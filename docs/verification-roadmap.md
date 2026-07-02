@@ -66,8 +66,30 @@ Clienti (form/detail/cascade-delete/tag/storico).
    sessioni) — restoreAppointmentRedeems ora è idempotente (azzera i linkage su
    appointment_services [PK composita, niente colonna id] + giftcard_used dopo
    il rimborso). e2e 9/9 CLEAN.
-6. ⏳ **Voucher pubblici** giftcard/giftbox (servono token reali su entrambi).
-7. ⏳ **Admin SaaS** + cron (EventBridge in prod).
+6. ✅ **Campagna deep Calendario/Appuntamenti/Quick-Booking (2026-07-02, stesso
+   dato su entrambi, tutto ripulito dopo)**:
+   - Lifecycle identico su entrambi: create(pending) → move (14:00) → resize
+     (90') → pending→scheduled→done OK; done→scheduled RIFIUTATO con messaggio
+     IDENTICO carattere-per-carattere; cancel_done preview+apply OK su entrambi.
+   - 🐛→✅ **BUG PARITY TROVATO+FIXATO (commit 1e94b1d)**: sul done il Next
+     accreditava punti flat floor(importo/step) (1pt su €12) dove il legacy dà 0
+     senza campagna attiva. Ora earn appuntamenti + ricariche usano
+     computeCampaignEarn (campaign-aware come il POS); rimosso l'helper flat
+     morto. Verificato live: done → 0 punti = PHP.
+   - Multi-servizio (test 60' €12 + test2 30' €20 creati su entrambi):
+     availability 103/103 identica; appuntamento 2 servizi → prezzi/righe
+     identici (12+20); conflitto col multi in agenda → 73/73 identici.
+   - Coupon TEST10 (10%): stessa validazione sede (messaggio IDENTICO), preview
+     drawer identica (sconto 3,20 su 32,00) su stesso contesto/data.
+   - Conferma LIVE del quirk legacy documentato: con 1 sede la lista coupon PHP
+     NON renderizza la tabella (il coupon esisteva ma invisibile); il Next la
+     mostra correttamente (bug legacy non replicato, intenzionale).
+   - Nota minore: default scadenza coupon Next = +30gg, PHP = nessuna → da
+     allineare (creazione senza date esplicite).
+7. ⏳ **Booking pubblico**: context + hold + confirm end-to-end (richiede account
+   cliente pubblico di test su entrambi).
+8. ⏳ **Calendario**: dati settimana/mese + note API (confronto payload).
+9. ⏳ **Voucher pubblici** giftcard/giftbox + **Admin SaaS** + cron.
 
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;
