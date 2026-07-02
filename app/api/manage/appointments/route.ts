@@ -295,16 +295,27 @@ export async function POST(request: Request) {
       }
 
       // Best-effort per id: a row that is not the tenant's / already gone returns
-      // false and is simply not counted, mirroring the legacy tolerant bulk delete.
+      // false and is simply not counted. deleteDbAppointment THROWS the legacy guard
+      // ("La prenotazione deve essere in stato Annullato...") for a non-cancelled
+      // appointment: the single delete surfaces it as the API error (faithful to
+      // api_appointments.php action=delete); the bulk skips those rows and reports.
       let deleted = 0;
+      let guardError = "";
       for (const id of ids) {
-        if (await deleteDbAppointment(tenantSlug, id)) deleted += 1;
+        try {
+          if (await deleteDbAppointment(tenantSlug, id)) deleted += 1;
+        } catch (error) {
+          guardError = error instanceof Error ? error.message : "Eliminazione non consentita.";
+          if (action === "delete") return jsonError(guardError);
+        }
       }
 
+      if (deleted === 0 && guardError) return jsonError(guardError);
       return Response.json({
         ok: true,
         sourceMode: "database",
         deleted,
+        skipped: ids.length - deleted,
         appointments: await listDbAppointments({ slug: tenantSlug }),
       });
     }

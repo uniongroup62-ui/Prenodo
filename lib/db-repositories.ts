@@ -2667,35 +2667,62 @@ export async function restoreAppointmentRedeems(slug: string, appointmentId: num
   }
 
   // Restore PACKAGE + PREPAID + GIFTBOX + GIFT redeems per appointment_services row.
+  // After each restore the linkage column is CLEARED so the helper is IDEMPOTENT:
+  // the cancel-on-status path restores first, and a later delete of that cancelled
+  // appointment re-runs this helper — without the clear, package/prepaid pools would
+  // be credited TWICE (blind +1 in the restore helpers).
   for (const row of serviceRows) {
+    // appointment_services has NO id column (PK = tenant_id + appointment_id +
+    // service_id) — the clear below targets the row by that composite key.
+    const rowServiceId = Number(row.service_id ?? 0);
+    const clearCols: Record<string, unknown> = {};
     // PACKAGE: give the session back (package pool + the per-service pool when linked).
     const clientPackageId = Number(row.client_package_id ?? 0);
     if (clientPackageId > 0) {
       await restoreClientPackageSession(slug, clientPackageId, Number(row.client_package_service_id ?? 0) || null);
+      clearCols.client_package_id = null;
+      clearCols.client_package_service_id = null;
     }
     // PREPAID: give the unit back.
     const clientPrepaidServiceId = Number(row.client_prepaid_service_id ?? 0);
     if (clientPrepaidServiceId > 0) {
       await restoreClientPrepaidUnit(slug, clientPrepaidServiceId);
+      clearCols.client_prepaid_service_id = null;
     }
-    // GIFTBOX: remove this appointment's redemption rows + reactivate the instance.
+    // GIFTBOX: remove this appointment's redemption rows + reactivate the instance
+    // (already self-clearing — keyed on this appointment's redemption rows — but the
+    // linkage is dropped too for consistency).
     const giftboxInstanceId = Number(row.giftbox_instance_id ?? 0);
     if (giftboxInstanceId > 0) {
       await restoreGiftboxRedemption(slug, giftboxInstanceId, id);
+      clearCols.giftbox_instance_id = null;
     }
     // GIFT: reactivate the instance (the appointment_gift_items rows stay on a cancel;
     // restoreGiftInstance only re-activates a 'riscattato' instance, so re-running is safe).
     const giftInstanceId = Number(row.gift_instance_id ?? 0);
     if (giftInstanceId > 0) {
       await restoreGiftInstance(slug, giftInstanceId);
+      clearCols.gift_instance_id = null;
+    }
+    if (rowServiceId > 0 && Object.keys(clearCols).length > 0) {
+      const asTable = await tenantTable(slug, "appointment_services");
+      const sets = Object.keys(clearCols).map((col) => `${quoteIdentifier(col)} = NULL`).join(", ");
+      await dbExecute(
+        `UPDATE ${quoteIdentifier(asTable.name)} SET ${sets} WHERE tenant_id = ? AND appointment_id = ? AND service_id = ?`,
+        [asTable.tenantId ?? 0, id, rowServiceId],
+      ).catch(() => undefined);
     }
   }
 
-  // Restore the appointment-level GIFTCARD redeem (refund the used amount).
+  // Restore the appointment-level GIFTCARD redeem (refund the used amount), then ZERO
+  // giftcard_used so a re-run cannot double-refund (cancel -> delete runs this twice).
+  // cancelDoneAppointment captures the figures BEFORE calling this helper (same pattern
+  // as the credit/fidelity notes below), so zeroing here loses nothing.
   const giftcardId = Number(existing[0].giftcard_id ?? 0);
   const giftcardUsed = roundMoney(Math.max(0, parseMoney(existing[0].giftcard_used, 0)));
   if (giftcardId > 0 && giftcardUsed > 0) {
     await restoreGiftcardBalance(slug, giftcardId, giftcardUsed);
+    await tenantUpdate({ slug, table: "appointments", id, values: { giftcard_used: 0 } }).catch(() => 0);
   }
 
   // Block 4 CREDIT restore: the drawer DEBITED the client wallet at create (credit_used>0),
@@ -3057,12 +3084,21 @@ export async function deleteDbAppointment(slug: string, id: number): Promise<boo
   const existing = await tenantSelect<RowDataPacket>({
     slug,
     table: "appointments",
-    columns: "id, giftcard_id, giftcard_used",
+    columns: "id, status, giftcard_id, giftcard_used",
     where: "id = ?",
     params: [appointmentId],
     limit: 1,
   }).catch(() => [] as RowDataPacket[]);
   if (!existing[0]) return false;
+
+  // 1b) Legacy delete guard (api_appointments.php action=delete): only a CANCELLED
+  //     appointment can be deleted — cancel first ("Annullala prima"). The cancel
+  //     path has already restored the redeems by then (and restoreAppointmentRedeems
+  //     below is idempotent, so the delete-time re-run is a no-op).
+  const currentStatus = String(existing[0].status ?? "").trim().toLowerCase();
+  if (currentStatus !== "canceled" && currentStatus !== "cancelled") {
+    throw new Error("La prenotazione deve essere in stato Annullato. Annullala prima per poterla eliminare.");
+  }
 
   // 2) Restore every redeem this appointment consumed (package/prepaid/giftbox/gift
   //    sessions + the appointment-level giftcard refund) BEFORE deleting any child
