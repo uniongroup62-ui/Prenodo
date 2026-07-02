@@ -27,6 +27,7 @@ import {
   listPublicCustomerAppointments,
   listPublicCustomerPackages,
   listPublicCustomerQuotes,
+  updatePublicCustomerReferenceLocation,
 } from "@/lib/public-customer-appointments";
 
 export async function GET() {
@@ -167,6 +168,15 @@ export async function POST(request: Request) {
       const result = await cancelPublicCustomerEmailChange(account.id);
       if (!result.ok) return jsonError(result.error);
       return Response.json({ ok: true, ...(await accountState(result.account)) });
+    }
+
+    // Sede di riferimento (port of mode=customer_update_reference_location).
+    if (action === "update_reference_location") {
+      const tenantSlug = String(body.tenant_slug ?? body.tenant ?? "").trim().toLowerCase();
+      const locationId = parseInteger(body.location_id, 0);
+      if (!tenantSlug) return jsonError("Seleziona una sede valida.");
+      await updatePublicCustomerReferenceLocation({ accountId: account.id, tenantSlug, locationId });
+      return Response.json({ ok: true, message: "Impostazioni aggiornate.", location_id: locationId, ...(await accountState(account)) });
     }
 
     // Area cliente — le mie prenotazioni (port of booking.php mode=my_appointments):

@@ -4,6 +4,7 @@ import { evalBestPromotionForAppointment } from "@/lib/db-repositories";
 import {
   confirmPublicBooking,
   holdPublicBookingSlot,
+  publicBookingClosures,
   publicBookingContext,
   publicBookingSlots,
   releasePublicBookingHold,
@@ -44,6 +45,18 @@ export async function GET(request: Request) {
         sourceMode: "database",
         date,
         slots,
+      });
+    }
+
+    // Closed days for the date strip (port of booking.php mode=closures).
+    if (action === "closures") {
+      const locationId = parseOptionalId(url.searchParams.get("location_id"));
+      const closures = await publicBookingClosures(slug, locationId);
+      return Response.json({
+        ok: true,
+        closed_dows: closures.closedDows,
+        closed_dates: closures.closedDates,
+        open_dates: closures.openDates,
       });
     }
 

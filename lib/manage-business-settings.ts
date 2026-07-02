@@ -122,6 +122,66 @@ export async function getBusinessSettingsContext(slug: string, publicOrigin = ""
   };
 }
 
+// Impostazioni Prenotazioni online (port of the legacy booking.php admin POST
+// ~:2893): booking_choose_staff_enabled + the customer cancel policy, saved on
+// the businesses row with the legacy clamps (>=0, hours<=8760 / days<=365).
+export async function saveBookingSettings(slug: string, input: Record<string, unknown>) {
+  const truthy = (v: unknown) => ["1", "true", "on", "yes"].includes(String(v ?? "").trim().toLowerCase());
+  const chooseStaff = truthy(input.booking_choose_staff_enabled) ? 1 : 0;
+  const cancelEnabled = truthy(input.booking_customer_cancel_enabled) ? 1 : 0;
+  let cancelValue = Math.trunc(Number(input.booking_customer_cancel_before_value ?? 0)) || 0;
+  if (cancelValue < 0) cancelValue = 0;
+  let cancelUnit = String(input.booking_customer_cancel_before_unit ?? "hours").trim().toLowerCase();
+  if (cancelUnit !== "hours" && cancelUnit !== "days") cancelUnit = "hours";
+  if (cancelUnit === "days" && cancelValue > 365) cancelValue = 365;
+  if (cancelUnit === "hours" && cancelValue > 8760) cancelValue = 8760;
+
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "id", orderBy: "id ASC", limit: 1 });
+  const businessId = Number(rows[0]?.id ?? 0);
+  if (businessId <= 0) throw new Error("Business non trovato");
+  await tenantUpdate({
+    slug,
+    table: "businesses",
+    id: businessId,
+    values: {
+      booking_choose_staff_enabled: chooseStaff,
+      booking_customer_cancel_enabled: cancelEnabled,
+      booking_customer_cancel_before_value: cancelValue,
+      booking_customer_cancel_before_unit: cancelUnit,
+    },
+  });
+  return {
+    ok: true as const,
+    message: "Impostazioni booking salvate",
+    settings: {
+      booking_choose_staff_enabled: chooseStaff === 1,
+      booking_customer_cancel_enabled: cancelEnabled === 1,
+      booking_customer_cancel_before_value: cancelValue,
+      booking_customer_cancel_before_unit: cancelUnit,
+    },
+  };
+}
+
+// Current booking settings for the settings form prefill.
+export async function getBookingSettings(slug: string) {
+  const rows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "businesses",
+    columns: "booking_choose_staff_enabled, booking_customer_cancel_enabled, booking_customer_cancel_before_value, booking_customer_cancel_before_unit",
+    orderBy: "id ASC",
+    limit: 1,
+  }).catch(() => [] as RowDataPacket[]);
+  const row = rows[0];
+  let unit = String(row?.booking_customer_cancel_before_unit ?? "hours").trim().toLowerCase();
+  if (unit !== "hours" && unit !== "days") unit = "hours";
+  return {
+    booking_choose_staff_enabled: Number(row?.booking_choose_staff_enabled ?? 0) === 1,
+    booking_customer_cancel_enabled: Number(row?.booking_customer_cancel_enabled ?? 0) === 1,
+    booking_customer_cancel_before_value: Math.max(0, Math.trunc(Number(row?.booking_customer_cancel_before_value ?? 0)) || 0),
+    booking_customer_cancel_before_unit: unit,
+  };
+}
+
 export async function saveBusinessProfile(slug: string, input: Record<string, string>, publicOrigin = "") {
   const name = clean(input.business_name ?? input.name ?? "", 190);
   const aboutText = (input.booking_about_text ?? input.aboutText ?? "").trim();

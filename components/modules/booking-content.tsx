@@ -32,6 +32,44 @@ export function BookingSettingsContent() {
   const [customerCancelEnabled, setCustomerCancelEnabled] = useState(true);
   const [cancelBeforeValue, setCancelBeforeValue] = useState("24");
   const [cancelBeforeUnit, setCancelBeforeUnit] = useState("hours");
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Save (port of the legacy booking.php admin POST): the 4 settings land on
+  // the businesses row via action=booking_settings_save.
+  async function saveSettings(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      const res = await fetch(`/api/manage/business-settings?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+        body: JSON.stringify({
+          action: "booking_settings_save",
+          booking_choose_staff_enabled: chooseStaffEnabled ? "1" : "",
+          booking_customer_cancel_enabled: customerCancelEnabled ? "1" : "",
+          booking_customer_cancel_before_value: cancelBeforeValue,
+          booking_customer_cancel_before_unit: cancelBeforeUnit,
+        }),
+      });
+      const data = await res.json().catch(() => null) as { ok?: boolean; error?: string; message?: string; settings?: { booking_customer_cancel_before_value?: number; booking_customer_cancel_before_unit?: string } } | null;
+      if (!res.ok || !data?.ok) {
+        setSaveMsg({ ok: false, text: String(data?.error || "Errore salvataggio impostazioni booking") });
+        return;
+      }
+      // Reflect the server clamps (e.g. hours > 8760).
+      if (data.settings) {
+        setCancelBeforeValue(String(data.settings.booking_customer_cancel_before_value ?? cancelBeforeValue));
+        if (data.settings.booking_customer_cancel_before_unit) setCancelBeforeUnit(data.settings.booking_customer_cancel_before_unit);
+      }
+      setSaveMsg({ ok: true, text: data.message || "Impostazioni booking salvate" });
+    } catch {
+      setSaveMsg({ ok: false, text: "Errore di rete durante il salvataggio." });
+    } finally {
+      setSaving(false);
+    }
+  }
 
   // Link card data.
   const [businessName, setBusinessName] = useState("");
@@ -40,16 +78,19 @@ export function BookingSettingsContent() {
   useEffect(() => {
     if (!slug) return;
 
-    // Choose-operator toggle lives on the business_profile config module
-    // ("Booking staff" record), the same source PHP reads.
-    fetch(`/api/manage/configuration?slug=${encodeURIComponent(slug)}&module=business_profile`, {
+    // Prefill from the businesses row (the same columns the save writes and
+    // the customer-area cancel policy reads).
+    fetch(`/api/manage/business-settings?slug=${encodeURIComponent(slug)}&section=booking`, {
       headers: { "x-tenant-slug": slug },
     })
       .then((r) => r.json())
       .then((j) => {
-        const records: ConfigRecord[] = Array.isArray(j.records) ? j.records : [];
-        const staff = records.find((rec) => rec.title === "Booking staff");
-        if (staff) setChooseStaffEnabled(Boolean(staff.active));
+        const s = j?.bookingSettings;
+        if (!s) return;
+        setChooseStaffEnabled(Boolean(s.booking_choose_staff_enabled));
+        setCustomerCancelEnabled(Boolean(s.booking_customer_cancel_enabled));
+        setCancelBeforeValue(String(s.booking_customer_cancel_before_value ?? "0"));
+        if (s.booking_customer_cancel_before_unit) setCancelBeforeUnit(String(s.booking_customer_cancel_before_unit));
       })
       .catch(() => {});
 
@@ -98,7 +139,7 @@ export function BookingSettingsContent() {
       <div className="row g-3">
         <div className="col-lg-7">
           <div className="card p-4">
-            <form method="post" className="row g-3" onSubmit={(e) => e.preventDefault()}>
+            <form method="post" className="row g-3" onSubmit={saveSettings}>
               <div className="col-12">
                 <div className="form-check">
                   <input
@@ -173,8 +214,13 @@ export function BookingSettingsContent() {
                 </div>
               </div>
 
+              {saveMsg ? (
+                <div className="col-12">
+                  <div className={`alert py-2 small mb-0 ${saveMsg.ok ? "alert-success" : "alert-danger"}`}>{saveMsg.text}</div>
+                </div>
+              ) : null}
               <div className="col-12 d-flex gap-2">
-                <button className="btn btn-primary btn-pill" type="submit">
+                <button className="btn btn-primary btn-pill" type="submit" disabled={saving}>
                   <i className="bi bi-check2-circle me-1" />
                   Salva
                 </button>

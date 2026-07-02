@@ -7,6 +7,8 @@ import {
   previewLocationDelete,
   saveBusinessBrandingPosition,
   saveBusinessLocation,
+  getBookingSettings,
+  saveBookingSettings,
   saveBusinessProfile,
   saveLocationMarketplace,
   uploadBusinessBrandingImage,
@@ -22,6 +24,16 @@ export async function GET(request: Request) {
   const tenantSlug = manageTenantSlugFromRequest(request);
   const session = await currentManageSession(tenantSlug);
   if (!session) return jsonError("Sessione gestionale scaduta.", 401);
+  const url = new URL(request.url);
+  // Booking-settings prefill for the Prenotazioni online page (booking.manage).
+  if (url.searchParams.get("section") === "booking") {
+    if (!canAny(session.user.perms, ["booking.manage", "settings.general"])) return jsonError("Permesso negato.", 403);
+    try {
+      return Response.json({ ok: true, bookingSettings: await getBookingSettings(tenantSlug) });
+    } catch (error) {
+      return jsonError(error instanceof Error ? error.message : "Impostazioni non caricate.");
+    }
+  }
   if (!canAny(session.user.perms, ["settings.general", "settings.location"])) return jsonError("Permesso negato.", 403);
 
   try {
@@ -83,6 +95,12 @@ export async function POST(request: Request) {
         if (!kind) return jsonError("Tipo immagine non valido.", 422);
         return Response.json(await deleteBusinessBrandingImage(tenantSlug, kind, publicOrigin(request)));
       }
+
+      // Impostazioni Prenotazioni online (legacy booking.php admin POST):
+      // choose-staff step + customer cancel policy on the businesses row.
+      case "booking_settings_save":
+        if (!canAny(session.user.perms, ["booking.manage", "settings.general"])) return jsonError("Permesso Prenotazioni online richiesto.", 403);
+        return Response.json(await saveBookingSettings(tenantSlug, body));
 
       case "location_save":
         if (!can(session.user.perms, "settings.location")) return jsonError("Permesso Sedi richiesto.", 403);

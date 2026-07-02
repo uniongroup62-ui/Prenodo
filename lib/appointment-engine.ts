@@ -56,6 +56,9 @@ export type AppointmentServiceLine = {
   serviceId: number;
   name: string;
   price: string;
+  // Segment id (multi-service): drives the ↑/↓ reorder in the appointments
+  // list (action=swap_segment, legacy data-seg).
+  segmentId?: number | null;
 };
 
 export type AppointmentHold = {

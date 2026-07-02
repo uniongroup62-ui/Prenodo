@@ -449,6 +449,27 @@ quote_decision (:7060).
   catalogo all'accettazione (quote_catalog_availability_check) non portato —
   la conversione in vendita lato manage rivalida comunque gli articoli.
 
+## Item 24 — Rifiniture finali (2026-07-02): impostazioni booking, chiusure strip, sede riferimento, frecce riordino
+- **Form Impostazioni → Prenotazioni** (era uno stub che non salvava):
+  action=booking_settings_save su business-settings (4 colonne businesses coi
+  clamp legacy 8760h/365g) + prefill GET section=booking. Verificato live:
+  prefill corretto, clamp 9999→8760, ripristino.
+- **Date strip wizard**: action=closures su /api/booking (port di
+  mode=closures: closed_dows dalle business_hours effettive, closed_dates
+  dalle closures 365gg, open_dates dagli straordinari che riaprono) —
+  **risposta identica a PHP** (domenica chiusa). La strip ora spegne i giorni
+  chiusi oltre ai passati.
+- **Sede di riferimento** (port di customer_update_reference_location):
+  update clients.location_id del cliente collegato con validazione sede
+  attiva/prenotabile e stringhe legacy; select nella card attività (visibile
+  con 2+ sedi), referenceLocationId esposto nelle activities.
+- **Frecce ↑/↓ riordino segmenti** nella lista appuntamenti (legacy
+  .ms-seg-move): le righe servizio ora portano segmentId e seguono l'ORDINE
+  di posizione segmento; i bottoni chiamano action=swap_segment e ricaricano.
+  Verificato live: swap up → ordine invertito nella lista; cleanup completo.
+  → Con questo, del flusso quick booking resta SOLO la UI conflict_policy
+  radios (fidelity choice) come rifinitura documentata.
+
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;
   legacy consuma al "done") — approvato.

@@ -47,6 +47,8 @@ type AppointmentServiceLine = {
   serviceId: number;
   name: string;
   price: string;
+  // Segment id (multi-service): drives the ↑/↓ reorder (action=swap_segment).
+  segmentId?: number | null;
 };
 
 type Appointment = {
@@ -147,6 +149,32 @@ export function AppointmentsContent() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // ↑/↓ segment reorder (legacy handleSegmentMove -> action=swap_segment): swap
+  // the adjacent segments' position + time windows, then reload from the server
+  // (the legacy reloads the page; we re-fetch). Errors surface via alert.
+  const [swapBusy, setSwapBusy] = useState(false);
+  const swapSegment = useCallback(async (appointmentId: number, segmentId: number, direction: "up" | "down") => {
+    if (swapBusy) return;
+    setSwapBusy(true);
+    try {
+      const res = await fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+        body: JSON.stringify({ action: "swap_segment", id: appointmentId, segment_id: segmentId, direction }),
+      });
+      const data = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null;
+      if (!res.ok || !data?.ok) {
+        if (typeof window !== "undefined") window.alert(String(data?.error || "Operazione non riuscita"));
+        return;
+      }
+      load();
+    } catch {
+      if (typeof window !== "undefined") window.alert("Errore di rete durante l'aggiornamento.");
+    } finally {
+      setSwapBusy(false);
+    }
+  }, [slug, swapBusy, load]);
 
   // POST a delete (single id) / bulk_delete (CSV ids) to the manage route, then
   // refresh the list. The route restores the consumed redeems server-side
@@ -490,7 +518,32 @@ export function AppointmentsContent() {
                               <td></td>
                               <td className="text-muted ps-4">{line.name}</td>
                               <td className="text-muted">{line.price}</td>
-                              <td></td>
+                              <td>
+                                {/* ↑/↓ segment reorder (legacy .ms-seg-move -> action=swap_segment):
+                                    swaps position + time windows, staff/cabin re-validated. */}
+                                {line.segmentId ? (
+                                  <div className="btn-group btn-group-sm" role="group" aria-label="Riordina servizio">
+                                    <button
+                                      type="button"
+                                      className="btn btn-outline-secondary ms-seg-move"
+                                      title="Sposta prima"
+                                      disabled={swapBusy || index === 0}
+                                      onClick={() => void swapSegment(appt.id, line.segmentId as number, "up")}
+                                    >
+                                      <i className="bi bi-arrow-up" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-outline-secondary ms-seg-move"
+                                      title="Sposta dopo"
+                                      disabled={swapBusy || index === lines.length - 1}
+                                      onClick={() => void swapSegment(appt.id, line.segmentId as number, "down")}
+                                    >
+                                      <i className="bi bi-arrow-down" />
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </td>
                               <td></td>
                             </tr>
                           ))}

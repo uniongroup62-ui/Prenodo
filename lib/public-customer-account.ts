@@ -147,6 +147,9 @@ export type PublicCustomerActivity = {
   linkedAt: string | null;
   lastSeenAt: string | null;
   clientId: number;
+  // Sede di riferimento del cliente collegato (clients.location_id) — legacy
+  // customer_update_reference_location.
+  referenceLocationId: number;
   locations: Array<{
     locationId: number;
     locationSlug: string;
@@ -964,6 +967,15 @@ export async function publicCustomerActivities(accountId: number): Promise<Publi
 
     const profile = await publicProfileSummary(tenantId, tenantSlug, String(row.tenant_name ?? ""));
     const locations = await publicLocationsForTenant(tenantId, tenantSlug);
+    // Sede di riferimento corrente del cliente collegato (best-effort).
+    const clientRows = await tenantSelect<RowDataPacket>({
+      slug: tenantSlug,
+      table: "clients",
+      columns: "location_id",
+      where: "id = ?",
+      params: [clientId],
+      limit: 1,
+    }).catch(() => [] as RowDataPacket[]);
     activities.push({
       tenantSlug,
       tenantName: profile.tenantName,
@@ -978,6 +990,7 @@ export async function publicCustomerActivities(accountId: number): Promise<Publi
       linkedAt: dateString(row.linked_at as string | Date | null | undefined),
       lastSeenAt: dateString(row.last_seen_at as string | Date | null | undefined),
       clientId,
+      referenceLocationId: Number(clientRows[0]?.location_id ?? 0) || 0,
       locations: locations.map((location) => ({
         locationId: location.locationId,
         locationSlug: location.locationSlug,

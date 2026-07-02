@@ -959,6 +959,64 @@ async function businessIntervals(slug: string, locationId: number | null, date: 
   return intervalsFromHoursRow(hours);
 }
 
+// Port of booking.php mode=closures (:4866): the closed day-of-weeks (weekly
+// business_hours), the specific closure DATES over the next 365 days and the
+// special-open dates (business_hours_exceptions is_closed=0, which REOPEN a
+// day) — the public date strip disables closed days like the legacy wizard.
+export async function publicBookingClosures(slug: string, locationId: number | null): Promise<{ closedDows: number[]; closedDates: string[]; openDates: string[] }> {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const today = new Date();
+  const from = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+  const toDateObj = new Date(today);
+  toDateObj.setDate(toDateObj.getDate() + 365);
+  const to = `${toDateObj.getFullYear()}-${pad(toDateObj.getMonth() + 1)}-${pad(toDateObj.getDate())}`;
+
+  const closureRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "closures",
+    columns: "date",
+    where: locationId
+      ? "(location_id IS NULL OR location_id = ?) AND date BETWEEN ? AND ?"
+      : "location_id IS NULL AND date BETWEEN ? AND ?",
+    params: locationId ? [locationId, from, to] : [from, to],
+    orderBy: "date ASC",
+  }).catch(() => [] as RowDataPacket[]);
+  const closedSet = new Set<string>(closureRows.map((row) => dateFromSql(row.date)).filter(Boolean));
+
+  // Special opens override closures (the legacy removes them from closed_dates).
+  const openRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "business_hours_exceptions",
+    columns: "date",
+    where: locationId
+      ? "COALESCE(is_closed,0) = 0 AND (location_id IS NULL OR location_id = ?) AND date BETWEEN ? AND ?"
+      : "COALESCE(is_closed,0) = 0 AND location_id IS NULL AND date BETWEEN ? AND ?",
+    params: locationId ? [locationId, from, to] : [from, to],
+    orderBy: "date ASC",
+  }).catch(() => [] as RowDataPacket[]);
+  const openDates = Array.from(new Set(openRows.map((row) => dateFromSql(row.date)).filter(Boolean)));
+  for (const date of openDates) closedSet.delete(date);
+
+  // Weekly closed dows: the effective business_hours row (location-preferred)
+  // yields no intervals (is_closed / empty hours). A missing row = open (the
+  // slot engine's 9-19 default).
+  const weeklyRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "business_hours",
+    where: locationId ? "(location_id IS NULL OR location_id = ?)" : "location_id IS NULL",
+    params: locationId ? [locationId] : [],
+    orderBy: "dow ASC, location_id DESC, id ASC",
+  }).catch(() => [] as RowDataPacket[]);
+  const closedDows: number[] = [];
+  for (let dow = 0; dow <= 6; dow++) {
+    const rowsForDow = weeklyRows.filter((row) => Number(row.dow ?? -1) === dow);
+    const preferred = preferredLocationRow(rowsForDow, locationId);
+    if (preferred && intervalsFromHoursRow(preferred).length === 0) closedDows.push(dow);
+  }
+
+  return { closedDows, closedDates: Array.from(closedSet).sort(), openDates };
+}
+
 async function hoursLabel(slug: string, locationId: number | null, date: string): Promise<string> {
   const intervals = await businessIntervals(slug, locationId, date);
   if (!intervals.length) return "Oggi chiuso";

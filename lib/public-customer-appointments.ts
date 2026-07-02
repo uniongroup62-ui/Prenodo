@@ -15,7 +15,7 @@ import "server-only";
 // rule: the linked client_id OR a client with the same email.
 
 import type { RowDataPacket } from "@/lib/tenant-db";
-import { dbQuery, quoteIdentifier, tenantSelect, tenantTable } from "@/lib/tenant-db";
+import { dbQuery, quoteIdentifier, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
 import {
   appointmentPhpStatus,
   restoreAppointmentRedeems,
@@ -313,6 +313,35 @@ export async function cancelPublicCustomerAppointment({
   } catch {
     // best-effort, like the legacy automation hook
   }
+}
+
+// Sede di riferimento (port of BookingAuth::updateReferenceLocation, chiamata
+// da mode=customer_update_reference_location): sets clients.location_id for
+// the account's linked client of that tenant. Legacy validation + strings.
+export async function updatePublicCustomerReferenceLocation({
+  accountId,
+  tenantSlug,
+  locationId,
+}: {
+  accountId: number;
+  tenantSlug: string;
+  locationId: number;
+}): Promise<void> {
+  const activities = await publicCustomerActivities(accountId).catch(() => [] as PublicCustomerActivity[]);
+  const activity = activities.find((a) => a.tenantSlug === tenantSlug);
+  if (!activity || activity.clientId <= 0) throw new Error("Sessione cliente non valida. Accedi di nuovo.");
+  const locId = Math.max(0, Math.trunc(Number(locationId)) || 0);
+  if (locId <= 0) throw new Error("Seleziona una sede valida.");
+  const locRows = await tenantSelect<RowDataPacket>({
+    slug: tenantSlug,
+    table: "locations",
+    columns: "id",
+    where: "id = ? AND COALESCE(is_active,1) = 1 AND COALESCE(booking_enabled,1) = 1",
+    params: [locId],
+    limit: 1,
+  }).catch(() => [] as RowDataPacket[]);
+  if (!locRows[0]) throw new Error("Seleziona una sede valida.");
+  await tenantUpdate({ slug: tenantSlug, table: "clients", id: activity.clientId, values: { location_id: locId } });
 }
 
 // ---------------------------------------------------------------------------

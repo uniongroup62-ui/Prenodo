@@ -319,6 +319,41 @@ export function BookingFaithful({ slug: slugProp }: { slug?: string } = {}) {
   const isFinalStep = step === 7;
   const canContinue = computeCanContinue();
 
+  // CLOSED days for the date strip (port of mode=closures): weekly closed dows
+  // + specific closures, special opens re-enable the day.
+  const [closures, setClosures] = useState<{ dows: Set<number>; dates: Set<string>; open: Set<string> }>({ dows: new Set(), dates: new Set(), open: new Set() });
+  useEffect(() => {
+    if (!slug) return;
+    let active = true;
+    const params = new URLSearchParams();
+    params.set("slug", slug);
+    params.set("action", "closures");
+    if (locationId > 0) params.set("location_id", String(locationId));
+    void fetch(`/api/booking?${params.toString()}`)
+      .then((res) => res.json().catch(() => null))
+      .then((data: { ok?: boolean; closed_dows?: number[]; closed_dates?: string[]; open_dates?: string[] } | null) => {
+        if (!active || !data?.ok) return;
+        setClosures({
+          dows: new Set((data.closed_dows ?? []).map(Number)),
+          dates: new Set((data.closed_dates ?? []).map(String)),
+          open: new Set((data.open_dates ?? []).map(String)),
+        });
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [slug, locationId]);
+
+  // A strip day is closed when its date is a closure OR its weekday is closed,
+  // unless a special-open re-enables it (legacy strip rule).
+  function isClosedDay(day: Date): boolean {
+    const ymd = toYmd(day);
+    if (closures.open.has(ymd)) return false;
+    if (closures.dates.has(ymd)) return true;
+    return closures.dows.has(day.getDay());
+  }
+
   // AUTO-PROMO detection (mode=promotion_preview) on entering Step 6+: the best
   // automatic promotion the confirm will apply, per selected services/date/slot.
   useEffect(() => {
@@ -841,7 +876,9 @@ export function BookingFaithful({ slug: slugProp }: { slug?: string } = {}) {
                   <div className="booking-day-strip" id="dateStripDays">
                     {dateStripDays.map((day) => {
                       const ymd = toYmd(day);
-                      const disabled = startOfDay(day).getTime() < startOfDay(new Date()).getTime();
+                      // Past days AND closed days (mode=closures) are disabled,
+                      // like the legacy strip.
+                      const disabled = startOfDay(day).getTime() < startOfDay(new Date()).getTime() || isClosedDay(day);
                       return (
                         <button
                           key={ymd}

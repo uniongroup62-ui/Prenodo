@@ -108,6 +108,7 @@ type Activity = {
   email: string;
   bookingUrl: string;
   clientId: number;
+  referenceLocationId?: number;
   locations: Array<{
     locationId: number;
     locationName: string;
@@ -245,6 +246,33 @@ export function PublicAccountPage({ initialMode = "login" }: { initialMode?: Acc
       active = false;
     };
   }, [activeMode, user, appointmentsLoaded]);
+
+  // Sede di riferimento (port of mode=customer_update_reference_location):
+  // updates the linked client's clients.location_id for that activity.
+  async function setReferenceLocation(activity: Activity, locationId: number) {
+    if (locationId <= 0) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const response = await fetch("/api/account", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "update_reference_location", tenant_slug: activity.tenantSlug, location_id: locationId }),
+      });
+      const data = await response.json() as AccountResponse;
+      if (!data.ok) {
+        setError(data.error || "Impossibile aggiornare la sede di riferimento.");
+        return;
+      }
+      applyAccountData(data);
+      setMessage(data.message || "Impostazioni aggiornate.");
+    } catch {
+      setError("Errore di rete.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   // Annulla (mode=cancel_appointment): confirm, POST, apply the refreshed list
   // or surface the tenant policy error ("Puoi annullare solo entro ...").
@@ -505,7 +533,7 @@ export function PublicAccountPage({ initialMode = "login" }: { initialMode?: Acc
                   );
                 })}
               </div>
-              {activeMode === "activities" ? <ActivitiesView activities={activities} /> : null}
+              {activeMode === "activities" ? <ActivitiesView activities={activities} busy={busy} onSetReferenceLocation={setReferenceLocation} /> : null}
               {activeMode === "appointments" ? (
                 <AppointmentsView
                   appointments={appointments}
@@ -624,7 +652,15 @@ function AuthLinks({ mode, onMode }: { mode: AccountMode; onMode: (mode: Account
   );
 }
 
-function ActivitiesView({ activities }: { activities: Activity[] }) {
+function ActivitiesView({
+  activities,
+  busy,
+  onSetReferenceLocation,
+}: {
+  activities: Activity[];
+  busy: boolean;
+  onSetReferenceLocation: (activity: Activity, locationId: number) => void;
+}) {
   return (
     <section className="rounded-lg border border-zinc-200 bg-white p-5">
       <h2 className="text-2xl font-semibold">Attivita collegate</h2>
@@ -636,6 +672,22 @@ function ActivitiesView({ activities }: { activities: Activity[] }) {
                 <h3 className="text-lg font-semibold">{activity.title}</h3>
                 <p className="mt-1 text-sm text-zinc-600">{[activity.city, activity.address].filter(Boolean).join(", ") || activity.subtitle}</p>
                 <p className="mt-2 text-sm text-zinc-500">Cliente #{activity.clientId}</p>
+                {activity.locations.length > 1 ? (
+                  <label className="mt-2 block text-sm text-zinc-600">
+                    Sede di riferimento
+                    <select
+                      className="mt-1 block h-9 rounded-md border border-zinc-200 px-2 text-sm"
+                      disabled={busy}
+                      value={activity.referenceLocationId ?? 0}
+                      onChange={(event) => onSetReferenceLocation(activity, Number(event.target.value) || 0)}
+                    >
+                      <option value={0}>Seleziona sede…</option>
+                      {activity.locations.map((location) => (
+                        <option key={location.locationId} value={location.locationId}>{location.locationName}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
               </div>
               <div className="flex gap-2">
                 <Link className="inline-flex h-10 items-center rounded-md border border-zinc-200 px-3 text-sm font-semibold" href={`/attivita/${activity.tenantSlug}`}>

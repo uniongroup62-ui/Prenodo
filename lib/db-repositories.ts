@@ -13829,7 +13829,7 @@ async function mapAppointment(slug: string, row: RowDataPacket): Promise<Appoint
       ? null
       : String(row.public_code).trim(),
     // Ordered service lines for the multi-service grouping (parent + child rows).
-    services: serviceLines.map((line) => ({ serviceId: line.serviceId, name: line.name, price: `${roundMoney(line.price)} euro` })),
+    services: serviceLines.map((line) => ({ serviceId: line.serviceId, name: line.name, price: `${roundMoney(line.price)} euro`, segmentId: line.segmentId ?? null })),
     // Per-operator segments for the Day calendar (only when >1 distinct operator).
     segments: await appointmentSegmentsForCalendar(slug, appointmentId),
   };
@@ -13883,7 +13883,7 @@ async function appointmentSegmentsForCalendar(
 async function appointmentServiceLines(
   slug: string,
   appointment: RowDataPacket,
-): Promise<Array<{ serviceId: number; name: string; price: number }>> {
+): Promise<Array<{ serviceId: number; name: string; price: number; segmentId?: number | null }>> {
   const appointmentId = Number(appointment.id ?? 0);
   try {
     const serviceRows = await tenantSelect<RowDataPacket>({
@@ -13895,11 +13895,34 @@ async function appointmentServiceLines(
       orderBy: "service_id ASC",
     });
     if (serviceRows.length > 0) {
-      return serviceRows.map((row) => ({
-        serviceId: Number(row.service_id ?? 0),
-        name: String(row.service_name ?? "Servizio"),
-        price: Number(row.price ?? 0),
-      }));
+      // Segment ids + POSITION order (the legacy child rows follow the segment
+      // sequence and carry data-seg for the ↑/↓ reorder buttons).
+      const segRows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "appointment_segments",
+        columns: "id, service_id, position",
+        where: "appointment_id = ?",
+        params: [appointmentId],
+        orderBy: "position ASC, id ASC",
+      }).catch(() => [] as RowDataPacket[]);
+      const segByService = new Map<number, { id: number; position: number }>();
+      for (const seg of segRows) {
+        const sid = Number(seg.service_id ?? 0);
+        if (sid > 0 && !segByService.has(sid)) segByService.set(sid, { id: Number(seg.id ?? 0), position: Number(seg.position ?? 0) });
+      }
+      const lines = serviceRows.map((row) => {
+        const serviceId = Number(row.service_id ?? 0);
+        const seg = segByService.get(serviceId);
+        return {
+          serviceId,
+          name: String(row.service_name ?? "Servizio"),
+          price: Number(row.price ?? 0),
+          segmentId: seg ? seg.id : null,
+          _position: seg ? seg.position : Number.MAX_SAFE_INTEGER,
+        };
+      });
+      lines.sort((a, b) => a._position - b._position || a.serviceId - b.serviceId);
+      return lines.map(({ _position, ...line }) => line);
     }
   } catch {
     // fallback below
