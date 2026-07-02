@@ -454,13 +454,17 @@ export async function issuePublicCustomerVerificationCode(
   }
 
   const code = generateCode();
+  // Expiry written from JS local time (mysqlDate), NOT SQL NOW(): the DB session
+  // runs in UTC while the driver reads naive timestamps as LOCAL time, so a
+  // NOW()-based expiry lands 2h in the past on CET/CEST and every code reads
+  // as already expired (live bug found 2026-07-02).
   await dbExecute(
     `UPDATE \`public_customer_accounts\`
         SET email_verification_hash=?,
-            email_verification_sent_at=NOW(),
-            email_verification_expires_at=NOW() + (15 * interval '1 minute')
+            email_verification_sent_at=?,
+            email_verification_expires_at=?
       WHERE id=?`,
-    [codeHash(code), accountId],
+    [codeHash(code), mysqlDate(new Date()), mysqlDate(new Date(Date.now() + 15 * 60000)), accountId],
   );
 
   // Send AFTER the DB write so the code is valid even if delivery has a transient
@@ -521,13 +525,16 @@ export async function requestPublicCustomerPasswordReset(
   const token = crypto.randomBytes(32).toString("hex");
   const rows = await dbQuery<PublicCustomerRow[]>("SELECT id,email FROM `public_customer_accounts` WHERE email=? LIMIT 1", [email]);
   if (rows[0]) {
+    // JS-side expiry (see issuePublicCustomerVerificationCode): SQL NOW() is UTC
+    // but naive timestamps read back as local, so a NOW()-based expiry is ~2h
+    // in the past on CET/CEST.
     await dbExecute(
       `UPDATE \`public_customer_accounts\`
           SET password_reset_hash=?,
-              password_reset_sent_at=NOW(),
-              password_reset_expires_at=NOW() + (30 * interval '1 minute')
+              password_reset_sent_at=?,
+              password_reset_expires_at=?
         WHERE id=?`,
-      [sha256(token), Number(rows[0].id)],
+      [sha256(token), mysqlDate(new Date()), mysqlDate(new Date(Date.now() + 30 * 60000)), Number(rows[0].id)],
     );
 
     // Send AFTER the DB write so the token is valid even on a transient send error;
@@ -738,15 +745,17 @@ export async function requestPublicCustomerEmailChange(
   if (duplicate[0]) return { ok: false, error: "Questa email e gia collegata a un altro account." };
 
   const code = generateCode();
+  // JS-side expiry (see issuePublicCustomerVerificationCode): NOW() is UTC vs
+  // naive-local reads — a SQL expiry lands in the past on CET/CEST.
   await dbExecute(
     `UPDATE \`public_customer_accounts\`
         SET pending_email=?,
             pending_email_verification_hash=?,
-            pending_email_verification_expires_at=NOW() + (15 * interval '1 minute'),
-            pending_email_verification_sent_at=NOW(),
+            pending_email_verification_expires_at=?,
+            pending_email_verification_sent_at=?,
             updated_at=NOW()
       WHERE id=?`,
-    [newEmail, codeHash(code), accountId],
+    [newEmail, codeHash(code), mysqlDate(new Date(Date.now() + 15 * 60000)), mysqlDate(new Date()), accountId],
   );
 
   // Send the confirmation code to the NEW pending_email, AFTER the DB write so the

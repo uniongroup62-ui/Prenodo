@@ -21,6 +21,10 @@ import {
   verifyPublicCustomerCode,
   type PublicCustomer,
 } from "@/lib/public-customer-account";
+import {
+  cancelPublicCustomerAppointment,
+  listPublicCustomerAppointments,
+} from "@/lib/public-customer-appointments";
 
 export async function GET() {
   const account = await currentPublicCustomerSession();
@@ -160,6 +164,29 @@ export async function POST(request: Request) {
       const result = await cancelPublicCustomerEmailChange(account.id);
       if (!result.ok) return jsonError(result.error);
       return Response.json({ ok: true, ...(await accountState(result.account)) });
+    }
+
+    // Area cliente — le mie prenotazioni (port of booking.php mode=my_appointments):
+    // the account's appointments across every linked activity, with can_cancel.
+    if (action === "appointments" || action === "my_appointments") {
+      const appointments = await listPublicCustomerAppointments(account.id, account.email);
+      return Response.json({ ok: true, appointments });
+    }
+
+    // Annulla prenotazione (port of mode=cancel_appointment): ownership + the
+    // tenant cancel policy, then the pending/scheduled→canceled path (redeems
+    // restored, lifecycle email best-effort). Legacy error strings.
+    if (action === "cancel_appointment") {
+      const tenantSlug = String(body.tenant_slug ?? body.tenant ?? "").trim().toLowerCase();
+      const appointmentId = parseInteger(body.appointment_id ?? body.id, 0);
+      if (!tenantSlug || appointmentId <= 0) return jsonError("Appuntamento non valido");
+      await cancelPublicCustomerAppointment({
+        accountId: account.id,
+        email: account.email,
+        tenantSlug,
+        appointmentId,
+      });
+      return Response.json({ ok: true, appointments: await listPublicCustomerAppointments(account.id, account.email) });
     }
 
     if (action === "toggle_favorite") {

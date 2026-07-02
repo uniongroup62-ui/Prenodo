@@ -347,8 +347,7 @@ radios "Scelta cliente" conflict_policy nel drawer.
 | (extra Next) favorites | toggle/remove_favorite | ✅ additivo |
 
 ### Priorità suggerite per chiudere il pubblico
-1. **Area cliente prenotazioni**: my_appointments + cancel_appointment + ics
-   (blocco autonomo, alto valore utente).
+1. ✅ **Area cliente prenotazioni** — FATTO (2026-07-02, item 21 sotto).
 2. **Step 6 wizard**: coupon free-text (mode=coupon), promotion_preview per
    carrello (riusare evalBestPromotionForAppointment), fidelity_preview e
    redeems al confirm (giftcard/giftbox/punti) + note automatiche legacy.
@@ -356,6 +355,41 @@ radios "Scelta cliente" conflict_policy nel drawer.
 4. Date strip: spegnere i giorni chiusi (mode=closures o riuso businessIntervals).
 5. Minori: update_reference_location, prezzi promo per-servizio al confirm.
 Nota infra: email conferma/OTP su SES già documentata come rinviata.
+
+## Item 21 — Area cliente PRENOTAZIONI (2026-07-02, blocco 1 del pubblico)
+Port di booking.php mode=my_appointments (:6525) + cancel_appointment (:6632) +
+ics (:7182) + policy booking_customer_can_cancel_appointment (Helpers:5424, le
+colonne booking_customer_cancel_* vivono su businesses — attive: 24 ore).
+- **lib/public-customer-appointments.ts**: lista aggregata su tutte le attività
+  collegate all'account globale (regola ownership legacy: client_id del link O
+  email uguale), payload legacy per appuntamento (codice, orari, stato+label,
+  servizi, operatori, sede, totale con la cascata sconto→fidelity→giftcard→
+  credito, can_cancel+cancel_reason con le stringhe esatte); annullo via il
+  percorso pending/scheduled→canceled del manage (restore redeems + status +
+  email lifecycle best-effort); ICS identico al legacy (VTIMEZONE Europe/Rome,
+  summary "Appuntamento • …", descrizione Servizi/Totale/Sede/Codice, VALARM
+  -15').
+- **API**: /api/account action=appointments + action=cancel_appointment;
+  GET /api/account/ics?code=… (text/calendar, 404 legacy).
+- **UI**: nuova voce "Prenotazioni" nell'account (+ /account/appointments):
+  card per prenotazione con badge stato, "Aggiungi al calendario" e "Annulla"
+  (o il motivo policy quando non annullabile).
+- **Verifica live e2e**: lista 3 appuntamenti (futuro annullabile + 2 annullati
+  con reason legacy), ICS 200 con corpo conforme, annullo <24h → "Puoi
+  annullare solo entro 24 ore prima dell'appuntamento.", annullo lontano → ok e
+  stato Annullato, appuntamento altrui → "Appuntamento non trovato". Cleanup
+  completo (appuntamenti test, account test, link ripristinato).
+- **BUG PRE-ESISTENTE trovato e fixato**: le scadenze dei codici OTP/reset
+  erano scritte con SQL NOW() (UTC) ma rilette come naive-local (+2h) → ogni
+  codice risultava "scaduto" su CET/CEST. Ora scadenza scritta da JS (verifica
+  email, reset password, cambio email). Verificato live: prima "Codice
+  scaduto…", dopo verify ok.
+- NOTA scoperta collegata: il form Impostazioni→Prenotazioni (policy annullo)
+  in Next è ancora uno STUB (onSubmit preventDefault, non salva) — i valori
+  esistono in DB e la policy funziona; il salvataggio del form è da wire-are.
+- Divergenza documentata: package/prepaid/gift summary della lista/ICS non
+  popolate (sotto-engine ClientPackages::appointmentPackageSummary non portato;
+  campi vuoti).
 
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;

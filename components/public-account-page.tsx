@@ -18,7 +18,27 @@ import {
   UserPlus,
 } from "lucide-react";
 
-type AccountMode = "login" | "register" | "forgot-password" | "verify" | "reset" | "activities" | "favorites" | "profile";
+type AccountMode = "login" | "register" | "forgot-password" | "verify" | "reset" | "activities" | "appointments" | "favorites" | "profile";
+
+// Port of booking.php mode=my_appointments payload (area cliente prenotazioni),
+// plus tenantSlug/tenantName since the global account aggregates every linked
+// activity. can_cancel/cancel_reason follow the tenant's cancel policy.
+type CustomerAppointment = {
+  id: number;
+  tenantSlug: string;
+  tenantName: string;
+  publicCode: string;
+  startsAt: string;
+  endsAt: string;
+  status: string;
+  statusLabel: string;
+  services: string[];
+  operators: string[];
+  locationName: string;
+  totalPrice: number;
+  canCancel: boolean;
+  cancelReason: string | null;
+};
 
 type PublicCustomer = {
   id: number;
@@ -72,6 +92,7 @@ type AccountResponse = {
   favorites?: Favorite[];
   favoriteKeys?: Record<string, boolean>;
   activities?: Activity[];
+  appointments?: CustomerAppointment[];
   requiresVerification?: boolean;
   accountId?: number;
   email?: string;
@@ -93,7 +114,61 @@ export function PublicAccountPage({ initialMode = "login" }: { initialMode?: Acc
   const activeMode: AccountMode = user && ["login", "register", "forgot-password", "verify", "reset"].includes(mode)
     ? "activities"
     : mode;
-  const protectedMode = ["activities", "favorites", "profile"].includes(activeMode);
+  const protectedMode = ["activities", "appointments", "favorites", "profile"].includes(activeMode);
+
+  // Le mie prenotazioni (mode=my_appointments): loaded on entering the section
+  // (and refreshed after a cancel — the cancel response carries the new list).
+  const [appointments, setAppointments] = useState<CustomerAppointment[]>([]);
+  const [appointmentsLoaded, setAppointmentsLoaded] = useState(false);
+  useEffect(() => {
+    if (activeMode !== "appointments" || !user || appointmentsLoaded) return;
+    let active = true;
+    void fetch("/api/account", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "appointments" }),
+    })
+      .then((res) => res.json() as Promise<AccountResponse>)
+      .then((data) => {
+        if (!active) return;
+        if (data.ok && Array.isArray(data.appointments)) setAppointments(data.appointments);
+        setAppointmentsLoaded(true);
+      })
+      .catch(() => {
+        if (active) setAppointmentsLoaded(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeMode, user, appointmentsLoaded]);
+
+  // Annulla (mode=cancel_appointment): confirm, POST, apply the refreshed list
+  // or surface the tenant policy error ("Puoi annullare solo entro ...").
+  async function cancelAppointment(appt: CustomerAppointment) {
+    if (!appt.canCancel) return;
+    if (typeof window !== "undefined" && !window.confirm("Annullare questa prenotazione?")) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const response = await fetch("/api/account", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "cancel_appointment", tenant_slug: appt.tenantSlug, appointment_id: appt.id }),
+      });
+      const data = await response.json() as AccountResponse;
+      if (!data.ok) {
+        setError(data.error || "Errore annullamento");
+        return;
+      }
+      if (Array.isArray(data.appointments)) setAppointments(data.appointments);
+      setMessage("Prenotazione annullata.");
+    } catch {
+      setError("Errore di rete durante l'annullamento.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -286,7 +361,8 @@ export function PublicAccountPage({ initialMode = "login" }: { initialMode?: Acc
                 <p className="mt-1 text-sm text-zinc-600">{user.email}</p>
               </div>
               <nav className="grid gap-2">
-                <AccountNavButton active={activeMode === "activities"} icon={CalendarDays} label="Attivita" onClick={() => setMode("activities")} />
+                <AccountNavButton active={activeMode === "activities"} icon={Store} label="Attivita" onClick={() => setMode("activities")} />
+                <AccountNavButton active={activeMode === "appointments"} icon={CalendarDays} label="Prenotazioni" onClick={() => setMode("appointments")} />
                 <AccountNavButton active={activeMode === "favorites"} icon={Heart} label="Preferiti" onClick={() => setMode("favorites")} />
                 <AccountNavButton active={activeMode === "profile"} icon={User} label="Profilo" onClick={() => setMode("profile")} />
               </nav>
@@ -324,6 +400,14 @@ export function PublicAccountPage({ initialMode = "login" }: { initialMode?: Acc
                 })}
               </div>
               {activeMode === "activities" ? <ActivitiesView activities={activities} /> : null}
+              {activeMode === "appointments" ? (
+                <AppointmentsView
+                  appointments={appointments}
+                  loaded={appointmentsLoaded}
+                  busy={busy}
+                  onCancel={cancelAppointment}
+                />
+              ) : null}
               {activeMode === "favorites" ? <FavoritesView busy={busy} favorites={favorites} onRemove={removeFavorite} /> : null}
               {activeMode === "profile" ? (
                 <ProfileView
@@ -467,6 +551,101 @@ function ActivitiesView({ activities }: { activities: Activity[] }) {
           </article>
         ))}
         {!activities.length ? <EmptyState icon={CalendarDays} title="Nessuna attivita collegata" text="Le prenotazioni pubbliche con la tua email appariranno qui." /> : null}
+      </div>
+    </section>
+  );
+}
+
+// "Le mie prenotazioni" (port of the legacy customer-area list): date/time,
+// services, operators, sede, totale, status badge; per row the ICS download
+// (mode=ics by public_code) and Annulla when the tenant policy allows it —
+// otherwise the muted cancel_reason, exactly like the legacy hints.
+function AppointmentsView({
+  appointments,
+  loaded,
+  busy,
+  onCancel,
+}: {
+  appointments: CustomerAppointment[];
+  loaded: boolean;
+  busy: boolean;
+  onCancel: (appt: CustomerAppointment) => void;
+}) {
+  const fmtDate = (sql: string) => {
+    const m = sql.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+    return m ? `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}` : sql;
+  };
+  const fmtTime = (sql: string) => {
+    const m = sql.match(/[T ](\d{2}):(\d{2})/);
+    return m ? `${m[1]}:${m[2]}` : "";
+  };
+  const money = (n: number) => n.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const badgeClass = (status: string) =>
+    status === "done"
+      ? "bg-emerald-100 text-emerald-800"
+      : status === "scheduled"
+        ? "bg-sky-100 text-sky-800"
+        : status === "pending"
+          ? "bg-amber-100 text-amber-800"
+          : "bg-zinc-200 text-zinc-600";
+
+  return (
+    <section className="rounded-lg border border-zinc-200 bg-white p-5">
+      <h2 className="text-2xl font-semibold">Le mie prenotazioni</h2>
+      <div className="mt-4 grid gap-3">
+        {!loaded ? (
+          <p className="flex items-center gap-2 text-sm text-zinc-500">
+            <Loader2 className="h-4 w-4 animate-spin" /> Caricamento prenotazioni...
+          </p>
+        ) : null}
+        {loaded && appointments.map((appt) => (
+          <article className="rounded-lg border border-zinc-200 p-4" key={`${appt.tenantSlug}:${appt.id}`}>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-lg font-semibold">{fmtDate(appt.startsAt)}{appt.endsAt ? ` - ${fmtTime(appt.endsAt)}` : ""}</h3>
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${badgeClass(appt.status)}`}>{appt.statusLabel}</span>
+                </div>
+                <p className="mt-1 text-sm font-medium text-zinc-800">{appt.services.length ? appt.services.join(", ") : "Appuntamento"}</p>
+                <p className="mt-1 text-sm text-zinc-600">
+                  {appt.tenantName}
+                  {appt.locationName ? ` • ${appt.locationName}` : ""}
+                  {appt.operators.length ? ` • ${appt.operators.join(", ")}` : ""}
+                </p>
+                <p className="mt-1 text-sm text-zinc-500">
+                  Totale: € {money(appt.totalPrice)}
+                  {appt.publicCode ? ` • Codice: ${appt.publicCode}` : ""}
+                </p>
+                {!appt.canCancel && appt.cancelReason && (appt.status === "pending" || appt.status === "scheduled") ? (
+                  <p className="mt-1 text-xs text-zinc-400">{appt.cancelReason}</p>
+                ) : null}
+              </div>
+              <div className="flex flex-col gap-2 sm:items-end">
+                {appt.publicCode ? (
+                  <a
+                    className="inline-flex h-9 items-center rounded-md border border-zinc-200 px-3 text-sm font-semibold"
+                    href={`/api/account/ics?code=${encodeURIComponent(appt.publicCode)}`}
+                  >
+                    Aggiungi al calendario
+                  </a>
+                ) : null}
+                {appt.canCancel ? (
+                  <button
+                    className="inline-flex h-9 items-center rounded-md border border-red-200 px-3 text-sm font-semibold text-red-700 disabled:opacity-60"
+                    disabled={busy}
+                    onClick={() => onCancel(appt)}
+                    type="button"
+                  >
+                    Annulla
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </article>
+        ))}
+        {loaded && !appointments.length ? (
+          <EmptyState icon={CalendarDays} title="Nessuna prenotazione" text="Le prenotazioni effettuate nei centri collegati appariranno qui." />
+        ) : null}
       </div>
     </section>
   );
