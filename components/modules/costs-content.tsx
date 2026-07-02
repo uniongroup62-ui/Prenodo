@@ -435,9 +435,11 @@ export function CostsContent() {
                             {r.docNumber ? <div className="small text-muted">Doc: {r.docNumber}</div> : null}
                             {r.attachmentName ? (
                               <div className="small">
+                                {/* Download via presigned R2 (la route verifica sessione+
+                                    tenant e redirige all'URL firmato a scadenza breve). */}
                                 <a
                                   className="text-muted"
-                                  href={href(`&page=cost_attachment&id=${r.id}`)}
+                                  href={`/api/manage/cost-attachment?slug=${encodeURIComponent(slug)}&id=${r.id}`}
                                   target="_blank"
                                   rel="noopener"
                                 >

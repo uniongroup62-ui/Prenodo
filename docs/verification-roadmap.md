@@ -801,10 +801,33 @@ VERIFICA LIVE end-to-end (foto operatore, staff di test poi ripristinato):
   - round-trip bucket PRIVATO: PUT + presigned GET (200, contenuto identico)
     + DELETE, con cleanup.
 
-Prossimi consumatori (stesso pattern): immagini categorie/servizi e
-marketplace (bucket public), allegati costi/magazzino + schede cliente +
-documenti cliente (quickBookClientCard docs) su bucket private con presigned,
-e i PDF (preventivi/GDPR/consensi) quando si porta la generazione.
+CONSUMATORI R2 IMPLEMENTATI E VERIFICATI LIVE (2026-07-02, dati test ripuliti):
+- FOTO OPERATORE (vedi sopra).
+- IMMAGINE CATEGORIA SERVIZI (port dell'upload image_file di services.php
+  tab=categories, max 5MB jpg/png/webp/gif): route /api/manage/category-image
+  (upload/sostituzione con delete del vecchio/remove_image), image_url = URL
+  pubblico; i modal Nuova/Modifica categoria hanno file input collegato +
+  anteprima + "Rimuovi immagine" (in creazione l'id è risolto dalla lista
+  restituita dal save). Il WIZARD pubblico ora riceve imageUrl nel context
+  (PublicBookingCategory — prima le card step 2 non avevano proprio il campo)
+  e la card mostra l'immagine con l'SVG di fallback legacy. Verificato:
+  upload -> R2 -> GET 200 -> imageUrl nel context booking -> remove -> 404.
+  Divergenza doc.: niente compressione/resize server (legacy 1600px).
+- ALLEGATO COSTO (port del campo attachment di costs.php, SOLO PDF o JPG max
+  5MB): route /api/manage/cost-attachment — POST multipart su bucket PRIVATO
+  (attachment_path = KEY R2, + mime/name/size), GET = check sessione+tenant e
+  302 verso presigned URL (5 min); path legacy non migrati -> messaggio
+  chiaro. Editor costo: campo Allegato con link al file corrente + "Rimuovi
+  allegato" (upload dopo save_cost, id risolto dalla lista in creazione);
+  lista costi: il link graffetta ora punta alla route presigned (prima era
+  un URL legacy inesistente). Verificato: upload PDF -> download 302 ->
+  presigned 200 con contenuto %PDF -> remove -> colonne azzerate. Divergenza
+  doc.: niente compressione GD/Ghostscript.
+
+Prossimi consumatori (stesso pattern): immagini marketplace/prodotti (bucket
+public), schede cliente + documenti cliente (quickBookClientCard docs) su
+private con presigned, e i PDF (preventivi/GDPR/consensi) quando si porta la
+generazione.
 
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;

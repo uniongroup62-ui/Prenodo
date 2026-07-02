@@ -25,6 +25,10 @@ export type PublicBookingLocation = {
 export type PublicBookingCategory = {
   id: number;
   name: string;
+  // service_categories.image_url (URL pubblico R2, o path legacy passato
+  // invariato) — la card categoria dello step 2 la mostra, con l'SVG di
+  // fallback quando vuota (booking.php 13097-13104).
+  imageUrl: string;
 };
 
 export type PublicBookingService = {
@@ -152,13 +156,16 @@ export async function publicBookingContext(slug: string): Promise<PublicBookingC
   const categories = categoryRows.map((row) => ({
     id: Number(row.id ?? 0),
     name: String(row.name ?? "Servizi"),
+    // Solo URL http assoluti (R2) arrivano al wizard; i path locali legacy
+    // (/uploads/...) non esistono nel Next e cadrebbero sul fallback comunque.
+    imageUrl: /^https?:\/\//i.test(String(row.image_url ?? "").trim()) ? String(row.image_url).trim() : "",
   }));
   const serviceCategoryIds = new Set(categories.map((category) => category.id));
   for (const service of serviceRows) {
     const categoryId = nullableNumber(service.category_id);
     if (categoryId && !serviceCategoryIds.has(categoryId)) {
       serviceCategoryIds.add(categoryId);
-      categories.push({ id: categoryId, name: `Categoria #${categoryId}` });
+      categories.push({ id: categoryId, name: `Categoria #${categoryId}`, imageUrl: "" });
     }
   }
 

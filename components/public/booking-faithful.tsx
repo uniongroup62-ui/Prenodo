@@ -61,7 +61,7 @@ type BookingLocation = {
   hoursToday: string;
 };
 
-type BookingCategory = { id: number; name: string };
+type BookingCategory = { id: number; name: string; imageUrl?: string };
 
 type BookingService = {
   id: number;
@@ -811,7 +811,10 @@ export function BookingFaithful({
                       }}
                     >
                       <div className="cat-left">
-                        <img src="/assets/img/categories/body.svg" alt="" />
+                        {/* Immagine categoria (service_categories.image_url via R2) con
+                            l'SVG di fallback legacy quando assente (booking.php 13097). */}
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={cat.imageUrl || "/assets/img/categories/body.svg"} alt="" />
                         <div>
                           <div className="cat-name">{cat.name}</div>
                           <div className="small text-muted mt-1">Apri i servizi disponibili in questa categoria.</div>

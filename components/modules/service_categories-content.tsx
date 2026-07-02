@@ -13,10 +13,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 // page). They now persist via /api/manage/services (action=category_save), and
 // the reorder up/down + delete buttons call category_move / category_delete.
 //
-// TODO: the legacy modals also upload a category IMAGE (input file image_file,
-// compressed server-side into image_url). The JSON /api/manage/services save
-// pipeline only accepts an image_url string, not a multipart file upload, so the
-// file input is shown for parity but is not yet wired to a real upload.
+// IMMAGINE CATEGORIA: il file input (image_file, max 5MB) è collegato a
+// /api/manage/category-image (multipart -> Cloudflare R2, image_url = URL
+// pubblico) e viaggia DOPO category_save (in creazione serve l'id, risolto
+// dalla lista restituita). "Rimuovi immagine" replica delete_image del legacy.
+// Divergenza documentata: niente compressione/resize server-side
+// (process_uploaded_image 1600px) — l'immagine è salvata come caricata.
 
 type Category = {
   id: number;
@@ -61,6 +63,10 @@ export function ServiceCategoriesContent() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [busyMove, setBusyMove] = useState(false);
+  // Immagine categoria: file scelto nei due modal + flag "rimuovi" (edit).
+  const [createImageFile, setCreateImageFile] = useState<File | null>(null);
+  const [editImageFile, setEditImageFile] = useState<File | null>(null);
+  const [editRemoveImage, setEditRemoveImage] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -111,6 +117,31 @@ export function ServiceCategoriesContent() {
     if (Array.isArray(j.services)) setServices(j.services);
   }
 
+  // Upload/rimozione immagine su /api/manage/category-image (dopo il save).
+  // Ritorna null in successo, altrimenti il messaggio d'errore.
+  const uploadCategoryImage = useCallback(
+    async (categoryId: number, file: File | null, remove: boolean): Promise<string | null> => {
+      if (!file && !remove) return null;
+      const fd = new FormData();
+      fd.set("category_id", String(categoryId));
+      if (file) fd.set("image_file", file);
+      else fd.set("remove_image", "1");
+      try {
+        const res = await fetch(`/api/manage/category-image?slug=${encodeURIComponent(slug)}`, {
+          method: "POST",
+          headers: { "x-tenant-slug": slug },
+          body: fd,
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || j.ok === false) return String(j.error ?? "errore caricamento immagine.");
+        return null;
+      } catch {
+        return "errore di rete durante il caricamento immagine.";
+      }
+    },
+    [slug],
+  );
+
   async function onCreateSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError("");
@@ -120,14 +151,34 @@ export function ServiceCategoriesContent() {
     }
     setSaving(true);
     const j = await postCategory({ action: "category_save", id: "0", name: createName });
-    setSaving(false);
     if (!j.ok) {
+      setSaving(false);
       setError(String(j.error ?? "Errore nel salvataggio della categoria."));
       return;
     }
     applyResult(j);
+    // Immagine: la categoria è APPENA creata — risolvo l'id dalla lista
+    // restituita (match per nome, id più alto: l'ultima inserita).
+    if (createImageFile) {
+      const createdId = (j.categories ?? [])
+        .filter((c) => c.name.trim().toLowerCase() === createName.trim().toLowerCase())
+        .reduce((max, c) => Math.max(max, c.id), 0);
+      const imageError = createdId > 0 ? await uploadCategoryImage(createdId, createImageFile, false) : "categoria creata ma non identificata.";
+      if (imageError) {
+        setSaving(false);
+        setError(`Categoria salvata, ma l'immagine non è stata caricata: ${imageError}`);
+        setCreateOpen(false);
+        setCreateName("");
+        setCreateImageFile(null);
+        load();
+        return;
+      }
+      load(); // ricarica per far arrivare l'imageUrl nella tabella
+    }
+    setSaving(false);
     setCreateOpen(false);
     setCreateName("");
+    setCreateImageFile(null);
   }
 
   async function onEditSubmit(event: React.FormEvent, categoryId: number) {
@@ -139,13 +190,21 @@ export function ServiceCategoriesContent() {
     }
     setSaving(true);
     const j = await postCategory({ action: "category_save", id: String(categoryId), name: editName });
-    setSaving(false);
     if (!j.ok) {
+      setSaving(false);
       setError(String(j.error ?? "Errore nel salvataggio della categoria."));
       return;
     }
     applyResult(j);
+    const imageError = await uploadCategoryImage(categoryId, editImageFile, !editImageFile && editRemoveImage);
+    setSaving(false);
+    if (imageError) {
+      setError(`Categoria salvata, ma l'immagine non è stata aggiornata: ${imageError}`);
+    }
+    if (editImageFile || editRemoveImage) load();
     setEditModalId(null);
+    setEditImageFile(null);
+    setEditRemoveImage(false);
   }
 
   async function onMove(categoryId: number, direction: "up" | "down") {
@@ -365,6 +424,8 @@ export function ServiceCategoriesContent() {
                             onClick={() => {
                               setError("");
                               setEditName(category.name);
+                              setEditImageFile(null);
+                              setEditRemoveImage(false);
                               setEditModalId(category.id);
                             }}
                           >
@@ -420,11 +481,48 @@ export function ServiceCategoriesContent() {
                       </div>
                       <div className="col-md-6">
                         <label className="form-label">Immagine categoria</label>
-                        <input className="form-control" type="file" name="image_file" accept="image/*" />
+                        {category.imageUrl && !editRemoveImage && !editImageFile ? (
+                          <div className="mb-2">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={category.imageUrl} alt="" className="rounded border" style={{ width: 120, height: 68, objectFit: "cover" }} />
+                          </div>
+                        ) : null}
+                        <input
+                          className="form-control"
+                          type="file"
+                          name="image_file"
+                          accept="image/jpeg,image/png,image/webp,image/gif"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0] ?? null;
+                            if (file && file.size > 5242880) {
+                              setError("Immagine troppo grande (max 5 MB).");
+                              e.target.value = "";
+                              setEditImageFile(null);
+                              return;
+                            }
+                            setError("");
+                            setEditImageFile(file);
+                            if (file) setEditRemoveImage(false);
+                          }}
+                        />
                         <div className="form-text">
                           Consigliato: <strong>1200&times;675</strong> (rapporto 16:9) oppure <strong>800&times;450</strong>.
-                          Max <strong>5 MB</strong>. L&apos;immagine verr&agrave; compressa automaticamente.
+                          Max <strong>5 MB</strong>.
                         </div>
+                        {category.imageUrl && !editImageFile ? (
+                          <div className="form-check mt-1">
+                            <input
+                              className="form-check-input"
+                              type="checkbox"
+                              id={`categoryRemoveImage${category.id}`}
+                              checked={editRemoveImage}
+                              onChange={(e) => setEditRemoveImage(e.target.checked)}
+                            />
+                            <label className="form-check-label" htmlFor={`categoryRemoveImage${category.id}`}>
+                              Rimuovi immagine
+                            </label>
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -467,10 +565,26 @@ export function ServiceCategoriesContent() {
                     </div>
                     <div className="col-md-6">
                       <label className="form-label">Immagine categoria</label>
-                      <input className="form-control" type="file" name="image_file" accept="image/*" />
+                      <input
+                        className="form-control"
+                        type="file"
+                        name="image_file"
+                        accept="image/jpeg,image/png,image/webp,image/gif"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0] ?? null;
+                          if (file && file.size > 5242880) {
+                            setError("Immagine troppo grande (max 5 MB).");
+                            e.target.value = "";
+                            setCreateImageFile(null);
+                            return;
+                          }
+                          setError("");
+                          setCreateImageFile(file);
+                        }}
+                      />
                       <div className="form-text">
                         Consigliato: <strong>1200&times;675</strong> (rapporto 16:9) oppure <strong>800&times;450</strong>. Max{" "}
-                        <strong>5 MB</strong>. L&apos;immagine verr&agrave; compressa automaticamente.
+                        <strong>5 MB</strong>.
                       </div>
                     </div>
                   </div>

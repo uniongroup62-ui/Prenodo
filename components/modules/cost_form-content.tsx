@@ -14,12 +14,12 @@ import { useEffect, useMemo, useState } from "react";
 // id). The list page links here via index.php?page=costs&tab=scadenziario&action=
 // new|edit, 307-redirected to /<slug>/costs?tab=scadenziario&action=new|edit.
 //
-// TODO: the legacy editor also handles the document ATTACHMENT upload
-// (input name="attachment", PDF/JPG, compressed server-side into attachment_*
-// columns). That requires multipart upload + image/PDF compression, which the
-// JSON /api/manage/costs save pipeline does not yet support, so the attachment
-// field is not ported here. Existing attachments are preserved on save (the
-// save pipeline never clears attachment_* columns).
+// ALLEGATO: il campo file (attachment, solo PDF o JPG max 5MB) è collegato a
+// /api/manage/cost-attachment (multipart -> Cloudflare R2 PRIVATO, la key va
+// in attachment_path; il download passa dal presigned della stessa route) e
+// viaggia DOPO save_cost (in creazione l'id è risolto dalla lista restituita).
+// "Rimuovi allegato" replica la rimozione legacy. Divergenza documentata:
+// niente compressione server-side (GD per i JPG / Ghostscript per i PDF).
 
 type CostCategory = { id: number; name: string; isActive: boolean };
 type CostSupplier = { id: number; name: string };
@@ -170,6 +170,7 @@ export function CostFormContent() {
             recurrence_end_mode: c.recurrenceEndDate ? "date" : "never",
             recurrence_end_date: String(c.recurrenceEndDate ?? "").slice(0, 10),
           });
+          setCurrentAttachmentName(String(c.attachmentName ?? "").trim());
         })
         .catch(() => setError("Errore nel caricamento del costo."))
         .finally(() => setLoading(false));
@@ -186,6 +187,11 @@ export function CostFormContent() {
   function set<K extends keyof CostForm>(key: K, value: CostForm[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
+
+  // Allegato (PDF/JPG max 5MB): file scelto + flag rimozione + nome corrente.
+  const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
+  const [removeAttachment, setRemoveAttachment] = useState(false);
+  const [currentAttachmentName, setCurrentAttachmentName] = useState("");
 
   function backToList() {
     window.location.href = `/${encodeURIComponent(slug)}/costs?tab=scadenziario`;
@@ -252,6 +258,42 @@ export function CostFormContent() {
         setSaving(false);
         return;
       }
+
+      // ALLEGATO: dopo il save (serve l'id anche in creazione — risolto dalla
+      // lista restituita: match titolo+scadenza, id più alto). Il costo è GIÀ
+      // salvato: un errore allegato resta sul form con il messaggio.
+      if (attachmentFile || removeAttachment) {
+        let costId = form.id;
+        if (costId <= 0) {
+          type SavedCost = { id: number; title: string; dueDate: string };
+          const list: SavedCost[] = Array.isArray(j.costs) ? j.costs : [];
+          costId = list
+            .filter((c) => String(c.title).trim() === form.title.trim() && String(c.dueDate ?? "").slice(0, 10) === form.due_date)
+            .reduce((max, c) => Math.max(max, Number(c.id) || 0), 0);
+        }
+        if (costId > 0) {
+          const fd = new FormData();
+          fd.set("cost_id", String(costId));
+          if (attachmentFile) fd.set("attachment", attachmentFile);
+          else fd.set("remove_attachment", "1");
+          const attachRes = await fetch(`/api/manage/cost-attachment?slug=${encodeURIComponent(slug)}`, {
+            method: "POST",
+            headers: { "x-tenant-slug": slug },
+            body: fd,
+          });
+          const attachJson = await attachRes.json().catch(() => ({}));
+          if (!attachRes.ok || attachJson.ok === false) {
+            setError(`Costo salvato, ma l'allegato non è stato aggiornato: ${String(attachJson.error ?? "errore caricamento allegato.")}`);
+            setSaving(false);
+            return;
+          }
+        } else {
+          setError("Costo salvato, ma l'allegato non è stato caricato (costo non identificato). Riapri il costo e ricarica il file.");
+          setSaving(false);
+          return;
+        }
+      }
+
       backToList();
     } catch {
       setError("Errore nel salvataggio del costo.");
@@ -395,6 +437,58 @@ export function CostFormContent() {
               <div className="col-12">
                 <label className="form-label">Note (opz.)</label>
                 <textarea className="form-control" name="notes" rows={3} value={form.notes} onChange={(e) => set("notes", e.target.value)} />
+              </div>
+
+              {/* Allegato documento (port del campo attachment di costs.php):
+                  PDF o JPG max 5MB su R2 privato; download presigned dalla lista. */}
+              <div className="col-12">
+                <label className="form-label">Allegato (opz.)</label>
+                {currentAttachmentName && !attachmentFile && !removeAttachment ? (
+                  <div className="small mb-1">
+                    <a
+                      className="text-muted"
+                      href={`/api/manage/cost-attachment?slug=${encodeURIComponent(slug)}&id=${form.id}`}
+                      target="_blank"
+                      rel="noopener"
+                    >
+                      <i className="bi bi-paperclip me-1" />
+                      {currentAttachmentName}
+                    </a>
+                  </div>
+                ) : null}
+                <input
+                  className="form-control"
+                  type="file"
+                  name="attachment"
+                  accept="application/pdf,image/jpeg"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] ?? null;
+                    if (file && file.size > 5242880) {
+                      setError("File troppo grande (max 5 MB)");
+                      e.target.value = "";
+                      setAttachmentFile(null);
+                      return;
+                    }
+                    setError("");
+                    setAttachmentFile(file);
+                    if (file) setRemoveAttachment(false);
+                  }}
+                />
+                <div className="form-text">Solo PDF o JPG, massimo 5 MB.</div>
+                {currentAttachmentName && !attachmentFile ? (
+                  <div className="form-check mt-1">
+                    <input
+                      className="form-check-input"
+                      type="checkbox"
+                      id="costRemoveAttachment"
+                      checked={removeAttachment}
+                      onChange={(e) => setRemoveAttachment(e.target.checked)}
+                    />
+                    <label className="form-check-label" htmlFor="costRemoveAttachment">
+                      Rimuovi allegato
+                    </label>
+                  </div>
+                ) : null}
               </div>
 
               <div className="col-md-3">
