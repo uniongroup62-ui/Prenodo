@@ -4192,15 +4192,13 @@ async function issueRechargeFromSale(
   // POINTS: faithful to pos_recharge_points_info — earn only when the template's earn_points
   // flag is set AND the client is recharge-points eligible. The earn BASE is base+bonus when
   // the flag is set (the legacy "Importo + bonus" rule the modal exposes), else base only.
-  // The points themselves are computed from the fidelity earn rule (floor(amount / earn_step)).
-  // TODO(parity): the full eligibility (campaign windows + min_spend + card levels via
-  // Fidelity::calcEarnPointsForAmountWithCampaign / credit_wallet_recharge_points_eligible) is
-  // NOT ported — only the global fidelity_enabled gate + the flat earn-step rate. A campaign
-  // (fidelity_campaigns) or level-restricted earn would diverge here.
+  // CAMPAIGN-AWARE like the POS/appointment earn (legacy calcEarnPointsForAmountWithCampaign):
+  // points accrue only under the ACTIVE fidelity campaign for today (no campaign => 0),
+  // applying its step/tiers + min_spend + card-level eligibility.
   const earnSettings = await getFidelityEarnSettings(slug);
   const eligible = earnPointsFlag && earnSettings.enabled;
   const earnBase = earnSettings.earnOnBonus ? totalAmount : baseAmount;
-  const pointsEarned = eligible ? earnFidelityPoints(earnBase, earnSettings.earnStep) : 0;
+  const pointsEarned = eligible ? (await computeCampaignEarn(slug, earnBase, clientId, earnSettings.earnStep)).points : 0;
 
   const note = rechargeNote(baseAmount, bonusAmount, pointsEarned, item.note);
 
@@ -4272,14 +4270,6 @@ async function getFidelityEarnSettings(slug: string): Promise<FidelityEarnSettin
   }
 }
 
-// Points earned for an amount — port of Fidelity::calcEarnPointsWithStep (floor(amount/step),
-// whole points). Returns 0 when the step or amount is non-positive.
-function earnFidelityPoints(amount: number, earnStep: number): number {
-  const value = Math.max(0, Number(amount) || 0);
-  const step = Number(earnStep) || 0;
-  if (step <= 0 || value <= 0) return 0;
-  return normalizePoints(value / step);
-}
 
 // Points for a tiered campaign: the highest tier whose min_spend <= amount.
 function tierPointsForSpend(amount: number, tiers: Array<{ minSpend: number; points: number }>): number {
@@ -4331,8 +4321,8 @@ async function computeCampaignEarn(slug: string, amount: number, clientId: numbe
 //    service lines are already 0, so they contribute nothing — the earn base is the net
 //    service value, matching the legacy (coupon is not persisted on appointments yet;
 //    credit/giftcard reduce the PAYMENT, not the earnable base).
-//  • EARN: when earn is enabled, award earnFidelityPoints(base, step) via a positive
-//    points_earn wallet movement tagged source_type='appointment'/source_id=appointmentId
+//  • EARN: when earn is enabled, award the campaign-aware computeCampaignEarn points via a
+//    positive points_earn wallet movement tagged source_type='appointment'/source_id=appointmentId
 //    (so a later cancel-done storno can find + reverse it, exactly like the POS void reverses
 //    via sales.fidelity_points_earned) and stamp appointments.fidelity_points_earned.
 //  • REDEEM (reserved): when fidelity_points_used>0, settle it with a negative points_redeem
@@ -4414,12 +4404,16 @@ export async function awardAppointmentFidelityOnDone(slug: string, appointmentId
 
     // EARN: gated on the tenant fidelity earn settings (fidelity_enabled + points_enabled +
     // earn step) AND the appointment-specific toggle (legacy earn_on_appointment_done — a
-    // tenant can enable points generally but NOT for completed appointments). When earned,
-    // award the points (positive points_earn movement tagged to the appointment) and stamp
-    // appointments.fidelity_points_earned so a later storno can reverse.
+    // tenant can enable points generally but NOT for completed appointments). CAMPAIGN-AWARE
+    // like the POS checkout (live PHP<->Next verification 2026-07-02 caught the divergence:
+    // the flat floor(earnable/step) awarded 1 point where the legacy awards 0): points accrue
+    // ONLY under the ACTIVE fidelity campaign for today (no campaign => 0 — the flat step is
+    // just the campaign default, NOT a fallback), applying its step/tiers + min_spend + card-
+    // level eligibility. The campaign id is stamped on the appointment like on the sale.
     const earnSettings = await getFidelityEarnSettings(slug);
     if (earnSettings.enabled && (await fidelityEarnOnAppointmentDone(slug))) {
-      const pointsEarned = earnFidelityPoints(earnable, earnSettings.earnStep);
+      const campaignEarn = await computeCampaignEarn(slug, earnable, clientId, earnSettings.earnStep);
+      const pointsEarned = campaignEarn.points;
       if (pointsEarned > 0) {
         await addDbWalletMovement(
           {
@@ -4433,7 +4427,7 @@ export async function awardAppointmentFidelityOnDone(slug: string, appointmentId
           },
           slug,
         );
-        await tenantUpdate({ slug, table: "appointments", id, values: { fidelity_points_earned: pointsEarned } });
+        await tenantUpdate({ slug, table: "appointments", id, values: { fidelity_points_earned: pointsEarned, fidelity_campaign_id: campaignEarn.campaignId > 0 ? campaignEarn.campaignId : null } });
       }
     }
 
