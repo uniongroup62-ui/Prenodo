@@ -25,7 +25,13 @@ import {
   cancelPublicCustomerAppointment,
   decidePublicCustomerQuote,
   listPublicCustomerAppointments,
+  listPublicCustomerCredit,
+  listPublicCustomerFidelity,
+  listPublicCustomerGiftcards,
+  listPublicCustomerGifts,
   listPublicCustomerPackages,
+  listPublicCustomerPrepaids,
+  listPublicCustomerPreorders,
   listPublicCustomerQuotes,
   updatePublicCustomerReferenceLocation,
 } from "@/lib/public-customer-appointments";
@@ -206,6 +212,27 @@ export async function POST(request: Request) {
     if (action === "packages" || action === "my_packages") {
       const packages = await listPublicCustomerPackages(account.id);
       return Response.json({ ok: true, packages });
+    }
+
+    // Sezioni area cliente P3 (port of the tenant-panel views: credit / giftcards /
+    // prepaids / gifts / fidelity / preorders) — read-only lists per linked activity.
+    if (action === "credit" || action === "my_credit") {
+      return Response.json({ ok: true, credit: await listPublicCustomerCredit(account.id) });
+    }
+    if (action === "giftcards" || action === "my_giftcards") {
+      return Response.json({ ok: true, giftcards: await listPublicCustomerGiftcards(account.id) });
+    }
+    if (action === "prepaids" || action === "my_prepaids") {
+      return Response.json({ ok: true, prepaids: await listPublicCustomerPrepaids(account.id) });
+    }
+    if (action === "gifts" || action === "my_gifts") {
+      return Response.json({ ok: true, gifts: await listPublicCustomerGifts(account.id) });
+    }
+    if (action === "fidelity" || action === "my_fidelity") {
+      return Response.json({ ok: true, fidelity: await listPublicCustomerFidelity(account.id) });
+    }
+    if (action === "preorders" || action === "my_preorders") {
+      return Response.json({ ok: true, preorders: await listPublicCustomerPreorders(account.id) });
     }
 
     // I miei preventivi (port of mode=my_quotes).

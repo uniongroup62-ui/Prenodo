@@ -705,3 +705,373 @@ export async function publicCustomerAppointmentIcs(
 
   return null;
 }
+
+// ===================== Sezioni area cliente (P3) =====================
+// Port of the remaining tenant-panel sections (BookingPublicUi.php 33-60 menu):
+// Credito, GiftCard, Prepagati, Omaggi, Fidelity, Preordini — read-only lists,
+// aggregated per linked activity like the appointments/packages above.
+
+const ymdLocal = (value: unknown): string | null => {
+  if (!value) return null;
+  const s = value instanceof Date ? sqlLocal(value) : String(value);
+  const m = /^(\d{4}-\d{2}-\d{2})/.exec(s);
+  return m ? m[1] : null;
+};
+const todayYmdLocal = (): string => {
+  const t = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}`;
+};
+
+// --- Credito: saldo + movimenti (credit_adjustments, il ledger del wallet). ---
+export type PublicCustomerCreditSection = {
+  tenantSlug: string;
+  tenantName: string;
+  balance: number;
+  movements: Array<{ date: string | null; amount: number; note: string }>;
+};
+export async function listPublicCustomerCredit(accountId: number): Promise<PublicCustomerCreditSection[]> {
+  const activities = await publicCustomerActivities(accountId).catch(() => [] as PublicCustomerActivity[]);
+  const out: PublicCustomerCreditSection[] = [];
+  for (const activity of activities) {
+    if (activity.clientId <= 0) continue;
+    const slug = activity.tenantSlug;
+    try {
+      const clientRows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "clients",
+        columns: "credit_balance",
+        where: "id = ?",
+        params: [activity.clientId],
+        limit: 1,
+      });
+      if (!clientRows[0]) continue;
+      const balance = Math.round((Math.max(0, Number(clientRows[0].credit_balance ?? 0) || 0) + Number.EPSILON) * 100) / 100;
+      const moveRows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "credit_adjustments",
+        columns: "delta_amount, note, created_at",
+        where: "client_id = ?",
+        params: [activity.clientId],
+        orderBy: "id DESC",
+        limit: 30,
+      }).catch(() => [] as RowDataPacket[]);
+      out.push({
+        tenantSlug: slug,
+        tenantName: activity.tenantName,
+        balance,
+        movements: moveRows.map((row) => ({
+          date: ymdLocal(row.created_at),
+          amount: Math.round((Number(row.delta_amount ?? 0) + Number.EPSILON) * 100) / 100,
+          note: String(row.note ?? ""),
+        })),
+      });
+    } catch {
+      // tolerate a tenant without the tables
+    }
+  }
+  return out;
+}
+
+// --- GiftCard: le carte intestate al cliente con stato leggibile. ---
+export type PublicCustomerGiftcard = {
+  tenantSlug: string;
+  tenantName: string;
+  id: number;
+  code: string;
+  balance: number;
+  expiresAt: string | null;
+  statusLabel: string;
+};
+export async function listPublicCustomerGiftcards(accountId: number): Promise<PublicCustomerGiftcard[]> {
+  const activities = await publicCustomerActivities(accountId).catch(() => [] as PublicCustomerActivity[]);
+  const out: PublicCustomerGiftcard[] = [];
+  const today = todayYmdLocal();
+  for (const activity of activities) {
+    if (activity.clientId <= 0) continue;
+    const slug = activity.tenantSlug;
+    try {
+      const rows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "giftcards",
+        columns: "id, code, balance, status, expires_at",
+        where: "recipient_client_id = ?",
+        params: [activity.clientId],
+        orderBy: "id DESC",
+        limit: 50,
+      }).catch(() => [] as RowDataPacket[]);
+      for (const row of rows) {
+        const balance = Math.round((Math.max(0, Number(row.balance ?? 0) || 0) + Number.EPSILON) * 100) / 100;
+        const status = String(row.status ?? "").trim().toLowerCase();
+        const expires = ymdLocal(row.expires_at);
+        const statusLabel =
+          status === "active" && expires && expires < today
+            ? "Scaduta"
+            : status === "active" && balance <= 0
+              ? "Esaurita"
+              : status === "active"
+                ? "Attiva"
+                : status === "redeemed"
+                  ? "Utilizzata"
+                  : status === "cancelled" || status === "canceled"
+                    ? "Annullata"
+                    : status || "—";
+        out.push({
+          tenantSlug: slug,
+          tenantName: activity.tenantName,
+          id: Number(row.id ?? 0),
+          code: String(row.code ?? ""),
+          balance,
+          expiresAt: expires,
+          statusLabel,
+        });
+      }
+    } catch {
+      // tolerate a tenant without the table
+    }
+  }
+  return out;
+}
+
+// --- Prepagati: i servizi prepagati con residuo + deep-link "prenota". ---
+export type PublicCustomerPrepaid = {
+  tenantSlug: string;
+  tenantName: string;
+  id: number;
+  serviceId: number;
+  serviceName: string;
+  remainingQty: number;
+  purchasedQty: number;
+  unitPrice: number;
+  expiresAt: string | null;
+  statusLabel: string;
+};
+export async function listPublicCustomerPrepaids(accountId: number): Promise<PublicCustomerPrepaid[]> {
+  const activities = await publicCustomerActivities(accountId).catch(() => [] as PublicCustomerActivity[]);
+  const out: PublicCustomerPrepaid[] = [];
+  const today = todayYmdLocal();
+  for (const activity of activities) {
+    if (activity.clientId <= 0) continue;
+    const slug = activity.tenantSlug;
+    try {
+      const rows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "client_prepaid_services",
+        columns: "id, service_id, service_name, purchased_qty, remaining_qty, unit_price, status, expires_at",
+        where: "client_id = ?",
+        params: [activity.clientId],
+        orderBy: "id DESC",
+        limit: 100,
+      }).catch(() => [] as RowDataPacket[]);
+      for (const row of rows) {
+        const remaining = Math.max(0, Number(row.remaining_qty ?? 0) || 0);
+        const status = String(row.status ?? "").trim().toLowerCase();
+        const expires = ymdLocal(row.expires_at);
+        const statusLabel =
+          status !== "active"
+            ? status === "completed"
+              ? "Esaurito"
+              : status || "—"
+            : expires && expires < today
+              ? "Scaduto"
+              : remaining <= 0
+                ? "Esaurito"
+                : "Attivo";
+        out.push({
+          tenantSlug: slug,
+          tenantName: activity.tenantName,
+          id: Number(row.id ?? 0),
+          serviceId: Number(row.service_id ?? 0),
+          serviceName: String(row.service_name ?? "") || `Servizio #${Number(row.service_id ?? 0)}`,
+          remainingQty: remaining,
+          purchasedQty: Math.max(0, Number(row.purchased_qty ?? 0) || 0),
+          unitPrice: Math.round((Math.max(0, Number(row.unit_price ?? 0) || 0) + Number.EPSILON) * 100) / 100,
+          expiresAt: expires,
+          statusLabel,
+        });
+      }
+    } catch {
+      // tolerate a tenant without the table
+    }
+  }
+  return out;
+}
+
+// --- Omaggi: le istanze gift del cliente con lo stato legacy. ---
+const GIFT_STATE_LABELS: Record<string, string> = {
+  accumulo: "In accumulo",
+  disponibile: "Disponibile",
+  riscattato: "Riscattato",
+  scaduto: "Scaduto",
+  annullato: "Annullato",
+};
+export type PublicCustomerGift = {
+  tenantSlug: string;
+  tenantName: string;
+  id: number;
+  name: string;
+  stateLabel: string;
+  expiresAt: string | null;
+};
+export async function listPublicCustomerGifts(accountId: number): Promise<PublicCustomerGift[]> {
+  const activities = await publicCustomerActivities(accountId).catch(() => [] as PublicCustomerActivity[]);
+  const out: PublicCustomerGift[] = [];
+  for (const activity of activities) {
+    if (activity.clientId <= 0) continue;
+    const slug = activity.tenantSlug;
+    try {
+      const rows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "gift_instances",
+        columns: "id, gift_id, state, expires_at",
+        where: "client_id = ?",
+        params: [activity.clientId],
+        orderBy: "id DESC",
+        limit: 50,
+      }).catch(() => [] as RowDataPacket[]);
+      if (!rows.length) continue;
+      const giftIds = Array.from(new Set(rows.map((r) => Number(r.gift_id ?? 0)).filter((n) => n > 0)));
+      const nameById = new Map<number, string>();
+      if (giftIds.length) {
+        const ph = giftIds.map(() => "?").join(", ");
+        const gifts = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "id, name", where: `id IN (${ph})`, params: giftIds }).catch(() => [] as RowDataPacket[]);
+        for (const g of gifts) nameById.set(Number(g.id ?? 0), String(g.name ?? ""));
+      }
+      for (const row of rows) {
+        const state = String(row.state ?? "").trim().toLowerCase();
+        out.push({
+          tenantSlug: slug,
+          tenantName: activity.tenantName,
+          id: Number(row.id ?? 0),
+          name: nameById.get(Number(row.gift_id ?? 0)) || "Omaggio",
+          stateLabel: GIFT_STATE_LABELS[state] ?? (state || "—"),
+          expiresAt: ymdLocal(row.expires_at),
+        });
+      }
+    } catch {
+      // tolerate a tenant without the tables
+    }
+  }
+  return out;
+}
+
+// --- Fidelity: punti, tessera e ultimi movimenti (transactions). ---
+export type PublicCustomerFidelitySection = {
+  tenantSlug: string;
+  tenantName: string;
+  points: number;
+  cardCode: string;
+  cardActive: boolean;
+  movements: Array<{ date: string | null; kind: string; deltaPoints: number; note: string }>;
+};
+export async function listPublicCustomerFidelity(accountId: number): Promise<PublicCustomerFidelitySection[]> {
+  const activities = await publicCustomerActivities(accountId).catch(() => [] as PublicCustomerActivity[]);
+  const out: PublicCustomerFidelitySection[] = [];
+  for (const activity of activities) {
+    if (activity.clientId <= 0) continue;
+    const slug = activity.tenantSlug;
+    try {
+      const clientRows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "clients",
+        columns: "points",
+        where: "id = ?",
+        params: [activity.clientId],
+        limit: 1,
+      });
+      if (!clientRows[0]) continue;
+      const cardRows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "cards",
+        columns: "code, status",
+        where: "client_id = ?",
+        params: [activity.clientId],
+        orderBy: "id DESC",
+        limit: 1,
+      }).catch(() => [] as RowDataPacket[]);
+      const txRows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "transactions",
+        columns: "kind, delta_points, note, created_at",
+        where: "client_id = ?",
+        params: [activity.clientId],
+        orderBy: "id DESC",
+        limit: 30,
+      }).catch(() => [] as RowDataPacket[]);
+      out.push({
+        tenantSlug: slug,
+        tenantName: activity.tenantName,
+        points: Math.max(0, Math.round(Number(clientRows[0].points ?? 0) || 0)),
+        cardCode: String(cardRows[0]?.code ?? ""),
+        cardActive: String(cardRows[0]?.status ?? "").trim().toLowerCase() === "active",
+        movements: txRows
+          .filter((row) => Number(row.delta_points ?? 0) !== 0)
+          .map((row) => ({
+            date: ymdLocal(row.created_at),
+            kind: String(row.kind ?? ""),
+            deltaPoints: Math.round(Number(row.delta_points ?? 0) || 0),
+            note: String(row.note ?? ""),
+          })),
+      });
+    } catch {
+      // tolerate a tenant without the tables
+    }
+  }
+  return out;
+}
+
+// --- Preordini: sale_items prodotto con item_status ordinato/ritirato (port di
+//     booking.php 10548-10620: la vista Preordini del pannello cliente). ---
+export type PublicCustomerPreorder = {
+  tenantSlug: string;
+  tenantName: string;
+  itemName: string;
+  qty: number;
+  statusLabel: string;
+  saleDate: string | null;
+  expiresAt: string | null;
+};
+export async function listPublicCustomerPreorders(accountId: number): Promise<PublicCustomerPreorder[]> {
+  const activities = await publicCustomerActivities(accountId).catch(() => [] as PublicCustomerActivity[]);
+  const out: PublicCustomerPreorder[] = [];
+  const today = todayYmdLocal();
+  for (const activity of activities) {
+    if (activity.clientId <= 0) continue;
+    const slug = activity.tenantSlug;
+    try {
+      const sales = await tenantTable(slug, "sales");
+      const saleItems = await tenantTable(slug, "sale_items");
+      const rows = await dbQuery<RowDataPacket[]>(
+        `SELECT si.item_name, si.qty, si.item_status, si.preorder_expires_at, s.sale_date, s.created_at
+           FROM ${quoteIdentifier(saleItems.name)} si
+           JOIN ${quoteIdentifier(sales.name)} s ON s.id = si.sale_id AND s.tenant_id = si.tenant_id
+          WHERE s.tenant_id = ?
+            AND s.client_id = ?
+            AND si.item_type = 'product'
+            AND LOWER(TRIM(COALESCE(si.item_status,''))) IN ('ordered','ordinato','collected','ritirato')
+            AND LOWER(TRIM(COALESCE(s.status,''))) NOT IN ('cancelled','canceled','annullato','annullata')
+          ORDER BY COALESCE(s.sale_date, s.created_at) DESC, si.id DESC
+          LIMIT 150`,
+        [sales.tenantId ?? 0, activity.clientId],
+      ).catch(() => [] as RowDataPacket[]);
+      for (const row of rows) {
+        const status = String(row.item_status ?? "ordered").trim().toLowerCase();
+        const collected = status === "collected" || status === "ritirato";
+        const expires = ymdLocal(row.preorder_expires_at);
+        const statusLabel = collected ? "Ritirato" : expires && expires < today ? "Scaduto" : "Ordinato";
+        out.push({
+          tenantSlug: slug,
+          tenantName: activity.tenantName,
+          itemName: String(row.item_name ?? "Prodotto"),
+          qty: Math.max(1, Math.round(Number(row.qty ?? 1) || 1)),
+          statusLabel,
+          saleDate: ymdLocal(row.sale_date ?? row.created_at),
+          expiresAt: expires,
+        });
+      }
+    } catch {
+      // tolerate a tenant without the sales tables
+    }
+  }
+  return out;
+}

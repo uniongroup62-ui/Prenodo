@@ -699,6 +699,21 @@ OTP/reset (fix TZ), conferme su DB.
   (applyAppointmentPackage/Prepaid/Giftbox/GiftRedeems, re-validazione +
   azzeramento riga), gate di sessione come i Vantaggi. Da collegare in P3 i
   link dalle sezioni area cliente ancora mancanti.
+- P3 CHIUSO (verificato live): sezioni area cliente Credito / GiftCard /
+  Prepagati / Omaggi / Fidelity / Preordini (port del menu tenant-panel
+  BookingPublicUi.php 33-60, aggregate per attività collegata come le sezioni
+  esistenti). Lib: listPublicCustomerCredit (saldo + ledger credit_adjustments),
+  Giftcards (stato leggibile Attiva/Esaurita/Scaduta/Utilizzata/Annullata),
+  Prepaids (residuo/qty/prezzo + stato), Gifts (gift_instances + stato legacy
+  In accumulo/Disponibile/...), Fidelity (punti + tessera + movimenti
+  transactions), Preorders (sale_items prodotto ordered/collected, port di
+  booking.php 10548-10620 — stati Ordinato/Ritirato/Scaduto). Route
+  /api/account: azioni credit/giftcards/prepaids/gifts/fidelity/preorders (+
+  alias my_*). UI: 6 voci nav + view con badge stato, empty state e lazy-load;
+  la view Prepagati espone il deep-link P2 "Prenota"
+  (/slug/booking?book_prepaid=id&service_id=). Test live con setup usa-e-getta
+  (credito+movimenti, giftcard, punti+tessera, sezioni vuote gracefully),
+  cleanup completo incluso il ledger credit_adjustments.
 - Q2 CHIUSO: modali dettaglio residui nel drawer. quickBookClientResidualsDetail
   esteso con gli id sorgente (prepaid id/service_id, giftcard id, package id +
   service_id per seduta, giftbox instance_id + giftbox_item_id/service_id,

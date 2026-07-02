@@ -5,7 +5,9 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
   CalendarDays,
+  CreditCard,
   FileText,
+  Gift,
   Heart,
   KeyRound,
   Loader2,
@@ -14,13 +16,34 @@ import {
   MapPin,
   Package,
   ShieldCheck,
+  ShoppingBag,
+  Star,
   Store,
+  Ticket,
   Trash2,
   User,
   UserPlus,
+  Wallet,
 } from "lucide-react";
 
-type AccountMode = "login" | "register" | "forgot-password" | "verify" | "reset" | "activities" | "appointments" | "packages" | "quotes" | "favorites" | "profile";
+type AccountMode =
+  | "login"
+  | "register"
+  | "forgot-password"
+  | "verify"
+  | "reset"
+  | "activities"
+  | "appointments"
+  | "packages"
+  | "quotes"
+  | "favorites"
+  | "profile"
+  | "credit"
+  | "giftcards"
+  | "prepaids"
+  | "gifts"
+  | "fidelity"
+  | "preorders";
 
 // Port of booking.php mode=my_packages payload (+ tenant fields).
 type CustomerPackage = {
@@ -118,6 +141,70 @@ type Activity = {
   }>;
 };
 
+// Sezioni P3 (port of the tenant-panel views): Credito / GiftCard / Prepagati /
+// Omaggi / Fidelity / Preordini — read-only, per linked activity.
+type CustomerCreditSection = {
+  tenantSlug: string;
+  tenantName: string;
+  balance: number;
+  movements: Array<{ date: string | null; amount: number; note: string }>;
+};
+type CustomerGiftcard = {
+  tenantSlug: string;
+  tenantName: string;
+  id: number;
+  code: string;
+  balance: number;
+  expiresAt: string | null;
+  statusLabel: string;
+};
+type CustomerPrepaid = {
+  tenantSlug: string;
+  tenantName: string;
+  id: number;
+  serviceId: number;
+  serviceName: string;
+  remainingQty: number;
+  purchasedQty: number;
+  unitPrice: number;
+  expiresAt: string | null;
+  statusLabel: string;
+};
+type CustomerGift = {
+  tenantSlug: string;
+  tenantName: string;
+  id: number;
+  name: string;
+  stateLabel: string;
+  expiresAt: string | null;
+};
+type CustomerFidelitySection = {
+  tenantSlug: string;
+  tenantName: string;
+  points: number;
+  cardCode: string;
+  cardActive: boolean;
+  movements: Array<{ date: string | null; kind: string; deltaPoints: number; note: string }>;
+};
+type CustomerPreorder = {
+  tenantSlug: string;
+  tenantName: string;
+  itemName: string;
+  qty: number;
+  statusLabel: string;
+  saleDate: string | null;
+  expiresAt: string | null;
+};
+type SectionData = {
+  credit: CustomerCreditSection[];
+  giftcards: CustomerGiftcard[];
+  prepaids: CustomerPrepaid[];
+  gifts: CustomerGift[];
+  fidelity: CustomerFidelitySection[];
+  preorders: CustomerPreorder[];
+};
+const SECTION_KEYS = ["credit", "giftcards", "prepaids", "gifts", "fidelity", "preorders"] as const;
+
 type AccountResponse = {
   ok: boolean;
   error?: string;
@@ -129,6 +216,12 @@ type AccountResponse = {
   appointments?: CustomerAppointment[];
   packages?: CustomerPackage[];
   quotes?: CustomerQuote[];
+  credit?: CustomerCreditSection[];
+  giftcards?: CustomerGiftcard[];
+  prepaids?: CustomerPrepaid[];
+  gifts?: CustomerGift[];
+  fidelity?: CustomerFidelitySection[];
+  preorders?: CustomerPreorder[];
   requiresVerification?: boolean;
   accountId?: number;
   email?: string;
@@ -150,7 +243,7 @@ export function PublicAccountPage({ initialMode = "login" }: { initialMode?: Acc
   const activeMode: AccountMode = user && ["login", "register", "forgot-password", "verify", "reset"].includes(mode)
     ? "activities"
     : mode;
-  const protectedMode = ["activities", "appointments", "packages", "quotes", "favorites", "profile"].includes(activeMode);
+  const protectedMode = ["activities", "appointments", "packages", "quotes", "favorites", "profile", ...SECTION_KEYS].includes(activeMode);
 
   // I miei pacchetti / preventivi: loaded lazily on entering the section.
   const [packages, setPackages] = useState<CustomerPackage[]>([]);
@@ -191,6 +284,32 @@ export function PublicAccountPage({ initialMode = "login" }: { initialMode?: Acc
       active = false;
     };
   }, [activeMode, user, packagesLoaded, quotesLoaded]);
+
+  // Sezioni P3 (Credito/GiftCard/Prepagati/Omaggi/Fidelity/Preordini): lazy-load
+  // on entering the section, once (undefined = not loaded yet).
+  const [sectionData, setSectionData] = useState<Partial<SectionData>>({});
+  useEffect(() => {
+    const key = (SECTION_KEYS as readonly string[]).includes(activeMode) ? (activeMode as keyof SectionData) : null;
+    if (!user || !key || sectionData[key] !== undefined) return;
+    let active = true;
+    void fetch("/api/account", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: key }),
+    })
+      .then((res) => res.json() as Promise<AccountResponse>)
+      .then((data) => {
+        if (!active) return;
+        const value = data.ok && Array.isArray(data[key]) ? data[key] : [];
+        setSectionData((prev) => ({ ...prev, [key]: value }));
+      })
+      .catch(() => {
+        if (active) setSectionData((prev) => ({ ...prev, [key]: [] }));
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeMode, user, sectionData]);
 
   // Accetta/Rifiuta preventivo (mode=quote_decision): confirm + POST; the
   // refreshed list (or the legacy policy error) comes back from the API.
@@ -496,6 +615,12 @@ export function PublicAccountPage({ initialMode = "login" }: { initialMode?: Acc
                 <AccountNavButton active={activeMode === "activities"} icon={Store} label="Attivita" onClick={() => setMode("activities")} />
                 <AccountNavButton active={activeMode === "appointments"} icon={CalendarDays} label="Prenotazioni" onClick={() => setMode("appointments")} />
                 <AccountNavButton active={activeMode === "packages"} icon={Package} label="Pacchetti" onClick={() => setMode("packages")} />
+                <AccountNavButton active={activeMode === "prepaids"} icon={Ticket} label="Prepagati" onClick={() => setMode("prepaids")} />
+                <AccountNavButton active={activeMode === "credit"} icon={Wallet} label="Credito" onClick={() => setMode("credit")} />
+                <AccountNavButton active={activeMode === "giftcards"} icon={CreditCard} label="GiftCard" onClick={() => setMode("giftcards")} />
+                <AccountNavButton active={activeMode === "gifts"} icon={Gift} label="Omaggi" onClick={() => setMode("gifts")} />
+                <AccountNavButton active={activeMode === "fidelity"} icon={Star} label="Fidelity" onClick={() => setMode("fidelity")} />
+                <AccountNavButton active={activeMode === "preorders"} icon={ShoppingBag} label="Preordini" onClick={() => setMode("preorders")} />
                 <AccountNavButton active={activeMode === "quotes"} icon={FileText} label="Preventivi" onClick={() => setMode("quotes")} />
                 <AccountNavButton active={activeMode === "favorites"} icon={Heart} label="Preferiti" onClick={() => setMode("favorites")} />
                 <AccountNavButton active={activeMode === "profile"} icon={User} label="Profilo" onClick={() => setMode("profile")} />
@@ -543,6 +668,12 @@ export function PublicAccountPage({ initialMode = "login" }: { initialMode?: Acc
                 />
               ) : null}
               {activeMode === "packages" ? <PackagesView packages={packages} loaded={packagesLoaded} /> : null}
+              {activeMode === "prepaids" ? <PrepaidsView items={sectionData.prepaids} /> : null}
+              {activeMode === "credit" ? <CreditView items={sectionData.credit} /> : null}
+              {activeMode === "giftcards" ? <GiftcardsView items={sectionData.giftcards} /> : null}
+              {activeMode === "gifts" ? <GiftsView items={sectionData.gifts} /> : null}
+              {activeMode === "fidelity" ? <FidelityView items={sectionData.fidelity} /> : null}
+              {activeMode === "preorders" ? <PreordersView items={sectionData.preorders} /> : null}
               {activeMode === "quotes" ? <QuotesView quotes={quotes} loaded={quotesLoaded} busy={busy} onDecision={decideQuote} /> : null}
               {activeMode === "favorites" ? <FavoritesView busy={busy} favorites={favorites} onRemove={removeFavorite} /> : null}
               {activeMode === "profile" ? (
@@ -863,6 +994,248 @@ function PackagesView({ packages, loaded }: { packages: CustomerPackage[]; loade
         ))}
         {loaded && !packages.length ? (
           <EmptyState icon={Package} title="Nessun pacchetto" text="I pacchetti acquistati nei centri collegati appariranno qui." />
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+// dd/mm/yyyy from a Y-m-d (shared by the P3 section views).
+function fmtYmdShared(v: string | null): string {
+  const m = String(v ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : "";
+}
+const fmtEuro = (n: number) => `€ ${n.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const SECTION_BADGE: Record<string, string> = {
+  Attivo: "bg-emerald-100 text-emerald-800",
+  Attiva: "bg-emerald-100 text-emerald-800",
+  Disponibile: "bg-emerald-100 text-emerald-800",
+  Ordinato: "bg-sky-100 text-sky-800",
+  Ritirato: "bg-zinc-200 text-zinc-600",
+  Scaduto: "bg-amber-100 text-amber-800",
+  Scaduta: "bg-amber-100 text-amber-800",
+  Esaurito: "bg-zinc-200 text-zinc-600",
+  Esaurita: "bg-zinc-200 text-zinc-600",
+  Riscattato: "bg-zinc-200 text-zinc-600",
+  Utilizzata: "bg-zinc-200 text-zinc-600",
+  "In accumulo": "bg-sky-100 text-sky-800",
+  Annullato: "bg-zinc-200 text-zinc-600",
+  Annullata: "bg-zinc-200 text-zinc-600",
+};
+function SectionBadge({ label }: { label: string }) {
+  return <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${SECTION_BADGE[label] ?? "bg-zinc-200 text-zinc-600"}`}>{label}</span>;
+}
+function SectionLoading({ text }: { text: string }) {
+  return (
+    <p className="flex items-center gap-2 text-sm text-zinc-500">
+      <Loader2 className="h-4 w-4 animate-spin" /> {text}
+    </p>
+  );
+}
+
+// "Prepagati" (port of the tenant-panel prepaids view) + the P2 deep-link
+// "Prenota" (book_prepaid + service_id -> the booking wizard prefill).
+function PrepaidsView({ items }: { items?: CustomerPrepaid[] }) {
+  return (
+    <section className="rounded-lg border border-zinc-200 bg-white p-5">
+      <h2 className="text-2xl font-semibold">I miei prepagati</h2>
+      <div className="mt-4 grid gap-3">
+        {items === undefined ? <SectionLoading text="Caricamento prepagati..." /> : null}
+        {(items ?? []).map((item) => (
+          <article className="rounded-lg border border-zinc-200 p-4" key={`${item.tenantSlug}:${item.id}`}>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-lg font-semibold">{item.serviceName}</h3>
+              <SectionBadge label={item.statusLabel} />
+            </div>
+            <p className="mt-1 text-sm text-zinc-600">
+              {item.tenantName}
+              {item.expiresAt ? ` • Scade il ${fmtYmdShared(item.expiresAt)}` : ""}
+            </p>
+            <p className="mt-1 text-sm font-medium text-zinc-800">
+              Quantità residua: {item.remainingQty} / {item.purchasedQty}
+              {item.unitPrice > 0 ? ` • Prezzo unitario ${fmtEuro(item.unitPrice)}` : ""}
+            </p>
+            {item.statusLabel === "Attivo" && item.serviceId > 0 ? (
+              <Link
+                className="mt-2 inline-flex items-center gap-1 rounded-full bg-emerald-600 px-3 py-1 text-sm font-semibold text-white hover:bg-emerald-700"
+                href={`/${encodeURIComponent(item.tenantSlug)}/booking?book_prepaid=${item.id}&service_id=${item.serviceId}`}
+              >
+                <CalendarDays className="h-4 w-4" /> Prenota
+              </Link>
+            ) : null}
+          </article>
+        ))}
+        {items !== undefined && !items.length ? (
+          <EmptyState icon={Ticket} title="Nessun servizio prepagato" text="I servizi prepagati acquistati nei centri collegati appariranno qui." />
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+// "Credito" (port of the tenant-panel credit view): balance + wallet ledger.
+function CreditView({ items }: { items?: CustomerCreditSection[] }) {
+  return (
+    <section className="rounded-lg border border-zinc-200 bg-white p-5">
+      <h2 className="text-2xl font-semibold">Il mio credito</h2>
+      <div className="mt-4 grid gap-3">
+        {items === undefined ? <SectionLoading text="Caricamento credito..." /> : null}
+        {(items ?? []).map((item) => (
+          <article className="rounded-lg border border-zinc-200 p-4" key={item.tenantSlug}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-lg font-semibold">{item.tenantName}</h3>
+              <span className="text-lg font-semibold text-emerald-700">{fmtEuro(item.balance)}</span>
+            </div>
+            {item.movements.length ? (
+              <div className="mt-2 grid gap-1">
+                {item.movements.map((movement, index) => (
+                  <p className="text-sm text-zinc-600" key={index}>
+                    {movement.date ? `${fmtYmdShared(movement.date)} • ` : ""}
+                    <span className={movement.amount >= 0 ? "text-emerald-700" : "text-red-700"}>
+                      {movement.amount >= 0 ? "+" : "-"} {fmtEuro(Math.abs(movement.amount))}
+                    </span>
+                    {movement.note ? ` • ${movement.note}` : ""}
+                  </p>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-1 text-sm text-zinc-500">Nessun movimento registrato.</p>
+            )}
+          </article>
+        ))}
+        {items !== undefined && !items.length ? (
+          <EmptyState icon={Wallet} title="Nessun credito" text="Il credito disponibile nei centri collegati apparirà qui." />
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+// "GiftCard" (port of the tenant-panel giftcards view).
+function GiftcardsView({ items }: { items?: CustomerGiftcard[] }) {
+  return (
+    <section className="rounded-lg border border-zinc-200 bg-white p-5">
+      <h2 className="text-2xl font-semibold">Le mie GiftCard</h2>
+      <div className="mt-4 grid gap-3">
+        {items === undefined ? <SectionLoading text="Caricamento GiftCard..." /> : null}
+        {(items ?? []).map((item) => (
+          <article className="rounded-lg border border-zinc-200 p-4" key={`${item.tenantSlug}:${item.id}`}>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-lg font-semibold">GiftCard {item.code}</h3>
+              <SectionBadge label={item.statusLabel} />
+            </div>
+            <p className="mt-1 text-sm text-zinc-600">
+              {item.tenantName}
+              {item.expiresAt ? ` • Scade il ${fmtYmdShared(item.expiresAt)}` : ""}
+            </p>
+            <p className="mt-1 text-sm font-medium text-zinc-800">Saldo: {fmtEuro(item.balance)}</p>
+          </article>
+        ))}
+        {items !== undefined && !items.length ? (
+          <EmptyState icon={CreditCard} title="Nessuna GiftCard" text="Le GiftCard a te intestate nei centri collegati appariranno qui." />
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+// "Omaggi" (port of the tenant-panel gifts view): gift instances + legacy state.
+function GiftsView({ items }: { items?: CustomerGift[] }) {
+  return (
+    <section className="rounded-lg border border-zinc-200 bg-white p-5">
+      <h2 className="text-2xl font-semibold">I miei omaggi</h2>
+      <div className="mt-4 grid gap-3">
+        {items === undefined ? <SectionLoading text="Caricamento omaggi..." /> : null}
+        {(items ?? []).map((item) => (
+          <article className="rounded-lg border border-zinc-200 p-4" key={`${item.tenantSlug}:${item.id}`}>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-lg font-semibold">{item.name}</h3>
+              <SectionBadge label={item.stateLabel} />
+            </div>
+            <p className="mt-1 text-sm text-zinc-600">
+              {item.tenantName}
+              {item.expiresAt ? ` • Scade il ${fmtYmdShared(item.expiresAt)}` : ""}
+            </p>
+          </article>
+        ))}
+        {items !== undefined && !items.length ? (
+          <EmptyState icon={Gift} title="Nessun omaggio" text="Gli omaggi maturati nei centri collegati appariranno qui." />
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+// "Fidelity" (port of the tenant-panel fidelity view): points, card, movements.
+function FidelityView({ items }: { items?: CustomerFidelitySection[] }) {
+  const kindLabel = (kind: string) =>
+    kind === "earn" ? "Accumulo" : kind === "redeem" ? "Utilizzo" : kind === "adjust" ? "Rettifica" : "Movimento";
+  return (
+    <section className="rounded-lg border border-zinc-200 bg-white p-5">
+      <h2 className="text-2xl font-semibold">Fidelity</h2>
+      <div className="mt-4 grid gap-3">
+        {items === undefined ? <SectionLoading text="Caricamento Fidelity..." /> : null}
+        {(items ?? []).map((item) => (
+          <article className="rounded-lg border border-zinc-200 p-4" key={item.tenantSlug}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-lg font-semibold">{item.tenantName}</h3>
+              <span className="text-lg font-semibold text-emerald-700">{item.points} Punti</span>
+            </div>
+            {item.cardCode ? (
+              <p className="mt-1 text-sm text-zinc-600">
+                Tessera {item.cardCode} {item.cardActive ? "• attiva" : "• non attiva"}
+              </p>
+            ) : (
+              <p className="mt-1 text-sm text-zinc-500">Nessuna tessera attiva.</p>
+            )}
+            {item.movements.length ? (
+              <div className="mt-2 grid gap-1">
+                {item.movements.map((movement, index) => (
+                  <p className="text-sm text-zinc-600" key={index}>
+                    {movement.date ? `${fmtYmdShared(movement.date)} • ` : ""}
+                    {kindLabel(movement.kind)} •{" "}
+                    <span className={movement.deltaPoints >= 0 ? "text-emerald-700" : "text-red-700"}>
+                      {movement.deltaPoints >= 0 ? "+" : ""}
+                      {movement.deltaPoints} punti
+                    </span>
+                    {movement.note ? ` • ${movement.note}` : ""}
+                  </p>
+                ))}
+              </div>
+            ) : null}
+          </article>
+        ))}
+        {items !== undefined && !items.length ? (
+          <EmptyState icon={Star} title="Nessun programma Fidelity" text="I punti Fidelity maturati nei centri collegati appariranno qui." />
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+// "Preordini" (port of booking.php 10548-10620): product preorders from sales.
+function PreordersView({ items }: { items?: CustomerPreorder[] }) {
+  return (
+    <section className="rounded-lg border border-zinc-200 bg-white p-5">
+      <h2 className="text-2xl font-semibold">I miei preordini</h2>
+      <div className="mt-4 grid gap-3">
+        {items === undefined ? <SectionLoading text="Caricamento preordini..." /> : null}
+        {(items ?? []).map((item, index) => (
+          <article className="rounded-lg border border-zinc-200 p-4" key={`${item.tenantSlug}:${index}`}>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-lg font-semibold">{item.itemName}</h3>
+              <SectionBadge label={item.statusLabel} />
+            </div>
+            <p className="mt-1 text-sm text-zinc-600">
+              {item.tenantName}
+              {item.saleDate ? ` • Ordinato il ${fmtYmdShared(item.saleDate)}` : ""}
+              {item.expiresAt ? ` • Ritiro entro il ${fmtYmdShared(item.expiresAt)}` : ""}
+            </p>
+            <p className="mt-1 text-sm font-medium text-zinc-800">Quantità: {item.qty}</p>
+          </article>
+        ))}
+        {items !== undefined && !items.length ? (
+          <EmptyState icon={ShoppingBag} title="Nessun preordine" text="I prodotti ordinati nei centri collegati appariranno qui." />
         ) : null}
       </div>
     </section>
