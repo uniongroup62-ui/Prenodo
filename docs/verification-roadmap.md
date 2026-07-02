@@ -315,6 +315,48 @@ con browser navigabile. Portato per intero:
 - publicBookingSlots ora accetta excludeAppointmentId (edit: l'appuntamento in
   modifica non blocca il proprio slot nel browser).
 
+## Item 20 — AUDIT COMPLETO flusso booking (2026-07-02): quick booking / calendario / booking PUBBLICO
+Inventario completo booking.php (13.665 righe, 16 modes API + confirm + area
+cliente) confrontato col Next.
+
+### Quick booking + calendario manage: A PARITÀ
+Tutte le 20 azioni api_appointments coperte e verificate live (item 15-19).
+Restano SOLO due rifiniture UI documentate: frecce ↑/↓ riordino segmenti nella
+lista appuntamenti (child-rows già presenti, API swap_segment già portata) e
+radios "Scelta cliente" conflict_policy nel drawer.
+
+### Booking PUBBLICO (booking.php): matrice modes → Next
+| PHP mode | Next | Stato |
+|---|---|---|
+| staff | context (Step 4 operatore) | ✅ |
+| slots | action=slots | ✅ (verificato identico in passato) |
+| hold_slot / release_hold | action=hold / release_hold | ✅ |
+| closures | — | ⚠️ il date strip disabilita solo i giorni PASSATI, non i chiusi (lo slot vuoto copre il caso ma la UX legacy li spegne) |
+| coupon (validazione free-text) | — | ❌ box coupon solo markup ("markup only" nel wizard) |
+| promotions | benefits list nel context | ⚠️ lista statica di promo/coupon ATTIVI; il legacy valuta per carrello |
+| promotion_preview | — | ❌ nessuna valutazione best-promo per carrello lato pubblico (engine ora esiste, manca il wiring) |
+| fidelity_preview | — | ❌ pannelli fidelity/credito/giftcard in Step 6 renderizzati ma STATICI e nascosti |
+| confirm (POST) | action=confirm | ⚠️ base ok (hold, cliente, sconto coupon/promo a livello appuntamento, segments, public_code, pending) MA mancano: fidelity_points_use, giftcard_redeem, giftbox_redeem, fidelity_choice/gift_idx, note automatiche legacy ("Gia pagato: ...", righe coupon/promo formattate), prezzi promo PER-SERVIZIO su appointment_services |
+| my_appointments | — | ❌ AREA CLIENTE: /account "Attività" elenca solo i CENTRI collegati, non le prenotazioni |
+| cancel_appointment | — | ❌ il cliente non può annullare da sé |
+| my_packages | — | ❌ pacchetti/residui cliente assenti |
+| my_quotes / quote_decision | — | ❌ preventivi cliente + accetta/rifiuta assenti |
+| ics | — | ❌ download calendario assente |
+| customer_login/register/verify/resend/forgot/logout/update_profile/verify_profile_email | /api/account (login/register/verify/resend/forgot/reset/logout/update_profile/email-change) | ✅ |
+| customer_update_reference_location | — | ❌ (minore) |
+| (extra Next) favorites | toggle/remove_favorite | ✅ additivo |
+
+### Priorità suggerite per chiudere il pubblico
+1. **Area cliente prenotazioni**: my_appointments + cancel_appointment + ics
+   (blocco autonomo, alto valore utente).
+2. **Step 6 wizard**: coupon free-text (mode=coupon), promotion_preview per
+   carrello (riusare evalBestPromotionForAppointment), fidelity_preview e
+   redeems al confirm (giftcard/giftbox/punti) + note automatiche legacy.
+3. **my_packages + my_quotes + quote_decision** (area cliente estesa).
+4. Date strip: spegnere i giorni chiusi (mode=closures o riuso businessIntervals).
+5. Minori: update_reference_location, prezzi promo per-servizio al confirm.
+Nota infra: email conferma/OTP su SES già documentata come rinviata.
+
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;
   legacy consuma al "done") — approvato.
