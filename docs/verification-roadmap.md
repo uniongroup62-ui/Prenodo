@@ -281,6 +281,40 @@ Clienti (form/detail/cascade-delete/tag/storico).
   punti; su MySQL redeem 0 e 0 punti — divergenza PRE-esistente dei dati, non
   di codice (riallineare all'export finale).
 
+## Item 19 — Modal "Disponibilità" del quick booking (2026-07-02, segnalato dall'utente)
+Il bottone "Disponibilità" del drawer Next faceva solo l'hold diretto dell'ora
+digitata; il legacy apre il MODAL XL "Orari disponibili" (#qbAvailabilityModal)
+con browser navigabile. Portato per intero:
+- **Backend** (`manageAvailabilityBrowser`, public-booking-db.ts + route
+  action=availability con range/summary): payload legacy per giorno {slots blu
+  in orario, override_slots arancioni fuori orario/chiusura selezionabili
+  (staff libero + no timeoff + cabina libera, senza il check turno SOFT),
+  booked/booked_outside (solo con operatore specifico), conteggi + primo slot
+  in modalità summary, is_closed + orari 1°/2° intervallo, label giorno
+  "24 GIO"/"24 Giovedì", label mese "Settembre 2026"}.
+  **Verifica live campo-per-campo IDENTICA a PHP**: giorno normale (109 slot +
+  168 override, tutti i 18 campi), domenica chiusa (277 override identici),
+  summary settimana 7/7 giorni (conteggi/primo orario/chiuso), giorno con
+  prenotazione (86 slot + 12 tick occupati identici).
+- **Drawer**: modal React con la stessa markup/classi CSS legacy (qb-avail-*
+  già in public/assets/css/app.css): vista Giorno = timeline 00:00-24:00 a
+  barrette 5' (blu/arancione/rosso/grigio + tooltip title), Settimana/Mese =
+  lista giorni riassuntiva (label, "Primo orario:", "Orari:"/Chiuso, badge
+  "N slot") con drill-down al giorno; nav ◀ Oggi ▶ per periodo, gruppo
+  Giorno/Settimana/Mese, date picker; click su barra selezionabile → hold →
+  compila data/ora (setter raw per non rilasciare l'hold) → chiude.
+- **Flusso e2e verificato**: settimana → drill giorno → click 11:00 → hold →
+  save con token → ok; cleanup completo.
+- **Quirk legacy preservato**: le barre arancioni "selezionabili" falliscono
+  l'hold anche su PHP ("Orario non piu disponibile. Ricarica e scegli un
+  altro slot." — verificato live 21:00/03:00); Next ora risponde con il
+  messaggio identico (stringa hold allineata anche nel wizard pubblico).
+- Differenze minori documentate: niente infinite-scroll/auto-refresh/tooltip
+  bootstrap (title nativo) e date-picker nativo al posto del popover; dst_fold
+  non calcolato (solo tooltip nel legacy).
+- publicBookingSlots ora accetta excludeAppointmentId (edit: l'appuntamento in
+  modifica non blocca il proprio slot nel browser).
+
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;
   legacy consuma al "done") — approvato.

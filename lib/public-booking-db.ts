@@ -209,12 +209,15 @@ export async function publicBookingSlots({
   serviceIds,
   staffId,
   locationId,
+  excludeAppointmentId = null,
 }: {
   slug: string;
   date: string;
   serviceIds: number[];
   staffId?: number | null;
   locationId?: number | null;
+  // Manage edit flow: the edited appointment must not block its own slot.
+  excludeAppointmentId?: number | null;
 }): Promise<PublicBookingSlot[]> {
   const normalizedDate = normalizeDate(date);
   const services = await publicServicesByIds(slug, serviceIds, locationId ?? null);
@@ -231,7 +234,7 @@ export async function publicBookingSlots({
     return [];
   }
 
-  const busyRanges = await busyRangesForDate(slug, normalizedDate);
+  const busyRanges = await busyRangesForDate(slug, normalizedDate, { excludeAppointmentId });
 
   // CABIN filter (live-parity fix 2026-07-02, port of booking_filter_slots_by_cabins):
   // the legacy removes slots whose service cabin is already occupied; the Next only
@@ -290,6 +293,256 @@ function holdTtlSecondsForChannel(channel: string): number {
   return channel === "public" ? 150 : 300;
 }
 
+// ---------------------------------------------------------------------------
+// "Disponibilità" BROWSER for the manage quick-booking modal (port of the legacy
+// action=availability with range/summary params — api_appointments.php:6467).
+// Per day it returns the exact legacy payload the modal renders:
+//  * slots           — bookable starts INSIDE business hours (blue bars), the
+//                      same engine as publicBookingSlots (closures, staff,
+//                      cabins, past-time filter);
+//  * override_slots  — full-day starts OUTSIDE hours / on closed days that an
+//                      admin can still book (orange "Fuori orario / Chiusura
+//                      (selezionabile)"): staff conflict+time-off free and
+//                      cabin free — the legacy isStartSelectable, which skips
+//                      the SOFT shift check;
+//  * booked/booked_outside — the selected operator's busy ticks (red bars);
+//                      empty in any-staff mode, like the legacy;
+//  * is_closed/opens/closes/opens2/closes2 — the day's hour intervals;
+//  * summary mode (week/month) returns counts + first slots only.
+export type ManageAvailabilityDay = {
+  date: string;
+  label: string;
+  label_full: string;
+  slots: string[];
+  override_slots: string[];
+  regular_slot_count: number;
+  override_slot_count: number;
+  first_regular_slot: string | null;
+  first_override_slot: string | null;
+  booked: string[];
+  booked_outside: string[];
+  dst_gap: string[];
+  dst_fold: string[];
+  is_closed: 0 | 1;
+  opens: string | null;
+  closes: string | null;
+  opens2: string | null;
+  closes2: string | null;
+};
+export type ManageAvailabilityMonth = { label: string; days: ManageAvailabilityDay[] };
+
+const IT_MONTHS = ["Gennaio", "Febbraio", "Marzo", "Aprile", "Maggio", "Giugno", "Luglio", "Agosto", "Settembre", "Ottobre", "Novembre", "Dicembre"];
+const IT_DOW = ["DOM", "LUN", "MAR", "MER", "GIO", "VEN", "SAB"];
+const IT_DOW_FULL = ["Domenica", "Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato"];
+
+// All time-off windows of the date, batched by staff id (minutes-of-day, with
+// the multi-day clamp of staffTimeoffReasonForRange) — the per-tick override
+// scan would otherwise hit the DB hundreds of times per day.
+async function staffTimeoffWindowsForDate(slug: string, date: string): Promise<Map<number, Array<[number, number]>>> {
+  const rows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "staff_timeoff",
+    columns: "staff_id, starts_at, ends_at",
+    where: "starts_at::date <= ? AND ends_at::date >= ?",
+    params: [date, date],
+  }).catch(() => [] as RowDataPacket[]);
+  const map = new Map<number, Array<[number, number]>>();
+  for (const row of rows) {
+    const staffId = Number(row.staff_id ?? 0) || 0;
+    if (staffId <= 0) continue;
+    const offStart = timeToMinutes(timeFromSql(row.starts_at));
+    const offEnd = timeToMinutes(timeFromSql(row.ends_at));
+    const effStart = dateFromSql(row.starts_at) < date ? 0 : offStart;
+    const effEnd = dateFromSql(row.ends_at) > date ? 24 * 60 : offEnd;
+    if (!Number.isFinite(effStart) || !Number.isFinite(effEnd)) continue;
+    if (!map.has(staffId)) map.set(staffId, []);
+    map.get(staffId)!.push([effStart, effEnd]);
+  }
+  return map;
+}
+
+export async function manageAvailabilityBrowser({
+  slug,
+  date,
+  range,
+  months = 1,
+  summary = false,
+  serviceIds,
+  staffId = null,
+  locationId = null,
+  excludeAppointmentId = null,
+}: {
+  slug: string;
+  date: string;
+  range: string;
+  months?: number;
+  summary?: boolean;
+  serviceIds: number[];
+  staffId?: number | null;
+  locationId?: number | null;
+  excludeAppointmentId?: number | null;
+}): Promise<{ months: ManageAvailabilityMonth[]; rangeStart: string; rangeEnd: string }> {
+  const services = await publicServicesByIds(slug, serviceIds, locationId ?? null);
+  const duration = services.reduce((sum, service) => sum + Math.max(5, Number(service.duration_min ?? 30)), 0);
+  if (duration <= 0) throw new Error("Durata servizio non valida.");
+  const candidates = await eligibleStaffCandidates(slug, services, staffId ?? null);
+
+  // Per-service cabin windows (same model as publicBookingSlots).
+  const segmentWindows: Array<{ cabinId: number; offset: number; duration: number }> = [];
+  {
+    let offset = 0;
+    for (const service of services) {
+      const dur = Math.max(5, Number(service.duration_min ?? 30));
+      const cabinId = Number(service.cabin_id ?? 0) || 0;
+      if (cabinId > 0) segmentWindows.push({ cabinId, offset, duration: dur });
+      offset += dur;
+    }
+  }
+
+  // Range (legacy): the start never falls before today; day = 1 day, week = 7
+  // days from the anchor, month = from the anchor to the end of its month(s).
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const anchor = new Date(`${normalizeDate(date)}T00:00:00`);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const start = anchor < today ? new Date(today) : anchor;
+  const mode = ["day", "week", "month"].includes(range) ? range : "month";
+  const end = new Date(start);
+  if (mode === "day") {
+    // single day
+  } else if (mode === "week") {
+    end.setDate(end.getDate() + 6);
+  } else {
+    const monthsClamped = Math.max(1, Math.min(3, Math.trunc(months) || 1));
+    end.setDate(1);
+    end.setMonth(end.getMonth() + monthsClamped);
+    end.setDate(end.getDate() - 1);
+    if (end < start) end.setTime(start.getTime());
+  }
+  const summaryOnly = summary && mode !== "day";
+
+  const monthsOut: ManageAvailabilityMonth[] = [];
+  let currentMonthKey = "";
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    const d = ymd(cursor);
+    const monthKey = `${cursor.getFullYear()}-${cursor.getMonth()}`;
+    if (monthKey !== currentMonthKey) {
+      currentMonthKey = monthKey;
+      monthsOut.push({ label: `${IT_MONTHS[cursor.getMonth()]} ${cursor.getFullYear()}`, days: [] });
+    }
+    const dow = cursor.getDay();
+    const label = `${cursor.getDate()} ${IT_DOW[dow]}`;
+    const labelFull = `${cursor.getDate()} ${IT_DOW_FULL[dow]}`;
+
+    const intervals = await businessIntervals(slug, locationId ?? null, d).catch(() => [] as Array<[number, number]>);
+    const isClosed = intervals.length === 0;
+    const [int1, int2] = intervals;
+    const busyRanges = await busyRangesForDate(slug, d, { excludeAppointmentId }).catch(() => [] as BusyRange[]);
+    const busyCabins = segmentWindows.length
+      ? await busyCabinRangesForDate(slug, d, { excludeAppointmentId }).catch(() => [] as CabinBusyRange[])
+      : [];
+    const cabinFree = (startMin: number): boolean =>
+      segmentWindows.every(({ cabinId, offset, duration: dur }) => {
+        const segStart = startMin + offset;
+        const segEnd = segStart + dur;
+        return !busyCabins.some((busy) => busy.cabinId === cabinId && busy.start < segEnd && busy.end > segStart);
+      });
+    const minStart = minimumStartForDate(d);
+
+    // Normal slots (blue): the publicBookingSlots loop inline (shared ranges).
+    const slots: string[] = [];
+    if (!isClosed && candidates.length > 0) {
+      for (const [opens, closes] of intervals) {
+        for (let s = opens; s + duration <= closes; s += 5) {
+          if (s < minStart) continue;
+          const free = candidates.find((candidate) => candidateFree(candidate, s, s + duration, locationId ?? null, busyRanges));
+          if (free && cabinFree(s)) slots.push(minutesToTime(s));
+        }
+      }
+    }
+
+    // Override slots (orange, day mode only): full-day starts outside hours a
+    // manage user can still book (staff busy+time-off free, cabin free).
+    const overrideSlots: string[] = [];
+    let dstGap: string[] = [];
+    if (!summaryOnly && candidates.length > 0) {
+      const timeoffByStaff = await staffTimeoffWindowsForDate(slug, d);
+      const normalSet = new Set(slots);
+      const fitsBusiness = (s: number) => intervals.some(([o, c]) => s >= o && s + duration <= c);
+      for (let s = 0; s + duration <= 24 * 60; s += 5) {
+        if (s < minStart) continue;
+        const time = minutesToTime(s);
+        if (normalSet.has(time)) continue;
+        const selectable = candidates.some((candidate) => {
+          if (!candidateFree(candidate, s, s + duration, locationId ?? null, busyRanges)) return false;
+          const offs = candidate.id !== null ? timeoffByStaff.get(candidate.id) ?? [] : [];
+          return !offs.some(([o, c]) => overlaps(s, s + duration, o, c));
+        });
+        if (!selectable) continue;
+        if (!cabinFree(s)) continue;
+        if (isClosed || !fitsBusiness(s)) overrideSlots.push(time);
+      }
+
+      // DST gap ticks (Europe/Rome spring-forward): a local time that does not
+      // exist normalizes to a different wall-clock time. Fold detection needs
+      // zone-offset APIs unavailable here — the legacy uses both only for
+      // tooltips, so gap-only is an accepted approximation.
+      dstGap = [];
+      for (let s = 0; s < 24 * 60; s += 5) {
+        const time = minutesToTime(s);
+        const probe = new Date(`${d}T${time}:00`);
+        if (!Number.isNaN(probe.getTime())) {
+          const back = `${pad(probe.getHours())}:${pad(probe.getMinutes())}`;
+          if (back !== time) dstGap.push(time);
+        }
+      }
+    }
+
+    // Booked ticks (red), only with a SPECIFIC operator (legacy any-staff => []).
+    const booked: string[] = [];
+    const bookedOutside: string[] = [];
+    if (!summaryOnly && staffId && staffId > 0) {
+      const staffBusy = busyRanges.filter(
+        (rangeRow) => sameLocation(locationId ?? null, rangeRow.locationId) && (!rangeRow.staffIds.length || rangeRow.staffIds.includes(staffId)),
+      );
+      for (let s = 0; s < 24 * 60; s += 5) {
+        if (!staffBusy.some((busy) => overlaps(s, s + 5, busy.start, busy.end))) continue;
+        const time = minutesToTime(s);
+        const inside = intervals.some(([o, c]) => s >= o && s < c);
+        if (inside) booked.push(time);
+        else bookedOutside.push(time);
+      }
+    }
+
+    monthsOut[monthsOut.length - 1].days.push({
+      date: d,
+      label,
+      label_full: labelFull,
+      slots: summaryOnly ? [] : slots,
+      override_slots: summaryOnly ? [] : overrideSlots,
+      regular_slot_count: slots.length,
+      override_slot_count: overrideSlots.length,
+      first_regular_slot: slots[0] ?? null,
+      first_override_slot: overrideSlots[0] ?? null,
+      booked,
+      booked_outside: bookedOutside,
+      dst_gap: dstGap,
+      dst_fold: [],
+      is_closed: isClosed ? 1 : 0,
+      opens: int1 ? minutesToTime(int1[0]) : null,
+      closes: int1 ? minutesToTime(int1[1]) : null,
+      opens2: int2 ? minutesToTime(int2[0]) : null,
+      closes2: int2 ? minutesToTime(int2[1]) : null,
+    });
+
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return { months: monthsOut, rangeStart: ymd(start), rangeEnd: ymd(end) };
+}
+
 export async function holdPublicBookingSlot({
   slug,
   date,
@@ -313,7 +566,8 @@ export async function holdPublicBookingSlot({
   const normalizedTime = normalizeTime(time);
   const slots = await publicBookingSlots({ slug, date: normalizedDate, serviceIds, staffId, locationId });
   const selected = slots.find((slot) => slot.time === normalizedTime && slot.available);
-  if (!selected) throw new Error("Orario non piu disponibile. Scegli un altro slot.");
+  // Exact legacy hold refusal (booking.php:5259 / api_appointments.php:6378).
+  if (!selected) throw new Error("Orario non piu disponibile. Ricarica e scegli un altro slot.");
 
   const services = await publicServicesByIds(slug, serviceIds, locationId ?? null);
   const start = timeToMinutes(normalizedTime);

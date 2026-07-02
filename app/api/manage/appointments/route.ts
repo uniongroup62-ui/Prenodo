@@ -37,6 +37,7 @@ import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can, canAny } from "@/lib/role-permissions";
 import {
   holdPublicBookingSlot,
+  manageAvailabilityBrowser,
   publicBookingContext,
   publicBookingSlots,
   releasePublicBookingHold,
@@ -216,6 +217,30 @@ export async function GET(request: Request) {
   if (action === "availability") {
     try {
       const date = url.searchParams.get("date") ?? todayIso();
+      // BROWSER mode (the "Disponibilità" modal — legacy range/summary params):
+      // service_ids as IDS + optional staff_id, per-day months/days payload.
+      const rangeParam = String(url.searchParams.get("range") ?? "").trim().toLowerCase();
+      if (rangeParam) {
+        const browserServiceIds = parseIdList(url.searchParams.get("service_ids") ?? "");
+        if (!browserServiceIds.length) return jsonError("Parametri mancanti.", 400);
+        const browserLocationId = await resolveManageLocationId({
+          slug: tenantSlug,
+          raw: url.searchParams.get("location_id"),
+          fallbackCurrent: true,
+        }) || null;
+        const result = await manageAvailabilityBrowser({
+          slug: tenantSlug,
+          date,
+          range: rangeParam,
+          months: Number.parseInt(String(url.searchParams.get("months") ?? "1"), 10) || 1,
+          summary: ["1", "true", "yes", "summary"].includes(String(url.searchParams.get("summary") ?? "").trim().toLowerCase()),
+          serviceIds: browserServiceIds,
+          staffId: Number.parseInt(String(url.searchParams.get("staff_id") ?? "0"), 10) || null,
+          locationId: browserLocationId,
+          excludeAppointmentId: Number.parseInt(String(url.searchParams.get("exclude_id") ?? "0"), 10) || null,
+        });
+        return Response.json({ ok: true, sourceMode: "database", months: result.months, range_start: result.rangeStart, range_end: result.rangeEnd });
+      }
       const serviceNames = parseServiceNames(url.searchParams);
       const staffName = emptyToNull(url.searchParams.get("staff_name") ?? url.searchParams.get("operator"));
       const locationId = await resolveManageLocationId({

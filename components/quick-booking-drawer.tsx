@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // Faithful port of the GLOBAL "Nuova prenotazione" quick-booking offcanvas drawer
 // from the legacy PHP gestionale (app/lib/View.php lines ~1094-1620: the
@@ -2456,7 +2456,7 @@ export function QuickBookingDrawer() {
       const data: { ok?: boolean; error?: string; token?: string; time?: string; staffName?: string; staffId?: number | null } =
         await res.json().catch(() => ({}));
       if (!res.ok || data.ok === false || !data.token) {
-        setFormError(String(data.error || "Orario non piu disponibile. Scegli un altro slot."));
+        setFormError(String(data.error || "Orario non piu disponibile. Ricarica e scegli un altro slot."));
         return;
       }
       setHoldToken(data.token);
@@ -2472,6 +2472,188 @@ export function QuickBookingDrawer() {
       setAvailLoading(false);
     }
   }, [selectedServiceNames, date, startTime, staffId, staff, slug, locationId]);
+
+  // ---- "Disponibilità" MODAL (port of #qbAvailabilityModal, app.js ~9979-11360) ----
+  // The button opens an XL modal that browses availability per period: Giorno =
+  // full-day 5-min timeline (blue available, orange fuori-orario selezionabile,
+  // red booked), Settimana/Mese = per-day summary list (counts + primo orario +
+  // hours) whose day click drills into the day view. Clicking a selectable bar
+  // creates the hold and fills date/time (legacy applyAvailabilitySlot). Data
+  // from action=availability with range/summary (manageAvailabilityBrowser),
+  // verified live identical to the legacy payload.
+  type QbAvailDay = {
+    date: string;
+    label: string;
+    label_full: string;
+    slots: string[];
+    override_slots: string[];
+    regular_slot_count: number;
+    first_regular_slot: string | null;
+    booked: string[];
+    booked_outside: string[];
+    dst_gap: string[];
+    dst_fold: string[];
+    is_closed: 0 | 1;
+    opens: string | null;
+    closes: string | null;
+    opens2: string | null;
+    closes2: string | null;
+  };
+  type QbAvailMonth = { label: string; days: QbAvailDay[] };
+  const [availModalOpen, setAvailModalOpen] = useState(false);
+  const [availMode, setAvailMode] = useState<"day" | "week" | "month">("week");
+  const [availAnchor, setAvailAnchor] = useState<string>("");
+  const [availMonths, setAvailMonths] = useState<QbAvailMonth[] | null>(null);
+  const [availRangeLabel, setAvailRangeLabel] = useState<string>("");
+  const [availBrowserLoading, setAvailBrowserLoading] = useState(false);
+  const [availModalError, setAvailModalError] = useState<string>("");
+  const [availApplying, setAvailApplying] = useState(false);
+  const availSeqRef = useRef(0);
+
+  const fmtDMY = (ymd: string) => {
+    const m = ymd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return m ? `${m[3]}/${m[2]}/${m[1]}` : ymd;
+  };
+  const addDaysYMD = (ymd: string, days: number) => {
+    const d = new Date(`${ymd}T00:00:00`);
+    d.setDate(d.getDate() + days);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  };
+  const startOfWeekYMD = (ymd: string) => {
+    const d = new Date(`${ymd}T00:00:00`);
+    if (Number.isNaN(d.getTime())) return ymd;
+    return addDaysYMD(ymd, -((d.getDay() + 6) % 7)); // Monday start (legacy)
+  };
+  const firstOfMonthYMD = (ymd: string) => `${ymd.slice(0, 7)}-01`;
+  const addMonthsYMD = (ymd: string, months: number) => {
+    const d = new Date(`${firstOfMonthYMD(ymd)}T00:00:00`);
+    d.setMonth(d.getMonth() + months);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-01`;
+  };
+
+  const loadAvailabilityPeriod = useCallback(async (anchorDate: string, mode: "day" | "week" | "month") => {
+    const safeDate = mode === "month" ? firstOfMonthYMD(anchorDate) : mode === "week" ? startOfWeekYMD(anchorDate) : anchorDate;
+    setAvailAnchor(safeDate);
+    setAvailMode(mode);
+    setAvailModalError("");
+    setAvailBrowserLoading(true);
+    const seq = ++availSeqRef.current;
+    try {
+      const params = new URLSearchParams();
+      params.set("slug", slug);
+      params.set("action", "availability");
+      params.set("date", safeDate);
+      params.set("range", mode);
+      if (mode === "month") params.set("months", "1");
+      if (mode !== "day") params.set("summary", "1");
+      params.set("service_ids", selectedServiceIds.join(","));
+      if (staffId) params.set("staff_id", staffId);
+      if (locationId) params.set("location_id", String(locationId));
+      if (apptId.trim()) params.set("exclude_id", apptId.trim());
+      const res = await fetch(`/api/manage/appointments?${params.toString()}`, { headers: { "x-tenant-slug": slug } });
+      const data: { ok?: boolean; error?: string; months?: QbAvailMonth[]; range_start?: string; range_end?: string } =
+        await res.json().catch(() => ({}));
+      if (seq !== availSeqRef.current) return;
+      if (!res.ok || !data.ok || !Array.isArray(data.months)) {
+        setAvailMonths(null);
+        setAvailModalError(String(data.error || "Errore caricamento disponibilita."));
+        return;
+      }
+      setAvailMonths(data.months);
+      // Range label (legacy formatAvailRangeLabel): the month label in month
+      // mode, else "GG/MM/AAAA - GG/MM/AAAA" (single date when one day).
+      const rs = String(data.range_start ?? safeDate);
+      const re = String(data.range_end ?? rs);
+      if (mode === "month" && data.months.length === 1 && data.months[0]?.label) setAvailRangeLabel(data.months[0].label);
+      else setAvailRangeLabel(!re || re === rs ? fmtDMY(rs) : `${fmtDMY(rs)} - ${fmtDMY(re)}`);
+    } catch {
+      if (seq === availSeqRef.current) {
+        setAvailMonths(null);
+        setAvailModalError("Errore caricamento disponibilita.");
+      }
+    } finally {
+      if (seq === availSeqRef.current) setAvailBrowserLoading(false);
+    }
+  }, [slug, selectedServiceIds, staffId, locationId, apptId]);
+
+  // Open (port of openAvailability): same pre-checks as the legacy, then week view.
+  const openAvailabilityModal = useCallback(() => {
+    setFormError("");
+    if (!date) {
+      setFormError("Seleziona una data di inizio");
+      return;
+    }
+    if (!selectedServiceIds.length) {
+      setFormError("Seleziona almeno un servizio");
+      return;
+    }
+    if (!operatorSelectionComplete) {
+      setFormError(isMultiService ? "Seleziona gli operatori per i servizi" : "Nessun operatore disponibile per il servizio selezionato");
+      return;
+    }
+    setAvailModalOpen(true);
+    void loadAvailabilityPeriod(date, "week");
+  }, [date, selectedServiceIds, operatorSelectionComplete, isMultiService, loadAvailabilityPeriod]);
+
+  const closeAvailabilityModal = useCallback(() => {
+    availSeqRef.current++;
+    setAvailModalOpen(false);
+  }, []);
+
+  // Slot click (port of applyAvailabilitySlot): create the hold for the chosen
+  // date/time, then fill the form via the RAW setters (changeDate/changeStartTime
+  // would drop the hold just created) and close. On failure show the error and
+  // reload the period so the grid reflects the real state.
+  const applyAvailabilitySlot = useCallback(async (slotDate: string, slotTime: string) => {
+    if (availApplying || !slotDate || !slotTime) return;
+    setAvailApplying(true);
+    try {
+      const names = selectedServiceNames();
+      const staffName = staffId ? staff.find((s) => String(s.id) === staffId)?.name ?? "" : "";
+      const res = await fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+        body: JSON.stringify({
+          action: "hold_availability",
+          date: slotDate,
+          time: slotTime,
+          service_names: names.join(","),
+          staff_name: staffName,
+          location_id: locationId,
+        }),
+      });
+      const data: { ok?: boolean; error?: string; token?: string; time?: string; staffId?: number | null } =
+        await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false || !data.token) {
+        setAvailModalError(String(data.error || "Orario non piu disponibile. Ricarica e scegli un altro slot."));
+        void loadAvailabilityPeriod(slotDate, availMode);
+        return;
+      }
+      setHoldToken(data.token);
+      setDate(slotDate);
+      setStartTime(data.time || slotTime);
+      setPrefillEndTime("");
+      if (!staffId && data.staffId && data.staffId > 0) setStaffId(String(data.staffId));
+      closeAvailabilityModal();
+    } catch {
+      setAvailModalError("Errore di rete durante il controllo disponibilita.");
+    } finally {
+      setAvailApplying(false);
+    }
+  }, [availApplying, selectedServiceNames, staffId, staff, slug, locationId, availMode, loadAvailabilityPeriod, closeAvailabilityModal]);
+
+  // Prev / Oggi / Next (legacy period navigation per mode).
+  const availNavigate = useCallback((direction: -1 | 0 | 1) => {
+    const anchor = availAnchor || date || todayIso();
+    let next = anchor;
+    if (direction === 0) next = todayIso();
+    else if (availMode === "day") next = addDaysYMD(anchor, direction);
+    else if (availMode === "week") next = addDaysYMD(anchor, direction * 7);
+    else next = addMonthsYMD(anchor, direction);
+    void loadAvailabilityPeriod(next, availMode);
+  }, [availAnchor, availMode, date, loadAvailabilityPeriod]);
 
   // Item B: calendar-slot auto-hold (port of qbApplyPendingCalendarSlot ~9841). When the drawer
   // was opened from a calendar empty-cell (date+time seeded — pendingCalendarSlotRef armed), fire
@@ -3634,12 +3816,14 @@ export function QuickBookingDrawer() {
                 </div>
                 <div>
                   <label className="form-label">&nbsp;</label>
+                  {/* Opens the availability BROWSER modal (legacy #qbAvailabilityModal);
+                      the direct hold (runAvailability) stays for the calendar auto-hold. */}
                   <button
                     className="btn btn-outline-primary w-100"
                     type="button"
                     id="qbAvailabilityBtn"
                     disabled={startGateDisabled || availLoading}
-                    onClick={runAvailability}
+                    onClick={openAvailabilityModal}
                   >
                     {availLoading ? "..." : <>Disponibilità <i className="bi bi-arrow-right ms-1" /></>}
                   </button>
@@ -4012,6 +4196,191 @@ export function QuickBookingDrawer() {
       </div>
 
       {/* ===================== FIND CLIENT MODAL (port of qbLinkFindClient flow) ===================== */}
+      {/* ===== Modal Disponibilità (port of #qbAvailabilityModal, View.php:1924) =====
+          React-driven (open state + backdrop) instead of bootstrap.Modal; same
+          markup/classes so the legacy qb-avail-* CSS applies unchanged. */}
+      {availModalOpen ? (
+        <>
+          <div className="modal fade show d-block" id="qbAvailabilityModal" tabIndex={-1} role="dialog" aria-modal="true">
+            <div className="modal-dialog modal-xl modal-dialog-scrollable">
+              <div className="modal-content">
+                <div className="modal-header">
+                  <div>
+                    <div className="small-muted">Disponibilità</div>
+                    <h5 className="modal-title fw-bold m-0">Orari disponibili</h5>
+                  </div>
+                  <button type="button" className="btn-close" aria-label="Chiudi" onClick={closeAvailabilityModal} />
+                </div>
+                <div className="modal-body">
+                  <div className="d-flex justify-content-between align-items-center mb-2">
+                    <div className="text-muted small" id="qbAvailHint">Seleziona un orario disponibile per aggiornare la prenotazione.</div>
+                    <div className="small text-muted" id="qbAvailRange">{availRangeLabel}</div>
+                  </div>
+                  <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                    <div className="btn-group btn-group-sm" role="group" aria-label="Naviga disponibilita">
+                      <button type="button" className="btn btn-outline-secondary" id="qbAvailPrevPeriod" title="Periodo precedente" onClick={() => availNavigate(-1)}>
+                        <i className="bi bi-chevron-left" />
+                      </button>
+                      <button type="button" className="btn btn-outline-secondary" id="qbAvailToday" onClick={() => availNavigate(0)}>Oggi</button>
+                      <button type="button" className="btn btn-outline-secondary" id="qbAvailNextPeriod" title="Periodo successivo" onClick={() => availNavigate(1)}>
+                        <i className="bi bi-chevron-right" />
+                      </button>
+                    </div>
+                    <div className="d-flex flex-wrap align-items-center gap-2">
+                      <div className="btn-group btn-group-sm qb-avail-mode-group" role="group" aria-label="Vista disponibilita">
+                        {(["day", "week", "month"] as const).map((mode) => (
+                          <button
+                            type="button"
+                            key={mode}
+                            className={`btn btn-outline-primary${availMode === mode ? " active" : ""}`}
+                            data-qb-avail-mode={mode}
+                            onClick={() => void loadAvailabilityPeriod(availAnchor || date, mode)}
+                          >
+                            {mode === "day" ? "Giorno" : mode === "week" ? "Settimana" : "Mese"}
+                          </button>
+                        ))}
+                      </div>
+                      {/* Period picker (the legacy popover calendar) as a native date input. */}
+                      <input
+                        type="date"
+                        className="form-control form-control-sm"
+                        style={{ width: "auto" }}
+                        aria-label="Seleziona periodo"
+                        value={availAnchor}
+                        onChange={(e) => { if (e.target.value) void loadAvailabilityPeriod(e.target.value, availMode); }}
+                      />
+                    </div>
+                  </div>
+                  {availModalError ? <div className="alert alert-warning py-2 small mb-2">{availModalError}</div> : null}
+                  <div className="qb-avail-wrap" id="qbAvailWrap">
+                    {availBrowserLoading ? (
+                      <div className="qb-avail-loading-state text-muted small p-3" role="status" aria-live="polite">
+                        <span className="spinner-border spinner-border-sm text-primary qb-inline-loader" aria-hidden="true" />
+                        <span>Caricamento...</span>
+                      </div>
+                    ) : !availMonths || availMonths.length === 0 ? (
+                      <div className="text-muted small p-2">Nessun dato.</div>
+                    ) : availMode === "day" ? (
+                      /* DAY: full 00:00-24:00 timeline of 5-min bars (legacy renderAvailability). */
+                      <>
+                        <div className="qb-avail-head">
+                          <div className="qb-avail-day">&nbsp;</div>
+                          <div className="qb-avail-hours">
+                            {Array.from({ length: 24 }, (_, h) => (
+                              <div key={h} className="qb-avail-hour">{String(h).padStart(2, "0")}</div>
+                            ))}
+                          </div>
+                        </div>
+                        {availMonths.map((m) => (
+                          <Fragment key={m.label}>
+                            <div className="qb-avail-month">{m.label}</div>
+                            {m.days.map((d) => {
+                              const slotSet = new Set(d.slots);
+                              const overrideSet = new Set(d.override_slots);
+                              const bookedSet = new Set(d.booked);
+                              const bookedOutsideSet = new Set(d.booked_outside);
+                              const toMin = (v: string | null) => {
+                                const mm = String(v ?? "").match(/^(\d{2}):(\d{2})/);
+                                return mm ? Number(mm[1]) * 60 + Number(mm[2]) : null;
+                              };
+                              const intervals: Array<[number, number]> = [];
+                              const o1 = toMin(d.opens), c1 = toMin(d.closes);
+                              if (o1 !== null && c1 !== null && c1 > o1) intervals.push([o1, c1]);
+                              const o2 = toMin(d.opens2), c2 = toMin(d.closes2);
+                              if (o2 !== null && c2 !== null && c2 > o2) intervals.push([o2, c2]);
+                              const ticks = Array.from({ length: (24 * 60) / 5 }, (_, i) => i * 5);
+                              return (
+                                <div className="qb-avail-row" data-date={d.date} key={d.date}>
+                                  <div className="qb-avail-day"><div className="fw-semibold">{d.label}</div></div>
+                                  <div className="qb-avail-bars">
+                                    {ticks.map((tMin) => {
+                                      const t = `${String(Math.floor(tMin / 60)).padStart(2, "0")}:${String(tMin % 60).padStart(2, "0")}`;
+                                      const inside = intervals.some(([s, e]) => tMin >= s && tMin < e);
+                                      const isOutside = intervals.length ? !inside : true;
+                                      // Legacy correction: an "available" tick inside a
+                                      // closed range renders as override (orange).
+                                      let on = slotSet.has(t);
+                                      let alt = !on && overrideSet.has(t);
+                                      if (on && isOutside) { on = false; alt = true; }
+                                      const isBookedOutside = bookedOutsideSet.has(t);
+                                      const isBooked = bookedSet.has(t);
+                                      const boundaryStart = intervals.some(([s]) => tMin === s);
+                                      const boundaryEnd = intervals.some(([, e]) => tMin === e - 5);
+                                      const cls = `qb-avail-bar${isBookedOutside ? " is-booked-outside" : isBooked ? " is-booked" : on ? " is-on" : alt ? " is-alt" : " is-off"}${isOutside ? " is-outside-hours" : ""}${boundaryStart ? " bh-start" : ""}${boundaryEnd ? " bh-end" : ""}`;
+                                      const state = isBookedOutside
+                                        ? "Prenotazione fuori orario / in chiusura"
+                                        : isBooked
+                                          ? "Slot occupato"
+                                          : on
+                                            ? d.dst_gap.includes(t) ? "Ora non esistente (cambio ora legale)" : "Disponibile"
+                                            : alt
+                                              ? "Fuori orario / Chiusura (selezionabile)"
+                                              : "Non disponibile";
+                                      const selectable = !isBooked && !isBookedOutside && (on || alt);
+                                      return (
+                                        <div
+                                          key={t}
+                                          className={cls}
+                                          data-time={t}
+                                          title={`${d.label_full} ${t} — ${state}`}
+                                          onClick={selectable && !availApplying ? () => void applyAvailabilitySlot(d.date, t) : undefined}
+                                        />
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </Fragment>
+                        ))}
+                      </>
+                    ) : (
+                      /* WEEK/MONTH: per-day summary list (legacy renderAvailabilityMonthSummary). */
+                      availMonths.map((m) => (
+                        <Fragment key={m.label}>
+                          <div className="qb-avail-month">{m.label}</div>
+                          <div className="list-group list-group-flush">
+                            {m.days.map((d) => {
+                              const total = Math.max(0, Number(d.regular_slot_count) || 0);
+                              const first = d.first_regular_slot || d.slots[0] || "";
+                              const hoursLabel = d.is_closed || (!d.opens && !d.opens2)
+                                ? "Chiuso"
+                                : `Orari: ${[d.opens && d.closes ? `${d.opens}-${d.closes}` : "", d.opens2 && d.closes2 ? `${d.opens2}-${d.closes2}` : ""].filter(Boolean).join(" / ")}`;
+                              return (
+                                <button
+                                  type="button"
+                                  key={d.date}
+                                  className="list-group-item list-group-item-action d-flex justify-content-between align-items-center gap-3"
+                                  data-qb-avail-day={d.date}
+                                  onClick={() => void loadAvailabilityPeriod(d.date, "day")}
+                                >
+                                  <span>
+                                    <span className="fw-semibold d-block">{d.label_full || d.label || d.date}</span>
+                                    <span className="small text-muted d-block">{first ? `Primo orario: ${first}` : "Nessun orario disponibile"}</span>
+                                    <span className="small text-muted d-block">{hoursLabel}</span>
+                                  </span>
+                                  <span className="d-flex align-items-center gap-2">
+                                    {total > 0
+                                      ? <span className="badge text-bg-light border">{total} slot</span>
+                                      : <span className="badge text-bg-light border text-muted">Nessuno slot</span>}
+                                    <i className="bi bi-chevron-right text-muted" />
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </Fragment>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="modal-backdrop fade show" onClick={closeAvailabilityModal} />
+        </>
+      ) : null}
+
       <div className="modal fade" id="qbClientFindModal" tabIndex={-1} aria-hidden="true">
         <div className="modal-dialog modal-dialog-scrollable">
           <div className="modal-content">
