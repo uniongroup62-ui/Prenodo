@@ -31,16 +31,25 @@ type StorageEnv = {
   publicBucket: string;
   privateBucket: string;
   publicBaseUrl: string;
+  endpoint: string;
 };
 
 function storageEnv(): StorageEnv {
+  const accountId = String(process.env.R2_ACCOUNT_ID ?? "").trim();
+  // Endpoint: R2_ENDPOINT esplicito (necessario per i bucket con GIURISDIZIONE
+  // — EU usa https://<account>.eu.r2.cloudflarestorage.com), altrimenti quello
+  // standard costruito dall'account id.
+  const endpoint =
+    String(process.env.R2_ENDPOINT ?? "").trim().replace(/\/+$/, "") ||
+    (accountId ? `https://${accountId}.r2.cloudflarestorage.com` : "");
   return {
-    accountId: String(process.env.R2_ACCOUNT_ID ?? "").trim(),
+    accountId,
     accessKeyId: String(process.env.R2_ACCESS_KEY_ID ?? "").trim(),
     secretAccessKey: String(process.env.R2_SECRET_ACCESS_KEY ?? "").trim(),
     publicBucket: String(process.env.R2_BUCKET_PUBLIC ?? "").trim(),
     privateBucket: String(process.env.R2_BUCKET_PRIVATE ?? "").trim(),
     publicBaseUrl: String(process.env.R2_PUBLIC_BASE_URL ?? "").trim().replace(/\/+$/, ""),
+    endpoint,
   };
 }
 
@@ -48,12 +57,12 @@ function storageEnv(): StorageEnv {
 // The private side additionally needs R2_BUCKET_PRIVATE (storagePrivateConfigured).
 export function storageConfigured(): boolean {
   const env = storageEnv();
-  return Boolean(env.accountId && env.accessKeyId && env.secretAccessKey && env.publicBucket && env.publicBaseUrl);
+  return Boolean(env.endpoint && env.accessKeyId && env.secretAccessKey && env.publicBucket && env.publicBaseUrl);
 }
 
 export function storagePrivateConfigured(): boolean {
   const env = storageEnv();
-  return Boolean(env.accountId && env.accessKeyId && env.secretAccessKey && env.privateBucket);
+  return Boolean(env.endpoint && env.accessKeyId && env.secretAccessKey && env.privateBucket);
 }
 
 // Il messaggio unico mostrato dalle feature quando lo storage non è pronto.
@@ -66,7 +75,7 @@ function r2Client(): S3Client {
   const env = storageEnv();
   cachedClient = new S3Client({
     region: "auto",
-    endpoint: `https://${env.accountId}.r2.cloudflarestorage.com`,
+    endpoint: env.endpoint,
     credentials: { accessKeyId: env.accessKeyId, secretAccessKey: env.secretAccessKey },
   });
   return cachedClient;
