@@ -42,6 +42,12 @@ export type AppointmentWithMeta = Appointment & {
   // scheduled to "Confermato"; statusCode preserves the true status so the calendar
   // can render the right pill/colour for canceled + no_show appointments.
   statusCode?: string;
+  // Per-service SEGMENTS (appointment_segments) when the appointment's services run
+  // under DIFFERENT operators: the Day calendar renders one block per segment in the
+  // respective staff column (like the legacy per-segment events) — otherwise the
+  // second operator's column would look free while they are busy on their segment.
+  // Present only when the appointment spans more than one operator.
+  segments?: Array<{ serviceId: number; serviceName: string; staffId: number; staffName: string; time: string; endTime: string }>;
 };
 
 // One service line on an appointment (from appointment_services), used for the

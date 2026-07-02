@@ -232,6 +232,34 @@ export async function publicBookingSlots({
   }
 
   const busyRanges = await busyRangesForDate(slug, normalizedDate);
+
+  // CABIN filter (live-parity fix 2026-07-02, port of booking_filter_slots_by_cabins):
+  // the legacy removes slots whose service cabin is already occupied; the Next only
+  // checked cabins at SAVE time (assertAppointmentSlotAvailable), so the drawer/public
+  // list offered slots the save would then refuse. Model: each service occupies its
+  // primary cabin (services.cabin_id — the same resolution the save uses) for its own
+  // sequential segment window; a start is cabin-free when every such window has no
+  // overlap with that cabin's busy ranges (appointments + segments + active holds).
+  const segmentWindows: Array<{ cabinId: number; offset: number; duration: number }> = [];
+  {
+    let offset = 0;
+    for (const service of services) {
+      const dur = Math.max(5, Number(service.duration_min ?? 30));
+      const cabinId = Number(service.cabin_id ?? 0) || 0;
+      if (cabinId > 0) segmentWindows.push({ cabinId, offset, duration: dur });
+      offset += dur;
+    }
+  }
+  const busyCabins = segmentWindows.length
+    ? await busyCabinRangesForDate(slug, normalizedDate).catch(() => [] as CabinBusyRange[])
+    : [];
+  const cabinFree = (start: number): boolean =>
+    segmentWindows.every(({ cabinId, offset, duration: dur }) => {
+      const segStart = start + offset;
+      const segEnd = segStart + dur;
+      return !busyCabins.some((busy) => busy.cabinId === cabinId && busy.start < segEnd && busy.end > segStart);
+    });
+
   const slots: PublicBookingSlot[] = [];
   const minStart = minimumStartForDate(normalizedDate);
 
@@ -241,12 +269,13 @@ export async function publicBookingSlots({
       const free = candidates.find((candidate) =>
         candidateFree(candidate, start, start + duration, locationId ?? null, busyRanges),
       );
+      const available = Boolean(free) && cabinFree(start);
       slots.push({
         time: minutesToTime(start),
-        available: Boolean(free),
-        staffId: free?.id ?? null,
-        staffName: free?.name ?? "",
-        reason: free ? "Disponibile" : "Orario occupato",
+        available,
+        staffId: available ? (free?.id ?? null) : null,
+        staffName: available ? (free?.name ?? "") : "",
+        reason: available ? "Disponibile" : "Orario occupato",
       });
     }
   }

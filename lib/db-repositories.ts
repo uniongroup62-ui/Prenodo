@@ -1478,6 +1478,45 @@ type AppointmentServicePlan = {
 // The primary service is the FIRST one; the primary cabin is the explicit
 // cabinId when provided, else the first service's cabin. Tenant-scoped via the
 // resolve* helpers.
+// Port of the legacy save guard (api_appointments.php ~3790-3830, live-parity fix
+// 2026-07-02): an operator can be assigned to a service only when ENABLED for it.
+// staff_services rows pointing at ACTIVE staff form the explicit allow-list for the
+// service; a service with NO (active) rows allows ALL active staff (the legacy
+// fallback). The special 'SSO' operator is exempt. Throws the exact legacy message.
+async function assertStaffAllowedForServices(
+  slug: string,
+  segments: Array<{ service: RowDataPacket; staffId: number | null }>,
+): Promise<void> {
+  const checked = new Set<string>();
+  for (const seg of segments) {
+    const staffId = Math.max(0, Number(seg.staffId ?? 0) || 0);
+    const serviceId = Math.max(0, Number(seg.service?.id ?? 0) || 0);
+    if (staffId <= 0 || serviceId <= 0) continue;
+    const key = `${serviceId}:${staffId}`;
+    if (checked.has(key)) continue;
+    checked.add(key);
+
+    // SSO exemption (the legacy skips its placeholder operator).
+    const staffRows = await tenantSelect<RowDataPacket>({ slug, table: "staff", columns: "id, full_name", where: "id = ?", params: [staffId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    if (String(staffRows[0]?.full_name ?? "").trim() === "SSO") continue;
+
+    // Explicit allow-list: staff_services rows whose staff is ACTIVE (legacy JOIN
+    // st.is_active=1 AND full_name<>'SSO'). Empty => no explicit rules => all allowed.
+    const ss = await tenantTable(slug, "staff_services").catch(() => null);
+    if (!ss) continue;
+    const staffTable = await tenantTable(slug, "staff");
+    const mapped = await dbQuery<RowDataPacket[]>(
+      `SELECT ss.staff_id FROM ${quoteIdentifier(ss.name)} ss JOIN ${quoteIdentifier(staffTable.name)} st ON st.id = ss.staff_id AND st.tenant_id = ss.tenant_id WHERE ss.tenant_id = ? AND ss.service_id = ? AND COALESCE(st.is_active,1) = 1 AND st.full_name <> 'SSO'`,
+      [ss.tenantId ?? 0, serviceId],
+    ).catch(() => [] as RowDataPacket[]);
+    const allowed = mapped.map((r) => Number(r.staff_id ?? 0)).filter((n) => n > 0);
+    if (allowed.length > 0 && !allowed.includes(staffId)) {
+      const serviceName = String(seg.service?.name ?? `#${serviceId}`);
+      throw new Error(`Operatore non abilitato per il servizio "${serviceName}".`);
+    }
+  }
+}
+
 async function planAppointmentServices({
   slug,
   serviceName,
@@ -1735,6 +1774,9 @@ export async function createDbAppointment({
     });
   }
   // Double-booking guard: refuse to book an operator already busy at this time.
+  // Legacy staff-service guard: each segment's operator must be enabled for its
+  // service (see assertStaffAllowedForServices).
+  await assertStaffAllowedForServices(slug, plan.segments);
   // Exclude this booking's own active hold (its [Disponibilità] reservation), so
   // the slot it reserved doesn't count against itself. Best-effort: only a real
   // detected overlap throws (the route turns it into { ok:false, error }).
@@ -1992,6 +2034,9 @@ export async function updateDbAppointment({
     });
   }
   // Double-booking guard: refuse to move/edit onto a slot where an operator is
+  // Legacy staff-service guard (same as create): each segment's operator must be
+  // enabled for its service.
+  await assertStaffAllowedForServices(slug, plan.segments);
   // already busy. Exclude THIS appointment (so it doesn't conflict with its own
   // existing row/staff) and its own active hold. Best-effort: only a real detected
   // overlap throws (the route turns it into { ok:false, error }).
@@ -12660,7 +12705,49 @@ async function mapAppointment(slug: string, row: RowDataPacket): Promise<Appoint
       : String(row.public_code).trim(),
     // Ordered service lines for the multi-service grouping (parent + child rows).
     services: serviceLines.map((line) => ({ serviceId: line.serviceId, name: line.name, price: `${roundMoney(line.price)} euro` })),
+    // Per-operator segments for the Day calendar (only when >1 distinct operator).
+    segments: await appointmentSegmentsForCalendar(slug, appointmentId),
   };
+}
+
+// Per-service segments (appointment_segments) with resolved staff names, exposed on
+// the calendar payload ONLY when the appointment spans MORE THAN ONE operator — the
+// Day view then renders one block per segment in the right staff column (legacy
+// per-segment events). Single-operator appointments return undefined (one block).
+async function appointmentSegmentsForCalendar(
+  slug: string,
+  appointmentId: number,
+): Promise<AppointmentWithMeta["segments"]> {
+  if (appointmentId <= 0) return undefined;
+  const rows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "appointment_segments",
+    columns: "service_id, service_name, staff_id, starts_at, ends_at, position",
+    where: "appointment_id = ?",
+    params: [appointmentId],
+    orderBy: "position ASC, starts_at ASC, id ASC",
+  }).catch(() => [] as RowDataPacket[]);
+  if (rows.length < 2) return undefined;
+  const staffIds = [...new Set(rows.map((r) => Number(r.staff_id ?? 0)).filter((n) => n > 0))];
+  if (staffIds.length < 2) return undefined;
+
+  const staffRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "staff",
+    columns: "id, full_name",
+    where: `id IN (${staffIds.map(() => "?").join(",")})`,
+    params: staffIds,
+  }).catch(() => [] as RowDataPacket[]);
+  const nameById = new Map<number, string>(staffRows.map((r) => [Number(r.id), String(r.full_name ?? "")]));
+
+  return rows.map((r) => ({
+    serviceId: Number(r.service_id ?? 0),
+    serviceName: String(r.service_name ?? "Servizio"),
+    staffId: Number(r.staff_id ?? 0),
+    staffName: nameById.get(Number(r.staff_id ?? 0)) ?? "",
+    time: timeLocal(toDate(r.starts_at)),
+    endTime: timeLocal(toDate(r.ends_at)),
+  }));
 }
 
 // Read the appointment's ORDERED service list from appointment_services (one entry

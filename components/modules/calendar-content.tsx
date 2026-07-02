@@ -138,6 +138,10 @@ type Appointment = {
   // Real php status code (pending|scheduled|done|canceled|no_show); the list API's
   // `status` is the collapsed 3-state UI label, so prefer statusCode for the pill.
   statusCode?: string;
+  // Per-operator segments (only when the appointment spans >1 operator): the Day
+  // view renders one block per segment in the matching staff column (legacy
+  // per-segment events), so the second operator's column shows their busy window.
+  segments?: { serviceId: number; serviceName: string; staffId: number; staffName: string; time: string; endTime: string }[];
 };
 
 type CalendarView = "staffTimeGridDay" | "timeGridWeek" | "dayGridMonth";
@@ -1098,7 +1102,30 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
 
   function apptsForStaff(staffName: string): Appointment[] {
     const target = staffName.trim().toLowerCase();
-    return visibleAppts.filter((a) => (a.operator || "").trim().toLowerCase() === target);
+    const out: Appointment[] = [];
+    for (const a of visibleAppts) {
+      // Multi-operator appointment: one VIRTUAL block per segment in the matching
+      // column (legacy per-segment events) — otherwise the second operator's column
+      // would look free while they are busy on their own segment. The virtual block
+      // keeps the appointment id (click still opens the same edit drawer) but takes
+      // the segment's time window, service and operator.
+      if (a.segments && a.segments.length > 1) {
+        for (const seg of a.segments) {
+          if ((seg.staffName || "").trim().toLowerCase() !== target) continue;
+          out.push({
+            ...a,
+            time: seg.time,
+            endTime: seg.endTime,
+            service: seg.serviceName,
+            services: [{ serviceId: seg.serviceId, name: seg.serviceName }],
+            operator: seg.staffName,
+          });
+        }
+        continue;
+      }
+      if ((a.operator || "").trim().toLowerCase() === target) out.push(a);
+    }
+    return out;
   }
 
   // Toolbar total reflects the visible range: the focused day (Day) or the whole
