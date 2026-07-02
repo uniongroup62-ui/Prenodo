@@ -663,6 +663,42 @@ OTP/reset (fix TZ), conferme su DB.
   (divergenza approvata): i residui nel drawer escludono già i consumi delle
   altre prenotazioni e il save re-valida con packageWarnings/prepaid/giftbox/
   gift warnings. Copertura equivalente per costruzione; nessun check separato.
+- Q4 NON È UN GAP (verificato nel sorgente legacy): Fidelity.php ~624-631 —
+  "Conflitto tra Sconto tramite punti e Omaggi: funzionalità rimossa", la
+  conflict_policy è FORZATA a 'discount' e la lista premi è vuota; il box
+  #qbFidelityChoiceBox (radio discount/gift/later) è codice morto anche nel
+  PHP (qbUpdateFidelityChoiceVisibility richiede policy==='choice' che non può
+  più verificarsi). Gli omaggi v2 dinamici per cliente sono già portati
+  (gift redeem + fidelity_gift_redeem).
+- P1 CHIUSO (verificato live end-to-end): Vantaggi step 6 pubblici.
+  * API: action=fidelity_preview su /api/booking (clientId SOLO dalla sessione
+    cliente — publicSessionClientId; anonimo => pannelli vuoti): punti
+    disponibili + suggerito (min(punti, floor(dovuto/euroPerPoint)), azzerato
+    sotto il minimo), credito, giftcard attive del cliente.
+  * Confirm: fidelity_points_use/credit_use/giftcard_redeem applicati POST
+    insert con gate sessione===client prenotato (parità col gate legacy
+    BookingAuth::user().client_id): riserva punti (colonne fidelity_points_used/
+    fidelity_discount + riga note legacy "Fidelity: -€ x (N Punti prenotati,
+    scalati quando eseguito)"), giftcard via applyAppointmentGiftcardRedeem,
+    credito con clamp legacy (dovuto - sconti - fidelity, giftcard NON
+    sottratta — quirk fedele a booking.php 8355) + addebito wallet + colonne.
+  * Wizard: pannelli Punti Fidelity / Credito / GiftCard collegati (toggle +
+    scelta giftcard), righe di sconto nel riepilogo step 7 e nell'aside,
+    totale pagabile aggiornato, nota #recFidelityNote sui punti prenotati.
+  * Test live (setup usa-e-getta client 28 + card + giftcard, TUTTO ripulito):
+    preview {50 punti -> €5, credito 20, giftcard 15}; confirm con fidelity+
+    giftcard -> colonne {50, 5, gc_used 7} + saldo giftcard 15->8 + note; 2a
+    prenotazione con credito -> wallet 20->8 + credit_used_by_customer; il
+    DELETE ha ripristinato correttamente giftcard e credito (stesso restore
+    del manage). DB pulito a fine test.
+- P2 CHIUSO: deep-link "prenota da residuo". La pagina booking legge
+  book_package/book_prepaid/book_giftbox(+giftbox_item_id)/book_omaggio
+  (+reward_item_index)+service_id, precompila il wizard (servizio+categoria
+  selezionati) e il confirm invia il redeem JSON; la route lo applica POST
+  insert con gli stessi applier server-side del manage
+  (applyAppointmentPackage/Prepaid/Giftbox/GiftRedeems, re-validazione +
+  azzeramento riga), gate di sessione come i Vantaggi. Da collegare in P3 i
+  link dalle sezioni area cliente ancora mancanti.
 - Q2 CHIUSO: modali dettaglio residui nel drawer. quickBookClientResidualsDetail
   esteso con gli id sorgente (prepaid id/service_id, giftcard id, package id +
   service_id per seduta, giftbox instance_id + giftbox_item_id/service_id,

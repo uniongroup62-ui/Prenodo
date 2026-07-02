@@ -15,13 +15,18 @@ import "server-only";
 //    per-service prices + promotion_id + "Promozione: T" note (legacy INSERT).
 
 import {
+  addDbWalletMovement,
+  applyAppointmentGiftcardRedeem,
+  dbWalletBalance,
   evalBestPromotionForAppointment,
   evalPromotionCodeForAppointment,
+  fidelityIsClientAdhering,
+  getFidelityPointsSettings,
   previewDbCoupon,
   type AppointmentPromoContext,
 } from "@/lib/db-repositories";
 import type { RowDataPacket } from "@/lib/tenant-db";
-import { tenantSelect } from "@/lib/tenant-db";
+import { tenantSelect, tenantUpdate } from "@/lib/tenant-db";
 
 export type PublicBookingBenefitResolution = {
   // Classic coupon actually applied (null when none / when the code was a promotion).
@@ -218,4 +223,235 @@ export async function resolvePublicBookingBenefits({
 
   result.totalDiscount = round2(result.couponDiscount + result.promoDiscount);
   return result;
+}
+
+// ===================== STEP 6 "Vantaggi" — customer benefits =====================
+// Port of the LOGGED-customer benefit panels (booking.php mode=fidelity_preview,
+// ~5700-6522, narrowed to the three panels the step 6 shows: Punti Fidelity /
+// Credito / GiftCard) + their application at confirm (~8053-8103 fidelity,
+// ~8174-8302 giftcard, ~8336-8395 credito). SECURITY: the caller resolves the
+// clientId from the PUBLIC CUSTOMER SESSION only (the legacy gates the credit
+// use on BookingAuth::user().client_id === client_id) — never from request params.
+
+export type PublicCustomerBenefitsPreview = {
+  ok: boolean;
+  // Fidelity redeem panel (#recFidelityBox): shown when the program + redeem are
+  // enabled AND the client adheres AND has points.
+  fidelity: {
+    enabled: boolean;
+    redeemEnabled: boolean;
+    pointsAvailable: number;
+    euroPerPoint: number;
+    minPoints: number;
+    // Suggested full redeem for THIS cart: min(points, floor(due/euroPerPoint)),
+    // zeroed under the minimum (the toggle applies exactly this).
+    suggestedPoints: number;
+    suggestedDiscount: number;
+  };
+  // Credito panel (#recCreditUseBox): the client's spendable wallet credit.
+  creditAvailable: number;
+  // GiftCard panel (#recGiftcardUseBox): the client's active spendable cards.
+  giftcards: Array<{ id: number; code: string; balance: number }>;
+};
+
+export async function publicCustomerBenefitsPreview({
+  slug,
+  clientId,
+  subtotal,
+  priorDiscount = 0,
+}: {
+  slug: string;
+  clientId: number;
+  subtotal: number;
+  priorDiscount?: number;
+}): Promise<PublicCustomerBenefitsPreview> {
+  const out: PublicCustomerBenefitsPreview = {
+    ok: true,
+    fidelity: { enabled: false, redeemEnabled: false, pointsAvailable: 0, euroPerPoint: 0.1, minPoints: 0, suggestedPoints: 0, suggestedDiscount: 0 },
+    creditAvailable: 0,
+    giftcards: [],
+  };
+  if (clientId <= 0) return out;
+
+  const due = Math.max(0, round2(subtotal - Math.max(0, priorDiscount)));
+
+  // --- Fidelity (settings gate + adhesion + wallet points) ---
+  try {
+    const settings = await getFidelityPointsSettings(slug);
+    const programOn = settings.globalEnabled && settings.pointsEnabled;
+    out.fidelity.enabled = programOn;
+    out.fidelity.redeemEnabled = programOn && settings.redeemEnabled;
+    out.fidelity.euroPerPoint = settings.redeemEuroPerPoint;
+    out.fidelity.minPoints = settings.redeemMinPoints;
+    if (out.fidelity.redeemEnabled && (await fidelityIsClientAdhering(slug, clientId).catch(() => false))) {
+      const wallet = await dbWalletBalance(clientId, slug);
+      const available = Math.max(0, Math.floor(Number(wallet.points ?? 0) || 0));
+      out.fidelity.pointsAvailable = available;
+      const epp = settings.redeemEuroPerPoint > 0 ? settings.redeemEuroPerPoint : 0.1;
+      let suggested = Math.min(available, Math.floor(due / epp));
+      if (suggested < settings.redeemMinPoints) suggested = 0;
+      out.fidelity.suggestedPoints = suggested;
+      out.fidelity.suggestedDiscount = round2(Math.min(due, suggested * epp));
+    }
+  } catch {
+    // fidelity panel simply stays hidden
+  }
+
+  // --- Credito (client wallet credit) ---
+  try {
+    const wallet = await dbWalletBalance(clientId, slug);
+    out.creditAvailable = round2(Math.max(0, Number(wallet.credit ?? 0) || 0));
+  } catch {
+    out.creditAvailable = 0;
+  }
+
+  // --- GiftCard (active, spendable, owned by the client) — same availability rule
+  //     as the manage residuals (recipient, active, balance>0, not expired). ---
+  try {
+    const rows = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "giftcards",
+      columns: "id, code, balance, expires_at",
+      where: "recipient_client_id = ? AND status = 'active' AND balance > 0 AND (expires_at IS NULL OR expires_at >= CURRENT_DATE)",
+      params: [clientId],
+      orderBy: "(expires_at IS NULL) DESC, expires_at ASC, id DESC",
+      limit: 20,
+    });
+    out.giftcards = rows
+      .map((r) => ({ id: Number(r.id ?? 0), code: String(r.code ?? ""), balance: round2(Math.max(0, Number(r.balance ?? 0) || 0)) }))
+      .filter((g) => g.id > 0 && g.balance > 0);
+  } catch {
+    out.giftcards = [];
+  }
+
+  return out;
+}
+
+// Apply the confirmed customer's requested benefits AFTER the public insert
+// (legacy order: fidelity -> giftcard -> credito; each best-effort/clamped, the
+// booking itself never fails). Returns what was actually applied so the caller
+// can echo it in the confirmation payload.
+export async function applyPublicCustomerBenefits({
+  slug,
+  appointmentId,
+  clientId,
+  subtotal,
+  priorDiscount,
+  requestedPoints,
+  requestedCredit,
+  giftcardRedeems,
+}: {
+  slug: string;
+  appointmentId: number;
+  clientId: number;
+  subtotal: number;
+  priorDiscount: number;
+  requestedPoints: number;
+  requestedCredit: number;
+  giftcardRedeems: Array<{ giftcard_id: number; amount: number }>;
+}): Promise<{ fidelityPoints: number; fidelityDiscount: number; creditUsed: number; giftcardUsed: number }> {
+  const applied = { fidelityPoints: 0, fidelityDiscount: 0, creditUsed: 0, giftcardUsed: 0 };
+  if (clientId <= 0 || appointmentId <= 0) return applied;
+  const dueBase = Math.max(0, round2(subtotal - Math.max(0, priorDiscount)));
+
+  // --- 1) FIDELITY points reserve (legacy ~8053-8103 + column update ~8250-8258):
+  //     normalize + clamp the request to the available points and the covered due;
+  //     persist appointments.fidelity_points_used/fidelity_discount + the legacy
+  //     notes line. Points are RESERVED (debited only when the booking is done). ---
+  const reqPts = Math.max(0, Math.floor(Number(requestedPoints) || 0));
+  if (reqPts > 0) {
+    try {
+      const settings = await getFidelityPointsSettings(slug);
+      if (
+        settings.globalEnabled &&
+        settings.pointsEnabled &&
+        settings.redeemEnabled &&
+        (await fidelityIsClientAdhering(slug, clientId).catch(() => false))
+      ) {
+        const wallet = await dbWalletBalance(clientId, slug);
+        const available = Math.max(0, Math.floor(Number(wallet.points ?? 0) || 0));
+        const epp = settings.redeemEuroPerPoint > 0 ? settings.redeemEuroPerPoint : 0.1;
+        let pts = Math.min(reqPts, available, Math.floor(dueBase / epp));
+        if (pts < settings.redeemMinPoints) pts = 0;
+        const discount = round2(Math.min(dueBase, pts * epp));
+        if (pts > 0 && discount > 0) {
+          await tenantUpdate({
+            slug,
+            table: "appointments",
+            id: appointmentId,
+            values: { fidelity_points_used: pts, fidelity_discount: discount },
+          });
+          // Legacy notes line: "Fidelity: -€ x (N Punti prenotati, scalati quando eseguito)".
+          try {
+            const rows = await tenantSelect<RowDataPacket>({ slug, table: "appointments", columns: "notes", where: "id = ?", params: [appointmentId], limit: 1 });
+            const prev = String(rows[0]?.notes ?? "").trim();
+            const line = `Fidelity: -€ ${moneyIt(discount)} (${pts} Punti prenotati, scalati quando eseguito)`;
+            await tenantUpdate({ slug, table: "appointments", id: appointmentId, values: { notes: prev ? `${prev}\n${line}` : line } });
+          } catch {
+            // the columns are the source of truth; a notes failure is cosmetic
+          }
+          applied.fidelityPoints = pts;
+          applied.fidelityDiscount = discount;
+        }
+      }
+    } catch {
+      // best-effort: the booking stands without the fidelity reserve
+    }
+  }
+
+  // --- 2) GIFTCARD (legacy booking_public_apply_giftcard): reuse the manage-side
+  //     redeem (ownership + balance validation, cap at the payable total, balance
+  //     decrement + appointments.giftcard_id/giftcard_used). ---
+  const validRedeems = (giftcardRedeems ?? []).filter((r) => Number(r.giftcard_id) > 0 && Number(r.amount) > 0);
+  if (validRedeems.length > 0) {
+    try {
+      const { applied: gcApplied } = await applyAppointmentGiftcardRedeem({
+        slug,
+        appointmentId,
+        clientId,
+        redeems: validRedeems.map((r) => ({ giftcardId: Number(r.giftcard_id), amount: round2(Number(r.amount)) })),
+      });
+      if (gcApplied) applied.giftcardUsed = round2(Number(gcApplied.amount) || 0);
+    } catch {
+      // best-effort
+    }
+  }
+
+  // --- 3) CREDITO (legacy ~8336-8388): clamp to min(balance, due-after-fidelity,
+  //     requested), debit the wallet NOW (refunded on cancel by
+  //     restoreAppointmentRedeems) + appointments.credit_used(+_by_customer). ---
+  const reqCredit = round2(Math.max(0, Number(requestedCredit) || 0));
+  if (reqCredit > 0) {
+    try {
+      const wallet = await dbWalletBalance(clientId, slug);
+      const balance = round2(Math.max(0, Number(wallet.credit ?? 0) || 0));
+      // Legacy dueBeforeCredit = subtotal - discount - fidelity_discount (the
+      // giftcard is intentionally NOT subtracted — faithful quirk, booking.php 8355).
+      const dueBeforeCredit = Math.max(0, round2(dueBase - applied.fidelityDiscount));
+      const use = round2(Math.min(balance, dueBeforeCredit, reqCredit));
+      if (use > 0) {
+        await addDbWalletMovement(
+          {
+            clientId,
+            type: "debit",
+            amount: -use,
+            source_type: "appointment",
+            source_id: appointmentId,
+            note: `Utilizzo credito prenotazione #${appointmentId}`,
+          },
+          slug,
+        );
+        try {
+          await tenantUpdate({ slug, table: "appointments", id: appointmentId, values: { credit_used: use, credit_used_by_customer: 1 } });
+        } catch {
+          await tenantUpdate({ slug, table: "appointments", id: appointmentId, values: { credit_used: use } });
+        }
+        applied.creditUsed = use;
+      }
+    } catch {
+      // best-effort: the booking stands without the credit deduction
+    }
+  }
+
+  return applied;
 }

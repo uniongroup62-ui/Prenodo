@@ -11312,7 +11312,7 @@ function normalizeFidelityPoints(n: unknown): number {
 
 // A client "adheres" to Fidelity when they hold an active, non-expired card
 // (port of Fidelity::isClientAdhering — cards.status='active' + expires_at NULL/>=today).
-async function fidelityIsClientAdhering(slug: string, clientId: number): Promise<boolean> {
+export async function fidelityIsClientAdhering(slug: string, clientId: number): Promise<boolean> {
   if (clientId <= 0) return false;
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "cards", columns: "id", where: "client_id = ? AND status = 'active' AND (expires_at IS NULL OR expires_at >= ?)", params: [clientId, todayIso()], limit: 1 }).catch(() => [] as RowDataPacket[]);
   return rows.length > 0;

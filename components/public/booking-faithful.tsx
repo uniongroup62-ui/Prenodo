@@ -158,7 +158,20 @@ const MONTHS_IT = [
   "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre",
 ];
 
-export function BookingFaithful({ slug: slugProp }: { slug?: string } = {}) {
+// DEEP-LINK "prenota da residuo" prefill (legacy book_package / book_prepaid /
+// book_giftbox / book_omaggio + service_id): the covered service is preselected
+// and the redeem travels with the confirm (re-validated server-side).
+export type BookingRedeemPrefill = {
+  kind: "package" | "prepaid" | "giftbox" | "gift";
+  refId: number;
+  itemId?: number;
+  serviceId: number;
+};
+
+export function BookingFaithful({
+  slug: slugProp,
+  redeemPrefill = null,
+}: { slug?: string; redeemPrefill?: BookingRedeemPrefill | null } = {}) {
   const slug = useMemo(() => {
     if (slugProp) return slugProp;
     if (typeof window === "undefined") return "";
@@ -229,6 +242,15 @@ export function BookingFaithful({ slug: slugProp }: { slug?: string } = {}) {
         setContext(ctx);
         setLocationId(ctx.locations[0]?.id ?? 0);
         setCategoryId(ctx.categories[0]?.id ?? null);
+        // Deep-link prefill: preselect the covered service (and its category) so
+        // the customer lands with the redeem's service already in the cart.
+        if (redeemPrefill && redeemPrefill.serviceId > 0) {
+          const svc = ctx.services.find((s) => s.id === redeemPrefill.serviceId);
+          if (svc) {
+            setServiceIds([svc.id]);
+            if (svc.categoryId) setCategoryId(svc.categoryId);
+          }
+        }
         setError("");
       })
       .catch((caught) => {
@@ -310,6 +332,58 @@ export function BookingFaithful({ slug: slugProp }: { slug?: string } = {}) {
       ? autoPromo.discount
       : estimateDiscount(selectedBenefit, subtotal);
   const finalTotal = Math.max(0, subtotal - discount);
+
+  // ---- STEP 6 "Vantaggi" — logged-customer panels (port of mode=fidelity_preview:
+  // Punti Fidelity / Credito / GiftCard). Fetched entering the step (and on cart/
+  // discount changes); the panels stay hidden for anonymous visitors or when the
+  // customer has nothing to spend. The choices only PREVIEW here — the confirm
+  // re-validates and clamps everything server-side. ----
+  type CustomerBenefits = {
+    logged: boolean;
+    redeemEnabled: boolean;
+    pointsAvailable: number;
+    suggestedPoints: number;
+    suggestedDiscount: number;
+    creditAvailable: number;
+    giftcards: Array<{ id: number; code: string; balance: number }>;
+  };
+  const [custBenefits, setCustBenefits] = useState<CustomerBenefits | null>(null);
+  const [useFidelity, setUseFidelity] = useState(false);
+  const [useCredit, setUseCredit] = useState(false);
+  const [giftcardChoiceId, setGiftcardChoiceId] = useState(0);
+  const serviceIdsKey = serviceIds.join(",");
+  useEffect(() => {
+    if (step < 6 || !serviceIdsKey) return;
+    let alive = true;
+    const params = new URLSearchParams({ slug, action: "fidelity_preview", service_ids: serviceIdsKey, discount: String(discount) });
+    fetch(`/api/booking?${params.toString()}`)
+      .then((r) => r.json())
+      .then((j) => {
+        if (!alive || !j?.ok) return;
+        setCustBenefits({
+          logged: Number(j.logged ?? 0) === 1,
+          redeemEnabled: Number(j.redeem_enabled ?? 0) === 1,
+          pointsAvailable: Number(j.available_points ?? 0) || 0,
+          suggestedPoints: Number(j.points_used ?? 0) || 0,
+          suggestedDiscount: Number(j.discount ?? 0) || 0,
+          creditAvailable: Number(j.credit_available ?? 0) || 0,
+          giftcards: Array.isArray(j.giftcards) ? j.giftcards : [],
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [step, slug, serviceIdsKey, discount]);
+  const round2c = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+  const fidelityDiscountApplied = useFidelity && custBenefits ? Math.min(custBenefits.suggestedDiscount, finalTotal) : 0;
+  const dueAfterFidelity = Math.max(0, round2c(finalTotal - fidelityDiscountApplied));
+  const chosenGiftcard = custBenefits?.giftcards.find((g) => g.id === giftcardChoiceId) ?? null;
+  const giftcardAppliedAmount = chosenGiftcard ? round2c(Math.min(chosenGiftcard.balance, dueAfterFidelity)) : 0;
+  const creditAppliedAmount =
+    useCredit && custBenefits ? round2c(Math.min(custBenefits.creditAvailable, Math.max(0, dueAfterFidelity - giftcardAppliedAmount))) : 0;
+  // The customer-facing payable total after every selected benefit.
+  const payableTotal = Math.max(0, round2c(finalTotal - fidelityDiscountApplied - giftcardAppliedAmount - creditAppliedAmount));
   const staffName =
     operatorId === "any"
       ? hold?.staffName || selectedSlot?.staffName || "Qualsiasi professionista"
@@ -536,6 +610,25 @@ export function BookingFaithful({ slug: slugProp }: { slug?: string } = {}) {
           // server-side: promo-by-code or classic coupon with stacking rules).
           coupon_code: couponApplied?.code ?? (selectedBenefit?.type === "coupon" ? selectedBenefit.code ?? selectedBenefit.label : ""),
           promotion_id: selectedBenefit?.type === "promotion" ? selectedBenefit.promotionId ?? "" : "",
+          // STEP 6 customer benefits (re-validated + clamped server-side; applied
+          // only when the customer session owns the booked client).
+          fidelity_points_use: useFidelity ? custBenefits?.suggestedPoints ?? 0 : 0,
+          credit_use: creditAppliedAmount > 0 ? String(creditAppliedAmount) : "0",
+          giftcard_redeem:
+            chosenGiftcard && giftcardAppliedAmount > 0
+              ? JSON.stringify([{ giftcard_id: chosenGiftcard.id, amount: giftcardAppliedAmount }])
+              : "",
+          // Deep-link redeem (book_package / book_prepaid / book_giftbox /
+          // book_omaggio): only when its covered service is still in the cart.
+          ...(redeemPrefill && serviceIds.includes(redeemPrefill.serviceId)
+            ? redeemPrefill.kind === "package"
+              ? { package_redeem: JSON.stringify([{ client_package_id: redeemPrefill.refId, service_id: redeemPrefill.serviceId }]) }
+              : redeemPrefill.kind === "prepaid"
+                ? { prepaid_service_redeem: JSON.stringify([{ client_prepaid_service_id: redeemPrefill.refId, service_id: redeemPrefill.serviceId }]) }
+                : redeemPrefill.kind === "giftbox"
+                  ? { giftbox_redeem: JSON.stringify([{ instance_id: redeemPrefill.refId, giftbox_item_id: redeemPrefill.itemId ?? 0, service_id: redeemPrefill.serviceId }]) }
+                  : { gift_redeem: JSON.stringify([{ instance_id: redeemPrefill.refId, reward_item_index: redeemPrefill.itemId ?? 0, service_id: redeemPrefill.serviceId }]) }
+            : {}),
           owner_key: ownerKeyRef.current,
         }),
       });
@@ -1047,8 +1140,11 @@ export function BookingFaithful({ slug: slugProp }: { slug?: string } = {}) {
                   </div>
                 ) : null}
 
-                {/* Fidelity / Credit / Giftcard panels — faithful markup, hidden (not wired). */}
-                <div id="recFidelityBox" className="booking-benefit-panel d-none">
+                {/* Fidelity / Credit / Giftcard panels — WIRED to action=fidelity_preview
+                    (logged customer only). Each stays hidden when there is nothing to
+                    spend; the selected amounts preview in the recap and travel with the
+                    confirm (re-validated + clamped server-side). */}
+                <div id="recFidelityBox" className={`booking-benefit-panel${custBenefits && custBenefits.redeemEnabled && custBenefits.suggestedDiscount > 0 ? "" : " d-none"}`}>
                   <div className="d-flex justify-content-between align-items-start gap-3">
                     <div>
                       <div className="fw-semibold">
@@ -1058,13 +1154,19 @@ export function BookingFaithful({ slug: slugProp }: { slug?: string } = {}) {
                       <div className="small text-muted" id="recFidelityHint" />
                     </div>
                     <div className="small text-muted" id="recFidelityAvail">
-                      Disponibili: 0 Punti
+                      Disponibili: {custBenefits?.pointsAvailable ?? 0} Punti
                     </div>
                   </div>
                   <div className="d-grid gap-2 mt-3">
-                    <label className="giftcard-choice booking-benefit-choice d-none" id="recFidelityToggleRow" htmlFor="recFidelityUseToggle">
+                    <label className="giftcard-choice booking-benefit-choice" id="recFidelityToggleRow" htmlFor="recFidelityUseToggle">
                       <span className="booking-benefit-choice__main">
-                        <input className="form-check-input" type="checkbox" id="recFidelityUseToggle" />
+                        <input
+                          className="form-check-input"
+                          type="checkbox"
+                          id="recFidelityUseToggle"
+                          checked={useFidelity}
+                          onChange={(e) => setUseFidelity(e.target.checked)}
+                        />
                         <span className="booking-benefit-choice__copy">
                           <span className="giftcard-choice__name">Usa sconto Punti Fidelity</span>
                           <span className="giftcard-choice__meta">
@@ -1073,13 +1175,13 @@ export function BookingFaithful({ slug: slugProp }: { slug?: string } = {}) {
                         </span>
                       </span>
                       <span className="giftcard-choice__amount" id="recFidelityDiscountAmount">
-                        - € 0
+                        - € {fmtMoney(custBenefits?.suggestedDiscount ?? 0)}
                       </span>
                     </label>
                   </div>
                 </div>
 
-                <div id="recCreditUseBox" className="booking-benefit-panel d-none">
+                <div id="recCreditUseBox" className={`booking-benefit-panel${custBenefits && custBenefits.creditAvailable > 0 ? "" : " d-none"}`}>
                   <div className="d-flex justify-content-between align-items-start gap-3">
                     <div>
                       <div className="fw-semibold">
@@ -1092,20 +1194,26 @@ export function BookingFaithful({ slug: slugProp }: { slug?: string } = {}) {
                   <div className="d-grid gap-2 mt-3">
                     <label className="giftcard-choice booking-benefit-choice" htmlFor="recCreditUseToggle">
                       <span className="booking-benefit-choice__main">
-                        <input className="form-check-input" type="checkbox" id="recCreditUseToggle" />
+                        <input
+                          className="form-check-input"
+                          type="checkbox"
+                          id="recCreditUseToggle"
+                          checked={useCredit}
+                          onChange={(e) => setUseCredit(e.target.checked)}
+                        />
                         <span className="booking-benefit-choice__copy">
                           <span className="giftcard-choice__name">Usa credito disponibile</span>
                           <span className="giftcard-choice__meta">Per questa prenotazione</span>
                         </span>
                       </span>
                       <strong className="giftcard-choice__amount" id="recCreditAvail">
-                        € 0
+                        € {fmtMoney(custBenefits?.creditAvailable ?? 0)}
                       </strong>
                     </label>
                   </div>
                 </div>
 
-                <div id="recGiftcardUseBox" className="booking-benefit-panel d-none">
+                <div id="recGiftcardUseBox" className={`booking-benefit-panel${custBenefits && custBenefits.giftcards.length > 0 ? "" : " d-none"}`}>
                   <div className="d-flex justify-content-between align-items-start gap-3">
                     <div>
                       <div className="fw-semibold">
@@ -1117,7 +1225,26 @@ export function BookingFaithful({ slug: slugProp }: { slug?: string } = {}) {
                       </div>
                     </div>
                   </div>
-                  <div id="recGiftcardList" className="d-grid gap-2 mt-3" />
+                  <div id="recGiftcardList" className="d-grid gap-2 mt-3">
+                    {(custBenefits?.giftcards ?? []).map((card) => (
+                      <label key={card.id} className="giftcard-choice booking-benefit-choice" htmlFor={`recGiftcard-${card.id}`}>
+                        <span className="booking-benefit-choice__main">
+                          <input
+                            className="form-check-input"
+                            type="checkbox"
+                            id={`recGiftcard-${card.id}`}
+                            checked={giftcardChoiceId === card.id}
+                            onChange={(e) => setGiftcardChoiceId(e.target.checked ? card.id : 0)}
+                          />
+                          <span className="booking-benefit-choice__copy">
+                            <span className="giftcard-choice__name">GiftCard {card.code}</span>
+                            <span className="giftcard-choice__meta">Saldo disponibile</span>
+                          </span>
+                        </span>
+                        <strong className="giftcard-choice__amount">€ {fmtMoney(card.balance)}</strong>
+                      </label>
+                    ))}
+                  </div>
                 </div>
               </div>
 
@@ -1236,14 +1363,39 @@ export function BookingFaithful({ slug: slugProp }: { slug?: string } = {}) {
                       <div className="fw-semibold text-success">- € {fmtMoney(discount)}</div>
                     </div>
                   ) : null}
+                  {fidelityDiscountApplied > 0 ? (
+                    <div className="summary-row summary-row--no-border">
+                      <div className="label">Sconto Punti Fidelity</div>
+                      <div className="fw-semibold text-success">- € {fmtMoney(fidelityDiscountApplied)}</div>
+                    </div>
+                  ) : null}
+                  {giftcardAppliedAmount > 0 ? (
+                    <div className="summary-row summary-row--no-border">
+                      <div className="label">GiftCard {chosenGiftcard?.code ?? ""}</div>
+                      <div className="fw-semibold text-success">- € {fmtMoney(giftcardAppliedAmount)}</div>
+                    </div>
+                  ) : null}
+                  {creditAppliedAmount > 0 ? (
+                    <div className="summary-row summary-row--no-border">
+                      <div className="label">Credito</div>
+                      <div className="fw-semibold text-success">- € {fmtMoney(creditAppliedAmount)}</div>
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="summary-total summary-total--compact">
                   <div>Prezzo Totale</div>
-                  <div id="recTotal">€ {fmtMoney(finalTotal)}</div>
+                  <div id="recTotal">€ {fmtMoney(payableTotal)}</div>
                 </div>
 
-                <div id="recFidelityNote" className="alert alert-info p-2 mt-2 d-none" />
+                {/* Nota punti Fidelity (legacy #recFidelityNote, booking.php 13313):
+                    reminds the customer the points are only RESERVED until executed. */}
+                <div id="recFidelityNote" className={`alert alert-info p-2 mt-2${fidelityDiscountApplied > 0 ? "" : " d-none"}`}>
+                  <div className="small">
+                    <i className="bi bi-info-circle me-1" />
+                    Verranno prenotati {custBenefits?.suggestedPoints ?? 0} Punti Fidelity: saranno scalati quando l&apos;appuntamento sarà eseguito.
+                  </div>
+                </div>
 
                 <div id="recPromoConditions" className="alert alert-info p-2 mt-2 d-none booking-alert-rounded">
                   <div className="d-flex gap-2">
@@ -1397,7 +1549,7 @@ export function BookingFaithful({ slug: slugProp }: { slug?: string } = {}) {
               <div id="sumFidelityNote" className="alert alert-info p-2 mt-2 d-none" />
               <div className="summary-total">
                 <div>Prezzo Totale</div>
-                <div id="sumTotal">€ {fmtMoney(finalTotal)}</div>
+                <div id="sumTotal">€ {fmtMoney(payableTotal)}</div>
               </div>
             </div>
 
