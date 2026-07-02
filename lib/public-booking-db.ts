@@ -659,6 +659,22 @@ export async function renewPublicBookingHold({
   };
 }
 
+// Benefit resolution computed SERVER-SIDE by the booking route (see
+// lib/public-booking-benefits.ts) and applied at insert: per-service promo
+// prices, coupon/promo notes lines and the applied promotion id. The legacy
+// public confirm persists NO discount columns — coupon in notes, promo in the
+// per-service prices — so `benefits` replaces the old discount_type/value shim.
+export type PublicBookingConfirmBenefits = {
+  couponCode: string | null;
+  couponDiscount: number;
+  promotionId: number | null;
+  promotionTitle: string;
+  promoDiscount: number;
+  serviceOverrides: Array<{ serviceId: number; price: number; listPrice: number; badge: string }>;
+  noteLines: string[];
+  totalDiscount: number;
+};
+
 export async function confirmPublicBooking({
   slug,
   date,
@@ -674,6 +690,7 @@ export async function confirmPublicBooking({
   couponCode,
   promotionId,
   notes,
+  benefits = null,
 }: {
   slug: string;
   date: string;
@@ -689,6 +706,7 @@ export async function confirmPublicBooking({
   couponCode?: string;
   promotionId?: number | null;
   notes?: string;
+  benefits?: PublicBookingConfirmBenefits | null;
 }): Promise<PublicBookingConfirmation> {
   const normalizedDate = normalizeDate(date);
   const normalizedTime = normalizeTime(time);
@@ -723,9 +741,21 @@ export async function confirmPublicBooking({
     locationId: locationId ?? null,
   });
   const subtotal = services.reduce((sum, service) => sum + Number(service.price ?? 0), 0);
-  const discount = await publicDiscount(slug, subtotal, couponCode, promotionId ?? null);
+  // Legacy-faithful benefit application when the route resolved them; the plain
+  // discount shim stays as the fallback for direct API callers.
+  const legacyBenefits = benefits ?? null;
+  const discount = legacyBenefits
+    ? { amount: legacyBenefits.totalDiscount, label: "" }
+    : await publicDiscount(slug, subtotal, couponCode, promotionId ?? null);
   const publicCode = randomHex(10).toUpperCase();
   const appointments = await tenantTable(slug, "appointments");
+  // autoNote (legacy): "Servizi: ..." + the coupon/promo lines -> appointments.notes.
+  const autoNoteLines = legacyBenefits
+    ? [
+        `Servizi: ${services.map((service) => String(service.name ?? "").trim()).filter(Boolean).join(", ")}`,
+        ...legacyBenefits.noteLines,
+      ]
+    : [];
   const values: Record<string, unknown> = {
     client_id: client.id,
     service_id: Number(services[0]?.id ?? 0) || null,
@@ -733,20 +763,43 @@ export async function confirmPublicBooking({
     starts_at: sqlDateTime(normalizedDate, normalizedTime),
     ends_at: sqlDateTime(normalizedDate, minutesToTime(start + duration)),
     status: "pending",
-    discount_type: discount.amount > 0 ? "fixed" : null,
-    discount_value: discount.amount,
-    promotion_id: promotionId && promotionId > 0 ? promotionId : null,
+    // Legacy public INSERT writes NO discount columns: the coupon lives in the
+    // notes lines and the promotion in per-service prices (+ promotion_id).
+    discount_type: legacyBenefits ? null : (discount.amount > 0 ? "fixed" : null),
+    discount_value: legacyBenefits ? 0 : discount.amount,
+    promotion_id: legacyBenefits
+      ? (legacyBenefits.promotionId && legacyBenefits.promotionId > 0 ? legacyBenefits.promotionId : null)
+      : (promotionId && promotionId > 0 ? promotionId : null),
     location_id: locationId && locationId > 0 ? locationId : null,
-    customer_notes: [notes, discount.label].filter(Boolean).join("\n") || null,
+    notes: autoNoteLines.length ? autoNoteLines.join("\n") : null,
+    customer_notes: legacyBenefits
+      ? (String(notes ?? "").trim() || null)
+      : ([notes, discount.label].filter(Boolean).join("\n") || null),
   };
   if (await columnExists(appointments.name, "public_code")) values.public_code = publicCode;
   const appointmentId = await tenantInsert(appointments, values);
 
-  await insertPublicAppointmentServices(slug, appointmentId, services);
+  await insertPublicAppointmentServices(slug, appointmentId, services, legacyBenefits?.serviceOverrides ?? []);
   if (selectedStaffId) await insertPublicAppointmentStaff(slug, appointmentId, selectedStaffId);
   if (locationId && locationId > 0) await insertPublicAppointmentLocation(slug, appointmentId, locationId);
   await insertPublicAppointmentSegments(slug, appointmentId, normalizedDate, normalizedTime, services, selectedStaffId);
   if (holdToken) await markPublicHoldConverted(slug, holdToken, ownerKey, appointmentId);
+
+  // Promotion redemption record (same shape the manage save writes; removed by
+  // the delete/cancel cleanup). Best-effort like every voucher side-write.
+  if (legacyBenefits?.promotionId && legacyBenefits.promotionId > 0 && legacyBenefits.promoDiscount > 0) {
+    const redTable = await tenantTable(slug, "promotion_redemptions").catch(() => null);
+    if (redTable) {
+      await tenantInsert(redTable, {
+        promotion_id: legacyBenefits.promotionId,
+        client_id: client.id > 0 ? client.id : null,
+        appointment_id: appointmentId,
+        discount_amount: roundMoney(legacyBenefits.promoDiscount),
+        location_id: locationId && locationId > 0 ? locationId : null,
+        redeemed_at: new Date(),
+      }).catch(() => 0);
+    }
+  }
 
   return {
     id: appointmentId,
@@ -1538,16 +1591,26 @@ async function publicDiscount(slug: string, subtotal: number, couponCode?: strin
   return { amount: 0, label: "" };
 }
 
-async function insertPublicAppointmentServices(slug: string, appointmentId: number, services: ServiceRow[]): Promise<void> {
+// `overrides` carries the promo per-service prices (price = discounted,
+// list_price = original, discount_badge) resolved by the confirm benefits.
+async function insertPublicAppointmentServices(
+  slug: string,
+  appointmentId: number,
+  services: ServiceRow[],
+  overrides: Array<{ serviceId: number; price: number; listPrice: number; badge: string }> = [],
+): Promise<void> {
+  const overrideById = new Map(overrides.map((o) => [o.serviceId, o]));
   for (const service of services) {
+    const override = overrideById.get(Number(service.id ?? 0));
     await tenantInsert(await tenantTable(slug, "appointment_services"), {
       appointment_id: appointmentId,
       service_id: Number(service.id ?? 0),
       service_name: String(service.name ?? ""),
       service_category_id: nullableNumber(service.category_id),
       qty: 1,
-      price: Number(service.price ?? 0),
-      list_price: Number(service.price ?? 0),
+      price: override ? override.price : Number(service.price ?? 0),
+      list_price: override ? override.listPrice : Number(service.price ?? 0),
+      discount_badge: override && override.badge ? override.badge : null,
       duration_min: Number(service.duration_min ?? 30),
     }).catch(() => 0);
   }

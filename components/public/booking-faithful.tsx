@@ -184,6 +184,17 @@ export function BookingFaithful({ slug: slugProp }: { slug?: string } = {}) {
   const [slotsLoading, setSlotsLoading] = useState(false);
   const [hold, setHold] = useState<BookingHold | null>(null);
   const [benefitId, setBenefitId] = useState("none");
+  // COUPON free-text (port of the legacy Step 6 coupon box -> mode=coupon):
+  // the typed code is validated SERVER-SIDE per cart/date; a code matching a
+  // promotion's coupon_code comes back as a promotion. The validated result
+  // feeds coupon_code to the confirm (which re-resolves, never trusting this).
+  const [couponInput, setCouponInput] = useState("");
+  const [couponApplied, setCouponApplied] = useState<null | { code: string; discount: number; isPromotion: boolean; promotionTitle: string }>(null);
+  const [couponMsg, setCouponMsg] = useState<null | { ok: boolean; text: string }>(null);
+  const [couponChecking, setCouponChecking] = useState(false);
+  // AUTO-PROMO (port of mode=promotion_preview): the best automatic promotion
+  // the confirm will apply, shown as an informational banner in Step 6.
+  const [autoPromo, setAutoPromo] = useState<null | { title: string; discount: number }>(null);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
@@ -290,7 +301,14 @@ export function BookingFaithful({ slug: slugProp }: { slug?: string } = {}) {
   const selectedSlot = availableSlots.find((item) => item.time === slot) ?? null;
   const subtotal = selectedServices.reduce((sum, service) => sum + service.price, 0);
   const totalDuration = selectedServices.reduce((sum, service) => sum + service.duration, 0);
-  const discount = estimateDiscount(selectedBenefit, subtotal);
+  // Discount shown in Step 6/7: the VALIDATED coupon result wins (its discount
+  // already includes a stacked auto-promo, like the legacy mode=coupon), then
+  // the auto-detected promotion, then the selected-benefit estimate.
+  const discount = couponApplied
+    ? couponApplied.discount
+    : autoPromo
+      ? autoPromo.discount
+      : estimateDiscount(selectedBenefit, subtotal);
   const finalTotal = Math.max(0, subtotal - discount);
   const staffName =
     operatorId === "any"
@@ -300,6 +318,97 @@ export function BookingFaithful({ slug: slugProp }: { slug?: string } = {}) {
 
   const isFinalStep = step === 7;
   const canContinue = computeCanContinue();
+
+  // AUTO-PROMO detection (mode=promotion_preview) on entering Step 6+: the best
+  // automatic promotion the confirm will apply, per selected services/date/slot.
+  useEffect(() => {
+    if (step < 6 || !serviceIds.length) {
+      setAutoPromo(null);
+      return;
+    }
+    let active = true;
+    const params = new URLSearchParams();
+    params.set("slug", slug);
+    params.set("action", "promotion_preview");
+    params.set("service_ids", serviceIds.join(","));
+    if (locationId > 0) params.set("location_id", String(locationId));
+    if (date) params.set("date", date);
+    if (slot) params.set("time", slot);
+    if (email.trim()) params.set("email", email.trim());
+    if (phone.trim()) params.set("phone", phone.trim());
+    void fetch(`/api/booking?${params.toString()}`)
+      .then((res) => res.json().catch(() => null))
+      .then((data: { ok?: boolean; eligible?: boolean; title?: string; discount?: number } | null) => {
+        if (!active) return;
+        if (data?.ok && data.eligible && Number(data.discount ?? 0) > 0) {
+          setAutoPromo({ title: String(data.title ?? ""), discount: Number(data.discount ?? 0) });
+        } else {
+          setAutoPromo(null);
+        }
+      })
+      .catch(() => {
+        if (active) setAutoPromo(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [step, serviceIds, locationId, date, slot, email, phone, slug]);
+
+  // COUPON free-text apply (mode=coupon): validate the typed code per cart/
+  // date; a promotion-with-code answers as a promotion (is_promotion=1).
+  async function applyCoupon() {
+    const code = couponInput.trim().toUpperCase();
+    if (!code) {
+      setCouponMsg({ ok: false, text: "Inserisci un codice coupon." });
+      return;
+    }
+    setCouponChecking(true);
+    setCouponMsg(null);
+    try {
+      const params = new URLSearchParams();
+      params.set("slug", slug);
+      params.set("action", "coupon");
+      params.set("code", code);
+      params.set("service_ids", serviceIds.join(","));
+      if (locationId > 0) params.set("location_id", String(locationId));
+      if (date) params.set("appt_date", date);
+      if (slot) params.set("time", slot);
+      if (email.trim()) params.set("email", email.trim());
+      if (phone.trim()) params.set("phone", phone.trim());
+      const res = await fetch(`/api/booking?${params.toString()}`);
+      const data: { ok?: boolean; error?: string; discount?: number; is_promotion?: number; promotion_title?: string } =
+        await res.json().catch(() => ({}));
+      if (!data.ok) {
+        setCouponApplied(null);
+        setCouponMsg({ ok: false, text: String(data.error || "Coupon non valido o scaduto.") });
+        return;
+      }
+      const isPromotion = Number(data.is_promotion ?? 0) === 1;
+      setCouponApplied({
+        code,
+        discount: Number(data.discount ?? 0),
+        isPromotion,
+        promotionTitle: String(data.promotion_title ?? ""),
+      });
+      setCouponMsg({
+        ok: true,
+        text: isPromotion
+          ? `Promozione "${String(data.promotion_title ?? code)}" applicata.`
+          : "Coupon applicato.",
+      });
+    } catch {
+      setCouponApplied(null);
+      setCouponMsg({ ok: false, text: "Errore durante la verifica del coupon." });
+    } finally {
+      setCouponChecking(false);
+    }
+  }
+
+  function removeCoupon() {
+    setCouponApplied(null);
+    setCouponInput("");
+    setCouponMsg(null);
+  }
 
   function computeCanContinue(): boolean {
     if (submitting) return false;
@@ -388,7 +497,9 @@ export function BookingFaithful({ slug: slugProp }: { slug?: string } = {}) {
           client_email: email,
           client_phone: phone,
           benefit_id: benefitId,
-          coupon_code: selectedBenefit?.type === "coupon" ? selectedBenefit.code ?? selectedBenefit.label : "",
+          // The VALIDATED free-text code wins (the confirm re-resolves it
+          // server-side: promo-by-code or classic coupon with stacking rules).
+          coupon_code: couponApplied?.code ?? (selectedBenefit?.type === "coupon" ? selectedBenefit.code ?? selectedBenefit.label : ""),
           promotion_id: selectedBenefit?.type === "promotion" ? selectedBenefit.promotionId ?? "" : "",
           owner_key: ownerKeyRef.current,
         }),
@@ -790,6 +901,62 @@ export function BookingFaithful({ slug: slugProp }: { slug?: string } = {}) {
                   Nessun vantaggio disponibile per questa prenotazione.
                 </div>
 
+                {/* AUTO-PROMO detected (mode=promotion_preview): the confirm applies it
+                    automatically, exactly like the legacy — this banner just shows it. */}
+                {autoPromo && !couponApplied ? (
+                  <div className="alert alert-success small booking-alert-rounded-sm" id="autoPromoBanner">
+                    <i className="bi bi-megaphone me-1" />
+                    Promozione attiva: <strong>{autoPromo.title}</strong> — sconto € {fmtMoney(autoPromo.discount)} applicato automaticamente alla conferma.
+                  </div>
+                ) : null}
+
+                {/* COUPON free-text (port of the legacy Step 6 coupon box -> mode=coupon). */}
+                <div className="booking-benefit-panel" id="couponBox">
+                  <div className="d-flex justify-content-between align-items-start gap-3">
+                    <div>
+                      <div className="fw-semibold">
+                        <i className="bi bi-ticket-perforated me-1" />
+                        Hai un codice coupon?
+                      </div>
+                      <div className="small text-muted">Inseriscilo qui per applicarlo alla prenotazione.</div>
+                    </div>
+                  </div>
+                  <div className="input-group input-group-sm mt-3" style={{ maxWidth: 420 }}>
+                    <input
+                      className="form-control"
+                      type="text"
+                      id="couponInput"
+                      placeholder="Codice coupon"
+                      value={couponInput}
+                      onChange={(event) => setCouponInput(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          void applyCoupon();
+                        }
+                      }}
+                    />
+                    <button type="button" className="btn btn-outline-success" disabled={couponChecking} onClick={() => void applyCoupon()}>
+                      Applica
+                    </button>
+                    <button type="button" className="btn btn-outline-secondary" disabled={couponChecking} onClick={removeCoupon}>
+                      Rimuovi
+                    </button>
+                  </div>
+                  {couponMsg ? (
+                    <div className={`form-text ${couponMsg.ok ? "text-success" : "text-danger"}`} id="couponMsg">
+                      {couponMsg.text}
+                    </div>
+                  ) : null}
+                  {couponApplied ? (
+                    <div className="small mt-1" id="couponAppliedLine">
+                      {couponApplied.isPromotion
+                        ? <>Promozione <strong>{couponApplied.promotionTitle || couponApplied.code}</strong>: - € {fmtMoney(couponApplied.discount)}</>
+                        : <>Coupon <strong>{couponApplied.code}</strong>: - € {fmtMoney(couponApplied.discount)}</>}
+                    </div>
+                  ) : null}
+                </div>
+
                 {/* Wired benefit choices (coupon / promotion) rendered with the legacy benefit-panel markup. */}
                 {ctx?.benefits.length ? (
                   <div className="booking-benefit-panel">
@@ -1028,7 +1195,7 @@ export function BookingFaithful({ slug: slugProp }: { slug?: string } = {}) {
                   ))}
                   {discount > 0 ? (
                     <div className="summary-row summary-row--no-border">
-                      <div className="label">{selectedBenefit?.label ?? "Sconto"}</div>
+                      <div className="label">{couponApplied ? (couponApplied.isPromotion ? `Promozione ${couponApplied.promotionTitle || couponApplied.code}` : `Coupon ${couponApplied.code}`) : autoPromo ? `Promozione ${autoPromo.title}` : selectedBenefit?.label ?? "Sconto"}</div>
                       <div className="fw-semibold text-success">- € {fmtMoney(discount)}</div>
                     </div>
                   ) : null}
@@ -1185,7 +1352,7 @@ export function BookingFaithful({ slug: slugProp }: { slug?: string } = {}) {
                 ))}
                 {discount > 0 ? (
                   <div className="summary-row summary-row--no-border">
-                    <div className="label">{selectedBenefit?.label ?? "Sconto"}</div>
+                    <div className="label">{couponApplied ? (couponApplied.isPromotion ? `Promozione ${couponApplied.promotionTitle || couponApplied.code}` : `Coupon ${couponApplied.code}`) : autoPromo ? `Promozione ${autoPromo.title}` : selectedBenefit?.label ?? "Sconto"}</div>
                     <div className="fw-semibold text-success">- € {fmtMoney(discount)}</div>
                   </div>
                 ) : null}

@@ -348,9 +348,9 @@ radios "Scelta cliente" conflict_policy nel drawer.
 
 ### Priorità suggerite per chiudere il pubblico
 1. ✅ **Area cliente prenotazioni** — FATTO (2026-07-02, item 21 sotto).
-2. **Step 6 wizard**: coupon free-text (mode=coupon), promotion_preview per
-   carrello (riusare evalBestPromotionForAppointment), fidelity_preview e
-   redeems al confirm (giftcard/giftbox/punti) + note automatiche legacy.
+2. ✅ **Step 6 wizard (coupon + promozioni)** — FATTO (2026-07-02, item 22).
+   Restano deferred i pannelli fidelity/credito/giftcard (richiedono cliente
+   loggato con saldi; nascosti anche nel legacy di default).
 3. **my_packages + my_quotes + quote_decision** (area cliente estesa).
 4. Date strip: spegnere i giorni chiusi (mode=closures o riuso businessIntervals).
 5. Minori: update_reference_location, prezzi promo per-servizio al confirm.
@@ -390,6 +390,36 @@ colonne booking_customer_cancel_* vivono su businesses — attive: 24 ore).
 - Divergenza documentata: package/prepaid/gift summary della lista/ICS non
   popolate (sotto-engine ClientPackages::appointmentPackageSummary non portato;
   campi vuoti).
+
+## Item 22 — Booking pubblico: coupon free-text + promozioni (2026-07-02, blocco 2)
+Port di booking.php mode=coupon (:5322), mode=promotion_preview (:5580) e del
+blocco benefit del confirm (:7600-7960).
+- **Engine**: evalBestPromotionForAppointment accetta preferredPromotionId
+  (legacy: la promo pre-selezionata eleggibile vince); nuova
+  evalPromotionCodeForAppointment (promo con coupon_code = PROMOZIONE, mai
+  coupon — port di Promotions::discountForCode).
+- **lib/public-booking-benefits.ts**: risoluzione benefit del confirm — promo
+  per codice > coupon classico (base ridotta ai servizi non scontati con promo
+  NON cumulabile, base post-promo con promo cumulabile) > migliore promo
+  automatica; client per le regole target risolto da email/telefono (port di
+  booking_resolve_client_id_for_promos).
+- **Route /api/booking**: action=coupon e action=promotion_preview (shape
+  legacy); il confirm risolve i benefit SERVER-SIDE (mai fidato il wizard).
+- **Confirm fedele al legacy**: NIENTE colonne discount — coupon nelle note
+  ("Servizi: …" + "Coupon: X" + "Sconto coupon: - € y,yy"), promo nei prezzi
+  per-servizio (price/list_price/badge) + promotion_id + riga
+  promotion_redemptions; customer_notes = solo note del cliente.
+- **Wizard Step 6**: box coupon wired (Applica/Rimuovi, promo-da-codice
+  riconosciuta), banner promo automatica rilevata, sconto/etichette reali in
+  Step 6/7.
+- **Verifica live vs PHP (public=1)**: promotion_preview identico (12→10.8,
+  badge -10%); coupon nei 3 casi identici (rifiuto char-per-char con promo non
+  cumulabile; 1.20 senza promo; ZZPROMOCODE → is_promotion=1, sconto 5, tot 7);
+  confirm verificati su DB: coupon → note legacy esatte + nessuna colonna
+  discount; promo → 10.80/12.00/-10% + promotion_id + redemption 1.20.
+  Cleanup completo su entrambi i DB (promo/coupon/appuntamenti/cliente test).
+- Nota parametri legacy: mode=promotion_preview usa `date`, mode=coupon usa
+  `appt_date` (rispecchiati).
 
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;

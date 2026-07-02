@@ -9274,6 +9274,7 @@ export async function evalBestPromotionForAppointment({
   time,
   clientId,
   locationId,
+  preferredPromotionId = null,
 }: {
   slug: string;
   serviceIds: number[];
@@ -9281,6 +9282,10 @@ export async function evalBestPromotionForAppointment({
   time: string | null;
   clientId: number | null;
   locationId: number | null;
+  // Legacy preferred-promo support (booking_pick_best_promotion_for_booking):
+  // when the caller pre-selected a promotion and it is ELIGIBLE, it wins over
+  // the best automatic one; otherwise the best eligible applies as usual.
+  preferredPromotionId?: number | null;
 }): Promise<AppointmentPromoContext> {
   const none = (reason: string): AppointmentPromoContext => ({ applied: false, promotion: null, services: [], discount: 0, reason });
   const ids = serviceIds.map((id) => Math.trunc(Number(id)) || 0).filter((id) => id > 0);
@@ -9302,7 +9307,12 @@ export async function evalBestPromotionForAppointment({
     // Skip coupon-code promotions (redeemed via coupon, not auto-applied).
     const promoRows = await tenantSelect<RowDataPacket>({ slug, table: "promotions", where: `id IN (${promotions.map(() => "?").join(", ")})`, params: promotions.map((p) => p.promotionId) }).catch(() => [] as RowDataPacket[]);
     const rowById = new Map<number, RowDataPacket>(promoRows.map((r) => [Number(r.id ?? 0), r]));
-    for (const evalResult of promotions) {
+    // Preferred promo first (legacy): an eligible pre-selected promotion wins.
+    const preferred = Math.max(0, Number(preferredPromotionId ?? 0) || 0);
+    const ordered = preferred > 0
+      ? [...promotions.filter((p) => p.promotionId === preferred), ...promotions.filter((p) => p.promotionId !== preferred)]
+      : promotions;
+    for (const evalResult of ordered) {
       const row = rowById.get(evalResult.promotionId);
       if (!row) continue;
       if (String(row.coupon_code ?? "").trim() !== "") continue;
@@ -9331,6 +9341,119 @@ export async function evalBestPromotionForAppointment({
   } catch {
     return none("Impossibile valutare le promozioni.");
   }
+}
+
+// PROMO-CON-CODICE per il booking (port of Promotions::discountForCode via the
+// legacy public mode=coupon/confirm): a promotion whose coupon_code matches the
+// typed code is treated as a PROMOTION (per-service prices), never as a coupon.
+// found=false when no active promotion carries that code; ok=false with the
+// eligibility reason when it exists but does not apply to this cart/context.
+export async function evalPromotionCodeForAppointment({
+  slug,
+  code,
+  serviceIds,
+  date,
+  time,
+  clientId,
+  locationId,
+}: {
+  slug: string;
+  code: string;
+  serviceIds: number[];
+  date: string;
+  time: string | null;
+  clientId: number | null;
+  locationId: number | null;
+}): Promise<{ found: boolean; ok: boolean; reason: string; context: AppointmentPromoContext }> {
+  const none: AppointmentPromoContext = { applied: false, promotion: null, services: [], discount: 0, reason: "" };
+  const normalized = String(code ?? "").trim().toUpperCase();
+  if (!normalized) return { found: false, ok: false, reason: "", context: none };
+  const promoRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "promotions",
+    where: "UPPER(TRIM(COALESCE(coupon_code,''))) = ? AND COALESCE(is_active,0) = 1",
+    params: [normalized],
+    orderBy: "priority DESC, id ASC",
+    limit: 1,
+  }).catch(() => [] as RowDataPacket[]);
+  const row = promoRows[0];
+  if (!row) return { found: false, ok: false, reason: "", context: none };
+
+  const ids = serviceIds.map((id) => Math.trunc(Number(id)) || 0).filter((id) => id > 0);
+  const ph = Array.from(new Set(ids)).map(() => "?").join(", ");
+  const svcRows = ids.length
+    ? await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, price", where: `id IN (${ph})`, params: Array.from(new Set(ids)) }).catch(() => [] as RowDataPacket[])
+    : [];
+  const priceById = new Map<number, number>(svcRows.map((r) => [Number(r.id ?? 0), Math.max(0, Number(r.price ?? 0) || 0)]));
+  const cart: PromoCartLine[] = ids
+    .map((id) => ({ type: "service" as const, id, qty: 1, unitPrice: priceById.get(id) ?? 0 }))
+    .filter((line) => line.unitPrice > 0);
+  if (!cart.length) return { found: true, ok: false, reason: "Nessun servizio valido nel carrello.", context: none };
+
+  // Evaluate JUST this promotion with its child mappings (the shared per-cart
+  // evaluator only returns eligible rows without reasons).
+  const promotionId = Number(row.id ?? 0);
+  const result = await evaluateSinglePromotionForCart(slug, row, cart, date, time ?? "", clientId ?? 0, locationId ?? 0);
+  if (!result.eligible || result.discount <= 0) {
+    return { found: true, ok: false, reason: result.reason || "Promozione non applicabile.", context: none };
+  }
+  const meta = promoStackMeta(row);
+  const services = Object.entries(result.breakdownServices)
+    .map(([sid, b]) => ({ service_id: Number(sid), list_price: roundMoney(b.old), booked_price: roundMoney(b.now), discount_badge: b.badge }))
+    .filter((line) => line.list_price > 0 && line.booked_price >= 0 && line.list_price - line.booked_price > 0.000001);
+  return {
+    found: true,
+    ok: true,
+    reason: "",
+    context: {
+      applied: true,
+      promotion: { id: promotionId, title: meta.title, stackable: meta.stackable, stackable_with_fidelity: meta.stackableWithFidelity, stackable_with_coupon: meta.stackableWithCoupon },
+      services,
+      discount: result.discount,
+      reason: "",
+    },
+  };
+}
+
+// Evaluate ONE promotion row against a cart, loading its child mappings (the
+// same shape evaluatePromotionsForCart builds per row).
+async function evaluateSinglePromotionForCart(
+  slug: string,
+  promo: RowDataPacket,
+  cart: PromoCartLine[],
+  date: string,
+  time: string,
+  clientId: number,
+  locationId: number,
+): Promise<PromoEvalResult> {
+  const promotionId = Number(promo.id ?? 0);
+  const grab = async (table: string): Promise<RowDataPacket[]> =>
+    tenantSelect<RowDataPacket>({ slug, table, where: "promotion_id = ?", params: [promotionId] }).catch(() => [] as RowDataPacket[]);
+  const [bo, tw, svc, prd, loc] = await Promise.all([
+    grab("promotion_blackout_dates"),
+    grab("promotion_time_windows"),
+    grab("promotion_services"),
+    grab("promotion_products"),
+    grab("promotion_locations"),
+  ]);
+  const defMap = (rows: RowDataPacket[], refCol: string) => {
+    const m = new Map<number, { type: "percent" | "fixed"; value: number; minQty: number }>();
+    for (const r of rows) {
+      const t2 = String(r.discount_type ?? "percent").toLowerCase() === "fixed" ? "fixed" : "percent";
+      m.set(Number(r[refCol] ?? 0), { type: t2 as "percent" | "fixed", value: Math.max(0, Number(r.discount_value ?? 0) || 0), minQty: Math.max(1, Number(r.min_qty ?? 1) || 1) });
+    }
+    return m;
+  };
+  const ch: PromoChildren = {
+    blackouts: new Set(bo.map((r) => (typeof r.blackout_date === "string" ? r.blackout_date.slice(0, 10) : r.blackout_date ? toIso(r.blackout_date).slice(0, 10) : "")).filter(Boolean)),
+    windows: tw.map((r) => ({ day: Number(r.day_of_week ?? 0), start: String(r.start_time ?? "").slice(0, 5), end: String(r.end_time ?? "").slice(0, 5) })),
+    serviceDefs: defMap(svc, "service_id"),
+    productDefs: defMap(prd, "product_id"),
+    locationIds: new Set(loc.map((r) => Number(r.location_id ?? 0)).filter((n) => n > 0)),
+  };
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : todayIso();
+  const ctx = clientId > 0 ? await loadPromoClientCtx(slug, clientId, day, promoNormTime(time)) : null;
+  return evaluateOnePromotion(promo, ch, cart, day, promoNormTime(time), clientId, locationId, ctx);
 }
 
 // Selected-scope services/products that must still resolve to a live, active
