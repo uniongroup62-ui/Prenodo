@@ -86,10 +86,21 @@ Clienti (form/detail/cascade-delete/tag/storico).
      mostra correttamente (bug legacy non replicato, intenzionale).
    - Nota minore: default scadenza coupon Next = +30gg, PHP = nessuna → da
      allineare (creazione senza date esplicite).
-7. ⏳ **Booking pubblico**: context + hold + confirm end-to-end (richiede account
-   cliente pubblico di test su entrambi).
-8. ⏳ **Calendario**: dati settimana/mese + note API (confronto payload).
-9. ⏳ **Voucher pubblici** giftcard/giftbox + **Admin SaaS** + cron.
+7. ✅ **Motore HOLD (booking)**: hold sullo stesso slot (14/07 10:00) su entrambi
+   → la disponibilità perde gli STESSI slot (86/86 identici, blocca anche gli
+   inizi precedenti che sconfinerebbero); release → 109 ripristinati su entrambi.
+   Token+TTL 300s identici come semantica.
+8. ✅ **Note calendario**: save/list/delete parity (stesso payload, autore
+   risolto identico); campi snake_case (PHP) vs camelCase (Next) — interna UI.
+9. ✅ **Coupon senza scadenza** (fix 2bc3978): mapCoupon inventava una finestra
+   finta oggi/+30gg per date NULL → un coupon senza scadenza previewato per un
+   appuntamento a >30gg veniva rifiutato (il PHP lo accetta). Ora bound vuoti =
+   illimitati (activeWindow già compatibile). Verificato live a +75gg.
+10. ⏳ **Booking confirm end-to-end cross-sistema**: richiede un account cliente
+    pubblico verificato via email su entrambi (codice di verifica) — da fare a
+    mano o con accesso alla mailbox/log mailer. Le componenti sottostanti (slot,
+    hold, conferma lato Next) sono già verificate singolarmente.
+11. ⏳ **Voucher pubblici** giftcard/giftbox + **Admin SaaS** + cron.
 
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;
