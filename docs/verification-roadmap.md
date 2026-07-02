@@ -197,14 +197,9 @@ Clienti (form/detail/cascade-delete/tag/storico).
     ripristinato + appuntamenti test eliminati da entrambi i DB.
 
 ## Gap residui del flusso Quick Booking (da decidere/pianificare)
-1. **Promozioni nel drawer** (il più grosso): auto-rilevamento promo nel
-   pannello prezzi (promotion_preview) + persistenza server-side al save dei
-   prezzi scontati per servizio con regole di stacking (coupon/fidelity
-   conflict_policy). L'engine di valutazione esiste già (Block 3, action=
-   evaluate): manca il wiring drawer + il blocco promo del save legacy
-   (api_appointments.php:9914 in poi).
+1. ~~Promozioni nel drawer~~ ✅ **FATTO (2026-07-02, vedi item 18)**.
 2. **fidelity_gift_redeem + conflict_policy radios** nel drawer (riscatto
-   premi fidelity; legato al punto 1 per i conflitti promo/punti).
+   premi fidelity; i conflitti promo/punti "hard" sono ora coperti dall'item 18).
 3. **swap_segment**: child-rows segmenti + frecce riordino nella lista
    appuntamenti Next.
 4. **Cabine nel drawer (solo UI)**: select cabina filtrata sulle LIBERE
@@ -214,6 +209,49 @@ Clienti (form/detail/cascade-delete/tag/storico).
    servizio; il legacy auto-sceglie una cabina LIBERA dalla lista allowed.
    Con 1 cabina per servizio (dato reale attuale) identico; divergenza solo
    con pool di cabine condivise.
+6. **Coupon su base ridotta dalla promo**: quando la promo NON è cumulabile
+   col coupon, il legacy applica il coupon SOLO ai servizi non scontati dalla
+   promo (coupon_eval_after_promotion). Il preview coupon Next non riduce
+   ancora la base; il caso reale (promo non cumulabile + coupon insieme) è
+   raro ma da chiudere per parità totale.
+
+## Item 18 — PROMOZIONI nel quick booking (2026-07-02, port completo + verifica live)
+- **Engine** (lib/db-repositories.ts): computePromoDiscountCents riscritto con
+  l'allocazione PER-UNITÀ legacy (Promotions.php ~4380): percent = round per
+  unità; fixed su riga selected = min(unit, valore) per unità; fixed globale =
+  pro-rata largest-remainder. Ora produce anche il breakdown per servizio
+  {old, now, discount, badge} ("-10%" / "-€ 5,00" formato it-IT) — lo stesso
+  che alimentava solo il POS ora è condiviso.
+- **evalBestPromotionForAppointment**: migliore promo automatica eleggibile
+  (le promo con coupon_code sono escluse come nel preview legacy) + flag
+  stackable dal bitmask legacy (raw 1 => tutto; bit 4 fidelity, bit 8 coupon).
+- **Route action=promotion_preview**: shape identica al legacy. **Verifica
+  live: risposta IDENTICA al centesimo e al carattere** (servizio 12€, promo
+  -10% => list 12 / booked 10.8 / badge "-10%", stessi flag stackable).
+- **Save (create+edit)**: rivalutazione server-side (il preview del drawer non
+  è mai fidato) → appointment_services.price/list_price/discount_badge coi
+  prezzi promo, appointments.promotion_id, riga promotion_redemptions
+  (discount_amount) — su edit ricreata/rimossa; gate legacy "non su done".
+  **Verifica live: persistenza IDENTICA sui 2 stack** (10.80/12.00/-10%,
+  redemption 1.20).
+- **Catena FIDELITY al save** (ogni step verificato LIVE contro PHP, stessi
+  dati sui 2 stack): (1) redeem disabilitato => richiesta azzerata in
+  silenzio, save ok con fidelity_points_used=0; (2) cliente senza tessera
+  attiva => "Cliente non aderisce alla Fidelity"; (3) conflitto promo non
+  cumulabile sulla richiesta GREZZA (prima del saldo!) => "Sconto punti
+  Fidelity non cumulabile con la promozione \"T\"."; (4) saldo => "Punti non
+  disponibili." / "Punti insufficienti." / minimo. Tre errori riprodotti
+  carattere-per-carattere su Next (test A/B/C).
+- **Drawer**: fetch promotion_preview su cambio cliente/servizi/data/ora/sede
+  (req-id + cache key come qbPromoKey legacy); pannello prezzi con prezzo di
+  listino barrato + prezzo scontato + badge verde (stesso ramo visivo dei
+  redeem, generalizzato list>price come renderPriceDetails).
+- Cleanup test completo: promo ZZPromoTest, tessera ZZTESTCARD, appuntamenti
+  e redemption eliminati da entrambi i DB; punti cliente 9 ripristinati
+  (22 su Supabase, 0 su MySQL), redeem flag MySQL ripristinato.
+- Nota drift dati: su Supabase fidelity_redeem_enabled=1 e cliente 9 con 22
+  punti; su MySQL redeem 0 e 0 punti — divergenza PRE-esistente dei dati, non
+  di codice (riallineare all'export finale).
 
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;

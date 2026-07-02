@@ -9,6 +9,7 @@ import {
   cancelDonePreview,
   createDbAppointment,
   deleteDbAppointment,
+  evalBestPromotionForAppointment,
   getDbAppointmentCustomerVisibleSnapshot,
   getDbAppointmentForEdit,
   getDbAppointmentMoveSnapshot,
@@ -129,6 +130,50 @@ export async function GET(request: Request) {
       return Response.json({ ok: preview.ok, error: preview.error, preview });
     } catch (error) {
       return jsonError(error instanceof Error ? error.message : "Errore anteprima annullamento.");
+    }
+  }
+
+  // Promo auto-detection for the quick-booking price panel (port of the legacy
+  // action=promotion_preview -> appt_eval_best_promotion_for_context): best
+  // ELIGIBLE automatic promotion for the selected services + client + slot,
+  // returned as per-service {list_price, booked_price, discount_badge} lines +
+  // the stackability flags. Read-only; the save re-evaluates server-side.
+  if (action === "promotion_preview") {
+    try {
+      const clientId = Number.parseInt(String(url.searchParams.get("client_id") ?? "0"), 10) || 0;
+      const serviceIds = parseIdList(url.searchParams.get("service_ids") ?? url.searchParams.get("service_id") ?? "");
+      const locationId = await resolveManageLocationId({
+        slug: tenantSlug,
+        raw: url.searchParams.get("location_id"),
+        fallbackCurrent: true,
+      }) || null;
+      let date = String(url.searchParams.get("appt_date") ?? url.searchParams.get("date") ?? "").trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) date = todayIso();
+      const timeRaw = String(url.searchParams.get("appt_time") ?? url.searchParams.get("time") ?? "").trim();
+      const time = /^\d{2}:\d{2}/.test(timeRaw) ? timeRaw.slice(0, 5) : null;
+      if (serviceIds.length === 0) {
+        return Response.json({ ok: true, applied: 0, promotion: null, services: [], location_id: locationId, service_ids: [], reason: "Nessun servizio selezionato." });
+      }
+      const promoCtx = await evalBestPromotionForAppointment({ slug: tenantSlug, serviceIds, date, time, clientId: clientId > 0 ? clientId : null, locationId });
+      return Response.json({
+        ok: true,
+        applied: promoCtx.applied ? 1 : 0,
+        promotion: promoCtx.promotion
+          ? {
+              id: promoCtx.promotion.id,
+              title: promoCtx.promotion.title,
+              stackable: promoCtx.promotion.stackable,
+              stackable_with_fidelity: promoCtx.promotion.stackable_with_fidelity ? 1 : 0,
+              stackable_with_coupon: promoCtx.promotion.stackable_with_coupon ? 1 : 0,
+            }
+          : null,
+        services: promoCtx.services,
+        location_id: locationId,
+        service_ids: serviceIds,
+        ...(promoCtx.applied ? {} : { reason: promoCtx.reason }),
+      });
+    } catch (error) {
+      return jsonError(error instanceof Error ? error.message : "Impossibile valutare le promozioni.");
     }
   }
 

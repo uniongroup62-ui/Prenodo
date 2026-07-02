@@ -534,6 +534,17 @@ export function QuickBookingDrawer() {
   // Reset by resetForm / on a new open; populated only from the edit-load payload.
   const [bookedPriceByService, setBookedPriceByService] = useState<Record<number, number>>({});
 
+  // ---- PROMOZIONE automatica (port of app.js qbPromo / action=promotion_preview) ----
+  // The legacy drawer auto-detects the best applicable promotion for the selected
+  // services + client + slot and shows the discounted prices in the price panel
+  // (struck list price + booked price + "-10%"/"-€ x" badge). serviceId -> the
+  // promo line from action=promotion_preview; the save re-evaluates SERVER-SIDE
+  // (never trusting this preview). A monotonic req-id discards stale responses;
+  // a cache key skips refetching for an unchanged context (legacy qbPromoKey).
+  const [promoByService, setPromoByService] = useState<Record<number, { list: number; booked: number; badge: string }>>({});
+  const promoReqRef = useRef(0);
+  const promoKeyRef = useRef<string>("");
+
   // ---- COUPON (#qbCouponToggle / #qbCouponBox / #qb_coupon_code / #qb_coupon_discount) ----
   // Port of app.js qbApplyCouponPreview + the coupon Apply/Remove buttons. `couponBoxOpen`
   // reveals #qbCouponBox; `couponInput` is the text the staff types; `couponCode` +
@@ -796,6 +807,8 @@ export function QuickBookingDrawer() {
     setPrepaidRedeems({});
     setSelectedServiceIds([]);
     setBookedPriceByService({}); // Item D: drop the edit-only booked-price snapshot
+    setPromoByService({}); // drop the auto-detected promo lines (re-fetched on next context)
+    promoKeyRef.current = "";
     setStaffPicks({});
     setCabinPicks({});
     setMsOpen(false);
@@ -1520,6 +1533,56 @@ export function QuickBookingDrawer() {
     return out;
   }, [effectiveGiftRedeems, effectivePrepaidRedeems, effectiveGiftboxRedeems, effectivePackageRedeems]);
 
+  // ===================== PROMO PREVIEW (port of app.js qbRefreshPromoPreview) =====================
+  // Auto-detect the best applicable promotion whenever the promo context changes
+  // (client, services, date, time, location). The response's per-service lines
+  // land in promoByService and flow into the price panel below (struck list price
+  // + discounted price + badge). Fail-soft: any error just clears the promo.
+  useEffect(() => {
+    const ids = selectedServiceIds;
+    if (!ids.length) {
+      promoKeyRef.current = "";
+      setPromoByService({});
+      return;
+    }
+    const cid = client?.id ? String(client.id) : "0";
+    const time = startTime && /^\d{2}:\d{2}/.test(startTime) ? startTime.slice(0, 5) : "";
+    const key = [cid, ids.join(","), date || "", time, locationId ?? ""].join("|");
+    if (key === promoKeyRef.current) return;
+    promoKeyRef.current = key;
+    const reqId = ++promoReqRef.current;
+    const params = new URLSearchParams();
+    params.set("slug", slug);
+    params.set("action", "promotion_preview");
+    params.set("client_id", cid);
+    params.set("service_ids", ids.join(","));
+    if (locationId) params.set("location_id", String(locationId));
+    if (date) params.set("appt_date", date);
+    if (time) params.set("appt_time", time);
+    void fetch(`/api/manage/appointments?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
+      .then((res) => res.json().catch(() => null))
+      .then((data: { ok?: boolean; applied?: number; services?: Array<{ service_id: number; list_price: number; booked_price: number; discount_badge: string }> } | null) => {
+        if (reqId !== promoReqRef.current) return;
+        if (!data || !data.ok || !data.applied || !Array.isArray(data.services)) {
+          setPromoByService({});
+          return;
+        }
+        const map: Record<number, { list: number; booked: number; badge: string }> = {};
+        for (const line of data.services) {
+          const sid = Number(line.service_id ?? 0);
+          const list = Number(line.list_price ?? 0);
+          const booked = Number(line.booked_price ?? 0);
+          if (sid > 0 && Number.isFinite(list) && Number.isFinite(booked) && list > 0 && booked >= 0 && list > booked) {
+            map[sid] = { list, booked, badge: String(line.discount_badge ?? "") };
+          }
+        }
+        setPromoByService(map);
+      })
+      .catch(() => {
+        if (reqId === promoReqRef.current) setPromoByService({});
+      });
+  }, [client, selectedServiceIds, date, startTime, locationId, slug]);
+
   // ===================== PRICE RECOMPUTE (port of app.js renderPriceDetails) =====================
   // React-driven price detail: per-line list (service name + price, or struck list price +
   // €0 + a redeem badge when the service is covered by a package/prepaid/giftbox/gift), the
@@ -1537,15 +1600,21 @@ export function QuickBookingDrawer() {
       // appointment shows the price as booked; a newly-added service has no snapshot and falls
       // back to the current catalog price.
       const booked = bookedPriceByService[id];
-      const listPrice = Number.isFinite(booked) ? Math.max(0, Number(booked)) : Math.max(0, Number(svc?.price ?? 0));
-      const badge = redeemBadgeByService[id] ?? "";
-      const covered = badge !== "";
+      const basePrice = Number.isFinite(booked) ? Math.max(0, Number(booked)) : Math.max(0, Number(svc?.price ?? 0));
+      const redeemBadge = redeemBadgeByService[id] ?? "";
+      const covered = redeemBadge !== "";
+      // PROMOZIONE: an auto-detected promo line replaces the plain price with the
+      // discounted one (struck list + booked + badge, legacy dataset.bookedPrice /
+      // listPrice / discountBadge). A redeem-covered service stays zero-charged
+      // (the redeem wins over the promo, same as the legacy save priority).
+      const promo = !covered ? promoByService[id] : undefined;
+      const listPrice = promo ? Math.max(promo.list, promo.booked) : basePrice;
       return {
         id,
         name: svc?.name ?? `Servizio #${id}`,
-        price: covered ? 0 : listPrice,
+        price: covered ? 0 : promo ? promo.booked : basePrice,
         listPrice,
-        badge,
+        badge: covered ? redeemBadge : promo?.badge ?? "",
         covered,
       };
     });
@@ -1634,6 +1703,7 @@ export function QuickBookingDrawer() {
     services,
     bookedPriceByService,
     redeemBadgeByService,
+    promoByService,
     discountType,
     discountValue,
     couponDiscount,
@@ -3661,11 +3731,15 @@ export function QuickBookingDrawer() {
                   {priceDetails.lines.map((line) => (
                     <div key={line.id} className="d-flex justify-content-between align-items-center mb-1">
                       <div className="text-truncate" style={{ maxWidth: "70%" }}>{line.name}</div>
-                      {line.covered ? (
+                      {line.listPrice > line.price + 0.0000001 ? (
+                        // Redeem-covered (price 0 + badge) OR promo-discounted line:
+                        // struck list price + effective price + badge (legacy
+                        // renderPriceDetails hasItemDiscount branch).
                         <div className="text-end">
                           <div className="small text-muted text-decoration-line-through">{fmtEUR(line.listPrice)}</div>
                           <div className="fw-semibold">
-                            {fmtEUR(0)} <span className="badge bg-success ms-1">{line.badge}</span>
+                            {fmtEUR(line.price)}
+                            {line.badge ? <span className="badge bg-success ms-1">{line.badge}</span> : null}
                           </div>
                         </div>
                       ) : (

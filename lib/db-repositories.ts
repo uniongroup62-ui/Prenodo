@@ -1819,6 +1819,39 @@ async function resolvePlanCabins({
   }
 }
 
+// FIDELITY points at save — the exact legacy guard chain (each step verified
+// LIVE against the PHP save, 2026-07-02):
+//  1. redeem disabled (or fidelity off) => the request is silently ZEROED and
+//     the save proceeds with fidelity_points_used=0;
+//  2. redeem enabled but the client has NO active card => hard error
+//     "Cliente non aderisce alla Fidelity" (no trailing period);
+//  3. the non-stackable-promotion conflict fires on the RAW request (before any
+//     balance check — a request conflicts even with zero balance): the CALLER
+//     runs it on the returned points;
+//  4. only then the balance: none => "Punti non disponibili.", short =>
+//     "Punti insufficienti.", below minimum => "Minimo punti utilizzabile: X.".
+type FidelitySaveGate = { points: number; settings: FidelityPointsSettings | null };
+
+async function fidelityPointsGateForSave(slug: string, clientId: number, requestedPoints: number): Promise<FidelitySaveGate> {
+  const requested = Math.max(0, Math.round(Number(requestedPoints) || 0));
+  if (requested <= 0 || clientId <= 0) return { points: 0, settings: null };
+  const settings = await getFidelityPointsSettings(slug).catch(() => null);
+  if (!settings || !settings.globalEnabled || !settings.redeemEnabled) return { points: 0, settings: null };
+  if (!(await fidelityIsClientAdhering(slug, clientId))) throw new Error("Cliente non aderisce alla Fidelity");
+  return { points: requested, settings };
+}
+
+async function assertFidelityPointsBalanceForSave(slug: string, clientId: number, gate: FidelitySaveGate): Promise<void> {
+  if (gate.points <= 0 || !gate.settings) return;
+  const { points } = await dbWalletBalance(clientId, slug);
+  const available = Math.max(0, Math.floor(points));
+  if (available <= 0) throw new Error("Punti non disponibili.");
+  if (gate.points > available) throw new Error("Punti insufficienti.");
+  if (gate.settings.redeemMinPoints > 0 && gate.points < gate.settings.redeemMinPoints) {
+    throw new Error(`Minimo punti utilizzabile: ${gate.settings.redeemMinPoints}.`);
+  }
+}
+
 // Legacy blocked-client guard at save (api_appointments.php:9995): a client with
 // is_blocked=1 cannot be booked from Quick Booking. EXCEPTION (edit): an
 // appointment that ALREADY belongs to that blocked client can still be edited —
@@ -2071,8 +2104,34 @@ export async function createDbAppointment({
   // Block 4: fidelity points RESERVED (settled on done) + CREDIT spent, persisted on the row
   // so the lifecycle (awardAppointmentFidelityOnDone earn/redeem, cancelDone/restore refunds)
   // can settle/reverse them. Both clamped >= 0; fidelity points are whole.
-  const fidelityPointsUse = Math.max(0, Math.round(Number(fidelityPointsUsed ?? 0) || 0));
+  // Fidelity gate steps 1-2 (zeroed when redeem off; adhesion error otherwise).
+  const fidelityGate = await fidelityPointsGateForSave(slug, Number(client.id ?? 0) || 0, Number(fidelityPointsUsed ?? 0));
+  const fidelityPointsUse = fidelityGate.points;
   const creditUse = roundMoney(Math.max(0, Number(creditUsed ?? 0) || 0));
+  // PROMOZIONE automatica (port of the legacy quick-booking promo flow): the best
+  // eligible automatic promotion is re-evaluated SERVER-SIDE (the drawer preview
+  // is never trusted) and its per-service prices land on the appointment_services
+  // snapshot below. Legacy stacking guard: fidelity points cannot be combined
+  // with a promo that is not stackable-with-fidelity (hard error, :12379); a
+  // non-stackable coupon instead restricts its own base in the drawer preview.
+  const promoCtx = await evalBestPromotionForAppointment({
+    slug,
+    serviceIds: plan.services.map((service) => Number(service.id ?? 0)),
+    date,
+    time: normalizedTime,
+    clientId: Number(client.id ?? 0) || null,
+    locationId,
+  });
+  if (promoCtx.applied && promoCtx.promotion && fidelityPointsUse > 0 && !promoCtx.promotion.stackable_with_fidelity) {
+    throw new Error(
+      promoCtx.promotion.title
+        ? `Sconto punti Fidelity non cumulabile con la promozione "${promoCtx.promotion.title}".`
+        : "Sconto punti Fidelity non cumulabile con la promozione attiva.",
+    );
+  }
+  // Fidelity gate step 4 (balance/minimum) — AFTER the promo conflict, like the legacy.
+  await assertFidelityPointsBalanceForSave(slug, Number(client.id ?? 0) || 0, fidelityGate);
+  const promoByService = new Map(promoCtx.services.map((line) => [line.service_id, line]));
   // Block 4: embed the applied coupon into the general `notes` column (the appointments table
   // has no coupon columns), mirroring the legacy coupon_apply_meta_to_notes.
   const notesWithCoupon = couponApplyMetaToNotes(null, couponCode, couponDiscount);
@@ -2087,6 +2146,7 @@ export async function createDbAppointment({
     discount_value: discount.discount_value,
     fidelity_points_used: fidelityPointsUse,
     credit_used: creditUse,
+    promotion_id: promoCtx.applied && promoCtx.promotion ? promoCtx.promotion.id : null,
     notes: notesWithCoupon || null,
     location_id: locationId,
     staff_notes: staffNotes || null,
@@ -2095,8 +2155,28 @@ export async function createDbAppointment({
   if (publicCode) appointmentValues.public_code = publicCode;
   const id = await tenantInsert(appointments, appointmentValues);
 
-  // One appointment_services snapshot row per selected service (ordered).
-  for (const service of plan.services) await insertAppointmentService(slug, id, service);
+  // One appointment_services snapshot row per selected service (ordered), with
+  // the promo pricing when this service is discounted (price/list_price/badge).
+  for (const service of plan.services) {
+    const promoLine = promoByService.get(Number(service.id ?? 0));
+    await insertAppointmentService(slug, id, service, promoLine ? { price: promoLine.booked_price, listPrice: promoLine.list_price, badge: promoLine.discount_badge } : null);
+  }
+  // RECORD the promotion redemption (port of Promotions recordRedemption at
+  // apply): one promotion_redemptions row linked to the appointment, removed by
+  // the delete/cancel cleanup (deleteWhereAny promotion_redemptions).
+  if (promoCtx.applied && promoCtx.promotion && promoCtx.discount > 0) {
+    const redTable = await tenantTable(slug, "promotion_redemptions").catch(() => null);
+    if (redTable) {
+      await tenantInsert(redTable, {
+        promotion_id: promoCtx.promotion.id,
+        client_id: Number(client.id ?? 0) > 0 ? Number(client.id) : null,
+        appointment_id: id,
+        discount_amount: roundMoney(promoCtx.discount),
+        location_id: locationId,
+        redeemed_at: new Date(),
+      }).catch(() => 0);
+    }
+  }
   // Distinct staff across all services (single operator + per-service staff).
   for (const staffId of plan.staffIds) await insertAppointmentStaff(slug, id, staffId);
   if (locationId) await insertAppointmentLocation(slug, id, locationId);
@@ -2278,10 +2358,13 @@ export async function updateDbAppointment({
   // so a row from another tenant (or a missing id) yields no match. cabin_id is
   // the "keep the current cabin" candidate of the legacy cabin resolution;
   // client_id feeds the blocked-client same-client exception.
-  const existingRows = await tenantSelect<RowDataPacket>({ slug, table: "appointments", columns: "id, cabin_id, client_id", where: "id = ?", params: [id], limit: 1 });
+  const existingRows = await tenantSelect<RowDataPacket>({ slug, table: "appointments", columns: "id, cabin_id, client_id, status", where: "id = ?", params: [id], limit: 1 });
   if (!existingRows[0]) throw new Error("Appuntamento non trovato.");
   const currentCabinId = Number(existingRows[0].cabin_id ?? 0) || 0;
   const currentClientId = Number(existingRows[0].client_id ?? 0) || 0;
+  // Legacy promo gate (appt_promotion_update_allowed_for_old_status): a re-save
+  // re-applies the automatic promotion unless the appointment is already done.
+  const promoUpdateAllowed = appointmentPhpStatus(String(existingRows[0].status ?? "")) !== "done";
   // Old per-segment cabins by position ("mantieni la cabina del segmento" candidate).
   const currentSegmentRows = await tenantSelect<RowDataPacket>({
     slug,
@@ -2358,6 +2441,32 @@ export async function updateDbAppointment({
   // Manual sconto from the quick-booking price panel (#qb_discount_type/#qb_discount_value),
   // normalized to the discount_type/discount_value columns (mirrors createDbAppointment).
   const discount = normalizeAppointmentDiscount(discountType, discountValue);
+  // PROMOZIONE automatica su edit (mirrors createDbAppointment), gated on the
+  // legacy old-status rule: a done appointment keeps its frozen promo pricing.
+  const promoCtx = promoUpdateAllowed
+    ? await evalBestPromotionForAppointment({
+        slug,
+        serviceIds: plan.services.map((service) => Number(service.id ?? 0)),
+        date,
+        time: normalizedTime,
+        clientId: Number(client.id ?? 0) || null,
+        locationId,
+      })
+    : { applied: false, promotion: null, services: [], discount: 0, reason: "" } satisfies AppointmentPromoContext;
+  // Fidelity gate (same legacy chain as create): steps 1-2 here, the promo
+  // conflict on the RAW request, then the balance assert after the guard.
+  const fidelityGate = fidelityPointsUsed !== undefined
+    ? await fidelityPointsGateForSave(slug, Number(client.id ?? 0) || 0, Number(fidelityPointsUsed) || 0)
+    : { points: 0, settings: null } satisfies FidelitySaveGate;
+  if (promoCtx.applied && promoCtx.promotion && fidelityGate.points > 0 && !promoCtx.promotion.stackable_with_fidelity) {
+    throw new Error(
+      promoCtx.promotion.title
+        ? `Sconto punti Fidelity non cumulabile con la promozione "${promoCtx.promotion.title}".`
+        : "Sconto punti Fidelity non cumulabile con la promozione attiva.",
+    );
+  }
+  await assertFidelityPointsBalanceForSave(slug, Number(client.id ?? 0) || 0, fidelityGate);
+  const promoByService = new Map(promoCtx.services.map((line) => [line.service_id, line]));
   const updateValues: Record<string, unknown> = {
     client_id: client.id,
     service_id: plan.primaryService.id,
@@ -2370,13 +2479,16 @@ export async function updateDbAppointment({
     discount_type: discount.discount_type,
     discount_value: discount.discount_value,
   };
+  if (promoUpdateAllowed) {
+    updateValues.promotion_id = promoCtx.applied && promoCtx.promotion ? promoCtx.promotion.id : null;
+  }
   // Block 4: persist the price-panel deductions ONLY when the caller sent them (the drawer
   // sends them on CREATE; a plain edit/move leaves them undefined and must not clobber the
   // existing reservation). fidelity/credit are persisted as-is (NO wallet re-debit here — the
   // create-time debit stands; re-saving must not double-charge). Coupon is re-embedded into
   // `notes` (preserving any non-coupon note text), matching coupon_apply_meta_to_notes.
   if (fidelityPointsUsed !== undefined) {
-    updateValues.fidelity_points_used = Math.max(0, Math.round(Number(fidelityPointsUsed) || 0));
+    updateValues.fidelity_points_used = fidelityGate.points;
   }
   if (creditUsed !== undefined) {
     updateValues.credit_used = roundMoney(Math.max(0, Number(creditUsed) || 0));
@@ -2401,8 +2513,30 @@ export async function updateDbAppointment({
   await deleteAppointmentChildren(slug, "appointment_locations", id);
   await deleteAppointmentChildren(slug, "appointment_segments", id);
 
-  // One appointment_services snapshot row per selected service (ordered).
-  for (const service of plan.services) await insertAppointmentService(slug, id, service);
+  // One appointment_services snapshot row per selected service (ordered), with
+  // the re-evaluated promo pricing (price/list_price/badge) when applicable.
+  for (const service of plan.services) {
+    const promoLine = promoUpdateAllowed ? promoByService.get(Number(service.id ?? 0)) : undefined;
+    await insertAppointmentService(slug, id, service, promoLine ? { price: promoLine.booked_price, listPrice: promoLine.list_price, badge: promoLine.discount_badge } : null);
+  }
+  // Refresh the promotion redemption record: the edit re-evaluated the promo, so
+  // the old appointment-linked row is replaced (or removed when no longer applied).
+  if (promoUpdateAllowed) {
+    const redTable = await tenantTable(slug, "promotion_redemptions").catch(() => null);
+    if (redTable) {
+      await dbExecute(`DELETE FROM ${quoteIdentifier(redTable.name)} WHERE tenant_id = ? AND appointment_id = ?`, [redTable.tenantId ?? 0, id]).catch(() => undefined);
+      if (promoCtx.applied && promoCtx.promotion && promoCtx.discount > 0) {
+        await tenantInsert(redTable, {
+          promotion_id: promoCtx.promotion.id,
+          client_id: Number(client.id ?? 0) > 0 ? Number(client.id) : null,
+          appointment_id: id,
+          discount_amount: roundMoney(promoCtx.discount),
+          location_id: locationId,
+          redeemed_at: new Date(),
+        }).catch(() => 0);
+      }
+    }
+  }
   // Distinct staff across all services (single operator + per-service staff).
   for (const staffId of plan.staffIds) await insertAppointmentStaff(slug, id, staffId);
   if (locationId) await insertAppointmentLocation(slug, id, locationId);
@@ -8485,7 +8619,11 @@ export async function promotionFormContext(slug: string): Promise<{
 
 // ---- Promotion APPLICATION engine (Block 3, port of Promotions::evaluatePromotion) ----
 export type PromoCartLine = { type: "service" | "product"; id: number; qty: number; unitPrice: number };
-export type PromoEvalResult = { promotionId: number; title: string; eligible: boolean; discount: number; reason: string; eligibleQty: number; eligibleAmount: number };
+// Per-service price breakdown of an applied promotion (unit prices, port of the
+// legacy eval breakdown_services): old = list, now = discounted, badge = "-10%" /
+// "-€ 5,00" (Italian money format, fmt_money).
+export type PromoServiceBreakdown = { old: number; now: number; discount: number; badge: string };
+export type PromoEvalResult = { promotionId: number; title: string; eligible: boolean; discount: number; reason: string; eligibleQty: number; eligibleAmount: number; breakdownServices: Record<number, PromoServiceBreakdown> };
 
 const PROMO_CANCELLED_STATES = ["canceled", "cancelled", "annullato", "annullata", "rejected", "rifiutato", "rifiutata", "deleted", "eliminato", "eliminata"];
 
@@ -8599,7 +8737,24 @@ function addDaysToIso(iso: string, days: number): string {
 // Compute the total discount a promotion grants on a cart (port of the scope/qty
 // discount computation in evaluatePromotion — per-line total; the legacy's unit-by-
 // unit pro-rata only changes rounding distribution, not the total). Returns cents.
-function computePromoDiscountCents(promo: RowDataPacket, ch: PromoChildren, cart: PromoCartLine[]): { discountC: number; eligibleQty: number; eligibleAmountC: number } {
+// Italian money for the badge text (legacy fmt_money: "1.234,56").
+function promoBadgeMoney(value: number): string {
+  return value.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Trim trailing zeros off a percent for the "-10%" badge (legacy rtrim of
+// number_format($p, 2)).
+function promoBadgePercent(value: number): string {
+  return String(Number(value.toFixed(2)));
+}
+
+// Discount computation with the legacy PER-UNIT allocation (Promotions.php
+// ~4380): percent => round(unitCents * p / 100) on each unit; fixed on a
+// selected line => min(unitCents, valueCents) per unit; fixed on the global
+// scope=all group => largest-remainder pro-rata across the group's units.
+// Besides the total it now returns the per-service breakdown (unit old/now/
+// discount + badge) the drawer/booking price panels render.
+function computePromoDiscountCents(promo: RowDataPacket, ch: PromoChildren, cart: PromoCartLine[]): { discountC: number; eligibleQty: number; eligibleAmountC: number; breakdownServices: Record<number, PromoServiceBreakdown> } {
   const svcMode = String(promo.apply_services_mode ?? "all").toLowerCase();
   const prdMode = String(promo.apply_products_mode ?? "none").toLowerCase();
   const cents = (v: number) => Math.round(v * 100);
@@ -8616,52 +8771,158 @@ function computePromoDiscountCents(promo: RowDataPacket, ch: PromoChildren, cart
   else { prdType = String(promo.products_discount_type ?? "").toLowerCase(); if (prdType !== "percent" && prdType !== "fixed") prdType = svcType; prdVal = Math.max(0, Number(prdValRaw) || 0); if (prdType === "percent" && prdVal > 100) prdVal = 100; }
   const prdMinQty = Math.max(1, Number(promo.products_min_qty ?? promo.min_qty ?? 1) || 1);
 
-  let discountC = 0;
+  // One expanded unit per qty (line index kept for the per-line aggregation).
+  type PromoUnit = { line: number; unitC: number; discC: number };
+  type PromoLine = { type: "service" | "product"; id: number; qty: number; unitC: number; units: PromoUnit[]; discType: string; discValue: number };
+  const units: PromoUnit[] = [];
+  const lines: PromoLine[] = [];
   let eligibleQty = 0;
   let eligibleAmountC = 0;
-  let globalSvcTotalC = 0;
-  let globalSvcQty = 0;
-  let globalPrdTotalC = 0;
-  let globalPrdQty = 0;
+  const globalSvcUnits: PromoUnit[] = [];
+  const globalPrdUnits: PromoUnit[] = [];
+
+  const addLine = (line: PromoCartLine, id: number, qty: number, unitC: number, discType: string, discValue: number): PromoLine => {
+    const entry: PromoLine = { type: line.type, id, qty, unitC, units: [], discType, discValue };
+    for (let i = 0; i < qty; i++) {
+      const u: PromoUnit = { line: lines.length, unitC, discC: 0 };
+      units.push(u);
+      entry.units.push(u);
+    }
+    lines.push(entry);
+    return entry;
+  };
+
+  // Legacy percent alloc: per-unit rounding.
+  const allocPercent = (us: PromoUnit[], pct: number) => {
+    for (const u of us) u.discC = Math.min(u.unitC, Math.round((u.unitC * pct) / 100));
+  };
+  // Legacy fixed pro-rata with largest-remainder distribution of the leftover cents.
+  const allocFixedProRata = (us: PromoUnit[], fixedTotC: number) => {
+    const sum = us.reduce((s, u) => s + u.unitC, 0);
+    if (sum <= 0) return;
+    let tot = Math.min(fixedTotC, sum);
+    const rema: number[] = [];
+    let sumBase = 0;
+    us.forEach((u, i) => {
+      const exact = tot * (u.unitC / sum);
+      let b = Math.floor(exact);
+      if (b < 0) b = 0;
+      if (b > u.unitC) b = u.unitC;
+      u.discC = b;
+      rema[i] = exact - b;
+      sumBase += b;
+    });
+    let left = tot - sumBase;
+    if (left > 0) {
+      const order = us.map((_, i) => i).sort((a, b) => {
+        const d = rema[b] - rema[a];
+        if (Math.abs(d) > 1e-9) return d > 0 ? 1 : -1;
+        return us[b].unitC - us[a].unitC;
+      });
+      for (const i of order) {
+        if (left <= 0) break;
+        if (us[i].discC < us[i].unitC) { us[i].discC++; left--; }
+      }
+    }
+  };
 
   for (const line of cart) {
-    const type = line.type;
     const id = Math.trunc(Number(line.id)) || 0;
     const qty = Math.max(1, Math.trunc(Number(line.qty)) || 1);
     const unitC = cents(Math.max(0, Number(line.unitPrice) || 0));
     if (id <= 0 || unitC <= 0) continue;
     const lineTotC = unitC * qty;
 
-    if (type === "service") {
-      if (svcMode === "all") { eligibleQty += qty; eligibleAmountC += lineTotC; globalSvcTotalC += lineTotC; globalSvcQty += qty; }
-      else if (svcMode === "selected" && ch.serviceDefs.has(id)) {
+    if (line.type === "service") {
+      if (svcMode === "all") {
+        eligibleQty += qty; eligibleAmountC += lineTotC;
+        const entry = addLine(line, id, qty, unitC, svcType, svcVal);
+        globalSvcUnits.push(...entry.units);
+      } else if (svcMode === "selected" && ch.serviceDefs.has(id)) {
         eligibleQty += qty; eligibleAmountC += lineTotC;
         const def = ch.serviceDefs.get(id)!;
-        if (qty >= def.minQty) discountC += def.type === "percent" ? Math.round((lineTotC * def.value) / 100) : Math.min(unitC, cents(def.value)) * qty;
+        const entry = addLine(line, id, qty, unitC, def.type, def.value);
+        if (qty >= def.minQty) {
+          if (def.type === "percent") allocPercent(entry.units, def.value);
+          else for (const u of entry.units) u.discC = Math.min(u.unitC, cents(def.value));
+        }
       }
-    } else if (type === "product") {
-      if (prdMode === "all") { eligibleQty += qty; eligibleAmountC += lineTotC; globalPrdTotalC += lineTotC; globalPrdQty += qty; }
-      else if (prdMode === "selected" && ch.productDefs.has(id)) {
+    } else if (line.type === "product") {
+      if (prdMode === "all") {
+        eligibleQty += qty; eligibleAmountC += lineTotC;
+        const entry = addLine(line, id, qty, unitC, prdType, prdVal);
+        globalPrdUnits.push(...entry.units);
+      } else if (prdMode === "selected" && ch.productDefs.has(id)) {
         eligibleQty += qty; eligibleAmountC += lineTotC;
         const def = ch.productDefs.get(id)!;
-        if (qty >= def.minQty) discountC += def.type === "percent" ? Math.round((lineTotC * def.value) / 100) : Math.min(unitC, cents(def.value)) * qty;
+        const entry = addLine(line, id, qty, unitC, def.type, def.value);
+        if (qty >= def.minQty) {
+          if (def.type === "percent") allocPercent(entry.units, def.value);
+          else for (const u of entry.units) u.discC = Math.min(u.unitC, cents(def.value));
+        }
       }
     }
   }
 
   // Global groups (scope=all): gate on the group qty >= the group min_qty.
-  if (globalSvcQty >= svcMinQty && globalSvcTotalC > 0) discountC += svcType === "percent" ? Math.round((globalSvcTotalC * svcVal) / 100) : Math.min(globalSvcTotalC, cents(svcVal));
-  if (globalPrdQty >= prdMinQty && globalPrdTotalC > 0) discountC += prdType === "percent" ? Math.round((globalPrdTotalC * prdVal) / 100) : Math.min(globalPrdTotalC, cents(prdVal));
+  if (globalSvcUnits.length >= svcMinQty && globalSvcUnits.length > 0) {
+    if (svcType === "percent") allocPercent(globalSvcUnits, svcVal);
+    else allocFixedProRata(globalSvcUnits, cents(svcVal));
+  }
+  if (globalPrdUnits.length >= prdMinQty && globalPrdUnits.length > 0) {
+    if (prdType === "percent") allocPercent(globalPrdUnits, prdVal);
+    else allocFixedProRata(globalPrdUnits, cents(prdVal));
+  }
 
+  let discountC = 0;
+  for (const u of units) discountC += Math.max(0, Math.min(u.unitC, u.discC));
   if (discountC > eligibleAmountC) discountC = eligibleAmountC;
-  return { discountC: Math.max(0, discountC), eligibleQty, eligibleAmountC };
+
+  // Per-service breakdown (aggregate lines by service id; legacy svcAgg): unit
+  // old/now/discount + badge ("-p%" when the whole line is percent-discounted,
+  // else "-€ <avg unit>"; conflicting badges across lines fall back to money).
+  const agg = new Map<number, { oldTotC: number; newTotC: number; qty: number; badge: string; badgeSet: boolean }>();
+  for (const line of lines) {
+    if (line.type !== "service") continue;
+    const lineDiscC = line.units.reduce((s, u) => s + Math.max(0, Math.min(u.unitC, u.discC)), 0);
+    const oldTotC = line.unitC * line.qty;
+    const newTotC = oldTotC - Math.min(lineDiscC, oldTotC);
+    let badge = "";
+    if (lineDiscC > 0) {
+      const discUnits = line.units.filter((u) => u.discC > 0).length;
+      if (discUnits >= line.qty && line.discType === "percent" && line.discValue > 0) {
+        badge = `-${promoBadgePercent(line.discValue)}%`;
+      } else {
+        badge = `-€ ${promoBadgeMoney(Math.round(lineDiscC / line.qty) / 100)}`;
+      }
+    }
+    const cur = agg.get(line.id);
+    if (!cur) agg.set(line.id, { oldTotC, newTotC, qty: line.qty, badge, badgeSet: true });
+    else {
+      cur.oldTotC += oldTotC; cur.newTotC += newTotC; cur.qty += line.qty;
+      if (badge && cur.badge !== badge) cur.badge = "";
+    }
+  }
+  const breakdownServices: Record<number, PromoServiceBreakdown> = {};
+  for (const [sid, a] of agg) {
+    const qty = Math.max(1, a.qty);
+    const discTotC = Math.max(0, a.oldTotC - a.newTotC);
+    const oldUnit = Math.round(a.oldTotC / qty) / 100;
+    const nowUnit = Math.round(a.newTotC / qty) / 100;
+    const discUnit = Math.round(discTotC / qty) / 100;
+    let badge = a.badge;
+    if (!badge && discTotC > 0) badge = `-€ ${promoBadgeMoney(discUnit)}`;
+    breakdownServices[sid] = { old: oldUnit, now: nowUnit, discount: discUnit, badge };
+  }
+
+  return { discountC: Math.max(0, discountC), eligibleQty, eligibleAmountC, breakdownServices };
 }
 
 // Evaluate one active promotion against a cart + context (port of the guard chain
 // in evaluatePromotion: active/date/blackout/time-window/location/excluded/target,
 // then the discount). date=YYYY-MM-DD, time=HH:MM (optional), locationId optional.
 function evaluateOnePromotion(promo: RowDataPacket, ch: PromoChildren, cart: PromoCartLine[], date: string, time: string, clientId: number, locationId: number, ctx: PromoClientCtx | null): PromoEvalResult {
-  const base: PromoEvalResult = { promotionId: Number(promo.id ?? 0), title: String(promo.title ?? ""), eligible: false, discount: 0, reason: "", eligibleQty: 0, eligibleAmount: 0 };
+  const base: PromoEvalResult = { promotionId: Number(promo.id ?? 0), title: String(promo.title ?? ""), eligible: false, discount: 0, reason: "", eligibleQty: 0, eligibleAmount: 0, breakdownServices: {} };
 
   if (Number(promo.is_active ?? 0) !== 1) return { ...base, reason: "Promozione non attiva." };
   const start = String(promo.starts_at ?? "").slice(0, 10);
@@ -8687,10 +8948,10 @@ function evaluateOnePromotion(promo: RowDataPacket, ch: PromoChildren, cart: Pro
   const targetOk = checkPromoTarget(target, promo, ctx, date);
   if (targetOk !== true) return { ...base, reason: targetOk };
 
-  const { discountC, eligibleQty, eligibleAmountC } = computePromoDiscountCents(promo, ch, cart);
+  const { discountC, eligibleQty, eligibleAmountC, breakdownServices } = computePromoDiscountCents(promo, ch, cart);
   if (eligibleQty <= 0) return { ...base, reason: "Nessun servizio/prodotto nel carrello rientra nello scope della promozione." };
   const discount = roundMoney(discountC / 100);
-  return { promotionId: base.promotionId, title: base.title, eligible: discount > 0, discount, reason: discount > 0 ? "Promozione valida." : "Nessuno sconto applicabile.", eligibleQty, eligibleAmount: roundMoney(eligibleAmountC / 100) };
+  return { promotionId: base.promotionId, title: base.title, eligible: discount > 0, discount, reason: discount > 0 ? "Promozione valida." : "Nessuno sconto applicabile.", eligibleQty, eligibleAmount: roundMoney(eligibleAmountC / 100), breakdownServices };
 }
 
 // Evaluate ALL active promotions against a cart; return the eligible ones (discount
@@ -8732,6 +8993,111 @@ export async function evaluatePromotionsForCart(slug: string, cart: PromoCartLin
 
   const eligible = results.filter((r) => r.eligible).sort((a, b) => b.discount - a.discount);
   return { promotions: eligible, best: eligible[0] ?? null };
+}
+
+// ---------------------------------------------------------------------------
+// PROMOZIONI nel quick booking — port of the legacy drawer auto-detection
+// (api_appointments.php action=promotion_preview -> appt_eval_best_promotion_
+// for_context) and its save-side application. The best ELIGIBLE automatic
+// promotion (coupon-code promotions excluded) is evaluated against the selected
+// services; the per-service breakdown drives both the drawer price panel
+// (list_price barrato + booked_price + badge) and the appointment_services
+// snapshot at save.
+
+// Stackability flags from the promotions.stackable bitmask (port of
+// Promotions::normalizeStackable): raw 1 => stackable with everything (4|8);
+// otherwise bit 4 = fidelity, bit 8 = coupon.
+function promoStackMeta(promoRow: RowDataPacket | null): { hasPromotion: boolean; id: number; title: string; stackable: number; stackableWithFidelity: boolean; stackableWithCoupon: boolean } {
+  const id = Number(promoRow?.id ?? 0) || 0;
+  const raw = Math.trunc(Number(promoRow?.stackable ?? 0)) || 0;
+  const mask = id > 0 ? (raw === 1 ? (4 | 8) : (raw & (4 | 8))) : 0;
+  return {
+    hasPromotion: id > 0,
+    id,
+    title: id > 0 ? String(promoRow?.title ?? "") : "",
+    stackable: mask,
+    stackableWithFidelity: (mask & 4) !== 0,
+    stackableWithCoupon: (mask & 8) !== 0,
+  };
+}
+
+export type AppointmentPromoContext = {
+  applied: boolean;
+  promotion: { id: number; title: string; stackable: number; stackable_with_fidelity: boolean; stackable_with_coupon: boolean } | null;
+  // Only services with a REAL discount (old - now > 0), like the legacy preview.
+  services: Array<{ service_id: number; list_price: number; booked_price: number; discount_badge: string }>;
+  discount: number;
+  reason: string;
+};
+
+// Best automatic promotion for a quick-booking services context (unit qty 1 per
+// service occurrence, price from the catalog). Excludes coupon-code promotions
+// (the legacy preview skips them — they go through the coupon flow). Returns a
+// non-applied context (never throws) so the preview/save degrade gracefully.
+export async function evalBestPromotionForAppointment({
+  slug,
+  serviceIds,
+  date,
+  time,
+  clientId,
+  locationId,
+}: {
+  slug: string;
+  serviceIds: number[];
+  date: string;
+  time: string | null;
+  clientId: number | null;
+  locationId: number | null;
+}): Promise<AppointmentPromoContext> {
+  const none = (reason: string): AppointmentPromoContext => ({ applied: false, promotion: null, services: [], discount: 0, reason });
+  const ids = serviceIds.map((id) => Math.trunc(Number(id)) || 0).filter((id) => id > 0);
+  if (ids.length === 0) return none("Nessun servizio selezionato.");
+
+  try {
+    // Cart from the catalog prices (legacy appt_cart_from_service_ids).
+    const ph = Array.from(new Set(ids)).map(() => "?").join(", ");
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, name, price", where: `id IN (${ph})`, params: Array.from(new Set(ids)) }).catch(() => [] as RowDataPacket[]);
+    const priceById = new Map<number, number>(rows.map((r) => [Number(r.id ?? 0), Math.max(0, Number(r.price ?? 0) || 0)]));
+    const cart: PromoCartLine[] = ids
+      .map((id) => ({ type: "service" as const, id, qty: 1, unitPrice: priceById.get(id) ?? 0 }))
+      .filter((line) => line.unitPrice > 0);
+    if (cart.length === 0) return none("Nessun servizio valido nel carrello.");
+
+    const { promotions } = await evaluatePromotionsForCart(slug, cart, date, time ?? "", clientId ?? 0, locationId ?? 0);
+    if (promotions.length === 0) return none("Nessuna promozione automatica applicabile.");
+
+    // Skip coupon-code promotions (redeemed via coupon, not auto-applied).
+    const promoRows = await tenantSelect<RowDataPacket>({ slug, table: "promotions", where: `id IN (${promotions.map(() => "?").join(", ")})`, params: promotions.map((p) => p.promotionId) }).catch(() => [] as RowDataPacket[]);
+    const rowById = new Map<number, RowDataPacket>(promoRows.map((r) => [Number(r.id ?? 0), r]));
+    for (const evalResult of promotions) {
+      const row = rowById.get(evalResult.promotionId);
+      if (!row) continue;
+      if (String(row.coupon_code ?? "").trim() !== "") continue;
+      const meta = promoStackMeta(row);
+      const services = Object.entries(evalResult.breakdownServices)
+        .map(([sid, b]) => ({ service_id: Number(sid), list_price: roundMoney(b.old), booked_price: roundMoney(b.now), discount_badge: b.badge }))
+        .filter((line) => line.list_price > 0 && line.booked_price >= 0 && line.list_price - line.booked_price > 0.000001);
+      if (services.length === 0) {
+        return {
+          applied: false,
+          promotion: { id: meta.id, title: meta.title, stackable: meta.stackable, stackable_with_fidelity: meta.stackableWithFidelity, stackable_with_coupon: meta.stackableWithCoupon },
+          services: [],
+          discount: 0,
+          reason: "La promozione non produce righe servizio scontate per il dettaglio prezzi.",
+        };
+      }
+      return {
+        applied: true,
+        promotion: { id: meta.id, title: meta.title, stackable: meta.stackable, stackable_with_fidelity: meta.stackableWithFidelity, stackable_with_coupon: meta.stackableWithCoupon },
+        services,
+        discount: evalResult.discount,
+        reason: "",
+      };
+    }
+    return none("Nessuna promozione automatica applicabile.");
+  } catch {
+    return none("Impossibile valutare le promozioni.");
+  }
 }
 
 // Selected-scope services/products that must still resolve to a live, active
@@ -13194,15 +13560,25 @@ async function resolveStaffForAppointment(slug: string, staffName: string): Prom
   return rows[0] ?? null;
 }
 
-async function insertAppointmentService(slug: string, appointmentId: number, service: RowDataPacket): Promise<void> {
+// One snapshot row per selected service. `promo` (when the save detected an
+// applicable promotion for this service) writes the legacy promo pricing:
+// price = discounted, list_price = original, discount_badge = "-10%"/"-€ x"
+// (redeem zero-charging runs AFTER and overrides these, same as the legacy).
+async function insertAppointmentService(
+  slug: string,
+  appointmentId: number,
+  service: RowDataPacket,
+  promo?: { price: number; listPrice: number; badge: string } | null,
+): Promise<void> {
   try {
     await tenantInsert(await tenantTable(slug, "appointment_services"), {
       appointment_id: appointmentId,
       service_id: Number(service.id ?? 0),
       service_name: String(service.name ?? ""),
       qty: 1,
-      price: Number(service.price ?? 0),
-      list_price: Number(service.price ?? 0),
+      price: promo ? roundMoney(promo.price) : Number(service.price ?? 0),
+      list_price: promo ? roundMoney(promo.listPrice) : Number(service.price ?? 0),
+      discount_badge: promo && promo.badge ? promo.badge : null,
       duration_min: Number(service.duration_min ?? 30),
     });
   } catch {
