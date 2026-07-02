@@ -112,19 +112,47 @@ async function markInstallmentPaid(
 ): Promise<InstallmentPlan> {
   const row = await installmentRow(slug, options.installmentId);
   if (String(row.status ?? "") === "paid") throw new Error("Rata gia pagata.");
-  if (String(row.status ?? "") === "cancelled") throw new Error("Rata annullata.");
+  // Rata o piano annullati non incassabili (SaleInstallments::markInstallmentPaid ~554-557).
+  if (String(row.status ?? "") === "cancelled" || (await planStatus(slug, Number(row.plan_id ?? 0))) === "cancelled") {
+    throw new Error("Non puoi incassare una rata annullata.");
+  }
 
-  const amount = Number(row.amount ?? 0) || 0;
-  const paidAmount = String(options.paidAmount ?? "").trim() ? parseNumber(options.paidAmount, amount) : amount;
+  // Validazioni legacy (SaleInstallments.php ~558-578): l'importo incassato DEVE
+  // corrispondere all'importo della rata (tolleranza 0.005; vuoto o 0 = importo pieno),
+  // la data deve essere valida, il tipo pagamento nel set canonico cash/card/check/bank
+  // (dal POST, fallback rata -> piano).
+  const amount = Math.round((Number(row.amount ?? 0) || 0) * 100) / 100;
+  const paidRaw = String(options.paidAmount ?? "").trim();
+  let paidAmount = amount;
+  if (paidRaw !== "") {
+    // parseMoneyValue legacy: "1.234,56" (virgola decimale, punti migliaia) o "1234.56".
+    const normalized = paidRaw.includes(",") ? paidRaw.replace(/\./g, "").replace(",", ".") : paidRaw;
+    const parsed = Number.parseFloat(normalized);
+    if (!Number.isFinite(parsed)) throw new Error("L'importo incassato non e valido.");
+    paidAmount = Math.round(Math.max(0, parsed) * 100) / 100;
+    if (paidAmount <= 0.00001) paidAmount = amount;
+  }
+  if (Math.abs(paidAmount - amount) > 0.005) {
+    throw new Error("L'importo incassato deve corrispondere all'importo della rata.");
+  }
+
+  const paidAt = parsePaidAt(options.paidAt);
+  if (paidAt === null) throw new Error("La data di incasso non e valida.");
+
+  const paymentType = normalizeInstallmentPaymentType(
+    clean(options.paymentType, 20) || String(row.payment_type ?? "") || (await planPaymentType(slug, Number(row.plan_id ?? 0))),
+  );
+  if (!paymentType) throw new Error("Seleziona un tipo di pagamento valido.");
+
   await tenantUpdate({
     slug,
     table: "sale_installments",
     id: options.installmentId,
     values: {
       status: "paid",
-      paid_at: parsePaidAt(options.paidAt),
+      paid_at: paidAt,
       paid_amount: paidAmount,
-      payment_type: clean(options.paymentType, 20) || undefined,
+      payment_type: paymentType,
       note: clean(options.note, 1000) || undefined,
       updated_by: options.userId,
     },
@@ -137,7 +165,10 @@ async function markInstallmentPaid(
 
 async function markInstallmentPending(slug: string, installmentId: number, userId: number): Promise<InstallmentPlan> {
   const row = await installmentRow(slug, installmentId);
-  if (String(row.status ?? "") === "cancelled") throw new Error("Rata annullata.");
+  // Guard legacy markInstallmentPending: rata o piano annullati non riapribili.
+  if (String(row.status ?? "") === "cancelled" || (await planStatus(slug, Number(row.plan_id ?? 0))) === "cancelled") {
+    throw new Error("Non puoi riaprire una rata annullata.");
+  }
   await tenantUpdate({
     slug,
     table: "sale_installments",
@@ -198,11 +229,41 @@ async function installmentPlan(slug: string, planId: number): Promise<Installmen
   return plan;
 }
 
-function parsePaidAt(value: string | undefined): Date | string {
+// null = data non valida (il chiamante risponde con l'errore legacy).
+function parsePaidAt(value: string | undefined): Date | string | null {
   const raw = clean(value, 40);
   if (!raw) return new Date();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return `${raw} 00:00:00`;
-  return raw;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return Number.isNaN(Date.parse(raw)) ? null : `${raw} 00:00:00`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?$/.test(raw)) {
+    return Number.isNaN(Date.parse(raw.replace(" ", "T"))) ? null : raw.replace("T", " ");
+  }
+  return null;
+}
+
+// normalizePaymentType legacy (SaleInstallments.php ~245-269): set canonico
+// cash/card/check/bank con gli alias italiani; fuori dal set -> null.
+function normalizeInstallmentPaymentType(value: string): string | null {
+  const v = value.trim().toLowerCase();
+  if (!v) return null;
+  if (["cash", "contanti", "contante"].includes(v)) return "cash";
+  if (["card", "carta", "credit_card", "carta_credito", "carta di credito", "carta-di-credito"].includes(v)) return "card";
+  if (["check", "assegno"].includes(v)) return "check";
+  if (["bank", "bank_transfer", "bank transfer", "bonifico", "bonifico bancario", "wire", "transfer"].includes(v)) return "bank";
+  return null;
+}
+
+async function planStatus(slug: string, planId: number): Promise<string> {
+  if (planId <= 0) return "";
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "sale_installment_plans", columns: "status", where: "id = ?", params: [planId], limit: 1 }).catch(() => []);
+  return String(rows[0]?.status ?? "").toLowerCase();
+}
+
+async function planPaymentType(slug: string, planId: number): Promise<string> {
+  if (planId <= 0) return "";
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "sale_installment_plans", columns: "payment_type", where: "id = ?", params: [planId], limit: 1 }).catch(() => []);
+  return String(rows[0]?.payment_type ?? "");
 }
 
 function clean(value: unknown, max: number): string {

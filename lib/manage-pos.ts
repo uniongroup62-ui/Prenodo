@@ -493,6 +493,13 @@ export async function checkoutManageSale(
   const items = await buildSaleItems(slug, input.items, locationId, client.id > 0);
   if (!items.length) throw new Error("Aggiungi almeno un elemento prima di concludere la vendita.");
 
+  // ESCLUSIVITÀ CARRELLO — port of pos.php ~3327-3415 + 3502/3755 + 3966-3999 + 4645:
+  // GiftCard e Ricariche sono vendite ESCLUSIVE (max 1 per vendita, niente altri
+  // elementi, niente GiftBox); su una vendita con ricarica sono vietati credito,
+  // GiftCard come pagamento, coupon/promozioni, sconto manuale, punti Fidelity e
+  // rateizzazione; servizi/prodotti/ricariche/pacchetti richiedono un cliente.
+  assertCartExclusivityRules(items, client.id, input);
+
   const subtotal = roundMoney(items.reduce((total, item) => total + item.total, 0));
   const manualDiscount = roundMoney(Math.max(0, input.discount ?? 0));
 
@@ -3388,6 +3395,72 @@ async function saleItems(slug: string, saleId: number): Promise<PosSaleItem[]> {
   });
 }
 
+// Regole di esclusività del carrello + divieti pagamento sulle ricariche — port
+// of pos.php ~3327-3415 (esclusività), 3502/3755 (max 1 GiftCard/ricarica),
+// 3966-3999 (divieti tender/sconti su ricariche) e 4645 (niente rate). Messaggi
+// legacy esatti. La GiftBox nel Next è una RIGA (il legacy la modella come draft
+// che avvolge il carrello), quindi: GiftBox+ricarica e GiftBox+GiftCard vietate
+// con i messaggi dedicati; una GiftBox in carrello ESONERA dalla selezione
+// cliente (come il giftbox_draft legacy — il destinatario viaggia sulla riga).
+function assertCartExclusivityRules(items: PosSaleItem[], clientId: number, input: PosCheckoutInput): void {
+  const giftcards = items.filter((it) => it.type === "giftcard").length;
+  const recharges = items.filter((it) => it.type === "recharge").length;
+  const giftboxes = items.filter((it) => it.type === "giftbox").length;
+  const hasServiceProductRecharge = items.some((it) => it.type === "service" || it.type === "product" || it.type === "recharge" || it.type === "prepaid");
+  const hasPackage = items.some((it) => it.type === "package");
+  const hasNonRechargeItems = items.some((it) => it.type !== "recharge" && it.type !== "giftbox");
+  const hasOtherThanGiftcard = items.some((it) => it.type !== "giftcard" && it.type !== "giftbox");
+
+  if (giftcards > 1) throw new Error("Puoi inserire una sola GiftCard per vendita. Modifica la GiftCard già presente oppure rimuovila.");
+  if (recharges > 1) throw new Error("Puoi inserire una sola ricarica per vendita. Modifica la ricarica già presente oppure rimuovila.");
+
+  if (recharges > 0 && hasNonRechargeItems) {
+    throw new Error("Una vendita con ricariche non può contenere altri elementi (servizi, prodotti, pacchetti, GiftCard). Effettua una vendita separata.");
+  }
+
+  if (giftcards > 0) {
+    if (clientId <= 0) throw new Error("Seleziona un mittente per emettere una GiftCard.");
+    if (hasOtherThanGiftcard) {
+      throw new Error("Una vendita con GiftCard non può contenere altri elementi (servizi, prodotti, pacchetti, ricariche). Effettua due vendite separate.");
+    }
+    if (giftboxes > 0) {
+      throw new Error("GiftCard e GiftBox non possono essere abbinate nella stessa vendita. Elimina la GiftBox oppure rimuovi la GiftCard.");
+    }
+  }
+
+  if (giftboxes > 0 && recharges > 0) {
+    throw new Error("GiftBox e Ricariche non possono essere abbinate nella stessa vendita. Elimina la GiftBox oppure rimuovi la ricarica.");
+  }
+
+  // Cliente obbligatorio per servizi/prodotti/ricariche/pacchetti (senza GiftBox).
+  if (clientId <= 0 && (hasServiceProductRecharge || hasPackage) && giftboxes === 0) {
+    throw new Error("Seleziona un cliente per concludere la vendita.");
+  }
+
+  // Divieti sulla vendita-ricarica: nessun tender residui, sconti o rate.
+  if (recharges > 0) {
+    const tender = (method: string) => (input.payments ?? []).reduce((sum, p) => sum + (String(p.method) === method ? Math.max(0, Number(p.amount) || 0) : 0), 0);
+    if (tender("wallet") > 0.00001) {
+      throw new Error("Non è possibile usare il credito per pagare una ricarica credito in carrello. Disattiva l'uso credito oppure rimuovi la ricarica.");
+    }
+    if (tender("giftcard") > 0.00001) {
+      throw new Error("Non è possibile usare una GiftCard per pagare una ricarica credito in carrello. Disattiva l'uso GiftCard oppure rimuovi la ricarica.");
+    }
+    if (clean(input.couponCode, 40) || (input.promotionId ?? 0) > 0) {
+      throw new Error("Coupon, buoni e promozioni non possono essere applicati a una ricarica credito. Rimuovi lo sconto oppure effettua una vendita separata.");
+    }
+    if ((input.discount ?? 0) > 0.00001) {
+      throw new Error("Lo sconto manuale non può essere applicato a una ricarica credito.");
+    }
+    if ((input.fidelityPointsUse ?? 0) > 0.00001) {
+      throw new Error("I punti Fidelity non possono essere usati per pagare una ricarica credito.");
+    }
+    if (input.installmentPlan) {
+      throw new Error("Le ricariche credito possono essere concluse solo con pagamento in unica soluzione.");
+    }
+  }
+}
+
 async function buildSaleItems(slug: string, inputItems: PosSaleItemInput[], locationId: number, hasClient: boolean): Promise<PosSaleItem[]> {
   const items: PosSaleItem[] = [];
   for (const [index, input] of inputItems.entries()) {
@@ -5136,7 +5209,9 @@ function normalizeItemStatus(type: PosSaleItemType, value: unknown, hasClient: b
   if (type === "service") {
     if (status === "executed" || status === "done" || status === "eseguito") return "executed";
     if (status === "prepaid" || status === "prepagato") return "prepaid";
-    return hasClient ? "prepaid" : "executed";
+    // Default legacy (pos_normalize_sale_item_status): un servizio senza stato
+    // esplicito è ESEGUITO — prepagato è sempre una scelta esplicita.
+    return "executed";
   }
   return "prepaid";
 }

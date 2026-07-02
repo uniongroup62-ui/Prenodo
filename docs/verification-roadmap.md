@@ -985,3 +985,77 @@ collegano quando si porta quella vista.
 - FOUC pagine auth eliminato (CSS SSR + precedence).
 - `/logout` reale (route dedicata, cancella cookie sessione).
 - Home `/` = marketplace migrato; eliminato `public-marketplace.tsx` (465 righe morte).
+
+## AUDIT PAGAMENTI/POS (2026-07-03) — matrice di parita legacy <-> Next
+
+Metodo: 4 mappe complete (pos.php 7148 righe, pos_history/pos_sale_detail/
+rate/prepagati/preordini/CreditRechargeCancel, sottosistema credito/wallet,
+implementazione Next) + batteria di 30+ test live sull'API Next con verifica
+dei side-effect su DB (cliente/prodotto usa-e-getta, tutto ripulito).
+
+VERDETTO: il modulo e' molto piu' completo di quanto dicano i commenti header
+di pos-content.tsx (righe 53-56 e 2224 sono STALE: dichiarano "non-wired"
+flussi che sono cablati e testati). Checkout, sconti, coupon/promo/punti,
+ricariche con bonus, tender wallet/giftcard, rate, preordini (anche ritiro
+PARZIALE con split riga), prepagati, annullo con ripristini (wallet,
+giftcard, stock, punti, void ricariche), delete vendite annullate, Movimenti,
+dettaglio vendita, impostazioni scadenze: TUTTI verificati live e funzionanti.
+
+GAP CONFERMATI DAI TEST (in ordine di gravita'):
+- [CHIUSO 2026-07-03] P1 ESCLUSIVITA' CARRELLO: il Next accetta ricarica+servizio e
+  giftcard+servizio nella stessa vendita (emettendo pure gli artefatti).
+  Legacy vieta (pos.php 3327-3415, 3966-3999): ricarica non cumulabile,
+  giftcard esclusiva e max 1, GiftBox<->GiftCard/ricariche vietate, niente
+  credito/giftcard/coupon/promo/punti/rate su vendite con ricariche.
+- [CHIUSO 2026-07-03] P2 RATE: markInstallmentPaid non validava l'importo (accettato 5 su rata da
+  3, salvato paid_amount=5). Legacy: "L'importo incassato deve corrispondere
+  all'importo della rata." (tol 0.005) + validazione data. Messaggi diversi
+  ("Rata annullata." vs "Non puoi incassare una rata annullata.").
+- [CHIUSO 2026-07-03] P3 default item_status servizio con cliente = 'prepaid' (manage-pos.ts
+  normalizeItemStatus) — legacy default 'executed'. La UI manda sempre lo
+  status esplicito, ma a livello API i dati divergono.
+- P4 righe vendita speciali: recharge/giftcard scritte come item_type
+  'service' con nome nudo "Ricarica"/"GiftCard" (legacy: 'product' +
+  "GiftCard (CODE)" / "Ricarica credito - titolo (+bonus)"). Impatta le
+  etichette dinamiche dei Movimenti e il matching R#/GC nelle note.
+- P5 rateizzazione semantica tender: il server esige pagamento pieno
+  ("Pagamento insufficiente") e la UI aggira inviando l'intero totale anche
+  quando in cassa entra solo l'acconto; il legacy non valida gli importi e
+  annota "acconto X - residuo Y".
+- P6 credito: solo clients.credit_balance (manca il modello cards.credit del
+  legacy); scalo manuale senza sede obbligatoria ne' colonne location/card su
+  credit_adjustments.
+- P7 fidelity_wallet: manca il sottosistema lotti/scadenze punti
+  (point_lots): calendario scadenze, in-scadenza, avvisi cron/lock-lots,
+  tabella warn_locked; clients.points aggiornato direttamente.
+- P8 paginazioni server (20/pag) mancanti su credit_movements (cap 300) e
+  fidelity_wallet.
+- P9 formattazione messaggi: importi con punto invece di virgola nei
+  messaggi credito; label punti hardcoded "Punti" invece della label tenant.
+- P10 deleteCancelledSale non purga gli artefatti emessi ne' i movimenti
+  commissioni (TODO dichiarato manage-pos.ts:1002) e senza le guardie
+  profonde legacy (giftcard collegata ad altre vendite/prenotazioni ecc.).
+- P11 installments_manage: scoping sede ignorato; acconto solo informativo.
+- P12 non verificato: guardia legacy "ricarica collegata ad ALTRA vendita"
+  (allocazione FIFO CreditRechargeCancel) nello storno — il Next ha una
+  guardia sui punti ma la FIFO non e' riscontrata.
+- P14 earn punti: TODO per-item eligibility + adhesion gate (dichiarato).
+Non-gap: omaggi v2 (gift_instance_id) spenti anche nel legacy; email voucher
+delegate al cron (scelta documentata); nessuna IVA/resto nel legacy.
+
+### Chiusura gap POS P1/P2/P3 (2026-07-03, 24/24 test live PASS)
+- P1 (commit sotto): assertCartExclusivityRules in checkoutManageSale — tutte
+  le regole legacy con messaggi esatti: max 1 GiftCard/ricarica, ricarica e
+  GiftCard vendite esclusive, GiftBox<->GiftCard/ricariche vietate, cliente
+  obbligatorio per servizi/prodotti/ricariche/pacchetti (GiftBox esonera come
+  il giftbox_draft legacy), divieti su vendita-ricarica (credito, GiftCard,
+  coupon/promo, sconto manuale, punti, rateizzazione). NOTA: "Cliente banco"
+  ora rifiutato al checkout col messaggio legacy (il PHP fa lo stesso).
+- P2: markInstallmentPaid ora valida importo (= importo rata, tol 0.005,
+  virgola/migliaia gestite; vuoto o 0 = importo pieno), data, tipo pagamento
+  (set canonico cash/card/check/bank con TUTTI gli alias legacy, fallback
+  rata -> piano) e rata/piano annullati ("Non puoi incassare una rata
+  annullata."); markInstallmentPending idem ("Non puoi riaprire...").
+- P3: default item_status servizio = 'executed' (era 'prepaid' con cliente).
+Restano aperti: P4 (righe ricarica/giftcard item_type+nome), P5 (semantica
+tender con rate), P6 (credito card-based + sede), P7 (point_lots), P8-P11.
