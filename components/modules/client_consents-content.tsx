@@ -1,22 +1,57 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 // Faithful port of the PHP per-client "Moduli consenso" page
-// (app/pages/client_consents.php, ?page=client_consents&id=<clientId>).
+// (app/pages/client_consents.php, ?page=client_consents&client_id=<id>).
 //
-// The page header (client name / phone / email) is fed by the existing
-// DB-backed /api/manage/clients route, matched on the client id taken from the
-// URL query string. The GDPR consent box and the associated/available consent
-// modules do not yet have a dedicated Next.js API route, so the draft/empty
-// state captured from the live PHP page is reproduced verbatim (the POST form
-// targets the legacy index.php handler, exactly like the PHP page).
+// Interamente DB-backed via /api/manage/client-gdpr: box GDPR (consensi,
+// stato draft/pending/signed, Stampa/Invia firma/Invia privacy/Carica PDF/
+// Reset), associazione moduli consenso attivi e azioni sui record associati
+// (stampa, firma elettronica, upload manuale, invio PDF ufficiale, rimozione,
+// reset) — messaggi, conferme e guard identici al legacy. Le stampe aprono le
+// GET do=gdpr_print / do=consent_print in un nuovo tab (come formtarget=_blank).
 
-type Client = {
+type GdprState = {
+  status: "draft" | "pending" | "signed";
+  statusLabel: string;
+  statusBadge: string;
+  statusIcon: string;
+  locked: boolean;
+  labels: Record<string, string>;
+  consents: Record<string, boolean>;
+  officialDocId: number;
+  requestedAtLabel: string;
+  signedAtLabel: string;
+  pendingPreviewUrl: string;
+  publicUrl: string;
+  officialDocUrl: string;
+};
+
+type ConsentRecord = {
   id: number;
-  name?: string;
-  email?: string;
-  phone?: string;
+  moduleId: number;
+  name: string;
+  typeLabel: string;
+  moduleActive: boolean;
+  status: "draft" | "pending" | "signed";
+  statusLabel: string;
+  statusBadge: string;
+  statusIcon: string;
+  documentId: number;
+  createdLabel: string;
+  updatedLabel: string;
+  requestedLabel: string;
+  signedLabel: string;
+  pendingUrl: string;
+  officialUrl: string;
+};
+
+type PageState = {
+  client: { id: number; name: string; phone: string; email: string };
+  gdpr: GdprState;
+  records: ConsentRecord[];
+  availableModules: { id: number; name: string }[];
 };
 
 function tenantSlug(): string {
@@ -26,48 +61,194 @@ function tenantSlug(): string {
 
 function clientIdFromUrl(): number {
   if (typeof window === "undefined") return 0;
-  const raw = new URLSearchParams(window.location.search).get("id");
+  const params = new URLSearchParams(window.location.search);
+  const raw = params.get("client_id") ?? params.get("id");
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
+// Gruppi record per stato (ordine + testi del legacy).
+const RECORD_GROUP_META: Record<string, { title: string; desc: string }> = {
+  draft: {
+    title: "Da completare",
+    desc: "Moduli pronti per stampa, invio firma elettronica o caricamento manuale del PDF firmato.",
+  },
+  pending: {
+    title: "In attesa di firma",
+    desc: "Richieste di firma gia inviate al cliente. I contenuti restano bloccati fino a conferma o reset.",
+  },
+  signed: {
+    title: "Firmati",
+    desc: "Documenti conclusi e disponibili come PDF ufficiali del cliente.",
+  },
+};
+
 export function ClientConsentsContent() {
   const slug = tenantSlug();
   const [clientId, setClientId] = useState(0);
-  const [client, setClient] = useState<Client | null>(null);
+  const [state, setState] = useState<PageState | null>(null);
   const [loading, setLoading] = useState(true);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  // Consensi GDPR spuntati nella UI (editabili solo in bozza).
+  const [consents, setConsents] = useState<Record<string, boolean>>({});
+  const [gdprFile, setGdprFile] = useState<File | null>(null);
+  const [recordFiles, setRecordFiles] = useState<Record<number, File | null>>({});
+  const [associateModuleId, setAssociateModuleId] = useState("");
+  const [gdprFileKey, setGdprFileKey] = useState(0); // resetta l'input file dopo l'upload
 
   useEffect(() => {
     setClientId(clientIdFromUrl());
   }, []);
 
-  useEffect(() => {
-    if (!slug) return;
+  const load = useCallback(() => {
+    if (!slug || clientId <= 0) return;
     setLoading(true);
-    fetch(`/api/manage/clients?slug=${encodeURIComponent(slug)}`, {
+    fetch(`/api/manage/client-gdpr?slug=${encodeURIComponent(slug)}&client_id=${clientId}`, {
       headers: { "x-tenant-slug": slug },
     })
       .then((r) => r.json())
       .then((j) => {
-        const list: Client[] = Array.isArray(j.clients) ? j.clients : [];
-        const found = list.find((c) => Number(c.id) === clientId) ?? null;
-        setClient(found);
+        if (!j?.ok) {
+          setErr(String(j?.error || "Cliente non trovato."));
+          setState(null);
+          return;
+        }
+        setState(j as PageState);
+        setConsents({ ...(j as PageState).gdpr.consents });
       })
-      .catch(() => setClient(null))
+      .catch(() => setErr("Errore di rete durante il caricamento."))
       .finally(() => setLoading(false));
   }, [slug, clientId]);
 
-  // Header strings, mirroring the PHP output. PHP renders the subtitle as
-  // "<phone> - <email>" and leaves empty parts blank (e.g. "- - mario@test.it").
-  const clientName = client?.name ?? "";
-  const phone = client?.phone ?? "";
-  const email = client?.email ?? "";
-  const titleSuffix = clientName ? ` - ${clientName}` : "";
+  useEffect(() => {
+    load();
+  }, [load]);
 
   // Legacy-style relative action links (the PHP page uses index.php?page=...).
   function pageHref(path: string): string {
     return `/${encodeURIComponent(slug)}/${`${path}`.replace("&", "?")}`;
   }
+
+  // POST verso /api/manage/client-gdpr; ritorna true se ok (per i post-step).
+  async function postAction(fields: Record<string, string>, file?: { name: string; file: File }): Promise<boolean> {
+    setBusy(true);
+    setMsg("");
+    setErr("");
+    try {
+      const fd = new FormData();
+      fd.set("client_id", String(clientId));
+      for (const [k, v] of Object.entries(fields)) fd.set(k, v);
+      if (file) fd.set(file.name, file.file);
+      const res = await fetch(`/api/manage/client-gdpr?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "x-tenant-slug": slug },
+        body: fd,
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || j.ok === false) {
+        setErr(String(j.error ?? "Operazione non riuscita."));
+        return false;
+      }
+      setMsg(String(j.message ?? "Operazione completata."));
+      load();
+      return true;
+    } catch {
+      setErr("Errore di rete durante il salvataggio.");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // I consensi correnti come campi gdpr_consents[...] (il form legacy li invia
+  // con ogni azione GDPR in bozza).
+  function gdprConsentFields(): Record<string, string> {
+    const fields: Record<string, string> = {};
+    for (const [key, on] of Object.entries(consents)) {
+      if (on) fields[`gdpr_consents[${key}]`] = "1";
+    }
+    return fields;
+  }
+
+  function gdprAction(action: string, confirmText?: string) {
+    if (confirmText && !window.confirm(confirmText)) return;
+    void postAction({ _mode: "gdpr_action", gdpr_action: action, ...gdprConsentFields() });
+  }
+
+  // Stampa Privacy: come il submit legacy salva prima i consensi, poi apre il
+  // PDF (do=gdpr_print) in un nuovo tab.
+  async function gdprPrint() {
+    const ok = await postAction({ _mode: "gdpr_action", gdpr_action: "save_consents", ...gdprConsentFields() });
+    if (ok) {
+      window.open(`/api/manage/client-gdpr?slug=${encodeURIComponent(slug)}&client_id=${clientId}&do=gdpr_print`, "_blank");
+    }
+  }
+
+  function gdprManualUpload() {
+    if (!gdprFile) {
+      setErr("Seleziona il PDF firmato da caricare.");
+      return;
+    }
+    void postAction({ _mode: "gdpr_action", gdpr_action: "manual_upload", ...gdprConsentFields() }, { name: "gdpr_signed_pdf", file: gdprFile }).then((ok) => {
+      if (ok) {
+        setGdprFile(null);
+        setGdprFileKey((k) => k + 1);
+      }
+    });
+  }
+
+  function recordAction(recordId: number, action: string, confirmText?: string) {
+    if (confirmText && !window.confirm(confirmText)) return;
+    void postAction({ _mode: "consent_record_action", record_id: String(recordId), record_action: action });
+  }
+
+  function recordManualUpload(recordId: number) {
+    const file = recordFiles[recordId];
+    if (!file) {
+      setErr("Seleziona il PDF firmato da caricare.");
+      return;
+    }
+    void postAction({ _mode: "consent_record_action", record_id: String(recordId), record_action: "manual_upload" }, { name: "signed_pdf", file }).then((ok) => {
+      if (ok) setRecordFiles((m) => ({ ...m, [recordId]: null }));
+    });
+  }
+
+  function recordPrint(recordId: number) {
+    window.open(
+      `/api/manage/client-gdpr?slug=${encodeURIComponent(slug)}&client_id=${clientId}&do=consent_print&record_id=${recordId}`,
+      "_blank",
+    );
+  }
+
+  function associateModule() {
+    const moduleId = Number(associateModuleId);
+    if (!moduleId) return;
+    void postAction({ _mode: "associate_module", module_id: String(moduleId) }).then((ok) => {
+      if (ok) setAssociateModuleId("");
+    });
+  }
+
+  const clientName = state?.client.name ?? "";
+  const phone = state?.client.phone ?? "";
+  const email = state?.client.email ?? "";
+  const titleSuffix = clientName ? ` - ${clientName}` : "";
+  const gdpr = state?.gdpr ?? null;
+  const records = state?.records ?? [];
+  const availableModules = state?.availableModules ?? [];
+
+  const recordGroups: Record<string, ConsentRecord[]> = { draft: [], pending: [], signed: [] };
+  for (const record of records) recordGroups[record.status]?.push(record);
+
+  const gdprStatusLine =
+    gdpr?.status === "draft"
+      ? "Stato bozza: i consensi sono modificabili e puoi stampare il documento o avviare la firma elettronica."
+      : gdpr?.status === "pending"
+        ? `Richiesta firma inviata${gdpr.requestedAtLabel ? ` il ${gdpr.requestedAtLabel}` : ""}. I consensi restano bloccati fino a conferma o reset.`
+        : `PDF privacy ufficiale associato${gdpr?.signedAtLabel ? ` il ${gdpr.signedAtLabel}` : ""}. Per modificare i consensi usa Reset GDPR.`;
+
+  const gdprOfficialOpenUrl = gdpr?.status === "signed" ? gdpr.publicUrl || gdpr.officialDocUrl : "";
 
   return (
     <div className="container-fluid">
@@ -78,7 +259,7 @@ export function ClientConsentsContent() {
           <div className="bs-page-kicker">Scheda cliente</div>
           <h1 className="bs-page-title">Moduli consenso{titleSuffix}</h1>
           <div className="bs-page-subtitle">
-            {loading ? "—" : `${phone} - ${email}`}
+            {loading && !state ? "—" : `${phone || "-"} - ${email || "-"}`}
           </div>
         </div>
         <div className="bs-page-actions">
@@ -101,6 +282,9 @@ export function ClientConsentsContent() {
         </div>
       </div>
 
+      {msg ? <div className="alert alert-success">{msg}</div> : null}
+      {err ? <div className="alert alert-danger">{err}</div> : null}
+
       <div className="consent-page-grid">
         <div className="consent-main-stack">
           <div className="card p-3 p-lg-4 consent-records-shell">
@@ -120,10 +304,39 @@ export function ClientConsentsContent() {
               </a>
             </div>
 
-            <div className="text-muted small">
-              Nessun modulo attivo disponibile da associare: sono gia associati al cliente oppure
-              non sono stati creati moduli aggiuntivi attivi.
-            </div>
+            {availableModules.length ? (
+              <div className="row g-2 align-items-end">
+                <div className="col-12 col-lg">
+                  <label className="form-label small fw-semibold" htmlFor="consentModuleSelect">
+                    Modulo
+                  </label>
+                  <select
+                    className="form-select"
+                    id="consentModuleSelect"
+                    value={associateModuleId}
+                    onChange={(e) => setAssociateModuleId(e.target.value)}
+                  >
+                    <option value="">-- seleziona modulo --</option>
+                    {availableModules.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="col-12 col-lg-auto">
+                  <button className="btn btn-primary w-100" type="button" disabled={busy || !associateModuleId} onClick={associateModule}>
+                    <i className="bi bi-plus-circle me-1" />
+                    Associa modulo
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="text-muted small">
+                Nessun modulo attivo disponibile da associare: sono gia associati al cliente oppure
+                non sono stati creati moduli aggiuntivi attivi.
+              </div>
+            )}
           </div>
 
           <div className="card p-3 p-lg-4 consent-records-shell">
@@ -139,17 +352,211 @@ export function ClientConsentsContent() {
                 </div>
               </div>
               <span className="badge text-bg-light border consent-count-badge">
-                0 modulo/i associato/i
+                {records.length} modulo/i associato/i
               </span>
             </div>
 
-            <div className="consent-empty-state">
-              <div className="fs-5 mb-2">
-                <i className="bi bi-journal-plus" />
+            {records.length ? (
+              (["draft", "pending", "signed"] as const).map((groupKey) => {
+                const group = recordGroups[groupKey];
+                if (!group.length) return null;
+                const meta = RECORD_GROUP_META[groupKey];
+                return (
+                  <div className="consent-record-group" key={groupKey}>
+                    <div className="consent-group-header">
+                      <div>
+                        <div className="consent-group-title">{meta.title}</div>
+                        <div className="text-muted small">{meta.desc}</div>
+                      </div>
+                      <span className="badge text-bg-light border">{group.length}</span>
+                    </div>
+
+                    <div className="consent-record-list">
+                      {group.map((record) => (
+                        <div className={`consent-record-card is-${record.status}`} key={record.id}>
+                          <div className="d-flex flex-wrap justify-content-between align-items-start gap-3">
+                            <div>
+                              <div className="d-flex flex-wrap align-items-center gap-2">
+                                <div className="fw-semibold">{record.name}</div>
+                                <span className="badge text-bg-light border">{record.typeLabel}</span>
+                                {!record.moduleActive ? (
+                                  <span className="badge text-bg-secondary">Modulo disattivato nel backend</span>
+                                ) : null}
+                              </div>
+                              <div className="consent-record-note mt-1">
+                                {record.status === "draft"
+                                  ? "Bozza pronta: puoi stampare il PDF, inviare la richiesta di firma elettronica oppure caricare il documento firmato manualmente."
+                                  : record.status === "pending"
+                                    ? `Richiesta firma inviata${record.requestedLabel ? ` il ${record.requestedLabel}` : ""}. Il modulo resta bloccato fino a conferma o reset.`
+                                    : `Documento firmato${record.signedLabel ? ` il ${record.signedLabel}` : ""}. Il PDF ufficiale e conservato tra i documenti protetti del cliente.`}
+                              </div>
+                            </div>
+                            <span className={`badge text-bg-${record.statusBadge}`}>
+                              <i className={`bi ${record.statusIcon} me-1`} />
+                              {record.statusLabel}
+                            </span>
+                          </div>
+
+                          <div className="consent-divider" />
+
+                          <div className="row g-3 align-items-start">
+                            <div className="col-12 col-xl-5">
+                              <div className="consent-record-meta">
+                                <span className="consent-meta-pill">
+                                  <i className="bi bi-calendar2-plus" />
+                                  Creato {record.createdLabel || "—"}
+                                </span>
+                                <span className="consent-meta-pill">
+                                  <i className="bi bi-clock-history" />
+                                  Ultima operazione {record.updatedLabel || "—"}
+                                </span>
+                                {record.status === "pending" && record.requestedLabel ? (
+                                  <span className="consent-meta-pill">
+                                    <i className="bi bi-envelope" />
+                                    Inviato {record.requestedLabel}
+                                  </span>
+                                ) : null}
+                                {record.status === "signed" && record.signedLabel ? (
+                                  <span className="consent-meta-pill">
+                                    <i className="bi bi-check2-circle" />
+                                    Firmato {record.signedLabel}
+                                  </span>
+                                ) : null}
+                              </div>
+
+                              {record.status === "pending" && record.pendingUrl ? (
+                                <a className="btn btn-outline-secondary w-100 mt-3" href={record.pendingUrl} target="_blank" rel="noopener">
+                                  <i className="bi bi-box-arrow-up-right me-1" />
+                                  Apri richiesta di firma
+                                </a>
+                              ) : null}
+
+                              {record.status === "signed" && record.officialUrl ? (
+                                <a className="btn btn-outline-secondary w-100 mt-3" href={record.officialUrl} target="_blank" rel="noopener">
+                                  <i className="bi bi-box-arrow-up-right me-1" />
+                                  Apri PDF ufficiale
+                                </a>
+                              ) : null}
+                            </div>
+
+                            <div className="col-12 col-xl-7">
+                              <div className="consent-action-grid">
+                                {record.status === "draft" ? (
+                                  <>
+                                    <button className="btn btn-outline-primary" type="button" disabled={busy} onClick={() => recordPrint(record.id)}>
+                                      <i className="bi bi-printer me-1" />
+                                      Stampa PDF
+                                    </button>
+                                    <button
+                                      className="btn btn-outline-primary"
+                                      type="button"
+                                      disabled={busy}
+                                      onClick={() =>
+                                        recordAction(record.id, "send_signature", "Inviare la richiesta di firma elettronica al cliente?")
+                                      }
+                                    >
+                                      <i className="bi bi-pen me-1" />
+                                      Invia Firma Elettronica
+                                    </button>
+                                    <button className="btn btn-outline-secondary" type="button" disabled>
+                                      <i className="bi bi-send me-1" />
+                                      Invia PDF firmato
+                                    </button>
+                                    <button
+                                      className="btn btn-outline-danger"
+                                      type="button"
+                                      disabled={busy}
+                                      onClick={() => recordAction(record.id, "remove", "Rimuovere questo modulo dalla scheda cliente?")}
+                                    >
+                                      <i className="bi bi-x-circle me-1" />
+                                      Rimuovi
+                                    </button>
+                                  </>
+                                ) : record.status === "pending" ? (
+                                  <>
+                                    <button className="btn btn-outline-secondary" type="button" disabled>
+                                      <i className="bi bi-printer me-1" />
+                                      Stampa PDF
+                                    </button>
+                                    <button className="btn btn-outline-secondary" type="button" disabled>
+                                      <i className="bi bi-pen me-1" />
+                                      Invia Firma Elettronica
+                                    </button>
+                                    <button className="btn btn-outline-secondary" type="button" disabled>
+                                      <i className="bi bi-send me-1" />
+                                      Invia PDF firmato
+                                    </button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <button className="btn btn-outline-secondary" type="button" disabled>
+                                      <i className="bi bi-printer me-1" />
+                                      Stampa PDF
+                                    </button>
+                                    <button className="btn btn-outline-secondary" type="button" disabled>
+                                      <i className="bi bi-pen me-1" />
+                                      Invia Firma Elettronica
+                                    </button>
+                                    <button className="btn btn-outline-primary" type="button" disabled={busy} onClick={() => recordAction(record.id, "send_pdf")}>
+                                      <i className="bi bi-send me-1" />
+                                      Invia PDF firmato
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+
+                              {record.status === "draft" ? (
+                                <div className="consent-upload-box mt-3">
+                                  <div className="fw-semibold small mb-2">Carica il PDF firmato manualmente</div>
+                                  <input
+                                    className="form-control mb-2"
+                                    type="file"
+                                    accept="application/pdf"
+                                    onChange={(e) =>
+                                      setRecordFiles((m) => ({ ...m, [record.id]: e.target.files?.[0] ?? null }))
+                                    }
+                                  />
+                                  <button className="btn btn-outline-secondary w-100" type="button" disabled={busy} onClick={() => recordManualUpload(record.id)}>
+                                    <i className="bi bi-upload me-1" />
+                                    Carica PDF firmato
+                                  </button>
+                                </div>
+                              ) : null}
+
+                              {record.status === "pending" || record.status === "signed" ? (
+                                <button
+                                  className="btn btn-outline-danger w-100 mt-3"
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() =>
+                                    recordAction(
+                                      record.id,
+                                      "reset",
+                                      "Eseguire il reset del modulo? Il PDF firmato precedente restera conservato nei documenti cliente e la procedura tornera in bozza.",
+                                    )
+                                  }
+                                >
+                                  <i className="bi bi-arrow-counterclockwise me-1" />
+                                  Reset modulo
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="consent-empty-state">
+                <div className="fs-5 mb-2">
+                  <i className="bi bi-journal-plus" />
+                </div>
+                <div className="fw-semibold mb-1">Nessun modulo consenso aggiuntivo associato</div>
+                <div>Usa il riquadro in alto per associare un modulo attivo creato nel backend.</div>
               </div>
-              <div className="fw-semibold mb-1">Nessun modulo consenso aggiuntivo associato</div>
-              <div>Usa il riquadro in alto per associare un modulo attivo creato nel backend.</div>
-            </div>
+            )}
           </div>
         </div>
 
@@ -165,123 +572,148 @@ export function ClientConsentsContent() {
                   Le spunte selezionate compilano automaticamente la sezione consenso del PDF privacy.
                 </div>
               </div>
-              <span className="badge text-bg-secondary">
-                <i className="bi bi-file-earmark-text me-1" />
-                Bozza
+              <span className={`badge text-bg-${gdpr?.statusBadge ?? "secondary"}`}>
+                <i className={`bi ${gdpr?.statusIcon ?? "bi-file-earmark-text"} me-1`} />
+                {gdpr?.statusLabel ?? "Bozza"}
               </span>
             </div>
 
-            <form
-              method="post"
-              action={pageHref(`client_consents&id=${clientId}`)}
-              encType="multipart/form-data"
-              className="gdpr-box"
-            >
-              <input type="hidden" name="_csrf" value="" />
-              <input type="hidden" name="_mode" value="gdpr_action" />
-
+            <div className="gdpr-box">
               <div className="gdpr-checklist">
-                <label className="gdpr-check-item">
-                  <input
-                    className="form-check-input"
-                    type="checkbox"
-                    name="gdpr_consents[data_processing]"
-                    value="1"
-                  />
-                  <span>Consenso al trattamento dei dati</span>
-                </label>
-                <label className="gdpr-check-item">
-                  <input
-                    className="form-check-input"
-                    type="checkbox"
-                    name="gdpr_consents[communications]"
-                    value="1"
-                  />
-                  <span>Consenso comunicazioni</span>
-                </label>
-                <label className="gdpr-check-item">
-                  <input
-                    className="form-check-input"
-                    type="checkbox"
-                    name="gdpr_consents[marketing]"
-                    value="1"
-                  />
-                  <span>Consenso marketing</span>
-                </label>
-                <label className="gdpr-check-item">
-                  <input
-                    className="form-check-input"
-                    type="checkbox"
-                    name="gdpr_consents[data_sharing]"
-                    value="1"
-                  />
-                  <span>Consenso diffusione dati</span>
-                </label>
+                {Object.entries(gdpr?.labels ?? {}).map(([key, label]) => (
+                  <label className={`gdpr-check-item${gdpr?.locked ? " is-locked" : ""}`} key={key}>
+                    <input
+                      className="form-check-input"
+                      type="checkbox"
+                      checked={Boolean(consents[key])}
+                      disabled={Boolean(gdpr?.locked) || busy}
+                      onChange={(e) => setConsents((c) => ({ ...c, [key]: e.target.checked }))}
+                    />
+                    <span>{label}</span>
+                  </label>
+                ))}
               </div>
 
-              <div className="mt-2">
-                <button
-                  className="btn btn-sm btn-outline-secondary"
-                  type="submit"
-                  name="gdpr_action"
-                  value="save_consents"
-                >
-                  <i className="bi bi-check2-circle me-1" />
-                  Salva consensi
-                </button>
-              </div>
+              {gdpr && !gdpr.locked ? (
+                <div className="mt-2">
+                  <button className="btn btn-sm btn-outline-secondary" type="button" disabled={busy} onClick={() => gdprAction("save_consents")}>
+                    <i className="bi bi-check2-circle me-1" />
+                    Salva consensi
+                  </button>
+                </div>
+              ) : null}
 
-              <div className="small text-muted mt-3 consent-status-line">
-                Stato bozza: i consensi sono modificabili e puoi stampare il documento o avviare la
-                firma elettronica.
-              </div>
+              <div className="small text-muted mt-3 consent-status-line">{gdpr ? gdprStatusLine : "—"}</div>
 
               <div className="d-grid gap-2 mt-3">
-                <button
-                  className="btn btn-gdpr-outline"
-                  type="submit"
-                  name="gdpr_action"
-                  value="print"
-                  formTarget="_blank"
-                >
-                  <i className="bi bi-printer me-1" />
-                  Stampa Privacy
-                </button>
-                <button
-                  className="btn btn-gdpr-outline"
-                  type="submit"
-                  name="gdpr_action"
-                  value="send_signature"
-                  data-client-consents-confirm="Inviare la richiesta di firma elettronica al cliente?"
-                >
-                  <i className="bi bi-pen me-1" />
-                  Invia Firma Elettronica
-                </button>
-                <button className="btn btn-gdpr-outline" type="button" disabled>
-                  <i className="bi bi-send me-1" />
-                  Invia Privacy
-                </button>
+                {gdpr?.status === "draft" ? (
+                  <>
+                    <button className="btn btn-gdpr-outline" type="button" disabled={busy} onClick={() => void gdprPrint()}>
+                      <i className="bi bi-printer me-1" />
+                      Stampa Privacy
+                    </button>
+                    <button
+                      className="btn btn-gdpr-outline"
+                      type="button"
+                      disabled={busy}
+                      onClick={() => gdprAction("send_signature", "Inviare la richiesta di firma elettronica al cliente?")}
+                    >
+                      <i className="bi bi-pen me-1" />
+                      Invia Firma Elettronica
+                    </button>
+                    <button className="btn btn-gdpr-outline" type="button" disabled>
+                      <i className="bi bi-send me-1" />
+                      Invia Privacy
+                    </button>
+                  </>
+                ) : gdpr?.status === "pending" ? (
+                  <>
+                    <button className="btn btn-gdpr-outline" type="button" disabled>
+                      <i className="bi bi-printer me-1" />
+                      Stampa Privacy
+                    </button>
+                    <button className="btn btn-gdpr-outline" type="button" disabled>
+                      <i className="bi bi-pen me-1" />
+                      Invia Firma Elettronica
+                    </button>
+                    <button className="btn btn-gdpr-outline" type="button" disabled>
+                      <i className="bi bi-send me-1" />
+                      Invia Privacy
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button className="btn btn-gdpr-outline" type="button" disabled>
+                      <i className="bi bi-printer me-1" />
+                      Stampa Privacy
+                    </button>
+                    <button className="btn btn-gdpr-outline" type="button" disabled>
+                      <i className="bi bi-pen me-1" />
+                      Invia Firma Elettronica
+                    </button>
+                    {gdpr && gdpr.officialDocId > 0 ? (
+                      <button className="btn btn-gdpr-outline" type="button" disabled={busy} onClick={() => gdprAction("send_privacy")}>
+                        <i className="bi bi-send me-1" />
+                        Invia Privacy
+                      </button>
+                    ) : (
+                      <button className="btn btn-gdpr-outline" type="button" disabled>
+                        <i className="bi bi-send me-1" />
+                        Invia Privacy
+                      </button>
+                    )}
+                  </>
+                )}
               </div>
 
-              <div className="gdpr-upload-box mt-3">
-                <div className="fw-semibold small mb-2">Carica il PDF firmato manualmente</div>
-                <input
-                  className="form-control mb-2"
-                  type="file"
-                  name="gdpr_signed_pdf"
-                  accept="application/pdf"
-                />
+              {gdpr?.status === "draft" ? (
+                <div className="gdpr-upload-box mt-3">
+                  <div className="fw-semibold small mb-2">Carica il PDF firmato manualmente</div>
+                  <input
+                    key={gdprFileKey}
+                    className="form-control mb-2"
+                    type="file"
+                    accept="application/pdf"
+                    onChange={(e) => setGdprFile(e.target.files?.[0] ?? null)}
+                  />
+                  <button className="btn btn-outline-secondary w-100" type="button" disabled={busy} onClick={gdprManualUpload}>
+                    <i className="bi bi-upload me-1" />
+                    Carica PDF firmato
+                  </button>
+                </div>
+              ) : null}
+
+              {gdpr?.status === "pending" && gdpr.pendingPreviewUrl ? (
+                <a className="btn btn-outline-secondary w-100 mt-3" href={gdpr.pendingPreviewUrl} target="_blank" rel="noopener">
+                  <i className="bi bi-box-arrow-up-right me-1" />
+                  Apri richiesta di firma
+                </a>
+              ) : null}
+
+              {gdpr?.status === "signed" && gdprOfficialOpenUrl ? (
+                <a className="btn btn-outline-secondary w-100 mt-3" href={gdprOfficialOpenUrl} target="_blank" rel="noopener">
+                  <i className="bi bi-box-arrow-up-right me-1" />
+                  Apri PDF ufficiale
+                </a>
+              ) : null}
+
+              {gdpr && (gdpr.status === "pending" || gdpr.status === "signed") ? (
                 <button
-                  className="btn btn-outline-secondary w-100"
-                  type="submit"
-                  name="gdpr_action"
-                  value="manual_upload"
+                  className="btn btn-outline-danger w-100 mt-3"
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    gdprAction(
+                      "reset",
+                      "Eseguire il reset GDPR? Il PDF firmato precedente restera conservato nei documenti cliente e i consensi torneranno modificabili.",
+                    )
+                  }
                 >
-                  <i className="bi bi-upload me-1" />
-                  Carica PDF firmato
+                  <i className="bi bi-arrow-counterclockwise me-1" />
+                  Reset GDPR
                 </button>
-              </div>
-            </form>
+              ) : null}
+            </div>
           </div>
 
           <div className="card p-3 p-lg-4 consent-quick-card">

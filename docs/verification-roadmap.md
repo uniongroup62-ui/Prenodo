@@ -903,9 +903,54 @@ CONSUMATORI R2 IMPLEMENTATI E VERIFICATI LIVE (2026-07-02, dati test ripuliti):
     TEMPLATE DEL TENANT via consent_modules + box consensi con firma e
     caption) -> doppia firma respinta col messaggio legacy. Cleanup totale
     (oggetto R2 + customer_documents + campi gdpr del cliente ripristinati).
-  * NON ancora portato: il lato MANAGE della richiesta firma (genera token +
-    invia email dalla scheda cliente) e consent_public.php (moduli consenso
-    via token — stesso pattern, prossimo passo).
+  * ~~NON ancora portato: il lato MANAGE della richiesta firma e
+    consent_public.php~~ -> FATTO, vedi blocco successivo.
+
+- CONSENSI CLIENTE MANAGE + MODULI CONSENSO PUBBLICI (port COMPLETO di
+  client_consents.php + ConsentModules.php lato record + consent_public.php —
+  testato live end-to-end, PDF verificato visivamente):
+  * lib/consent-records.ts: record client_consent_records (stati
+    draft/pending/signed normalizzati come il GDPR), snapshot modulo
+    (consent_module_snapshot_create: footer_mode/footer_title, v2 per
+    gdpr_consents / v1 per signature_only), filename
+    CONSENSO_<SLUG>_<NOME>_<COGNOME>.pdf, associa/pending/signed/reset,
+    moduli attivi disponibili (esclude privacy_gdpr e i gia' associati) e le
+    4 email legacy (firma GDPR, PDF privacy ufficiale, firma modulo, PDF
+    modulo firmato) con bottone brand #8a1d52 dentro il template moderno;
+    mittente privacy_mail_sender -> con SES il From resta il dominio
+    verificato e l'email del business va in Reply-To (divergenza doc.).
+  * /api/manage/client-gdpr (perm client_consents.manage): GET stato pagina
+    completo (box GDPR + record raggruppati per stato + moduli associabili),
+    GET do=gdpr_print / do=consent_print (PDF solo in bozza, guard legacy),
+    POST _mode=gdpr_action (save_consents/send_signature/manual_upload/
+    send_privacy/reset — messaggi esatti, ROLLBACK di token/stato se l'email
+    non parte, consensi salvati prima di ogni azione in bozza come il form
+    legacy), _mode=associate_module, _mode=consent_record_action
+    (send_signature/manual_upload/send_pdf/remove/reset con i guard "Il
+    modulo e bloccato..." / documento ufficiale collegato / modulo
+    disattivato). Upload PDF firmato: 10MB, solo application/pdf, R2 privato
+    t{tid}/clients/{cid}/<random>.pdf + customer_documents.
+  * client_consents-content.tsx ricablato da forma-morta-verso-index.php a
+    interamente DB-backed: checkbox consensi (bloccati fuori bozza), bottoni
+    per stato, upload manuale, conferme window.confirm coi testi
+    data-client-consents-confirm, Apri richiesta di firma / Apri PDF
+    ufficiale, associazione moduli con select, gruppi Da completare/In
+    attesa/Firmati.
+  * /api/public/consent + /<slug>/consent_public?token= (ConsentPublicFaithful):
+    gemella della pagina GDPR sul record modulo (GET dati/PDF con footer del
+    modulo, POST firma con caption "Firmato elettronicamente il ...",
+    documento 'X firmato', guard "Il documento risulta gia confermato.").
+  * FIX robustezza scoperto nei test: un PNG firma CORROTTO mandava pdfkit
+    in Z_DATA_ERROR asincrono (uncaughtException + richiesta appesa minuti)
+    — ora privacyDecodeSignature valida l'integrita' (signature PNG + IDAT
+    inflateSync, SOI per JPEG) e risponde subito "Firma non valida".
+  * Test live (cliente + modulo usa-e-getta, tutto ripulito incl. R2):
+    save_consents, stampa PDF bozza, send_signature con rollback (email non
+    configurata), manual_upload -> signed, guard su save/print/remove/delete
+    documento, send_privacy/send_pdf, reset, associa/rimuovi modulo,
+    pending -> firma pubblica -> signed con PDF ufficiale (visivamente
+    corretto: footer "Conferma e firma cliente", firma embedded, caption),
+    doppia firma respinta, firma corrotta respinta.
 
 Prossimi consumatori (stesso pattern): foto nelle schede cliente
 (client_sheet_records values_json — legato al porting completo delle schede,
@@ -917,8 +962,10 @@ collegano quando si porta quella vista.
   legacy consuma al "done") — approvato.
 - Promozioni: applicazione con click esplicito "Rileva" (legacy auto-applica).
 - point_lots/scadenza punti non scritti (subsystem dormiente anche di fatto nel legacy).
-- Allegati (costi/magazzino/schede/foto) rinviati a infra S3.
-- PDF preventivi/GDPR + email voucher rinviati (infra SES).
+- Allegati: costi/documenti/foto operatori/gallery prodotti/categorie FATTI su
+  R2; restano foto schede cliente (col porting schede) e immagini marketplace.
+- PDF preventivi/GDPR/consensi FATTI (pdfkit); invio email attivo appena SES
+  e' configurato (emailConfigured) — i flussi gestiscono gia' il fallimento.
 - Limiti per-cliente/giorno promozioni registrati ma non applicati al checkout.
 
 ## Bug trovati + fixati in questa verifica (2026-07-02)

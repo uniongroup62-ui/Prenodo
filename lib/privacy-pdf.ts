@@ -10,6 +10,7 @@ import "server-only";
 // data URL png/jpeg e viene incorporata direttamente (il legacy convertiva
 // PNG->JPEG solo perché il suo MiniPdf embeddava solo DCTDecode).
 
+import { inflateSync } from "node:zlib";
 import PDFDocument from "pdfkit";
 import {
   privacyConsentLabelsForSnapshot,
@@ -65,6 +66,34 @@ function wrapText(text: string, chars: number): string[] {
   return out.length ? out : [""];
 }
 
+// Verifica di integrità del PNG: pdfkit decodifica i chunk IDAT con zlib in
+// modo asincrono e un PNG corrotto produce un uncaughtException (Z_DATA_ERROR)
+// che lascia la richiesta appesa — validiamo PRIMA con inflateSync.
+function assertValidSignatureImage(bytes: Buffer, mime: string): void {
+  if (mime === "image/jpeg") {
+    if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) throw new Error("Firma non valida");
+    return;
+  }
+  const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  if (bytes.length < 8 || !bytes.subarray(0, 8).equals(PNG_SIG)) throw new Error("Firma non valida");
+  const idat: Buffer[] = [];
+  let off = 8;
+  while (off + 8 <= bytes.length) {
+    const len = bytes.readUInt32BE(off);
+    const type = bytes.toString("latin1", off + 4, off + 8);
+    if (off + 12 + len > bytes.length) throw new Error("Firma non valida");
+    if (type === "IDAT") idat.push(bytes.subarray(off + 8, off + 8 + len));
+    if (type === "IEND") break;
+    off += 12 + len;
+  }
+  if (!idat.length) throw new Error("Firma non valida");
+  try {
+    inflateSync(Buffer.concat(idat));
+  } catch {
+    throw new Error("Firma non valida");
+  }
+}
+
 // privacy_pdf_decode_signature_payload: data URL png/jpeg, max 3MB il payload,
 // max 2MB i byte; stringhe errore legacy.
 export function privacyDecodeSignature(dataUrl: string): { bytes: Buffer; mime: string } {
@@ -76,7 +105,9 @@ export function privacyDecodeSignature(dataUrl: string): { bytes: Buffer; mime: 
   const bytes = Buffer.from(m[2].replace(/\s+/g, ""), "base64");
   if (!bytes.length) throw new Error("Firma non valida");
   if (bytes.length > 2 * 1024 * 1024) throw new Error("Firma troppo pesante");
-  return { bytes, mime: m[1].toLowerCase() === "png" ? "image/png" : "image/jpeg" };
+  const mime = m[1].toLowerCase() === "png" ? "image/png" : "image/jpeg";
+  assertValidSignatureImage(bytes, mime);
+  return { bytes, mime };
 }
 
 export type PrivacyPdfOptions = {

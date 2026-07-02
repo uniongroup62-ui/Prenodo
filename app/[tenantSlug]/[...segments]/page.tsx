@@ -91,6 +91,7 @@ import { GiftBoxVoucherFaithful } from "@/components/public/giftbox-voucher-fait
 import { GiftCardVoucherFaithful } from "@/components/public/giftcard-voucher-faithful";
 import { QuotePublicFaithful } from "@/components/public/quote-public-faithful";
 import { GdprPublicFaithful } from "@/components/public/gdpr-public-faithful";
+import { ConsentPublicFaithful } from "@/components/public/consent-public-faithful";
 import { currentManageSession } from "@/lib/manage-auth";
 import { shouldPromptOnboarding } from "@/lib/manage-onboarding";
 
@@ -201,6 +202,12 @@ export default async function TenantPage({
   //   /<slug>/gdpr_public?token=<64hex> — le email di richiesta firma linkano qui.
   if (page === "gdpr_public") {
     return <GdprPublicFaithful slug={tenantSlug} token={query.token ?? ""} />;
+  }
+
+  // Public consent-module signature page (consent_public.php: token 64 hex):
+  //   /<slug>/consent_public?token=<64hex> — le email dei moduli linkano qui.
+  if (page === "consent_public") {
+    return <ConsentPublicFaithful slug={tenantSlug} token={query.token ?? ""} />;
   }
 
   // Public quote viewer (quote_public.php: accesso via token, no login):

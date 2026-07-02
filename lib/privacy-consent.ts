@@ -35,6 +35,9 @@ export type PrivacySnapshot = {
   footer_mode?: string;
   footer_title?: string;
   consent_rows?: string[];
+  module_id?: number;
+  module_name?: string;
+  module_type?: string;
 };
 
 const clean = (v: unknown) => String(v ?? "").trim();
@@ -170,13 +173,17 @@ export function privacyClientDisplayName(client: RowDataPacket): string {
   return clean(client.full_name) || "Cliente";
 }
 
-function privacyClientNameParts(client: RowDataPacket): [string, string] {
+export function privacyClientNameParts(client: RowDataPacket): [string, string] {
   const first = clean(client.first_name);
   const last = clean(client.last_name);
   if (first || last) return [first, last];
   const parts = privacyClientDisplayName(client).split(/\s+/).filter(Boolean);
   if (parts.length <= 1) return [parts[0] ?? "Cliente", ""];
   return [parts[0], parts.slice(1).join(" ")];
+}
+
+export function privacySlugPiece(value: string): string {
+  return slugPiece(value);
 }
 
 function slugPiece(value: string): string {
