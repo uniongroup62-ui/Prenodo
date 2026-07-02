@@ -714,6 +714,11 @@ OTP/reset (fix TZ), conferme su DB.
   (/slug/booking?book_prepaid=id&service_id=). Test live con setup usa-e-getta
   (credito+movimenti, giftcard, punti+tessera, sezioni vuote gracefully),
   cleanup completo incluso il ledger credit_adjustments.
+- P5 CHIUSO: azioni post-conferma del wizard pubblico (booking.php ~8928-8931):
+  pulsante "Aggiungi al calendario" (.ics via /api/account/ics?code=, mostrato
+  solo con sessione cliente attiva E prenotazione collegata all'account —
+  l'endpoint serve solo le prenotazioni del cliente loggato, come il legacy
+  login-gated) + pulsante "Stampa" (window.print) nell'alert di conferma.
 - Q2 CHIUSO: modali dettaglio residui nel drawer. quickBookClientResidualsDetail
   esteso con gli id sorgente (prepaid id/service_id, giftcard id, package id +
   service_id per seduta, giftbox instance_id + giftbox_item_id/service_id,

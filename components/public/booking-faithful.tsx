@@ -127,6 +127,9 @@ type BookingConfirmation = {
   time: string;
   total: number;
   discount: number;
+  // Set from the confirm response: true when the booking is linked to the
+  // logged customer account (gates the .ics download button).
+  accountLinked?: boolean;
   staffId: number | null;
   locationId: number | null;
 };
@@ -634,7 +637,9 @@ export function BookingFaithful({
       });
       const data = await response.json();
       if (!data.ok) throw new Error(data.error || "Prenotazione non completata.");
-      setConfirmation(data.confirmation as BookingConfirmation);
+      // accountLinked gates the .ics button: the calendar endpoint serves only
+      // the LOGGED customer's own bookings (the legacy page was login-gated).
+      setConfirmation({ ...(data.confirmation as BookingConfirmation), accountLinked: Boolean(data.accountLinked) });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Prenotazione non completata.");
     } finally {
@@ -1262,6 +1267,29 @@ export function BookingFaithful({
                     </div>
                     <div className="small mt-1">
                       Prenotazione <strong>{confirmation.publicCode}</strong> in attesa di conferma per {formatDateIt(confirmation.date)} alle {confirmation.time}.
+                    </div>
+                    {/* Legacy confirmation actions (booking.php ~8928-8931): the .ics
+                        download (login-gated, hence accountLinked) + Stampa. */}
+                    <div className="d-flex gap-2 mt-2">
+                      {/* .ics only for a LOGGED session (custBenefits.logged): the endpoint
+                          serves the session account's own bookings; accountLinked alone
+                          may be true for an email-matched account without a session. */}
+                      {confirmation.accountLinked && custBenefits?.logged ? (
+                        <a className="btn btn-sm btn-outline-success" href={`/api/account/ics?code=${encodeURIComponent(confirmation.publicCode)}`}>
+                          <i className="bi bi-calendar2-plus me-1" />
+                          Aggiungi al calendario
+                        </a>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-outline-secondary"
+                        onClick={() => {
+                          if (typeof window !== "undefined") window.print();
+                        }}
+                      >
+                        <i className="bi bi-printer me-1" />
+                        Stampa
+                      </button>
                     </div>
                   </div>
                 ) : null}
