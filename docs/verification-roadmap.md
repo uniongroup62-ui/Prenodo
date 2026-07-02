@@ -782,15 +782,24 @@ Implementato:
   immagine non supportato...". L'upload reale si verifica appena esistono i
   bucket.
 
-SETUP R2 (da fare dall'utente, poi in .env.local e negli env Amplify):
-  1. Dashboard Cloudflare -> R2 -> crea 2 bucket (es. prenodo-public,
-     prenodo-private), giurisdizione EU.
-  2. Al bucket public collega un custom domain (es. media.<dominio>) o abilita
-     r2.dev -> R2_PUBLIC_BASE_URL.
-  3. Crea un API token R2 (Object Read & Write sui 2 bucket) ->
-     R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY; R2_ACCOUNT_ID dalla dashboard.
-  4. Variabili: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
-     R2_BUCKET_PUBLIC, R2_BUCKET_PRIVATE, R2_PUBLIC_BASE_URL.
+SETUP R2 — COMPLETATO (2026-07-02): bucket prenodo-public/prenodo-private
+(giurisdizione EU), token creato, variabili in .env.local. NOTA: i bucket EU
+usano un ENDPOINT dedicato (...eu.r2.cloudflarestorage.com) -> aggiunta la
+variabile R2_ENDPOINT (fallback: endpoint standard dall'account id).
+R2_PUBLIC_BASE_URL per ora è il sottodominio r2.dev DI SVILUPPO
+(pub-...r2.dev); quando i DNS del custom domain (media.<dominio>) sono
+propagati va SOSTITUITO (+ ricaricati gli eventuali photo_path già salvati,
+che contengono l'URL completo r2.dev). Le stesse variabili vanno replicate
+negli env Amplify al deploy.
+
+VERIFICA LIVE end-to-end (foto operatore, staff di test poi ripristinato):
+  - upload PNG -> oggetto su t25/staff/<id>-<ts>.png, photo_path = URL
+    pubblico, GET pubblico 200 image/png, photoPath presente nel context
+    calendario (avatar colonna Giorno);
+  - sostituzione -> nuovo oggetto, il VECCHIO risponde 404 (cancellato);
+  - remove_photo -> photo_path NULL e oggetto 404;
+  - round-trip bucket PRIVATO: PUT + presigned GET (200, contenuto identico)
+    + DELETE, con cleanup.
 
 Prossimi consumatori (stesso pattern): immagini categorie/servizi e
 marketplace (bucket public), allegati costi/magazzino + schede cliente +
