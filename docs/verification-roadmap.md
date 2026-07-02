@@ -838,10 +838,24 @@ CONSUMATORI R2 IMPLEMENTATI E VERIFICATI LIVE (2026-07-02, dati test ripuliti):
   sempre "" -> "Non disponibile"). Verificato live: upload -> lista ->
   download presigned 200 %PDF -> delete; dati test ripuliti.
 
-Prossimi consumatori (stesso pattern): immagini marketplace/prodotti
-(product_images: galleria multi-immagine con ordinamento — feature dedicata),
-foto nelle schede cliente (client_sheet_records values_json), e i PDF
-(preventivi/GDPR/consensi) quando si porta la generazione.
+- GALLERIA IMMAGINI PRODOTTO (port delle azioni AJAX di products.php:
+  upload_image_ajax/delete_image_ajax/set_main_image + ProductPageHelpers):
+  route /api/manage/product-image — GET lista, POST multipart con upload
+  multiplo `images` (MAX 5 per prodotto, 5MB l'una, jpg/png/webp/gif, errori
+  per-file come il legacy), delete (oggetto R2 + riga + rinormalizzazione
+  ordinamento) e set_main (riordino legacy 0,10,20...; la prima è la
+  principale). image_path = URL pubblico R2. Form prodotto: sezione
+  "Immagini prodotto" — in EDIT galleria interattiva (thumb, badge/bottone
+  Principale, cestino, upload immediato); in CREAZIONE i file selezionati
+  partono dopo il save (id risolto dalla lista). Verificato live: upload x2
+  -> set main (riordino 0/10) -> delete (lista rinormalizzata) -> pulizia.
+  Divergenza doc.: niente compressione/resize server (legacy 2000px).
+
+Prossimi consumatori (stesso pattern): foto nelle schede cliente
+(client_sheet_records values_json — legato al porting completo delle schede,
+oggi display-only) e i PDF (preventivi/GDPR/consensi) quando si porta la
+generazione. Le immagini prodotto nel marketplace/showcase si collegano
+quando si porta quella vista.
 
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;

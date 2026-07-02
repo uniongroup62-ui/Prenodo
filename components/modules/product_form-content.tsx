@@ -94,6 +94,15 @@ export function ProductFormContent() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // GALLERIA immagini (port delle azioni AJAX di products.php: max 5, la prima
+  // è la principale). In EDIT è interattiva (upload/set-main/delete immediati);
+  // in CREAZIONE i file selezionati vengono caricati DOPO il save (id risolto
+  // dalla lista restituita).
+  type ProductImage = { id: number; url: string; isMain: boolean };
+  const [images, setImages] = useState<ProductImage[]>([]);
+  const [imagesBusy, setImagesBusy] = useState(false);
+  const [pendingImages, setPendingImages] = useState<File[]>([]);
+  const [imagesKey, setImagesKey] = useState(0); // resetta l'input file
 
   // Load the context (categories/locations/suppliers), then prefill on edit
   // (action=get) or apply faithful new-product defaults (all active locations
@@ -189,6 +198,46 @@ export function ProductFormContent() {
     [ctx.suppliers],
   );
 
+  // Carica la galleria in EDIT (GET product-image?product_id=).
+  useEffect(() => {
+    if (action !== "edit" || form.id <= 0) return;
+    let active = true;
+    fetch(`/api/manage/product-image?slug=${encodeURIComponent(slug)}&product_id=${form.id}`, {
+      headers: { "x-tenant-slug": slug },
+    })
+      .then((r) => r.json())
+      .then((j) => {
+        if (active && Array.isArray(j.images)) setImages(j.images);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [action, form.id, slug]);
+
+  // POST verso /api/manage/product-image (upload / delete / set_main); ogni
+  // risposta porta la lista aggiornata come gli endpoint AJAX legacy.
+  async function postImages(productId: number, fd: FormData): Promise<string | null> {
+    setImagesBusy(true);
+    try {
+      fd.set("product_id", String(productId));
+      const res = await fetch(`/api/manage/product-image?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "x-tenant-slug": slug },
+        body: fd,
+      });
+      const j = await res.json().catch(() => ({}));
+      if (Array.isArray(j.images)) setImages(j.images);
+      const errs: string[] = Array.isArray(j.errors) ? j.errors : [];
+      if (!res.ok || (j.ok === false && !errs.length)) return String(j.error ?? "Errore immagini prodotto.");
+      return errs.length ? errs.join(" ") : null;
+    } catch {
+      return "Errore di rete durante il caricamento immagini.";
+    } finally {
+      setImagesBusy(false);
+    }
+  }
+
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError("");
@@ -243,6 +292,31 @@ export function ProductFormContent() {
         setSaving(false);
         return;
       }
+
+      // IMMAGINI in CREAZIONE: upload dopo il save (id risolto dalla lista
+      // restituita: match nome, id più alto). Il prodotto è GIÀ salvato.
+      if (action === "new" && pendingImages.length > 0) {
+        type SavedProduct = { id: number; name: string };
+        const list: SavedProduct[] = Array.isArray(j.products) ? j.products : [];
+        const createdId = list
+          .filter((p) => String(p.name).trim().toLowerCase() === name.toLowerCase())
+          .reduce((max, p) => Math.max(max, Number(p.id) || 0), 0);
+        if (createdId > 0) {
+          const fd = new FormData();
+          for (const file of pendingImages) fd.append("images", file);
+          const imgError = await postImages(createdId, fd);
+          if (imgError) {
+            setError(`Prodotto salvato, ma immagini non caricate: ${imgError}`);
+            setSaving(false);
+            return;
+          }
+        } else {
+          setError("Prodotto salvato, ma immagini non caricate (prodotto non identificato). Riapri il prodotto e ricaricale.");
+          setSaving(false);
+          return;
+        }
+      }
+
       backToList();
     } catch {
       setError("Errore nel salvataggio del prodotto.");
@@ -541,6 +615,97 @@ export function ProductFormContent() {
                   onChange={(e) => set("warnings", e.target.value)}
                 />
               </div>
+            </div>
+
+            {/* Galleria immagini (port del box products.php: max 5, la PRIMA è la
+                principale — set_main la porta in testa; delete con conferma).
+                In EDIT le azioni sono immediate (AJAX legacy); in CREAZIONE i file
+                partono dopo il salvataggio. */}
+            <hr className="my-3" />
+            <div className="mb-3">
+              <div className="fw-semibold mb-2">
+                <i className="bi bi-images me-1" />
+                Immagini prodotto <span className="text-muted small">(max 5, la prima è la principale)</span>
+              </div>
+              {action === "edit" && images.length > 0 ? (
+                <div className="d-flex flex-wrap gap-2 mb-2">
+                  {images.map((img) => (
+                    <div className="border rounded p-1 text-center" style={{ width: 120 }} key={img.id}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={img.url} alt="" className="rounded" style={{ width: "100%", height: 80, objectFit: "cover" }} />
+                      <div className="d-flex justify-content-between align-items-center mt-1">
+                        {img.isMain ? (
+                          <span className="badge text-bg-primary">Principale</span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-link p-0 small"
+                            disabled={imagesBusy}
+                            onClick={() => {
+                              const fd = new FormData();
+                              fd.set("set_main_img_id", String(img.id));
+                              void postImages(form.id, fd).then((err) => err && setError(err));
+                            }}
+                          >
+                            Principale
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-link text-danger p-0"
+                          title="Elimina immagine"
+                          disabled={imagesBusy}
+                          onClick={() => {
+                            if (typeof window !== "undefined" && !window.confirm("Eliminare questa immagine?")) return;
+                            const fd = new FormData();
+                            fd.set("delete_img_id", String(img.id));
+                            void postImages(form.id, fd).then((err) => err && setError(err));
+                          }}
+                        >
+                          <i className="bi bi-trash" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {action === "new" && pendingImages.length > 0 ? (
+                <div className="small text-muted mb-1">
+                  {pendingImages.length} immagini selezionate — verranno caricate al salvataggio.
+                </div>
+              ) : null}
+              <input
+                key={imagesKey}
+                className="form-control"
+                type="file"
+                name="images"
+                multiple
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                disabled={imagesBusy || (action === "edit" && images.length >= 5)}
+                onChange={(e) => {
+                  const files = Array.from(e.target.files ?? []).filter((f) => f.size > 0);
+                  const tooBig = files.find((f) => f.size > 5 * 1024 * 1024);
+                  if (tooBig) {
+                    setError("Immagine troppo grande (max 5 MB).");
+                    e.target.value = "";
+                    return;
+                  }
+                  setError("");
+                  if (action === "new") {
+                    setPendingImages(files.slice(0, 5));
+                    return;
+                  }
+                  if (files.length && form.id > 0) {
+                    const fd = new FormData();
+                    for (const file of files) fd.append("images", file);
+                    void postImages(form.id, fd).then((err) => {
+                      if (err) setError(err);
+                      setImagesKey((k) => k + 1);
+                    });
+                  }
+                }}
+              />
+              <div className="form-text">JPG, PNG, WEBP o GIF — massimo 5 MB per immagine, 5 immagini per prodotto.</div>
             </div>
 
             <hr className="my-3" />
