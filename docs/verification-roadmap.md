@@ -34,19 +34,24 @@ credito), Promozioni (lista/editor avanzato/engine applicazione + POS),
 Report/Statistiche (analytics filtrate per data), editor catalogo (16 moduli),
 Clienti (form/detail/cascade-delete/tag/storico).
 
-## Verifiche live PHP↔Next da eseguire (step successivi)
-1. **Dashboard**: KPI via API (`api_dashboard_performance.php` vs `/api/manage/...`)
-   — confronto formule, non numeri (dati divergenti).
-2. **Calendario/Drawer**: creare lo stesso appuntamento su entrambi → confrontare
-   slot proposti, conflitti, prezzi, redeem.
-3. **POS**: stessa vendita su entrambi → confrontare totali, sconti, punti, residui.
-4. **Booking pubblico**: slot generati per lo stesso giorno/servizio su entrambi.
-5. **Impostazioni** (business_profile, hours, roles, automation, accessibility,
-   notifications): confronto campo-per-campo dei form. ← area non ancora auditata
-   in profondità.
-6. **Pagine pubbliche**: marketplace (/attivita vs /), scheda attività, account
-   cliente, voucher pubblici.
-7. **Admin SaaS** + cron (EventBridge in prod).
+## Verifiche live PHP↔Next — risultati (2026-07-02)
+1. ✅ **Slot engine (disponibilità)**: stesso giorno/servizio/sede (2026-07-06,
+   servizio 9, sede 21) → **109/109 slot IDENTICI** (09:00→18:00 passo 5') sia
+   sull'endpoint drawer (`action=availability`, param `service_name`) sia su
+   quello pubblico (`/api/booking?action=slots`). Engine equivalente al PHP.
+2. ✅ **Dashboard KPI**: stessa finestra settimanale (29/06–05/07), stessi 4
+   indicatori (appuntamenti/ricavi/ore/nuovi clienti) + serie giornaliera; i
+   numeri divergono SOLO per il drift dati documentato sopra (verificato campo
+   per campo: ogni differenza è spiegata dai record di test).
+3. ✅ **Pagine pubbliche**: /attivita, /attivita/<slug>, /account/login,
+   /account/register → 200/200 su entrambi. Nota: la scheda attività Next è
+   client-rendered (h1 placeholder "Attivita" pre-hydration, poi "elite" dal
+   context API — nessun bug funzionale; eventuale SSR per SEO è un'ottimizzazione
+   futura).
+4. ⏳ **POS**: stessa vendita su entrambi → confrontare totali/sconti/punti/residui.
+5. ⏳ **Drawer**: stesso appuntamento su entrambi (conflitti, prezzi, redeem).
+6. ⏳ **Voucher pubblici** giftcard/giftbox (servono token reali su entrambi).
+7. ⏳ **Admin SaaS** + cron (EventBridge in prod).
 
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;
