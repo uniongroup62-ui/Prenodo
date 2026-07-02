@@ -1,6 +1,7 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
 import { addDbWalletMovement, dbWalletBalance, deleteFidelityCampaign, deleteFidelityCard, fidelityWalletManualMove, getFidelityEnabled, getFidelityLevelsSettings, getFidelityMembership, getFidelityPointsSettings, getFidelityWallet, getManageCreditMovements, issueFidelityCard, listDbClients, listDbWalletMovements, listFidelityCampaigns, manualCreditDebit, reactivateFidelityCard, saveFidelityCampaign, saveFidelityLevels, saveFidelityPointsSettings, setFidelityEnabled, toggleFidelityCampaign, updateFidelityCardStatus } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
+import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can, canAny } from "@/lib/role-permissions";
 import type { WalletMovementType } from "@/lib/tenant-store";
@@ -51,10 +52,15 @@ export async function GET(request: Request) {
       return Response.json({ ok: true, sourceMode: "database", wallet: await getFidelityWallet(tenantSlug, parseInteger(url.searchParams.get("client_id"), 0)) });
     }
 
-    // CREDIT movements ledger (credit_movements.php "Movimenti Credito").
+    // CREDIT movements ledger (credit_movements.php "Movimenti Credito"),
+    // paginato 20/pagina come il legacy (?page=N).
     if (url.searchParams.get("action") === "credit") {
       if (!can(session.user.perms, "credit_movements.manage") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso movimenti credito mancante.", 403);
-      return Response.json({ ok: true, sourceMode: "database", credit: await getManageCreditMovements(tenantSlug, parseInteger(url.searchParams.get("client_id"), 0)) });
+      return Response.json({
+        ok: true,
+        sourceMode: "database",
+        credit: await getManageCreditMovements(tenantSlug, parseInteger(url.searchParams.get("client_id"), 0), parseInteger(url.searchParams.get("page"), 1)),
+      });
     }
 
     const clients = await listDbClients({ slug: tenantSlug });
@@ -101,9 +107,17 @@ export async function POST(request: Request) {
     }
 
     // CREDIT manual debit (port of credit_movements.php manual_credit_debit).
+    // La sede corrente è obbligatoria (guard legacy "Seleziona una sede dalla
+    // barra superiore..."): risolta qui dal contesto sedi e passata al writer
+    // per le colonne location_id/location_name su credit_adjustments.
     if (body.action === "credit_debit" || body._mode === "manual_credit_debit") {
       if (!can(session.user.perms, "credit_movements.manage") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso movimenti credito mancante.", 403);
-      const result = await manualCreditDebit(tenantSlug, parseInteger(body.client_id, 0), body.amount, String(body.note ?? ""), session.user.id);
+      const locationContext = await getManageLocationContext(tenantSlug);
+      const currentLocation = locationContext.locations.find((loc) => loc.id === locationContext.currentLocationId);
+      const result = await manualCreditDebit(tenantSlug, parseInteger(body.client_id, 0), body.amount, String(body.note ?? ""), session.user.id, {
+        id: locationContext.currentLocationId,
+        name: currentLocation?.name ?? "",
+      });
       return Response.json({ sourceMode: "database", ...result });
     }
 

@@ -11503,12 +11503,17 @@ export type CreditMovementsData = {
   movements: CreditMovement[];
   pending: CreditPending[];
   total: number;
+  // Paginazione server 20/pagina (legacy $crPerPage=20, credit_movements.php:44).
+  page: number;
+  perPage: number;
+  totalPages: number;
 };
 
 // Full credit ledger (port of credit_movements.php's UNION): recharges (+ their
 // storno), appointment + sale credit usage, and manual credit_adjustments — merged,
-// newest first. Plus the pending-credit list (open appointments holding credit).
-export async function getManageCreditMovements(slug: string, clientId: number): Promise<CreditMovementsData> {
+// newest first, paginato 20/pagina come il legacy. Plus the pending-credit list
+// (open appointments holding credit).
+export async function getManageCreditMovements(slug: string, clientId: number, pageRaw = 1): Promise<CreditMovementsData> {
   const scoped = clientId > 0;
   const cw = (col: string): { where: string; params: unknown[] } => (scoped ? { where: `${col} = ?`, params: [clientId] } : { where: "", params: [] });
 
@@ -11629,7 +11634,10 @@ export async function getManageCreditMovements(slug: string, clientId: number): 
     return b.sourceId - a.sourceId;
   });
   const total = movements.length;
-  const capped = movements.slice(0, 300);
+  const perPage = 20;
+  const totalPages = Math.max(1, Math.ceil(total / perPage));
+  const page = Math.min(Math.max(1, Math.trunc(Number(pageRaw) || 1)), totalPages);
+  const capped = movements.slice((page - 1) * perPage, page * perPage);
 
   // Pending credit: open appointments still holding credit.
   const pc = cw("client_id");
@@ -11644,43 +11652,82 @@ export async function getManageCreditMovements(slug: string, clientId: number): 
     creditUsed: roundMoney(Number(a.credit_used ?? 0)),
   }));
 
-  return { clients, movements: capped, pending, total };
+  return { clients, movements: capped, pending, total, page, perPage, totalPages };
+}
+
+// La tessera ATTIVA del cliente per il tracciamento card_id/card_code sulle
+// rettifiche credito (port of credit_wallet_active_card, Helpers.php ~9917):
+// status='active', non scaduta, la più recente.
+async function creditWalletActiveCard(slug: string, clientId: number): Promise<{ id: number; code: string } | null> {
+  const rows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "cards",
+    columns: "id, code",
+    where: "client_id = ? AND status = 'active' AND (expires_at IS NULL OR expires_at >= CURRENT_DATE)",
+    params: [clientId],
+    orderBy: "id DESC",
+    limit: 1,
+  }).catch(() => [] as RowDataPacket[]);
+  if (!rows[0]) return null;
+  return { id: Number(rows[0].id ?? 0), code: String(rows[0].code ?? "") };
 }
 
 // Manually scale (debit) a client's credit wallet (port of credit_movements.php
-// manual_credit_debit): blocked-client + note-required + sufficient-balance guards,
-// writes a credit_adjustments debit row and decrements clients.credit_balance.
-export async function manualCreditDebit(slug: string, clientId: number, amountRaw: unknown, noteRaw: string, by: number): Promise<{ ok: true; message: string; movements: CreditMovementsData }> {
+// manual_credit_debit): blocked-client + note-required + sufficient-balance +
+// SEDE-obbligatoria guards (messaggi legacy con fmt_money), writes a
+// credit_adjustments debit row (card_id/card_code della tessera attiva +
+// location_id/location_name) and decrements clients.credit_balance.
+export async function manualCreditDebit(
+  slug: string,
+  clientId: number,
+  amountRaw: unknown,
+  noteRaw: string,
+  by: number,
+  location: { id: number; name: string },
+): Promise<{ ok: true; message: string; movements: CreditMovementsData }> {
   if (clientId <= 0) throw new Error("Seleziona un cliente.");
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, full_name, credit_balance, is_blocked", where: "id = ?", params: [clientId], limit: 1 });
   if (!rows[0]) throw new Error("Cliente non trovato.");
-  if (Number(rows[0].is_blocked ?? 0) === 1) throw new Error("Cliente bloccato: operazione non consentita.");
+  if (Number(rows[0].is_blocked ?? 0) === 1) {
+    // client_block_operational_message() legacy.
+    throw new Error("Questo cliente è disattivato e non può essere utilizzato in Pagamenti o Quick Booking finché non viene riattivato.");
+  }
 
   const amount = roundMoney(Number(String(amountRaw ?? "").replace(",", ".")));
   if (!Number.isFinite(amount) || amount <= 0.00001) throw new Error("Inserisci un importo valido.");
-  if (amount > 99999999.99) throw new Error("Importo troppo alto. Massimo 99999999.99.");
+  if (amount > 99999999.99) throw new Error(`Importo troppo alto. Massimo ${formatMoneyIt(99999999.99)}.`);
 
   const note = String(noteRaw ?? "").trim().slice(0, 255);
   if (note === "") throw new Error("Inserisci una nota per motivare lo scalo manuale.");
 
+  // Sede obbligatoria (credit_movements.php ~160-161).
+  if (!location || location.id <= 0) {
+    throw new Error("Seleziona una sede dalla barra superiore prima di scalare il credito.");
+  }
+
   const balanceBefore = roundMoney(Number(rows[0].credit_balance ?? 0));
-  if (balanceBefore + 0.00001 < amount) throw new Error(`Credito insufficiente. Saldo attuale € ${balanceBefore.toFixed(2)}.`);
+  if (balanceBefore + 0.00001 < amount) throw new Error(`Credito insufficiente. Saldo attuale € ${formatMoneyIt(balanceBefore)}.`);
   const balanceAfter = roundMoney(balanceBefore - amount);
 
+  const activeCard = await creditWalletActiveCard(slug, clientId);
   await tenantInsert(await tenantTable(slug, "credit_adjustments"), {
     client_id: clientId,
+    card_id: activeCard?.id ?? null,
+    card_code: activeCard?.code || null,
     direction: "debit",
     amount,
     delta_amount: -amount,
     balance_before: balanceBefore,
     balance_after: balanceAfter,
     note,
+    location_id: location.id,
+    location_name: String(location.name ?? "").slice(0, 190) || null,
     created_by: by > 0 ? by : null,
     created_at: new Date(),
   });
   await tenantUpdate({ slug, table: "clients", id: clientId, values: { credit_balance: balanceAfter } });
 
-  return { ok: true, message: `Credito scalato manualmente: -€ ${amount.toFixed(2)}.`, movements: await getManageCreditMovements(slug, clientId) };
+  return { ok: true, message: `Credito scalato manualmente: -€ ${formatMoneyIt(amount)}.`, movements: await getManageCreditMovements(slug, clientId) };
 }
 
 async function getSingleClient(slug: string, id: number): Promise<ManagedClient> {

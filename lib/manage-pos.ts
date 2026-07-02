@@ -538,7 +538,26 @@ export async function checkoutManageSale(
   const total = roundMoney(Math.max(0, subtotal - discount));
   const payments = normalizePayments(input.payments, total);
   const paidAmount = roundMoney(payments.reduce((sum, payment) => sum + payment.amount, 0));
-  if (paidAmount + 0.00001 < total) throw new Error("Pagamento insufficiente.");
+  // RATEIZZAZIONE (P5 semantica acconto): con un piano rate attivo in cassa entra
+  // solo l'ACCONTO — il residuo è finanziato dalle rate (il legacy non valida
+  // affatto gli importi: il floor sull'acconto è la traduzione fedele del flusso).
+  const activePlan =
+    input.installmentPlan && client.id > 0 && total > 0.00001 && Math.max(1, Math.round(input.installmentPlan.count)) >= 2
+      ? input.installmentPlan
+      : null;
+  // Stesso clamp di createManageInstallmentPlan (acconto < totale).
+  const planDownPayment = activePlan ? roundMoney(Math.min(Math.max(0, activePlan.downPayment ?? 0), Math.max(0, total - 0.01))) : 0;
+  const paidFloor = activePlan ? planDownPayment : total;
+  if (paidAmount + 0.00001 < paidFloor) throw new Error("Pagamento insufficiente.");
+
+  // Nota vendita legacy (pos.php 4666-4669): "Rateizzazione: acconto € X •
+  // residuo € Y • N rate • prima scadenza YYYY-MM-DD".
+  const installmentNoteLine = activePlan
+    ? `Rateizzazione: acconto € ${formatMoney(planDownPayment)}` +
+      ` • residuo € ${formatMoney(Math.max(0, total - planDownPayment))}` +
+      ` • ${Math.max(2, Math.min(120, Math.round(activePlan.count)))} rate` +
+      ` • prima scadenza ${normalizeInstallmentDate(activePlan.firstDueDate ?? "") || addDaysIso(todayIso(), 30)}`
+    : "";
 
   // FIDELITY points EARNED on this sale. The earn base is the "totale pagato, netto sconti e al
   // netto di credito/GiftCard usati" (pos.php ~4671-4695): the sale total AFTER discounts MINUS the
@@ -583,7 +602,7 @@ export async function checkoutManageSale(
     discount,
     total,
     coupon_code: emptyToNull(couponCode),
-    notes: saleNotes(input.notes, input.appointmentId, baseMethod),
+    notes: saleNotes(input.notes, input.appointmentId, baseMethod, installmentNoteLine),
     status: "done",
     // IN-POS quote import: link the sale back to the source quote (faithful to pos.php:4802
     // UPDATE sales SET source_quote_id). The quote itself is flipped to 'converted' below.
@@ -5328,11 +5347,13 @@ function emptyToNull(value: unknown): string | null {
 // legacy POS likewise records the payment type as a notes line ("Tipo pagamento: ...").
 const BASE_METHOD_MARKER = "[posmethod:";
 
-function saleNotes(notes: unknown, appointmentId?: number, baseMethod?: PosPaymentMethod): string | null {
+function saleNotes(notes: unknown, appointmentId?: number, baseMethod?: PosPaymentMethod, installmentLine?: string): string | null {
   const lines = [];
   const text = clean(notes, 2000);
   if (text) lines.push(text);
   if (appointmentId && appointmentId > 0) lines.push(`Appuntamento #${appointmentId}`);
+  // Nota rateizzazione legacy (acconto/residuo/rate/prima scadenza).
+  if (installmentLine) lines.push(installmentLine);
   if (baseMethod) lines.push(`${BASE_METHOD_MARKER}${baseMethod}]`);
   return lines.length ? lines.join("\n") : null;
 }

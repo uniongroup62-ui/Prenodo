@@ -1018,19 +1018,19 @@ GAP CONFERMATI DAI TEST (in ordine di gravita'):
   'service' con nome nudo "Ricarica"/"GiftCard" (legacy: 'product' +
   "GiftCard (CODE)" / "Ricarica credito - titolo (+bonus)"). Impatta le
   etichette dinamiche dei Movimenti e il matching R#/GC nelle note.
-- P5 rateizzazione semantica tender: il server esige pagamento pieno
+- [CHIUSO 2026-07-03] P5 rateizzazione semantica tender: il server esige pagamento pieno
   ("Pagamento insufficiente") e la UI aggira inviando l'intero totale anche
   quando in cassa entra solo l'acconto; il legacy non valida gli importi e
   annota "acconto X - residuo Y".
-- P6 credito: solo clients.credit_balance (manca il modello cards.credit del
+- [PARZIALE 2026-07-03] P6 credito: solo clients.credit_balance (manca il modello cards.credit del
   legacy); scalo manuale senza sede obbligatoria ne' colonne location/card su
   credit_adjustments.
 - P7 fidelity_wallet: manca il sottosistema lotti/scadenze punti
   (point_lots): calendario scadenze, in-scadenza, avvisi cron/lock-lots,
   tabella warn_locked; clients.points aggiornato direttamente.
-- P8 paginazioni server (20/pag) mancanti su credit_movements (cap 300) e
+- [PARZIALE 2026-07-03] P8 paginazioni server (20/pag) mancanti su credit_movements (cap 300) e
   fidelity_wallet.
-- P9 formattazione messaggi: importi con punto invece di virgola nei
+- [PARZIALE 2026-07-03] P9 formattazione messaggi: importi con punto invece di virgola nei
   messaggi credito; label punti hardcoded "Punti" invece della label tenant.
 - P10 deleteCancelledSale non purga gli artefatti emessi ne' i movimenti
   commissioni (TODO dichiarato manage-pos.ts:1002) e senza le guardie
@@ -1078,3 +1078,20 @@ CHECK constraint: finche' il vincolo non e' allargato scrive 'service'
     CHECK (item_type IN ('service','product','package'));
 Verificato anche che l'annullo vendita continua a matchare giftcard/giftbox
 per codice col nuovo formato nome.
+
+### Chiusura gap POS P5/P6/P8/P9 (2026-07-03, 14/14 test live PASS)
+- P5 CHIUSO: con piano rate attivo il checkout richiede l'ACCONTO (non piu'
+  il totale) — la UI mostra/invia come dovuto-ora l'acconto (dueNow) e il
+  server ha il floor sull'acconto; nota vendita legacy "Rateizzazione:
+  acconto € X • residuo € Y • N rate • prima scadenza YYYY-MM-DD".
+- P6 CHIUSO (lato scalo manuale): sede obbligatoria col messaggio legacy
+  "Seleziona una sede dalla barra superiore...", colonne location_id/
+  location_name + card_id/card_code (tessera attiva via
+  creditWalletActiveCard) su credit_adjustments; messaggio cliente bloccato
+  = client_block_operational_message legacy. RESTA (deferred, sottosistema
+  card-credit): il fallback saldo su cards.credit del legacy.
+- P8 CHIUSO (credit_movements): paginazione server 20/pagina con clamp +
+  controlli Precedente/Successiva in pagina. RESTA: paginazione
+  fidelity_wallet (sottosistema punti/lotti, deferred con P7).
+- P9 CHIUSO (credito): messaggi con fmt_money italiano (virgola/migliaia).
+  RESTA: label punti dinamica del tenant (con P7/fidelity).

@@ -981,14 +981,20 @@ export function PosContent() {
   const residuiTotal = useMemo(() => roundMoney(creditUse + giftcardUse), [creditUse, giftcardUse]);
 
   // ---- base payment math ----
-  // The base method covers the remainder after residui: base = total − residui.
-  const baseAmount = useMemo(() => roundMoney(Math.max(0, total - residuiTotal)), [total, residuiTotal]);
+  // The base method covers the remainder after residui. Con RATEIZZAZIONE attiva
+  // in cassa entra solo l'ACCONTO (il residuo è finanziato dalle rate — semantica
+  // legacy): l'importo dovuto ORA è l'acconto, non il totale.
+  const dueNow = useMemo(
+    () => (installmentActive ? installmentDownPayment : total),
+    [installmentActive, installmentDownPayment, total],
+  );
+  const baseAmount = useMemo(() => roundMoney(Math.max(0, dueNow - residuiTotal)), [dueNow, residuiTotal]);
   const paidTotal = useMemo(() => roundMoney(residuiTotal + baseAmount), [residuiTotal, baseAmount]);
-  const remainingToPay = useMemo(() => roundMoney(Math.max(0, total - paidTotal)), [total, paidTotal]);
+  const remainingToPay = useMemo(() => roundMoney(Math.max(0, dueNow - paidTotal)), [dueNow, paidTotal]);
   // Residui can never exceed the balances (they are clamped above) nor the total, so the
-  // base auto-covers the rest; "insufficiente" can only happen if the total is somehow
-  // not covered (defensive — mirrors the backend "Pagamento insufficiente").
-  const paymentInsufficient = useMemo(() => total > 0 && paidTotal + 0.00001 < total, [total, paidTotal]);
+  // base auto-covers the rest; "insufficiente" can only happen if the due-now amount is
+  // somehow not covered (defensive — mirrors the backend "Pagamento insufficiente").
+  const paymentInsufficient = useMemo(() => dueNow > 0 && paidTotal + 0.00001 < dueNow, [dueNow, paidTotal]);
 
   // Reset every applied residui (used on client change, clear, and checkout success).
   const resetResiduals = useCallback(() => {

@@ -26,7 +26,7 @@ type Movement = {
   note: string;
 };
 type Pending = { id: number; publicCode: string; clientId: number; clientName: string; startsAt: string; status: string; creditUsed: number };
-type CreditData = { clients: CreditClient[]; movements: Movement[]; pending: Pending[]; total: number };
+type CreditData = { clients: CreditClient[]; movements: Movement[]; pending: Pending[]; total: number; page?: number; perPage?: number; totalPages?: number };
 
 function tenantSlug(): string {
   if (typeof window === "undefined") return "";
@@ -61,6 +61,7 @@ export function CreditMovementsContent() {
 
   const [data, setData] = useState<CreditData | null>(null);
   const [selectedClientId, setSelectedClientId] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
@@ -72,18 +73,23 @@ export function CreditMovementsContent() {
   const [note, setNote] = useState("");
 
   const load = useCallback(() => {
-    return fetch(`/api/manage/fidelity?slug=${encodeURIComponent(slug)}&action=credit${selectedClientId ? `&client_id=${selectedClientId}` : ""}`, { headers: { "x-tenant-slug": slug } })
+    return fetch(`/api/manage/fidelity?slug=${encodeURIComponent(slug)}&action=credit${selectedClientId ? `&client_id=${selectedClientId}` : ""}&page=${page}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
       .then((j) => {
         if (j?.credit) setData(j.credit as CreditData);
       })
       .catch(() => undefined)
       .finally(() => setLoading(false));
-  }, [slug, selectedClientId]);
+  }, [slug, selectedClientId, page]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  // Cambiando filtro cliente si torna alla prima pagina (come il legacy).
+  useEffect(() => {
+    setPage(1);
+  }, [selectedClientId]);
 
   const clients = useMemo(() => data?.clients ?? [], [data]);
   const movements = data?.movements ?? [];
@@ -233,6 +239,31 @@ export function CreditMovementsContent() {
                 </tbody>
               </table>
             </div>
+            {data && (data.totalPages ?? 1) > 1 ? (
+              <div className="card-footer d-flex flex-wrap justify-content-between align-items-center gap-2">
+                <div className="text-muted small">
+                  Pagina {data.page ?? 1} di {data.totalPages} • {data.total} movimenti
+                </div>
+                <div className="btn-group btn-group-sm">
+                  <button
+                    className="btn btn-outline-secondary"
+                    type="button"
+                    disabled={loading || (data.page ?? 1) <= 1}
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  >
+                    « Precedente
+                  </button>
+                  <button
+                    className="btn btn-outline-secondary"
+                    type="button"
+                    disabled={loading || (data.page ?? 1) >= (data.totalPages ?? 1)}
+                    onClick={() => setPage((p) => p + 1)}
+                  >
+                    Successiva »
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
 
