@@ -543,6 +543,25 @@ Gap residuo documentato: segment_view (modifica singolo segmento dal calendario,
 #qbSegmentViewAlert) non portato — il drawer Next apre sempre l'appuntamento
 completo.
 
+## Item 28 — Calendario: overlay "Caricamento prenotazioni..." + frecce giorno (2026-07-02, segnalato dall'utente)
+Due mancanze vs PHP nella toolbar/griglia del calendario:
+- **Overlay di caricamento mancante**: il legacy inietta #calendarLoadingOverlay
+  (card con spinner, "Caricamento prenotazioni..." / "Aggiornamento del calendario
+  in corso.", 120ms anti-flicker, hide dopo 100ms, stato errore "Impossibile
+  caricare le prenotazioni" + bottone Riprova su fetch eventi fallita). Il CSS
+  (.calendar-loading-*) era GIÀ nel calendar.css portato ma il componente non
+  renderizzava mai il markup (solo un testo piccolo nella colonna staff). Portato
+  in calendar-content.tsx: stati overlayVisible/loadError con gli stessi timer,
+  card nel .fc-view-harness, errore legacy esatto ("Non e stato possibile
+  aggiornare gli appuntamenti del calendario.") + Riprova che rilancia loadContext.
+- **Frecce ‹ › invisibili**: i bottoni prev/next esistevano ma i glifi usano il
+  font "fcicons" di FullCalendar, che nel legacy viene iniettato dal JS del CDN
+  (il <link> css del legacy è in realtà un 404 — v6 non ha css separato). Il Next
+  non carica FullCalendar -> icone vuote. Fix: @font-face fcicons (base64) +
+  .fc-icon/.fc-icon-chevron-left/right + sizing .fc .fc-button .fc-icon estratti
+  da fullcalendar@6.1.11/index.global.min.js e aggiunti a
+  public/assets/css/pages/calendar.css.
+
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;
   legacy consuma al "done") — approvato.

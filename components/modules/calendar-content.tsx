@@ -722,6 +722,20 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
   // include_unavailability: off-shift + time-off, clipped to store hours).
   const [staffUnavail, setStaffUnavail] = useState<Array<{ staffId: number; start: number; end: number }>>([]);
   const [loading, setLoading] = useState(true);
+  // Loading overlay lifecycle (port of calendarSetLoading / calendarSetLoadError,
+  // calendar.js ~88-140): the "Caricamento prenotazioni..." card appears only after
+  // 120ms of loading (anti-flicker) and hides 100ms after the load settles; a failed
+  // appointments fetch flips it to the error state with the Riprova button.
+  const [overlayVisible, setOverlayVisible] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  useEffect(() => {
+    if (loading) {
+      const t = window.setTimeout(() => setOverlayVisible(true), 120);
+      return () => window.clearTimeout(t);
+    }
+    const t = window.setTimeout(() => setOverlayVisible(false), 100);
+    return () => window.clearTimeout(t);
+  }, [loading]);
 
   // Current minute-of-day for the now-indicator line (port of FullCalendar's
   // nowIndicator + calendar.js installStaffNowIndicatorFix). Ticked every 30s by an
@@ -816,6 +830,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
   const loadContext = useCallback(
     (forDate: string, range: { from: string; to: string }) => {
       setLoading(true);
+      setLoadError("");
       // Context (staff/services/notes/businessHours + per-date note counts) for the
       // whole visible range. `date` keeps the day-of-week business-hours fallback
       // working; start/end widen the notes window so Week/Month markers are complete.
@@ -858,7 +873,11 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
         .then((j: { appointments?: Appointment[] }) => {
           setAppointments(Array.isArray(j.appointments) ? j.appointments : []);
         })
-        .catch(() => setAppointments([]))
+        .catch(() => {
+          setAppointments([]);
+          // Legacy events-failure message (calendar.js ~4778) -> error overlay + Riprova.
+          setLoadError("Non e stato possibile aggiornare gli appuntamenti del calendario.");
+        })
         .finally(() => setLoading(false));
     },
     [slug],
@@ -2852,6 +2871,44 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                 className="fc-view-harness"
                 style={{ height: view === "dayGridMonth" ? "auto" : (view === "timeGridWeek" ? weekGridHeight : gridHeight) + 44 }}
               >
+                {/* Loading/error overlay card over the agenda (port of the legacy
+                    #calendarLoadingOverlay injected by calendarEnsureLoadingOverlay):
+                    spinner + "Caricamento prenotazioni..." while loading (after the
+                    120ms anti-flicker delay); on a failed events fetch it becomes the
+                    error card ("Impossibile caricare le prenotazioni") with Riprova.
+                    The page CSS (.calendar-loading-*) styles it identically. */}
+                {overlayVisible || loadError ? (
+                  <div
+                    id="calendarLoadingOverlay"
+                    className={`calendar-loading-overlay${loadError ? " is-error" : ""}`}
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <div className="calendar-loading-panel">
+                      <div className="spinner-border text-primary calendar-loading-spinner" aria-hidden="true" />
+                      <div className="calendar-loading-copy">
+                        <div className="calendar-loading-title">
+                          {loadError ? "Impossibile caricare le prenotazioni" : "Caricamento prenotazioni..."}
+                        </div>
+                        <div className="calendar-loading-text">
+                          {loadError || "Aggiornamento del calendario in corso."}
+                        </div>
+                        {loadError ? (
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-outline-primary calendar-loading-retry"
+                            onClick={() => {
+                              setLoadError("");
+                              loadContext(date, visibleRange);
+                            }}
+                          >
+                            Riprova
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
                 <div
                   className={
                     view === "dayGridMonth"
