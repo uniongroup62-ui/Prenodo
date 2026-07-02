@@ -12,8 +12,9 @@
  * the totals box, the public note, the payment methods and the terms/footer.
  * Styled by the ported /assets/css/pages/quote_public.css.
  *
- * NOT ported (deferred infra): the "Scarica PDF" button — quote_pdf_download
- * needs the PDF generation stack (QuotePdf), deferred with S3/SES.
+ * "Scarica PDF": generato server-side da /api/public/quote/pdf (renderer
+ * pdfkit in lib/quote-pdf.ts, layout 1:1 col MiniPdf legacy); l'URL email
+ * ?format=pdf viene rediretto alla stessa route dalla page.
  */
 
 import { useEffect, useState } from "react";
@@ -138,6 +139,15 @@ export function QuotePublicFaithful({ slug, token }: { slug: string; token: stri
                 </div>
               </div>
               <div className="d-flex gap-2 flex-wrap justify-content-end">
+                {/* Scarica PDF (quote_public.php:213): generato server-side dal
+                    renderer pdfkit, stesso layout del QuotePdf legacy. */}
+                <a
+                  className="btn btn-outline-secondary"
+                  href={`/api/public/quote/pdf?slug=${encodeURIComponent(slug)}&token=${encodeURIComponent(token)}`}
+                >
+                  <i className="bi bi-filetype-pdf me-1" />
+                  Scarica PDF
+                </a>
                 <button
                   className="btn btn-primary"
                   type="button"

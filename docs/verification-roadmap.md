@@ -851,11 +851,29 @@ CONSUMATORI R2 IMPLEMENTATI E VERIFICATI LIVE (2026-07-02, dati test ripuliti):
   -> set main (riordino 0/10) -> delete (lista rinormalizzata) -> pulizia.
   Divergenza doc.: niente compressione/resize server (legacy 2000px).
 
+- PDF PREVENTIVO (port di QuotePdf.php quote_pdf_render — il MiniPdf
+  hand-rolled del legacy — con pdfkit, font Helvetica standard senza asset):
+  lib/quote-pdf.ts replica il layout 1:1 (A4/margine 40, header azienda,
+  titolo PREVENTIVO, meta N./Data/Valido, blocco Cliente, tabella bordata con
+  header grigio e re-header al salto pagina, righe multi-linea con SKU e
+  "Sconto: N%", numerici allineati a destra, box totali grigio 240pt con
+  Totale bold, paragrafi Nota/Metodi di pagamento/Condizioni/Footer, wrap
+  testo port di MiniPdf::wrapText, fallback Condizioni = quote_terms del
+  profilo). Route /api/public/quote/pdf (stesso gate token/bozza della pagina;
+  filename legacy Preventivo_<num>.pdf); la page redirige ?format=pdf alla
+  route — così l'URL PDF già presente nelle EMAIL preventivo funziona; nuovo
+  bottone "Scarica PDF" nella pagina pubblica. next.config:
+  serverExternalPackages pdfkit (legge i font AFM da node_modules a runtime).
+  VERIFICATO VISIVAMENTE: PDF 200 application/pdf, layout identico al legacy,
+  conti corretti (2x12 -10% = 21,60 + IVA 4,75 = 26,35). Dati test ripuliti.
+  NB dev: dopo la modifica di next.config è servito rm -rf .next (la cache
+  Turbopack corrotta faceva 404 su tutte le /api/manage).
+
 Prossimi consumatori (stesso pattern): foto nelle schede cliente
 (client_sheet_records values_json — legato al porting completo delle schede,
-oggi display-only) e i PDF (preventivi/GDPR/consensi) quando si porta la
-generazione. Le immagini prodotto nel marketplace/showcase si collegano
-quando si porta quella vista.
+oggi display-only) e i PDF GDPR/consensi (PrivacyPdf — la generazione ora ha
+il renderer di base) quando si portano firma e moduli. Le immagini prodotto
+nel marketplace/showcase si collegano quando si porta quella vista.
 
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;

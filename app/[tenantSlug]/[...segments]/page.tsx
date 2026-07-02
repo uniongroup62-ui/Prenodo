@@ -173,7 +173,7 @@ export default async function TenantPage({
   searchParams,
 }: {
   params: Promise<{ tenantSlug: string; segments?: string[] }>;
-  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string }>;
+  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string }>;
 }) {
   const { tenantSlug, segments } = await params;
   const query = await searchParams;
@@ -198,7 +198,12 @@ export default async function TenantPage({
 
   // Public quote viewer (quote_public.php: accesso via token, no login):
   //   /<slug>/quote_public?token=<32/64hex> — the quote emails link here.
+  //   ?format=pdf (l'URL PDF delle email) -> redirect alla route che genera
+  //   il PDF (una page React non può streammare il binario).
   if (page === "quote_public") {
+    if (query.format === "pdf") {
+      redirect(`/api/public/quote/pdf?slug=${encodeURIComponent(tenantSlug)}&token=${encodeURIComponent(query.token ?? "")}`);
+    }
     return <QuotePublicFaithful slug={tenantSlug} token={query.token ?? ""} />;
   }
 
