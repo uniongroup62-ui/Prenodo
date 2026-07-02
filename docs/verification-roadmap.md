@@ -572,6 +572,78 @@ Due mancanze vs PHP nella toolbar/griglia del calendario:
   corner spacer sticky (il wrapper overflowX annidato è stato rimosso: con uno
   scroller solo gli sticky funzionano). Mese resta auto-height come nel legacy.
 
+## Item 29 — AUDIT COMPLETO n.2 (2026-07-02): booking / quick booking / calendario
+Catalogo integrale del legacy (calendar.js 5204 righe, app.js qb* + api_appointments
+20 action, booking.php 13665 righe) confrontato feature-per-feature col Next +
+test live su entrambi gli stack. MANCANZE RILEVATE (non ancora fixate):
+
+CALENDARIO
+- C1 Card evento: manca la riga orario "HH:mm - HH:mm (NN')" come prima riga;
+  in legacy dot+badge stanno DENTRO la riga cliente (eventContent calendar.js
+  4301-4379 + prepend 4446-4531); ordine attuale Next: badge/dot riga 1, poi
+  "HH:mm Cliente". Vale per vista Giorno e Settimana.
+- C2 Multi-servizio: badge "MS" con colore accento univoco per gruppo/giorno
+  (calendar.js 4408-4444, palette 3865-3959) + hover ms-active che evidenzia
+  tutti i segmenti dello stesso appuntamento (4538-4558) — mancanti.
+- C3 Densità adattiva card corte (appt-event-tiny/compact, 4007-4030) — mancante.
+- C4 Marker note in vista GIORNO (pallino sul titolo toolbar, 759-858) —
+  mancante (Settimana/Mese presenti).
+- C5 Gating drag/resize client-side per stato (legacy: editable solo
+  pending/scheduled) — Next: blocchi sempre trascinabili, il server rifiuta
+  correttamente ("La prenotazione non e modificabile da calendario." — testato
+  live su done). Solo UX, esito identico.
+- C6 Colonna "SSO / Senza Operatore" se esistono servizi senza operatore
+  (calendar.php 54-58) — mancante (edge case).
+OK verificati: viste, filtri, note sett/mese+modale, now-indicator multi-colonna,
+bande indisponibilità, chiusure, BREAK TIME, asse dinamico fuori-orario
+(expandWindowForAppointments), ordina colonne persistente, date picker
+tri-modale, contatori, overlay caricamento, guard multi-servizio su move/resize.
+
+QUICK BOOKING
+- Q1 action qb_residui_check (conflitti redeem già usati su ALTRI appuntamenti,
+  con segnalazione + deselezione, api 5879 + app.js 770/2456-3158) — mancante.
+- Q2 Modali dettaglio residui: #qbGiftboxInfoModal, #qbPackageInfoModal,
+  #qbGiftInfoModal, #qbPrepaidServiceInfoModal, #qbGiftcardInfoModal
+  (View.php 1741-1896) — mancanti (la lista residui c'è, i 5 popup no).
+- Q3 Auto-rinnovo hold a metà TTL (qbScheduleHoldRenew app.js 3315; drawer
+  aperto >5 min = hold scade) — l'action renew_hold esiste nel Next ma il
+  drawer non la schedula mai.
+- Q4 Fidelity conflict choice: #qbFidelityChoiceBox radio discount/gift/later
+  con policy 'choice' + riga omaggio #qbFidelityGiftRow + auto-pick best gift
+  (app.js 4722-4797, 7654-7720) — mancante (fidelity_gift_redeem API già
+  portata, UI no). Già documentato.
+- Q5 segment_view (già documentato Item 27).
+- Q6 staff_for_service(s): il legacy mostra nel select operatore anche gli
+  occupati con motivo (api 5909-6171); il Next calcola l'eleggibilità
+  client-side senza stato occupato — divergenza minore.
+OK verificati: 20/20 action coperte o equivalenti, lock annullate, cancel
+reserved/executed, hold expiry recovery, coupon/promo/sconto/redeem, modale
+disponibilità, scheda cliente, trova/nuovo cliente (form completo).
+
+BOOKING PUBBLICO / AREA CLIENTE
+- P1 Step 6 "Vantaggi": i pannelli Fidelity/Credito/GiftCard esistono nel
+  markup Next ma sono statici d-none — manca mode=fidelity_preview pubblico
+  (booking.php 5700-6522) e l'applicazione al confirm. (Nel tenant di test i
+  pannelli legacy sono comunque nascosti: nessun beneficio attivo.)
+- P2 Deep-link prenotazione da residuo: book_package/book_prepaid/
+  book_giftbox/book_omaggio + service_id precompilano il wizard
+  (booking.php 2226-2331, 3034-3167) — mancanti.
+- P3 Sezioni area cliente tenant mancanti: Credito, GiftCard, Prepagati,
+  Preordini, Fidelity, Omaggi (BookingPublicUi.php 33-60; Next ha
+  Attività/Prenotazioni/Pacchetti/Preventivi/Preferiti/Profilo).
+- P4 Pagine pubbliche via token: quote_public.php (preventivo + PDF),
+  gdpr_public.php (firma GDPR), consent_public.php (firma consenso) —
+  mancanti (dipendono da infra PDF/S3 rinviata).
+- P5 Vista conferma post-invio: il legacy ha pagina dedicata con pulsanti
+  ".ics" e "Stampa" (booking.php 8824-8982); il Next mostra solo l'alert
+  "Richiesta inviata" con codice — mancano ICS/Stampa post-conferma.
+- P6 embed=1 (incorporamento su sito esterno, booking.php 9166) — mancante.
+OK verificati: gate login obbligatorio, wizard 7 step con consigliati/badge
+promo, coupon/promo step 6-7, hold countdown 150s, chiusure/eccezioni, area
+cliente (appuntamenti+annulla+ICS, pacchetti, preventivi+decisione, profilo
+con cambio email OTP, sede riferimento), impostazioni Booking (3 controlli),
+OTP/reset (fix TZ), conferme su DB.
+
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;
   legacy consuma al "done") — approvato.
