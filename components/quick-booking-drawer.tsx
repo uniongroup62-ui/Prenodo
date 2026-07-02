@@ -805,6 +805,47 @@ export function QuickBookingDrawer() {
     setHoldToken("");
   }, [releaseHold]);
 
+  // AUTO-RENEW the technical hold (port of qbScheduleHoldRenew / qbRenewAvailabilityHold,
+  // app.js ~3305-3344): the backend-channel TTL is 300s and the legacy renew delay is
+  // clamp(ttl/2, 30s..60s) = 60s, so the hold survives while the operator keeps the
+  // drawer open past the TTL. A failed renew retries in 30s (the legacy reschedules
+  // with ttl_seconds:60 -> 30s) and leaves the token/form intact — the final save
+  // validation decides. Like the legacy qbCanRenewHold, no renew fires while the tab
+  // is hidden (the chain stops). Dropping/replacing the token cancels the chain.
+  useEffect(() => {
+    if (!holdToken) return;
+    let stopped = false;
+    let timer = 0;
+    const schedule = (delayMs: number) => {
+      if (stopped) return;
+      timer = window.setTimeout(() => void renew(), delayMs);
+    };
+    const renew = async () => {
+      if (stopped) return;
+      if (typeof document !== "undefined" && document.hidden) return;
+      try {
+        const res = await fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+          body: JSON.stringify({ action: "renew_hold", appointment_hold_token: holdToken }),
+        });
+        const data: { ok?: boolean; token?: string } = await res.json().catch(() => ({}));
+        if (res.ok && data.ok && String(data.token ?? "") === holdToken) {
+          schedule(60000);
+          return;
+        }
+      } catch {
+        // network problem: keep the token and retry sooner (legacy behaviour).
+      }
+      schedule(30000);
+    };
+    schedule(60000);
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+    };
+  }, [holdToken, slug]);
+
   // Reset the whole form to "new appointment" defaults (port of qbResetForm).
   const resetForm = useCallback(() => {
     pendingCalendarSlotRef.current = false; // disarm any calendar-slot auto-hold (Item B)

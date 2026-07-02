@@ -644,6 +644,26 @@ cliente (appuntamenti+annulla+ICS, pacchetti, preventivi+decisione, profilo
 con cambio email OTP, sede riferimento), impostazioni Booking (3 controlli),
 OTP/reset (fix TZ), conferme su DB.
 
+### Esiti fix audit n.2 (stessa data)
+- C1+C2+C3+C4 CHIUSI (calendar-content.tsx): card evento rifatta fedele
+  (riga 1 "HH:mm - HH:mm (NN')" via apptTimeLine, riga 2 dot+badge stato+
+  [badge MS]+nome cliente in .fc-event-title/.appt-client-name, "• operatore"
+  solo Settimana, righe "• servizio" con bullet legacy); badge MS con accent
+  per gruppo/giorno (palette MS_ACCENT_PALETTE portata, msAccentByAppt) +
+  --ms-accent/ms-has-accent + hover ms-active su tutti i blocchi del gruppo;
+  split per-segmento anche in Settimana (expandSegments); densità adattiva
+  (tiny <28px / compact 28-54px, soglie legacy); marker note sul titolo
+  toolbar in vista Giorno. Il CSS ms-*/densità era GIÀ nel app.css portato.
+- Q3 CHIUSO (quick-booking-drawer.tsx): auto-rinnovo hold ogni 60s (clamp
+  legacy ttl/2 30-60s su TTL backend 300s), retry 30s su errore, stop a token
+  rilasciato/tab nascosta. Ciclo hold->renew->release verificato live.
+- Q1 RISOLTO SENZA PORT (analisi): qb_residui_check protegge il modello
+  legacy "consuma al done" (residui solo prenotati su appuntamenti attivi ->
+  serve sottrarre le riserve). Il Next consuma i redeem alla CREAZIONE
+  (divergenza approvata): i residui nel drawer escludono già i consumi delle
+  altre prenotazioni e il save re-valida con packageWarnings/prepaid/giftbox/
+  gift warnings. Copertura equivalente per costruzione; nessun check separato.
+
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;
   legacy consuma al "done") — approvato.

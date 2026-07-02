@@ -369,6 +369,46 @@ function timeToMin(time: string): number | null {
   return Number(m[1]) * 60 + Number(m[2]);
 }
 
+// Legacy event first row "HH:mm - HH:mm (NN′)" (calendar.js eventContent ~4350-4365):
+// start - end + duration in minutes with the prime mark; start only when no end.
+function apptTimeLine(time: string, endTime: string | null | undefined): string {
+  if (!time) return "";
+  const start = timeToMin(time);
+  const end = endTime ? timeToMin(endTime) : null;
+  if (start === null || end === null) return time;
+  const mins = end - start;
+  return `${time} - ${endTime}${mins > 0 ? ` (${mins}′)` : ""}`;
+}
+
+// Multi-servizio accent palette (calendar.js MS_ACCENT_PALETTE ~3871): colors chosen
+// to never collide with the appointment STATUS colors; same group -> same accent.
+const MS_ACCENT_PALETTE = [
+  "#7c3aed", "#06b6d4", "#f97316", "#84cc16", "#e11d48", "#14b8a6", "#a855f7", "#0ea5e9",
+  "#fb7185", "#10b981", "#8b5cf6", "#22c55e", "#eab308", "#ef4444", "#4e6da5",
+];
+
+// Segment count of a booking = the legacy ms_count (one list event per segment).
+function msCountOf(a: Appointment): number {
+  return Math.max(a.segments?.length ?? 0, a.services?.length ?? 0, 1);
+}
+
+// One VIRTUAL block per segment (the legacy per-segment list events) — used by the
+// Week view; the Day view does the same inside apptsForStaff with the staff filter.
+function expandSegments(list: Appointment[]): Appointment[] {
+  return list.flatMap((a) =>
+    a.segments && a.segments.length > 1
+      ? a.segments.map((seg) => ({
+          ...a,
+          time: seg.time,
+          endTime: seg.endTime,
+          service: seg.serviceName,
+          services: [{ serviceId: seg.serviceId, name: seg.serviceName }],
+          operator: seg.staffName,
+        }))
+      : [a],
+  );
+}
+
 // Bootstrap modal helpers. Bootstrap's bundle is already loaded by the manage shell
 // (the page uses data-bs-* modals elsewhere); we just drive show programmatically for
 // the calendar-notes modal. Falls back to a no-op when the API is unavailable so the
@@ -1181,6 +1221,30 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
     }
     return out;
   }
+
+  // --- Multi-servizio (MS) group accents (port of getMsAccentForGroup, calendar.js
+  // 3865-3959): each multi-service appointment gets a per-day accent from the MS
+  // palette; same group -> same accent, different groups the same day -> different
+  // accents. Assignment order = start time (the legacy assigns on mount order,
+  // which is chronological within the day). ---
+  const msAccentByAppt = useMemo(() => {
+    const map: Record<number, string> = {};
+    const seqByDay: Record<string, number> = {};
+    const groups = appointments
+      .filter((a) => msCountOf(a) > 1)
+      .sort((x, y) =>
+        x.date < y.date ? -1 : x.date > y.date ? 1 : ((timeToMin(x.time) ?? 0) - (timeToMin(y.time) ?? 0)) || x.id - y.id,
+      );
+    for (const a of groups) {
+      const seq = seqByDay[a.date] ?? 0;
+      seqByDay[a.date] = seq + 1;
+      map[a.id] = MS_ACCENT_PALETTE[seq % MS_ACCENT_PALETTE.length];
+    }
+    return map;
+  }, [appointments]);
+  // Hovering ANY block of a multi-service group highlights ALL its blocks
+  // (port of eventMouseEnter/Leave -> .ms-active, calendar.js 4538-4558).
+  const [msHoverGroup, setMsHoverGroup] = useState(0);
 
   // Toolbar total reflects the visible range: the focused day (Day) or the whole
   // visible week/month grid (Week/Month).
@@ -2362,7 +2426,9 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                     );
                   })}
 
-                  {dayAppts.map((a) => {
+                  {/* One VIRTUAL block per segment (legacy per-segment list events) so a
+                      multi-operator booking shows each operator's own window. */}
+                  {expandSegments(dayAppts).map((a) => {
                     const startMin = timeToMin(a.time);
                     if (startMin === null) return null;
                     const top = (startMin - weekMinMin) * PX_PER_MIN;
@@ -2376,11 +2442,18 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                     const st = statusKeyFromLabel(a.statusCode ?? a.status);
                     const op = staff.find((s) => (s.name || "").trim().toLowerCase() === (a.operator || "").trim().toLowerCase());
                     const accent = op?.color || "#2f63d8";
+                    // MS group meta + adaptive density (tiny <28px, compact 28-54px).
+                    const msCount = msCountOf(a);
+                    const msAccent = msCount > 1 ? msAccentByAppt[a.id] : "";
+                    const density = height < 28 ? " appt-event-tiny" : height < 54 ? " appt-event-compact" : "";
                     return (
                       <a
-                        key={a.id}
+                        key={`${a.id}-${a.time}`}
                         href={href(`appointments&action=view&id=${a.id}`)}
-                        className="fc-event fc-timegrid-event appt-soft-event"
+                        className={`fc-event fc-timegrid-event appt-soft-event${density}${msAccent ? " ms-has-accent" : ""}${msAccent && msHoverGroup === a.id ? " ms-active" : ""}`}
+                        data-ms-group={msAccent ? a.id : undefined}
+                        onMouseEnter={msAccent ? () => setMsHoverGroup(a.id) : undefined}
+                        onMouseLeave={msAccent ? () => setMsHoverGroup(0) : undefined}
                         title={`${a.time} ${a.client} • ${serviceTitleOf(a)}${a.operator ? ` (${a.operator})` : ""}`}
                         // DRAG-MOVE: a Week block is HTML5-draggable to another day column /
                         // time (changes the DATE, operator unchanged). Component-scope drag
@@ -2415,27 +2488,38 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                           // Above the store-background bands (z 0) so blocks stay
                           // visible/clickable over the shading.
                           zIndex: 3,
+                          ...(msAccent ? ({ "--ms-accent": msAccent } as React.CSSProperties) : null),
                         }}
                       >
+                        {/* Card rows, faithful to the legacy eventContent + prepends:
+                            row 1 = time range + duration, row 2 = dot + status badge +
+                            [MS] + client, "• operator" (showStaff=true in Week), then
+                            one "• service" row each. */}
                         <div className="fc-event-main">
-                          <span className={`appt-status-badge status-${st.key}`} title={`Stato: ${st.label}`}>
-                            {st.label}
-                          </span>
-                          <span className="appt-staff-dot" style={{ background: accent }} />
-                          <div className="fw-semibold appt-client" style={{ lineHeight: 1.15 }}>
-                            {a.time} {a.client}
-                          </div>
-                          {/* OPERATOR bullet then ALL booked services, one bulleted line
-                              each — faithful to the legacy Week block (showStaff=true in
-                              timeGridWeek: it shows the operator + each service). */}
-                          {a.operator ? (
-                            <div className="small text-truncate appt-staff">{`· ${a.operator}`}</div>
-                          ) : null}
-                          {serviceNamesOf(a).map((name, i) => (
-                            <div key={i} className="small text-truncate appt-service">
-                              {`· ${name}`}
+                          <div className="appt-event">
+                            <div className="appt-time">{apptTimeLine(a.time, previewEnd ?? a.endTime)}</div>
+                            <div className="fc-event-title appt-client" style={{ lineHeight: 1.15 }}>
+                              <span className="appt-staff-dot" title="Operatore" style={{ background: accent }} />
+                              <span className={`appt-status-badge status-${st.key}`} title={`Stato: ${st.label}`}>
+                                {st.label}
+                              </span>
+                              {msAccent ? (
+                                <span className="ms-badge" title={`Prenotazione multi-servizio (${msCount})`}>
+                                  <span className="ms-dot" />
+                                  <span className="ms-label">MS</span>
+                                </span>
+                              ) : null}
+                              <span className="appt-client-name">{a.client}</span>
                             </div>
-                          ))}
+                            {a.operator ? (
+                              <div className="text-truncate appt-staff">{`• ${a.operator}`}</div>
+                            ) : null}
+                            {serviceNamesOf(a).map((name, i) => (
+                              <div key={i} className="text-truncate appt-service">
+                                {`• ${name}`}
+                              </div>
+                            ))}
+                          </div>
                         </div>
                         {/* RESIZE handle (bottom edge): drag to change the end time (custom
                             duration), identical to the Day view, positioned in this day
@@ -2732,6 +2816,23 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                   </div>
                   <h2 className="fc-toolbar-title">
                     {view === "timeGridWeek" ? weekRangeTitle(date) : view === "dayGridMonth" ? monthTitle(date) : longTitle(date)}
+                    {/* Day-view note marker ON the toolbar title (legacy places the
+                        paperclip+count there in staffTimeGridDay, calendar.js 759-858);
+                        click opens the notes modal filtered on the focused day. */}
+                    {view === "staffTimeGridDay" && (countByDate[date] ?? 0) > 0 ? (
+                      <button
+                        type="button"
+                        className="calendar-note-marker-wrap"
+                        onClick={() => openNotesModalForDate(date)}
+                        title={`${countByDate[date]} note — apri il giorno selezionato`}
+                        style={{ background: "transparent", border: "none", padding: 0, cursor: "pointer", marginLeft: 6 }}
+                      >
+                        <span className="calendar-note-marker" aria-label={`${countByDate[date]} note`}>
+                          <i className="bi bi-stickies" aria-hidden="true" />
+                          <span>{countByDate[date]}</span>
+                        </span>
+                      </button>
+                    ) : null}
                   </h2>
                   <button type="button" className="fc-today-button fc-button fc-button-primary" onClick={() => setDate(isoLocal(new Date()))}>
                     Oggi
@@ -3214,9 +3315,14 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                     const durationMin = endMinVal !== null && endMinVal > startMin ? endMinVal - startMin : DEFAULT_DURATION_MIN;
                                     const height = Math.max(durationMin * PX_PER_MIN - 2, 18);
                                     const st = statusKeyFromLabel(a.statusCode ?? a.status);
+                                    // MS group meta + adaptive density (legacy
+                                    // applyCalendarAppointmentDensity: tiny <28px, compact 28-54px).
+                                    const msCount = msCountOf(a);
+                                    const msAccent = msCount > 1 ? msAccentByAppt[a.id] : "";
+                                    const density = height < 28 ? " appt-event-tiny" : height < 54 ? " appt-event-compact" : "";
                                     return (
                                       <a
-                                        key={a.id}
+                                        key={`${a.id}-${a.time}`}
                                         href={href(`appointments&action=view&id=${a.id}`)}
                                         // EDIT in the GLOBAL drawer: a plain click (not a drag)
                                         // routes to the drawer's document-level [data-qb-edit]
@@ -3224,7 +3330,10 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                         // The block itself does NOT carry data-qb-edit so its own
                                         // click can stopPropagation (to suppress the column
                                         // quick-book) without losing the edit-open path.
-                                        className="fc-event fc-timegrid-event appt-soft-event"
+                                        className={`fc-event fc-timegrid-event appt-soft-event${density}${msAccent ? " ms-has-accent" : ""}${msAccent && msHoverGroup === a.id ? " ms-active" : ""}`}
+                                        data-ms-group={msAccent ? a.id : undefined}
+                                        onMouseEnter={msAccent ? () => setMsHoverGroup(a.id) : undefined}
+                                        onMouseLeave={msAccent ? () => setMsHoverGroup(0) : undefined}
                                         title={`${a.time} ${a.client} • ${serviceTitleOf(a)}`}
                                         draggable
                                         // Keep a press on the block from starting a column
@@ -3274,26 +3383,37 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                           // -master break band at z 2) so blocks stay
                                           // visible/clickable over the shading.
                                           zIndex: 3,
+                                          ...(msAccent ? ({ "--ms-accent": msAccent } as React.CSSProperties) : null),
                                         }}
                                       >
+                                        {/* Card rows, faithful to the legacy eventContent (calendar.js
+                                            4367-4374) + eventDidMount prepends (dot -> badge -> MS ->
+                                            client name, 4408-4531): row 1 = time range + duration,
+                                            row 2 = dot + status badge + [MS] + client, then one
+                                            "• service" row each. The operator row is NOT shown here:
+                                            the Day view already has per-operator columns. */}
                                         <div className="fc-event-main">
-                                          <span className={`appt-status-badge status-${st.key}`} title={`Stato: ${st.label}`}>
-                                            {st.label}
-                                          </span>
-                                          <span className="appt-staff-dot" style={{ background: s.color }} />
-                                          <div className="fw-semibold appt-client" style={{ lineHeight: 1.15 }}>
-                                            {a.time} {a.client}
-                                          </div>
-                                          {/* ALL booked services, one bulleted line each (faithful to
-                                              the legacy multi-service block), not just the primary. The
-                                              operator is NOT bulleted here: the Day view already has a
-                                              per-operator column header (legacy showStaff=false in
-                                              staffTimeGridDay). Falls back to the single service. */}
-                                          {serviceNamesOf(a).map((name, i) => (
-                                            <div key={i} className="small text-truncate appt-service">
-                                              {`· ${name}`}
+                                          <div className="appt-event">
+                                            <div className="appt-time">{apptTimeLine(a.time, previewEnd ?? a.endTime)}</div>
+                                            <div className="fc-event-title appt-client" style={{ lineHeight: 1.15 }}>
+                                              <span className="appt-staff-dot" title="Operatore" style={{ background: s.color }} />
+                                              <span className={`appt-status-badge status-${st.key}`} title={`Stato: ${st.label}`}>
+                                                {st.label}
+                                              </span>
+                                              {msAccent ? (
+                                                <span className="ms-badge" title={`Prenotazione multi-servizio (${msCount})`}>
+                                                  <span className="ms-dot" />
+                                                  <span className="ms-label">MS</span>
+                                                </span>
+                                              ) : null}
+                                              <span className="appt-client-name">{a.client}</span>
                                             </div>
-                                          ))}
+                                            {serviceNamesOf(a).map((name, i) => (
+                                              <div key={i} className="text-truncate appt-service">
+                                                {`• ${name}`}
+                                              </div>
+                                            ))}
+                                          </div>
                                         </div>
                                         {/* RESIZE handle (bottom edge): drag to change the end
                                             time (a custom duration). Not draggable itself; it uses
