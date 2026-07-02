@@ -101,6 +101,29 @@ Clienti (form/detail/cascade-delete/tag/storico).
     mano o con accesso alla mailbox/log mailer. Le componenti sottostanti (slot,
     hold, conferma lato Next) sono già verificate singolarmente.
 11. ⏳ **Voucher pubblici** giftcard/giftbox + **Admin SaaS** + cron.
+12. ✅ **Deep round 2 Quick-Booking/Calendario (2026-07-02, secondo operatore +
+    secondo servizio creati su entrambi, poi ripuliti) — 3 BUG PARITY TROVATI +
+    FIXATI (commit 3f3ebc9)**:
+    - **Guardia staff-servizio**: il save legacy rifiuta un operatore non
+      abilitato al servizio ("Operatore non abilitato per il servizio ..."); il
+      Next accettava chiunque. Portata la semantica esatta (staff_services con
+      staff ATTIVI = allow-list; nessuna riga = tutti ammessi; 'SSO' esente) in
+      createDbAppointment + updateDbAppointment. Messaggio identico verificato.
+    - **Filtro CABINA negli slot** (publicBookingSlots): il legacy toglie gli
+      slot con cabina occupata (booking_filter_slots_by_cabins); il Next li
+      offriva (il save poi rifiutava). Ora ogni servizio occupa la sua cabina
+      primaria per la propria finestra sequenziale contro
+      busyCabinRangesForDate. Retest 4 combinazioni: 80/80, 92/92, 92/92,
+      73/73 (prima il Next mostrava +30 slot fantasma).
+    - **Blocchi per-segmento nel calendario Day**: il legacy emette un evento
+      PER SEGMENTO per-operatore; il Next un solo blocco sotto l'operatore
+      primario → la colonna del secondo operatore sembrava LIBERA mentre era
+      occupata. Ora mapAppointment espone `segments` (solo quando >1 operatore)
+      e la Day view renderizza un blocco virtuale per segmento nella colonna
+      giusta (click → stesso drawer di modifica).
+    - Verificati inoltre: staff_for_service (stessi operatori listati),
+      availability per-segmento su 4 combinazioni, calendario list API
+      (eventi per-segmento PHP ≡ appointment+segments Next).
 
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;
