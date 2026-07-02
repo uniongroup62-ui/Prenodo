@@ -90,6 +90,7 @@ import { BookingFaithful } from "@/components/public/booking-faithful";
 import { GiftBoxVoucherFaithful } from "@/components/public/giftbox-voucher-faithful";
 import { GiftCardVoucherFaithful } from "@/components/public/giftcard-voucher-faithful";
 import { QuotePublicFaithful } from "@/components/public/quote-public-faithful";
+import { GdprPublicFaithful } from "@/components/public/gdpr-public-faithful";
 import { currentManageSession } from "@/lib/manage-auth";
 import { shouldPromptOnboarding } from "@/lib/manage-onboarding";
 
@@ -194,6 +195,12 @@ export default async function TenantPage({
   }
   if (page === "giftcard_voucher" && query.public === "1") {
     return <GiftCardVoucherFaithful slug={tenantSlug} token={query.token ?? ""} embed={query.embed === "1"} />;
+  }
+
+  // Public GDPR signature page (gdpr_public.php: token 64 hex, no login):
+  //   /<slug>/gdpr_public?token=<64hex> — le email di richiesta firma linkano qui.
+  if (page === "gdpr_public") {
+    return <GdprPublicFaithful slug={tenantSlug} token={query.token ?? ""} />;
   }
 
   // Public quote viewer (quote_public.php: accesso via token, no login):

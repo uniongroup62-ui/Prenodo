@@ -869,11 +869,48 @@ CONSUMATORI R2 IMPLEMENTATI E VERIFICATI LIVE (2026-07-02, dati test ripuliti):
   NB dev: dopo la modifica di next.config è servito rm -rf .next (la cache
   Turbopack corrotta faceva 404 su tutte le /api/manage).
 
+- FIRMA GDPR PUBBLICA (port di gdpr_public.php + gdpr_public.js +
+  PrivacyConsent.php + PrivacyPdf.php — verificata VISIVAMENTE):
+  * lib/privacy-consent.ts: etichette consensi (+ fallback snapshot v1),
+    template con variabili case-insensitive ({{nome}}, {{Dati anagrafici}} =
+    profilo quote_*, {{dati_sede}} = site_*), lookup template dal modulo di
+    sistema consent_modules privacy_gdpr -> businesses.gdpr_template_body ->
+    default testuale identico, snapshot v2, stati draft/pending/signed
+    normalizzati, filename GDPR_<NOME>_<COGNOME>.pdf. Divergenza doc.:
+    niente override profilo legale per-sede (tenant mono-sede).
+  * lib/privacy-pdf.ts: renderer pdfkit del privacy_pdf_build (titolo F2 15,
+    heading GDPR noti in bold, bullet indentati, box firma bordato con righe
+    [X]/[ ], Data, immagine firma max 210x50 con riga e caption "Firmato
+    elettronicamente il ..." o riga "Firma cliente: ___"); la firma arriva
+    come data URL png/jpeg (pdfkit embedda PNG direttamente — il legacy
+    convertiva in JPEG solo per il suo MiniPdf). Stringhe errore legacy
+    (Firma troppo grande/Formato firma non valido/...).
+  * /api/public/gdpr: GET dati pagina (token 64hex su gdpr_public_token,
+    solo pending/signed), GET format=pdf inline/download (pending = snapshot
+    con riga firma; signed = documento UFFICIALE da customer_documents/R2
+    privato, byte proxyati con gli header legacy), POST firma (valida,
+    genera PDF firmato, salva 'Privacy firmata' su R2 + customer_documents,
+    aggiorna clients document_id/status/signed_at/locked_at/snapshot; guard
+    "Il documento privacy risulta gia confermato."; publicErrorMessage che
+    non espone errori tecnici).
+  * Pagina /<slug>/gdpr_public?token= (GdprPublicFaithful): header cliente +
+    badge stato, Apri/Scarica PDF, iframe anteprima, riquadro FIRMA con
+    canvas pointer-events (mouse/trackpad/dito), Pulisci, Conferma abilitato
+    solo con tratto; dopo la firma la pagina passa a Firmato e l'iframe
+    ricarica il documento ufficiale.
+  * Test live end-to-end su cliente di test: pending -> PDF non firmato ->
+    firma -> stato signed + PDF ufficiale (2 pagine: informativa dal
+    TEMPLATE DEL TENANT via consent_modules + box consensi con firma e
+    caption) -> doppia firma respinta col messaggio legacy. Cleanup totale
+    (oggetto R2 + customer_documents + campi gdpr del cliente ripristinati).
+  * NON ancora portato: il lato MANAGE della richiesta firma (genera token +
+    invia email dalla scheda cliente) e consent_public.php (moduli consenso
+    via token — stesso pattern, prossimo passo).
+
 Prossimi consumatori (stesso pattern): foto nelle schede cliente
 (client_sheet_records values_json — legato al porting completo delle schede,
-oggi display-only) e i PDF GDPR/consensi (PrivacyPdf — la generazione ora ha
-il renderer di base) quando si portano firma e moduli. Le immagini prodotto
-nel marketplace/showcase si collegano quando si porta quella vista.
+oggi display-only). Le immagini prodotto nel marketplace/showcase si
+collegano quando si porta quella vista.
 
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;
