@@ -14,11 +14,14 @@ import { useEffect, useMemo, useState } from "react";
 // with id) — the same endpoint/handler the legacy form posts to (saveStaffMember,
 // which also upserts the login user + sends the "Conferma email account" invite).
 //
-// NOTE: the operator PHOTO upload (operator_photo / photo_crop_data, multipart)
-// is NOT ported here — image management is a separate follow-up (saveStaffMember
-// does not handle the photo). The "Admin" role option is shown for everyone here;
-// the legacy hides it for non-admins as a cosmetic guard (role security is still
-// enforced server-side by the staff.manage permission gate).
+// FOTO OPERATORE: campo file (operator_photo, jpeg/png/webp/gif max 5MB) con
+// anteprima circolare + "Rimuovi foto". L'upload viaggia DOPO staff_save su
+// /api/manage/staff-photo (multipart -> Cloudflare R2, photo_path = URL
+// pubblico). Il crop/zoom client-side del legacy (photo_crop_data) non è
+// portato: l'immagine è salvata come caricata, il ritaglio circolare resta CSS.
+// The "Admin" role option is shown for everyone here; the legacy hides it for
+// non-admins as a cosmetic guard (role security is still enforced server-side
+// by the staff.manage permission gate).
 
 type LocationRow = { id: number; name: string; isActive?: boolean };
 
@@ -80,6 +83,12 @@ export function StaffFormContent() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // Foto operatore: il file scelto (con anteprima object-URL), l'URL corrente
+  // dal DB (edit) e il flag "rimuovi" (staff_action=delete_photo del legacy).
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState("");
+  const [currentPhotoUrl, setCurrentPhotoUrl] = useState("");
+  const [removePhoto, setRemovePhoto] = useState(false);
 
   // Load the staff context (locations), then prefill on edit (action=get) or
   // keep the faithful new-operator defaults.
@@ -125,6 +134,7 @@ export function StaffFormContent() {
             is_active: Boolean(s.isActive ?? true),
             location_ids: (s.locationIds ?? []).map(Number).filter((n: number) => n > 0),
           });
+          setCurrentPhotoUrl(String(s.photoPath ?? "").trim());
         })
         .catch(() => setError("Errore nel caricamento dell'operatore."))
         .finally(() => setLoading(false));
@@ -198,6 +208,29 @@ export function StaffFormContent() {
         setSaving(false);
         return;
       }
+
+      // FOTO: dopo il salvataggio dell'operatore (serve l'id anche in creazione),
+      // carica la nuova immagine o applica la rimozione su /api/manage/staff-photo.
+      // L'operatore è GIÀ salvato: un errore foto resta sul form con il messaggio.
+      const savedId = Number(j.staff?.id ?? form.id) || form.id;
+      if (savedId > 0 && (photoFile || removePhoto)) {
+        const fd = new FormData();
+        fd.set("staff_id", String(savedId));
+        if (photoFile) fd.set("operator_photo", photoFile);
+        else fd.set("remove_photo", "1");
+        const photoRes = await fetch(`/api/manage/staff-photo?slug=${encodeURIComponent(slug)}`, {
+          method: "POST",
+          headers: { "x-tenant-slug": slug },
+          body: fd,
+        });
+        const photoJson = await photoRes.json().catch(() => ({}));
+        if (!photoRes.ok || photoJson.ok === false) {
+          setError(`Operatore salvato, ma la foto non è stata aggiornata: ${String(photoJson.error ?? "errore caricamento foto.")}`);
+          setSaving(false);
+          return;
+        }
+      }
+
       backToList();
     } catch {
       setError("Errore nel salvataggio dell'operatore.");
@@ -264,6 +297,76 @@ export function StaffFormContent() {
                   <option value="admin">Admin</option>
                   <option value="altro">Personalizzato</option>
                 </select>
+              </div>
+
+              {/* Foto operatore (port del box .staff-photo-field di staff.php):
+                  anteprima circolare (immagine o iniziale), input file
+                  jpeg/png/webp/gif max 5MB, Rimuovi foto. Upload su R2 dopo il
+                  salvataggio (vedi onSubmit); niente crop/zoom client (divergenza
+                  documentata). */}
+              <div className="col-12">
+                <div className="border rounded-4 p-3">
+                  <div className="fw-semibold mb-2">Foto operatore</div>
+                  <div className="d-flex align-items-center gap-3 flex-wrap">
+                    <div
+                      className="rounded-circle border d-flex align-items-center justify-content-center overflow-hidden flex-shrink-0"
+                      style={{ width: 96, height: 96, background: "#f1f5f9" }}
+                      aria-label="Anteprima immagine operatore"
+                    >
+                      {photoPreview || (currentPhotoUrl && !removePhoto) ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={photoPreview || currentPhotoUrl}
+                          alt=""
+                          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                        />
+                      ) : (
+                        <span className="fs-3 fw-semibold text-secondary">
+                          {(form.full_name.trim().charAt(0) || "O").toUpperCase()}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex-grow-1" style={{ minWidth: 240 }}>
+                      <input
+                        className="form-control"
+                        type="file"
+                        name="operator_photo"
+                        id="staffPhotoInput"
+                        accept="image/jpeg,image/png,image/webp,image/gif"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0] ?? null;
+                          if (photoPreview) URL.revokeObjectURL(photoPreview);
+                          if (file && file.size > 5242880) {
+                            setError("Immagine troppo grande (max 5 MB).");
+                            setPhotoFile(null);
+                            setPhotoPreview("");
+                            e.target.value = "";
+                            return;
+                          }
+                          setError("");
+                          setPhotoFile(file);
+                          setPhotoPreview(file ? URL.createObjectURL(file) : "");
+                          if (file) setRemovePhoto(false);
+                        }}
+                      />
+                      <div className="form-text">JPG, PNG, WEBP o GIF — massimo 5 MB.</div>
+                      {currentPhotoUrl && !photoFile ? (
+                        <div className="form-check mt-1">
+                          <input
+                            className="form-check-input"
+                            type="checkbox"
+                            id="staffRemovePhoto"
+                            checked={removePhoto}
+                            onChange={(e) => setRemovePhoto(e.target.checked)}
+                          />
+                          <label className="form-check-label" htmlFor="staffRemovePhoto">
+                            Rimuovi foto
+                          </label>
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div className="col-12">

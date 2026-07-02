@@ -755,6 +755,48 @@ OTP/reset (fix TZ), conferme su DB.
   (fetchResidualsDetail rifattorizzato). Non portato: lista movimenti
   dell'omaggio (qbGiftTxLabel) — il payload non traccia le transazioni gift.
 
+## Item 30 — STORAGE FILE su Cloudflare R2 (2026-07-02, decisione utente)
+Deciso: i file vanno su Cloudflare R2 (S3-compatibile) invece di S3 — zero
+egress per le immagini pubbliche, custom domain via CDN Cloudflare, bucket con
+giurisdizione EU per il GDPR. Lo stack resta: Amplify (app) + Supabase (DB) +
+R2 (file) + SES (email) + OpenAPI (SMS) + EventBridge (cron).
+
+Implementato:
+- lib/storage.ts: client S3 su endpoint R2, DUE bucket (PUBLIC per immagini
+  servite via R2_PUBLIC_BASE_URL con cache immutabile; PRIVATE per documenti,
+  solo presigned GET a TTL breve dopo i check sessione+tenant), chiavi sempre
+  namespaced t{tenantId}/<area>/..., storageConfigured() gate (pattern
+  emailConfigured) con errore chiaro "Storage file non configurato...".
+- PRIMO CONSUMATORE end-to-end: FOTO OPERATORE (port dell'upload
+  operator_photo di staff.php). Route /api/manage/staff-photo (multipart,
+  max 5MB legacy, jpeg/png/webp/gif, guard SSO, delete del vecchio oggetto
+  alla sostituzione, remove_photo=1 per la rimozione); in staff.photo_path
+  si salva l'URL PUBBLICO completo (staff_photo_url legacy passa gli http
+  assoluti invariati -> compatibile nei due sensi; calendario/booking/lista
+  usano già photoPath cosi com'è). Editor staff: box "Foto operatore" con
+  anteprima circolare, input file, "Rimuovi foto"; upload DOPO staff_save
+  (serve l'id in creazione). Divergenza documentata: niente crop/zoom client
+  (photo_crop_data) — immagine salvata come caricata.
+- Test live (senza credenziali): upload PNG -> "Storage file non
+  configurato..." (503, nessuna scrittura DB), mime non valido -> "Formato
+  immagine non supportato...". L'upload reale si verifica appena esistono i
+  bucket.
+
+SETUP R2 (da fare dall'utente, poi in .env.local e negli env Amplify):
+  1. Dashboard Cloudflare -> R2 -> crea 2 bucket (es. prenodo-public,
+     prenodo-private), giurisdizione EU.
+  2. Al bucket public collega un custom domain (es. media.<dominio>) o abilita
+     r2.dev -> R2_PUBLIC_BASE_URL.
+  3. Crea un API token R2 (Object Read & Write sui 2 bucket) ->
+     R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY; R2_ACCOUNT_ID dalla dashboard.
+  4. Variabili: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
+     R2_BUCKET_PUBLIC, R2_BUCKET_PRIVATE, R2_PUBLIC_BASE_URL.
+
+Prossimi consumatori (stesso pattern): immagini categorie/servizi e
+marketplace (bucket public), allegati costi/magazzino + schede cliente +
+documenti cliente (quickBookClientCard docs) su bucket private con presigned,
+e i PDF (preventivi/GDPR/consensi) quando si porta la generazione.
+
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;
   legacy consuma al "done") — approvato.
