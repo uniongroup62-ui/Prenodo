@@ -686,6 +686,10 @@ export async function checkoutManageSale(
     if (item.type === "giftcard") {
       const issued = await issueGiftcardFromSale(slug, saleId, client.id, item, locationId);
       if (issued.voucher) issuedVouchers.push(issued.voucher);
+      // Nome riga legacy col codice emesso: "GiftCard • <code>" (pos.php 5509).
+      if (issued.voucher?.code) {
+        await tenantUpdate({ slug, table: "sale_items", id: saleItemId, values: { item_name: `GiftCard • ${issued.voucher.code}` } }).catch(() => 0);
+      }
     }
     // SELL a GiftBox: issue a real giftbox_instances row (+ its items copied from the chosen
     // giftboxes template) OWNED by the recipient (defaults to the sale client), so it appears
@@ -694,6 +698,10 @@ export async function checkoutManageSale(
     if (item.type === "giftbox") {
       const issued = await issueGiftboxFromSale(slug, saleId, client.id, item, locationId);
       if (issued.voucher) issuedVouchers.push(issued.voucher);
+      // Nome riga legacy col codice emesso: "GiftBox • <code>" (pos.php 5143).
+      if (issued.voucher?.code) {
+        await tenantUpdate({ slug, table: "sale_items", id: saleItemId, values: { item_name: `GiftBox • ${issued.voucher.code}` } }).catch(() => 0);
+      }
     }
     // SELL a RECHARGE: insert a recharges row (base/bonus/total/points), CREDIT the wallet by
     // base+bonus, and EARN fidelity points (when earn_points + eligible). A recharge tops up
@@ -3533,15 +3541,40 @@ async function buildSaleItems(slug: string, inputItems: PosSaleItemInput[], loca
     const rechargeBonusValue = isRecharge ? roundMoney(Math.max(0, Number(input.bonusValue ?? 0) || 0)) : 0;
     const rechargeBonus = isRecharge ? rechargeBonusAmount(rechargeBase, rechargeBonusKind, rechargeBonusValue) : 0;
     const rechargeTotal = isRecharge ? roundMoney(rechargeBase + rechargeBonus) : 0;
+    // Nome riga nel formato legacy (autoritativo lato server, mai dalla UI):
+    // "Ricarica credito[ • titolo modello]" (pos.php 5622) e "Pacchetto: nome
+    // • Inizio dd/mm/YYYY - Fine dd/mm/YYYY" troncato a 190 (pos.php 5441-5445).
+    // GiftCard/GiftBox ricevono il codice DOPO l'emissione (update post-issue).
+    let lineName = input.name?.trim() || fallbackItemName(input.type);
+    if (isRecharge) {
+      const tplTitle = refId > 0 ? await rechargeTemplateTitle(slug, refId) : "";
+      lineName = tplTitle ? `Ricarica credito • ${tplTitle}` : "Ricarica credito";
+    } else if (isPackage) {
+      const pkgRows = refId > 0
+        ? await tenantSelect<RowDataPacket>({ slug, table: "packages", columns: "name", where: "id=?", params: [refId], limit: 1 }).catch(() => [] as RowDataPacket[])
+        : [];
+      lineName = `Pacchetto: ${clean(String(pkgRows[0]?.name ?? ""), 120) || lineName}`;
+      const startLabel = italianDateLabel(input.startDate);
+      const endLabel = italianDateLabel(input.expiresAt);
+      if (startLabel) lineName += ` • Inizio ${startLabel}`;
+      if (endLabel) lineName += ` - Fine ${endLabel}`;
+      lineName = lineName.slice(0, 190);
+    } else if (isGiftcard) {
+      lineName = "GiftCard";
+    } else if (isGiftbox) {
+      lineName = "GiftBox";
+    }
     items.push({
       id: index + 1,
       type: input.type,
       refId,
-      name: input.name?.trim() || fallbackItemName(input.type),
+      name: lineName,
       quantity: lineQty,
       unitPrice,
       total: roundMoney(unitPrice * lineQty),
-      status: "prepaid",
+      // item_status solo per i prepagati (riga service+prepaid); le altre righe
+      // speciali restano senza stato come gli INSERT legacy.
+      status: input.type === "prepaid" ? "prepaid" : undefined,
       startDate: clean(input.startDate, 10) || undefined,
       expiresAt: clean(input.expiresAt, 10) || undefined,
       note: clean(input.note, 255) || undefined,
@@ -3570,13 +3603,43 @@ async function buildSaleItems(slug: string, inputItems: PosSaleItemInput[], loca
   return items.filter((item) => item.quantity > 0);
 }
 
+// Il CHECK sale_items_item_type_check ammette 'package'? Lo schema aggiornato sì
+// (db/schema.sql); sulle installazioni non ancora migrate il fallback resta
+// 'service' (nessuna rottura). Cache di processo: il vincolo non cambia a runtime.
+let packageItemTypeAllowedCache: boolean | null = null;
+async function packageItemTypeAllowed(): Promise<boolean> {
+  if (packageItemTypeAllowedCache !== null) return packageItemTypeAllowedCache;
+  const rows = await dbQuery<RowDataPacket[]>(
+    "SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conname = 'sale_items_item_type_check'",
+  ).catch(() => [] as RowDataPacket[]);
+  const def = String(rows[0]?.def ?? "");
+  packageItemTypeAllowedCache = def === "" || def.includes("'package'");
+  return packageItemTypeAllowedCache;
+}
+
 async function insertSaleItem(slug: string, saleId: number, item: PosSaleItem): Promise<number> {
   const table = await tenantTable(slug, "sale_items");
-  const storedType = item.type === "product" ? "product" : "service";
+  // item_type/item_id fedeli agli INSERT legacy (pos.php 5145/5451/5511/5632):
+  // giftcard/giftbox -> 'product' item_id NULL; ricarica -> 'product' item_id 0;
+  // pacchetto -> 'package' con l'id del template (l'INTENTO legacy: il MySQL
+  // non-strict troncava l'enum a '' — qui il valore è reale, gated dal CHECK);
+  // prepagato -> riga 'service' con item_status prepaid.
+  const storedType =
+    item.type === "product" || item.type === "giftcard" || item.type === "giftbox" || item.type === "recharge"
+      ? "product"
+      : item.type === "package"
+        ? (await packageItemTypeAllowed()) ? "package" : "service"
+        : "service";
+  const itemId =
+    item.type === "recharge"
+      ? 0
+      : item.refId > 0 && (item.type === "product" || item.type === "service" || item.type === "prepaid" || item.type === "package")
+        ? item.refId
+        : null;
   return tenantInsert(table, await filterColumns(table.name, {
     sale_id: saleId,
     item_type: storedType,
-    item_id: item.refId > 0 && (item.type === "product" || item.type === "service") ? item.refId : null,
+    item_id: itemId,
     item_name: item.name,
     qty: item.quantity,
     unit_price: item.unitPrice,
@@ -5228,6 +5291,18 @@ function cancelNote(saleId: number, userName: string, reason: string, stockMode:
     lines.push(stockMode === "restore" ? `Magazzino prodotti ripristinato: ${qty} pezzi.` : `Magazzino prodotti non ripristinato: ${qty} pezzi.`);
   }
   return lines.join("\n");
+}
+
+// Titolo del modello ricarica per il nome riga legacy "Ricarica credito • <titolo>".
+async function rechargeTemplateTitle(slug: string, templateId: number): Promise<string> {
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "recharge_templates", columns: "title", where: "id=?", params: [templateId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  return clean(String(rows[0]?.title ?? ""), 120);
+}
+
+// "YYYY-MM-DD" -> "dd/mm/YYYY" (per i suffissi Inizio/Fine del nome riga pacchetto).
+function italianDateLabel(value: string | undefined): string {
+  const m = String(value ?? "").trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : "";
 }
 
 function fallbackItemName(type: PosSaleItemType): string {

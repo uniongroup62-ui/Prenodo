@@ -1014,7 +1014,7 @@ GAP CONFERMATI DAI TEST (in ordine di gravita'):
 - [CHIUSO 2026-07-03] P3 default item_status servizio con cliente = 'prepaid' (manage-pos.ts
   normalizeItemStatus) — legacy default 'executed'. La UI manda sempre lo
   status esplicito, ma a livello API i dati divergono.
-- P4 righe vendita speciali: recharge/giftcard scritte come item_type
+- [CHIUSO 2026-07-03] P4 righe vendita speciali: recharge/giftcard scritte come item_type
   'service' con nome nudo "Ricarica"/"GiftCard" (legacy: 'product' +
   "GiftCard (CODE)" / "Ricarica credito - titolo (+bonus)"). Impatta le
   etichette dinamiche dei Movimenti e il matching R#/GC nelle note.
@@ -1059,3 +1059,22 @@ delegate al cron (scelta documentata); nessuna IVA/resto nel legacy.
 - P3: default item_status servizio = 'executed' (era 'prepaid' con cliente).
 Restano aperti: P4 (righe ricarica/giftcard item_type+nome), P5 (semantica
 tender con rate), P6 (credito card-based + sede), P7 (point_lots), P8-P11.
+
+### Chiusura gap POS P4 (2026-07-03, 8/8 test live PASS)
+Righe sale_items nel formato legacy: giftcard/giftbox -> item_type 'product'
+item_id NULL con nome "GiftCard • <code>" / "GiftBox • <code>" (update
+post-emissione col codice reale); ricarica -> 'product' item_id 0 con
+"Ricarica credito[ • titolo modello]"; pacchetto -> item_id = template id e
+nome "Pacchetto: <nome> • Inizio dd/mm/YYYY - Fine dd/mm/YYYY" (troncato
+190); prepagato -> riga 'service' con item_id del servizio + status prepaid;
+item_status NULL sulle righe speciali (come gli INSERT legacy). SCOPERTA:
+il MySQL legacy e' NON-strict e troncava l'enum 'package' a stringa vuota —
+il Next implementa l'INTENTO ('package' reale) con capability-check sul
+CHECK constraint: finche' il vincolo non e' allargato scrive 'service'
+(fallback identico a prima, nessuna rottura). MIGRAZIONE DA APPLICARE
+(schema.sql gia' aggiornato per le installazioni nuove):
+  ALTER TABLE sale_items DROP CONSTRAINT sale_items_item_type_check;
+  ALTER TABLE sale_items ADD CONSTRAINT sale_items_item_type_check
+    CHECK (item_type IN ('service','product','package'));
+Verificato anche che l'annullo vendita continua a matchare giftcard/giftbox
+per codice col nuovo formato nome.

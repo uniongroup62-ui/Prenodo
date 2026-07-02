@@ -144,7 +144,9 @@ export type PosSaleItem = {
   quantity: number;
   unitPrice: number;
   total: number;
-  status: PosSaleItemStatus;
+  // Assente sulle righe speciali (giftcard/giftbox/ricarica/pacchetto): gli INSERT
+  // legacy le scrivono senza item_status (NULL su DB).
+  status?: PosSaleItemStatus;
   stockMovementId?: number;
   // Package sale meta carried from the cart to issuePackageFromSale (start/expiry/note).
   startDate?: string;
