@@ -470,6 +470,25 @@ quote_decision (:7060).
   → Con questo, del flusso quick booking resta SOLO la UI conflict_policy
   radios (fidelity choice) come rifinitura documentata.
 
+## Item 25 — Modal "Scheda semplificata" cliente nel quick booking (2026-07-02, segnalato dall'utente)
+Il link "Apri scheda" dello Storico cliente navigava alla pagina clienti; il
+legacy apre il MODAL scheda semplificata (qbOpenClientCard -> api_clients
+action=card -> #qbClientCardModal, View.php:1650).
+- **API** quickBookClientCard (route clients action=card): anagrafica+punti,
+  summary (contatori stato, ultima/prossima visita, totale vendite non
+  annullate), ultimi appuntamenti (nomi servizi da snapshot, operatori,
+  totale col solo sconto manuale come il legacy card, limit 0..50), ultime 10
+  vendite, tag (customer_tags) e documenti (senza URL: infra allegati S3
+  rinviata — il modal mostra "Non disponibile" come il legacy senza href).
+  **Verificata live**: payload allineato a PHP (unica differenza il drift
+  punti 22 vs 0 già noto + campi extra legacy non usati dal render).
+- **Drawer**: modal XL con la markup legacy (header "Scheda semplificata" +
+  "Apri in nuova scheda", colonna Fidelity/Tag/Documenti, tabelle Storico
+  appuntamenti con badge stato e Storico vendite); "Apri scheda" ora lo apre
+  (href intatto per middle-click/nuova scheda).
+- **Sweep completo id drawer legacy** (~110 elementi qb*): tutti presenti in
+  Next — l'unica mancanza era questo modal.
+
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;
   legacy consuma al "done") — approvato.

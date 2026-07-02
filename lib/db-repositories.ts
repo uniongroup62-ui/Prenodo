@@ -14865,6 +14865,176 @@ async function quickBookClientResidualsSummary(
   return out;
 }
 
+// "Scheda semplificata" cliente per il quick booking (port of api_clients.php
+// action=card :3921, rendered by the legacy #qbClientCardModal): anagrafica +
+// punti, riepilogo appuntamenti (contatori + ultima/prossima visita) e totale
+// vendite, ultimi appuntamenti (servizi/operatori/totale con lo sconto manuale
+// applicato come nel legacy), ultime 10 vendite, tag e documenti (best-effort:
+// le tabelle sono opzionali). limit clampato 0..50 come il legacy.
+export type QuickBookClientCard = {
+  client: { id: number; full_name: string; phone: string; email: string; points: number };
+  summary: {
+    total: number;
+    done: number;
+    scheduled: number;
+    pending: number;
+    canceled: number;
+    no_show: number;
+    last_visit: string | null;
+    next_visit: string | null;
+    sales_total: number;
+  };
+  appointments: Array<{ id: number; starts_at: string; status: string; services: string; staff: string; total: number }>;
+  sales: Array<{ id: number; sale_date: string; total: number; notes: string }>;
+  tags: Array<{ id: number; name: string }>;
+  docs: Array<{ id: number; title: string; url: string; created_at: string }>;
+};
+
+export async function quickBookClientCard(slug: string, clientId: number, limitInput = 10): Promise<QuickBookClientCard> {
+  const clientRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "clients",
+    columns: "id, full_name, phone, email, points",
+    where: "id = ?",
+    params: [clientId],
+    limit: 1,
+  });
+  const clientRow = clientRows[0];
+  if (!clientRow) throw new Error("Cliente non trovato");
+
+  const sqlLocalStr = (value: unknown): string | null => {
+    if (!value) return null;
+    if (value instanceof Date) {
+      const p = (n: number) => String(n).padStart(2, "0");
+      return `${value.getFullYear()}-${p(value.getMonth() + 1)}-${p(value.getDate())} ${p(value.getHours())}:${p(value.getMinutes())}:${p(value.getSeconds())}`;
+    }
+    return String(value).replace("T", " ").slice(0, 19);
+  };
+
+  // Summary (legacy aggregate: counts per stato + ultima/prossima visita).
+  const appts = await tenantTable(slug, "appointments");
+  const sumRows = await dbQuery<RowDataPacket[]>(
+    `SELECT COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE status = 'done') AS done,
+            COUNT(*) FILTER (WHERE status = 'scheduled') AS scheduled,
+            COUNT(*) FILTER (WHERE status = 'pending') AS pending,
+            COUNT(*) FILTER (WHERE LOWER(TRIM(COALESCE(status,''))) IN ('canceled','cancelled','rejected','annullato','rifiutato')) AS canceled,
+            COUNT(*) FILTER (WHERE LOWER(TRIM(COALESCE(status,''))) IN ('no_show','no show','no-show','noshow','non presentato','non presentata')) AS no_show,
+            MAX(CASE WHEN starts_at < NOW() THEN starts_at ELSE NULL END) AS last_visit,
+            MIN(CASE WHEN starts_at >= NOW() AND status IN ('pending','scheduled') THEN starts_at ELSE NULL END) AS next_visit
+       FROM ${quoteIdentifier(appts.name)}
+      WHERE tenant_id = ? AND client_id = ?`,
+    [appts.tenantId ?? 0, clientId],
+  ).catch(() => [] as RowDataPacket[]);
+  const sum = sumRows[0] ?? ({} as RowDataPacket);
+
+  const salesTable = await tenantTable(slug, "sales");
+  const salesTotalRows = await dbQuery<RowDataPacket[]>(
+    `SELECT COALESCE(SUM(total),0) AS t FROM ${quoteIdentifier(salesTable.name)} WHERE tenant_id = ? AND client_id = ? AND (status IS NULL OR status NOT IN ('cancelled','canceled'))`,
+    [salesTable.tenantId ?? 0, clientId],
+  ).catch(() => [] as RowDataPacket[]);
+
+  // Ultimi appuntamenti: nomi servizi (snapshot) + operatori + totale con lo
+  // sconto manuale (percent/fixed clampato) applicato al subtotale, come il
+  // legacy card. limit=0 => solo riepilogo.
+  let limit = Math.trunc(Number(limitInput) || 0);
+  if (limit < 0) limit = 10;
+  if (limit > 50) limit = 50;
+  const appointments: QuickBookClientCard["appointments"] = [];
+  if (limit > 0) {
+    const apsTable = await tenantTable(slug, "appointment_services");
+    const astTable = await tenantTable(slug, "appointment_staff");
+    const staffTable = await tenantTable(slug, "staff");
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT a.id, a.starts_at, a.status, a.discount_type, a.discount_value,
+              COALESCE(NULLIF((SELECT string_agg(DISTINCT aps.service_name, ', ' ORDER BY aps.service_name) FROM ${quoteIdentifier(apsTable.name)} aps WHERE aps.tenant_id = a.tenant_id AND aps.appointment_id = a.id), ''), '(nessun servizio)') AS service_names,
+              COALESCE((SELECT string_agg(DISTINCT st.full_name, ', ' ORDER BY st.full_name) FROM ${quoteIdentifier(astTable.name)} ast JOIN ${quoteIdentifier(staffTable.name)} st ON st.id = ast.staff_id AND st.tenant_id = ast.tenant_id WHERE ast.tenant_id = a.tenant_id AND ast.appointment_id = a.id), '') AS staff_names,
+              COALESCE((SELECT SUM(aps2.price) FROM ${quoteIdentifier(apsTable.name)} aps2 WHERE aps2.tenant_id = a.tenant_id AND aps2.appointment_id = a.id), 0) AS subtotal
+         FROM ${quoteIdentifier(appts.name)} a
+        WHERE a.tenant_id = ? AND a.client_id = ?
+        ORDER BY a.starts_at DESC
+        LIMIT ${limit}`,
+      [appts.tenantId ?? 0, clientId],
+    ).catch(() => [] as RowDataPacket[]);
+    for (const row of rows) {
+      const subtotal = Math.max(0, Number(row.subtotal ?? 0) || 0);
+      const dtype = String(row.discount_type ?? "").toLowerCase();
+      const dval = Math.max(0, Number(row.discount_value ?? 0) || 0);
+      let discount = 0;
+      if (dval > 0) {
+        if (dtype === "percent") discount = (subtotal * dval) / 100;
+        else if (dtype === "fixed") discount = dval;
+        if (discount > subtotal) discount = subtotal;
+      }
+      appointments.push({
+        id: Number(row.id ?? 0),
+        starts_at: sqlLocalStr(row.starts_at) ?? "",
+        status: appointmentPhpStatus(String(row.status ?? "")),
+        services: String(row.service_names ?? ""),
+        staff: String(row.staff_names ?? ""),
+        total: roundMoney(Math.max(0, subtotal - discount)),
+      });
+    }
+  }
+
+  const salesRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "sales",
+    columns: "id, sale_date, total, notes",
+    where: "client_id = ? AND (status IS NULL OR status NOT IN ('cancelled','canceled'))",
+    params: [clientId],
+    orderBy: "sale_date DESC",
+    limit: 10,
+  }).catch(() => [] as RowDataPacket[]);
+
+  const tagRows = await dbQuery<RowDataPacket[]>(
+    `SELECT t.id, t.name FROM ${quoteIdentifier((await tenantTable(slug, "customer_tags")).name)} t JOIN ${quoteIdentifier((await tenantTable(slug, "customer_tag_map")).name)} m ON m.tag_id = t.id AND m.tenant_id = t.tenant_id WHERE t.tenant_id = ? AND m.client_id = ? ORDER BY t.name ASC`,
+    [appts.tenantId ?? 0, clientId],
+  ).catch(() => [] as RowDataPacket[]);
+
+  const docRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "customer_documents",
+    columns: "id, title, file_path, created_at",
+    where: "client_id = ?",
+    params: [clientId],
+    orderBy: "created_at DESC",
+    limit: 25,
+  }).catch(() => [] as RowDataPacket[]);
+
+  return {
+    client: {
+      id: Number(clientRow.id ?? 0),
+      full_name: String(clientRow.full_name ?? ""),
+      phone: String(clientRow.phone ?? ""),
+      email: String(clientRow.email ?? ""),
+      points: Math.max(0, Math.round(Number(clientRow.points ?? 0) || 0)),
+    },
+    summary: {
+      total: Number(sum.total ?? 0) || 0,
+      done: Number(sum.done ?? 0) || 0,
+      scheduled: Number(sum.scheduled ?? 0) || 0,
+      pending: Number(sum.pending ?? 0) || 0,
+      canceled: Number(sum.canceled ?? 0) || 0,
+      no_show: Number(sum.no_show ?? 0) || 0,
+      last_visit: sqlLocalStr(sum.last_visit),
+      next_visit: sqlLocalStr(sum.next_visit),
+      sales_total: roundMoney(Number(salesTotalRows[0]?.t ?? 0) || 0),
+    },
+    appointments,
+    sales: salesRows.map((row) => ({
+      id: Number(row.id ?? 0),
+      sale_date: sqlLocalStr(row.sale_date) ?? "",
+      total: roundMoney(Number(row.total ?? 0) || 0),
+      notes: String(row.notes ?? ""),
+    })),
+    tags: tagRows.map((row) => ({ id: Number(row.id ?? 0), name: String(row.name ?? "") })),
+    // I documenti restano senza URL (l'infra allegati S3 è rinviata): il modal
+    // mostra "Non disponibile" come il legacy senza href.
+    docs: docRows.map((row) => ({ id: Number(row.id ?? 0), title: String(row.title ?? "Documento"), url: "", created_at: sqlLocalStr(row.created_at) ?? "" })),
+  };
+}
+
 // Combined quick-booking client context (history + residuals summaries),
 // tenant-scoped + session-gated by the API route. Mirrors the two legacy
 // endpoints the drawer calls when a client is selected.

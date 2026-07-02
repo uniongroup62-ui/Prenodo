@@ -207,6 +207,14 @@ function badgeForStatus(status: string): { cls: string; label: string } {
 }
 
 // EUR formatting, faithful to app.js fmtEUR ("€ 1.234,56", it-IT).
+// "GG/MM/AAAA HH:MM" from a SQL datetime (legacy qbFmtDateTime).
+function fmtQbDateTime(value: string | null | undefined): string {
+  const m = String(value ?? "").match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+  if (m) return `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`;
+  const d = String(value ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return d ? `${d[3]}/${d[2]}/${d[1]}` : String(value ?? "");
+}
+
 function fmtEUR(value: number): string {
   const num = Number(value || 0);
   try {
@@ -2282,12 +2290,52 @@ export function QuickBookingDrawer() {
     if (el && api) api.getOrCreateInstance(el).show();
   }, []);
 
-  // The history "Apri scheda" link -> the clean client view URL (port: opens the
-  // client card). The residuals "Apri scheda" link opens the DETAIL modal below
-  // (openResidualsDetail) — the full read-only residuals view.
+  // The history "Apri scheda" opens the CLIENT CARD modal (port of
+  // qbOpenClientCard -> api_clients action=card -> #qbClientCardModal); the
+  // href stays as the clean client view URL for the modal's "Apri in nuova
+  // scheda" footer link (and middle-click). The residuals "Apri scheda" link
+  // opens the DETAIL modal below (openResidualsDetail).
   const historyOpenHref = clientId
     ? `/${encodeURIComponent(slug)}/clients?action=view&id=${encodeURIComponent(clientId)}`
     : "#";
+
+  // ---- "Scheda semplificata" cliente (#qbClientCardModal) ----
+  type QbClientCard = {
+    client: { id: number; full_name: string; phone: string; email: string; points: number };
+    summary: { last_visit: string | null; next_visit: string | null; sales_total: number };
+    appointments: Array<{ id: number; starts_at: string; status: string; services: string; staff: string; total: number }>;
+    sales: Array<{ id: number; sale_date: string; total: number; notes: string }>;
+    tags: Array<{ id: number; name: string }>;
+    docs: Array<{ id: number; title: string; url: string; created_at: string }>;
+  };
+  const [clientCard, setClientCard] = useState<{ loading: boolean; error: string; data: QbClientCard | null }>({ loading: false, error: "", data: null });
+  const clientCardReqRef = useRef(0);
+
+  const openClientCard = useCallback((e?: React.MouseEvent) => {
+    if (e) e.preventDefault();
+    const id = String(clientId || "").trim();
+    if (!id) return;
+    const el = document.getElementById("qbClientCardModal");
+    const api = bootstrap()?.Modal;
+    if (el && api) api.getOrCreateInstance(el).show();
+    setClientCard({ loading: true, error: "", data: null });
+    const reqId = ++clientCardReqRef.current;
+    void fetch(`/api/manage/clients?slug=${encodeURIComponent(slug)}&action=card&client_id=${encodeURIComponent(id)}`, {
+      headers: { "x-tenant-slug": slug },
+    })
+      .then((res) => res.json().catch(() => null))
+      .then((data: ({ ok?: boolean; error?: string } & Partial<QbClientCard>) | null) => {
+        if (reqId !== clientCardReqRef.current) return;
+        if (!data || !data.ok || !data.client) {
+          setClientCard({ loading: false, error: String(data?.error || "Impossibile caricare la scheda cliente."), data: null });
+          return;
+        }
+        setClientCard({ loading: false, error: "", data: data as QbClientCard });
+      })
+      .catch(() => {
+        if (reqId === clientCardReqRef.current) setClientCard({ loading: false, error: "Errore di rete durante il caricamento.", data: null });
+      });
+  }, [clientId, slug]);
 
   // Open the "Apri scheda" residuals DETAIL modal for the selected client (port of
   // app.js qbOpenClientResiduals): show the modal, then fetch action=residuals and
@@ -3138,6 +3186,7 @@ export function QuickBookingDrawer() {
                   id="qbClientHistoryOpen"
                   className="small text-decoration-none"
                   data-client-id={clientId || undefined}
+                  onClick={openClientCard}
                 >
                   Apri scheda
                 </a>
@@ -4773,6 +4822,134 @@ export function QuickBookingDrawer() {
           drawer form already does the redeem SELECTION inline (per-service "Usa …" controls
           + the giftcard/credit price rows), which supersedes them. Bootstrap classes/markup
           kept close to app/lib/View.php:1683 + qbRenderClientResiduals. */}
+      {/* ===== Modal Scheda cliente (port of #qbClientCardModal, View.php:1650 +
+          qbRenderClientCard): anagrafica + punti Fidelity, Tag, Documenti,
+          Storico appuntamenti e Storico vendite del cliente selezionato. ===== */}
+      <div className="modal fade" id="qbClientCardModal" tabIndex={-1} aria-hidden="true">
+        <div className="modal-dialog modal-xl modal-dialog-scrollable">
+          <div className="modal-content" style={{ height: "calc(100vh - 3rem)" }}>
+            <div className="modal-header align-items-start">
+              <div className="d-flex align-items-start w-100">
+                <div>
+                  <div className="small-muted">Cliente</div>
+                  <h5 className="modal-title fw-bold m-0">Scheda semplificata</h5>
+                </div>
+                <div className="ms-auto d-flex flex-column align-items-end text-end">
+                  <a className="btn btn-sm btn-outline-secondary" id="qbClientCardOpenNew" href={historyOpenHref} target="_blank" rel="noopener">
+                    <i className="bi bi-box-arrow-up-right me-1" />Apri in nuova scheda
+                  </a>
+                  <div className="small text-muted mt-1">Per vedere più dettagli, apri la scheda cliente in una nuova scheda.</div>
+                </div>
+              </div>
+              <button type="button" className="btn-close ms-2" data-bs-dismiss="modal" aria-label="Chiudi" />
+            </div>
+            <div className="modal-body">
+              <div id="qbClientCardBody" className="p-1">
+                {clientCard.loading ? (
+                  <div className="app-inline-loading text-muted small p-2" role="status" aria-live="polite">
+                    <span className="spinner-border spinner-border-sm text-primary qb-inline-loader" aria-hidden="true" /> Caricamento...
+                  </div>
+                ) : clientCard.error ? (
+                  <div className="text-danger small p-2">{clientCard.error}</div>
+                ) : clientCard.data ? (
+                  <div className="px-2 pb-2">
+                    <div className="d-flex justify-content-between align-items-center mb-3">
+                      <div>
+                        <div className="text-muted small">Scheda cliente</div>
+                        <div className="h5 fw-bold m-0">{clientCard.data.client.full_name || "Cliente"}</div>
+                        <div className="text-muted small">{clientCard.data.client.phone || "—"} • {clientCard.data.client.email || "—"}</div>
+                      </div>
+                    </div>
+                    <div className="row g-3">
+                      <div className="col-lg-4">
+                        <div className="card p-3">
+                          <div className="fw-semibold mb-2"><i className="bi bi-award me-1" />Fidelity</div>
+                          <div className="display-6 fw-bold">{clientCard.data.client.points}</div>
+                          <div className="text-muted small">Punti accumulati</div>
+                        </div>
+                        <div className="card p-3 mt-3">
+                          <div className="fw-semibold mb-2"><i className="bi bi-tags me-1" />Tag</div>
+                          <div className="d-flex flex-wrap gap-2">
+                            {clientCard.data.tags.length
+                              ? clientCard.data.tags.map((tag) => <span className="badge badge-soft me-1 mb-1" key={tag.id}>{tag.name}</span>)
+                              : <span className="text-muted small">Nessun tag.</span>}
+                          </div>
+                        </div>
+                        <div className="card p-3 mt-3">
+                          <div className="fw-semibold mb-2"><i className="bi bi-file-earmark-arrow-up me-1" />Documenti</div>
+                          <div>
+                            {clientCard.data.docs.length ? clientCard.data.docs.map((doc) => (
+                              <div className="d-flex justify-content-between align-items-center border rounded-3 p-2 mb-2" key={doc.id}>
+                                <div>
+                                  <div className="fw-semibold">{doc.title || "Documento"}</div>
+                                  <div className="text-muted small">{fmtQbDateTime(doc.created_at) || "—"}</div>
+                                </div>
+                                <div className="d-flex gap-2">
+                                  {doc.url
+                                    ? <a className="btn btn-sm btn-outline-secondary" target="_blank" rel="noopener" href={doc.url}>Apri</a>
+                                    : <span className="text-muted small">Non disponibile</span>}
+                                </div>
+                              </div>
+                            )) : <div className="text-muted small">Nessun documento.</div>}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="col-lg-8">
+                        <div className="card">
+                          <div className="card-header fw-semibold">
+                            <i className="bi bi-calendar-check me-2" />Storico appuntamenti
+                            <span className="text-muted small ms-2">
+                              Ultima: {clientCard.data.summary.last_visit ? fmtQbDateTime(clientCard.data.summary.last_visit) : "—"} • Prossima: {clientCard.data.summary.next_visit ? fmtQbDateTime(clientCard.data.summary.next_visit) : "—"}
+                              {clientCard.data.summary.sales_total > 0 ? <> • Vendite: <span className="fw-semibold">{fmtEUR(clientCard.data.summary.sales_total)}</span></> : null}
+                            </span>
+                          </div>
+                          <div className="table-responsive">
+                            <table className="table mb-0">
+                              <thead><tr><th>Data</th><th>Servizi</th><th>Operatore</th><th className="text-end">Totale</th><th>Stato</th></tr></thead>
+                              <tbody>
+                                {clientCard.data.appointments.length ? clientCard.data.appointments.map((appt) => {
+                                  const badge = badgeForStatus(appt.status);
+                                  return (
+                                    <tr key={appt.id}>
+                                      <td>{fmtQbDateTime(appt.starts_at)}</td>
+                                      <td className="text-muted">{appt.services || "—"}</td>
+                                      <td className="text-muted">{appt.staff || "—"}</td>
+                                      <td className="text-end fw-semibold">{fmtEUR(appt.total)}</td>
+                                      <td><span className={`badge text-bg-${badge.cls}`}>{badge.label}</span></td>
+                                    </tr>
+                                  );
+                                }) : <tr><td colSpan={5} className="text-muted p-3">Nessun appuntamento.</td></tr>}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                        <div className="card mt-3">
+                          <div className="card-header fw-semibold"><i className="bi bi-receipt me-2" />Storico vendite</div>
+                          <div className="table-responsive">
+                            <table className="table mb-0">
+                              <thead><tr><th>Data</th><th>Totale</th><th>Note</th></tr></thead>
+                              <tbody>
+                                {clientCard.data.sales.length ? clientCard.data.sales.map((sale) => (
+                                  <tr key={sale.id}>
+                                    <td>{fmtQbDateTime(sale.sale_date)}</td>
+                                    <td className="fw-semibold">{fmtEUR(sale.total)}</td>
+                                    <td className="text-muted">{sale.notes || "—"}</td>
+                                  </tr>
+                                )) : <tr><td colSpan={3} className="text-muted p-3">Nessuna vendita.</td></tr>}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div className="modal fade" id="qbClientResidualsModal" tabIndex={-1} aria-hidden="true">
         <div className="modal-dialog modal-lg modal-dialog-scrollable">
           <div className="modal-content">

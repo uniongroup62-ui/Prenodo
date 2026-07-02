@@ -11,6 +11,7 @@ import {
   getManageClientDetail,
   getManageClientHistory,
   listDbClients,
+  quickBookClientCard,
   quickBookClientContext,
   quickBookClientResidualsDetail,
   removeManageClientTag,
@@ -42,6 +43,20 @@ export async function GET(request: Request) {
   // returns BOTH the legacy `action=history` (summary) and `action=residuals`
   // (summary=1) payloads for one client, so the drawer can populate both boxes
   // with a single fetch. Port of api_clients.php history/residuals summaries.
+  // "Scheda semplificata" cliente per il modal del quick booking (port of
+  // api_clients.php action=card): anagrafica+punti, riepilogo, ultimi
+  // appuntamenti/vendite, tag e documenti.
+  if (url.searchParams.get("action") === "card") {
+    const clientId = parseInteger(url.searchParams.get("client_id"));
+    if (clientId <= 0) return jsonError("client_id mancante.");
+    try {
+      const card = await quickBookClientCard(tenantSlug, clientId, parseInteger(url.searchParams.get("limit"), 10));
+      return Response.json({ ok: true, sourceMode: "database", ...card });
+    } catch (error) {
+      return jsonError(error instanceof Error ? error.message : "Impossibile caricare la scheda cliente.");
+    }
+  }
+
   if (url.searchParams.get("action") === "quickbook_client_context") {
     const clientId = parseInteger(url.searchParams.get("client_id"));
     if (clientId <= 0) return jsonError("client_id mancante.");
