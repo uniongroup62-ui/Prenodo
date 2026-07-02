@@ -48,8 +48,21 @@ Clienti (form/detail/cascade-delete/tag/storico).
    client-rendered (h1 placeholder "Attivita" pre-hydration, poi "elite" dal
    context API — nessun bug funzionale; eventuale SSR per SEO è un'ottimizzazione
    futura).
-4. ⏳ **POS**: stessa vendita su entrambi → confrontare totali/sconti/punti/residui.
-5. ⏳ **Drawer**: stesso appuntamento su entrambi (conflitti, prezzi, redeem).
+4. ✅ **POS — stessa vendita su entrambi** (cliente 9, servizio "test" €12, contanti):
+   PHP #23 e Next #91 → **numeri IDENTICI** (Subtotale €12,00 / Sconto €0,00 /
+   Totale €12,00 / 0 punti — nessuna campagna attiva su entrambi). Storno +
+   eliminazione definitiva eseguiti su entrambi (DB ripuliti). Nota tecnica PHP:
+   il checkout richiede `installment_choice_mode=single|installment` (obbligatorio).
+5. ✅ **Drawer — stesso appuntamento su entrambi** (06/07 09:00–10:00, cliente 9,
+   staff luca): creato su entrambi; con l'occupazione identica la disponibilità
+   perde **gli stessi 12 slot** (09:00–09:55) → **97/97 disponibili identici**.
+   Differenza di FORMATO (non logica): il PHP restituisce solo gli slot liberi,
+   il Next tutti gli slot con flag `available`/`reason` (la UI filtra il flag).
+   Cleanup completo su entrambi.
+   ⚠️ **Divergenza guardia delete**: il PHP rifiuta l'eliminazione di un
+   appuntamento non annullato ("Annullala prima"); il Next elimina direttamente
+   (con restore dei redeem). Da decidere se allineare (guardia legacy più
+   prudente) o mantenere (il delete Next è confirm-gated e ripristina tutto).
 6. ⏳ **Voucher pubblici** giftcard/giftbox (servono token reali su entrambi).
 7. ⏳ **Admin SaaS** + cron (EventBridge in prod).
 
