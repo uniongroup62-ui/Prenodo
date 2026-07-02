@@ -561,6 +561,16 @@ Due mancanze vs PHP nella toolbar/griglia del calendario:
   .fc-icon/.fc-icon-chevron-left/right + sizing .fc .fc-button .fc-icon estratti
   da fullcalendar@6.1.11/index.global.min.js e aggiunti a
   public/assets/css/pages/calendar.css.
+- **Griglia a tutta pagina invece che con scroll interno**: il legacy imposta
+  l'altezza del calendario al viewport (computeCalendarViewportHeight: innerHeight
+  - top shell - footer - gap, min 360/400/420 per breakpoint) e la timegrid
+  scorre DENTRO lo scroller FullCalendar; il Next dava all'harness l'altezza
+  dell'intero contenuto (slot x 88px) facendo crescere la pagina. Port:
+  harnessRef + agendaViewportHeight (stessa formula, ricalcolo su resize),
+  .fc-scroller interno (overflow auto, entrambi gli assi) per Giorno/Settimana,
+  header colonne (operatori/giorni) sticky-top, asse orari sticky-left con
+  corner spacer sticky (il wrapper overflowX annidato è stato rimosso: con uno
+  scroller solo gli sticky funzionano). Mese resta auto-height come nel legacy.
 
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;

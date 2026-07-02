@@ -736,6 +736,32 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
     const t = window.setTimeout(() => setOverlayVisible(false), 100);
     return () => window.clearTimeout(t);
   }, [loading]);
+  // Viewport-height agenda (port of computeCalendarViewportHeight /
+  // syncCalendarViewportHeight, calendar.js ~347-397): the legacy sizes the whole
+  // calendar to the visible viewport (shell minimum 360/400/420 by breakpoint) and
+  // FullCalendar's inner scroller scrolls the time grid — the PAGE does not grow
+  // with the day's slots. We measure the grid harness top and give it the
+  // remaining viewport space; the inner .fc-scroller scrolls vertically with
+  // sticky column headers (Day/Week; Month stays auto-height like the legacy grid).
+  const harnessRef = useRef<HTMLDivElement | null>(null);
+  const [agendaViewportHeight, setAgendaViewportHeight] = useState(0);
+  useEffect(() => {
+    const compute = () => {
+      const el = harnessRef.current;
+      const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+      if (!el || !vh) return;
+      const width = window.innerWidth || 0;
+      const gap = width <= 575 ? 12 : 16;
+      // Legacy minimums are for the whole shell (toolbar included, ~72px above
+      // the harness): 360 / 400 / 420 — the harness keeps what remains.
+      const minShell = width <= 575 ? 360 : width <= 991 ? 400 : 420;
+      const available = Math.floor(vh - Math.max(0, el.getBoundingClientRect().top) - gap);
+      setAgendaViewportHeight(Math.max(minShell - 72, available));
+    };
+    compute();
+    window.addEventListener("resize", compute);
+    return () => window.removeEventListener("resize", compute);
+  }, []);
 
   // Current minute-of-day for the now-indicator line (port of FullCalendar's
   // nowIndicator + calendar.js installStaffNowIndicatorFix). Ticked every 30s by an
@@ -2173,7 +2199,8 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
       <div className="cal-static-grid" style={{ display: "flex", minHeight: weekGridHeight }}>
         {/* Time axis */}
         <div className="cal-static-axis" style={{ flex: "0 0 56px", borderRight: "1px solid var(--calendar-line, #e2e8f0)", position: "relative" }}>
-          <div style={{ height: 44 }} />
+          {/* 44px corner spacer — sticky-top like the week header cells. */}
+          <div style={{ height: 44, position: "sticky", top: 0, zIndex: 10, background: "#fff" }} />
           {/* NOW-INDICATOR axis side (Settimana): red arrow + HH:MM label at the now
               line's Y plus the 44px header offset. */}
           {weekNowIndicator ? (
@@ -2264,7 +2291,9 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                 <div
                   data-date={iso}
                   className={`fc-col-header-cell${isToday ? " fc-day-today" : ""}${noteCount > 0 ? " has-calendar-notes" : ""}`}
-                  style={{ height: 44, display: "flex", alignItems: "center", justifyContent: "center", borderBottom: "1px solid var(--calendar-line, #e2e8f0)" }}
+                  // sticky: pinned at the top of the .fc-scroller while the week grid
+                  // scrolls; the page CSS provides the (today-tinted) opaque background.
+                  style={{ height: 44, display: "flex", alignItems: "center", justifyContent: "center", borderBottom: "1px solid var(--calendar-line, #e2e8f0)", position: "sticky", top: 0, zIndex: 8 }}
                 >
                   <span className="fc-col-header-cell-cushion">
                     <span className="calendar-weekday-full">
@@ -2869,7 +2898,16 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
 
               <div
                 className="fc-view-harness"
-                style={{ height: view === "dayGridMonth" ? "auto" : (view === "timeGridWeek" ? weekGridHeight : gridHeight) + 44 }}
+                ref={harnessRef}
+                // Day/Week: fixed viewport-derived height (legacy cal.setOption('height', …));
+                // the grid scrolls INSIDE the .fc-scroller below. Fallback to the full
+                // content height only before the first client-side measure.
+                style={{
+                  height:
+                    view === "dayGridMonth"
+                      ? "auto"
+                      : agendaViewportHeight || (view === "timeGridWeek" ? weekGridHeight : gridHeight) + 44,
+                }}
               >
                 {/* Loading/error overlay card over the agenda (port of the legacy
                     #calendarLoadingOverlay injected by calendarEnsureLoadingOverlay):
@@ -2909,6 +2947,10 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                     </div>
                   </div>
                 ) : null}
+                {/* Inner scroller (the FullCalendar .fc-scroller role): Day/Week scroll
+                    the time grid vertically (and horizontally with many staff columns)
+                    inside the fixed-height harness; the sticky headers below stay pinned. */}
+                <div className="fc-scroller" style={view === "dayGridMonth" ? undefined : { height: "100%", overflow: "auto" }}>
                 <div
                   className={
                     view === "dayGridMonth"
@@ -2928,9 +2970,11 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                     weekView
                   ) : (
                     <div className="cal-static-grid" style={{ display: "flex", minHeight: gridHeight }}>
-                      {/* Time axis */}
-                      <div className="cal-static-axis" style={{ flex: "0 0 56px", borderRight: "1px solid var(--calendar-line, #e2e8f0)", position: "relative" }}>
-                        <div style={{ height: 44 }} />
+                      {/* Time axis — sticky-left so it stays visible when many staff
+                          columns make the scroller scroll horizontally (the FullCalendar
+                          pinned-axis behavior); the 44px corner spacer is also sticky-top. */}
+                      <div className="cal-static-axis" style={{ flex: "0 0 56px", borderRight: "1px solid var(--calendar-line, #e2e8f0)", position: "sticky", left: 0, zIndex: 9, background: "#fff" }}>
+                        <div style={{ height: 44, position: "sticky", top: 0, zIndex: 10, background: "#fff" }} />
                         {/* NOW-INDICATOR axis side: the red arrow (legacy
                             .fc-timegrid-now-indicator-arrow) + the current HH:MM label.
                             Positioned at the now line's Y plus the 44px header offset. */}
@@ -2994,12 +3038,12 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                         })}
                       </div>
 
-                      {/* Staff columns. overflowX:auto mirrors FullCalendar's dayMinWidth:
-                          when the per-column min-width (--calendar-staff-col-min) makes the
-                          columns wider than the container (many operators), this wrapper
-                          scrolls horizontally instead of squishing the columns to nil; with
-                          one / a few columns flex-grow still fills the width. */}
-                      <div style={{ display: "flex", flex: "1 1 auto", minWidth: 0, position: "relative", overflowX: "auto" }}>
+                      {/* Staff columns. The per-column min-width (--calendar-staff-col-min,
+                          FullCalendar's dayMinWidth) makes the columns overflow this wrapper
+                          with many operators; the overflow now scrolls in the OUTER
+                          .fc-scroller (one scroller for both axes, so the sticky headers +
+                          sticky axis keep working), instead of a nested overflowX here. */}
+                      <div style={{ display: "flex", flex: "1 1 auto", minWidth: 0, position: "relative" }}>
                         {/* NOW-INDICATOR line (Giorno): a single red line spanning ALL
                             staff columns, faithful to updateStaffNowIndicator. Uses the
                             legacy .fc-timegrid-now-indicator-line class (calendar.css
@@ -3038,7 +3082,10 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                               >
                                 <div
                                   className="fc-col-header-cell"
-                                  style={{ height: 44, display: "flex", alignItems: "center", justifyContent: "center", borderBottom: "1px solid var(--calendar-line, #e2e8f0)" }}
+                                  // sticky: pinned at the top of the .fc-scroller while the
+                                  // grid scrolls (the FullCalendar header-section behavior);
+                                  // the page CSS provides the opaque background.
+                                  style={{ height: 44, display: "flex", alignItems: "center", justifyContent: "center", borderBottom: "1px solid var(--calendar-line, #e2e8f0)", position: "sticky", top: 0, zIndex: 8 }}
                                 >
                                   <div className="staff-col-head" data-staff-id={s.id}>
                                     {s.photoPath ? (
@@ -3278,6 +3325,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                       </div>
                     </div>
                   )}
+                </div>
                 </div>
               </div>
             </div>
