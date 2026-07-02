@@ -10785,8 +10785,12 @@ async function mapCoupon(slug: string, row: RowDataPacket): Promise<CouponRule> 
     value: roundMoney(Number(row.discount_value ?? 0)),
     minSubtotal: roundMoney(Number(row.min_subtotal ?? 0)),
     active: Number(row.is_active ?? 1) === 1 && !row.cancelled_at,
-    startsAt: String(row.valid_from ?? todayIso()).slice(0, 10),
-    endsAt: String(row.valid_to ?? addDaysDate(30)).slice(0, 10),
+    // NULL validity bounds stay EMPTY (unbounded, like the legacy): activeWindow()
+    // treats "" as no limit. The previous today/+30d fallbacks invented a rolling
+    // fake window — display-wrong AND a real bug: a no-expiry coupon previewed
+    // as-of an appointment date >30 days ahead was wrongly judged expired.
+    startsAt: row.valid_from ? String(row.valid_from).slice(0, 10) : "",
+    endsAt: row.valid_to ? String(row.valid_to).slice(0, 10) : "",
     usageLimit: Math.max(0, Math.round(Number(row.usage_limit ?? 0))),
     usedCount: await couponUsageCount(slug, code),
     createdAt: toIso(row.created_at),
