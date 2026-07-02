@@ -2507,6 +2507,12 @@ export function QuickBookingDrawer() {
   const [availRangeLabel, setAvailRangeLabel] = useState<string>("");
   const [availBrowserLoading, setAvailBrowserLoading] = useState(false);
   const [availModalError, setAvailModalError] = useState<string>("");
+  // Hover tooltip on the day-view bars (port of the legacy lazy Bootstrap
+  // tooltips, app.js ensureAvailTooltip: dark top tooltip shown IMMEDIATELY
+  // with "3 Luglio" + bold HH:MM + the state line). Rendered as a fixed
+  // Bootstrap-styled tooltip driven by React state (no bootstrap.Tooltip
+  // instances to dispose across re-renders).
+  const [availHoverTip, setAvailHoverTip] = useState<{ left: number; top: number; day: string; time: string; state: string | null; muted: boolean } | null>(null);
   const [availApplying, setAvailApplying] = useState(false);
   const availSeqRef = useRef(0);
 
@@ -2538,6 +2544,7 @@ export function QuickBookingDrawer() {
     setAvailAnchor(safeDate);
     setAvailMode(mode);
     setAvailModalError("");
+    setAvailHoverTip(null); // the bars re-render: never leave a stale tooltip
     setAvailBrowserLoading(true);
     const seq = ++availSeqRef.current;
     try {
@@ -2600,6 +2607,7 @@ export function QuickBookingDrawer() {
   const closeAvailabilityModal = useCallback(() => {
     availSeqRef.current++;
     setAvailModalOpen(false);
+    setAvailHoverTip(null);
   }, []);
 
   // Slot click (port of applyAvailabilitySlot): create the hold for the chosen
@@ -4289,6 +4297,12 @@ export function QuickBookingDrawer() {
                               const o2 = toMin(d.opens2), c2 = toMin(d.closes2);
                               if (o2 !== null && c2 !== null && c2 > o2) intervals.push([o2, c2]);
                               const ticks = Array.from({ length: (24 * 60) / 5 }, (_, i) => i * 5);
+                              // Tooltip day line (legacy formatItDayMonth): "3 Luglio".
+                              const monthsIt = ["Gennaio", "Febbraio", "Marzo", "Aprile", "Maggio", "Giugno", "Luglio", "Agosto", "Settembre", "Ottobre", "Novembre", "Dicembre"];
+                              const dayMonthLabel = (() => {
+                                const mm = d.date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+                                return mm ? `${Number(mm[3])} ${monthsIt[Number(mm[2]) - 1] ?? ""}` : d.date;
+                              })();
                               return (
                                 <div className="qb-avail-row" data-date={d.date} key={d.date}>
                                   <div className="qb-avail-day"><div className="fw-semibold">{d.label}</div></div>
@@ -4307,12 +4321,15 @@ export function QuickBookingDrawer() {
                                       const boundaryStart = intervals.some(([s]) => tMin === s);
                                       const boundaryEnd = intervals.some(([, e]) => tMin === e - 5);
                                       const cls = `qb-avail-bar${isBookedOutside ? " is-booked-outside" : isBooked ? " is-booked" : on ? " is-on" : alt ? " is-alt" : " is-off"}${isOutside ? " is-outside-hours" : ""}${boundaryStart ? " bh-start" : ""}${boundaryEnd ? " bh-end" : ""}`;
+                                      // Legacy state line: a PLAIN available slot has NO
+                                      // extra line (day + bold time only); the others
+                                      // carry their status (booked-outside is muted).
                                       const state = isBookedOutside
                                         ? "Prenotazione fuori orario / in chiusura"
                                         : isBooked
                                           ? "Slot occupato"
                                           : on
-                                            ? d.dst_gap.includes(t) ? "Ora non esistente (cambio ora legale)" : "Disponibile"
+                                            ? d.dst_gap.includes(t) ? "Ora non esistente (cambio ora legale)" : null
                                             : alt
                                               ? "Fuori orario / Chiusura (selezionabile)"
                                               : "Non disponibile";
@@ -4322,7 +4339,18 @@ export function QuickBookingDrawer() {
                                           key={t}
                                           className={cls}
                                           data-time={t}
-                                          title={`${d.label_full} ${t} — ${state}`}
+                                          onMouseEnter={(e) => {
+                                            const rect = e.currentTarget.getBoundingClientRect();
+                                            setAvailHoverTip({
+                                              left: rect.left + rect.width / 2,
+                                              top: rect.top - 6,
+                                              day: dayMonthLabel,
+                                              time: t,
+                                              state,
+                                              muted: isBookedOutside,
+                                            });
+                                          }}
+                                          onMouseLeave={() => setAvailHoverTip(null)}
                                           onClick={selectable && !availApplying ? () => void applyAvailabilitySlot(d.date, t) : undefined}
                                         />
                                       );
@@ -4378,6 +4406,31 @@ export function QuickBookingDrawer() {
             </div>
           </div>
           <div className="modal-backdrop fade show" onClick={closeAvailabilityModal} />
+          {/* Slot hover tooltip (port of the legacy Bootstrap tooltip on the
+              bars): dark top tooltip with "3 Luglio" + bold HH:MM + state. */}
+          {availHoverTip ? (
+            <div
+              className="tooltip bs-tooltip-top show"
+              role="tooltip"
+              style={{
+                position: "fixed",
+                left: availHoverTip.left,
+                top: availHoverTip.top,
+                transform: "translate(-50%, -100%)",
+                zIndex: 1090,
+                pointerEvents: "none",
+              }}
+            >
+              <div className="tooltip-arrow" style={{ position: "absolute", left: "50%", bottom: 0, transform: "translateX(-50%)" }} />
+              <div className="tooltip-inner">
+                {availHoverTip.day}
+                <div className="fw-semibold">{availHoverTip.time}</div>
+                {availHoverTip.state ? (
+                  <div className={`small mt-1 ${availHoverTip.muted ? "text-muted" : "text-white"}`}>{availHoverTip.state}</div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
         </>
       ) : null}
 
