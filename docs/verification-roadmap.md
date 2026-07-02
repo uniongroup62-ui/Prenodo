@@ -124,6 +124,23 @@ Clienti (form/detail/cascade-delete/tag/storico).
     - Verificati inoltre: staff_for_service (stessi operatori listati),
       availability per-segmento su 4 combinazioni, calendario list API
       (eventi per-segmento PHP ≡ appointment+segments Next).
+13. ✅ **Chiusure + Straordinari cross-engine (fix bf1105f)**: il motore slot
+    Next IGNORAVA la tabella closures (giorno chiuso = 109 slot prenotabili!).
+    Ora priorità legacy (straordinario > chiusura > orari settimanali).
+    Verificato live: chiusura 17/07 → 0/0; domenica straordinaria 19/07
+    10:00–13:00 → 25/25 identici (10:00→12:00 per 60'); domenica normale → 0/0;
+    delete chiusura → 109 ripristinati.
+14. ✅ **Redeem PACCHETTO cross-sistema end-to-end (2026-07-02)**: template
+    ZZPack (3× test, €30) creato su entrambi → venduto via POS a cliente 9 su
+    entrambi → redeem nel drawer su entrambi → **parità perfetta**: riga
+    servizio price 0 / list_price 12 / badge "Pacchetto" IDENTICI; il Next
+    scala la seduta 3→2 alla creazione (modello prenotazione, divergenza
+    documentata: il legacy scala al done) e la RIPRISTINA 2→3 all'annullo.
+    Cleanup completo: appuntamenti, storno vendite (il delete PHP riporta
+    "Artefatti vendita eliminati: Pacchetti 1" ≡ il void Next annulla il
+    client_package), template eliminati da entrambi.
+    Nota harness: il campo Next è `item_id` (non `id`) nelle righe pacchetto;
+    la delete catalogo PHP è un GET (action=catalog_delete&id&_csrf).
 
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;
