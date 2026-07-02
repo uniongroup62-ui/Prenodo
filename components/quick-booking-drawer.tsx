@@ -117,6 +117,10 @@ type AppointmentEditPayload = {
   // Item 3: warning when the edited appointment links a now-EXPIRED redeem source
   // (package/prepaid/giftbox/gift/giftcard). "" / absent when nothing is expired.
   expiredLinkWarning?: string;
+  // Cancellation metadata for the locked-mode alert (#qbCancellationAlert): the
+  // cancelled_at datetime + the operator's reason (with the notes fallback server-side).
+  cancelledAt?: string;
+  cancelledReason?: string;
 };
 
 // Minimal Bootstrap offcanvas/modal surface used here (the bundle is loaded by
@@ -670,6 +674,10 @@ export function QuickBookingDrawer() {
   const [holdToken, setHoldToken] = useState<string>("");
   // Item 3: the expired-linked warning shown in #qbExpiredLinkedAlert (from action=get).
   const [expiredLinkWarning, setExpiredLinkWarning] = useState<string>("");
+  // Cancellation metadata (from action=get) for the locked-mode alert
+  // (#qbCancellationAlert, port of qbRenderCancellationAlert).
+  const [cancelledAt, setCancelledAt] = useState<string>("");
+  const [cancelledReason, setCancelledReason] = useState<string>("");
   // Item 4: the edit-load lifecycle. `editLoading` drives #qbLoadingState (spinner) around
   // the action=get fetch; `editLoadError` (already present) drives #qbLoadErrorState. Both
   // block the form while set. A separate #qbLoadErrorState (with a working Riprova button)
@@ -834,6 +842,9 @@ export function QuickBookingDrawer() {
     dropAndReleaseHold();
     // Item 3/4: a fresh form carries no expired-linked alert and no edit-load lifecycle.
     setExpiredLinkWarning("");
+    // No cancellation alert on a fresh CREATE (port of qbApplyCancellationState(null)).
+    setCancelledAt("");
+    setCancelledReason("");
     setEditLoading(false);
     // Manual sconto + coupon belong to the booking; reset to "none" (port of qbResetForm).
     setDiscountType("");
@@ -2242,6 +2253,10 @@ export function QuickBookingDrawer() {
           // Item 3: surface the expired-linked-residual warning in #qbExpiredLinkedAlert
           // (port of qbSetExpiredLinkedAlert(a.expired_link_warning)). "" hides it.
           setExpiredLinkWarning(String(a.expiredLinkWarning ?? "").trim());
+          // Cancellation metadata for the locked-mode alert (qbApplyCancellationState):
+          // only rendered when the loaded status is canceled/no_show.
+          setCancelledAt(String(a.cancelledAt ?? "").trim());
+          setCancelledReason(String(a.cancelledReason ?? "").trim());
           // Item 4: prefill done -> ready (spinner hidden, form unblocked; qbSetLoadReady).
           setEditLoading(false);
         })
@@ -2809,6 +2824,12 @@ export function QuickBookingDrawer() {
     async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
       setFormError("");
+      // Locked-appointment guard (port of the legacy submit check on
+      // qbIsCanceledLockedMode): a canceled/no_show appointment cannot be re-saved.
+      if (apptId && (originalStatus === "canceled" || originalStatus === "no_show")) {
+        setFormError("La prenotazione annullata non è modificabile.");
+        return;
+      }
       const names = selectedServiceNames();
       if (!client) {
         setFormError("Seleziona o crea un cliente.");
@@ -2981,20 +3002,26 @@ export function QuickBookingDrawer() {
         // A failed transition surfaces inline (we DON'T reload) so the staff can retry.
         const newStatus = status.trim();
         if (apptId && originalStatus && newStatus && newStatus !== originalStatus) {
-          const isCancelDone =
-            originalStatus === "done" && (newStatus === "canceled" || newStatus === "no_show");
+          // ANY cancel goes through the dedicated popup, like the legacy submit routing
+          // (app.js ~11340: pending/scheduled/done -> canceled/no_show opens
+          // qbOpenDoneCancelPreview). 'reserved' mode (pending/scheduled) unlocks the
+          // holds; 'executed' (done) reverses the settled points/credit. Both stamp
+          // cancelled_at/by/reason server-side.
+          const isCancelFlow =
+            (originalStatus === "pending" || originalStatus === "scheduled" || originalStatus === "done") &&
+            (newStatus === "canceled" || newStatus === "no_show");
           let cancelReason = "";
-          if (isCancelDone) {
+          if (isCancelFlow) {
             // Rich preview-lock modal replacing the bare confirm(): fetch the cancel_done
-            // preview, show what will be restored/reversed + a reason field, and AWAIT the
-            // operator's decision. A null result = abort (keep the appointment 'Eseguito',
-            // no reload); { reason } = confirmed, threaded into the cancel_done POST.
+            // preview, show what will be restored/unlocked + a reason field, and AWAIT the
+            // operator's decision. A null result = abort (keep the current status, no
+            // reload); { reason } = confirmed, threaded into the cancel_done POST.
             const decision = await openDoneCancelModal(apptId, newStatus === "no_show" ? "no_show" : "canceled");
             if (!decision) {
-              // Staff declined the storno: keep the appointment done. The save already
-              // persisted the other fields; just stop here (no reload) so the drawer
-              // stays open and the status select can be reverted.
-              setFormError("Annullamento non confermato: lo stato resta 'Eseguito'.");
+              // Staff declined: keep the current status. The save already persisted the
+              // other fields; just stop here (no reload) so the drawer stays open and
+              // the status select can be reverted.
+              setFormError("Annullamento non confermato: lo stato resta invariato.");
               return;
             }
             cancelReason = decision.reason;
@@ -3003,7 +3030,7 @@ export function QuickBookingDrawer() {
             method: "POST",
             headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
             body: JSON.stringify(
-              isCancelDone
+              isCancelFlow
                 ? { action: "cancel_done", id: apptId, status: newStatus, reason: cancelReason }
                 : { action: "status", id: apptId, status: newStatus },
             ),
@@ -3083,6 +3110,13 @@ export function QuickBookingDrawer() {
           { value: "no_show", label: "No show" },
         ];
 
+  // LOCKED-appointment mode (port of qbIsCanceledLockedMode + qbSetLockedAppointmentMode):
+  // editing an appointment whose ORIGINAL status is canceled/no_show freezes the whole
+  // form — every field disabled, the client links inert, the submit disabled with the
+  // status as its label — and shows the #qbCancellationAlert. The delete button stays
+  // usable ONLY for canceled (legacy keepDeleteEnabled); no_show disables it too.
+  const formLocked = Boolean(apptId) && statusLocked;
+
   return (
     <>
       {/* ===================== OFFCANVAS (verbatim from View.php) ===================== */}
@@ -3140,7 +3174,29 @@ export function QuickBookingDrawer() {
           {/* Item 4: hide the form while loading or on a load error (qbSetFormHydrationBlocked). */}
           <form id="quickBookingForm" onSubmit={submitBooking} style={editLoading || editLoadError ? { display: "none" } : undefined}>
             <div id="qbSegmentViewAlert" className="alert alert-warning small" style={{ display: "none" }} />
-            <div id="qbCancellationAlert" className="alert alert-warning small" style={{ display: "none" }} />
+            {/* Cancellation alert (port of qbRenderCancellationAlert): shown only for a
+                canceled/no_show appointment — bold title, the operator's reason (or the
+                terminal-state fallback line) and the cancellation timestamp. */}
+            <div id="qbCancellationAlert" className="alert alert-warning small" style={{ display: formLocked ? "block" : "none" }}>
+              {formLocked ? (
+                <>
+                  <div className="fw-semibold mb-1">{originalStatus === "no_show" ? "Prenotazione No show" : "Prenotazione annullata"}</div>
+                  <div>{cancelledReason || "Questa prenotazione è in stato finale e non può più essere modificata."}</div>
+                  {cancelledAt ? (
+                    <div className="small text-muted mt-1">
+                      {(originalStatus === "no_show" ? "Segnata il " : "Annullata il ") + fmtDateTimeFromSql(cancelledAt)}
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+
+            {/* Locked-mode field freeze (port of qbSetLockedAppointmentMode): a disabled
+                fieldset covers every input/select/textarea/button of the form body; the
+                qb-locked class also inerts the client links + the services multiselect
+                (pointer-events none, opacity .65, like qbSetClickableLocked). The submit
+                and delete buttons live OUTSIDE this fieldset (their lock is per-button). */}
+            <fieldset disabled={formLocked} className={formLocked ? "qb-locked" : undefined}>
 
             {/* Cliente (spostato sopra a "Servizi") */}
             <label className="form-label">Cliente</label>
@@ -4231,9 +4287,13 @@ export function QuickBookingDrawer() {
               </div>
             </div>
 
+            </fieldset>
+
             {formError ? <div className="alert alert-danger small mt-3 mb-0">{formError}</div> : null}
 
-            <button className="btn btn-primary btn-pill w-100 mt-3" type="submit" id="qbSubmitBtn" disabled={submitting}>
+            {/* Locked mode: submit disabled with the terminal status as label (port of
+                qbSetLockedAppointmentMode submitBtn.disabled + submitTextEl). */}
+            <button className="btn btn-primary btn-pill w-100 mt-3" type="submit" id="qbSubmitBtn" disabled={submitting || formLocked}>
               <span id="qbSubmitText">
                 {submitting
                   ? "Salvataggio..."
@@ -4247,7 +4307,16 @@ export function QuickBookingDrawer() {
               </span>
             </button>
 
-            <button className="btn btn-outline-danger btn-pill w-100 mt-2" type="button" id="qbDeleteBtn" style={{ display: isEditMode ? "block" : "none" }} onClick={deleteBooking} disabled={submitting}>
+            {/* Locked mode: delete stays enabled ONLY for canceled (legacy
+                keepDeleteEnabled) — a no_show cannot be deleted from the drawer. */}
+            <button
+              className="btn btn-outline-danger btn-pill w-100 mt-2"
+              type="button"
+              id="qbDeleteBtn"
+              style={{ display: isEditMode ? "block" : "none" }}
+              onClick={deleteBooking}
+              disabled={submitting || (formLocked && originalStatus !== "canceled")}
+            >
               Elimina appuntamento
             </button>
           </form>

@@ -2440,9 +2440,16 @@ export async function updateDbAppointment({
   if (!existingRows[0]) throw new Error("Appuntamento non trovato.");
   const currentCabinId = Number(existingRows[0].cabin_id ?? 0) || 0;
   const currentClientId = Number(existingRows[0].client_id ?? 0) || 0;
+  // Legacy terminal-status save guard (api_appointments.php ~10222-10227): once an
+  // appointment is canceled/no_show the WHOLE edit-save is refused — the row is in
+  // a final state and only delete (canceled) remains possible from the drawer.
+  const originalPhpStatus = appointmentPhpStatus(String(existingRows[0].status ?? ""));
+  if (originalPhpStatus === "canceled" || originalPhpStatus === "no_show") {
+    throw new Error("La prenotazione annullata non è più modificabile.");
+  }
   // Legacy promo gate (appt_promotion_update_allowed_for_old_status): a re-save
   // re-applies the automatic promotion unless the appointment is already done.
-  const promoUpdateAllowed = appointmentPhpStatus(String(existingRows[0].status ?? "")) !== "done";
+  const promoUpdateAllowed = originalPhpStatus !== "done";
   // Old per-segment cabins by position ("mantieni la cabina del segmento" candidate).
   const currentSegmentRows = await tenantSelect<RowDataPacket>({
     slug,
@@ -3063,6 +3070,12 @@ export type AppointmentEditPayload = {
   // a redeem source (package/prepaid/giftbox/gift/giftcard) that is now EXPIRED — a
   // heads-up so the operator knows a linked residual can't be re-applied. "" when none.
   expiredLinkWarning: string;
+  // Cancellation metadata for the drawer's locked-mode alert (#qbCancellationAlert):
+  // cancelled_at ("YYYY-MM-DD HH:MM:SS", local) + cancelled_reason (with the legacy
+  // notes fallback: a "[ANNULLATA ...] reason" line when the column is empty on a
+  // canceled row). "" when absent — the alert only renders on canceled/no_show.
+  cancelledAt: string;
+  cancelledReason: string;
 };
 
 // Compute the expired-linked warning for an appointment being edited (Item 3, port of
@@ -3256,6 +3269,21 @@ export async function getDbAppointmentForEdit(slug: string, id: number): Promise
   // Item 3: the expired-linked warning (checks the redeem sources this appointment links).
   const expiredLinkWarning = await computeExpiredLinkWarning(slug, Number(row.id ?? id), Number(row.giftcard_id ?? 0) || 0);
 
+  // Cancellation metadata (api_appointments.php `get` ~8683-8694): the cancelled_at/
+  // cancelled_reason columns, plus the legacy fallback that extracts the reason from a
+  // "[ANNULLATA ...] reason" notes line when a canceled row has no explicit reason.
+  const rowPhpStatus = phpStatus(String(row.status ?? ""));
+  let cancelledReason = String(row.cancelled_reason ?? "").trim();
+  if (rowPhpStatus === "canceled" && cancelledReason === "" && row.notes) {
+    const reasonMatch = /^\s*\[ANNULLATA[^\]]*\]\s*(.+)$/im.exec(String(row.notes));
+    if (reasonMatch) cancelledReason = String(reasonMatch[1] ?? "").trim();
+  }
+  const cancelledAtDate = row.cancelled_at ? toDate(row.cancelled_at) : null;
+  const cancelledAt =
+    cancelledAtDate && !Number.isNaN(cancelledAtDate.getTime())
+      ? `${dateIsoLocal(cancelledAtDate)} ${timeLocal(cancelledAtDate)}:00`
+      : "";
+
   return {
     id: Number(row.id ?? id),
     publicCode:
@@ -3290,6 +3318,8 @@ export async function getDbAppointmentForEdit(slug: string, id: number): Promise
       return meta.code && meta.discount > 0 ? meta : null;
     })(),
     expiredLinkWarning,
+    cancelledAt,
+    cancelledReason,
   };
 }
 
@@ -3482,10 +3512,14 @@ export type CancelDonePreview = {
   error: string;
   status: string;
   targetStatus: "canceled" | "no_show";
+  // 'executed' = the booking was DONE (settled redeems + awarded points get reversed);
+  // 'reserved' = pending/scheduled (holds only get UNLOCKED, no accounting reversal).
+  cancelMode: "executed" | "reserved";
   summary: string[];
   warnings: string[];
   blockers: string[];
-  points: { used: number; earned: number };
+  // `locked` = the reserved (not yet debited) points on a pending/scheduled booking.
+  points: { used: number; locked: number; earned: number };
   restores: { credit: number; giftcard: number };
 };
 
@@ -3501,13 +3535,15 @@ function formatMoneyIt(value: number): string {
   return value.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-// COMPUTE-ONLY preview for the cancel-done flow (port of
+// COMPUTE-ONLY preview for the cancel flow (port of
 // appt_lifecycle_load_cancel_done_preview, ~576-720). Reads the appointment's settled
 // fidelity/credit/giftcard figures and projects — WITHOUT mutating anything — what the
 // APPLY (cancelDoneAppointment) will restore/reverse, plus the faithful Italian summary
-// lines + the un-accrued-points warning. Only a DONE booking is previewable here; any
-// other status returns { ok:false, error } (already canceled/no_show/not applicable) so
-// the modal shows the message and disables Confirm.
+// lines + the un-accrued-points warning. TWO modes, like the legacy: 'executed' for a
+// DONE booking (settled amounts reversed) and 'reserved' for pending/scheduled (holds
+// only unlocked — "Verranno sbloccati ..."). Any other status returns { ok:false, error }
+// (already canceled/no_show/not applicable) so the modal shows the message and disables
+// Confirm.
 export async function cancelDonePreview(
   slug: string,
   appointmentId: number,
@@ -3519,10 +3555,11 @@ export async function cancelDonePreview(
     error: "",
     status: "",
     targetStatus: target,
+    cancelMode: "reserved",
     summary: [],
     warnings: [],
     blockers: [],
-    points: { used: 0, earned: 0 },
+    points: { used: 0, locked: 0, earned: 0 },
     restores: { credit: 0, giftcard: 0 },
   };
 
@@ -3551,54 +3588,77 @@ export async function cancelDonePreview(
   const status = phpStatus(String(appointment.status ?? ""));
   preview.status = status;
 
-  // Only an EXECUTED ('done') booking is cancellable via this flow. Any other status is
-  // not applicable: canceled/no_show are terminal, and pending/scheduled cancels go
-  // through the plain action=status path (not this popup). Set error + return early
-  // (compute-only: no summary computed for a non-applicable transition).
-  if (status !== "done") {
+  // Mode by status (AppointmentLifecycle.php ~615-630): DONE -> 'executed';
+  // pending/scheduled -> 'reserved'; anything else is not applicable (terminal or
+  // unknown) — error with the exact legacy strings + early return (compute-only:
+  // no summary computed for a non-applicable transition).
+  if (status === "done") {
+    preview.cancelMode = "executed";
+  } else if (status === "pending" || status === "scheduled") {
+    preview.cancelMode = "reserved";
+  } else {
     if (status === "canceled") {
       preview.error = "La prenotazione risulta già annullata.";
     } else if (status === "no_show") {
       preview.error = "La prenotazione risulta già marcata No show.";
     } else {
-      preview.error = "Solo una prenotazione eseguita può essere annullata da questo flusso.";
+      preview.error =
+        target === "no_show"
+          ? "Solo le prenotazioni in attesa, prenotate o eseguite possono essere marcate No show da questa schermata."
+          : "Solo le prenotazioni in attesa, prenotate o eseguite possono essere annullate da questa schermata.";
     }
     return preview;
   }
+  const executed = preview.cancelMode === "executed";
 
   // The amounts the APPLY will restore/reverse (mirrors cancelDoneAppointment's reads):
-  //  - fidelity_points_earned : REVERSED (storno) — the loyalty points awarded on done.
-  //  - fidelity_points_used    : RESTORED — the redeemed points refunded to the wallet.
-  //  - credit_used             : RESTORED — re-credited to the client wallet.
-  //  - giftcard_used           : RECHARGED — refunded to the giftcard balance.
-  const pointsEarned = Math.max(0, Math.round(Number(appointment.fidelity_points_earned ?? 0) || 0));
-  const pointsUsed = Math.max(0, Math.round(Number(appointment.fidelity_points_used ?? 0) || 0));
+  //  - fidelity_points_used  : on 'executed' a real redeem was debited -> RESTORED; on
+  //                            'reserved' the points are only LOCKED -> just unlocked.
+  //  - fidelity_points_earned: REVERSED (storno) — only awarded on done ('executed').
+  //  - credit_used           : RESTORED — re-credited to the client wallet.
+  //  - giftcard_used         : RECHARGED — refunded to the giftcard balance.
+  const pointsLocked = Math.max(0, Math.round(Number(appointment.fidelity_points_used ?? 0) || 0));
+  const pointsUsed = executed ? pointsLocked : 0;
+  const pointsEarned = executed ? Math.max(0, Math.round(Number(appointment.fidelity_points_earned ?? 0) || 0)) : 0;
   const creditUsed = roundMoney(Math.max(0, parseMoney(appointment.credit_used, 0)));
   const giftcardUsed = roundMoney(Math.max(0, parseMoney(appointment.giftcard_used, 0)));
 
-  preview.points = { used: pointsUsed, earned: pointsEarned };
+  preview.points = { used: pointsUsed, locked: pointsLocked, earned: pointsEarned };
   preview.restores = { credit: creditUsed, giftcard: giftcardUsed };
 
-  // Faithful Italian summary lines (AppointmentLifecycle.php ~696-704, executed branch)
-  // built from the amounts. Guarded on the same >0.00001 epsilon so a zero figure adds
-  // no line.
-  if (pointsUsed > 0.00001) {
-    preview.summary.push(`Verranno ripristinati ${formatPointsIt(pointsUsed)} punti Fidelity usati.`);
-  }
-  if (pointsEarned > 0.00001) {
-    preview.summary.push(`Verranno stornati ${formatPointsIt(pointsEarned)} punti Fidelity guadagnati.`);
-  }
-  if (creditUsed > 0.00001) {
-    preview.summary.push(`Verrà ripristinato credito cliente per € ${formatMoneyIt(creditUsed)}`);
-  }
-  if (giftcardUsed > 0.00001) {
-    preview.summary.push(`Verrà ricaricata la GiftCard usata per € ${formatMoneyIt(giftcardUsed)}`);
-  }
-  // The un-accrued-points warning (legacy ~704, reserved branch) is also shown on the
-  // executed branch in the JS modal build; keep it when there were earned points, since
-  // the storno reverses points that "would have" stayed accrued.
-  if (pointsEarned > 0.00001) {
-    preview.warnings.push("I punti Fidelity che sarebbero stati maturati con questa prenotazione non verranno accreditati.");
+  // Faithful Italian summary lines (AppointmentLifecycle.php ~695-705) built from the
+  // amounts, branched on the mode. Guarded on the same >0.00001 epsilon so a zero
+  // figure adds no line.
+  if (executed) {
+    if (pointsUsed > 0.00001) {
+      preview.summary.push(`Verranno ripristinati ${formatPointsIt(pointsUsed)} punti Fidelity usati.`);
+    }
+    if (pointsEarned > 0.00001) {
+      preview.summary.push(`Verranno stornati ${formatPointsIt(pointsEarned)} punti Fidelity guadagnati.`);
+    }
+    if (creditUsed > 0.00001) {
+      preview.summary.push(`Verrà ripristinato credito cliente per € ${formatMoneyIt(creditUsed)}`);
+    }
+    if (giftcardUsed > 0.00001) {
+      preview.summary.push(`Verrà ricaricata la GiftCard usata per € ${formatMoneyIt(giftcardUsed)}`);
+    }
+    // The un-accrued-points warning (legacy ~704, reserved branch) is also shown on the
+    // executed branch in the JS modal build; keep it when there were earned points, since
+    // the storno reverses points that "would have" stayed accrued.
+    if (pointsEarned > 0.00001) {
+      preview.warnings.push("I punti Fidelity che sarebbero stati maturati con questa prenotazione non verranno accreditati.");
+    }
+  } else {
+    // RESERVED branch (legacy ~700-705): pending/scheduled holds are only UNLOCKED.
+    if (pointsLocked > 0.00001) {
+      preview.summary.push(`Verranno sbloccati ${formatPointsIt(pointsLocked)} punti Fidelity usati.`);
+    }
+    if (creditUsed > 0.00001) {
+      preview.summary.push(`Verrà sbloccato credito cliente usato per € ${formatMoneyIt(creditUsed)}`);
+    }
+    if (giftcardUsed > 0.00001) {
+      preview.summary.push(`Verrà sbloccato il saldo GiftCard usato per € ${formatMoneyIt(giftcardUsed)}`);
+    }
   }
 
   // TODO (deep per-resource blockers, legacy ~707-865): the fidelity loyalty-card guard
@@ -3613,18 +3673,20 @@ export async function cancelDonePreview(
   return preview;
 }
 
-// CANCEL a DONE appointment (the dedicated cancel-done flow). Tenant-scoped port of
-// app/lib/AppointmentLifecycle.php appt_lifecycle_cancel_done_apply (~867): once an
-// appointment is EXECUTED ('done') the plain action=status transition refuses
-// done->canceled/no_show ("usa il popup dedicato di annullamento"), because settling a
-// done booking consumed redeems AND awarded fidelity points — a bare status flip would
-// leak both. This flow RESTORES everything the done settlement consumed/awarded, then
-// flips the status. Best-effort PER PIECE (a single restore failing must not abort the
-// others or the status flip), but the status change itself always happens.
+// CANCEL an appointment via the dedicated flow (the popup). Tenant-scoped port of
+// app/lib/AppointmentLifecycle.php appt_lifecycle_cancel_done_apply (~867). In the
+// legacy EVERY drawer cancel goes through this apply, in one of two modes:
+//   - 'executed' (done): settling consumed redeems AND awarded fidelity points — a
+//     bare status flip would leak both, so everything is RESTORED/REVERSED first.
+//   - 'reserved' (pending/scheduled): the holds were only reserved — they are
+//     UNLOCKED (columns zeroed, redeems given back) without accounting reversals.
+// Both stamp cancelled_at/cancelled_by/cancelled_reason (default reason when empty),
+// then flip the status. Best-effort PER PIECE (a single restore failing must not abort
+// the others or the status flip), but the status change itself always happens.
 //
 // Restore order (mirrors the legacy apply + the POS-void reverse model):
-//   1) VALIDATE the appointment is 'done' (idempotency: a non-done row can't be
-//      cancel-done'd again — re-running would otherwise double-restore).
+//   1) VALIDATE the appointment is pending/scheduled/done (idempotency: a terminal
+//      canceled/no_show row can't be cancelled again — no double-restore).
 //   2) restoreAppointmentRedeems — package/prepaid/giftbox/gift sessions + the
 //      appointment-level GIFTCARD refund (reused, same as delete/cancel-on-status).
 //   3) FIDELITY reverse (the POS-void pattern, manage-pos.ts ~1896-1924):
@@ -3671,17 +3733,28 @@ export async function cancelDoneAppointment(
   const appointment = rows[0];
   if (!appointment) throw new Error("Appuntamento non trovato.");
 
-  // IDEMPOTENCY / GUARD: only a DONE appointment is cancellable via this dedicated flow.
-  // A pending/scheduled cancel goes through action=status (restoreAppointmentRedeems on
-  // the transition); an already canceled/no_show row is terminal. Rejecting a non-done
-  // row here also prevents a second cancel-done from double-restoring.
-  if (phpStatus(String(appointment.status ?? "")) !== "done") {
-    throw new Error("Solo una prenotazione eseguita può essere annullata da questo flusso.");
+  // IDEMPOTENCY / GUARD (AppointmentLifecycle.php ~921-931): pending/scheduled/done are
+  // cancellable via this flow ('reserved' vs 'executed' mode); an already canceled/
+  // no_show row is terminal (exact legacy strings). Rejecting a terminal row also
+  // prevents a second cancel from double-restoring.
+  const oldStatus = phpStatus(String(appointment.status ?? ""));
+  if (oldStatus !== "pending" && oldStatus !== "scheduled" && oldStatus !== "done") {
+    if (oldStatus === "canceled") throw new Error("La prenotazione risulta già annullata.");
+    if (oldStatus === "no_show") throw new Error("La prenotazione risulta già marcata No show.");
+    throw new Error(
+      target === "no_show"
+        ? "La prenotazione non può essere marcata No show da questa schermata."
+        : "La prenotazione non è annullabile da questa schermata.",
+    );
   }
+  // 'executed' = the done settlement debited real points/credit -> reverse them below;
+  // 'reserved' (pending/scheduled) = the holds are only unlocked (restoreAppointmentRedeems
+  // zeroes the reservation columns), no accounting reversal (legacy ~649, ~972-975).
+  const isExecutedCancel = oldStatus === "done";
 
   const clientId = Math.max(0, Number(appointment.client_id ?? 0) || 0);
-  const pointsEarned = Math.max(0, Math.round(Number(appointment.fidelity_points_earned ?? 0) || 0));
-  const pointsUsed = Math.max(0, Math.round(Number(appointment.fidelity_points_used ?? 0) || 0));
+  const pointsEarned = isExecutedCancel ? Math.max(0, Math.round(Number(appointment.fidelity_points_earned ?? 0) || 0)) : 0;
+  const pointsUsed = isExecutedCancel ? Math.max(0, Math.round(Number(appointment.fidelity_points_used ?? 0) || 0)) : 0;
   const creditUsed = roundMoney(Math.max(0, parseMoney(appointment.credit_used, 0)));
   const by = createdBy && createdBy > 0 ? createdBy : undefined;
 
@@ -3759,8 +3832,15 @@ export async function cancelDoneAppointment(
   if (await columnExists("appointments", "cancelled_at")) statusValues.cancelled_at = nowSql;
   if (by !== undefined && (await columnExists("appointments", "cancelled_by"))) statusValues.cancelled_by = by;
   if (await columnExists("appointments", "cancelled_reason")) {
+    // Legacy default reason (AppointmentLifecycle.php ~880): an empty motivation is
+    // replaced by the backend-cancel default, never left NULL.
     const cleanReason = String(reason ?? "").trim().slice(0, 255);
-    statusValues.cancelled_reason = cleanReason === "" ? null : cleanReason;
+    statusValues.cancelled_reason =
+      cleanReason !== ""
+        ? cleanReason
+        : target === "no_show"
+          ? "No show prenotazione da backend"
+          : "Annullamento prenotazione da backend";
   }
   await tenantUpdate({ slug, table: "appointments", id, values: statusValues });
   const updated = await tenantSelect<RowDataPacket>({ slug, table: "appointments", where: "id = ?", params: [id], limit: 1 });

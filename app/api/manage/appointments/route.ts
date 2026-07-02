@@ -19,7 +19,6 @@ import {
   getDbAppointmentSegmentCount,
   listDbAppointments,
   resizeDbAppointmentEnd,
-  restoreAppointmentRedeems,
   swapDbAppointmentSegment,
   updateDbAppointment,
   updateDbAppointmentStatus,
@@ -509,21 +508,21 @@ export async function POST(request: Request) {
               : "Una prenotazione eseguita non può essere riportata ad altri stati da questa schermata.",
         });
       }
-      // RESTORE-ON-CANCEL (H5 redeem part): this app consumes redeems at CREATE time,
-      // so a pending/scheduled appointment already holds them. Transitioning it to
-      // canceled/no_show must give them back or they leak. Restore BEFORE the write
-      // (the linkage snapshot is read directly, write order is irrelevant) only when
-      // the OLD status was a non-canceled/non-done state — done->canceled/no_show is
-      // already blocked by the guard above, and old canceled/no_show is too, so this
-      // can never double-restore (a re-cancel never reaches here).
+      // RESERVED-MODE CANCEL: in the legacy EVERY cancel goes through
+      // appt_lifecycle_cancel_done_apply (there is no bare status->canceled write), which
+      // restores the reserved holds AND stamps cancelled_at/cancelled_by (+ the default
+      // backend reason). Delegate a pending/scheduled -> canceled/no_show transition to
+      // the same apply (cancelDoneAppointment, 'reserved' mode) so the metadata is
+      // stamped no matter which caller used action=status. done->cancel is already
+      // blocked above (popup only), terminal statuses too — no double-restore possible.
       const transitioningToCancel = newPhpStatus === "canceled" || newPhpStatus === "no_show";
-      if (transitioningToCancel && (oldPhpStatus === "pending" || oldPhpStatus === "scheduled")) {
-        await restoreAppointmentRedeems(tenantSlug, id);
-      }
-      // Pass the raw code through: updateDbAppointmentStatus applies phpStatus(), so
-      // all five statuses persist correctly (the bug was upstream, not here). The
-      // appointment ROW is kept on cancel (legacy keeps canceled appointments).
-      const appointment = await updateDbAppointmentStatus(tenantSlug, id, rawStatus);
+      const appointment =
+        transitioningToCancel && (oldPhpStatus === "pending" || oldPhpStatus === "scheduled")
+          ? await cancelDoneAppointment(tenantSlug, id, newPhpStatus, session.user.id)
+          : // Pass the raw code through: updateDbAppointmentStatus applies phpStatus(), so
+            // all five statuses persist correctly (the bug was upstream, not here). The
+            // appointment ROW is kept on cancel (legacy keeps canceled appointments).
+            await updateDbAppointmentStatus(tenantSlug, id, rawStatus);
       // FIDELITY EARN-on-done (port of Fidelity::handleAppointmentStatusChange, the EARN
       // side): only when the booking actually crosses INTO 'done' (newPhpStatus==='done' &&
       // oldPhpStatus!=='done'), settle the reserved fidelity — award the earned points
@@ -573,10 +572,14 @@ export async function POST(request: Request) {
       // appointments.cancelled_reason by cancelDoneAppointment; mirrors the legacy apply).
       const reason = String(body.reason ?? "").trim().slice(0, 255);
       try {
+        // Capture the REAL old status before the apply: this action now serves both
+        // modes (done = 'executed', pending/scheduled = 'reserved'), and the lifecycle
+        // email kind depends on the transition (e.g. pending->canceled = 'rejected').
+        const oldPhpStatus = (await getDbAppointmentPhpStatus(tenantSlug, id)) ?? "done";
         const appointment = await cancelDoneAppointment(tenantSlug, id, targetStatus, session.user.id, reason);
-        // Lifecycle email: a done->canceled crossing maps to the same 'rejected'/cancel
-        // kind the status path fires; gated + error-swallowed inside the helper.
-        const kind = lifecycleKindForStatusChange("done", targetStatus);
+        // Lifecycle email: same transition mapping the status path fires; gated +
+        // error-swallowed inside the helper.
+        const kind = lifecycleKindForStatusChange(oldPhpStatus, targetStatus);
         if (kind) await sendAppointmentLifecycleEmail({ slug: tenantSlug, appointmentId: id, kind });
         return Response.json({
           ok: true,

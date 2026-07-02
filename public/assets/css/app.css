@@ -909,6 +909,13 @@ body:not(.booking-public-body):not(.onboarding-body):not(.auth-body) .badge{
   align-items:center;
   justify-content:center;
 }
+/* Locked (canceled/no_show) appointment: inert client links + services multiselect,
+   port of qbSetClickableLocked's inline pointer-events:none / opacity:.65. */
+#quickBooking fieldset.qb-locked a,
+#quickBooking fieldset.qb-locked .qb-ms-control{
+  pointer-events:none;
+  opacity:.65;
+}
 #qbClientCreateModal .qb-create-section-title{
   color:#0f172a;
   font-weight:600;

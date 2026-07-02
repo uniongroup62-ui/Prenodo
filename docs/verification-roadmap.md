@@ -508,6 +508,41 @@ restyle soft-card degli eventi ≡). Due differenze reali trovate e chiuse:
   label (es. lista appuntamenti). Ora 5 label (Annullato / No show aggiunte al
   tipo + statusStyles). Verificato live: 138 canceled -> "Annullato".
 
+## Item 27 — Lock prenotazioni annullate/No show nel quick booking (2026-07-02, segnalato dall'utente)
+Segnalazione: "nelle prenotazioni annullate non c'è alcun blocco della modifica".
+Analisi legacy completa (qbApplyCancellationState / qbSetLockedAppointmentMode /
+qbRenderCancellationAlert + guard save api_appointments.php ~10222-10233 +
+routing submit app.js ~11336-11343). Chiuso su 4 fronti:
+- **Guard server-side sul save** (updateDbAppointment): originale canceled/no_show
+  -> throw "La prenotazione annullata non è più modificabile." (stringa legacy
+  esatta; prima il save ANDAVA A BUON FINE). action=status aveva già il guard.
+- **Lock UI del drawer**: fieldset disabled + classe .qb-locked (link cliente e
+  multiselect servizi inerti: pointer-events none / opacity .65 ≡
+  qbSetClickableLocked), alert #qbCancellationAlert (titolo "Prenotazione
+  annullata"/"Prenotazione No show", motivazione o riga fallback "Questa
+  prenotazione è in stato finale...", "Annullata il/Segnata il gg/mm/aaaa
+  hh:mm"), submit disabilitato con label di stato, Elimina attivo SOLO per
+  canceled (no_show: disabilitato, ≡ keepDeleteEnabled), guard nel submit.
+- **cancelledAt/cancelledReason in action=get** (con fallback [ANNULLATA ...]
+  dalle notes come nel PHP ~8686-8694).
+- **Annullamento 'reserved' (pending/scheduled)**: nel legacy OGNI annullamento
+  passa dal popup dedicato (cancel_mode reserved|executed) che timbra
+  cancelled_at/by/reason (default "Annullamento prenotazione da backend" /
+  "No show prenotazione da backend"). Prima in Next pending/scheduled->annullato
+  era un bare status-write senza timbro né popup. Ora: cancelDonePreview/
+  cancelDoneAppointment estesi al modo reserved (righe "Verranno sbloccati ...",
+  errori legacy esatti), il drawer apre il popup per pending/scheduled/done, e
+  action=status delega il cancel reserved allo stesso apply (timbro garantito
+  per ogni caller). Email lifecycle mappata sul VERO stato precedente.
+**Verifica live** (appuntamenti test 169/170/171, creati+eliminati, DB pulito):
+save/status su annullata -> rifiutati con stringa legacy; preview reserved ok;
+cancel_done con motivazione -> get {canceled, "2026-07-02 18:06:00", "cliente ha
+cambiato idea"}; status->no_show -> timbro default "No show prenotazione da
+backend"; delete su no_show rifiutato ("...deve essere in stato Annullato...").
+Gap residuo documentato: segment_view (modifica singolo segmento dal calendario,
+#qbSegmentViewAlert) non portato — il drawer Next apre sempre l'appuntamento
+completo.
+
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;
   legacy consuma al "done") — approvato.
