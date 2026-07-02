@@ -3240,7 +3240,9 @@ export function QuickBookingDrawer() {
               </div>
             </div>
 
-            <div id="qbNewClientBox" className="qb-client-actions mb-3">
+            {/* Trova/Nuovo are visible ONLY while NO client is selected (legacy
+                qbShowSelected hides #qbNewClientBox; "annulla" re-shows it). */}
+            <div id="qbNewClientBox" className="qb-client-actions mb-3" style={{ display: client ? "none" : "block" }}>
               <div className="row g-2">
                 <div className={canQuickCreateClient ? "col-6" : "col-12"}>
                   <button type="button" className="btn btn-outline-primary w-100" id="qbLinkFindClient" onClick={openFindClient}>
