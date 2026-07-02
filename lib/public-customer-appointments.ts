@@ -315,6 +315,261 @@ export async function cancelPublicCustomerAppointment({
   }
 }
 
+// ---------------------------------------------------------------------------
+// AREA CLIENTE — Pacchetti (port of booking.php mode=my_packages :6817) and
+// Preventivi (mode=my_quotes :6708 + mode=quote_decision :7060).
+
+const PACKAGE_STATUS_LABELS: Record<string, string> = {
+  active: "Attivo",
+  completed: "Completato",
+  expired: "Scaduto",
+  canceled: "Annullato",
+};
+
+export type PublicCustomerPackage = {
+  id: number;
+  tenantSlug: string;
+  tenantName: string;
+  packageName: string;
+  serviceName: string;
+  purchaseDate: string | null;
+  expiresAt: string | null;
+  sessionsTotal: number;
+  sessionsRemaining: number;
+  status: string;
+  statusLabel: string;
+  services: Array<{ serviceName: string; sessionsTotal: number; sessionsRemaining: number }>;
+};
+
+// mode=my_packages: the linked clients' packages with the legacy status
+// normalization (canceled > esaurito > scaduto > attivo). The legacy also
+// splits RESERVED sessions (pending bookings) per service — not ported here
+// (documented): the remaining figures are the raw client_package(_services).
+export async function listPublicCustomerPackages(accountId: number): Promise<PublicCustomerPackage[]> {
+  const activities = await publicCustomerActivities(accountId).catch(() => [] as PublicCustomerActivity[]);
+  const out: PublicCustomerPackage[] = [];
+  const today = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const todayYmd = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+
+  for (const activity of activities) {
+    if (activity.clientId <= 0) continue;
+    const slug = activity.tenantSlug;
+    try {
+      const rows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "client_packages",
+        columns: "id, package_name, service_id, purchase_date, expires_at, sessions_total, sessions_remaining, status",
+        where: "client_id = ?",
+        params: [activity.clientId],
+        orderBy: "purchase_date DESC, id DESC",
+      }).catch(() => [] as RowDataPacket[]);
+      for (const row of rows) {
+        const id = Number(row.id ?? 0);
+        if (id <= 0) continue;
+        const remaining = Math.max(0, Number(row.sessions_remaining ?? 0) || 0);
+        const expires = row.expires_at ? String(row.expires_at instanceof Date ? sqlLocal(row.expires_at).slice(0, 10) : String(row.expires_at).slice(0, 10)) : "";
+        const statusRaw = String(row.status ?? "").trim().toLowerCase();
+        let status = "active";
+        if (statusRaw === "canceled" || statusRaw === "cancelled") status = "canceled";
+        else if (remaining <= 0) status = "completed";
+        else if (expires && expires < todayYmd) status = "expired";
+        // Per-service rows (multi-service packages) — best-effort.
+        const serviceRows = await tenantSelect<RowDataPacket>({
+          slug,
+          table: "client_package_services",
+          columns: "service_id, sessions_total, sessions_remaining",
+          where: "client_package_id = ?",
+          params: [id],
+          orderBy: "sort_order ASC, id ASC",
+        }).catch(() => [] as RowDataPacket[]);
+        const serviceIds = Array.from(new Set([Number(row.service_id ?? 0), ...serviceRows.map((s) => Number(s.service_id ?? 0))].filter((n) => n > 0)));
+        const nameById = new Map<number, string>();
+        if (serviceIds.length) {
+          const ph = serviceIds.map(() => "?").join(", ");
+          const svcNames = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, name", where: `id IN (${ph})`, params: serviceIds }).catch(() => [] as RowDataPacket[]);
+          for (const s of svcNames) nameById.set(Number(s.id ?? 0), String(s.name ?? ""));
+        }
+        out.push({
+          id,
+          tenantSlug: slug,
+          tenantName: activity.tenantName,
+          packageName: String(row.package_name ?? ""),
+          serviceName: nameById.get(Number(row.service_id ?? 0)) ?? "",
+          purchaseDate: row.purchase_date ? sqlLocal(row.purchase_date).slice(0, 10) : null,
+          expiresAt: expires || null,
+          sessionsTotal: Math.max(0, Number(row.sessions_total ?? 0) || 0),
+          sessionsRemaining: remaining,
+          status,
+          statusLabel: PACKAGE_STATUS_LABELS[status] ?? status,
+          services: serviceRows.map((s) => ({
+            serviceName: nameById.get(Number(s.service_id ?? 0)) ?? `Servizio #${Number(s.service_id ?? 0)}`,
+            sessionsTotal: Math.max(0, Number(s.sessions_total ?? 0) || 0),
+            sessionsRemaining: Math.max(0, Number(s.sessions_remaining ?? 0) || 0),
+          })),
+        });
+      }
+    } catch {
+      // best-effort per activity
+    }
+  }
+  return out;
+}
+
+const QUOTE_STATUS_LABELS: Record<string, string> = {
+  draft: "Bozza",
+  sent: "Inviato",
+  expired: "Scaduto",
+  accepted: "Accettato",
+  paid: "Pagato",
+  rejected: "Rifiutato",
+  canceled: "Annullato",
+};
+
+export type PublicCustomerQuote = {
+  id: number;
+  tenantSlug: string;
+  tenantName: string;
+  number: string;
+  quoteDate: string | null;
+  validUntil: string | null;
+  status: string;
+  statusLabel: string;
+  total: number;
+  canRespond: boolean;
+  customerDecisionAt: string | null;
+};
+
+// mode=my_quotes: the linked clients' quotes (non-draft), with the legacy
+// expired override on 'sent' past valid_until and the can_respond gate.
+export async function listPublicCustomerQuotes(accountId: number, email: string): Promise<PublicCustomerQuote[]> {
+  const activities = await publicCustomerActivities(accountId).catch(() => [] as PublicCustomerActivity[]);
+  const normalizedEmail = String(email ?? "").trim().toLowerCase();
+  const today = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const todayYmd = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+  const out: PublicCustomerQuote[] = [];
+
+  for (const activity of activities) {
+    const slug = activity.tenantSlug;
+    try {
+      const where: string[] = [];
+      const params: unknown[] = [];
+      if (activity.clientId > 0) {
+        where.push("client_id = ?");
+        params.push(activity.clientId);
+      }
+      if (normalizedEmail) {
+        where.push("(client_id IS NULL AND LOWER(TRIM(COALESCE(client_email,''))) = ?)");
+        params.push(normalizedEmail);
+      }
+      if (!where.length) continue;
+      const rows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "quotes",
+        columns: "id, number, quote_date, valid_until, status, total, customer_decision_at",
+        where: `(${where.join(" OR ")}) AND status <> 'draft'`,
+        params,
+        orderBy: "quote_date DESC, id DESC",
+        limit: 50,
+      }).catch(() => [] as RowDataPacket[]);
+      for (const row of rows) {
+        const id = Number(row.id ?? 0);
+        if (id <= 0) continue;
+        let status = String(row.status ?? "").trim().toLowerCase();
+        if (status === "cancelled") status = "canceled";
+        const validUntil = row.valid_until ? sqlLocal(row.valid_until).slice(0, 10) : "";
+        let canRespond = status === "sent";
+        if (status === "sent" && validUntil && validUntil < todayYmd) {
+          status = "expired";
+          canRespond = false;
+        }
+        if (["accepted", "paid", "rejected", "expired", "canceled"].includes(status)) canRespond = false;
+        out.push({
+          id,
+          tenantSlug: slug,
+          tenantName: activity.tenantName,
+          number: String(row.number ?? ""),
+          quoteDate: row.quote_date ? sqlLocal(row.quote_date).slice(0, 10) : null,
+          validUntil: validUntil || null,
+          status,
+          statusLabel: QUOTE_STATUS_LABELS[status] ?? (status || "—"),
+          total: Math.round((Number(row.total ?? 0) + Number.EPSILON) * 100) / 100,
+          canRespond,
+          customerDecisionAt: row.customer_decision_at ? sqlLocal(row.customer_decision_at) : null,
+        });
+      }
+    } catch {
+      // best-effort per activity
+    }
+  }
+  return out;
+}
+
+// mode=quote_decision: accept/reject a SENT quote the account owns (legacy
+// ownership: linked client_id, or client-less quote with the same email).
+// Exact legacy guards + error strings; the decision stamps customer_decision_*.
+export async function decidePublicCustomerQuote({
+  accountId,
+  email,
+  tenantSlug,
+  quoteId,
+  decision,
+}: {
+  accountId: number;
+  email: string;
+  tenantSlug: string;
+  quoteId: number;
+  decision: "accept" | "reject";
+}): Promise<void> {
+  if (quoteId <= 0) throw new Error("Preventivo non valido");
+  const activities = await publicCustomerActivities(accountId).catch(() => [] as PublicCustomerActivity[]);
+  const activity = activities.find((a) => a.tenantSlug === tenantSlug);
+  const normalizedEmail = String(email ?? "").trim().toLowerCase();
+
+  const rows = await tenantSelect<RowDataPacket>({
+    slug: tenantSlug,
+    table: "quotes",
+    columns: "id, status, valid_until, client_id, client_email",
+    where: "id = ?",
+    params: [quoteId],
+    limit: 1,
+  }).catch(() => [] as RowDataPacket[]);
+  const quote = rows[0];
+  if (!quote) throw new Error("Preventivo non trovato");
+
+  let owned = false;
+  if (activity && activity.clientId > 0 && Number(quote.client_id ?? 0) === activity.clientId) owned = true;
+  if (!owned && normalizedEmail && String(quote.client_email ?? "").trim().toLowerCase() === normalizedEmail) owned = true;
+  if (!owned) throw new Error("Non autorizzato");
+
+  let status = String(quote.status ?? "").trim().toLowerCase();
+  if (status === "cancelled") status = "canceled";
+  const validUntil = quote.valid_until ? sqlLocal(quote.valid_until).slice(0, 10) : "";
+  const today = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const todayYmd = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+  if (status === "sent" && validUntil && validUntil < todayYmd) {
+    const quotesTable = await tenantTable(tenantSlug, "quotes");
+    await dbQuery(`UPDATE ${quoteIdentifier(quotesTable.name)} SET status='expired' WHERE tenant_id = ? AND id = ? AND status='sent'`, [quotesTable.tenantId ?? 0, quoteId]).catch(() => undefined);
+    throw new Error("Preventivo scaduto");
+  }
+  if (status === "accepted" || status === "rejected") throw new Error("Hai già risposto a questo preventivo.");
+  if (status !== "sent") throw new Error("Questo preventivo non è modificabile.");
+  // NOTA: il check disponibilità catalogo del legacy (quote_catalog_availability_check
+  // all'accettazione) non è portato — la conversione in vendita lato manage
+  // rivalida comunque gli articoli.
+
+  const quotesTable = await tenantTable(tenantSlug, "quotes");
+  const newStatus = decision === "accept" ? "accepted" : "rejected";
+  await dbQuery(
+    `UPDATE ${quoteIdentifier(quotesTable.name)}
+        SET status = ?, customer_decision_at = ?, customer_decision_source = 'booking', customer_decision_seen_at = NULL
+      WHERE tenant_id = ? AND id = ? AND status = 'sent' AND customer_decision_at IS NULL`,
+    [newStatus, sqlLocal(new Date()), quotesTable.tenantId ?? 0, quoteId],
+  );
+}
+
 // mode=ics: the .ics file for an OWNED appointment found by public_code across
 // the linked activities (the legacy is per-tenant; the global account searches
 // its linked tenants). Exact legacy calendar body: Europe/Rome VTIMEZONE,

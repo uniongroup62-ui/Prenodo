@@ -351,7 +351,7 @@ radios "Scelta cliente" conflict_policy nel drawer.
 2. ✅ **Step 6 wizard (coupon + promozioni)** — FATTO (2026-07-02, item 22).
    Restano deferred i pannelli fidelity/credito/giftcard (richiedono cliente
    loggato con saldi; nascosti anche nel legacy di default).
-3. **my_packages + my_quotes + quote_decision** (area cliente estesa).
+3. ✅ **my_packages + my_quotes + quote_decision** — FATTO (2026-07-02, item 23).
 4. Date strip: spegnere i giorni chiusi (mode=closures o riuso businessIntervals).
 5. Minori: update_reference_location, prezzi promo per-servizio al confirm.
 Nota infra: email conferma/OTP su SES già documentata come rinviata.
@@ -420,6 +420,34 @@ blocco benefit del confirm (:7600-7960).
   Cleanup completo su entrambi i DB (promo/coupon/appuntamenti/cliente test).
 - Nota parametri legacy: mode=promotion_preview usa `date`, mode=coupon usa
   `appt_date` (rispecchiati).
+
+## Item 23 — Area cliente: PACCHETTI + PREVENTIVI (2026-07-02, blocco 3)
+Port di booking.php mode=my_packages (:6817), my_quotes (:6708) e
+quote_decision (:7060).
+- **Lib** (public-customer-appointments.ts): pacchetti per attività collegata
+  (client_packages + righe per-servizio, normalizzazione stato legacy
+  canceled→completed→expired→active con label italiane); preventivi non-draft
+  (LIMIT 50, override 'sent'→'expired' oltre valid_until, can_respond, regola
+  ownership legacy client_id o email su preventivi senza cliente); decisione
+  accept/reject con le guardie e le stringhe legacy esatte ("Preventivo
+  scaduto", "Hai già risposto a questo preventivo.", "Questo preventivo non è
+  modificabile.", "Non autorizzato") + stamp customer_decision_at/source
+  ='booking' condizionato (status='sent' AND decision IS NULL).
+- **API** /api/account: action=packages | quotes | quote_decision.
+- **UI**: voci "Pacchetti" e "Preventivi" nell'account (+ /account/packages,
+  /account/quotes): card pacchetto con sedute residue/totali, scadenza e badge
+  stato; card preventivo con numero/date/totale/badge + Accetta/Rifiuta sui
+  'sent'.
+- **Verifica live e2e**: pacchetto 3/5 Attivo listato; preventivo sent
+  rispondibile + scaduto forzato expired non rispondibile; accept → Accettato
+  con decision stampata; secondo accept → "Hai già risposto…"; decisione su
+  scaduto → "Preventivo scaduto". Cleanup completo (quotes/pacchetto/account
+  test, link ripristinato).
+- Divergenze documentate: sedute RISERVATE (prenotazioni pending) non scisse
+  dal residuo per-servizio; public_url/pdf_url del preventivo non esposti (la
+  pagina quote_public + PDF è nell'infra rinviata); il check disponibilità
+  catalogo all'accettazione (quote_catalog_availability_check) non portato —
+  la conversione in vendita lato manage rivalida comunque gli articoli.
 
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;

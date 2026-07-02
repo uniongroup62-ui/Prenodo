@@ -5,12 +5,14 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
   CalendarDays,
+  FileText,
   Heart,
   KeyRound,
   Loader2,
   LogOut,
   Mail,
   MapPin,
+  Package,
   ShieldCheck,
   Store,
   Trash2,
@@ -18,7 +20,38 @@ import {
   UserPlus,
 } from "lucide-react";
 
-type AccountMode = "login" | "register" | "forgot-password" | "verify" | "reset" | "activities" | "appointments" | "favorites" | "profile";
+type AccountMode = "login" | "register" | "forgot-password" | "verify" | "reset" | "activities" | "appointments" | "packages" | "quotes" | "favorites" | "profile";
+
+// Port of booking.php mode=my_packages payload (+ tenant fields).
+type CustomerPackage = {
+  id: number;
+  tenantSlug: string;
+  tenantName: string;
+  packageName: string;
+  serviceName: string;
+  purchaseDate: string | null;
+  expiresAt: string | null;
+  sessionsTotal: number;
+  sessionsRemaining: number;
+  status: string;
+  statusLabel: string;
+  services: Array<{ serviceName: string; sessionsTotal: number; sessionsRemaining: number }>;
+};
+
+// Port of booking.php mode=my_quotes payload (+ tenant fields).
+type CustomerQuote = {
+  id: number;
+  tenantSlug: string;
+  tenantName: string;
+  number: string;
+  quoteDate: string | null;
+  validUntil: string | null;
+  status: string;
+  statusLabel: string;
+  total: number;
+  canRespond: boolean;
+  customerDecisionAt: string | null;
+};
 
 // Port of booking.php mode=my_appointments payload (area cliente prenotazioni),
 // plus tenantSlug/tenantName since the global account aggregates every linked
@@ -93,6 +126,8 @@ type AccountResponse = {
   favoriteKeys?: Record<string, boolean>;
   activities?: Activity[];
   appointments?: CustomerAppointment[];
+  packages?: CustomerPackage[];
+  quotes?: CustomerQuote[];
   requiresVerification?: boolean;
   accountId?: number;
   email?: string;
@@ -114,7 +149,76 @@ export function PublicAccountPage({ initialMode = "login" }: { initialMode?: Acc
   const activeMode: AccountMode = user && ["login", "register", "forgot-password", "verify", "reset"].includes(mode)
     ? "activities"
     : mode;
-  const protectedMode = ["activities", "appointments", "favorites", "profile"].includes(activeMode);
+  const protectedMode = ["activities", "appointments", "packages", "quotes", "favorites", "profile"].includes(activeMode);
+
+  // I miei pacchetti / preventivi: loaded lazily on entering the section.
+  const [packages, setPackages] = useState<CustomerPackage[]>([]);
+  const [packagesLoaded, setPackagesLoaded] = useState(false);
+  const [quotes, setQuotes] = useState<CustomerQuote[]>([]);
+  const [quotesLoaded, setQuotesLoaded] = useState(false);
+  useEffect(() => {
+    if (!user) return;
+    const target = activeMode === "packages" && !packagesLoaded
+      ? { action: "packages" as const }
+      : activeMode === "quotes" && !quotesLoaded
+        ? { action: "quotes" as const }
+        : null;
+    if (!target) return;
+    let active = true;
+    void fetch("/api/account", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: target.action }),
+    })
+      .then((res) => res.json() as Promise<AccountResponse>)
+      .then((data) => {
+        if (!active) return;
+        if (target.action === "packages") {
+          if (data.ok && Array.isArray(data.packages)) setPackages(data.packages);
+          setPackagesLoaded(true);
+        } else {
+          if (data.ok && Array.isArray(data.quotes)) setQuotes(data.quotes);
+          setQuotesLoaded(true);
+        }
+      })
+      .catch(() => {
+        if (!active) return;
+        if (target.action === "packages") setPackagesLoaded(true);
+        else setQuotesLoaded(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeMode, user, packagesLoaded, quotesLoaded]);
+
+  // Accetta/Rifiuta preventivo (mode=quote_decision): confirm + POST; the
+  // refreshed list (or the legacy policy error) comes back from the API.
+  async function decideQuote(quote: CustomerQuote, decision: "accept" | "reject") {
+    if (!quote.canRespond) return;
+    const label = decision === "accept" ? "Accettare questo preventivo?" : "Rifiutare questo preventivo?";
+    if (typeof window !== "undefined" && !window.confirm(label)) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const response = await fetch("/api/account", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "quote_decision", tenant_slug: quote.tenantSlug, quote_id: quote.id, decision }),
+      });
+      const data = await response.json() as AccountResponse;
+      if (!data.ok) {
+        setError(data.error || "Errore preventivo");
+        return;
+      }
+      if (Array.isArray(data.quotes)) setQuotes(data.quotes);
+      setMessage(decision === "accept" ? "Preventivo accettato." : "Preventivo rifiutato.");
+    } catch {
+      setError("Errore di rete.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   // Le mie prenotazioni (mode=my_appointments): loaded on entering the section
   // (and refreshed after a cancel — the cancel response carries the new list).
@@ -363,6 +467,8 @@ export function PublicAccountPage({ initialMode = "login" }: { initialMode?: Acc
               <nav className="grid gap-2">
                 <AccountNavButton active={activeMode === "activities"} icon={Store} label="Attivita" onClick={() => setMode("activities")} />
                 <AccountNavButton active={activeMode === "appointments"} icon={CalendarDays} label="Prenotazioni" onClick={() => setMode("appointments")} />
+                <AccountNavButton active={activeMode === "packages"} icon={Package} label="Pacchetti" onClick={() => setMode("packages")} />
+                <AccountNavButton active={activeMode === "quotes"} icon={FileText} label="Preventivi" onClick={() => setMode("quotes")} />
                 <AccountNavButton active={activeMode === "favorites"} icon={Heart} label="Preferiti" onClick={() => setMode("favorites")} />
                 <AccountNavButton active={activeMode === "profile"} icon={User} label="Profilo" onClick={() => setMode("profile")} />
               </nav>
@@ -408,6 +514,8 @@ export function PublicAccountPage({ initialMode = "login" }: { initialMode?: Acc
                   onCancel={cancelAppointment}
                 />
               ) : null}
+              {activeMode === "packages" ? <PackagesView packages={packages} loaded={packagesLoaded} /> : null}
+              {activeMode === "quotes" ? <QuotesView quotes={quotes} loaded={quotesLoaded} busy={busy} onDecision={decideQuote} /> : null}
               {activeMode === "favorites" ? <FavoritesView busy={busy} favorites={favorites} onRemove={removeFavorite} /> : null}
               {activeMode === "profile" ? (
                 <ProfileView
@@ -645,6 +753,148 @@ function AppointmentsView({
         ))}
         {loaded && !appointments.length ? (
           <EmptyState icon={CalendarDays} title="Nessuna prenotazione" text="Le prenotazioni effettuate nei centri collegati appariranno qui." />
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+// "I miei pacchetti" (port of the legacy customer-area packages list): package
+// name, sessions remaining/total, expiry, status badge and the per-service rows
+// of multi-service packages.
+function PackagesView({ packages, loaded }: { packages: CustomerPackage[]; loaded: boolean }) {
+  const badgeClass = (status: string) =>
+    status === "active"
+      ? "bg-emerald-100 text-emerald-800"
+      : status === "completed"
+        ? "bg-zinc-200 text-zinc-600"
+        : status === "expired"
+          ? "bg-amber-100 text-amber-800"
+          : "bg-zinc-200 text-zinc-600";
+  const fmtYmd = (v: string | null) => {
+    const m = String(v ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[3]}/${m[2]}/${m[1]}` : "";
+  };
+  return (
+    <section className="rounded-lg border border-zinc-200 bg-white p-5">
+      <h2 className="text-2xl font-semibold">I miei pacchetti</h2>
+      <div className="mt-4 grid gap-3">
+        {!loaded ? (
+          <p className="flex items-center gap-2 text-sm text-zinc-500">
+            <Loader2 className="h-4 w-4 animate-spin" /> Caricamento pacchetti...
+          </p>
+        ) : null}
+        {loaded && packages.map((pkg) => (
+          <article className="rounded-lg border border-zinc-200 p-4" key={`${pkg.tenantSlug}:${pkg.id}`}>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-lg font-semibold">{pkg.packageName || pkg.serviceName || `Pacchetto #${pkg.id}`}</h3>
+              <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${badgeClass(pkg.status)}`}>{pkg.statusLabel}</span>
+            </div>
+            <p className="mt-1 text-sm text-zinc-600">
+              {pkg.tenantName}
+              {pkg.purchaseDate ? ` • Acquistato il ${fmtYmd(pkg.purchaseDate)}` : ""}
+              {pkg.expiresAt ? ` • Scade il ${fmtYmd(pkg.expiresAt)}` : ""}
+            </p>
+            <p className="mt-1 text-sm font-medium text-zinc-800">
+              Sedute residue: {pkg.sessionsRemaining} / {pkg.sessionsTotal}
+            </p>
+            {pkg.services.length ? (
+              <div className="mt-2 grid gap-1">
+                {pkg.services.map((svc, index) => (
+                  <p className="text-sm text-zinc-600" key={index}>
+                    {svc.serviceName}: {svc.sessionsRemaining} / {svc.sessionsTotal}
+                  </p>
+                ))}
+              </div>
+            ) : null}
+          </article>
+        ))}
+        {loaded && !packages.length ? (
+          <EmptyState icon={Package} title="Nessun pacchetto" text="I pacchetti acquistati nei centri collegati appariranno qui." />
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+// "I miei preventivi" (port of the legacy customer-area quotes list): number,
+// dates, total, status badge and Accetta/Rifiuta while the quote is 'sent'.
+function QuotesView({
+  quotes,
+  loaded,
+  busy,
+  onDecision,
+}: {
+  quotes: CustomerQuote[];
+  loaded: boolean;
+  busy: boolean;
+  onDecision: (quote: CustomerQuote, decision: "accept" | "reject") => void;
+}) {
+  const badgeClass = (status: string) =>
+    status === "accepted" || status === "paid"
+      ? "bg-emerald-100 text-emerald-800"
+      : status === "sent"
+        ? "bg-sky-100 text-sky-800"
+        : status === "expired"
+          ? "bg-amber-100 text-amber-800"
+          : "bg-zinc-200 text-zinc-600";
+  const fmtYmd = (v: string | null) => {
+    const m = String(v ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[3]}/${m[2]}/${m[1]}` : "";
+  };
+  const money = (n: number) => n.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return (
+    <section className="rounded-lg border border-zinc-200 bg-white p-5">
+      <h2 className="text-2xl font-semibold">I miei preventivi</h2>
+      <div className="mt-4 grid gap-3">
+        {!loaded ? (
+          <p className="flex items-center gap-2 text-sm text-zinc-500">
+            <Loader2 className="h-4 w-4 animate-spin" /> Caricamento preventivi...
+          </p>
+        ) : null}
+        {loaded && quotes.map((quote) => (
+          <article className="rounded-lg border border-zinc-200 p-4" key={`${quote.tenantSlug}:${quote.id}`}>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-lg font-semibold">Preventivo {quote.number || `#${quote.id}`}</h3>
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${badgeClass(quote.status)}`}>{quote.statusLabel}</span>
+                </div>
+                <p className="mt-1 text-sm text-zinc-600">
+                  {quote.tenantName}
+                  {quote.quoteDate ? ` • Data: ${fmtYmd(quote.quoteDate)}` : ""}
+                  {quote.validUntil ? ` • Valido fino al ${fmtYmd(quote.validUntil)}` : ""}
+                </p>
+                <p className="mt-1 text-sm font-medium text-zinc-800">Totale: € {money(quote.total)}</p>
+                {quote.customerDecisionAt ? (
+                  <p className="mt-1 text-xs text-zinc-400">Risposto il {fmtYmd(quote.customerDecisionAt)}</p>
+                ) : null}
+              </div>
+              {quote.canRespond ? (
+                <div className="flex flex-col gap-2 sm:items-end">
+                  <button
+                    className="inline-flex h-9 items-center rounded-md bg-emerald-600 px-3 text-sm font-semibold text-white disabled:opacity-60"
+                    disabled={busy}
+                    onClick={() => onDecision(quote, "accept")}
+                    type="button"
+                  >
+                    Accetta
+                  </button>
+                  <button
+                    className="inline-flex h-9 items-center rounded-md border border-red-200 px-3 text-sm font-semibold text-red-700 disabled:opacity-60"
+                    disabled={busy}
+                    onClick={() => onDecision(quote, "reject")}
+                    type="button"
+                  >
+                    Rifiuta
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </article>
+        ))}
+        {loaded && !quotes.length ? (
+          <EmptyState icon={FileText} title="Nessun preventivo" text="I preventivi ricevuti dai centri collegati appariranno qui." />
         ) : null}
       </div>
     </section>

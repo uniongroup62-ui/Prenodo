@@ -23,7 +23,10 @@ import {
 } from "@/lib/public-customer-account";
 import {
   cancelPublicCustomerAppointment,
+  decidePublicCustomerQuote,
   listPublicCustomerAppointments,
+  listPublicCustomerPackages,
+  listPublicCustomerQuotes,
 } from "@/lib/public-customer-appointments";
 
 export async function GET() {
@@ -187,6 +190,37 @@ export async function POST(request: Request) {
         appointmentId,
       });
       return Response.json({ ok: true, appointments: await listPublicCustomerAppointments(account.id, account.email) });
+    }
+
+    // I miei pacchetti (port of booking.php mode=my_packages).
+    if (action === "packages" || action === "my_packages") {
+      const packages = await listPublicCustomerPackages(account.id);
+      return Response.json({ ok: true, packages });
+    }
+
+    // I miei preventivi (port of mode=my_quotes).
+    if (action === "quotes" || action === "my_quotes") {
+      const quotes = await listPublicCustomerQuotes(account.id, account.email);
+      return Response.json({ ok: true, quotes });
+    }
+
+    // Accetta/Rifiuta preventivo (port of mode=quote_decision). Legacy guards +
+    // error strings; the refreshed list rides back for the UI.
+    if (action === "quote_decision") {
+      const tenantSlug = String(body.tenant_slug ?? body.tenant ?? "").trim().toLowerCase();
+      const quoteId = parseInteger(body.quote_id ?? body.id, 0);
+      const decision = String(body.decision ?? "").trim().toLowerCase();
+      if (quoteId <= 0) return jsonError("Preventivo non valido");
+      if (decision !== "accept" && decision !== "reject") return jsonError("Azione non valida");
+      if (!tenantSlug) return jsonError("Preventivo non valido");
+      await decidePublicCustomerQuote({
+        accountId: account.id,
+        email: account.email,
+        tenantSlug,
+        quoteId,
+        decision,
+      });
+      return Response.json({ ok: true, quotes: await listPublicCustomerQuotes(account.id, account.email) });
     }
 
     if (action === "toggle_favorite") {
