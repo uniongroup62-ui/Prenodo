@@ -14651,7 +14651,12 @@ export type QuickBookClientContext = {
 // credit/giftcard entry controls — the inline UX supersedes those (intentional
 // divergence). Each section carries the fields the modal renders: name, remaining
 // (+ total where meaningful), expiry, and the source sale # where available.
+// Each row also carries its SOURCE ids (prepaid id / instance id / package id /
+// giftcard id + the covered service ids) so the drawer's per-item info modals
+// (#qbPackageInfoModal & co.) can look the clicked residual up by id.
 export type QuickBookResidualServiceDetail = {
+  id: number;
+  service_id: number;
   service_name: string;
   remaining_qty: number;
   purchased_qty: number;
@@ -14660,6 +14665,9 @@ export type QuickBookResidualServiceDetail = {
   expires_at: string | null;
 };
 export type QuickBookResidualGiftDetail = {
+  instance_id: number;
+  reward_item_index: number;
+  service_id: number;
   gift_name: string;
   service_name: string;
   qty_remaining: number;
@@ -14667,11 +14675,14 @@ export type QuickBookResidualGiftDetail = {
   expires_at: string | null;
 };
 export type QuickBookResidualGiftboxItem = {
+  giftbox_item_id: number;
+  service_id: number;
   service_name: string;
   qty_remaining: number;
   qty_total: number;
 };
 export type QuickBookResidualGiftboxDetail = {
+  instance_id: number;
   giftbox_name: string;
   code: string;
   remaining_qty: number;
@@ -14680,16 +14691,19 @@ export type QuickBookResidualGiftboxDetail = {
   items: QuickBookResidualGiftboxItem[];
 };
 export type QuickBookResidualGiftcardDetail = {
+  id: number;
   code: string;
   balance: number;
   expires_at: string | null;
 };
 export type QuickBookResidualPackageItem = {
+  service_id: number;
   service_name: string;
   sessions_remaining: number;
   sessions_total: number;
 };
 export type QuickBookResidualPackageDetail = {
+  id: number;
   package_name: string;
   sessions_remaining: number;
   sessions_total: number;
@@ -15611,6 +15625,8 @@ export async function quickBookClientResidualsDetail(
       const serviceId = Number(row.service_id ?? 0);
       const saleId = Number(row.sale_id ?? 0);
       out.services.push({
+        id: Number(row.id ?? 0),
+        service_id: serviceId,
         service_name: String(row.service_name ?? "") || (serviceId > 0 ? `Servizio #${serviceId}` : "Servizio"),
         remaining_qty: Math.max(0, Number(row.remaining_qty ?? 0)),
         purchased_qty: Math.max(0, Number(row.purchased_qty ?? 0)),
@@ -15643,6 +15659,7 @@ export async function quickBookClientResidualsDetail(
       const balance = roundMoney(Math.max(0, Number(row.balance ?? 0)));
       if (balance <= 0) continue;
       out.giftcards.push({
+        id: Number(row.id ?? 0),
         code: String(row.code ?? ""),
         balance,
         expires_at: row.expires_at ? String(row.expires_at).slice(0, 10) : null,
@@ -15686,6 +15703,7 @@ export async function quickBookClientResidualsDetail(
           if (packageId <= 0) continue;
           const list = itemsByPackage.get(packageId) ?? [];
           list.push({
+            service_id: serviceId,
             service_name: await serviceNameById(slug, serviceId, serviceId > 0 ? `Servizio #${serviceId}` : "Servizio"),
             sessions_remaining: Math.max(0, Number(row.sessions_remaining ?? 0)),
             sessions_total: Math.max(0, Number(row.sessions_total ?? 0)),
@@ -15705,6 +15723,7 @@ export async function quickBookClientResidualsDetail(
         .map((it) => `${it.service_name}: ${it.sessions_remaining}/${it.sessions_total}`)
         .join(" • ");
       out.packages.push({
+        id,
         package_name: String(row.package_name ?? "") || "Pacchetto",
         sessions_remaining: Math.max(0, Number(row.sessions_remaining ?? 0)),
         sessions_total: Math.max(0, Number(row.sessions_total ?? 0)),
@@ -15768,12 +15787,13 @@ export async function quickBookClientResidualsDetail(
             const itemRemaining = itemTotal - itemRedeemed;
             if (itemRemaining <= 0) continue;
             const label = String(it.custom_label ?? "") || (await serviceNameById(slug, serviceId, "Servizio"));
-            items.push({ service_name: label, qty_remaining: itemRemaining, qty_total: itemTotal });
+            items.push({ giftbox_item_id: giftboxItemId, service_id: serviceId, service_name: label, qty_remaining: itemRemaining, qty_total: itemTotal });
           }
 
           const giftboxId = Number(inst.giftbox_id ?? 0);
           const giftboxName = giftboxId > 0 ? await giftboxNameById(slug, giftboxId, "GiftBox") : "GiftBox";
           out.giftboxes.push({
+            instance_id: instanceId,
             giftbox_name: giftboxName,
             code: String(inst.code ?? ""),
             remaining_qty: Math.max(0, remaining),
@@ -15798,6 +15818,9 @@ export async function quickBookClientResidualsDetail(
     for (const g of gifts) {
       const giftName = await giftNameByInstanceId(slug, g.instance_id, "Omaggio");
       out.gifts.push({
+        instance_id: g.instance_id,
+        reward_item_index: g.reward_item_index,
+        service_id: g.service_id,
         gift_name: giftName,
         service_name: g.name,
         // quickBookClientGifts only returns still-available rewards; expose the

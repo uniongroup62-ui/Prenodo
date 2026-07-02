@@ -361,6 +361,8 @@ type QbClientContextResponse = {
 // sections + a credit line, each with per-item display detail. DISPLAY-ONLY — no
 // redeem controls (the drawer form does the inline redeem SELECTION).
 type QbResidualServiceDetail = {
+  id: number;
+  service_id: number;
   service_name: string;
   remaining_qty: number;
   purchased_qty: number;
@@ -369,14 +371,18 @@ type QbResidualServiceDetail = {
   expires_at: string | null;
 };
 type QbResidualGiftDetail = {
+  instance_id: number;
+  reward_item_index: number;
+  service_id: number;
   gift_name: string;
   service_name: string;
   qty_remaining: number;
   qty_total: number;
   expires_at: string | null;
 };
-type QbResidualGiftboxItem = { service_name: string; qty_remaining: number; qty_total: number };
+type QbResidualGiftboxItem = { giftbox_item_id: number; service_id: number; service_name: string; qty_remaining: number; qty_total: number };
 type QbResidualGiftboxDetail = {
+  instance_id: number;
   giftbox_name: string;
   code: string;
   remaining_qty: number;
@@ -384,9 +390,10 @@ type QbResidualGiftboxDetail = {
   expires_at: string | null;
   items: QbResidualGiftboxItem[];
 };
-type QbResidualGiftcardDetail = { code: string; balance: number; expires_at: string | null };
-type QbResidualPackageItem = { service_name: string; sessions_remaining: number; sessions_total: number };
+type QbResidualGiftcardDetail = { id: number; code: string; balance: number; expires_at: string | null };
+type QbResidualPackageItem = { service_id: number; service_name: string; sessions_remaining: number; sessions_total: number };
 type QbResidualPackageDetail = {
+  id: number;
   package_name: string;
   sessions_remaining: number;
   sessions_total: number;
@@ -2397,14 +2404,10 @@ export function QuickBookingDrawer() {
   // app.js qbOpenClientResiduals): show the modal, then fetch action=residuals and
   // render the sections. A monotonic req-id discards stale responses. The modal is a
   // read-only VIEWER — the inline redeem SELECTION lives on the drawer form.
-  const openResidualsDetail = useCallback(() => {
-    const id = String(clientId || "").trim();
-    if (!id) return;
-    // Show the modal immediately with a loading state (like the legacy).
-    const el = document.getElementById("qbClientResidualsModal");
-    const api = bootstrap()?.Modal;
-    if (el && api) api.getOrCreateInstance(el).show();
-
+  // Fetch-only part of the residuals detail (shared by the residuals modal and the
+  // per-item info modals below): loads /api/manage/clients?action=residuals into
+  // residualsDetail with the loading/error lifecycle.
+  const fetchResidualsDetail = useCallback((id: string) => {
     const myReq = ++residualsDetailReqRef.current;
     setResidualsDetail(null);
     setResidualsDetailError("");
@@ -2438,7 +2441,40 @@ export function QuickBookingDrawer() {
         if (myReq !== residualsDetailReqRef.current) return;
         setResidualsDetailLoading(false);
       });
-  }, [slug, clientId]);
+  }, [slug]);
+
+  const openResidualsDetail = useCallback(() => {
+    const id = String(clientId || "").trim();
+    if (!id) return;
+    // Show the modal immediately with a loading state (like the legacy).
+    const el = document.getElementById("qbClientResidualsModal");
+    const api = bootstrap()?.Modal;
+    if (el && api) api.getOrCreateInstance(el).show();
+    fetchResidualsDetail(id);
+  }, [clientId, fetchResidualsDetail]);
+
+  // ---- Per-item residual INFO modals (port of #qbPackageInfoModal /
+  // #qbPrepaidServiceInfoModal / #qbGiftboxInfoModal / #qbGiftInfoModal /
+  // #qbGiftcardInfoModal, View.php 1741-1896 + qbOpen*Info app.js 1584-2302).
+  // Opened by clicking a service PILL linked to a redeem (or the GiftCard row
+  // label); rendered React-driven from the residuals detail payload. ----
+  type QbInfoModalState = {
+    kind: "package" | "prepaid" | "giftbox" | "gift" | "giftcard";
+    refId: number;
+    serviceId: number;
+    itemId?: number;
+    usedAmount?: number;
+  };
+  const [infoModal, setInfoModal] = useState<QbInfoModalState | null>(null);
+  const openResidualInfo = useCallback(
+    (state: QbInfoModalState) => {
+      setInfoModal(state);
+      // Load the detail payload if not already fetched for this client.
+      const id = String(clientId || "").trim();
+      if (id && !residualsDetail && !residualsDetailLoading) fetchResidualsDetail(id);
+    },
+    [clientId, residualsDetail, residualsDetailLoading, fetchResidualsDetail],
+  );
 
   // Whether the fetched residuals detail has ANY content (drives the empty-state).
   const residualsDetailHasAny = !!(
@@ -3381,11 +3417,41 @@ export function QuickBookingDrawer() {
                     {selectedServiceIds.map((id) => {
                       const svc = services.find((s) => s.id === id);
                       if (!svc) return null;
+                      // Redeem traceability on the pill (legacy pill click -> info modal,
+                      // app.js 8925-8963, priority giftbox > gift > package > prepaid).
+                      const gb = giftboxRedeems[id];
+                      const og = giftRedeems[id];
+                      const pk = packageRedeems[id];
+                      const ps = prepaidRedeems[id];
+                      const infoTarget: QbInfoModalState | null = gb
+                        ? { kind: "giftbox", refId: gb.instance_id, serviceId: id, itemId: gb.giftbox_item_id }
+                        : og
+                          ? { kind: "gift", refId: og.instance_id, serviceId: id, itemId: og.reward_item_index }
+                          : pk
+                            ? { kind: "package", refId: pk.client_package_id, serviceId: id }
+                            : ps
+                              ? { kind: "prepaid", refId: ps.client_prepaid_service_id, serviceId: id }
+                              : null;
                       return (
                         <span
                           key={id}
                           className="badge bg-primary d-inline-flex align-items-center me-1 mb-1 qb-ms-pill"
                           data-service-id={id}
+                          data-gb-instance-id={gb ? gb.instance_id : undefined}
+                          data-og-instance-id={og ? og.instance_id : undefined}
+                          data-cp-id={pk ? pk.client_package_id : undefined}
+                          data-prepaid-service-id={ps ? ps.client_prepaid_service_id : undefined}
+                          style={infoTarget ? { cursor: "pointer" } : undefined}
+                          title={infoTarget ? "Apri i dettagli del residuo collegato" : undefined}
+                          onClick={
+                            infoTarget
+                              ? (e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  openResidualInfo(infoTarget);
+                                }
+                              : undefined
+                          }
                         >
                           {svc.name}
                           <button
@@ -4198,7 +4264,26 @@ export function QuickBookingDrawer() {
                     posted via #qb_giftcard_redeem + decremented server-side by the redeem),
                     clamped to the running total; it now feeds the recompute so the Totale drops. */}
                 <div className={`d-flex justify-content-between align-items-center mt-2 pt-2 border-top${priceDetails.giftcardMonetary > 0 ? "" : " d-none"}`} id="qbGiftcardRow" style={{ color: "#047857" }}>
-                  <button type="button" className="btn btn-link btn-sm p-0 fw-semibold qb-giftcard-open" id="qbGiftcardLabel" style={{ color: "inherit", textDecoration: "none" }} title="Dettagli GiftCard">GiftCard</button>
+                  <button
+                    type="button"
+                    className="btn btn-link btn-sm p-0 fw-semibold qb-giftcard-open"
+                    id="qbGiftcardLabel"
+                    style={{ color: "inherit", textDecoration: "none" }}
+                    title="Dettagli GiftCard"
+                    // Port of qbOpenGiftcardInfo (app.js 2302): the row label opens the
+                    // GiftCard detail modal with the applied amount.
+                    onClick={() => {
+                      if (!effectiveGiftcard) return;
+                      openResidualInfo({
+                        kind: "giftcard",
+                        refId: effectiveGiftcard.id,
+                        serviceId: 0,
+                        usedAmount: priceDetails.giftcardMonetary,
+                      });
+                    }}
+                  >
+                    {effectiveGiftcard ? `GiftCard (${effectiveGiftcard.code})` : "GiftCard"}
+                  </button>
                   <div className="d-flex align-items-center gap-2">
                     <div className="small fw-semibold" id="qbGiftcardAmount">- {fmtEUR(priceDetails.giftcardMonetary)}</div>
                     <button type="button" className="btn btn-sm btn-link text-danger p-0 d-none" id="qbGiftcardRemoveBtn" title="Rimuovi GiftCard"><i className="bi bi-x-circle" /></button>
@@ -4794,6 +4879,191 @@ export function QuickBookingDrawer() {
           </form>
         </div>
       </div>
+
+      {/* ===================== RESIDUAL INFO MODALS (port of #qbPackageInfoModal /
+          #qbPrepaidServiceInfoModal / #qbGiftboxInfoModal / #qbGiftInfoModal /
+          #qbGiftcardInfoModal, View.php 1741-1896). One React-driven modal that takes
+          the per-kind id/labels; body rendered from the residuals detail payload
+          (qbRender*Info equivalents: head name/stato/scadenza + residuo, the
+          "Servizio selezionato" line and the items card with the selected row
+          highlighted). ===================== */}
+      {infoModal ? (
+        <>
+          <div
+            className="modal fade show d-block"
+            id={
+              infoModal.kind === "package"
+                ? "qbPackageInfoModal"
+                : infoModal.kind === "prepaid"
+                  ? "qbPrepaidServiceInfoModal"
+                  : infoModal.kind === "giftbox"
+                    ? "qbGiftboxInfoModal"
+                    : infoModal.kind === "gift"
+                      ? "qbGiftInfoModal"
+                      : "qbGiftcardInfoModal"
+            }
+            tabIndex={-1}
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="modal-dialog modal-lg modal-dialog-scrollable">
+              <div className="modal-content">
+                {(() => {
+                  const kind = infoModal.kind;
+                  const detail = residualsDetail;
+                  const pkg = kind === "package" ? detail?.packages.find((p) => p.id === infoModal.refId) ?? null : null;
+                  const pre = kind === "prepaid" ? detail?.services.find((p) => p.id === infoModal.refId) ?? null : null;
+                  const gbx = kind === "giftbox" ? detail?.giftboxes.find((g) => g.instance_id === infoModal.refId) ?? null : null;
+                  const gft =
+                    kind === "gift"
+                      ? detail?.gifts.find(
+                          (g) => g.instance_id === infoModal.refId && (infoModal.itemId === undefined || g.reward_item_index === infoModal.itemId),
+                        ) ?? null
+                      : null;
+                  const gcd = kind === "giftcard" ? detail?.giftcards.find((g) => g.id === infoModal.refId) ?? null : null;
+                  const kindLabel =
+                    kind === "package" ? "Pacchetto" : kind === "prepaid" ? "Servizio prepagato" : kind === "giftbox" ? "GiftBox" : kind === "gift" ? "gift" : "GiftCard";
+                  const subtitle =
+                    kind === "package"
+                      ? "Dettagli pacchetto associato al servizio selezionato."
+                      : kind === "prepaid"
+                        ? "Dettagli del servizio acquistato associato al servizio selezionato."
+                        : kind === "giftbox"
+                          ? "Dettagli GiftBox associata al servizio selezionato."
+                          : kind === "gift"
+                            ? "Dettagli dell'omaggio associato al servizio selezionato."
+                            : "Dettagli GiftCard applicata alla prenotazione.";
+                  const title =
+                    pkg?.package_name || pre?.service_name || (gbx ? `${gbx.giftbox_name}${gbx.code ? ` (${gbx.code})` : ""}` : "") || gft?.gift_name || (gcd ? `GiftCard ${gcd.code}` : "") || "Dettagli";
+                  const openNewHref =
+                    kind === "package"
+                      ? `/${encodeURIComponent(slug)}/packages?action=client_view&id=${encodeURIComponent(infoModal.refId)}`
+                      : kind === "giftbox"
+                        ? `/${encodeURIComponent(slug)}/giftbox?tab=instances&action=edit_instance&id=${encodeURIComponent(infoModal.refId)}`
+                        : kind === "gift"
+                          ? `/${encodeURIComponent(slug)}/gift_instance?id=${encodeURIComponent(infoModal.refId)}`
+                          : kind === "giftcard"
+                            ? `/${encodeURIComponent(slug)}/giftcard?action=edit&id=${encodeURIComponent(infoModal.refId)}`
+                            : pre?.sale_id
+                              ? `/${encodeURIComponent(slug)}/sales?action=view&id=${encodeURIComponent(pre.sale_id)}`
+                              : "#";
+                  const selServiceName = infoModal.serviceId > 0 ? services.find((s) => s.id === infoModal.serviceId)?.name ?? "" : "";
+                  const expiry = pkg?.expires_at ?? pre?.expires_at ?? gbx?.expires_at ?? gft?.expires_at ?? gcd?.expires_at ?? null;
+                  // Legacy fmtDateTimeFromSql(exp, {endOfDay:true}): a date-only expiry
+                  // renders as end-of-day.
+                  const expiryLabel = expiry ? `${fmtQbDateTime(expiry)} 23:59` : "—";
+                  const found = pkg || pre || gbx || gft || gcd;
+                  const activeBadge = <span className="badge text-bg-success">{kind === "gift" ? "Disponibile" : "Attivo"}</span>;
+                  const itemRows =
+                    kind === "package" && pkg
+                      ? pkg.items.map((it) => ({ key: `${it.service_id}`, name: it.service_name, rem: it.sessions_remaining, tot: it.sessions_total, selected: it.service_id === infoModal.serviceId }))
+                      : kind === "giftbox" && gbx
+                        ? gbx.items.map((it) => ({ key: `${it.giftbox_item_id}`, name: it.service_name, rem: it.qty_remaining, tot: it.qty_total, selected: infoModal.itemId !== undefined && it.giftbox_item_id === infoModal.itemId }))
+                        : [];
+                  return (
+                    <>
+                      <div className="modal-header align-items-start">
+                        <div className="d-flex align-items-start w-100">
+                          <div>
+                            <div className="small-muted">{kindLabel}</div>
+                            <h5 className="modal-title fw-bold m-0">{title}</h5>
+                          </div>
+                          <div className="ms-auto d-flex flex-column align-items-end text-end">
+                            <a className="btn btn-sm btn-outline-secondary" href={openNewHref} target="_blank" rel="noopener">
+                              <i className="bi bi-box-arrow-up-right me-1" />Apri in nuova scheda
+                            </a>
+                            <div className="small text-muted mt-1">{subtitle}</div>
+                          </div>
+                        </div>
+                        <button type="button" className="btn-close ms-2" aria-label="Chiudi" onClick={() => setInfoModal(null)} />
+                      </div>
+                      <div className="modal-body">
+                        <div className="p-1">
+                          {residualsDetailLoading ? (
+                            <div className="app-inline-loading text-muted small p-2" role="status" aria-live="polite">
+                              <span className="spinner-border spinner-border-sm text-primary qb-inline-loader" aria-hidden="true" />
+                              <span>Caricamento...</span>
+                            </div>
+                          ) : residualsDetailError ? (
+                            <div className="text-danger small p-2">{residualsDetailError}</div>
+                          ) : !found ? (
+                            <div className="text-muted small p-2">Nessun dettaglio disponibile.</div>
+                          ) : (
+                            <>
+                              <div className="mb-2">
+                                <div className="fw-bold">{title}</div>
+                                <div className="text-muted small">Stato: {activeBadge} • Scade: {expiryLabel}</div>
+                                {pkg ? (
+                                  <div className="text-muted small">Residuo complessivo: {Math.max(0, pkg.sessions_remaining)}{pkg.sessions_total > 0 ? ` / ${pkg.sessions_total}` : ""}</div>
+                                ) : null}
+                                {pre ? (
+                                  <>
+                                    <div className="text-muted small">Quantità residua: {pre.remaining_qty}{pre.purchased_qty > 0 ? ` / ${pre.purchased_qty}` : ""}</div>
+                                    {pre.unit_price > 0 ? <div className="text-muted small">Prezzo unitario: {fmtEUR(pre.unit_price)}</div> : null}
+                                  </>
+                                ) : null}
+                                {gbx ? (
+                                  <div className="text-muted small">Residuo complessivo: {Math.max(0, gbx.remaining_qty)}{gbx.total_qty > 0 ? ` / ${gbx.total_qty}` : ""}</div>
+                                ) : null}
+                                {gft ? <div className="text-muted small">Premio: {gft.service_name}</div> : null}
+                                {gcd ? (
+                                  <>
+                                    <div className="text-muted small">Saldo: {fmtEUR(gcd.balance)}</div>
+                                    {infoModal.usedAmount && infoModal.usedAmount > 0 ? (
+                                      <div className="text-muted small">Applicata a questa prenotazione: {fmtEUR(infoModal.usedAmount)}</div>
+                                    ) : null}
+                                  </>
+                                ) : null}
+                              </div>
+                              {selServiceName ? (
+                                <div className="alert alert-light border small py-2 px-2 mb-3">
+                                  Servizio selezionato: <span className="fw-semibold">{selServiceName}</span>
+                                </div>
+                              ) : null}
+                              {itemRows.length > 0 ? (
+                                <div className="card">
+                                  <div className="card-header py-2">
+                                    <div className="small text-muted">{kind === "package" ? "Dettaglio sedute" : "Contenuto GiftBox"}</div>
+                                  </div>
+                                  <div className="list-group list-group-flush">
+                                    {itemRows.map((row) => (
+                                      <div
+                                        key={row.key}
+                                        className={`list-group-item d-flex justify-content-between align-items-start${row.selected ? " list-group-item-warning" : ""}`}
+                                        title={row.tot > 0 ? `Residuo ${row.rem}/${row.tot}` : undefined}
+                                      >
+                                        <div className="me-2">
+                                          <div className="fw-semibold">{row.name}</div>
+                                          {row.selected ? <div className="small text-muted">Selezionato in questa prenotazione</div> : null}
+                                        </div>
+                                        <div className="text-end ms-auto" style={{ whiteSpace: "nowrap" }}>
+                                          {row.tot > 0 ? (
+                                            <>
+                                              <span className="badge text-bg-secondary">{row.rem}</span>
+                                              <span className="text-muted small ms-1">/{row.tot}</span>
+                                            </>
+                                          ) : (
+                                            <span className="text-muted small">—</span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : null}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          </div>
+          <div className="modal-backdrop fade show" onClick={() => setInfoModal(null)} />
+        </>
+      ) : null}
 
       {/* ===================== CANCEL-DONE PREVIEW MODAL (port of #qbDoneCancelModal) ===================== */}
       {/* Preview-lock for the done->canceled/no_show storno: shows what will be restored/

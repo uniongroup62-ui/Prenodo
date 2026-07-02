@@ -663,6 +663,20 @@ OTP/reset (fix TZ), conferme su DB.
   (divergenza approvata): i residui nel drawer escludono già i consumi delle
   altre prenotazioni e il save re-valida con packageWarnings/prepaid/giftbox/
   gift warnings. Copertura equivalente per costruzione; nessun check separato.
+- Q2 CHIUSO: modali dettaglio residui nel drawer. quickBookClientResidualsDetail
+  esteso con gli id sorgente (prepaid id/service_id, giftcard id, package id +
+  service_id per seduta, giftbox instance_id + giftbox_item_id/service_id,
+  gift instance_id/reward_item_index/service_id — verificato live nel payload).
+  Drawer: click sulla PILL del servizio collegato a un redeem (priorità legacy
+  giftbox>gift>pacchetto>prepagato, data-* di tracciabilità) o sulla label
+  "GiftCard (codice)" del pannello prezzi -> modal dettaglio React-driven con
+  gli id legacy (#qbPackageInfoModal ecc.): header tipo+titolo+"Apri in nuova
+  scheda"+sottotitolo legacy, body con Stato/Scade (end-of-day)/Residuo
+  complessivo, riga "Servizio selezionato", card "Dettaglio sedute"/"Contenuto
+  GiftBox" con highlight della riga selezionata ("Selezionato in questa
+  prenotazione") e badge rem/tot. Dati dal payload residuals condiviso
+  (fetchResidualsDetail rifattorizzato). Non portato: lista movimenti
+  dell'omaggio (qbGiftTxLabel) — il payload non traccia le transazioni gift.
 
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;
