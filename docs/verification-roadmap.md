@@ -824,10 +824,24 @@ CONSUMATORI R2 IMPLEMENTATI E VERIFICATI LIVE (2026-07-02, dati test ripuliti):
   presigned 200 con contenuto %PDF -> remove -> colonne azzerate. Divergenza
   doc.: niente compressione GD/Ghostscript.
 
-Prossimi consumatori (stesso pattern): immagini marketplace/prodotti (bucket
-public), schede cliente + documenti cliente (quickBookClientCard docs) su
-private con presigned, e i PDF (preventivi/GDPR/consensi) quando si porta la
-generazione.
+- DOCUMENTI CLIENTE (port del blocco customer_documents di clients.php
+  ~2118-2179, era un TODO dichiarato del dettaglio cliente): route
+  /api/manage/client-document — GET ?client_id= elenco / ?id= download (302
+  presigned 5 min), POST multipart upload (titolo + doc, 10MB
+  PDF/PNG/JPG/WEBP, estensione forzata dal MIME, nome random) o delete con i
+  GUARD legacy (il documento GDPR ufficiale e i documenti ufficiali dei
+  moduli consenso non si eliminano da qui — stringhe esatte). file_path =
+  KEY R2 privata. UI: card "Documenti" nel dettaglio cliente (lista con link
+  presigned, upload titolo+file, cestino con conferma; i path legacy non
+  migrati sono mostrati senza link). La scheda semplificata del quick booking
+  (quickBookClientCard) ora espone url funzionanti per i documenti R2 (prima
+  sempre "" -> "Non disponibile"). Verificato live: upload -> lista ->
+  download presigned 200 %PDF -> delete; dati test ripuliti.
+
+Prossimi consumatori (stesso pattern): immagini marketplace/prodotti
+(product_images: galleria multi-immagine con ordinamento — feature dedicata),
+foto nelle schede cliente (client_sheet_records values_json), e i PDF
+(preventivi/GDPR/consensi) quando si porta la generazione.
 
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;

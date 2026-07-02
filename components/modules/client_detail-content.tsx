@@ -602,6 +602,11 @@ export function ClientDetailContent() {
             </form>
           </div>
 
+          {/* Documenti (port del blocco customer_documents di clients.php ~2118-2179):
+              upload titolo+file su R2 privato, download presigned, delete con i
+              guard legacy (GDPR ufficiale / consenso ufficiale non eliminabili). */}
+          <ClientDocumentsCard slug={slug} clientId={clientId} />
+
           {/* Azioni cliente */}
           <div className="card p-3 mt-3">
             <div className="fw-semibold mb-2">Azioni</div>
@@ -885,6 +890,161 @@ export function ClientDetailContent() {
   );
 }
 
+// Documenti cliente (customer_documents su R2 privato): elenco + upload
+// (titolo + file, 10MB PDF/PNG/JPG/WEBP come il legacy) + download presigned +
+// delete con i guard ufficiali, tutto via /api/manage/client-document.
+function ClientDocumentsCard({ slug, clientId }: { slug: string; clientId: number }) {
+  type ClientDoc = { id: number; title: string; mime: string; createdAt: string; downloadable: boolean };
+  const [docs, setDocs] = useState<ClientDoc[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [docError, setDocError] = useState("");
+  const [docTitle, setDocTitle] = useState("");
+  const [docFile, setDocFile] = useState<File | null>(null);
+  const [docBusy, setDocBusy] = useState(false);
+  const [fileKey, setFileKey] = useState(0); // resetta l'input file dopo l'upload
+
+  useEffect(() => {
+    if (!clientId) return;
+    let active = true;
+    fetch(`/api/manage/client-document?slug=${encodeURIComponent(slug)}&client_id=${clientId}`, {
+      headers: { "x-tenant-slug": slug },
+    })
+      .then((r) => r.json())
+      .then((j) => {
+        if (!active) return;
+        setDocs(Array.isArray(j.docs) ? j.docs : []);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (active) setLoaded(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [slug, clientId]);
+
+  async function post(fd: FormData): Promise<void> {
+    setDocBusy(true);
+    setDocError("");
+    try {
+      fd.set("client_id", String(clientId));
+      const res = await fetch(`/api/manage/client-document?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "x-tenant-slug": slug },
+        body: fd,
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || j.ok === false) {
+        setDocError(String(j.error ?? "Errore documento."));
+        return;
+      }
+      if (Array.isArray(j.docs)) setDocs(j.docs);
+      setDocTitle("");
+      setDocFile(null);
+      setFileKey((k) => k + 1);
+    } catch {
+      setDocError("Errore di rete.");
+    } finally {
+      setDocBusy(false);
+    }
+  }
+
+  const fmtDocDate = (v: string) => {
+    const m = v.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[3]}/${m[2]}/${m[1]}` : v;
+  };
+
+  return (
+    <div className="card p-3 mt-3">
+      <div className="fw-semibold mb-2">
+        <i className="bi bi-file-earmark-text me-1" />
+        Documenti
+      </div>
+      {docError ? <div className="alert alert-danger py-2 small">{docError}</div> : null}
+      <div className="d-grid gap-1 mb-2">
+        {!loaded ? <span className="text-muted small">Caricamento…</span> : null}
+        {loaded && docs.length === 0 ? <span className="text-muted small">Nessun documento.</span> : null}
+        {docs.map((doc) => (
+          <div className="d-flex align-items-center justify-content-between gap-2 small" key={doc.id}>
+            <div className="text-truncate">
+              {doc.downloadable ? (
+                <a href={`/api/manage/client-document?slug=${encodeURIComponent(slug)}&id=${doc.id}`} target="_blank" rel="noopener">
+                  <i className="bi bi-paperclip me-1" />
+                  {doc.title}
+                </a>
+              ) : (
+                <span className="text-muted" title="Documento legacy non migrato">
+                  <i className="bi bi-paperclip me-1" />
+                  {doc.title}
+                </span>
+              )}
+              {doc.createdAt ? <span className="text-muted ms-1">({fmtDocDate(doc.createdAt)})</span> : null}
+            </div>
+            <button
+              type="button"
+              className="btn btn-sm btn-link text-danger p-0"
+              title="Elimina documento"
+              disabled={docBusy}
+              onClick={() => {
+                if (typeof window !== "undefined" && !window.confirm(`Eliminare il documento "${doc.title}"?`)) return;
+                const fd = new FormData();
+                fd.set("delete_doc_id", String(doc.id));
+                void post(fd);
+              }}
+            >
+              <i className="bi bi-trash" />
+            </button>
+          </div>
+        ))}
+      </div>
+      <form
+        className="d-grid gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!docFile) {
+            setDocError("Seleziona un file.");
+            return;
+          }
+          const fd = new FormData();
+          fd.set("title", docTitle);
+          fd.set("doc", docFile);
+          void post(fd);
+        }}
+      >
+        <input
+          className="form-control form-control-sm"
+          placeholder="Titolo documento"
+          maxLength={190}
+          value={docTitle}
+          onChange={(e) => setDocTitle(e.target.value)}
+        />
+        <input
+          key={fileKey}
+          className="form-control form-control-sm"
+          type="file"
+          accept="application/pdf,image/png,image/jpeg,image/webp"
+          onChange={(e) => {
+            const file = e.target.files?.[0] ?? null;
+            if (file && file.size > 10 * 1024 * 1024) {
+              setDocError("File troppo grande");
+              e.target.value = "";
+              setDocFile(null);
+              return;
+            }
+            setDocError("");
+            setDocFile(file);
+          }}
+        />
+        <div className="form-text mt-0">PDF, PNG, JPG o WEBP — massimo 10 MB.</div>
+        <button className="btn btn-sm btn-outline-primary" type="submit" disabled={docBusy || !docFile}>
+          <i className="bi bi-upload me-1" />
+          {docBusy ? "Caricamento…" : "Carica documento"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
 // TODOs (precise, faithful-parity follow-ups):
 //  - Deep per-table HISTORY drilldown: the legacy Storico page (clients.php action=history,
 //    ~lines 3100-3400) renders per-status appointment tables (fissati/eseguiti/cancellati
@@ -892,9 +1052,8 @@ export function ClientDetailContent() {
 //    preview), individual recipient GiftBox / GiftCard rows, Preventivi, and the last-10
 //    sales with purchased-item GROUP_CONCAT. This component shows only the counts/summary
 //    and links out. Port a dedicated history reader + page for full parity.
-//  - DOCUMENTS: customer_documents upload/list/delete (clients.php view ~2118-2179) is not
-//    rendered here (display-only count in the delete summary). Needs a documents reader +
-//    file storage strategy.
+//  - DOCUMENTS: DONE — ClientDocumentsCard above (upload/list/download/delete su R2
+//    privato via /api/manage/client-document, guard GDPR/consensi ufficiali).
 //  - Fidelity LEVELS / progress: the legacy header shows the points-level badge + progress
 //    toward the next level + expiring-soon points (Fidelity::calcClientLevelPoints etc.).
 //    Only the raw points balance is shown here.

@@ -15130,9 +15130,19 @@ export async function quickBookClientCard(slug: string, clientId: number, limitI
       notes: String(row.notes ?? ""),
     })),
     tags: tagRows.map((row) => ({ id: Number(row.id ?? 0), name: String(row.name ?? "") })),
-    // I documenti restano senza URL (l'infra allegati S3 è rinviata): il modal
-    // mostra "Non disponibile" come il legacy senza href.
-    docs: docRows.map((row) => ({ id: Number(row.id ?? 0), title: String(row.title ?? "Documento"), url: "", created_at: sqlLocalStr(row.created_at) ?? "" })),
+    // Documenti su R2 privato: l'URL punta alla route che verifica sessione+
+    // tenant e redirige al presigned (i path legacy non migrati restano senza
+    // href e il modal mostra "Non disponibile" come prima).
+    docs: docRows.map((row) => {
+      const path = String(row.file_path ?? "").trim();
+      const downloadable = /^t\d+\//.test(path);
+      return {
+        id: Number(row.id ?? 0),
+        title: String(row.title ?? "Documento"),
+        url: downloadable ? `/api/manage/client-document?slug=${encodeURIComponent(slug)}&id=${Number(row.id ?? 0)}` : "",
+        created_at: sqlLocalStr(row.created_at) ?? "",
+      };
+    }),
   };
 }
 
