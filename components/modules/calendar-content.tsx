@@ -112,6 +112,10 @@ type CalendarContextResponse = {
   businessHours?: CalendarBusinessHour[];
   closures?: CalendarClosure[];
   exceptions?: CalendarBusinessHourException[];
+  // Per-staff grey unavailability ranges for the Day view (minutes-of-day) —
+  // port of the legacy include_unavailability background events (off-shift +
+  // time-off clipped to the store's open intervals).
+  staffUnavailability?: Array<{ staffId: number; start: number; end: number }>;
 };
 
 type Appointment = {
@@ -714,6 +718,9 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
   const [savedStaffOrder, setSavedStaffOrder] = useState<number[]>([]);
   // Note count per ISO date for the visible range (Week/Month note markers).
   const [countByDate, setCountByDate] = useState<Record<string, number>>({});
+  // Per-staff grey unavailability ranges for the Day view (legacy
+  // include_unavailability: off-shift + time-off, clipped to store hours).
+  const [staffUnavail, setStaffUnavail] = useState<Array<{ staffId: number; start: number; end: number }>>([]);
   const [loading, setLoading] = useState(true);
 
   // Current minute-of-day for the now-indicator line (port of FullCalendar's
@@ -823,6 +830,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
           setClosures(Array.isArray(j.closures) ? j.closures : []);
           setExceptions(Array.isArray(j.exceptions) ? j.exceptions : []);
           setCountByDate(j.countByDate && typeof j.countByDate === "object" ? j.countByDate : {});
+          setStaffUnavail(Array.isArray(j.staffUnavailability) ? j.staffUnavailability : []);
           setCurrentStaffId(Number(j.currentStaffId ?? 0) || 0);
           setSavedStaffOrder(normalizeStaffOrder(j.staffOrder));
         })
@@ -835,6 +843,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
           setExceptions([]);
           setCountByDate({});
           setCurrentStaffId(0);
+          setStaffUnavail([]);
           setSavedStaffOrder([]);
         });
 
@@ -3048,6 +3057,32 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                       + now-indicator, pointer-events:none so quick-book /
                                       drag / resize still work on top. */}
                                   {renderStoreBands(date, minMin, maxMin, true, colIndex === 0)}
+                                  {/* Per-OPERATOR unavailability shading (legacy
+                                      include_unavailability: fuori turno + assenze,
+                                      clipped to store hours) — the striped grey band
+                                      with the "Non disponibile" pill (CSS ::after). */}
+                                  {staffUnavail
+                                    .filter((band) => band.staffId === s.id)
+                                    .map((band, bandIndex) => {
+                                      const bandStart = Math.max(band.start, minMin);
+                                      const bandEnd = Math.min(band.end, maxMin);
+                                      if (bandEnd <= bandStart) return null;
+                                      return (
+                                        <div
+                                          key={`unavail-${s.id}-${bandIndex}`}
+                                          className="staff-unavailability"
+                                          style={{
+                                            position: "absolute",
+                                            left: 0,
+                                            right: 0,
+                                            top: (bandStart - minMin) * PX_PER_MIN,
+                                            height: (bandEnd - bandStart) * PX_PER_MIN,
+                                            zIndex: 1,
+                                            pointerEvents: "none",
+                                          }}
+                                        />
+                                      );
+                                    })}
                                   {/* HOVER guide-line / slot-highlight / time label + live
                                       drag-select band overlays (non-interactive). */}
                                   {renderHoverOverlay(`day-${s.id}`, minMin)}

@@ -9,6 +9,7 @@ import {
   setCalendarDayStaffOrder,
 } from "@/lib/manage-calendar";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
+import { staffUnavailabilityForDate } from "@/lib/public-booking-db";
 import { can, canAny } from "@/lib/role-permissions";
 
 export const dynamic = "force-dynamic";
@@ -58,10 +59,18 @@ export async function GET(request: Request) {
       start,
       end,
     });
+    // Per-staff grey unavailability bands for the Day (staff columns) view —
+    // port of the legacy include_unavailability=1 (off-shift + time-off clipped
+    // to the store's open intervals). Best-effort: never blocks the context.
+    const locationParam = Number.parseInt(String(url.searchParams.get("location_id") ?? "0"), 10) || null;
+    const staffUnavailability = date
+      ? await staffUnavailabilityForDate(tenantSlug, date, locationParam).catch(() => [])
+      : [];
     return Response.json({
       ok: true,
       sourceMode: "database",
       ...context,
+      staffUnavailability,
     });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Calendario non disponibile.", 400);

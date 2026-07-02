@@ -87,7 +87,7 @@ import type {
 import { tenantSessionSuffix } from "@/lib/tenant-runtime";
 
 type FeatureState = "Replica navigabile" | "Analizzato" | "Da collegare al DB";
-type AppointmentStatus = "Confermato" | "In attesa" | "Completato";
+type AppointmentStatus = "Confermato" | "In attesa" | "Completato" | "Annullato" | "No show";
 type Location = {
   id: number;
   tenantSlug: string;
@@ -715,6 +715,8 @@ const statusStyles: Record<AppointmentStatus, string> = {
   Confermato: "bg-emerald-100 text-emerald-800",
   "In attesa": "bg-amber-100 text-amber-900",
   Completato: "bg-zinc-200 text-zinc-700",
+  Annullato: "bg-zinc-200 text-zinc-500",
+  "No show": "bg-zinc-800 text-white",
 };
 
 const featureGroups: FeatureGroup[] = [

@@ -14420,9 +14420,16 @@ function timeLocal(date: Date): string {
   return [String(date.getHours()).padStart(2, "0"), String(date.getMinutes()).padStart(2, "0")].join(":");
 }
 
+// UI label from the raw status. BUG FIX (2026-07-02): canceled/no_show used to
+// collapse into "Confermato" — an annullato appointment showed a "Confermato"
+// badge wherever the label (not statusCode) was rendered, e.g. the
+// appointments list.
 function uiStatus(status: string): AppointmentStatus {
-  if (status === "done") return "Completato";
-  if (status === "pending") return "In attesa";
+  const code = phpStatus(status);
+  if (code === "done") return "Completato";
+  if (code === "pending") return "In attesa";
+  if (code === "canceled") return "Annullato";
+  if (code === "no_show") return "No show";
   return "Confermato";
 }
 

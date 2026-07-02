@@ -1017,6 +1017,129 @@ export async function publicBookingClosures(slug: string, locationId: number | n
   return { closedDows, closedDates: Array.from(closedSet).sort(), openDates };
 }
 
+// Per-staff UNAVAILABILITY bands for the calendar staff-day view (port of the
+// legacy action=list include_unavailability=1, api_appointments.php:8218):
+// per active operator (SSO excluded), the grey ranges = OFF-SHIFT gaps (the
+// day complement of staff_availability, ONLY when the operator uses the
+// availability feature — no rows at all => unconstrained) merged with the
+// TIME-OFF windows, clipped to the store's open intervals. Minutes-of-day.
+export type StaffUnavailabilityBand = { staffId: number; start: number; end: number };
+
+export async function staffUnavailabilityForDate(
+  slug: string,
+  date: string,
+  locationId: number | null,
+): Promise<StaffUnavailabilityBand[]> {
+  const openIntervals = await businessIntervals(slug, locationId, date).catch(() => [] as Array<[number, number]>);
+  // Store fully closed: the calendar's store bands already shade the whole
+  // column (the legacy emits store_closed events; same visual outcome).
+  if (!openIntervals.length) return [];
+
+  const staffRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "staff",
+    columns: "id",
+    where: "COALESCE(is_active,1) = 1 AND full_name <> 'SSO'",
+    orderBy: "full_name ASC",
+  }).catch(() => [] as RowDataPacket[]);
+  const staffIds = staffRows.map((row) => Number(row.id ?? 0)).filter((id) => id > 0);
+  if (!staffIds.length) return [];
+
+  // Batch loads: every availability row overlapping the date + every timeoff.
+  const availRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "staff_availability",
+    columns: "staff_id, kind, starts_at, ends_at, location_id",
+    where: locationId
+      ? "(location_id = ? OR location_id IS NULL) AND starts_at::date <= ? AND ends_at::date >= ?"
+      : "starts_at::date <= ? AND ends_at::date >= ?",
+    params: locationId ? [locationId, date, date] : [date, date],
+    orderBy: "starts_at ASC",
+  }).catch(() => [] as RowDataPacket[]);
+  // Feature gate (staff_availability_has_any): ANY row for the staff (this
+  // location or global), not just today's.
+  const anyRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "staff_availability",
+    columns: "DISTINCT staff_id",
+    where: locationId ? "(location_id = ? OR location_id IS NULL)" : "1 = 1",
+    params: locationId ? [locationId] : [],
+  }).catch(() => [] as RowDataPacket[]);
+  const usesAvailability = new Set(anyRows.map((row) => Number(row.staff_id ?? 0)).filter((id) => id > 0));
+  const timeoffRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "staff_timeoff",
+    columns: "staff_id, starts_at, ends_at",
+    where: "starts_at::date <= ? AND ends_at::date >= ?",
+    params: [date, date],
+  }).catch(() => [] as RowDataPacket[]);
+
+  const mergeRanges = (ranges: Array<[number, number]>): Array<[number, number]> => {
+    const sorted = ranges.filter(([s, e]) => e > s).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const merged: Array<[number, number]> = [];
+    for (const [s, e] of sorted) {
+      const last = merged[merged.length - 1];
+      if (last && s <= last[1]) last[1] = Math.max(last[1], e);
+      else merged.push([s, e]);
+    }
+    return merged;
+  };
+  const dayMinutes = (value: unknown, endOfRange: boolean): number => {
+    const day = dateFromSql(value);
+    if (endOfRange) return day > date ? 24 * 60 : timeToMinutes(timeFromSql(value));
+    return day < date ? 0 : timeToMinutes(timeFromSql(value));
+  };
+
+  const out: StaffUnavailabilityBand[] = [];
+  for (const staffId of staffIds) {
+    const blocks: Array<[number, number]> = [];
+
+    // OFF-SHIFT gaps (staff_schedule_blocks_for_date): only when the operator
+    // uses the availability feature. Location-specific rows win; 'presenza'
+    // rows override 'turno' rows (same preference as the slot-engine check).
+    if (usesAvailability.has(staffId)) {
+      const own = availRows.filter((row) => Number(row.staff_id ?? 0) === staffId);
+      let rows = own;
+      if (locationId) {
+        const specific = own.filter((row) => Number(row.location_id ?? 0) === locationId);
+        if (specific.length) rows = specific;
+      }
+      const presence = rows.filter((row) => String(row.kind ?? "").trim().toLowerCase() === "presenza");
+      const used = presence.length ? presence : rows;
+      const avail = mergeRanges(used.map((row): [number, number] => [dayMinutes(row.starts_at, false), dayMinutes(row.ends_at, true)]));
+      if (!avail.length) {
+        blocks.push([0, 24 * 60]); // configured but no shift today => whole day off
+      } else {
+        let cursor = 0;
+        for (const [s, e] of avail) {
+          if (s > cursor) blocks.push([cursor, s]);
+          cursor = Math.max(cursor, e);
+        }
+        if (cursor < 24 * 60) blocks.push([cursor, 24 * 60]);
+      }
+    }
+
+    // TIME-OFF windows clamped to the day.
+    for (const row of timeoffRows) {
+      if (Number(row.staff_id ?? 0) !== staffId) continue;
+      const s = dayMinutes(row.starts_at, false);
+      const e = dayMinutes(row.ends_at, true);
+      if (Number.isFinite(s) && Number.isFinite(e) && e > s) blocks.push([s, e]);
+    }
+    if (!blocks.length) continue;
+
+    // Merge, then clip to the store's open intervals (the legacy intersects).
+    for (const [bs, be] of mergeRanges(blocks)) {
+      for (const [os, oe] of openIntervals) {
+        const s = Math.max(bs, os);
+        const e = Math.min(be, oe);
+        if (e > s) out.push({ staffId, start: s, end: e });
+      }
+    }
+  }
+  return out;
+}
+
 async function hoursLabel(slug: string, locationId: number | null, date: string): Promise<string> {
   const intervals = await businessIntervals(slug, locationId, date);
   if (!intervals.length) return "Oggi chiuso";

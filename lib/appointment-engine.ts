@@ -8,7 +8,7 @@
 // types and (2) tenant-agnostic pure helpers (status/duration/price parsing,
 // time math) with no data-source coupling.
 
-export type AppointmentStatus = "Confermato" | "In attesa" | "Completato";
+export type AppointmentStatus = "Confermato" | "In attesa" | "Completato" | "Annullato" | "No show";
 
 export type Appointment = {
   id: number;

@@ -489,6 +489,25 @@ action=card -> #qbClientCardModal, View.php:1650).
 - **Sweep completo id drawer legacy** (~110 elementi qb*): tutti presenti in
   Next — l'unica mancanza era questo modal.
 
+## Item 26 — Caricamento calendario: bande indisponibilità per-operatore + fix label stato (2026-07-02, segnalato dall'utente)
+Analisi completa del caricamento eventi legacy (calendar.js events() ->
+action=list con range/filtri; filtri server-side ≡ client-side Next per esito;
+restyle soft-card degli eventi ≡). Due differenze reali trovate e chiuse:
+- **Bande grigie per-operatore mancanti** (legacy include_unavailability=1
+  nella vista Giorno a colonne): fuori-turno (complemento di
+  staff_availability, solo per operatori che usano la feature; presenza >
+  turno; righe sede-specifiche preferite) + assenze staff_timeoff, uniti e
+  RITAGLIATI sugli orari di apertura. Port: staffUnavailabilityForDate
+  (public-booking-db) + staffUnavailability nel context /api/manage/calendar
+  + bande nella colonna operatore della vista Giorno con la CSS legacy
+  (.staff-unavailability: strisce diagonali + pillola "Non disponibile").
+  **Verifica live**: assenza 14-16 -> banda {22, 840, 960} ≡ PHP
+  (22, 14:00->16:00). Cleanup completo.
+- **BUG label stato**: uiStatus collassava canceled/no_show in "Confermato" —
+  un appuntamento annullato mostrava badge "Confermato" ovunque si usasse la
+  label (es. lista appuntamenti). Ora 5 label (Annullato / No show aggiunte al
+  tipo + statusStyles). Verificato live: 138 canceled -> "Annullato".
+
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;
   legacy consuma al "done") — approvato.
