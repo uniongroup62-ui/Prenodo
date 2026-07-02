@@ -59,10 +59,13 @@ Clienti (form/detail/cascade-delete/tag/storico).
    Differenza di FORMATO (non logica): il PHP restituisce solo gli slot liberi,
    il Next tutti gli slot con flag `available`/`reason` (la UI filtra il flag).
    Cleanup completo su entrambi.
-   ⚠️ **Divergenza guardia delete**: il PHP rifiuta l'eliminazione di un
-   appuntamento non annullato ("Annullala prima"); il Next elimina direttamente
-   (con restore dei redeem). Da decidere se allineare (guardia legacy più
-   prudente) o mantenere (il delete Next è confirm-gated e ripristina tutto).
+   ✅ **Guardia delete ALLINEATA al legacy** (scelta utente, commit e016982): un
+   appuntamento si elimina solo se già Annullato (msg legacy identico; il bulk
+   salta i non annullati e riporta `skipped`). Il fix ha smascherato un BUG
+   latente reale: cancel→delete faceva DOPPIO restore dei redeem (pacchetto +2
+   sessioni) — restoreAppointmentRedeems ora è idempotente (azzera i linkage su
+   appointment_services [PK composita, niente colonna id] + giftcard_used dopo
+   il rimborso). e2e 9/9 CLEAN.
 6. ⏳ **Voucher pubblici** giftcard/giftbox (servono token reali su entrambi).
 7. ⏳ **Admin SaaS** + cron (EventBridge in prod).
 
