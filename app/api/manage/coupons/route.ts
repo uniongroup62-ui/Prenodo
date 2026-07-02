@@ -1,5 +1,6 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
-import { cancelManageCoupon, createDbCoupon, deleteManageCoupon, getCouponFormContext, getManageCoupon, listDbCoupons, listManageCoupons, previewDbCoupon, redeemDbCoupon, saveManageCoupon } from "@/lib/db-repositories";
+import { todayIso } from "@/lib/appointment-engine";
+import { cancelManageCoupon, createDbCoupon, deleteManageCoupon, evalBestPromotionForAppointment, getCouponFormContext, getManageCoupon, listDbCoupons, listManageCoupons, previewDbCoupon, redeemDbCoupon, saveManageCoupon } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can, canAny } from "@/lib/role-permissions";
@@ -120,13 +121,51 @@ export async function POST(request: Request) {
       .split(",")
       .map((v) => parseInteger(v, 0))
       .filter((n) => n > 0);
-    const preview = await previewDbCoupon(code, subtotal, tenantSlug, {
-      serviceIds,
-      locationId: parseInteger(body.location_id, 0) || null,
-      clientId: parseInteger(body.client_id, 0) || null,
+    const locationId = parseInteger(body.location_id, 0) || null;
+    const clientId = parseInteger(body.client_id, 0) || null;
+    const apptDate = typeof body.appt_date === "string" ? body.appt_date : null;
+    const apptTime = typeof body.appt_time === "string" ? body.appt_time : null;
+    // Legacy coupon-vs-promo stacking (coupon_eval_after_promotion, called by the
+    // legacy action=coupon_preview): when the AUTO promotion applied to these
+    // services is NOT stackable-with-coupon, the coupon base shrinks to the
+    // services the promo does NOT discount; nothing left => the coupon is refused
+    // with the legacy reason. POS previews (no service_ids) are untouched.
+    let effectiveSubtotal = subtotal;
+    let effectiveServiceIds = serviceIds;
+    if (serviceIds.length > 0) {
+      const promoCtx = await evalBestPromotionForAppointment({
+        slug: tenantSlug,
+        serviceIds,
+        date: apptDate && /^\d{4}-\d{2}-\d{2}$/.test(apptDate) ? apptDate : todayIso(),
+        time: apptTime && /^\d{2}:\d{2}/.test(apptTime) ? apptTime.slice(0, 5) : null,
+        clientId,
+        locationId,
+      });
+      if (promoCtx.applied && promoCtx.promotion && !promoCtx.promotion.stackable_with_coupon) {
+        const discounted = new Set(promoCtx.services.map((line) => line.service_id));
+        effectiveServiceIds = serviceIds.filter((id) => !discounted.has(id));
+        // The drawer's subtotal already carries the promo booked prices, so the
+        // non-promo base = subtotal minus the discounted lines' booked prices.
+        const discountedBooked = promoCtx.services.reduce((sum, line) => sum + Math.max(0, line.booked_price), 0);
+        effectiveSubtotal = Math.max(0, Math.round((subtotal - discountedBooked + Number.EPSILON) * 100) / 100);
+        if (effectiveServiceIds.length === 0 || effectiveSubtotal <= 0.000001) {
+          return Response.json({
+            ok: true,
+            source: "coupons?action=preview",
+            sourceMode: "database",
+            preview: { valid: false, discount: 0, reason: "Il coupon non è applicabile agli elementi già in promozione per questa campagna." },
+            coupons: await listDbCoupons(tenantSlug),
+          });
+        }
+      }
+    }
+    const preview = await previewDbCoupon(code, effectiveSubtotal, tenantSlug, {
+      serviceIds: effectiveServiceIds,
+      locationId,
+      clientId,
       appointmentId: parseInteger(body.appointment_id, 0) || null,
-      apptDate: typeof body.appt_date === "string" ? body.appt_date : null,
-      apptTime: typeof body.appt_time === "string" ? body.appt_time : null,
+      apptDate,
+      apptTime,
     });
     return Response.json({ ok: true, source: "coupons?action=preview", sourceMode: "database", preview, coupons: await listDbCoupons(tenantSlug) });
   } catch (error) {

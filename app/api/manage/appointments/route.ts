@@ -6,10 +6,12 @@ import {
   appointmentCustomerVisibleChanged,
   appointmentPhpStatus,
   cancelDoneAppointment,
+  cabinsForServicesContext,
   cancelDonePreview,
   createDbAppointment,
   deleteDbAppointment,
   evalBestPromotionForAppointment,
+  fidelityGiftRedeemForAppointment,
   getDbAppointmentCustomerVisibleSnapshot,
   getDbAppointmentForEdit,
   getDbAppointmentMoveSnapshot,
@@ -131,6 +133,39 @@ export async function GET(request: Request) {
       return Response.json({ ok: preview.ok, error: preview.error, preview });
     } catch (error) {
       return jsonError(error instanceof Error ? error.message : "Errore anteprima annullamento.");
+    }
+  }
+
+  // FREE-cabin check for the drawer cabin select (port of the legacy
+  // action=cabins_for_services / refreshCabinsForServices): the cabins allowed
+  // for the selected services with their occupied state in the chosen window.
+  if (action === "cabins_for_services") {
+    try {
+      const serviceIds = parseIdList(url.searchParams.get("service_ids") ?? url.searchParams.get("service_id") ?? "");
+      const locationId = await resolveManageLocationId({
+        slug: tenantSlug,
+        raw: url.searchParams.get("location_id"),
+        fallbackCurrent: true,
+      }) || null;
+      const result = await cabinsForServicesContext({
+        slug: tenantSlug,
+        serviceIds,
+        startsAt: String(url.searchParams.get("starts_at") ?? url.searchParams.get("starts_at_local") ?? ""),
+        endsAt: url.searchParams.get("ends_at"),
+        excludeAppointmentId: Number.parseInt(String(url.searchParams.get("exclude_id") ?? "0"), 10) || null,
+        excludeHoldToken: url.searchParams.get("appointment_hold_token"),
+        locationId,
+      });
+      return Response.json({
+        ok: true,
+        cabins: result.cabins,
+        free_ids: result.freeIds,
+        auto_select: result.autoSelect,
+        starts_at: result.startsAt,
+        ends_at: result.endsAt,
+      });
+    } catch (error) {
+      return jsonError(error instanceof Error ? error.message : "Impossibile caricare cabine.");
     }
   }
 
@@ -267,6 +302,30 @@ export async function POST(request: Request) {
       });
 
       return Response.json({ ok: true, sourceMode: "database", ...hold });
+    }
+
+    // "Registra gift" (port of the legacy action=fidelity_gift_redeem): redeem a
+    // whole gift INSTANCE of the client against an existing appointment. gift_idx
+    // optional (auto-picks the first available instance). Legacy error messages.
+    if (action === "fidelity_gift_redeem") {
+      const clientId = Number.parseInt(String(body.client_id ?? "0"), 10) || 0;
+      const appointmentId = Number.parseInt(String(body.appointment_id ?? "0"), 10) || 0;
+      if (clientId <= 0 || appointmentId <= 0) return jsonError("Dati mancanti", 400);
+      const giftIdx = body.gift_idx === undefined || body.gift_idx === null || String(body.gift_idx) === ""
+        ? null
+        : Number.parseInt(String(body.gift_idx), 10) || 0;
+      try {
+        const result = await fidelityGiftRedeemForAppointment({
+          slug: tenantSlug,
+          clientId,
+          appointmentId,
+          giftIdx,
+          createdBy: session.user.id ?? null,
+        });
+        return Response.json({ ok: true, points_used: result.pointsUsed, available_points: result.availablePoints });
+      } catch (error) {
+        return jsonError(error instanceof Error ? error.message : "Operazione non riuscita");
+      }
     }
 
     // Reorder two adjacent segments of a multi-servizio booking (port of the

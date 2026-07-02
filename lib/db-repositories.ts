@@ -1682,6 +1682,84 @@ async function allowedCabinIdsForServices(slug: string, serviceIds: number[], lo
   return activeIds.filter((cid) => allowedSet.has(cid));
 }
 
+// Port of action=cabins_for_services (api_appointments.php): the cabins ALLOWED
+// for the selected services at the location, each with its FREE/occupied state
+// in the chosen window (the drawer select shows occupied ones disabled with the
+// "(occupata)" suffix). ends_at defaults to starts_at + the services' total
+// duration; auto_select is set when exactly ONE cabin is free (legacy shape).
+export async function cabinsForServicesContext({
+  slug,
+  serviceIds,
+  startsAt,
+  endsAt,
+  excludeAppointmentId = null,
+  excludeHoldToken = null,
+  locationId = null,
+}: {
+  slug: string;
+  serviceIds: number[];
+  startsAt: string;
+  endsAt?: string | null;
+  excludeAppointmentId?: number | null;
+  excludeHoldToken?: string | null;
+  locationId?: number | null;
+}): Promise<{ cabins: Array<{ id: number; name: string; occupied: boolean }>; freeIds: number[]; autoSelect: number; startsAt: string; endsAt: string }> {
+  const ids = Array.from(new Set(serviceIds.map((id) => Math.trunc(Number(id)) || 0).filter((id) => id > 0)));
+  let end = String(endsAt ?? "").trim();
+  const start = String(startsAt ?? "").trim();
+  if (start && (!end || end === start) && ids.length > 0) {
+    // Total duration from the services (legacy calc_total_duration_and_primary).
+    const ph = ids.map(() => "?").join(", ");
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, duration_min", where: `id IN (${ph})`, params: ids }).catch(() => [] as RowDataPacket[]);
+    const durById = new Map<number, number>(rows.map((r) => [Number(r.id ?? 0), Math.max(10, Number(r.duration_min ?? 0) || 0)]));
+    const totalMin = serviceIds.reduce((sum, id) => sum + (durById.get(Math.trunc(Number(id)) || 0) ?? 0), 0);
+    if (totalMin > 0) end = addMinutesSqlDate(start.length === 16 ? `${start}:00` : start, totalMin);
+  }
+
+  const allowed = await allowedCabinIdsForServices(slug, ids, locationId ?? null);
+  const hasLocation = typeof locationId === "number" && locationId > 0;
+  const activeRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "cabins",
+    columns: "id, name",
+    where: hasLocation
+      ? "COALESCE(is_active, 1) = 1 AND (location_id = ? OR location_id IS NULL)"
+      : "COALESCE(is_active, 1) = 1",
+    params: hasLocation ? [locationId] : [],
+    orderBy: hasLocation ? "(location_id IS NULL) ASC, position ASC, id ASC" : "position ASC, id ASC",
+  }).catch(() => [] as RowDataPacket[]);
+  const allowedSet = new Set(allowed);
+
+  const occupied = new Set<number>();
+  if (start && end && allowed.length > 0) {
+    const date = start.slice(0, 10);
+    const startMin = minutesOfDayFromSqlDate(start.length === 16 ? `${start}:00` : start);
+    const endMin = minutesOfDayFromSqlDate(end.length === 16 ? `${end}:00` : end);
+    if (Number.isFinite(startMin) && Number.isFinite(endMin)) {
+      const ranges = await busyCabinRangesForDate(slug, date, { excludeAppointmentId, excludeHoldToken }).catch(() => [] as CabinBusyRange[]);
+      for (const range of ranges) {
+        if (!allowedSet.has(range.cabinId)) continue;
+        if (range.locationId !== null && hasLocation && range.locationId !== locationId) continue;
+        if (range.end > startMin && range.start < endMin) occupied.add(range.cabinId);
+      }
+    }
+  }
+
+  const cabins = activeRows
+    .map((row) => ({ id: Number(row.id ?? 0), name: String(row.name ?? "") }))
+    .filter((cabin) => cabin.id > 0 && allowedSet.has(cabin.id))
+    .map((cabin) => ({ ...cabin, occupied: occupied.has(cabin.id) }));
+  const freeIds = cabins.filter((cabin) => !cabin.occupied).map((cabin) => cabin.id);
+  return {
+    cabins,
+    freeIds,
+    autoSelect: freeIds.length === 1 ? freeIds[0] : 0,
+    // Echo the window normalized to full "YYYY-MM-DD HH:MM:SS" like the legacy.
+    startsAt: start.length === 16 ? `${start}:00` : start,
+    endsAt: end,
+  };
+}
+
 // resolve_cabin_id_for_range: validate the requested cabin (allowed + free) or
 // auto-pick the first free allowed cabin. Throws the exact legacy messages.
 async function resolveCabinIdForRange({
@@ -9624,6 +9702,102 @@ export async function issueDbGift(
     progress_json: JSON.stringify({ source: "next", value: input.value ?? 0 }),
   });
   return getSingleGift(slug, id);
+}
+
+// Port of action=fidelity_gift_redeem (api_appointments.php:7886) — the calendar
+// edit modal's "Registra gift": redeem a whole GIFT INSTANCE against an existing
+// appointment. gift_idx is optional: the legacy auto-picks the first available
+// instance (Omaggi v2 instances cost 0 points, so the first eligible one wins).
+// The instance is marked 'riscattato' with source appointment, a gift_transactions
+// row records it, and the appointment's reserved fidelity-gift fields are cleared.
+// Throws the legacy messages ('Nessun omaggio riscattabile', 'omaggio non
+// trovato/attivo/disponibile/scaduto', 'Appuntamento non coerente...').
+export async function fidelityGiftRedeemForAppointment({
+  slug,
+  clientId,
+  appointmentId,
+  giftIdx = null,
+  createdBy = null,
+}: {
+  slug: string;
+  clientId: number;
+  appointmentId: number;
+  giftIdx?: number | null;
+  createdBy?: number | null;
+}): Promise<{ pointsUsed: number; availablePoints: number }> {
+  const apptRows = await tenantSelect<RowDataPacket>({ slug, table: "appointments", columns: "id, client_id", where: "id = ?", params: [appointmentId], limit: 1 });
+  const appt = apptRows[0];
+  const apptClientId = Number(appt?.client_id ?? 0) || 0;
+  if (!appt || apptClientId <= 0 || apptClientId !== clientId) {
+    throw new Error("Appuntamento non coerente con il cliente selezionato.");
+  }
+
+  // Auto-pick: first AVAILABLE instance of the client (state disponibile, active,
+  // not expired by calendar day), assignment order.
+  let instanceId = Math.max(0, Number(giftIdx ?? 0) || 0);
+  if (instanceId <= 0) {
+    const candidates = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "gift_instances",
+      columns: "id",
+      where: "client_id = ? AND LOWER(COALESCE(state,'')) = 'disponibile' AND COALESCE(is_active,0) = 1 AND (expires_at IS NULL OR expires_at::date >= ?)",
+      params: [clientId, todayIso()],
+      orderBy: "id ASC",
+      limit: 1,
+    }).catch(() => [] as RowDataPacket[]);
+    instanceId = Number(candidates[0]?.id ?? 0) || 0;
+  }
+  if (instanceId <= 0) throw new Error("Nessun omaggio riscattabile");
+
+  // Validate the instance with the legacy redeemInstance guard chain.
+  const instRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "gift_instances",
+    columns: "id, client_id, state, is_active, expires_at",
+    where: "id = ?",
+    params: [instanceId],
+    limit: 1,
+  });
+  const instance = instRows[0];
+  if (!instance || Number(instance.client_id ?? 0) !== clientId) throw new Error("omaggio non trovato");
+  if (Number(instance.is_active ?? 0) !== 1) throw new Error("omaggio non attivo");
+  if (String(instance.state ?? "").trim().toLowerCase() !== "disponibile") throw new Error("omaggio non disponibile");
+  const expiresYmd = instance.expires_at ? toIso(instance.expires_at).slice(0, 10) : "";
+  if (expiresYmd && expiresYmd < todayIso()) throw new Error("omaggio scaduto");
+
+  await tenantUpdate({
+    slug,
+    table: "gift_instances",
+    id: instanceId,
+    values: {
+      state: "riscattato",
+      is_active: 0,
+      redeemed_at: new Date(),
+      redeemed_source_type: "appointment",
+      redeemed_source_id: appointmentId,
+    },
+  });
+  await tenantInsert(await tenantTable(slug, "gift_transactions"), {
+    instance_id: instanceId,
+    appointment_id: appointmentId,
+    type: "redeem",
+    qty: 1,
+    note: "Riscatto omaggio da appuntamento",
+    created_by: createdBy && createdBy > 0 ? createdBy : null,
+    created_at: new Date(),
+  }).catch(() => 0);
+
+  // Clear the reservation fields IF this exact gift was the reserved one (legacy
+  // UPDATE ... WHERE fidelity_gift_idx=?; a different reservation stays intact).
+  const apptTable = await tenantTable(slug, "appointments");
+  await dbExecute(
+    `UPDATE ${quoteIdentifier(apptTable.name)} SET fidelity_gift_points_used = 0, fidelity_gift_idx = NULL WHERE tenant_id = ? AND id = ? AND client_id = ? AND fidelity_gift_idx = ?`,
+    [apptTable.tenantId ?? 0, appointmentId, clientId, instanceId],
+  ).catch(() => undefined);
+
+  // Omaggi v2: instances never cost points — points_used is always 0.
+  const { points } = await dbWalletBalance(clientId, slug).catch(() => ({ credit: 0, points: 0 }));
+  return { pointsUsed: 0, availablePoints: Math.max(0, Math.round(Number(points) || 0)) };
 }
 
 export async function redeemDbGift(id: number, slug: string): Promise<GiftReward> {

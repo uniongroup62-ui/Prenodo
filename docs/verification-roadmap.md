@@ -198,8 +198,16 @@ Clienti (form/detail/cascade-delete/tag/storico).
 
 ## Gap residui del flusso Quick Booking (da decidere/pianificare)
 1. ~~Promozioni nel drawer~~ ✅ **FATTO (2026-07-02, vedi item 18)**.
-2. **fidelity_gift_redeem + conflict_policy radios** nel drawer (riscatto
-   premi fidelity; i conflitti promo/punti "hard" sono ora coperti dall'item 18).
+2. **fidelity_gift_redeem**: ✅ FATTO (2026-07-02): action portata sulla route
+   Next (fidelityGiftRedeemForAppointment) — riscatto dell'INTERA istanza
+   omaggio su appuntamento esistente ("Registra gift" del modal calendario):
+   auto-pick prima istanza disponibile senza gift_idx, catena guardie legacy
+   (istanza del cliente/attiva/disponibile/non scaduta), istanza →
+   'riscattato' con source appointment + riga gift_transactions, campi
+   fidelity_gift_* dell'appuntamento azzerati. **Verifica live IDENTICA sui 2
+   stack** (redeem ok {points_used:0}, "Nessun omaggio riscattabile",
+   "Appuntamento non coerente con il cliente selezionato."). Cleanup completo.
+   RESTA UI: radios "Scelta cliente" (conflict_policy='choice') nel drawer.
 3. **swap_segment**: ✅ BACKEND portato (2026-07-02): action=swap_segment sulla
    route Next con semantica legacy esatta (solo pending/scheduled; scambio
    position+finestre orarie mantenendo la finestra appuntamento; guardie staff
@@ -214,18 +222,26 @@ Clienti (form/detail/cascade-delete/tag/storico).
    "Errore durante l'aggiornamento della prenotazione.". Semantica presa dal
    codice sorgente (:9386-9605). RESTA UI: child-rows multi-servizio + frecce
    ↑/↓ nella lista appuntamenti Next.
-4. **Cabine nel drawer (solo UI)**: select cabina filtrata sulle LIBERE
-   (legacy refreshCabinsForServices); oggi il Next mostra tutte quelle della
-   sede e il server valida al save (esito corretto, UX meno guidata).
+4. **Cabine nel drawer**: ✅ FATTO (2026-07-02): action=cabins_for_services
+   portata (cabinsForServicesContext: allowed per servizi + stato occupata
+   nella finestra, ends_at auto da durata totale, auto_select su singola
+   libera — shape legacy {cabins, free_ids, auto_select}); **verifica live:
+   risposta IDENTICA sui 2 stack** (occupata alle 10:30 con appuntamento
+   sovrapposto, libera+auto_select alle 14:00). Drawer: select #qb_cabin_id e
+   picker multi mostrano le occupate col suffisso "(occupata)" disabilitate,
+   auto-select sulla singola LIBERA (come refreshCabinsForServices).
 5. **Hold: cabin_ids_json** — il Next riserva la cabina di default del
    servizio; il legacy auto-sceglie una cabina LIBERA dalla lista allowed.
    Con 1 cabina per servizio (dato reale attuale) identico; divergenza solo
    con pool di cabine condivise.
-6. **Coupon su base ridotta dalla promo**: quando la promo NON è cumulabile
-   col coupon, il legacy applica il coupon SOLO ai servizi non scontati dalla
-   promo (coupon_eval_after_promotion). Il preview coupon Next non riduce
-   ancora la base; il caso reale (promo non cumulabile + coupon insieme) è
-   raro ma da chiudere per parità totale.
+6. **Coupon su base ridotta dalla promo**: ✅ FATTO (2026-07-02): il preview
+   coupon Next (route coupons action=preview) ora valuta la promo automatica
+   dei servizi e, se NON cumulabile col coupon, riduce la base ai soli servizi
+   non scontati; tutto scontato ⇒ rifiuto con la reason legacy ("Il coupon non
+   è applicabile agli elementi già in promozione per questa campagna.").
+   **Verifica live IDENTICA sui 2 stack**: rifiuto carattere-per-carattere con
+   promo non cumulabile; sconto 1.08 su base post-promo 10.80 con promo
+   cumulabile; 1.20 senza promo. I preview POS (solo code+subtotal) invariati.
 
 ## Item 18 — PROMOZIONI nel quick booking (2026-07-02, port completo + verifica live)
 - **Engine** (lib/db-repositories.ts): computePromoDiscountCents riscritto con
