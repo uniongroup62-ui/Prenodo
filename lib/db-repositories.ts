@@ -50,7 +50,7 @@ import type {
 } from "@/lib/tenant-store";
 import { tenantDelete, tenantInsert, tenantSelect, tenantTable, tenantUpdate, columnExists, dbExecute, dbQuery, quoteIdentifier, tableExists, tenantIdForSlug, withTenantTransaction, type TenantTable } from "@/lib/tenant-db";
 import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
-import { assertAppointmentSlotAvailable, busyCabinRangesForDate, type AppointmentSlotSegment, type CabinBusyRange } from "@/lib/public-booking-db";
+import { assertAppointmentSlotAvailable, busyCabinRangesForDate, busyRangesForDate, staffTimeoffReasonForRange, type AppointmentSlotSegment, type CabinBusyRange } from "@/lib/public-booking-db";
 
 export async function listDbLocations(slug: string): Promise<Location[]> {
   const table = await tenantTable(slug, "locations");
@@ -2671,6 +2671,161 @@ export async function getDbAppointmentSegmentCount(slug: string, id: number): Pr
     params: [id],
   }).catch(() => [] as RowDataPacket[]);
   return rows.length;
+}
+
+// Swap two ADJACENT segments of a multi-servizio booking (port of the legacy
+// action=swap_segment, api_appointments.php:9386). Semantics:
+//  * only pending/scheduled bookings are editable;
+//  * the two segments exchange POSITION and TIME WINDOWS — the earlier slot is
+//    taken by whichever segment moves first, keeping the whole appointment
+//    window unchanged (base = min(start), sequential by duration);
+//  * each moved segment's staff is re-validated on its NEW range: time-off and
+//    double-booking throw the exact legacy messages;
+//  * each moved segment's cabin is re-resolved (keep current -> appointment's
+//    -> auto-pick, via resolveCabinIdForRange);
+//  * appointments.starts_at/ends_at are re-aligned to MIN/MAX of the segments.
+export async function swapDbAppointmentSegment(slug: string, appointmentId: number, segmentId: number, direction: "up" | "down"): Promise<void> {
+  const apptRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "appointments",
+    columns: "id, starts_at, status, cabin_id, location_id",
+    where: "id = ?",
+    params: [appointmentId],
+    limit: 1,
+  });
+  const appt = apptRows[0];
+  if (!appt) throw new Error("Prenotazione non trovata");
+  const curStatus = appointmentPhpStatus(String(appt.status ?? ""));
+  if (curStatus !== "pending" && curStatus !== "scheduled") {
+    throw new Error("Impossibile cambiare l'ordine: la prenotazione non è modificabile.");
+  }
+  const locationId = Number(appt.location_id ?? 0) || null;
+
+  const segs = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "appointment_segments",
+    where: "appointment_id = ?",
+    params: [appointmentId],
+    orderBy: "position ASC, starts_at ASC, id ASC",
+  });
+  if (segs.length === 0) throw new Error("Questa prenotazione non è multi-servizio.");
+  if (segs.length < 2) throw new Error("Multi-servizio non valido");
+
+  const idx = segs.findIndex((seg) => Number(seg.id ?? 0) === segmentId);
+  if (idx < 0) throw new Error("Segmento non trovato");
+  const swapIdx = direction === "up" ? idx - 1 : idx + 1;
+  if (swapIdx < 0 || swapIdx >= segs.length) throw new Error("Spostamento non disponibile");
+
+  const segCur = segs[idx];
+  const segSwap = segs[swapIdx];
+  const tsCur = toDate(segCur.starts_at).getTime();
+  const teCur = toDate(segCur.ends_at).getTime();
+  const tsSwap = toDate(segSwap.starts_at).getTime();
+  const teSwap = toDate(segSwap.ends_at).getTime();
+  if (!Number.isFinite(tsCur) || !Number.isFinite(tsSwap)) throw new Error("Orari non validi");
+
+  // Durations from the stored windows, falling back to duration_minutes (>=10'),
+  // then to the legacy 10' floor.
+  const durCurMs = teCur > tsCur ? teCur - tsCur : Math.max(10, Number(segCur.duration_minutes ?? 0) || 0) * 60000;
+  const durSwapMs = teSwap > tsSwap ? teSwap - tsSwap : Math.max(10, Number(segSwap.duration_minutes ?? 0) || 0) * 60000;
+
+  const baseMs = Math.min(tsCur, tsSwap);
+  const firstSeg = direction === "up" ? segCur : segSwap;
+  const secondSeg = direction === "up" ? segSwap : segCur;
+  const durFirstMs = direction === "up" ? durCurMs : durSwapMs;
+  const durSecondMs = direction === "up" ? durSwapMs : durCurMs;
+
+  const fmtSql = (ms: number) => {
+    const d = new Date(ms);
+    return `${dateIsoLocal(d)} ${timeLocal(d)}:00`;
+  };
+  const firstStart = fmtSql(baseMs);
+  const firstEnd = fmtSql(baseMs + durFirstMs);
+  const secondStart = firstEnd;
+  const secondEnd = fmtSql(baseMs + durFirstMs + durSecondMs);
+
+  const checks = [
+    { seg: firstSeg, starts: firstStart, ends: firstEnd },
+    { seg: secondSeg, starts: secondStart, ends: secondEnd },
+  ];
+
+  // Staff guards on the NEW ranges: HARD time-off, then double-booking (both with
+  // the exact legacy messages, naming the operator).
+  const date = firstStart.slice(0, 10);
+  const busy = await busyRangesForDate(slug, date, { excludeAppointmentId: appointmentId }).catch(() => []);
+  for (const check of checks) {
+    const staffId = Number(check.seg.staff_id ?? 0) || 0;
+    if (staffId <= 0) continue;
+    const startMin = minutesOfDayFromSqlDate(check.starts);
+    const endMin = minutesOfDayFromSqlDate(check.ends);
+    const staffName = async () => {
+      const rows = await tenantSelect<RowDataPacket>({ slug, table: "staff", columns: "full_name", where: "id = ?", params: [staffId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+      return String(rows[0]?.full_name ?? "").trim() || "Operatore";
+    };
+    const reason = await staffTimeoffReasonForRange(slug, staffId, date, startMin, endMin);
+    if (reason) {
+      throw new Error(`Impossibile cambiare ordine: ${await staffName()} risulta non disponibile (${reason}) nel periodo selezionato.`);
+    }
+    const conflict = busy.some((range) =>
+      (range.staffIds.length === 0 || range.staffIds.includes(staffId))
+      && (range.locationId === null || locationId === null || range.locationId === locationId)
+      && range.end > startMin && range.start < endMin,
+    );
+    if (conflict) {
+      throw new Error(`Impossibile cambiare ordine: ${await staffName()} ha già un altro appuntamento in quell'orario.`);
+    }
+  }
+
+  // Cabin re-resolution per moved segment (keep current -> appointment's -> auto),
+  // exactly like the legacy candidate chain. Skipped for cabin-less tenants by
+  // resolveCabinIdForRange's caller gate — here we mirror the legacy inline gate.
+  const anyCabins = await tenantSelect<RowDataPacket>({ slug, table: "cabins", columns: "id", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const cabinUpdates = new Map<number, number>();
+  if (anyCabins.length > 0) {
+    const apptCabin = Number(appt.cabin_id ?? 0) || 0;
+    for (const check of checks) {
+      const segId = Number(check.seg.id ?? 0);
+      const serviceId = Number(check.seg.service_id ?? 0);
+      if (segId <= 0 || serviceId <= 0) continue;
+      const currentCabin = Number(check.seg.cabin_id ?? 0) || 0;
+      const candidates: number[] = [];
+      if (currentCabin > 0) candidates.push(currentCabin);
+      if (apptCabin > 0 && !candidates.includes(apptCabin)) candidates.push(apptCabin);
+      candidates.push(0);
+      let lastError: unknown = null;
+      for (const candidate of candidates) {
+        try {
+          cabinUpdates.set(segId, await resolveCabinIdForRange({ slug, requestedCabinId: candidate, serviceIds: [serviceId], startsAt: check.starts, endsAt: check.ends, locationId, excludeAppointmentId: appointmentId }));
+          lastError = null;
+          break;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      if (lastError) throw lastError;
+    }
+  }
+
+  // Apply: new time windows, swapped positions, re-resolved cabins, then the
+  // appointment window re-aligned to MIN/MAX of its segments.
+  const segTable = await tenantTable(slug, "appointment_segments");
+  const segName = quoteIdentifier(segTable.name);
+  const tenantId = segTable.tenantId ?? 0;
+  await dbExecute(`UPDATE ${segName} SET starts_at = ?, ends_at = ? WHERE tenant_id = ? AND id = ? AND appointment_id = ?`, [firstStart, firstEnd, tenantId, Number(firstSeg.id), appointmentId]);
+  await dbExecute(`UPDATE ${segName} SET starts_at = ?, ends_at = ? WHERE tenant_id = ? AND id = ? AND appointment_id = ?`, [secondStart, secondEnd, tenantId, Number(secondSeg.id), appointmentId]);
+  const posCur = Number(segCur.position ?? idx);
+  const posSwap = Number(segSwap.position ?? swapIdx);
+  await dbExecute(`UPDATE ${segName} SET position = ? WHERE tenant_id = ? AND id = ? AND appointment_id = ?`, [posSwap, tenantId, Number(segCur.id), appointmentId]);
+  await dbExecute(`UPDATE ${segName} SET position = ? WHERE tenant_id = ? AND id = ? AND appointment_id = ?`, [posCur, tenantId, Number(segSwap.id), appointmentId]);
+  for (const [segId, cabId] of cabinUpdates) {
+    await dbExecute(`UPDATE ${segName} SET cabin_id = ? WHERE tenant_id = ? AND id = ? AND appointment_id = ?`, [cabId > 0 ? cabId : null, tenantId, segId, appointmentId]).catch(() => undefined);
+  }
+  const apptTable = await tenantTable(slug, "appointments");
+  const apptName = quoteIdentifier(apptTable.name);
+  await dbExecute(
+    `UPDATE ${apptName} SET starts_at = (SELECT MIN(starts_at) FROM ${segName} WHERE tenant_id = ? AND appointment_id = ?), ends_at = (SELECT MAX(ends_at) FROM ${segName} WHERE tenant_id = ? AND appointment_id = ?) WHERE tenant_id = ? AND id = ?`,
+    [tenantId, appointmentId, tenantId, appointmentId, tenantId, appointmentId],
+  );
 }
 
 export async function resizeDbAppointmentEnd(slug: string, id: number, newEndTime: string): Promise<AppointmentWithMeta | null> {

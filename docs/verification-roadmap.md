@@ -200,8 +200,20 @@ Clienti (form/detail/cascade-delete/tag/storico).
 1. ~~Promozioni nel drawer~~ ✅ **FATTO (2026-07-02, vedi item 18)**.
 2. **fidelity_gift_redeem + conflict_policy radios** nel drawer (riscatto
    premi fidelity; i conflitti promo/punti "hard" sono ora coperti dall'item 18).
-3. **swap_segment**: child-rows segmenti + frecce riordino nella lista
-   appuntamenti Next.
+3. **swap_segment**: ✅ BACKEND portato (2026-07-02): action=swap_segment sulla
+   route Next con semantica legacy esatta (solo pending/scheduled; scambio
+   position+finestre orarie mantenendo la finestra appuntamento; guardie staff
+   time-off/conflitto e ri-risoluzione cabina per segmento; appointments
+   riallineato a MIN/MAX segmenti). Verificato live su Next: swap up/down
+   corretti, 5 messaggi-guardia identici al legacy ("Spostamento non
+   disponibile", "Direzione non valida", "Segmento non trovato", ecc.).
+   NOTA: il PHP LOCALE non è testabile per confronto diretto — il rewriter
+   tenant del suo Db inietta `appointments.tenant_id` dentro la subquery
+   MIN/MAX (bug dell'import locale a tabelle condivise; in produzione con
+   tabelle prefissate non accade) → lo swap PHP locale fallisce sempre con
+   "Errore durante l'aggiornamento della prenotazione.". Semantica presa dal
+   codice sorgente (:9386-9605). RESTA UI: child-rows multi-servizio + frecce
+   ↑/↓ nella lista appuntamenti Next.
 4. **Cabine nel drawer (solo UI)**: select cabina filtrata sulle LIBERE
    (legacy refreshCabinsForServices); oggi il Next mostra tutte quelle della
    sede e il server valida al save (esito corretto, UX meno guidata).

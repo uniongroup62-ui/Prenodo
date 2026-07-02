@@ -111,7 +111,7 @@ type StaffCandidate = {
   serviceIds: Set<number>;
 };
 
-type BusyRange = {
+export type BusyRange = {
   start: number;
   end: number;
   locationId: number | null;
@@ -675,7 +675,7 @@ async function hoursLabel(slug: string, locationId: number | null, date: string)
 // "legacy-appointments-missing-a-segment" handling). The no-staff-range-blocks-everyone
 // rule is preserved by candidateFree (a range with an empty staffIds list blocks any
 // operator).
-async function busyRangesForDate(
+export async function busyRangesForDate(
   slug: string,
   date: string,
   options: { excludeAppointmentId?: number | null; excludeHoldToken?: string | null } = {},
@@ -871,7 +871,7 @@ export async function busyCabinRangesForDate(
 // else null. Always enforced (cannot be overridden). Best-effort: a failed query
 // returns null (never blocks). Compared in minutes-of-day within the single date,
 // matching the rest of this guard.
-async function staffTimeoffReasonForRange(
+export async function staffTimeoffReasonForRange(
   slug: string,
   staffId: number,
   date: string,

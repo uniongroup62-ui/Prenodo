@@ -18,6 +18,7 @@ import {
   listDbAppointments,
   resizeDbAppointmentEnd,
   restoreAppointmentRedeems,
+  swapDbAppointmentSegment,
   updateDbAppointment,
   updateDbAppointmentStatus,
   type AppointmentPackageRedeem,
@@ -266,6 +267,23 @@ export async function POST(request: Request) {
       });
 
       return Response.json({ ok: true, sourceMode: "database", ...hold });
+    }
+
+    // Reorder two adjacent segments of a multi-servizio booking (port of the
+    // legacy action=swap_segment): position + time windows swap, staff/cabin
+    // re-validated on the new ranges. Errors carry the exact legacy messages.
+    if (action === "swap_segment") {
+      const id = Number.parseInt(String(body.id ?? "0"), 10) || 0;
+      const segmentId = Number.parseInt(String(body.segment_id ?? "0"), 10) || 0;
+      if (id <= 0 || segmentId <= 0) return jsonError("Dati mancanti", 400);
+      const direction = String(body.direction ?? "").trim();
+      if (direction !== "up" && direction !== "down") return jsonError("Direzione non valida", 400);
+      try {
+        await swapDbAppointmentSegment(tenantSlug, id, segmentId, direction);
+        return Response.json({ ok: true });
+      } catch (error) {
+        return jsonError(error instanceof Error ? error.message : "Errore durante l'aggiornamento della prenotazione.");
+      }
     }
 
     if (action === "release_hold") {
