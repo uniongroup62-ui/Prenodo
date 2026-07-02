@@ -2,7 +2,7 @@ import "server-only";
 
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { listDbAppointments, listDbLocations, listDbServices } from "@/lib/db-repositories";
-import { dbExecute, dbQuery, quoteIdentifier, columnExists, tableExists, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
+import { dbExecute, dbQuery, quoteIdentifier, columnExists, tableExists, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
 
 export type ManageCalendarStaff = {
   id: number;
@@ -304,12 +304,41 @@ async function calendarStaff(slug: string): Promise<ManageCalendarStaff[]> {
   if (hasColor) columns.push("calendar_color");
   if (hasPhoto) columns.push("photo_path");
 
+  // SSO ("Senza Operatore") column (calendar.php 54-60): shown ONLY when at
+  // least one active service is flagged no_operator; otherwise the special
+  // 'SSO' staff row is filtered out. When shown, SSO sorts LAST.
+  let includeSso = false;
+  try {
+    const servicesTable = await tenantTable(slug, "services");
+    if (await columnExists(servicesTable.name, "no_operator")) {
+      const rows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "services",
+        columns: "COUNT(*) AS n",
+        where: "COALESCE(is_active, 1) = 1 AND no_operator = 1",
+      });
+      includeSso = Number(rows[0]?.n ?? 0) > 0;
+    }
+  } catch {
+    includeSso = false;
+  }
+  if (includeSso) {
+    // ensure_sso_staff_exists: create the special staff row if missing (best-effort).
+    try {
+      const existing = await tenantSelect<RowDataPacket>({ slug, table: "staff", columns: "id", where: "full_name = 'SSO'", limit: 1 });
+      if (!existing[0]) await tenantInsert(staffTable, { full_name: "SSO", is_active: 1 });
+    } catch {
+      // a failed ensure just leaves the column out
+    }
+  }
+
+  const ssoLast = "(CASE WHEN full_name = 'SSO' THEN 1 ELSE 0 END) ASC";
   const rows = await tenantSelect<RowDataPacket>({
     slug,
     table: "staff",
     columns: columns.map(quoteIdentifier).join(","),
-    where: "COALESCE(is_active, 1) = 1",
-    orderBy: hasSortOrder ? "sort_order ASC, full_name ASC, id ASC" : "full_name ASC, id ASC",
+    where: `COALESCE(is_active, 1) = 1${includeSso ? "" : " AND full_name <> 'SSO'"}`,
+    orderBy: hasSortOrder ? `${ssoLast}, sort_order ASC, full_name ASC, id ASC` : `${ssoLast}, full_name ASC, id ASC`,
   });
 
   return rows.map((row, index) => ({

@@ -719,6 +719,27 @@ OTP/reset (fix TZ), conferme su DB.
   solo con sessione cliente attiva E prenotazione collegata all'account —
   l'endpoint serve solo le prenotazioni del cliente loggato, come il legacy
   login-gated) + pulsante "Stampa" (window.print) nell'alert di conferma.
+- C6 CHIUSO: colonna SSO "Senza Operatore" nel calendario (calendar.php 54-60):
+  calendarStaff ora include la riga staff 'SSO' SOLO se esiste almeno un
+  servizio attivo no_operator (altrimenti la filtra), la crea se manca
+  (ensure_sso_staff_exists) e la ordina per ULTIMA.
+- P4-parziale CHIUSO (verificato live): pagina PREVENTIVO PUBBLICO via token
+  (port di quote_public.php, accesso senza login). API /api/public/quote
+  (?slug&token 32/64hex): draft -> 404 (mai pubblico), sent oltre valid_until
+  -> Scaduto, stato effettivo con label/badge legacy; payload con anagrafiche
+  azienda (profilo quote_* + override location) e cliente (snapshot), voci
+  (SKU/sconto%/IVA), totali, nota pubblica, metodi di pagamento (JSON o
+  newline), termini, footer. Componente QuotePublicFaithful su
+  /<slug>/quote_public?token= (l'URL che le email preventivo già linkano!)
+  con markup legacy + quote_public.css portato + Stampa. Test live: token
+  invalido 404, bozza 404, inviato -> payload completo e pagina 200; delete
+  del preventivo di test rifiutato dal guard legacy ("solo bozze") -> pulito
+  via SQL. NON portato: "Scarica PDF" (QuotePdf = infra rinviata); restano
+  gdpr_public/consent_public (firma elettronica + PDF, stessa infra).
+- EMBED (P6) COPERTO BY-DESIGN: la pagina /slug/booking del Next è già
+  chrome-less (body embed-body, nessuna topbar marketplace) e iframabile;
+  embed=1 nel legacy serviva a nascondere la UI del portale. Il parametro
+  viene accettato senza effetti (nessun X-Frame-Options bloccante).
 - Q2 CHIUSO: modali dettaglio residui nel drawer. quickBookClientResidualsDetail
   esteso con gli id sorgente (prepaid id/service_id, giftcard id, package id +
   service_id per seduta, giftbox instance_id + giftbox_item_id/service_id,

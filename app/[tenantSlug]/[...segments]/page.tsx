@@ -89,6 +89,7 @@ import { AppointmentsContent } from "@/components/modules/appointments-content";
 import { BookingFaithful } from "@/components/public/booking-faithful";
 import { GiftBoxVoucherFaithful } from "@/components/public/giftbox-voucher-faithful";
 import { GiftCardVoucherFaithful } from "@/components/public/giftcard-voucher-faithful";
+import { QuotePublicFaithful } from "@/components/public/quote-public-faithful";
 import { currentManageSession } from "@/lib/manage-auth";
 import { shouldPromptOnboarding } from "@/lib/manage-onboarding";
 
@@ -193,6 +194,12 @@ export default async function TenantPage({
   }
   if (page === "giftcard_voucher" && query.public === "1") {
     return <GiftCardVoucherFaithful slug={tenantSlug} token={query.token ?? ""} embed={query.embed === "1"} />;
+  }
+
+  // Public quote viewer (quote_public.php: accesso via token, no login):
+  //   /<slug>/quote_public?token=<32/64hex> — the quote emails link here.
+  if (page === "quote_public") {
+    return <QuotePublicFaithful slug={tenantSlug} token={query.token ?? ""} />;
   }
 
   const session = await currentManageSession(tenantSlug);
