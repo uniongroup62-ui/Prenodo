@@ -1713,7 +1713,9 @@ export async function createDbAppointment({
   giftboxWarnings,
   giftRedeems = [],
   giftWarnings,
-  status: statusInput = "pending",
+  // Default 'scheduled' faithful to the legacy save ($_POST['status'] ?? 'scheduled').
+  // Callers that need 'pending' (the public booking confirm) pass it explicitly.
+  status: statusInput = "scheduled",
   discountType,
   discountValue,
   fidelityPointsUsed,

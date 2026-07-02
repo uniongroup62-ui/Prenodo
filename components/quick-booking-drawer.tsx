@@ -2546,6 +2546,13 @@ export function QuickBookingDrawer() {
             date,
             time: startTime,
             location_id: locationId,
+            // STATO selezionato nel drawer (In attesa/Prenotato/...): senza questo campo
+            // il CREATE ignorava la select e salvava sempre il default backend
+            // ("Prenotato" selezionato -> salvato "In attesa"). In EDIT
+            // updateDbAppointment lo ignora (le transizioni passano dal blocco
+            // action=status più sotto), quindi inviarlo sempre è innocuo e rende il
+            // payload identico al form PHP (che invia sempre `status`).
+            status,
             staff_notes: staffNotes,
             customer_notes: customerNotes,
             appointment_hold_token: holdToken,
