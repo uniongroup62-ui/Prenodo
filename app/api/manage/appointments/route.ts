@@ -215,6 +215,9 @@ export async function POST(request: Request) {
         staffId,
         locationId,
         ownerKey: "manage",
+        // Legacy backend channel: 5-minute TTL (vs 150s public) — the drawer
+        // countdown starts at 5:00.
+        channel: "backend",
       });
 
       return Response.json({ ok: true, sourceMode: "database", ...hold });

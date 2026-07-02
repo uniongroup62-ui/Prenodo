@@ -283,6 +283,13 @@ export async function publicBookingSlots({
   return slots;
 }
 
+// Legacy hold TTL per channel (appointment_holds_ttl_seconds_for_channel,
+// Helpers.php:12871): 150s for the public wizard, 5 minutes for the backend
+// quick-booking drawer (its countdown starts at 5:00).
+function holdTtlSecondsForChannel(channel: string): number {
+  return channel === "public" ? 150 : 300;
+}
+
 export async function holdPublicBookingSlot({
   slug,
   date,
@@ -291,6 +298,7 @@ export async function holdPublicBookingSlot({
   staffId,
   locationId,
   ownerKey,
+  channel = "public",
 }: {
   slug: string;
   date: string;
@@ -299,6 +307,7 @@ export async function holdPublicBookingSlot({
   staffId?: number | null;
   locationId?: number | null;
   ownerKey: string;
+  channel?: string;
 }): Promise<PublicBookingHold> {
   const normalizedDate = normalizeDate(date);
   const normalizedTime = normalizeTime(time);
@@ -309,13 +318,13 @@ export async function holdPublicBookingSlot({
   const services = await publicServicesByIds(slug, serviceIds, locationId ?? null);
   const start = timeToMinutes(normalizedTime);
   const duration = services.reduce((sum, service) => sum + Math.max(5, Number(service.duration_min ?? 30)), 0);
-  const expiresAt = addSecondsSqlDate(new Date(), 150);
+  const expiresAt = addSecondsSqlDate(new Date(), holdTtlSecondsForChannel(channel));
   const token = randomHex(64);
   const selectedStaffId = staffId && staffId > 0 ? staffId : selected.staffId;
 
   await tenantInsert(await tenantTable(slug, "appointment_holds"), {
     token,
-    channel: "public",
+    channel,
     owner_key: ownerKey || "public",
     location_id: locationId && locationId > 0 ? locationId : null,
     starts_at: sqlDateTime(normalizedDate, normalizedTime),
@@ -380,7 +389,9 @@ export async function renewPublicBookingHold({
   const id = Number(row?.id ?? 0);
   if (id <= 0) throw new Error("Hold non trovato.");
 
-  const expiresAt = addSecondsSqlDate(new Date(), 150);
+  // Renew with the TTL of the hold's own channel (legacy appointment_hold_renew
+  // passes the channel through to the per-channel TTL).
+  const expiresAt = addSecondsSqlDate(new Date(), holdTtlSecondsForChannel(String(row.channel ?? "public")));
   await tenantUpdate({ slug, table: "appointment_holds", id, values: { expires_at: expiresAt } });
   const staffId = parseNumberArray(row.staff_ids_json)[0] ?? null;
 
@@ -762,9 +773,9 @@ async function busyRangesForDate(
 // and (3) active holds' reserved cabins (cabin_ids_json). Same exclusions as
 // busyRangesForDate (the edited appointment + the booking's own hold). Best-effort:
 // a failed/missing query yields no ranges (never blocks).
-type CabinBusyRange = { start: number; end: number; locationId: number | null; cabinId: number };
+export type CabinBusyRange = { start: number; end: number; locationId: number | null; cabinId: number };
 
-async function busyCabinRangesForDate(
+export async function busyCabinRangesForDate(
   slug: string,
   date: string,
   options: { excludeAppointmentId?: number | null; excludeHoldToken?: string | null } = {},

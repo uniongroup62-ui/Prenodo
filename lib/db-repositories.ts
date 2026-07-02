@@ -50,7 +50,7 @@ import type {
 } from "@/lib/tenant-store";
 import { tenantDelete, tenantInsert, tenantSelect, tenantTable, tenantUpdate, columnExists, dbExecute, dbQuery, quoteIdentifier, tableExists, tenantIdForSlug, withTenantTransaction, type TenantTable } from "@/lib/tenant-db";
 import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
-import { assertAppointmentSlotAvailable, type AppointmentSlotSegment } from "@/lib/public-booking-db";
+import { assertAppointmentSlotAvailable, busyCabinRangesForDate, type AppointmentSlotSegment, type CabinBusyRange } from "@/lib/public-booking-db";
 
 export async function listDbLocations(slug: string): Promise<Location[]> {
   const table = await tenantTable(slug, "locations");
@@ -1581,6 +1581,265 @@ async function planAppointmentServices({
   };
 }
 
+// ---------------------------------------------------------------------------
+// CABINA al save — port of resolve_cabin_id_for_range (api_appointments.php:3117)
+// and its helpers fetch_active_cabins (:2660), allowed_cabin_ids_for_services
+// (:2679) and occupied_cabin_ids_for_range (:2770), applied the way the legacy
+// save does: per-segment for multi-servizio (:4426), appointment-level for
+// single-service (:11162). Without this, an appointment whose cabin the drawer
+// left on AUTO would be stored with a NULL/service-default cabin: it would never
+// consume cabin capacity (bookings the legacy refuses with "Nessuna cabina
+// disponibile" would silently succeed) and a busy service-default cabin would
+// make the H2 occupancy guard refuse bookings the legacy accepts by auto-picking
+// the next free cabin.
+
+// Minutes-of-day from a "YYYY-MM-DD HH:MM[:SS]" SQL datetime (occupancy math is
+// per-day in minutes, same as busyCabinRangesForDate).
+function minutesOfDayFromSqlDate(sqlDate: string): number {
+  const m = String(sqlDate ?? "").match(/\d{4}-\d{2}-\d{2}[T ](\d{2}):(\d{2})/);
+  if (!m) return Number.NaN;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+// Active cabin ids usable at a location, in the legacy pick order: cabins bound
+// to the location first, then location-less ones, by position then id
+// (fetch_active_cabins + order_cabin_ids_by_position).
+async function activeCabinIdsForLocation(slug: string, locationId: number | null): Promise<number[]> {
+  const hasLocation = typeof locationId === "number" && locationId > 0;
+  const rows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "cabins",
+    columns: "id",
+    where: hasLocation
+      ? "COALESCE(is_active, 1) = 1 AND (location_id = ? OR location_id IS NULL)"
+      : "COALESCE(is_active, 1) = 1",
+    params: hasLocation ? [locationId] : [],
+    orderBy: hasLocation ? "(location_id IS NULL) ASC, position ASC, id ASC" : "position ASC, id ASC",
+  }).catch(() => [] as RowDataPacket[]);
+  return rows.map((row) => Number(row.id ?? 0)).filter((id) => id > 0);
+}
+
+// Allowed cabins for a service set: per service, the service_cabins rows (map
+// table), else the service's own services.cabin_id, else ALL active cabins; the
+// result is the INTERSECTION across services, restricted to active cabins at the
+// location and returned in the active-cabin pick order.
+async function allowedCabinIdsForServices(slug: string, serviceIds: number[], locationId: number | null): Promise<number[]> {
+  const ids = Array.from(new Set(serviceIds.map((id) => Number(id) || 0).filter((id) => id > 0)));
+  if (ids.length === 0) return [];
+  const activeIds = await activeCabinIdsForLocation(slug, locationId);
+  if (activeIds.length === 0) return [];
+  const activeSet = new Set(activeIds);
+
+  const byService = new Map<number, Set<number>>();
+  const placeholders = ids.map(() => "?").join(", ");
+  const mapRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "service_cabins",
+    columns: "service_id, cabin_id",
+    where: `service_id IN (${placeholders})`,
+    params: ids,
+  }).catch(() => [] as RowDataPacket[]);
+  for (const row of mapRows) {
+    const sid = Number(row.service_id ?? 0);
+    const cid = Number(row.cabin_id ?? 0);
+    if (sid <= 0 || cid <= 0 || !activeSet.has(cid)) continue;
+    if (!byService.has(sid)) byService.set(sid, new Set());
+    byService.get(sid)!.add(cid);
+  }
+
+  const missing = ids.filter((sid) => !(byService.get(sid)?.size ?? 0));
+  if (missing.length > 0) {
+    const ph = missing.map(() => "?").join(", ");
+    const svcRows = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "services",
+      columns: "id, cabin_id",
+      where: `id IN (${ph})`,
+      params: missing,
+    }).catch(() => [] as RowDataPacket[]);
+    for (const row of svcRows) {
+      const sid = Number(row.id ?? 0);
+      const cid = Number(row.cabin_id ?? 0);
+      if (sid > 0 && cid > 0 && activeSet.has(cid)) byService.set(sid, new Set([cid]));
+    }
+  }
+  for (const sid of ids) {
+    if (!(byService.get(sid)?.size ?? 0)) byService.set(sid, new Set(activeIds));
+  }
+
+  let allowed: Set<number> | null = null;
+  for (const sid of ids) {
+    const own = byService.get(sid) ?? new Set<number>();
+    if (allowed === null) {
+      allowed = new Set<number>(own);
+    } else {
+      const kept = new Set<number>();
+      for (const cid of allowed) if (own.has(cid)) kept.add(cid);
+      allowed = kept;
+    }
+  }
+  const allowedSet: Set<number> = allowed ?? new Set<number>();
+  return activeIds.filter((cid) => allowedSet.has(cid));
+}
+
+// resolve_cabin_id_for_range: validate the requested cabin (allowed + free) or
+// auto-pick the first free allowed cabin. Throws the exact legacy messages.
+async function resolveCabinIdForRange({
+  slug,
+  requestedCabinId,
+  serviceIds,
+  startsAt,
+  endsAt,
+  locationId,
+  excludeAppointmentId = null,
+  excludeHoldToken = null,
+}: {
+  slug: string;
+  requestedCabinId: number;
+  serviceIds: number[];
+  startsAt: string;
+  endsAt: string;
+  locationId: number | null;
+  excludeAppointmentId?: number | null;
+  excludeHoldToken?: string | null;
+}): Promise<number> {
+  const allowed = await allowedCabinIdsForServices(slug, serviceIds, locationId);
+  if (allowed.length === 0) throw new Error("Nessuna cabina configurata per i servizi selezionati.");
+
+  const date = String(startsAt).slice(0, 10);
+  const startMin = minutesOfDayFromSqlDate(startsAt);
+  const endMin = minutesOfDayFromSqlDate(endsAt);
+  const ranges = await busyCabinRangesForDate(slug, date, { excludeAppointmentId, excludeHoldToken }).catch(() => [] as CabinBusyRange[]);
+  const occupied = new Set<number>();
+  if (Number.isFinite(startMin) && Number.isFinite(endMin)) {
+    for (const range of ranges) {
+      if (!allowed.includes(range.cabinId)) continue;
+      // Legacy location filter: a range bound to ANOTHER location never blocks;
+      // a location-less range blocks everywhere (a.location_id=? OR IS NULL).
+      if (range.locationId !== null && locationId !== null && locationId > 0 && range.locationId !== locationId) continue;
+      if (range.end > startMin && range.start < endMin) occupied.add(range.cabinId);
+    }
+  }
+
+  const requested = Math.max(0, Number(requestedCabinId) || 0);
+  if (requested > 0) {
+    if (!allowed.includes(requested)) throw new Error("La cabina selezionata non è abilitata per i servizi scelti.");
+    if (occupied.has(requested)) throw new Error("Cabina selezionata occupata nell'orario selezionato.");
+    return requested;
+  }
+  for (const cid of allowed) {
+    if (!occupied.has(cid)) return cid;
+  }
+  throw new Error("Nessuna cabina disponibile nell'orario selezionato.");
+}
+
+// Apply the legacy cabin resolution to a service plan (mutates plan segments +
+// primaryCabinId). Feature gate: a tenant with ZERO cabins skips resolution
+// entirely — the shared-schema equivalent of the legacy per-tenant
+// table_exists('cabins') gate, so cabin-less tenants keep saving with NULL cabins.
+//  * single service: appointment-level resolve on the FULL range — requested
+//    cabin, else keep the current one (edit), else auto-pick; if keeping the
+//    current fails and nothing was requested, retry with auto-pick (:11173-11180).
+//  * multi-servizio: cabins are per SEGMENT (:4426) — an explicit per-service
+//    choice (cabin_map) is validated strictly (no fallback); otherwise try the
+//    old segment cabin at the same position, then the appointment's cabin, then
+//    auto-pick. appointments.cabin_id stays NULL in this mode (legacy
+//    $use_segment_cabins_multi).
+async function resolvePlanCabins({
+  slug,
+  plan,
+  requestedCabinId,
+  cabinMap,
+  locationId,
+  excludeAppointmentId = null,
+  excludeHoldToken = null,
+  currentCabinId = null,
+  currentSegmentCabins = [],
+}: {
+  slug: string;
+  plan: AppointmentServicePlan;
+  requestedCabinId: number | null;
+  cabinMap: Record<number, number>;
+  locationId: number | null;
+  excludeAppointmentId?: number | null;
+  excludeHoldToken?: string | null;
+  currentCabinId?: number | null;
+  currentSegmentCabins?: number[];
+}): Promise<void> {
+  const anyCabins = await tenantSelect<RowDataPacket>({ slug, table: "cabins", columns: "id", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  if (anyCabins.length === 0) return;
+
+  const common = { slug, locationId, excludeAppointmentId, excludeHoldToken };
+  const current = Math.max(0, Number(currentCabinId ?? 0) || 0);
+
+  if (plan.segments.length <= 1) {
+    const requested = Math.max(0, Number(requestedCabinId ?? 0) || 0);
+    const req = requested > 0 ? requested : current;
+    const serviceIds = plan.services.map((service) => Number(service.id ?? 0)).filter((id) => id > 0);
+    const startsAt = plan.segments[0]?.startsAt ?? "";
+    let resolved: number;
+    try {
+      resolved = await resolveCabinIdForRange({ ...common, requestedCabinId: req, serviceIds, startsAt, endsAt: plan.end });
+    } catch (error) {
+      if (requested <= 0 && current > 0 && req === current) {
+        resolved = await resolveCabinIdForRange({ ...common, requestedCabinId: 0, serviceIds, startsAt, endsAt: plan.end });
+      } else {
+        throw error;
+      }
+    }
+    plan.primaryCabinId = resolved;
+    for (const seg of plan.segments) seg.cabinId = resolved;
+    return;
+  }
+
+  plan.primaryCabinId = null;
+  for (const [position, seg] of plan.segments.entries()) {
+    const serviceId = Number(seg.service.id ?? 0);
+    const explicit = Math.max(0, Number(cabinMap[serviceId] ?? 0) || 0);
+    if (explicit > 0) {
+      seg.cabinId = await resolveCabinIdForRange({ ...common, requestedCabinId: explicit, serviceIds: [serviceId], startsAt: seg.startsAt, endsAt: seg.endsAt });
+      continue;
+    }
+    const candidates: number[] = [];
+    const posCabin = Math.max(0, Number(currentSegmentCabins[position] ?? 0) || 0);
+    if (posCabin > 0) candidates.push(posCabin);
+    if (current > 0 && !candidates.includes(current)) candidates.push(current);
+    candidates.push(0);
+    let lastError: unknown = null;
+    for (const candidate of candidates) {
+      try {
+        seg.cabinId = await resolveCabinIdForRange({ ...common, requestedCabinId: candidate, serviceIds: [serviceId], startsAt: seg.startsAt, endsAt: seg.endsAt });
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (lastError) throw lastError;
+  }
+}
+
+// Legacy blocked-client guard at save (api_appointments.php:9995): a client with
+// is_blocked=1 cannot be booked from Quick Booking. EXCEPTION (edit): an
+// appointment that ALREADY belongs to that blocked client can still be edited —
+// only assigning a blocked client anew is refused ($sameExistingBlockedClient).
+// Throws the exact legacy operational message (client_block_operational_message).
+async function assertClientNotBlockedForSave(slug: string, clientId: number, currentAppointmentClientId: number | null = null): Promise<void> {
+  if (!clientId || clientId <= 0) return;
+  if (currentAppointmentClientId && currentAppointmentClientId === clientId) return;
+  const rows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "clients",
+    columns: "COALESCE(is_blocked, 0) AS is_blocked",
+    where: "id = ?",
+    params: [clientId],
+    limit: 1,
+  }).catch(() => [] as RowDataPacket[]);
+  if (Number(rows[0]?.is_blocked ?? 0) === 1) {
+    throw new Error("Questo cliente è disattivato e non può essere utilizzato in Pagamenti o Quick Booking finché non viene riattivato.");
+  }
+}
+
 // Generate a unique 5-digit booking code (port of the legacy ensure_unique_public_code).
 async function generateUniqueAppointmentPublicCode(slug: string): Promise<string | null> {
   try {
@@ -1748,6 +2007,9 @@ export async function createDbAppointment({
   couponDiscount?: number;
 } & MultiServiceAppointmentInput): Promise<AppointmentWithMeta> {
   const client = await resolveClientForAppointment(slug, clientName, locationId, clientId);
+  // Legacy blocked-client guard: a disabled client cannot be booked (create has
+  // no "same existing client" exception — that only applies to edits).
+  await assertClientNotBlockedForSave(slug, Number(client.id ?? 0));
   const staff = operator ? await resolveStaffForAppointment(slug, operator) : null;
   const operatorStaffId = staff ? Number(staff.id ?? 0) : null;
   const normalizedTime = normalizeTime(time);
@@ -1779,6 +2041,16 @@ export async function createDbAppointment({
   // Legacy staff-service guard: each segment's operator must be enabled for its
   // service (see assertStaffAllowedForServices).
   await assertStaffAllowedForServices(slug, plan.segments);
+  // Cabina: validate the drawer choice / auto-pick the first free allowed cabin
+  // per segment, exactly like the legacy save (resolve_cabin_id_for_range).
+  await resolvePlanCabins({
+    slug,
+    plan,
+    requestedCabinId: cabinId,
+    cabinMap,
+    locationId,
+    excludeHoldToken: token || null,
+  });
   // Exclude this booking's own active hold (its [Disponibilità] reservation), so
   // the slot it reserved doesn't count against itself. Best-effort: only a real
   // detected overlap throws (the route turns it into { ok:false, error }).
@@ -2003,11 +2275,31 @@ export async function updateDbAppointment({
   couponDiscount?: number;
 } & MultiServiceAppointmentInput): Promise<AppointmentWithMeta> {
   // Tenant-scoped existence guard: the SELECT only returns rows for this tenant,
-  // so a row from another tenant (or a missing id) yields no match.
-  const existingRows = await tenantSelect<RowDataPacket>({ slug, table: "appointments", columns: "id", where: "id = ?", params: [id], limit: 1 });
+  // so a row from another tenant (or a missing id) yields no match. cabin_id is
+  // the "keep the current cabin" candidate of the legacy cabin resolution;
+  // client_id feeds the blocked-client same-client exception.
+  const existingRows = await tenantSelect<RowDataPacket>({ slug, table: "appointments", columns: "id, cabin_id, client_id", where: "id = ?", params: [id], limit: 1 });
   if (!existingRows[0]) throw new Error("Appuntamento non trovato.");
+  const currentCabinId = Number(existingRows[0].cabin_id ?? 0) || 0;
+  const currentClientId = Number(existingRows[0].client_id ?? 0) || 0;
+  // Old per-segment cabins by position ("mantieni la cabina del segmento" candidate).
+  const currentSegmentRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "appointment_segments",
+    columns: "position, cabin_id",
+    where: "appointment_id = ?",
+    params: [id],
+    orderBy: "position ASC",
+  }).catch(() => [] as RowDataPacket[]);
+  const currentSegmentCabins: number[] = [];
+  for (const row of currentSegmentRows) {
+    currentSegmentCabins[Number(row.position ?? 0)] = Number(row.cabin_id ?? 0) || 0;
+  }
 
   const client = await resolveClientForAppointment(slug, clientName, locationId, clientId);
+  // Legacy blocked-client guard, edit variant: keeping the appointment's OWN
+  // blocked client is allowed; re-assigning to a (different) blocked one is not.
+  await assertClientNotBlockedForSave(slug, Number(client.id ?? 0), currentClientId);
   const staff = operator ? await resolveStaffForAppointment(slug, operator) : null;
   const operatorStaffId = staff ? Number(staff.id ?? 0) : null;
   const normalizedTime = normalizeTime(time);
@@ -2039,6 +2331,19 @@ export async function updateDbAppointment({
   // Legacy staff-service guard (same as create): each segment's operator must be
   // enabled for its service.
   await assertStaffAllowedForServices(slug, plan.segments);
+  // Cabina (legacy resolve_cabin_id_for_range on edit): requested cabin, else
+  // keep the current appointment/segment cabin when still free, else auto-pick.
+  await resolvePlanCabins({
+    slug,
+    plan,
+    requestedCabinId: cabinId,
+    cabinMap,
+    locationId,
+    excludeAppointmentId: id,
+    excludeHoldToken: token || null,
+    currentCabinId,
+    currentSegmentCabins,
+  });
   // already busy. Exclude THIS appointment (so it doesn't conflict with its own
   // existing row/staff) and its own active hold. Best-effort: only a real detected
   // overlap throws (the route turns it into { ok:false, error }).

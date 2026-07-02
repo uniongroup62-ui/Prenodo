@@ -141,6 +141,79 @@ Clienti (form/detail/cascade-delete/tag/storico).
     client_package), template eliminati da entrambi.
     Nota harness: il campo Next è `item_id` (non `id`) nelle righe pacchetto;
     la delete catalogo PHP è un GET (action=catalog_delete&id&_csrf).
+15. ✅ **Matrice COMPLETA azioni api_appointments PHP ↔ Next (2026-07-02, flusso quick booking)**
+    Tutte le 20 azioni reali del PHP mappate e verificate:
+    | PHP | Next | Esito |
+    |---|---|---|
+    | availability | availability | ✅ verificata live (più volte) |
+    | cabins_for_services | (client-side su context.cabins) | ⚠️ il legacy lista solo le cabine LIBERE nell'orario; il Next tutte quelle della sede. Solo UI: il save ora valida/auto-assegna (vedi item 16) |
+    | cancel_done_preview/apply | cancel_done_preview / cancel_done | ✅ verificate live |
+    | coupon_preview | /api/manage/coupons action=preview | ✅ verificata live (3.20/32) |
+    | delete | delete / bulk_delete | ✅ guardia "Annullato prima" identica |
+    | fidelity_preview | calcolo client-side nel drawer (Block 4) | ✅ stesso esito, meccanismo diverso; conflict_policy/gift radios NON portati (vedi gap) |
+    | fidelity_gift_redeem | — | ❌ GAP: riscatto premio-fidelity dal drawer non portato |
+    | get | get | ✅ verificata live |
+    | hold_availability / release_hold / renew_hold | idem | ✅ round-trip live ok; **fix TTL**: canale backend ora 300s (era 150s fisso; legacy Helpers.php:12871). NB: countdown/auto-renew nel drawer legacy sono DISATTIVATI da qbStartHoldCountdown ("short technical hold") → il Next senza countdown è fedele |
+    | list | /api/manage/calendar | ✅ verificata live |
+    | move | move | ✅ + ora risolve la cabina come il legacy (mantieni se libera, altrimenti auto-pick) |
+    | promotion_preview | — | ❌ GAP MAGGIORE: il drawer legacy auto-rileva la migliore promozione (prezzi barrati + badge, persistiti al save server-side con regole di stacking coupon/fidelity). Drawer Next non wired (engine action=evaluate esiste, Block 3) |
+    | qb_residui_check | rivalidazione al save | ✅ esito equivalente (il legacy pre-valida al toggle; il Next rivalida sempre in createDbAppointment e riporta warnings) |
+    | save | default POST (create/update) | ✅ verificata estensivamente |
+    | staff_for_service(s) | context payload staff | ✅ verificata live |
+    | swap_segment | — | ❌ GAP: riordino ↑/↓ segmenti multi-servizio dalla lista appuntamenti (assets/js/pages/appointments.js:138). La lista Next non ha le child-row segmenti; equivalente ottenibile ri-salvando i servizi in altro ordine |
+    | (extra Next) resize / status / context / plan_* | — | ✅ status≡save legacy; resize è additivo |
+    - **Nuovo cliente dal drawer**: legacy `client_id=__new__` dentro il save
+      (transazionale); Next POST /api/manage/clients action=create poi save.
+      Esito equivalente (divergenza: se il save fallisce il Next ha già creato
+      il cliente).
+16. ✅ **CABINE al save — port completo resolve_cabin_id_for_range (fix di oggi)**
+    Il save Next NON validava/assegnava le cabine: un appuntamento con cabina
+    AUTO restava NULL → non consumava capacità cabine (il legacy rifiuta con
+    "Nessuna cabina disponibile"), e una cabina-servizio occupata faceva
+    rifiutare prenotazioni che il legacy accetta auto-scegliendo la successiva.
+    Portati in lib/db-repositories.ts: allowed per servizio (service_cabins →
+    services.cabin_id → tutte le attive, INTERSEZIONE multi-servizio, ordine
+    position), occupazione (segmenti + appuntamenti + hold, filtro sede),
+    auto-pick prima libera, per-segmento nel multi-servizio (cabin_map
+    esplicita = validazione severa; altrimenti mantieni-posizione → cabina
+    appuntamento → auto), appointments.cabin_id NULL in multi (modalità
+    segment del legacy), edit "mantieni la corrente se libera altrimenti
+    auto". Gate multi-tenant: tenant senza cabine ⇒ nessuna risoluzione
+    (equivalente del table_exists per-tenant legacy).
+    **Verifica live (T1–T5, dati identici sui 2 stack: 1 cabina attiva)**:
+    T1 create senza cabina → ok + cabina 9 auto su ENTRAMBI; T2 overlap senza
+    cabina → "Nessuna cabina disponibile nell'orario selezionato." identico;
+    T3 cabina 9 esplicita occupata → "Cabina selezionata occupata nell'orario
+    selezionato." identico; T4 cabina 10 inattiva → "La cabina selezionata non
+    è abilitata per i servizi scelti." identico; T5 edit 10:00→15:00 → cabina
+    mantenuta (appuntamento + segmento) su entrambi. Cleanup DB completo.
+17. ✅ **Guardia CLIENTE BLOCCATO al save (fix di oggi)**: il legacy rifiuta un
+    cliente is_blocked=1 al save (api_appointments.php:9995) con eccezione
+    "stesso cliente già sull'appuntamento" in edit. Il Next non aveva la
+    guardia. Portata in create+update. Verifica live su ENTRAMBI: create
+    bloccato → messaggio identico ("Questo cliente è disattivato e non può
+    essere utilizzato in Pagamenti o Quick Booking finché non viene
+    riattivato."); edit stesso cliente bloccato → ok su entrambi. Flag
+    ripristinato + appuntamenti test eliminati da entrambi i DB.
+
+## Gap residui del flusso Quick Booking (da decidere/pianificare)
+1. **Promozioni nel drawer** (il più grosso): auto-rilevamento promo nel
+   pannello prezzi (promotion_preview) + persistenza server-side al save dei
+   prezzi scontati per servizio con regole di stacking (coupon/fidelity
+   conflict_policy). L'engine di valutazione esiste già (Block 3, action=
+   evaluate): manca il wiring drawer + il blocco promo del save legacy
+   (api_appointments.php:9914 in poi).
+2. **fidelity_gift_redeem + conflict_policy radios** nel drawer (riscatto
+   premi fidelity; legato al punto 1 per i conflitti promo/punti).
+3. **swap_segment**: child-rows segmenti + frecce riordino nella lista
+   appuntamenti Next.
+4. **Cabine nel drawer (solo UI)**: select cabina filtrata sulle LIBERE
+   (legacy refreshCabinsForServices); oggi il Next mostra tutte quelle della
+   sede e il server valida al save (esito corretto, UX meno guidata).
+5. **Hold: cabin_ids_json** — il Next riserva la cabina di default del
+   servizio; il legacy auto-sceglie una cabina LIBERA dalla lista allowed.
+   Con 1 cabina per servizio (dato reale attuale) identico; divergenza solo
+   con pool di cabine condivise.
 
 ## Divergenze intenzionali documentate (non bug)
 - Redeem consumati alla CREAZIONE appuntamento (modello prenotazione, più sicuro;
