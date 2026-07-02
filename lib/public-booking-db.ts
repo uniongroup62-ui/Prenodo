@@ -600,6 +600,11 @@ async function eligibleStaffCandidates(slug: string, services: ServiceRow[], req
 }
 
 async function businessIntervals(slug: string, locationId: number | null, date: string): Promise<Array<[number, number]>> {
+  // Priority faithful to the legacy getStoreScheduleForDate:
+  //   0) a business_hours_exceptions row for the date WINS over everything (a
+  //      normally-closed day can special-open, or get custom hours);
+  //   1) a CLOSURE for the date => fully closed (no slots);
+  //   2) otherwise the weekly business_hours.
   const exceptionRows = await tenantSelect<RowDataPacket>({
     slug,
     table: "business_hours_exceptions",
@@ -609,6 +614,19 @@ async function businessIntervals(slug: string, locationId: number | null, date: 
   }).catch(() => [] as RowDataPacket[]);
   const exception = preferredLocationRow(exceptionRows, locationId);
   if (exception) return intervalsFromHoursRow(exception);
+
+  // CLOSURE check (live-parity fix 2026-07-02): the slot engine ignored the
+  // closures table entirely — a closed day still offered its full weekly grid,
+  // so a customer could book on a closure (the PHP returns zero slots).
+  const closureRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "closures",
+    columns: "id",
+    where: locationId ? "date = ? AND (location_id = ? OR location_id IS NULL)" : "date = ?",
+    params: locationId ? [date, locationId] : [date],
+    limit: 1,
+  }).catch(() => [] as RowDataPacket[]);
+  if (closureRows.length > 0) return [];
 
   const dow = new Date(`${date}T12:00:00`).getDay();
   const hourRows = await tenantSelect<RowDataPacket>({
