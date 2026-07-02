@@ -783,12 +783,17 @@ async function listStaff(slug: string, activeLocationId: number, locations: Reso
 }
 
 async function listBusinessHours(slug: string, locationId: number): Promise<BusinessHourRow[]> {
+  // Ordering (faithful to hours.php "ORDER BY dow ASC, (location_id IS NULL) DESC"):
+  // the global NULL row comes FIRST so the per-location row, coming last, WINS in the
+  // byDow map below. NB: a plain "location_id ASC" is NOT equivalent on Postgres —
+  // NULLs sort LAST in ASC (MySQL sorts them first), which made the global row
+  // silently override the per-location one on read.
   const rows = await tenantSelect<RowDataPacket>({
     slug,
     table: "business_hours",
     where: locationId ? "location_id IS NULL OR location_id = ?" : "",
     params: locationId ? [locationId] : [],
-    orderBy: "dow ASC, location_id ASC, id ASC",
+    orderBy: "dow ASC, (location_id IS NULL) DESC, id ASC",
   }).catch(() => []);
   const byDow = new Map<number, RowDataPacket>();
   for (const row of rows) byDow.set(Number(row.dow ?? 0), row);

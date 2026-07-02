@@ -37,10 +37,20 @@ type ExceptionRange = {
   note: string;
 };
 
+type BusinessHourRow = {
+  dow: number;
+  opens: string;
+  closes: string;
+  opens2: string;
+  closes2: string;
+  isClosed: boolean;
+};
+
 type ResourcesContext = {
   ok?: boolean;
   activeLocationId?: number;
   locations?: ApiLocation[];
+  hours?: BusinessHourRow[];
   closures?: ClosureRange[];
   exceptions?: ExceptionRange[];
 };
@@ -76,10 +86,12 @@ export function HoursContent() {
   const slug = tenantSlug();
   const [locationId, setLocationId] = useState<number>(0);
   const [tab, setTab] = useState<"hours" | "closures" | "exceptions">("hours");
+  const [hours, setHours] = useState<BusinessHourRow[]>([]);
   const [closures, setClosures] = useState<ClosureRange[]>([]);
   const [exceptions, setExceptions] = useState<ExceptionRange[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>("");
+  const [savedMsg, setSavedMsg] = useState<string>("");
 
   const load = useCallback(() => {
     // Note: `loading` starts true and is only cleared in .finally(); we avoid a
@@ -93,11 +105,13 @@ export function HoursContent() {
       .then((r) => r.json())
       .then((j: ResourcesContext) => {
         const locs: ApiLocation[] = Array.isArray(j.locations) ? j.locations : [];
+        setHours(Array.isArray(j.hours) ? j.hours : []);
         setClosures(Array.isArray(j.closures) ? j.closures : []);
         setExceptions(Array.isArray(j.exceptions) ? j.exceptions : []);
         setLocationId((prev) => (prev > 0 ? prev : Number(j.activeLocationId ?? locs[0]?.id ?? 0)));
       })
       .catch(() => {
+        setHours([]);
         setClosures([]);
         setExceptions([]);
       })
@@ -209,8 +223,26 @@ export function HoursContent() {
         </div>
       ) : null}
 
+      {savedMsg ? (
+        <div className="alert alert-success" role="alert">
+          {savedMsg}
+        </div>
+      ) : null}
+
       {tab === "hours" ? (
-        <HoursTab locationId={locationId} />
+        <HoursTab
+          locationId={locationId}
+          hours={hours}
+          onSave={async (rows) => {
+            setSavedMsg("");
+            const ok = await postAction({ action: "hours_save", hours_json: JSON.stringify(rows) });
+            if (ok) {
+              setSavedMsg("Orari salvati.");
+              load();
+            }
+            return ok;
+          }}
+        />
       ) : tab === "closures" ? (
         <ClosuresTab loading={loading} closures={closures} onSave={postAction} />
       ) : (
@@ -220,12 +252,63 @@ export function HoursContent() {
   );
 }
 
-function HoursTab({ locationId }: { locationId: number }) {
-  const rows = useMemo(() => DAYS, []);
+// Editable weekly-hours row state (times as HH:MM, dow 0=Domenica..6=Sabato).
+type HourRowState = { dow: number; opens: string; closes: string; opens2: string; closes2: string; isClosed: boolean };
+
+// Controlled weekly-hours grid (port of the hours.php save_hours form): prefilled
+// from the resources context and saved via POST action=hours_save (hours_json).
+function HoursTab({
+  locationId,
+  hours,
+  onSave,
+}: {
+  locationId: number;
+  hours: BusinessHourRow[];
+  onSave: (rows: Array<{ dow: number; opens: string; closes: string; opens2: string; closes2: string; is_closed: number }>) => Promise<boolean>;
+}) {
+  const [rows, setRows] = useState<HourRowState[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  // Hydrate/refresh the editable grid whenever the loaded hours (or sede) change.
+  const hoursSig = useMemo(
+    () => `${locationId}|${hours.map((h) => `${h.dow}:${h.opens}:${h.closes}:${h.opens2}:${h.closes2}:${h.isClosed ? 1 : 0}`).join(",")}`,
+    [locationId, hours],
+  );
+  const [prevSig, setPrevSig] = useState("");
+  if (hoursSig !== prevSig) {
+    setPrevSig(hoursSig);
+    setRows(
+      DAYS.map((day) => {
+        const h = hours.find((row) => row.dow === day.dow);
+        return {
+          dow: day.dow,
+          opens: trimTime(h?.opens ?? ""),
+          closes: trimTime(h?.closes ?? ""),
+          opens2: trimTime(h?.opens2 ?? ""),
+          closes2: trimTime(h?.closes2 ?? ""),
+          isClosed: Boolean(h?.isClosed),
+        };
+      }),
+    );
+  }
+
+  function patch(dow: number, changes: Partial<HourRowState>) {
+    setRows((prev) => prev.map((r) => (r.dow === dow ? { ...r, ...changes } : r)));
+  }
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    try {
+      await onSave(rows.map((r) => ({ dow: r.dow, opens: r.opens, closes: r.closes, opens2: r.opens2, closes2: r.closes2, is_closed: r.isClosed ? 1 : 0 })));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div className="card p-3">
-      <form method="post">
+      <form method="post" onSubmit={submit}>
         <input type="hidden" name="location_id" value={locationId} />
         <div className="table-responsive">
           <table className="table mb-0 align-middle">
@@ -239,16 +322,20 @@ function HoursTab({ locationId }: { locationId: number }) {
               </tr>
             </thead>
             <tbody id="hoursTable">
-              {rows.map((day) => (
-                <HoursRow key={day.dow} dow={day.dow} label={day.label} />
-              ))}
+              {DAYS.map((day) => {
+                const row = rows.find((r) => r.dow === day.dow) ?? { dow: day.dow, opens: "", closes: "", opens2: "", closes2: "", isClosed: false };
+                const splitOpen = row.opens2 !== "" || row.closes2 !== "";
+                return (
+                  <HoursRow key={day.dow} label={day.label} row={row} splitOpen={splitOpen} onPatch={(changes) => patch(day.dow, changes)} />
+                );
+              })}
             </tbody>
           </table>
         </div>
         <div className="mt-3 d-flex justify-content-end">
-          <button className="btn btn-primary" type="submit">
+          <button className="btn btn-primary" type="submit" disabled={saving}>
             <i className="bi bi-check2-circle me-1" />
-            Salva orari
+            {saving ? "Salvataggio…" : "Salva orari"}
           </button>
         </div>
       </form>
@@ -256,26 +343,38 @@ function HoursTab({ locationId }: { locationId: number }) {
   );
 }
 
-function HoursRow({ dow, label }: { dow: number; label: string }) {
-  const [closed, setClosed] = useState(false);
-  const [splitOpen, setSplitOpen] = useState(false);
+function HoursRow({
+  label,
+  row,
+  splitOpen: splitFromData,
+  onPatch,
+}: {
+  label: string;
+  row: HourRowState;
+  splitOpen: boolean;
+  onPatch: (changes: Partial<HourRowState>) => void;
+}) {
+  // The split row stays visible once opened even with empty times (like the PHP UI).
+  const [splitForced, setSplitForced] = useState(false);
+  const splitOpen = splitForced || splitFromData;
+  const dow = row.dow;
 
   return (
     <>
       <tr className="hours-row" data-role="main" data-dow={dow}>
         <td className="fw-semibold">{label}</td>
         <td>
-          <input className="form-control" type="time" name={`hours[${dow}][opens]`} defaultValue="" />
+          <input className="form-control" type="time" name={`hours[${dow}][opens]`} value={row.opens} disabled={row.isClosed} onChange={(e) => onPatch({ opens: e.target.value })} />
         </td>
         <td>
-          <input className="form-control" type="time" name={`hours[${dow}][closes]`} defaultValue="" />
+          <input className="form-control" type="time" name={`hours[${dow}][closes]`} value={row.closes} disabled={row.isClosed} onChange={(e) => onPatch({ closes: e.target.value })} />
         </td>
         <td className="text-nowrap">
           <button
             type="button"
             className={`btn btn-sm btn-outline-secondary js-add-split ${splitOpen ? "d-none" : ""}`}
             data-dow={dow}
-            onClick={() => setSplitOpen(true)}
+            onClick={() => setSplitForced(true)}
           >
             <i className="bi bi-plus-lg me-1" />
             Aggiungi orario spezzato
@@ -284,7 +383,10 @@ function HoursRow({ dow, label }: { dow: number; label: string }) {
             type="button"
             className={`btn btn-sm btn-outline-danger js-remove-split ${splitOpen ? "" : "d-none"}`}
             data-dow={dow}
-            onClick={() => setSplitOpen(false)}
+            onClick={() => {
+              setSplitForced(false);
+              onPatch({ opens2: "", closes2: "" });
+            }}
           >
             <i className="bi bi-x-lg me-1" />
             Rimuovi
@@ -297,8 +399,8 @@ function HoursRow({ dow, label }: { dow: number; label: string }) {
               type="checkbox"
               name={`hours[${dow}][is_closed]`}
               data-dow={dow}
-              checked={closed}
-              onChange={(e) => setClosed(e.target.checked)}
+              checked={row.isClosed}
+              onChange={(e) => onPatch({ isClosed: e.target.checked })}
             />
           </div>
         </td>
@@ -307,11 +409,11 @@ function HoursRow({ dow, label }: { dow: number; label: string }) {
         <td></td>
         <td>
           <label className="form-label small text-muted mb-1">Riapertura</label>
-          <input className="form-control" type="time" name={`hours[${dow}][opens2]`} defaultValue="" />
+          <input className="form-control" type="time" name={`hours[${dow}][opens2]`} value={row.opens2} disabled={row.isClosed} onChange={(e) => onPatch({ opens2: e.target.value })} />
         </td>
         <td>
           <label className="form-label small text-muted mb-1">Chiusura 2</label>
-          <input className="form-control" type="time" name={`hours[${dow}][closes2]`} defaultValue="" />
+          <input className="form-control" type="time" name={`hours[${dow}][closes2]`} value={row.closes2} disabled={row.isClosed} onChange={(e) => onPatch({ closes2: e.target.value })} />
         </td>
         <td className="small text-muted">Orario spezzato</td>
         <td></td>
