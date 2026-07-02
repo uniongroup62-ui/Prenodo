@@ -1032,7 +1032,7 @@ GAP CONFERMATI DAI TEST (in ordine di gravita'):
   fidelity_wallet.
 - [PARZIALE 2026-07-03] P9 formattazione messaggi: importi con punto invece di virgola nei
   messaggi credito; label punti hardcoded "Punti" invece della label tenant.
-- P10 deleteCancelledSale non purga gli artefatti emessi ne' i movimenti
+- [CHIUSO 2026-07-03] P10 deleteCancelledSale non purgava gli artefatti emessi ne' i movimenti
   commissioni (TODO dichiarato manage-pos.ts:1002) e senza le guardie
   profonde legacy (giftcard collegata ad altre vendite/prenotazioni ecc.).
 - P11 installments_manage: scoping sede ignorato; acconto solo informativo.
@@ -1095,3 +1095,16 @@ per codice col nuovo formato nome.
   fidelity_wallet (sottosistema punti/lotti, deferred con P7).
 - P9 CHIUSO (credito): messaggi con fmt_money italiano (virgola/migliaia).
   RESTA: label punti dinamica del tenant (con P7/fidelity).
+
+### Chiusura gap POS P10 (2026-07-03, 11/11 test live PASS)
+deleteCancelledSale ora purga gli artefatti emessi dalla vendita con le
+guardie legacy esatte (pos_sale_detail.php 2913-3060): GiftCard (deve essere
+annullata; blockers prenotazioni/altre vendite; cancella transazioni+righe),
+GiftBox (annullata; blockers appointment_giftbox_items/riscatti storici;
+cancella transazioni/item/istanza + template orfano), Pacchetti (blocker
+prenotazioni; cancella usi/transazioni/servizi/item), Prepagati (blocker
+prenotazioni; cancella usi), Ricariche (devono essere stornate). Tutto in
+UNA transazione tenant-scoped. Divergenze documentate: il blocker FIFO
+"ricarica collegata a prenotazioni" non serve (il void Next ripristina il
+credito) e i movimenti Commissioni restano al reconcile compute-on-view.
+BONUS: le pulizie dei test ora sfruttano il purge automaticamente.

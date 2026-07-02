@@ -1027,19 +1027,17 @@ export async function cancelManageSale(
 // that was already voided — NOT the void/cancel (that is cancelManageSale). Gated by: the
 // sale must exist, be status=cancelled, and be at a location the user can access; plus an
 // appointment-cleanup blocker (a sale still tied to an appointment refuses, telling the
-// operator to detach the booking first). The residui/voucher reversals already happened at
-// cancel time, so the delete only removes the sale + its OWN child rows: the installment plan
-// + its installments, the linked 'sale' events, the stock-cancel audit rows, the sale_items,
-// and finally the sales row. Runs as ONE atomic transaction so a failure never leaves a
-// half-deleted sale. Returns the refreshed POS context (the sale is gone from the list).
+// operator to detach the booking first). Purga anche gli ARTEFATTI emessi dalla vendita con
+// le guardie legacy per-artefatto (GiftCard/GiftBox annullate e non collegate altrove,
+// pacchetti/prepagati senza prenotazioni, ricariche stornate) — messaggi legacy esatti —
+// poi il piano rate, gli eventi 'sale', l'audit magazzino, le righe e la vendita. Runs as
+// ONE atomic transaction so a failure never leaves a half-deleted sale.
 //
-// TODO(parity): the legacy delete ALSO hard-deletes the issued GiftCard/GiftBox/package/
-// prepaid/recharge artifacts (only when each is already cancelled/void, else it refuses) and
-// the Commissions movements, with per-artifact appointment/other-sale link blockers. That
-// deep artifact cascade is intentionally out of scope here: the Next void already CANCELS
-// those artifacts (cancelLinkedSaleResidues), so they survive as cancelled rows rather than
-// being purged — the sale itself is removed. Porting the full artifact purge + its blockers
-// is a later pass.
+// Divergenze documentate: (1) il blocker legacy "ricarica collegata a prenotazioni" usa
+// l'allocazione FIFO di CreditRechargeCancel — qui la ricarica deve solo essere gia'
+// stornata (il void Next ripristina il credito, quindi non esistono allocazioni residue);
+// (2) i movimenti Commissioni non vengono eliminati: il motore Next e' compute-on-view e
+// il reconcile marca 'cancelled' le entry di una vendita sparita al ricalcolo successivo.
 export async function deleteCancelledSale(
   slug: string,
   input: { saleId: number; userId: number | null },
@@ -1066,6 +1064,64 @@ export async function deleteCancelledSale(
     );
   }
 
+  // --- ARTEFATTI emessi dalla vendita: guardie legacy PRIMA di toccare qualsiasi riga ---
+  // (pos_sale_detail.php ~2913-3060; ogni throw usa la stringa legacy esatta).
+  const throwaway: string[] = [];
+  const issuedGiftcards = await summarizeIssuedGiftcards(slug, input.saleId, throwaway, throwaway).catch(() => []);
+  const issuedGiftboxes = await summarizeIssuedGiftboxes(slug, input.saleId, throwaway).catch(() => []);
+  const linkedPackages = await summarizeLinkedRows(slug, "client_packages", input.saleId, (r) => ({ id: Number(r.id ?? 0) })).catch(() => []);
+  const linkedPrepaids = await summarizeLinkedRows(slug, "client_prepaid_services", input.saleId, (r) => ({ id: Number(r.id ?? 0) })).catch(() => []);
+  const linkedRecharges = await summarizeLinkedRows(slug, "recharges", input.saleId, (r) => ({ id: Number(r.id ?? 0), isVoid: Number(r.is_void ?? 0) === 1 })).catch(() => []);
+
+  const countRows = async (table: string, where: string, params: unknown[]): Promise<number> =>
+    (await tenantSelect<RowDataPacket>({ slug, table, columns: "id", where, params, limit: 1 }).catch(() => [] as RowDataPacket[])).length;
+
+  for (const card of issuedGiftcards) {
+    const label = card.code || `#${card.id}`;
+    if (!["cancelled", "canceled"].includes(card.status)) {
+      throw new Error(`GiftCard ${label}: elimina la vendita solo dopo l'annullamento della GiftCard.`);
+    }
+    if (await countRows("appointments", "giftcard_id = ? AND COALESCE(giftcard_used,0) > 0", [card.id])) {
+      throw new Error(`GiftCard ${label}: è ancora collegata a prenotazioni.`);
+    }
+    if (await countRows("sales", "giftcard_id = ? AND id <> ? AND COALESCE(giftcard_used,0) > 0", [card.id, input.saleId])) {
+      throw new Error(`GiftCard ${label}: è ancora collegata ad altre vendite.`);
+    }
+  }
+
+  // giftbox_id del template per la pulizia post-delete (istanza -> template orfano).
+  const giftboxTemplateIds = new Map<number, number>();
+  for (const box of issuedGiftboxes) {
+    const label = box.code || `#${box.id}`;
+    if (!["cancelled", "canceled"].includes(box.status)) {
+      throw new Error(`GiftBox ${label}: elimina la vendita solo dopo l'annullamento della GiftBox.`);
+    }
+    if (await countRows("appointment_giftbox_items", "instance_id = ?", [box.id])) {
+      throw new Error(`GiftBox ${label}: è ancora collegata a prenotazioni.`);
+    }
+    if (await countRows("giftbox_redemptions", "instance_id = ?", [box.id])) {
+      throw new Error(`GiftBox ${label}: contiene riscatti storici.`);
+    }
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "giftbox_instances", columns: "giftbox_id", where: "id = ?", params: [box.id], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    giftboxTemplateIds.set(box.id, Math.max(0, Number(rows[0]?.giftbox_id ?? 0) || 0));
+  }
+
+  for (const pkg of linkedPackages) {
+    if (await countRows("appointment_package_items", "client_package_id = ?", [pkg.id])) {
+      throw new Error(`Pacchetto CP#${pkg.id}: è ancora collegato a prenotazioni.`);
+    }
+  }
+  for (const prep of linkedPrepaids) {
+    if (await countRows("appointment_prepaid_service_items", "client_prepaid_service_id = ?", [prep.id])) {
+      throw new Error(`Servizio prepagato #${prep.id}: è ancora collegato a prenotazioni.`);
+    }
+  }
+  for (const rech of linkedRecharges) {
+    if (!rech.isVoid) {
+      throw new Error(`Ricarica #${rech.id}: elimina la vendita solo dopo lo storno della ricarica.`);
+    }
+  }
+
   // Resolve the child-table names ONCE (schema-guarded) so the transaction only touches
   // tables that exist. Each delete is tenant-scoped via tenantScope.
   const salesTable = await tenantTable(slug, "sales");
@@ -1074,6 +1130,23 @@ export async function deleteCancelledSale(
   const installmentsTable = await tenantTable(slug, "sale_installments").catch(() => null);
   const eventsTable = await tenantTable(slug, "events").catch(() => null);
   const stockAuditTable = await tenantTable(slug, "pos_sale_stock_cancel_actions").catch(() => null);
+  const resolve = async (name: string) => tenantTable(slug, name).catch(() => null);
+  const giftcardTxTable = await resolve("giftcard_transactions");
+  const giftcardItemsTable = await resolve("giftcard_items");
+  const giftcardsTable = await resolve("giftcards");
+  const giftboxTxTable = await resolve("giftbox_transactions");
+  const giftboxInstanceItemsTable = await resolve("giftbox_instance_items");
+  const giftboxInstancesTable = await resolve("giftbox_instances");
+  const giftboxItemsTable = await resolve("giftbox_items");
+  const giftboxesTable = await resolve("giftboxes");
+  const cpUsagesTable = await resolve("client_package_usages");
+  const cpTxTable = await resolve("client_package_transactions");
+  const cpServicesTable = await resolve("client_package_services");
+  const cpItemsTable = await resolve("client_package_items");
+  const clientPackagesTable = await resolve("client_packages");
+  const prepaidUsagesTable = await resolve("client_prepaid_service_usages");
+  const prepaidsTable = await resolve("client_prepaid_services");
+  const rechargesTable = await resolve("recharges");
 
   await withTenantTransaction(slug, async (q) => {
     const del = async (table: TenantTarget | null, clauses: string[], params: unknown[]) => {
@@ -1081,6 +1154,48 @@ export async function deleteCancelledSale(
       const scope = await tenantScope(table, clauses, params);
       await q(`DELETE FROM ${quoteIdentifier(table.name)}${scope.where}`, scope.params);
     };
+    const countIn = async (table: TenantTarget | null, clauses: string[], params: unknown[]): Promise<number> => {
+      if (!table) return 0;
+      const scope = await tenantScope(table, clauses, params);
+      const rows = (await q(`SELECT COUNT(*) AS n FROM ${quoteIdentifier(table.name)}${scope.where}`, scope.params)) as RowDataPacket[];
+      return Number(rows[0]?.n ?? 0) || 0;
+    };
+
+    // Artefatti (le guardie sono già passate): giftcard -> transazioni + righe + card.
+    for (const card of issuedGiftcards) {
+      await del(giftcardTxTable, ["giftcard_id=?"], [card.id]);
+      await del(giftcardItemsTable, ["giftcard_id=?"], [card.id]);
+      await del(giftcardsTable, ["id=?"], [card.id]);
+    }
+    // GiftBox: transazioni + item istanza + istanza; template orfano -> item + template.
+    for (const box of issuedGiftboxes) {
+      await del(giftboxTxTable, ["instance_id=?"], [box.id]);
+      await del(giftboxInstanceItemsTable, ["instance_id=?"], [box.id]);
+      await del(giftboxInstancesTable, ["id=?"], [box.id]);
+      const templateId = giftboxTemplateIds.get(box.id) ?? 0;
+      if (templateId > 0 && (await countIn(giftboxInstancesTable, ["giftbox_id=?"], [templateId])) === 0) {
+        await del(giftboxItemsTable, ["giftbox_id=?"], [templateId]);
+        await del(giftboxesTable, ["id=?"], [templateId]);
+      }
+    }
+    // Pacchetti: usi/transazioni/servizi/item + riga.
+    for (const pkg of linkedPackages) {
+      await del(cpUsagesTable, ["client_package_id=?"], [pkg.id]);
+      await del(cpTxTable, ["client_package_id=?"], [pkg.id]);
+      await del(cpServicesTable, ["client_package_id=?"], [pkg.id]);
+      await del(cpItemsTable, ["client_package_id=?"], [pkg.id]);
+      await del(clientPackagesTable, ["id=?"], [pkg.id]);
+    }
+    // Prepagati: usi + riga.
+    for (const prep of linkedPrepaids) {
+      await del(prepaidUsagesTable, ["client_prepaid_service_id=?"], [prep.id]);
+      await del(prepaidsTable, ["id=?"], [prep.id]);
+    }
+    // Ricariche (già stornate): riga.
+    for (const rech of linkedRecharges) {
+      await del(rechargesTable, ["id=?"], [rech.id]);
+    }
+
     // Installments first (children of the plan), then the plan, then the rest.
     await del(installmentsTable, ["sale_id=?"], [input.saleId]);
     await del(plansTable, ["sale_id=?"], [input.saleId]);
