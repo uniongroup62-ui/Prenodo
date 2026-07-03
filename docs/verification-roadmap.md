@@ -1122,3 +1122,78 @@ migrazione). Restano solo i differiti di sottosistema: FIDELITY (P7
 point_lots/scadenze punti, label punti dinamica, paginazione fidelity_wallet,
 campagne/adesione card, fallback saldo cards.credit) e MULTI-SEDE (P11
 scoping Gestione Rate + filtri all_locations trasversali).
+
+## AUDIT FIDELITY (2026-07-03) — matrice di parita legacy <-> Next
+
+Metodo: 4 mappe (Fidelity.php 3609 + 2 cron; 5 pagine fidelity ~8k righe;
+implementazione Next; motore omaggi Gifts.php 12.7k). Stato DB t25: cards,
+point_lots, fidelity_campaigns, item_rules, gifts/events tutti VUOTI; 16
+transactions (il ledger punti base e' vivo).
+
+GIA' A PARITA' (verificato dalle mappe): toggle globale con blocchi promo/
+omaggi + conferma prenotazioni; settings punti (persistenza); campagne CRUD
+complete (amount/tiers, min_spend, periodo con no-overlap, livelli target,
+soft-delete); tessere (emissione con registro codici anti-riuso, stati,
+riattiva, elimina con reset punti); livelli (editor split JSON, base level);
+wallet (movimenti manuali con protezione reserved); earn SOLO sotto campagna
+attiva (= legacy con schema campagne presente); redeem su 3 percorsi; dedup
+transazioni transactions_uq_fid_src; punti interi.
+
+NON-GAP scoperti (il legacy li ha RIMOSSI — il Next e' gia' corretto):
+- label punti personalizzata: legacy FISSA 'Punti' (Fidelity.php:329) — la
+  "label dinamica" segnata come TODO in P9/P7 NON esiste piu' nel legacy.
+- item_rules per-item nelle campagne: legacy le salva sempre vuote
+  (fidelity_points.php:2647, save_rule/delete_rule deprecati) e le applica
+  SOLO nel ramo senza-schema-campagne, che nel Next non esiste mai.
+- earn_mode/conflict_policy/redeem_auto_discount: costanti nel legacy.
+
+GAP CONFERMATI (ordine di gravita'):
+- F1 POINT_LOTS mai scritti: scadenza punti configurabile ma NON operativa.
+  Manca l'intero motore lotti (creazione su earn, consumo FIFO con lock
+  first, lotto legacy-init, expire con lock/unlock per prenotazioni
+  protette, reconcile, applyExpirySettingsToOpenLots al salvataggio, punti
+  in scadenza/scaduti nel wallet, calendario scadenze, 2 cron).
+- F2 ADESIONE TESSERA incoerente: earn POS + redeem POS non chiamano
+  fidelityIsClientAdhering (prenotazioni e pubblico si'). Legacy: earn/
+  manual bloccati per non-aderenti, availablePoints=0 senza tessera; il
+  fallback adhesion_mode (all/include/exclude) si applica SOLO se la
+  tabella cards NON esiste. Include eligibility earn ricariche.
+- F3 TOGGLE: manca il RIPRISTINO su riattivazione (promotions/gifts
+  auto_disabled_by_fidelity -> riattivati) + auto_disabled_by_points sulle
+  campagne quando si spengono i punti + messaggi composti legacy.
+- F4 LIVELLI mai promossi: clients.fidelity_level mai ricalcolato
+  (legacy: recalcClientLevelLocked su ogni transazione, earnedPointsInLastDays
+  su level_period_days) -> le campagne per-livello sono inerti. Manca anche
+  la cascata cleanup livelli eliminati (promo/omaggi/campagne aggiornati o
+  disattivati + prenotazioni pulite) e i preview/conferme.
+- F5 TESSERE: rinnovo automatico su attivita' (fidelity_card_try_auto_renew
+  _by_activity su earn sale/appointment) non implementato; membership
+  settings senza applyMode (preserve/disable_expiry con snapshot/
+  restore_existing_from_snapshot), campi restore non inviati, modal
+  conferma morta, "Nessuna modifica da salvare.".
+- F6 SAVE_SETTINGS punti: mancano conferme popup legacy (rimozione sconti
+  da prenotazioni aperte su disattivazione, conferma cambio scadenza) +
+  messaggi composti + applyExpirySettingsToOpenLots post-commit (dipende F1).
+- F7 UI MORTA in fidelity_points-content.tsx: 5 modali senza handler
+  (161-390), form livelli duplicato inerte (563-747), seconda tabella
+  campagne statica (749-787), statistiche hardcoded 0 (795-826), banner
+  campagna statico (143-151), header obsoleto.
+- F8 fidelity_wallet: paginazione 20/pag + sezioni scadenze (con F1).
+- F12 GIFTS V2 (omaggi): portato ~30-35% (CRUD campagne + redeem in
+  prenotazione). MANCA il motore: tabella events mai scritta (recordSale/
+  recordAppointmentDone/recordProductOrder), recalcClient/evaluateRules
+  (5 tipi regola, set AND/OR, finestra anti-retroattiva, gift_progress_
+  resets), detail istanza + azioni operatore (riscatto parziale, annullo,
+  eliminazione, note, voucher email), assegnazione manuale, riscatto in
+  POS (gift_instance_id), editor avanzato (livelli/esclusioni/multi-set/
+  clone), GiftLoyaltyAttribution. Tenant 25: 0 omaggi (dormiente).
+
+PIANO BLOCCHI (ordine proposto):
+1. F1 motore point_lots + scadenze + wallet UI + cron (il piu' grande del
+   core fidelity; abilita anche la parte scadenze di F6/F8)
+2. F2 adesione coerente + eligibility ricariche + auto-renew tessera (F5a)
+3. F4 promozione livelli + cascata cleanup + preview
+4. F3+F6 toggle/settings parity (ripristini, conferme, messaggi composti)
+5. F5b membership settings applyMode/snapshot + F7 pulizia UI morta
+6. F12 Gifts v2 (area a se', 4-5 sotto-blocchi — solo se vuoi il modulo
+   omaggi operativo: oggi il tenant non lo usa)
