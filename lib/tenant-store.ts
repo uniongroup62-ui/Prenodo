@@ -303,6 +303,11 @@ export type Quote = {
   publicToken: string;
   expiresAt: string;
   acceptedAt?: string;
+  // Risposta cliente dall'area booking (quotes.customer_decision_*): quando la
+  // decisione e' stata presa e quando il gestionale l'ha segnata come letta
+  // (pagina Notifiche > Preventivi, azioni seen/seen_all).
+  customerDecisionAt?: string;
+  customerDecisionSeenAt?: string;
   convertedSaleId?: number;
   createdAt: string;
 };

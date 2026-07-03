@@ -1,4 +1,5 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
+import { getAutomationSettings, saveAutomationSettings } from "@/lib/automation-reminders";
 import { listDbAutomationRules, runDbAutomationRule, toggleDbAutomationRule } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -18,6 +19,9 @@ export async function GET(request: Request) {
       ok: true,
       sourceMode: "database",
       rules: await listDbAutomationRules(tenantSlug),
+      // Impostazioni complete della pagina Automazione (toggle + ore invio),
+      // cosi' il form puo' prefillarsi come il legacy (automation.php).
+      settings: await getAutomationSettings(tenantSlug),
     });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Errore automazione.");
@@ -35,6 +39,19 @@ export async function POST(request: Request) {
   const id = parseInteger(body.id);
 
   try {
+    // Salvataggio della pagina Automazione (port di automation.php 24-71):
+    // toggle + ore promemoria, poi rischedulazione dei reminder futuri.
+    if (action === "save") {
+      const settings = await saveAutomationSettings(tenantSlug, body);
+      return Response.json({
+        ok: true,
+        sourceMode: "database",
+        message: "Automazione salvata",
+        settings,
+        rules: await listDbAutomationRules(tenantSlug),
+      });
+    }
+
     if (action === "toggle") {
       const enabled = ["1", "true", "yes", "on"].includes((body.enabled ?? "").toLowerCase());
       const rule = await toggleDbAutomationRule(id, enabled, tenantSlug);

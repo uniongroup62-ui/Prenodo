@@ -44,6 +44,7 @@ export function NotificationsBirthdaysContent() {
   const [clients, setClients] = useState<Client[]>([]);
   const [alertDays, setAlertDays] = useState<number>(DEFAULT_ALERT_DAYS);
   const [daysInput, setDaysInput] = useState<string>(String(DEFAULT_ALERT_DAYS));
+  const [settingsMessage, setSettingsMessage] = useState<string>("");
 
   useEffect(() => {
     fetch(`/api/manage/clients?slug=${encodeURIComponent(slug)}`, {
@@ -52,7 +53,45 @@ export function NotificationsBirthdaysContent() {
       .then((r) => r.json())
       .then((j) => setClients(Array.isArray(j.clients) ? j.clients : []))
       .catch(() => setClients([]));
+    // Valore persistito (automation_settings.client_birthday_alert_days).
+    fetch(`/api/manage/notifications?slug=${encodeURIComponent(slug)}&action=settings`, {
+      headers: { "x-tenant-slug": slug },
+    })
+      .then((r) => r.json())
+      .then((j) => {
+        const n = Number(j.client_birthday_alert_days);
+        if (Number.isFinite(n) && n >= 0 && n <= 365) {
+          setAlertDays(n);
+          setDaysInput(String(n));
+        }
+      })
+      .catch(() => undefined);
   }, [slug]);
+
+  // Port di notifications_birthdays.php action=save_settings: persiste il
+  // valore lato server e aggiorna la lista, messaggio legacy.
+  const submitSettings = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const n = Number(daysInput);
+    if (!Number.isFinite(n) || n < 0 || n > 365) return;
+    setSettingsMessage("");
+    try {
+      const response = await fetch(`/api/manage/notifications?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-tenant-slug": slug },
+        body: JSON.stringify({ action: "save_birthday_days", client_birthday_alert_days: String(n) }),
+      });
+      const json = await response.json().catch(() => ({}));
+      if (json.ok) {
+        setAlertDays(Number(json.days ?? n));
+        setSettingsMessage(json.message || "Impostazioni salvate");
+      } else {
+        setSettingsMessage(json.error || "Operazione non valida");
+      }
+    } catch {
+      setSettingsMessage("Operazione non valida");
+    }
+  };
 
   const today = new Date();
   const upcoming = clients
@@ -141,13 +180,16 @@ export function NotificationsBirthdaysContent() {
 
       <div className="modal fade" id="birthdayNotificationSettingsModal" tabIndex={-1} aria-hidden="true">
         <div className="modal-dialog modal-dialog-centered">
-          <form method="post" className="modal-content" onSubmit={(e) => e.preventDefault()}>
+          <form method="post" className="modal-content" onSubmit={submitSettings}>
             <input type="hidden" name="action" value="save_settings" />
             <div className="modal-header">
               <h2 className="modal-title h5">Impostazioni avviso compleanni</h2>
               <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Chiudi" />
             </div>
             <div className="modal-body">
+              {settingsMessage ? (
+                <div className={`alert ${settingsMessage === "Impostazioni salvate" ? "alert-success" : "alert-danger"} py-2`}>{settingsMessage}</div>
+              ) : null}
               <label className="form-label fw-semibold" htmlFor="client_birthday_alert_days">
                 Avvisa per i compleanni nei prossimi
               </label>
@@ -172,14 +214,7 @@ export function NotificationsBirthdaysContent() {
               <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal">
                 Annulla
               </button>
-              <button
-                className="btn btn-primary"
-                type="submit"
-                onClick={() => {
-                  const n = Number(daysInput);
-                  if (Number.isFinite(n) && n >= 0 && n <= 365) setAlertDays(n);
-                }}
-              >
+              <button className="btn btn-primary" type="submit">
                 <i className="bi bi-check2-circle me-1" />
                 Salva
               </button>

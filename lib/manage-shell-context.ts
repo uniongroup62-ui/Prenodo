@@ -306,11 +306,82 @@ export async function getNotificationSummary(
     summary.birthdays = await countUpcomingBirthdays(slug);
   }
 
-  // fidelity_cards: legacy sums fidelity_card_notification_groups() — a complex
-  // card-renewal helper not yet ported. Left at 0 (TODO) so the general count
-  // matches the legacy formula (appointments + fidelity_cards), minus fidelity.
+  summary.fidelity_cards = await countFidelityCardNotifications(slug);
+
+  // Formula legacy (View.php:191): il badge della campanella somma SOLO
+  // appuntamenti pending + tessere fidelity; preventivi/rate/compleanni hanno
+  // le proprie icone dedicate.
   summary.count = summary.appointments + summary.fidelity_cards;
   return summary;
+}
+
+// Port count-only di fidelity_card_notification_groups (Helpers.php 5147-5356,
+// sommato dal notificationSummary a View.php:181-189): tessere gia' scadute +
+// tessere in scadenza entro la finestra promemoria. Quando il promemoria
+// scadenza fidelity e' disattivato il legacy ritorna [] (contatore 0).
+export async function countFidelityCardNotifications(slug: string): Promise<number> {
+  try {
+    if (!(await tenantTableExists(slug, "cards"))) return 0;
+    const hasExpiresAt = await tenantColumnExists(slug, "cards", "expires_at");
+    const hasExpiryDate = await tenantColumnExists(slug, "cards", "expiry_date");
+    const expiryCol = hasExpiresAt ? "expires_at" : hasExpiryDate ? "expiry_date" : null;
+    if (!expiryCol) return 0;
+
+    // fidelity_card_expiry_notification_config(): disattivato -> nessun gruppo.
+    if (!(await tenantColumnExists(slug, "automation_settings", "fidelity_expiry_reminder_enabled"))) return 0;
+    const settingsRows = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "automation_settings",
+      columns: "fidelity_expiry_reminder_enabled",
+      orderBy: "id ASC",
+      limit: 1,
+    });
+    if (Number(settingsRows[0]?.fidelity_expiry_reminder_enabled ?? 0) !== 1) return 0;
+    const reminderDays = await automationAlertDays(slug, "installment_alert_days");
+
+    const hasStatus = await tenantColumnExists(slug, "cards", "status");
+    const hasIsActive = await tenantColumnExists(slug, "cards", "is_active");
+    const scope = await tenantScope(slug, "cards", "fc");
+    const extraSelect = `${hasStatus ? ", fc.status" : ""}${hasIsActive ? ", fc.is_active" : ""}`;
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT fc.${expiryCol} AS expires_at${extraSelect}
+         FROM \`cards\` fc
+         JOIN \`clients\` c ON c.id = fc.client_id
+        WHERE fc.${expiryCol} IS NOT NULL${scope.sql}`,
+      scope.params,
+    );
+
+    const now = new Date();
+    const todayUtc = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+    let count = 0;
+    for (const row of rows) {
+      const raw = row.expires_at instanceof Date
+        ? `${row.expires_at.getFullYear()}-${String(row.expires_at.getMonth() + 1).padStart(2, "0")}-${String(row.expires_at.getDate()).padStart(2, "0")}`
+        : String(row.expires_at ?? "").slice(0, 10);
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+      if (!m) continue;
+      const days = Math.round((Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) - todayUtc) / 86_400_000);
+
+      let isActive = true;
+      if (hasStatus) {
+        let status = String(row.status ?? "active").trim().toLowerCase();
+        if (status === "") status = "active";
+        isActive = status !== "inactive";
+      } else if (hasIsActive) {
+        isActive = Number(row.is_active ?? 1) !== 0;
+      }
+
+      if (days < 0) {
+        // Gia' scadute: incluse anche se disattivate (come il legacy).
+        count += 1;
+      } else if (isActive && reminderDays > 0 && days <= reminderDays) {
+        count += 1;
+      }
+    }
+    return count;
+  } catch {
+    return 0;
+  }
 }
 
 // Port of the topbar closure-range computation (View.php lines 248-304):

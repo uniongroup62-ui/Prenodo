@@ -18,6 +18,17 @@ type AutomationRule = {
   createdAt?: string;
 };
 
+type AutomationSettings = {
+  reminder_enabled: boolean;
+  reminder_hours: number;
+  sms_reminder_enabled: boolean;
+  sms_reminder_hours: number;
+  approved_enabled: boolean;
+  modified_enabled: boolean;
+  rejected_enabled: boolean;
+  fidelity_expiry_reminder_enabled: boolean;
+};
+
 const SMS_PLANS = [
   { value: "1", domId: "smsPlan1", name: "Base", credits: "100", price: "7,00 EUR", pricePerCredit: "0,0700 EUR", note: "Per iniziare con i promemoria SMS.", recommended: false },
   { value: "2", domId: "smsPlan2", name: "Standard", credits: "250", price: "17,50 EUR", pricePerCredit: "0,0700 EUR", note: "Per attivita con invii regolari.", recommended: true },
@@ -33,13 +44,19 @@ function tenantSlug(): string {
 export function AutomationContent() {
   const slug = tenantSlug();
   const [rules, setRules] = useState<AutomationRule[]>([]);
+  const [settings, setSettings] = useState<AutomationSettings | null>(null);
+  const [saveMessage, setSaveMessage] = useState<string>("");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     fetch(`/api/manage/automation?slug=${encodeURIComponent(slug)}`, {
       headers: { "x-tenant-slug": slug },
     })
       .then((r) => r.json())
-      .then((j) => setRules(Array.isArray(j.rules) ? j.rules : []))
+      .then((j) => {
+        setRules(Array.isArray(j.rules) ? j.rules : []);
+        setSettings(j.settings ?? null);
+      })
       .catch(() => setRules([]));
   }, [slug]);
 
@@ -49,14 +66,51 @@ export function AutomationContent() {
     return map;
   }, [rules]);
 
-  // Map PHP switches to API rule ids. modified/rejected are not exposed by the
-  // API, so they fall back to the captured default (checked).
-  const reminderEnabled = enabledById[1] ?? true;
-  const smsReminderEnabled = enabledById[2] ?? true;
-  const approvedEnabled = enabledById[3] ?? true;
-  const fidelityExpiryEnabled = enabledById[4] ?? false;
-  const modifiedEnabled = true;
-  const rejectedEnabled = true;
+  // Prefill dai settings API (port automation_settings); i toggle modified/
+  // rejected ora sono esposti direttamente, fallback sulle rules legacy-shape.
+  const reminderEnabled = settings?.reminder_enabled ?? enabledById[1] ?? true;
+  const smsReminderEnabled = settings?.sms_reminder_enabled ?? enabledById[2] ?? true;
+  const approvedEnabled = settings?.approved_enabled ?? enabledById[3] ?? true;
+  const fidelityExpiryEnabled = settings?.fidelity_expiry_reminder_enabled ?? enabledById[4] ?? false;
+  const modifiedEnabled = settings?.modified_enabled ?? true;
+  const rejectedEnabled = settings?.rejected_enabled ?? true;
+
+  // Salvataggio (port del POST di automation.php): invia toggle + ore all'API,
+  // che persiste e rischedula i promemoria futuri; alert "Automazione salvata".
+  const submitSave = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const flag = (name: string) => (form.get(name) ? "1" : "0");
+    setSaving(true);
+    setSaveMessage("");
+    try {
+      const response = await fetch(`/api/manage/automation?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-tenant-slug": slug },
+        body: JSON.stringify({
+          action: "save",
+          reminder_enabled: flag("reminder_enabled"),
+          reminder_hours: String(form.get("reminder_hours") ?? "24"),
+          sms_reminder_enabled: flag("sms_reminder_enabled"),
+          sms_reminder_hours: String(form.get("sms_reminder_hours") ?? "24"),
+          approved_enabled: flag("approved_enabled"),
+          modified_enabled: flag("modified_enabled"),
+          rejected_enabled: flag("rejected_enabled"),
+        }),
+      });
+      const json = await response.json().catch(() => ({}));
+      if (json.ok) {
+        setSettings(json.settings ?? null);
+        setSaveMessage(json.message || "Automazione salvata");
+      } else {
+        setSaveMessage(json.error || "Errore salvataggio automazione.");
+      }
+    } catch {
+      setSaveMessage("Errore salvataggio automazione.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   // SMS top-up plan selection (mirrors the inline PHP script behaviour).
   const [selectedPlan, setSelectedPlan] = useState<string>("2");
@@ -79,7 +133,10 @@ export function AutomationContent() {
             <div className="fw-bold mb-2"><i className="bi bi-envelope me-1" />Promemoria email appuntamento</div>
             <div className="text-muted small">Invia una email prima dell&apos;appuntamento al cliente con indirizzo email valido. Il promemoria parte solo per appuntamenti in stato <strong>Prenotato</strong>.</div>
 
-            <form method="post" className="mt-3" action={`/${encodeURIComponent(slug)}/automation`}>
+            <form className="mt-3" onSubmit={submitSave}>
+              {saveMessage ? (
+                <div className={`alert ${saveMessage === "Automazione salvata" ? "alert-success" : "alert-danger"} py-2`}>{saveMessage}</div>
+              ) : null}
               <div className="row g-3">
                 <div className="col-12">
                   <div className="form-check form-switch">
@@ -89,7 +146,7 @@ export function AutomationContent() {
                 </div>
                 <div className="col-md-6">
                   <label className="form-label">Invio email</label>
-                  <select className="form-select" name="reminder_hours" defaultValue="24">
+                  <select className="form-select" name="reminder_hours" defaultValue={String(settings?.reminder_hours ?? 24)} key={`rh-${settings?.reminder_hours ?? 24}`}>
                     <option value="3">3 ore prima</option>
                     <option value="6">6 ore prima</option>
                     <option value="12">12 ore prima</option>
@@ -126,7 +183,7 @@ export function AutomationContent() {
                 </div>
                 <div className="col-md-6">
                   <label className="form-label">Invio SMS</label>
-                  <select className="form-select" name="sms_reminder_hours" defaultValue="24">
+                  <select className="form-select" name="sms_reminder_hours" defaultValue={String(settings?.sms_reminder_hours ?? 24)} key={`sh-${settings?.sms_reminder_hours ?? 24}`}>
                     <option value="3">3 ore prima</option>
                     <option value="6">6 ore prima</option>
                     <option value="12">12 ore prima</option>
@@ -223,7 +280,7 @@ export function AutomationContent() {
                 </div>
                 <div className="col-12">
                   <div className="form-check form-switch">
-                    <input className="form-check-input" type="checkbox" role="switch" id="modifiedEnabled" name="modified_enabled" value="1" defaultChecked={modifiedEnabled} />
+                    <input className="form-check-input" type="checkbox" role="switch" id="modifiedEnabled" name="modified_enabled" value="1" defaultChecked={modifiedEnabled} key={`m-${modifiedEnabled}`} />
                     <label className="form-check-label" htmlFor="modifiedEnabled">Attiva email modifica</label>
                   </div>
                 </div>
@@ -253,7 +310,7 @@ export function AutomationContent() {
                 </div>
                 <div className="col-12">
                   <div className="form-check form-switch">
-                    <input className="form-check-input" type="checkbox" role="switch" id="rejectedEnabled" name="rejected_enabled" value="1" defaultChecked={rejectedEnabled} />
+                    <input className="form-check-input" type="checkbox" role="switch" id="rejectedEnabled" name="rejected_enabled" value="1" defaultChecked={rejectedEnabled} key={`j-${rejectedEnabled}`} />
                     <label className="form-check-label" htmlFor="rejectedEnabled">Attiva email rifiuto</label>
                   </div>
                 </div>
@@ -272,7 +329,7 @@ export function AutomationContent() {
               </div>
 
               <div className="mt-4 d-flex gap-2">
-                <button className="btn btn-primary" type="submit"><i className="bi bi-check2-circle me-1" />Salva</button>
+                <button className="btn btn-primary" type="submit" disabled={saving}><i className="bi bi-check2-circle me-1" />Salva</button>
                 <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/dashboard`}>Indietro</a>
               </div>
             </form>

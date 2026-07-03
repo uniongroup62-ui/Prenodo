@@ -14478,6 +14478,8 @@ async function mapQuote(slug: string, row: RowDataPacket): Promise<Quote> {
     publicToken: String(row.public_token ?? ""),
     expiresAt: String(row.valid_until ?? "").slice(0, 10) || todayIso(),
     acceptedAt: row.customer_decision_at ? toIso(row.customer_decision_at) : undefined,
+    customerDecisionAt: row.customer_decision_at ? toIso(row.customer_decision_at) : undefined,
+    customerDecisionSeenAt: row.customer_decision_seen_at ? toIso(row.customer_decision_seen_at) : undefined,
     convertedSaleId: Number(row.converted_sale_id ?? 0) || undefined,
     createdAt: toIso(row.created_at),
   };

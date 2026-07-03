@@ -17,6 +17,8 @@ type Quote = {
   total: number;
   status: string;
   acceptedAt?: string;
+  customerDecisionAt?: string;
+  customerDecisionSeenAt?: string;
   createdAt?: string;
 };
 
@@ -75,17 +77,35 @@ export function NotificationsQuotesContent() {
       .catch(() => {});
   }, [slug]);
 
-  // Responses = quotes that the client accepted or rejected, newest first.
+  // Responses = decisioni cliente NON ancora lette (come il legacy:
+  // customer_decision_at valorizzato e customer_decision_seen_at NULL),
+  // piu' recenti in alto.
   const responses = useMemo(() => {
     return quotes
-      .filter((q) => ACCEPTED.has(q.status) || REJECTED.has(q.status))
+      .filter((q) => (ACCEPTED.has(q.status) || REJECTED.has(q.status)) && q.customerDecisionAt && !q.customerDecisionSeenAt)
       .map((q) => ({
         ...q,
         accepted: ACCEPTED.has(q.status),
-        when: q.acceptedAt ?? q.createdAt,
+        when: q.customerDecisionAt ?? q.acceptedAt ?? q.createdAt,
       }))
       .sort((a, b) => String(b.when ?? "").localeCompare(String(a.when ?? "")));
   }, [quotes]);
+
+  // "Segna come letto" / "Segna tutti come letti" (port di
+  // notifications_quotes.php action=seen / seen_all).
+  const markSeen = async (id: number | null) => {
+    try {
+      const response = await fetch(`/api/manage/quotes?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-tenant-slug": slug },
+        body: JSON.stringify(id ? { action: "seen", id: String(id) } : { action: "seen_all" }),
+      });
+      const json = await response.json().catch(() => ({}));
+      if (json.ok && Array.isArray(json.quotes)) setQuotes(json.quotes);
+    } catch {
+      // best-effort
+    }
+  };
 
   const subtitleLocation = locationName ? ` Sede: ${locationName}.` : "";
 
@@ -105,6 +125,14 @@ export function NotificationsQuotesContent() {
             Accettati o rifiutati dall&#039;area clienti del booking.{subtitleLocation}
           </div>
         </div>
+        {responses.length > 0 ? (
+          <div className="bs-page-actions">
+            <button className="btn btn-outline-secondary btn-sm" type="button" onClick={() => markSeen(null)}>
+              <i className="bi bi-check2-all me-1" />
+              Segna tutti come letti
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {responses.length === 0 ? (
@@ -143,13 +171,16 @@ export function NotificationsQuotesContent() {
                   <div className="text-muted small mt-2">Totale</div>
                   <div className="fw-semibold">{fmtEuro(r.total)}</div>
                 </div>
-                <div className="notification-action p-3 d-flex align-items-center">
+                <div className="notification-action p-3 d-flex align-items-center gap-2">
                   <a
                     className="btn btn-sm btn-outline-secondary"
                     href={`/${encodeURIComponent(slug)}/quotes?action=view&id=${r.id}`}
                   >
                     Apri preventivo
                   </a>
+                  <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => markSeen(r.id)}>
+                    Segna come letto
+                  </button>
                 </div>
               </div>
             </div>

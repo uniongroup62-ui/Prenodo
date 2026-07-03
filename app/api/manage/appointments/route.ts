@@ -29,6 +29,7 @@ import {
   type AppointmentGiftRedeem,
 } from "@/lib/db-repositories";
 import { lifecycleKindForStatusChange, sendAppointmentLifecycleEmail } from "@/lib/appointment-lifecycle-email";
+import { automationClearPendingReminders, automationScheduleReminder } from "@/lib/automation-reminders";
 import { awardAppointmentFidelityOnDone } from "@/lib/manage-pos";
 import { giftInvalidateSource, giftRecordAppointmentDone } from "@/lib/gifts-engine";
 import { giftRedeemAppointmentSelectionIfAny } from "@/lib/gifts-instances";
@@ -454,7 +455,12 @@ export async function POST(request: Request) {
       let guardError = "";
       for (const id of ids) {
         try {
-          if (await deleteDbAppointment(tenantSlug, id)) deleted += 1;
+          if (await deleteDbAppointment(tenantSlug, id)) {
+            deleted += 1;
+            // Pulizia righe promemoria pending orfane (il cron le ignorerebbe
+            // ma resterebbero pending per sempre).
+            await automationClearPendingReminders(tenantSlug, id);
+          }
         } catch (error) {
           guardError = error instanceof Error ? error.message : "Eliminazione non consentita.";
           if (action === "delete") return jsonError(guardError);
@@ -551,6 +557,9 @@ export async function POST(request: Request) {
         const kind = lifecycleKindForStatusChange(oldPhpStatus, newPhpStatus);
         if (kind) await sendAppointmentLifecycleEmail({ slug: tenantSlug, appointmentId: id, kind });
       }
+      // Port di automation_handle_status_change: (ri)schedula i promemoria se
+      // il nuovo stato e' prenotato, altrimenti cancella le righe pending.
+      await automationScheduleReminder(tenantSlug, id);
       return Response.json({ ok: true, sourceMode: "database", appointment, appointments: await listDbAppointments({ slug: tenantSlug }) });
     }
 
@@ -593,6 +602,9 @@ export async function POST(request: Request) {
         // error-swallowed inside the helper.
         const kind = lifecycleKindForStatusChange(oldPhpStatus, targetStatus);
         if (kind) await sendAppointmentLifecycleEmail({ slug: tenantSlug, appointmentId: id, kind });
+        // Annullo: lo stato non e' piu' prenotato, la schedule fa da clear
+        // (port di automation_clear_pending_reminders sul cancel).
+        await automationScheduleReminder(tenantSlug, id);
         return Response.json({
           ok: true,
           sourceMode: "database",
@@ -681,6 +693,9 @@ export async function POST(request: Request) {
         }
       }
 
+      // Il nuovo orario sposta anche la scheduled_at dei promemoria pending.
+      await automationScheduleReminder(tenantSlug, id);
+
       return Response.json({
         ok: true,
         sourceMode: "database",
@@ -724,6 +739,10 @@ export async function POST(request: Request) {
       // customer-visible snapshot (date/time/service names), so a pure duration
       // change is never a customer-visible change — matching the move path, which
       // only emails when date/time actually move.
+
+      // La durata non sposta l'inizio, ma il legacy rischedula comunque a ogni
+      // edit dell'appuntamento.
+      await automationScheduleReminder(tenantSlug, id);
 
       return Response.json({
         ok: true,
@@ -876,6 +895,12 @@ export async function POST(request: Request) {
     } else {
       appointment = await createDbAppointment(dbAppointmentInput);
     }
+
+    // Port di automation_schedule_reminder sui trigger create/edit: schedula i
+    // promemoria email/SMS (solo per stato prenotato; per pending non fa nulla
+    // e su un edit che cambia orario aggiorna la scheduled_at).
+    const savedApptId = isEdit ? editId : Number((appointment as { id?: number } | null)?.id ?? 0);
+    if (savedApptId > 0) await automationScheduleReminder(tenantSlug, savedApptId);
 
     return Response.json({
       ok: true,

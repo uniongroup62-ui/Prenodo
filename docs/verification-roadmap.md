@@ -1862,3 +1862,57 @@ in uso. Scegline un altro." e' SENZA accenti anche nel legacy
 falliva a torto; parita' verbatim confermata.
 Cleanup: login_attempts svuotata, role_permissions 'altro' ripristinata,
 operatore/users/password_resets/signups zzv6* rimossi -> CLEAN.
+
+## V7 NOTIFICHE + AUTOMATION — CHIUSA (2026-07-03, 19 test e2e PASS)
+Fonte legacy: automation.php, notifications.php + notifications_{quotes,
+installments,birthdays}.php, View::notificationSummary (View.php 67-193),
+Helpers automation_schedule_reminder (9315-9413) / client_birthday_* /
+fidelity_card_notification_groups (5147-5356), cron/reminders.php.
+Batteria: e2e-notifications-automation.mjs (scratchpad).
+GAP GRAVI TROVATI E FIXATI:
+1. NESSUN CODICE creava le righe `reminders`: il cron Next le invia soltanto,
+   quindi i promemoria appuntamento (email+SMS) non sarebbero MAI partiti.
+   Nuovo lib/automation-reminders.ts (port di automation_schedule_reminder):
+   una riga pending per canale (email se il cliente ha email, sms se il
+   telefono normalizza E.164), scheduled_at = inizio - ore (3/6/12/24/48,
+   fallback 24), target passato -> now+5min. Hook in
+   app/api/manage/appointments: create/edit/move/resize/status/cancel_done
+   (annullo = clear pending), delete (pulizia orfani).
+2. Il form della pagina Automazione postava su una route INESISTENTE
+   (/[slug]/automation): "Salva" non salvava nulla e reminder_hours /
+   sms_reminder_hours non venivano mai persistite. Ora POST
+   /api/manage/automation action=save (port automation.php 24-71): toggle
+   (incl. modified/rejected prima hardcoded true) + ore + sender forzato
+   'Prenodo', poi RISCHEDULAZIONE di tutti i promemoria futuri (57-68).
+   Messaggio legacy "Automazione salvata"; GET espone `settings` per il prefill.
+3. Impostazione compleanni non persistita (preventDefault + stato locale):
+   ora POST notifications action=save_birthday_days -> "Impostazioni salvate",
+   clamp 0..365 su automation_settings.client_birthday_alert_days; il
+   componente rilegge il valore da action=settings.
+4. Risposte preventivi senza seen/seen_all: aggiunte a /api/manage/quotes
+   (SQL legacy: status accepted/rejected + customer_decision_at NOT NULL +
+   seen NULL + filtro sede corrente), messaggi "Preventivo segnato come
+   letto" / "Preventivi segnati come letti"; la lista API espone
+   customerDecisionAt/SeenAt e la pagina notifiche filtra le NON lette.
+5. Contatore campanella fidelity_cards fisso a 0: portato il conteggio
+   (tessere scadute sempre + in scadenza entro la finestra quando
+   fidelity_expiry_reminder_enabled=1; disattivato -> 0 come il legacy).
+   Formula campanella confermata: count = appointments + fidelity_cards.
+6. Aggiunto GET notifications action=count (port del poller legacy
+   ?page=notifications&action=count, no-store).
+NON-GAP DOCUMENTATI (il legacy NON ha queste funzioni):
+- Compleanni e rate NON inviano MAI email/SMS nel legacy: solo contatori
+  topbar + pagine dedicate. Nessuna email di auguri, nessun promemoria rata.
+- I subject/body delle email automatiche NON sono modificabili dall'utente
+  (il save legacy li riscrive sempre coi default); il Next li genera dal
+  codice. I default DB legacy contengono mojibake (Ã¨ = è) che NON
+  riproduciamo: le email Next escono con gli accenti corretti (miglioria
+  deliberata, il testo e' identico).
+- runDbAutomationRule (action=run) non esiste nel legacy: resta uno stub.
+DIFFERITI: preferenze notifiche browser per-utente (BrowserNotifications
+feed/prefs legacy) e barra support-access topbar (getSupportAccess null);
+saldo SMS reale in pagina Automazione (wallet gia' usato dal cron).
+Cleanup: cliente/appuntamento/preventivi/tessera ZZV7 rimossi, righe
+reminders create durante i test eliminate (anche quelle delle
+rischedulazioni su appuntamenti reali), automation_settings ripristinata
+al valore pre-test -> CLEAN.

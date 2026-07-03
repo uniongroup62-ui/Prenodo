@@ -1,8 +1,10 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
 import { convertDbQuoteToSale, createDbQuote, deleteDbQuote, getManageQuoteDetail, getManageQuoteForEdit, listDbClients, listDbProducts, listDbQuotes, listDbServices, sendQuoteEmail, updateDbQuote, updateDbQuoteStatus, type QuoteLineInput, type QuoteSaveInput } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
+import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can } from "@/lib/role-permissions";
+import { columnExists, dbExecute, tenantTable } from "@/lib/tenant-db";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -77,6 +79,42 @@ export async function POST(request: Request) {
   const action = body.action ?? "create";
 
   try {
+    // "Segna come letto" delle risposte preventivo (port di
+    // notifications_quotes.php action=seen / seen_all): stampa
+    // customer_decision_seen_at sulle decisioni accettate/rifiutate non ancora
+    // lette, filtrate per sede corrente come il legacy.
+    if (action === "seen" || action === "seen_all") {
+      const table = await tenantTable(tenantSlug, "quotes");
+      const clauses = [
+        "status IN ('accepted','rejected')",
+        "customer_decision_at IS NOT NULL",
+        "customer_decision_seen_at IS NULL",
+      ];
+      const params: unknown[] = [];
+      if (action === "seen") {
+        const id = parseInteger(body.id);
+        if (id <= 0) return jsonError("ID preventivo mancante.");
+        clauses.push("id = ?");
+        params.push(id);
+      }
+      const { currentLocationId } = await getManageLocationContext(tenantSlug);
+      if (currentLocationId > 0 && await columnExists(table.name, "location_id")) {
+        clauses.push("location_id = ?");
+        params.push(currentLocationId);
+      }
+      if (table.mode === "shared" && table.tenantId && await columnExists(table.name, "tenant_id")) {
+        clauses.push("tenant_id = ?");
+        params.push(table.tenantId);
+      }
+      await dbExecute(`UPDATE \`${table.name}\` SET customer_decision_seen_at = NOW() WHERE ${clauses.join(" AND ")}`, params);
+      return Response.json({
+        ok: true,
+        sourceMode: "database",
+        message: action === "seen" ? "Preventivo segnato come letto" : "Preventivi segnati come letti",
+        quotes: await listDbQuotes(tenantSlug),
+      });
+    }
+
     if (action === "create") {
       const quote = await createDbQuote(quoteSaveInputFromBody(body), tenantSlug);
       return Response.json({ ok: true, source: "quotes?action=create", sourceMode: "database", quote, quotes: await listDbQuotes(tenantSlug) });
