@@ -2683,3 +2683,72 @@ catalog_promos coperti da flussi equivalenti Next (omaggi auto al checkout da
 appuntamento, Rileva promozione); vendita da appuntamento e' un EXTRA Next
 (il legacy incassa gli appuntamenti dal quick-booking); pacchetti "in
 GiftBox" (badge) ancora da portare.
+
+## Pagamenti — logiche dinamiche pos.js (2026-07-04)
+
+Porting COMPLETO delle logiche runtime di pos.js (recalcTotals ->
+syncPaymentTypeControls -> syncInstallmentPlanForContext ->
+renderInstallmentCard -> syncConcludeState + pre-check bottom bar) in
+pos-content.tsx, su segnalazione screenshot utente (stati dinamici mancanti).
+
+1. TOTALE NETTO legacy: il "Totale" del dettaglio prezzi e tutte le logiche
+   di pagamento usano currentPosTotal = totale al NETTO dei residui applicati
+   (GiftCard poi Credito). Al checkout i residui restano tender distinti.
+2. TIPO PAGAMENTO (syncPaymentTypeControls): markup legacy
+   pos-payment-type-grid/option/label (id posPaymentTypeCash/Card/Check/Bank),
+   radio disabilitati + card is-disabled con totale a 0, help a due stati
+   verbatim ("Seleziona come paga il cliente." / "Totale a 0: nessun tipo di
+   pagamento selezionabile."). Rimosse le righe extra non-legacy (importo
+   base, Residui applicati, Pagato, Rimanente).
+3. RATEIZZAZIONE (renderInstallmentCard): scelta '' | single | installment
+   che parte VUOTA ed e' OBBLIGATORIA con totale > 0 (badge fisso "Scelta
+   obbligatoria" + card is-required); headline a 5 stati; bottone Rateizzato
+   con testo dinamico (Rateizzato/Configura piano/Modifica piano) e classi
+   is-selected/is-pending; help in cascata a 8 stati + 2 override ricariche +
+   notice contestuale; piano come SNAPSHOT salvato dal modale (riepilogo
+   "Acconto oggi • Residuo • N rate • Cadenza • Prima scadenza" + Note: +
+   tabella "Rata N" con date dd/mm/yyyy); syncInstallmentPlanForContext
+   (totale a 0 -> reset scelta; ricarica -> forza Pagamento unico; cambio
+   cliente/totale>0.02/tipo pagamento -> piano rimosso col notice verbatim);
+   reset scelta a VUOTO dopo ogni vendita. Backend: financed sul totale
+   NETTO dei tender wallet/giftcard (semantica legacy sale_total del piano).
+4. CONCLUDI (getConcludeBlockReason + syncConcludeState): catena completa dei
+   motivi di blocco SEMPRE visibile in posConcludeHelp + bottone disabilitato
+   con title (carrello vuoto, mittente GiftBox diverso/mancante, cliente
+   richiesto, mittente GiftCard, 7 motivi rateizzazione verbatim).
+5. BOTTOM BAR pre-check al click (alert verbatim): GiftBox (GiftCard in
+   carrello, ricarica, mittente, "Aggiungi prima almeno un contenuto nella
+   lista...", messaggio eleggibilita'), GiftCard (GiftBox attiva, solo-
+   GiftCard, mittente), Ricariche (4 alert esclusivita' + "Seleziona prima un
+   cliente."), Pacchetti (GiftCard/ricarica, "Nessun pacchetto configurato.").
+   gbDraft ora memorizza il mittente (senderClientId) per il blocco
+   "GiftBox collegata a un mittente diverso".
+6. BADGE + posRedeemInfo (syncClientMetaUI): "Fidelity: SI/NO/—" dall'
+   adesione reale (tessera attiva), "Punti: …" durante il caricamento;
+   posRedeemInfo a 3 stati (default dinamico / "Caricamento punti
+   disponibili…" / vuoto) — rimossi i testi inventati "Residui disponibili".
+7. BOX PUNTI (pos.js sync + calcMaxPointsUse): label legacy "Punti da usare",
+   visibile solo con max spendibile > 0 (0 con ricarica o sotto il minimo),
+   help CONCATENATO verbatim "Disponibili: N Punti • Max: M Punti • Saldo •
+   Prenotati • [Saldo negativo...] • Min • Stai usando ~€ X,XX". API
+   client_residuals estesa: points = DISPONIBILI (saldo - prenotati da
+   appuntamenti aperti, Fidelity::reservedPoints) + pointsBalance/
+   pointsReserved/fidelityAdhering.
+8. COUPON (fetchPreview + syncRechargeExclusivePricingState): esito valido
+   SILENZIOSO (niente "Coupon applicato."), input readOnly a coupon
+   applicato, "Puoi applicare un solo coupon per vendita...", esiti
+   reason/"Codice non trovato."; lock ricarica con azzeramento di coupon/
+   sconti/punti/promo + controlli disabilitati + help verbatim "Con una
+   ricarica in carrello coupon, buoni, promozioni, sconti e punti non sono
+   applicabili."; righe dettaglio con etichette legacy ("Coupon / Promo",
+   "Promozione: {nome}").
+9. AUTO-PROMOZIONI (preview_auto_promo): rilevazione SILENZIOSA debounced
+   250ms su cambio carrello/cliente senza coupon/ricarica — rimosso il
+   bottone non-legacy "Rileva promozione".
+Verifica: 60/60 marker verbatim nel bundle; battery e2e 16/16 (residuals con
+saldo/prenotati/adesione, non aderente a 0 punti, piano rate financed=totale-
+acconto, piano su totale NETTO con GiftCard residuo 100-20=80, guardia
+"Pagamento insufficiente." sull'acconto, cleanup CLEAN con dati throwaway).
+RESIDUI DOCUMENTATI: fidLabel fisso "Punti" (config etichetta non portata);
+badge Fidelity mostra "—" durante il fetch (il legacy ha l'adesione
+pre-renderizzata nelle option); promo AUTO non cumulata col coupon (M1).

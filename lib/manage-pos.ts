@@ -26,6 +26,7 @@ import {
   getDbAppointmentForEdit,
   listDbQuotes,
   fidelityIsClientAdhering,
+  fidelityReservedPoints,
   listFidelityCampaigns,
   previewDbCoupon,
   redeemDbGiftCard,
@@ -94,6 +95,9 @@ export type ManagePosContext = {
     rechargeTemplates: SellableRecharge[];
   };
   locations: Array<{ id: number; name: string }>;
+  // Riscatto punti abilitato (testo dinamico posRedeemInfo legacy:
+  // "Seleziona un cliente per vedere [punti, ]credito disponibili.").
+  fidelityRedeemEnabled: boolean;
 };
 
 // A single row of the "Movimenti" list (port of pos_history.php's $events entry). One of four
@@ -224,6 +228,11 @@ export async function getManagePosContext(
 
   const movements = await buildPosMovements(slug, sales, { locationId: activeLocationId });
 
+  // Flag riscatto punti per il testo dinamico posRedeemInfo legacy
+  // ("Seleziona un cliente per vedere [punti, ]credito disponibili." —
+  // pos.php 5922-5926; 'omaggi' è morto: $giftsV2Enabled resta false).
+  const redeemSettings = await getFidelityRedeemSettings(slug).catch(() => ({ redeemEnabled: false, euroPerPoint: 0.1, minPoints: 0 }));
+
   return {
     ok: true,
     sourceMode: "database",
@@ -234,6 +243,7 @@ export async function getManagePosContext(
     movements,
     catalog: { clients, services, products, packages, giftboxes, rechargeTemplates },
     locations: locationContext.locations.map((location) => ({ id: location.id, name: location.name })),
+    fidelityRedeemEnabled: redeemSettings.redeemEnabled,
   };
 }
 
@@ -296,11 +306,17 @@ export type ManagePosResiduals = {
   clientId: number;
   credit: number;
   giftcards: Array<{ id: number; code: string; balance: number }>;
-  // FIDELITY redemption: the client's spendable POINTS balance (clients.points) plus the
-  // business redeem settings, so the UI can render the "punti da usare" box and compute the
+  // FIDELITY redemption: the client's spendable POINTS (available = saldo - prenotati,
+  // come il legacy mode=client_fidelity: Fidelity::availablePoints) plus the business
+  // redeem settings, so the UI can render the "punti da usare" box and compute the
   // resulting € discount (points x euroPerPoint). `enabled` mirrors the legacy gate:
   // fidelity_enabled AND fidelity_redeem_enabled AND the client actually has points.
   points: number;
+  // Dettaglio legacy per l'help del box punti + i badge del POS: saldo GREZZO (può
+  // essere negativo), punti prenotati da appuntamenti aperti, adesione (tessera attiva).
+  pointsBalance: number;
+  pointsReserved: number;
+  fidelityAdhering: boolean;
   fidelity: {
     enabled: boolean;
     euroPerPoint: number;
@@ -312,7 +328,7 @@ export async function getManagePosResiduals(slug: string, clientId: number): Pro
   const id = Math.max(0, Number(clientId) || 0);
   const settings = await getFidelityRedeemSettings(slug);
   if (id <= 0) {
-    return { ok: true, clientId: 0, credit: 0, giftcards: [], points: 0, fidelity: { enabled: false, euroPerPoint: settings.euroPerPoint, minPoints: settings.minPoints } };
+    return { ok: true, clientId: 0, credit: 0, giftcards: [], points: 0, pointsBalance: 0, pointsReserved: 0, fidelityAdhering: false, fidelity: { enabled: false, euroPerPoint: settings.euroPerPoint, minPoints: settings.minPoints } };
   }
   // Expire-on-read (port of Fidelity::availablePoints): con scadenza punti attiva
   // i lotti scaduti vengono processati prima di esporre il saldo spendibile.
@@ -325,13 +341,21 @@ export async function getManagePosResiduals(slug: string, clientId: number): Pro
   // F2: come Fidelity::availablePoints, un cliente NON aderente (tessera assente/
   // scaduta/disattivata) non ha punti spendibili — il box redeem non si offre.
   const adhering = await fidelityIsClientAdhering(slug, id).catch(() => false);
-  const normalizedPoints = adhering ? normalizePoints(points) : 0;
+  const pointsBalance = normalizePoints(points);
+  // Punti PRENOTATI da appuntamenti aperti (Fidelity::reservedPoints): il disponibile
+  // legacy è saldo - prenotati (clampato al saldo, mai negativo).
+  const reservedRaw = adhering ? await fidelityReservedPoints(slug, id).catch(() => 0) : 0;
+  const reserved = Math.min(reservedRaw, Math.max(0, pointsBalance));
+  const normalizedPoints = adhering ? normalizePoints(Math.max(0, pointsBalance - reserved)) : 0;
   return {
     ok: true,
     clientId: id,
     credit: roundMoney(Math.max(0, credit)),
     giftcards: giftcards.map((card) => ({ id: card.id, code: card.code, balance: roundMoney(Math.max(0, card.balance)) })),
     points: normalizedPoints,
+    pointsBalance: adhering ? pointsBalance : 0,
+    pointsReserved: reserved,
+    fidelityAdhering: adhering,
     // Redemption is offered only when globally enabled AND the client has points to spend
     // (faithful to pos.php: `$client_id && $fid['enabled'] && $fid['redeem_enabled']`).
     fidelity: {
@@ -571,16 +595,23 @@ export async function checkoutManageSale(
     input.installmentPlan && client.id > 0 && total > 0.00001 && Math.max(1, Math.round(input.installmentPlan.count)) >= 2
       ? input.installmentPlan
       : null;
-  // Stesso clamp di createManageInstallmentPlan (acconto < totale).
-  const planDownPayment = activePlan ? roundMoney(Math.min(Math.max(0, activePlan.downPayment ?? 0), Math.max(0, total - 0.01))) : 0;
-  const paidFloor = activePlan ? planDownPayment : total;
+  // Semantica legacy: il piano rate è calcolato sul totale NETTO dei residui applicati
+  // (in legacy currentPosTotal è già al netto di credito/GiftCard; qui i residui sono
+  // tender wallet/giftcard, quindi vanno sottratti prima di finanziare il resto).
+  const residualTendersTotal = roundMoney(
+    payments.reduce((sum, payment) => sum + (payment.method === "wallet" || payment.method === "giftcard" ? payment.amount : 0), 0),
+  );
+  const planNetTotal = roundMoney(Math.max(0, total - residualTendersTotal));
+  // Stesso clamp di createManageInstallmentPlan (acconto < totale netto).
+  const planDownPayment = activePlan ? roundMoney(Math.min(Math.max(0, activePlan.downPayment ?? 0), Math.max(0, planNetTotal - 0.01))) : 0;
+  const paidFloor = activePlan ? roundMoney(residualTendersTotal + planDownPayment) : total;
   if (paidAmount + 0.00001 < paidFloor) throw new Error("Pagamento insufficiente.");
 
   // Nota vendita legacy (pos.php 4666-4669): "Rateizzazione: acconto € X •
   // residuo € Y • N rate • prima scadenza YYYY-MM-DD".
   const installmentNoteLine = activePlan
     ? `Rateizzazione: acconto € ${formatMoney(planDownPayment)}` +
-      ` • residuo € ${formatMoney(Math.max(0, total - planDownPayment))}` +
+      ` • residuo € ${formatMoney(Math.max(0, planNetTotal - planDownPayment))}` +
       ` • ${Math.max(2, Math.min(120, Math.round(activePlan.count)))} rate` +
       ` • prima scadenza ${normalizeInstallmentDate(activePlan.firstDueDate ?? "") || addDaysIso(todayIso(), 30)}`
     : "";
@@ -789,7 +820,8 @@ export async function checkoutManageSale(
     await createManageInstallmentPlan(slug, {
       saleId,
       clientId: client.id,
-      total,
+      // Totale NETTO dei residui (semantica legacy: il finanziato è netTotal - acconto).
+      total: planNetTotal,
       downPayment: plan.downPayment ?? 0,
       count: plan.count,
       intervalValue: plan.intervalValue ?? 1,

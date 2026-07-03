@@ -12487,7 +12487,7 @@ export async function fidelityIsClientAdhering(slug: string, clientId: number): 
 
 // Points reserved on a client's still-open appointments (port of Fidelity::reservedPoints:
 // SUM(fidelity_points_used + fidelity_gift_points_used) over pending/scheduled appts).
-async function fidelityReservedPoints(slug: string, clientId: number): Promise<number> {
+export async function fidelityReservedPoints(slug: string, clientId: number): Promise<number> {
   if (clientId <= 0) return 0;
   const rows = await tenantSelect<RowDataPacket>({
     slug,

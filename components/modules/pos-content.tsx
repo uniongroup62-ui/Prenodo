@@ -220,6 +220,8 @@ type PosContext = {
     giftboxes?: CatalogGiftbox[];
     rechargeTemplates?: CatalogRecharge[];
   };
+  // Riscatto punti abilitato (testo dinamico posRedeemInfo legacy).
+  fidelityRedeemEnabled?: boolean;
 };
 
 // The client's spendable residui (wallet CREDIT + GiftCards) + the FIDELITY points balance
@@ -229,8 +231,31 @@ type ClientResiduals = {
   clientId: number;
   credit: number;
   giftcards: Array<{ id: number; code: string; balance: number }>;
+  // Punti DISPONIBILI (saldo - prenotati, come Fidelity::availablePoints legacy) + il
+  // dettaglio saldo/prenotati per l'help concatenato del box punti (pos.js sync()).
   points: number;
+  pointsBalance: number;
+  pointsReserved: number;
+  // Adesione Fidelity (tessera attiva non scaduta) — badge "Fidelity: SI/NO".
+  fidelityAdhering: boolean;
   fidelity: { enabled: boolean; euroPerPoint: number; minPoints: number };
+};
+
+// SNAPSHOT del piano rate salvato dal modale (legacy installment_plan_json + il contesto
+// cliente/totale/tipo pagamento usato dai controlli di coerenza di syncInstallmentPlanForContext
+// e getInstallmentConcludeBlockReason). total è il totale NETTO (dopo residui) come il legacy.
+type InstallmentPlanSnap = {
+  clientId: number;
+  total: number;
+  paymentType: PaymentMethod;
+  downPayment: number;
+  financed: number;
+  count: number;
+  intervalUnit: "day" | "week" | "month";
+  intervalValue: number;
+  firstDue: string;
+  note: string;
+  schedule: Array<{ no: number; dueDate: string; amount: number }>;
 };
 
 type CartLine = {
@@ -385,6 +410,13 @@ function roundMoney(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
+// YYYY-MM-DD -> dd/mm/yyyy ("—" when invalid), port of pos.js fmtIsoDate (piano rate).
+function fmtDMY(value: string): string {
+  const v = String(value || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) return "—";
+  return `${v.substring(8, 10)}/${v.substring(5, 7)}/${v.substring(0, 4)}`;
+}
+
 // Today as YYYY-MM-DD (local), mirrors pos.js pkTodayYMD().
 function todayYMD(): string {
   const d = new Date();
@@ -499,28 +531,34 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   const [couponApplying, setCouponApplying] = useState(false);
   const couponReqRef = useRef(0);
 
-  // Promotion (Block 3b): the operator-detected automatic promotion. promotionId/name/
-  // discount mirror the best eligible promotion the engine returned for the current cart;
-  // promotion_id is sent on checkout (the backend re-evaluates and refuses if no longer
-  // applicable, so the shown discount always equals the charged one).
+  // Promotion (Block 3b): la promozione automatica migliore per il carrello corrente,
+  // rilevata SILENZIOSAMENTE (legacy preview_auto_promo dentro fetchPreview — nessun
+  // bottone "Rileva"): l'effetto debounced sotto la ricalcola a ogni cambio carrello/
+  // cliente quando nessun coupon è applicato. promotion_id is sent on checkout (the
+  // backend re-evaluates and refuses if no longer applicable).
   const [promotionId, setPromotionId] = useState(0);
   const [promotionName, setPromotionName] = useState("");
   const [promotionDiscountRaw, setPromotionDiscountRaw] = useState(0);
-  const [promotionMsg, setPromotionMsg] = useState<{ text: string; ok: boolean } | null>(null);
-  const [promotionEvaluating, setPromotionEvaluating] = useState(false);
+  const promotionReqRef = useRef(0);
 
   // Payment: ONE base method for the remainder after residui (faithful single
   // payment_type radio). Defaults to Contanti.
   const [baseMethod, setBaseMethod] = useState<PaymentMethod>("cash");
   const [notes, setNotes] = useState("");
 
-  // RATEIZZAZIONE (installment plan): the single/rate choice + the configured params. mode
-  // "single" = pagamento unico (no plan), "installment" = a rate plan is active. The params
-  // (acconto, numero rate, intervallo, prima scadenza, note) mirror the legacy
-  // installment_plan_json; the schedule is derived (installmentSchedule below) and sent as
-  // installment_plan JSON at checkout when mode === "installment". Defaults: monthly, +30d
-  // first due, 0 down, 3 rate.
-  const [installmentMode, setInstallmentMode] = useState<"single" | "installment">("single");
+  // RATEIZZAZIONE (installment plan) — modello legacy pos.js:
+  // • installmentChoice parte VUOTA ('') e la scelta esplicita (Pagamento unico /
+  //   Rateizzato) è OBBLIGATORIA quando il totale è > 0 (badge "Scelta obbligatoria",
+  //   Concludi bloccato finché non si sceglie — readInstallmentChoice/renderInstallmentCard).
+  // • installmentPlan è lo SNAPSHOT del piano salvato dal modale ("Salva piano rate"),
+  //   con il contesto (cliente/totale/tipo pagamento) per il controllo di coerenza:
+  //   se cliente, totale (>0.02) o tipo pagamento cambiano il piano viene rimosso
+  //   (syncInstallmentPlanForContext legacy) con il notice verbatim.
+  // • installmentNotice = installmentContextNotice legacy: quando settato sovrascrive
+  //   l'help della card. Gli input sono la BOZZA del modale (seedata all'apertura).
+  const [installmentChoice, setInstallmentChoice] = useState<"" | "single" | "installment">("");
+  const [installmentPlan, setInstallmentPlan] = useState<InstallmentPlanSnap | null>(null);
+  const [installmentNotice, setInstallmentNotice] = useState("");
   const [installmentDownInput, setInstallmentDownInput] = useState("0");
   const [installmentCountInput, setInstallmentCountInput] = useState("3");
   const [installmentIntervalValueInput, setInstallmentIntervalValueInput] = useState("1");
@@ -583,6 +621,10 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   // prodotti Ordinato già nel carrello e viene emessa al Concludi come UNA riga
   // "GiftBox • {code}" col totale del contenuto. "Salva" memorizza il draft.
   const [gbDraft, setGbDraft] = useState<null | {
+    // Mittente al momento del salvataggio (legacy pos_giftbox_client_id): se il cliente
+    // selezionato cambia, Concludi si blocca con "La GiftBox è collegata a un mittente
+    // diverso..." (getConcludeBlockReason legacy).
+    senderClientId: number;
     eventType: string;
     validFrom: string;
     validTo: string;
@@ -875,6 +917,10 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
     [cart],
   );
 
+  // Ricarica in carrello (pos.js hasRechargeInCart): esclusiva — azzera punti spendibili,
+  // blocca coupon/sconti/promozioni e forza il pagamento in unica soluzione.
+  const hasRechargeInCart = useMemo(() => cart.some((l) => l.type === "recharge"), [cart]);
+
   const manualDiscount = useMemo(() => {
     const v = Math.max(0, Number.parseFloat(discountValue.replace(",", ".")) || 0);
     if (discountType === "percent") return roundMoney(Math.min(subtotal, (subtotal * v) / 100));
@@ -894,7 +940,6 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
       setPromotionId(0);
       setPromotionName("");
       setPromotionDiscountRaw(0);
-      setPromotionMsg(null);
     }
   }
 
@@ -941,12 +986,23 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
     () => (euroPerPoint > 0 ? Math.floor((baseForPoints + 1e-9) / euroPerPoint) : 0),
     [baseForPoints, euroPerPoint],
   );
-  // The points actually used = min(requested, balance, maxByAmount), whole.
+  // Max spendibile legacy (pos.js calcMaxPointsUse): 0 con una ricarica in carrello;
+  // min(disponibili, max per importo); azzerato se sotto il minimo configurato.
+  const maxPointsUse = useMemo(() => {
+    if (hasRechargeInCart) return 0;
+    let maxUse = Math.max(0, Math.min(pointsBalance, maxPointsByAmount));
+    if (minPoints > 0 && maxUse < minPoints) maxUse = 0;
+    return maxUse;
+  }, [hasRechargeInCart, pointsBalance, maxPointsByAmount, minPoints]);
+  // Saldo GREZZO (può essere negativo) e prenotati, per l'help concatenato legacy.
+  const pointsBalanceRaw = useMemo(() => Math.floor(residuals?.pointsBalance ?? 0), [residuals]);
+  const pointsReservedVal = useMemo(() => Math.max(0, Math.floor(residuals?.pointsReserved ?? 0)), [residuals]);
+  // The points actually used = min(requested, max spendibile legacy), whole.
   const pointsUsed = useMemo(() => {
     if (!fidelityEnabled) return 0;
     const typed = Math.max(0, Math.floor(Number.parseInt(pointsUseInput, 10) || 0));
-    return Math.max(0, Math.min(typed, pointsBalance, maxPointsByAmount));
-  }, [fidelityEnabled, pointsUseInput, pointsBalance, maxPointsByAmount]);
+    return Math.max(0, Math.min(typed, maxPointsUse));
+  }, [fidelityEnabled, pointsUseInput, maxPointsUse]);
   const fidelityDiscount = useMemo(
     () => roundMoney(Math.min(baseForPoints, pointsUsed * euroPerPoint)),
     [baseForPoints, pointsUsed, euroPerPoint],
@@ -966,54 +1022,6 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
     () => roundMoney(Math.max(0, subtotal - manualDiscount - promotionDiscount - codeDiscount - fidelityDiscount)),
     [subtotal, manualDiscount, promotionDiscount, codeDiscount, fidelityDiscount],
   );
-
-  // ---- rateizzazione (installment plan) math ----
-  // The chosen plan params, clamped + derived for the schedule preview and the checkout
-  // payload. count >= 2; the acconto stays below the total (so financed > 0); financed =
-  // total - acconto; the schedule splits financed across `count` rows summing to financed.
-  const installmentCount = useMemo(
-    () => Math.max(1, Math.min(120, Math.floor(Number.parseInt(installmentCountInput, 10) || 0))),
-    [installmentCountInput],
-  );
-  const installmentIntervalValue = useMemo(() => {
-    const max = installmentIntervalUnit === "day" ? 365 : installmentIntervalUnit === "week" ? 52 : 24;
-    return Math.max(1, Math.min(max, Math.floor(Number.parseInt(installmentIntervalValueInput, 10) || 1)));
-  }, [installmentIntervalValueInput, installmentIntervalUnit]);
-  // The first due defaults to today + 30 days (faithful default) until the staff picks one.
-  const installmentFirstDueValue = useMemo(
-    () => validYMD(installmentFirstDue) || addDaysYMD(today, 30),
-    [installmentFirstDue, today],
-  );
-  const installmentDownPayment = useMemo(
-    () => roundMoney(Math.min(Math.max(0, Number.parseFloat(installmentDownInput.replace(",", ".")) || 0), Math.max(0, total - 0.01))),
-    [installmentDownInput, total],
-  );
-  const installmentFinanced = useMemo(() => roundMoney(Math.max(0, total - installmentDownPayment)), [total, installmentDownPayment]);
-  const installmentSchedule = useMemo(
-    () => buildInstallmentSchedule(installmentFinanced, installmentCount, installmentFirstDueValue, installmentIntervalUnit, installmentIntervalValue),
-    [installmentFinanced, installmentCount, installmentFirstDueValue, installmentIntervalUnit, installmentIntervalValue],
-  );
-  const installmentLastDue = useMemo(
-    () => (installmentSchedule.length ? installmentSchedule[installmentSchedule.length - 1].dueDate : installmentFirstDueValue),
-    [installmentSchedule, installmentFirstDueValue],
-  );
-  // A rate plan is "active" (sent at checkout) only when the staff chose it, the sale has a
-  // real client + a positive total, and count >= 2 (mirrors the backend guard).
-  const installmentActive = useMemo(
-    () => installmentMode === "installment" && installmentCount >= 2 && total > 0.00001 && !!clientId && clientId > 0,
-    [installmentMode, installmentCount, total, clientId],
-  );
-  // Modal validation (mirrors preparePlanConfig): a client + positive total are required, the
-  // acconto must be below the total (financed > 0) and there must be >= 2 rate. The save
-  // button is disabled + the reason shown when the plan is not valid to commit.
-  const installmentModalError = useMemo(() => {
-    if (!clientId || clientId <= 0) return "Seleziona un cliente per configurare la rateizzazione.";
-    if (total <= 0.00001) return "La rateizzazione non è disponibile con totale a zero.";
-    if (installmentCount < 2) return "Servono almeno 2 rate per un piano rateale.";
-    if (installmentFinanced <= 0.00001) return "L’acconto iniziale deve essere inferiore al totale della vendita.";
-    return "";
-  }, [clientId, total, installmentCount, installmentFinanced]);
-  const installmentCanSave = useMemo(() => installmentModalError === "", [installmentModalError]);
 
   // ---- residui math ----
   // The chosen giftcard's available balance (0 when none / not in the list anymore).
@@ -1039,21 +1047,184 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
 
   const residuiTotal = useMemo(() => roundMoney(creditUse + giftcardUse), [creditUse, giftcardUse]);
 
-  // ---- base payment math ----
-  // The base method covers the remainder after residui. Con RATEIZZAZIONE attiva
-  // in cassa entra solo l'ACCONTO (il residuo è finanziato dalle rate — semantica
-  // legacy): l'importo dovuto ORA è l'acconto, non il totale.
-  const dueNow = useMemo(
-    () => (installmentActive ? installmentDownPayment : total),
-    [installmentActive, installmentDownPayment, total],
+  // TOTALE legacy (pos.js recalcTotals currentPosTotal): il "Totale" mostrato e usato da
+  // tutte le logiche di pagamento è NETTO dei residui applicati (GiftCard prima, poi
+  // Credito). I residui restano tender distinti al checkout — qui è solo la semantica UI.
+  const netTotal = useMemo(() => roundMoney(Math.max(0, total - residuiTotal)), [total, residuiTotal]);
+
+  // ---- tipo pagamento (syncPaymentTypeControls legacy) ----
+  // Radio abilitati solo con totale (netto) > 0; con totale a 0 selectedPaymentType() legacy
+  // torna '' (i radio sono disabled) — da qui il gating della card rateizzazione.
+  const paymentTypeEnabled = netTotal > 0.00001;
+  const selectedPaymentTypeValue: PaymentMethod | "" = paymentTypeEnabled ? baseMethod : "";
+
+  // ---- rateizzazione: gating legacy (installmentSingleChoiceEnabled/CanBeConfigured) ----
+  const canChooseSingle = paymentTypeEnabled && selectedPaymentTypeValue !== "";
+  const canConfigureInstallment = canChooseSingle && !!clientId && clientId > 0 && !hasRechargeInCart;
+  const installmentChoiceRequired = canChooseSingle && installmentChoice === "";
+  // Il piano è "attivo" (acconto in cassa + rate al checkout) solo con scelta Rateizzato
+  // E piano salvato dal modale — il contesto è già validato dall'effetto di sync sotto.
+  const installmentActive = installmentChoice === "installment" && !!installmentPlan;
+
+  // ---- rateizzazione: bozza del modale ----
+  // The draft params, clamped + derived for the schedule preview. count >= 2; the acconto
+  // stays below the NET total (so financed > 0); the schedule splits financed across
+  // `count` rows summing to financed. "Salva piano rate" snapshots the draft into
+  // installmentPlan (writeInstallmentPlan legacy).
+  const installmentCount = useMemo(
+    () => Math.max(1, Math.min(120, Math.floor(Number.parseInt(installmentCountInput, 10) || 0))),
+    [installmentCountInput],
   );
-  const baseAmount = useMemo(() => roundMoney(Math.max(0, dueNow - residuiTotal)), [dueNow, residuiTotal]);
+  const installmentIntervalValue = useMemo(() => {
+    const max = installmentIntervalUnit === "day" ? 365 : installmentIntervalUnit === "week" ? 52 : 24;
+    return Math.max(1, Math.min(max, Math.floor(Number.parseInt(installmentIntervalValueInput, 10) || 1)));
+  }, [installmentIntervalValueInput, installmentIntervalUnit]);
+  // The first due defaults to today + 30 days (faithful default) until the staff picks one.
+  const installmentFirstDueValue = useMemo(
+    () => validYMD(installmentFirstDue) || addDaysYMD(today, 30),
+    [installmentFirstDue, today],
+  );
+  const installmentDownPayment = useMemo(
+    () => roundMoney(Math.min(Math.max(0, Number.parseFloat(installmentDownInput.replace(",", ".")) || 0), Math.max(0, netTotal - 0.01))),
+    [installmentDownInput, netTotal],
+  );
+  const installmentFinanced = useMemo(() => roundMoney(Math.max(0, netTotal - installmentDownPayment)), [netTotal, installmentDownPayment]);
+  const installmentSchedule = useMemo(
+    () => buildInstallmentSchedule(installmentFinanced, installmentCount, installmentFirstDueValue, installmentIntervalUnit, installmentIntervalValue),
+    [installmentFinanced, installmentCount, installmentFirstDueValue, installmentIntervalUnit, installmentIntervalValue],
+  );
+  const installmentLastDue = useMemo(
+    () => (installmentSchedule.length ? installmentSchedule[installmentSchedule.length - 1].dueDate : installmentFirstDueValue),
+    [installmentSchedule, installmentFirstDueValue],
+  );
+  // Modal validation (mirrors preparePlanConfig): a client + positive total are required, the
+  // acconto must be below the total (financed > 0) and there must be >= 2 rate. The save
+  // button is disabled + the reason shown when the plan is not valid to commit.
+  const installmentModalError = useMemo(() => {
+    if (!clientId || clientId <= 0) return "Seleziona un cliente per configurare la rateizzazione.";
+    if (netTotal <= 0.00001) return "La rateizzazione non è disponibile con totale a zero.";
+    if (installmentCount < 2) return "Servono almeno 2 rate per un piano rateale.";
+    if (installmentFinanced <= 0.00001) return "L’acconto iniziale deve essere inferiore al totale della vendita.";
+    return "";
+  }, [clientId, netTotal, installmentCount, installmentFinanced]);
+  const installmentCanSave = useMemo(() => installmentModalError === "", [installmentModalError]);
+
+  // Sync del piano col contesto (syncInstallmentPlanForContext legacy): totale a 0 o tipo
+  // pagamento assente azzerano scelta e piano; una ricarica forza Pagamento unico; se
+  // cliente, totale (>0.02) o tipo pagamento divergono dallo snapshot il piano cade con
+  // il notice verbatim (la scelta resta Rateizzato -> "da configurare").
+  useEffect(() => {
+    if (netTotal <= 0.00001 || !paymentTypeEnabled) {
+      if (installmentChoice !== "" || installmentPlan) {
+        setInstallmentChoice("");
+        setInstallmentPlan(null);
+        setInstallmentNotice("");
+      }
+      return;
+    }
+    if (hasRechargeInCart && (installmentChoice === "installment" || installmentPlan)) {
+      setInstallmentPlan(null);
+      setInstallmentChoice("single");
+      setInstallmentNotice("Le ricariche credito possono essere concluse solo con pagamento in unica soluzione.");
+      return;
+    }
+    if (!installmentPlan) return;
+    if (
+      !clientId ||
+      clientId <= 0 ||
+      installmentPlan.clientId !== clientId ||
+      Math.abs(installmentPlan.total - netTotal) > 0.02 ||
+      installmentPlan.paymentType !== baseMethod
+    ) {
+      setInstallmentPlan(null);
+      setInstallmentChoice("installment");
+      setInstallmentNotice("Il piano rate è stato rimosso perché cliente, totale o tipo pagamento sono cambiati.");
+    }
+  }, [netTotal, paymentTypeEnabled, hasRechargeInCart, installmentChoice, installmentPlan, clientId, baseMethod]);
+
+  // Help della card rateizzazione (renderInstallmentCard legacy, cascata + override
+  // ricariche + notice contestuale che vince su tutto).
+  const installmentHelpText = useMemo(() => {
+    let help = "Seleziona esplicitamente se il cliente paga in unica soluzione oppure con un piano rate.";
+    if (netTotal <= 0.00001) help = "Totale a 0: nessuna scelta richiesta tra pagamento unico e rateizzato.";
+    else if (!selectedPaymentTypeValue) help = "Seleziona il tipo di pagamento per scegliere come incassare la vendita.";
+    else if (!installmentChoice) help = "Scelta obbligatoria: seleziona Pagamento unico o Rateizzato per continuare.";
+    else if (installmentChoice === "single") help = "Pagamento in unica soluzione confermato.";
+    else if (!clientId || clientId <= 0) help = "Per rateizzare la vendita devi prima selezionare un cliente.";
+    else if (!installmentPlan) help = "Completa la configurazione del piano rate per continuare.";
+    else help = "Piano rate confermato. Puoi modificarlo oppure selezionare Pagamento unico.";
+    if (hasRechargeInCart && !installmentChoice) help = "Le ricariche credito possono essere concluse solo con pagamento in unica soluzione.";
+    if (hasRechargeInCart && installmentChoice === "installment") help = "Rateizzazione non disponibile per le ricariche credito. Seleziona Pagamento unico.";
+    if (installmentNotice) help = installmentNotice;
+    return help;
+  }, [netTotal, selectedPaymentTypeValue, installmentChoice, clientId, installmentPlan, hasRechargeInCart, installmentNotice]);
+
+  // ---- base payment math ----
+  // The base method covers the remainder after residui. Con RATEIZZAZIONE attiva in cassa
+  // entra solo l'ACCONTO del piano (il residuo è finanziato dalle rate — semantica legacy:
+  // il piano è calcolato sul totale NETTO, i residui restano tender a parte).
+  const baseAmount = useMemo(
+    () => (installmentActive && installmentPlan ? roundMoney(Math.max(0, installmentPlan.downPayment)) : netTotal),
+    [installmentActive, installmentPlan, netTotal],
+  );
   const paidTotal = useMemo(() => roundMoney(residuiTotal + baseAmount), [residuiTotal, baseAmount]);
-  const remainingToPay = useMemo(() => roundMoney(Math.max(0, dueNow - paidTotal)), [dueNow, paidTotal]);
   // Residui can never exceed the balances (they are clamped above) nor the total, so the
-  // base auto-covers the rest; "insufficiente" can only happen if the due-now amount is
+  // base auto-covers the rest; "insufficiente" can only happen if the amount due now is
   // somehow not covered (defensive — mirrors the backend "Pagamento insufficiente").
-  const paymentInsufficient = useMemo(() => dueNow > 0 && paidTotal + 0.00001 < dueNow, [dueNow, paidTotal]);
+  const paymentInsufficient = useMemo(
+    () => !installmentActive && total > 0 && paidTotal + 0.00001 < total,
+    [installmentActive, total, paidTotal],
+  );
+
+  // Motivo di blocco Concludi lato rateizzazione (getInstallmentConcludeBlockReason legacy).
+  const installmentBlockReason = useMemo(() => {
+    if (netTotal <= 0.00001) return "";
+    if (!selectedPaymentTypeValue) return "Seleziona il tipo di pagamento della vendita.";
+    if (!installmentChoice) {
+      return hasRechargeInCart
+        ? "Seleziona Pagamento unico per concludere la ricarica credito."
+        : "Seleziona Pagamento unico o Rateizzato prima di concludere la vendita.";
+    }
+    if (hasRechargeInCart && installmentChoice !== "single") return "Le ricariche credito possono essere concluse solo con pagamento in unica soluzione.";
+    if (installmentChoice === "single") return "";
+    if (!installmentPlan) return "Configura il piano rate prima di concludere la vendita.";
+    if (!clientId || clientId <= 0) return "Seleziona un cliente per concludere una vendita rateizzata.";
+    if (
+      installmentPlan.clientId !== clientId ||
+      Math.abs(installmentPlan.total - netTotal) > 0.02 ||
+      installmentPlan.paymentType !== baseMethod
+    ) {
+      return "Il totale o il cliente della vendita è cambiato. Aggiorna la rateizzazione prima di concludere.";
+    }
+    return "";
+  }, [netTotal, selectedPaymentTypeValue, installmentChoice, hasRechargeInCart, installmentPlan, clientId, baseMethod]);
+
+  // Catena completa dei motivi di blocco Concludi (getConcludeBlockReason legacy): il
+  // bottone è disabilitato e il motivo è mostrato SEMPRE in posConcludeHelp (non solo
+  // dopo il submit). Ordine legacy: carrello vuoto -> mittente GiftBox -> cliente
+  // richiesto -> mittente GiftCard -> rateizzazione.
+  const concludeBlockReason = useMemo(() => {
+    const currentClientId = clientId ?? 0;
+    if (cart.length === 0) return "Aggiungi almeno un elemento prima di concludere la vendita.";
+    if (gbDraft && gbDraft.senderClientId > 0 && currentClientId !== gbDraft.senderClientId) {
+      return "La GiftBox è collegata a un mittente diverso. Seleziona il mittente corretto oppure elimina la GiftBox.";
+    }
+    if (gbDraft && (gbDraft.senderClientId <= 0 || currentClientId <= 0)) {
+      return "Seleziona un mittente per emettere una GiftBox.";
+    }
+    // cartRowsRequireClient legacy: servizi/prodotti/ricariche/giftcard (e prepagati)
+    // richiedono un cliente; i pacchetti solo fuori dalla GiftBox.
+    const requiresClient = cart.some((l) => {
+      if (l.type === "service" || l.type === "product" || l.type === "recharge" || l.type === "giftcard" || l.type === "prepaid") return true;
+      if (l.type === "package") return !gbDraft;
+      return false;
+    });
+    if (currentClientId <= 0 && requiresClient) return "Seleziona un cliente per concludere la vendita.";
+    if (cart.some((l) => l.type === "giftcard") && currentClientId <= 0) {
+      return "Seleziona un mittente per emettere una GiftCard.";
+    }
+    return installmentBlockReason;
+  }, [cart, gbDraft, clientId, installmentBlockReason]);
 
   // Reset every applied residui (used on client change, clear, and checkout success).
   const resetResiduals = useCallback(() => {
@@ -1076,15 +1247,53 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
     setClientName("");
   }
 
-  // RATEIZZAZIONE handlers. "Pagamento unico" clears any rate plan; "Salva piano rate" (the
-  // modal footer) commits the configured plan (mode -> installment). Bootstrap's data-attrs
-  // open/close the modal; React drives the inputs + the schedule preview.
+  // RATEIZZAZIONE handlers (pos.js applyInstallmentChoice/openInstallmentModal/
+  // saveInstallmentPlan). "Pagamento unico" azzera il piano e conferma la scelta;
+  // "Rateizzato"/"Configura piano"/"Modifica piano" marca la scelta e apre il modale
+  // (solo se configurabile); "Salva piano rate" fotografa la bozza nello snapshot.
   function chooseInstallmentSingle() {
-    setInstallmentMode("single");
+    setInstallmentPlan(null);
+    setInstallmentChoice("single");
+    setInstallmentNotice("");
+  }
+  function openInstallmentModal() {
+    if (hasRechargeInCart) {
+      setInstallmentPlan(null);
+      setInstallmentChoice("single");
+      setInstallmentNotice("Le ricariche credito possono essere concluse solo con pagamento in unica soluzione.");
+      return;
+    }
+    setInstallmentChoice("installment");
+    setInstallmentNotice("Completa la configurazione del piano rate per continuare.");
+    if (!canConfigureInstallment) return;
+    // populateInstallmentModal legacy: la bozza riparte dal piano salvato (o dai default).
+    if (installmentPlan) {
+      setInstallmentDownInput(installmentPlan.downPayment.toFixed(2));
+      setInstallmentCountInput(String(installmentPlan.count));
+      setInstallmentIntervalUnit(installmentPlan.intervalUnit);
+      setInstallmentIntervalValueInput(String(installmentPlan.intervalValue));
+      setInstallmentFirstDue(installmentPlan.firstDue);
+      setInstallmentNote(installmentPlan.note);
+    }
+    showPosModal("posInstallmentModal");
   }
   function saveInstallmentPlan() {
     if (!installmentCanSave) return;
-    setInstallmentMode("installment");
+    setInstallmentPlan({
+      clientId: clientId ?? 0,
+      total: netTotal,
+      paymentType: baseMethod,
+      downPayment: installmentDownPayment,
+      financed: installmentFinanced,
+      count: installmentCount,
+      intervalUnit: installmentIntervalUnit,
+      intervalValue: installmentIntervalValue,
+      firstDue: installmentFirstDueValue,
+      note: installmentNote.trim(),
+      schedule: installmentSchedule.map((row) => ({ no: row.no, dueDate: row.dueDate, amount: row.amount })),
+    });
+    setInstallmentChoice("installment");
+    setInstallmentNotice("");
   }
 
   // Fetch the selected client's residui (wallet CREDIT + GiftCards) whenever the client
@@ -1099,7 +1308,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
       headers: { "x-tenant-slug": slug },
     })
       .then((r) => r.json())
-      .then((j: { ok?: boolean; clientId?: number; credit?: number; giftcards?: ClientResiduals["giftcards"]; points?: number; fidelity?: ClientResiduals["fidelity"] }) => {
+      .then((j: { ok?: boolean; clientId?: number; credit?: number; giftcards?: ClientResiduals["giftcards"]; points?: number; pointsBalance?: number; pointsReserved?: number; fidelityAdhering?: boolean; fidelity?: ClientResiduals["fidelity"] }) => {
         if (!active || myReq !== residualsReqRef.current) return; // stale
         const epp = roundMoney(Math.max(0, Number(j?.fidelity?.euroPerPoint ?? 0.1))) || 0.1;
         setResiduals({
@@ -1111,6 +1320,11 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                 .filter((card) => card.id > 0 && card.balance > 0)
             : [],
           points: j?.ok === false ? 0 : Math.max(0, Math.floor(Number(j?.points ?? 0))),
+          // Saldo/prenotati per l'help concatenato del box punti (il saldo può essere
+          // negativo — pos.js lo mostra col messaggio dedicato).
+          pointsBalance: j?.ok === false ? 0 : Math.floor(Number(j?.pointsBalance ?? j?.points ?? 0)),
+          pointsReserved: j?.ok === false ? 0 : Math.max(0, Math.floor(Number(j?.pointsReserved ?? 0))),
+          fidelityAdhering: j?.ok !== false && j?.fidelityAdhering === true,
           fidelity: {
             enabled: j?.ok !== false && j?.fidelity?.enabled === true,
             euroPerPoint: epp,
@@ -1120,7 +1334,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
       })
       .catch(() => {
         if (active && myReq === residualsReqRef.current) {
-          setResiduals({ clientId, credit: 0, giftcards: [], points: 0, fidelity: { enabled: false, euroPerPoint: 0.1, minPoints: 0 } });
+          setResiduals({ clientId, credit: 0, giftcards: [], points: 0, pointsBalance: 0, pointsReserved: 0, fidelityAdhering: false, fidelity: { enabled: false, euroPerPoint: 0.1, minPoints: 0 } });
         }
       });
     return () => {
@@ -1272,6 +1486,109 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
 
   function removeLine(key: string) {
     setCart((prev) => prev.filter((l) => l.key !== key));
+  }
+
+  // Show a Bootstrap modal by id — usato dai pre-check legacy (bottom bar / rateizzazione)
+  // che aprono il modale SOLO dopo i controlli, al posto dei data-bs-target statici.
+  function showPosModal(id: string) {
+    if (typeof document === "undefined") return;
+    const modalEl = document.getElementById(id);
+    if (!modalEl) return;
+    const w = window as unknown as { bootstrap?: { Modal?: { getOrCreateInstance?: (el: Element) => { show?: () => void } } } };
+    try {
+      w.bootstrap?.Modal?.getOrCreateInstance?.(modalEl as Element)?.show?.();
+    } catch {
+      // no-op: bootstrap not ready (SSR/first paint) — the button can be clicked again.
+    }
+  }
+
+  // ---- pre-check di apertura dei modali bottom-bar (alert verbatim pos.js) ----
+  // Pacchetti (btnPackages): niente GiftCard/ricariche in carrello; serve un catalogo
+  // pacchetti; il cliente NON è richiesto per aprire (solo per concludere).
+  function openPackagesModal() {
+    if (cart.some((l) => l.type === "giftcard")) {
+      window.alert("Non puoi aggiungere pacchetti: è presente una GiftCard in carrello. Rimuovila per continuare.");
+      return;
+    }
+    if (cart.some((l) => l.type === "recharge")) {
+      window.alert("Non puoi aggiungere pacchetti: è presente una ricarica in carrello. Le ricariche vanno vendute da sole.");
+      return;
+    }
+    if (packages.length === 0) {
+      window.alert("Nessun pacchetto configurato.");
+      return;
+    }
+    showPosModal("posModalPackages");
+  }
+
+  // Ricariche (btnRecharge): vendita ESCLUSIVA (nessun altro elemento) + cliente richiesto.
+  function openRechargeModal() {
+    if (cart.some((l) => l.type === "giftcard")) {
+      window.alert("Non puoi aggiungere ricariche: è presente una GiftCard in carrello. Rimuovila per continuare.");
+      return;
+    }
+    if (cart.some((l) => l.type === "package")) {
+      window.alert("Non puoi aggiungere ricariche: è presente un pacchetto in carrello. Concludi una vendita separata oppure rimuovi il pacchetto.");
+      return;
+    }
+    if (gbDraft) {
+      window.alert("Non puoi aggiungere ricariche: è presente una GiftBox in questa vendita. Elimina la GiftBox per continuare.");
+      return;
+    }
+    if (cart.some((l) => l.type !== "recharge")) {
+      window.alert("Non puoi aggiungere ricariche: sono già presenti altri elementi in carrello. Le ricariche vanno vendute da sole.");
+      return;
+    }
+    if (!clientId || clientId <= 0) {
+      window.alert("Seleziona prima un cliente.");
+      return;
+    }
+    showPosModal("posModalRecharge");
+  }
+
+  // GiftBox (btnGiftbox): non abbinabile a GiftCard/ricariche; serve il mittente e
+  // almeno un contenuto (servizi/prodotti) in lista; le righe non conformi bloccano
+  // col messaggio di eleggibilità.
+  function openGiftboxModal() {
+    if (cart.some((l) => l.type === "giftcard")) {
+      window.alert("GiftBox e GiftCard non possono essere abbinate nella stessa vendita. Rimuovi la GiftCard dal carrello.");
+      return;
+    }
+    if (cart.some((l) => l.type === "recharge")) {
+      window.alert("GiftBox e Ricariche non possono essere abbinate nella stessa vendita. Rimuovi la ricarica dal carrello per continuare.");
+      return;
+    }
+    if (!clientId || clientId <= 0) {
+      window.alert("Seleziona un mittente prima di emettere una GiftBox.");
+      return;
+    }
+    if (!cart.some((l) => l.type === "service" || l.type === "prepaid" || l.type === "product")) {
+      window.alert("Aggiungi prima almeno un contenuto nella lista, poi potrai emettere una GiftBox.");
+      return;
+    }
+    if (giftboxBlockingMessage) {
+      window.alert(giftboxBlockingMessage);
+      return;
+    }
+    showPosModal("posModalGiftbox");
+  }
+
+  // GiftCard (btnGiftcard): vendita mono-riga (solo la GiftCard), mai insieme a una
+  // GiftBox; serve il mittente selezionato.
+  function openGiftcardModal() {
+    if (gbDraft) {
+      window.alert("GiftCard e GiftBox non possono essere abbinate nella stessa vendita. Elimina la GiftBox per continuare.");
+      return;
+    }
+    if (cart.some((l) => l.type !== "giftcard")) {
+      window.alert("Per vendere una GiftCard la vendita deve contenere solo la GiftCard. Rimuovi gli altri elementi dal carrello.");
+      return;
+    }
+    if (!clientId || clientId <= 0) {
+      window.alert("Seleziona un mittente prima di emettere una GiftCard.");
+      return;
+    }
+    showPosModal("posModalGiftcard");
   }
 
   // Hide a Bootstrap modal by id (its data-bs handlers may not run for this dynamic markup).
@@ -1519,6 +1836,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
       }
     }
     setGbDraft({
+      senderClientId: clientId ?? 0,
       eventType: gbEventType,
       validFrom,
       validTo,
@@ -1641,10 +1959,17 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   const applyCoupon = useCallback(async () => {
     const code = couponInput.trim().toUpperCase();
     setCouponOpen(true);
+    // Un solo coupon per vendita (pos.js couponApplyBtn): se un codice è già applicato
+    // e se ne digita un altro, l'input torna al codice applicato col messaggio verbatim.
+    if (couponCode && code && code !== couponCode) {
+      setCouponInput(couponCode);
+      setCouponMsg({ text: "Puoi applicare un solo coupon per vendita. Rimuovi quello attuale prima di inserirne un altro.", ok: false });
+      return;
+    }
     if (!code) {
       clearCouponState();
       setCouponInput("");
-      setCouponMsg({ text: "Inserisci un codice coupon.", ok: false });
+      setCouponMsg(null);
       return;
     }
     if (subtotal <= 0) {
@@ -1676,11 +2001,15 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
         setCouponCode(code);
         setCouponDiscount(disc);
         setCouponInput(code);
-        setCouponMsg({ text: "Coupon applicato.", ok: true });
+        // Esito legacy (pos.js fetchPreview): a coupon valido couponHelp resta VUOTO —
+        // lo sconto compare nella riga "Coupon / Promo" del dettaglio prezzi.
+        setCouponMsg(null);
       } else {
         clearCouponState();
         setCouponInput(code);
-        setCouponMsg({ text: String(preview?.reason || data?.error || "Coupon non applicabile."), ok: false });
+        // Esiti verbatim legacy: reason del preview, altrimenti "Codice non trovato."
+        // (il preview Next include già "Codice non applicabile." tra le reason).
+        setCouponMsg({ text: String(preview?.reason || data?.error || "Codice non trovato."), ok: false });
       }
     } catch {
       if (myReq !== couponReqRef.current) return;
@@ -1690,7 +2019,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
     } finally {
       if (myReq === couponReqRef.current) setCouponApplying(false);
     }
-  }, [couponInput, subtotal, slug, clearCouponState, cart, clientId]);
+  }, [couponInput, couponCode, subtotal, slug, clearCouponState, cart, clientId]);
 
   // Remove: clear the applied coupon + the typed code + the feedback.
   const removeCoupon = useCallback(() => {
@@ -1706,49 +2035,68 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
     setPromotionDiscountRaw(0);
   }, []);
 
-  // "Rileva promozione": evaluate the service/product cart against the active promotions
-  // (POST action=evaluate) and apply the best eligible one. promotion_id is then sent on
-  // checkout, where the backend re-evaluates + records the redemption.
-  const detectPromotion = useCallback(async () => {
-    if (subtotal <= 0) {
-      setPromotionMsg({ text: "Aggiungi almeno un elemento al carrello.", ok: false });
+  // Auto-promozioni legacy (pos.js fetchPreview -> preview_auto_promo, debounce 250ms,
+  // best-effort e SILENZIOSO): con carrello servizi/prodotti, nessun coupon applicato e
+  // nessuna ricarica, applica la migliore promozione attiva; la riga "Promozione: {nome}"
+  // appare nel dettaglio prezzi. promotion_id is sent on checkout, where the backend
+  // re-evaluates + records the redemption. Un req-id scarta le risposte stantie.
+  useEffect(() => {
+    if (hasRechargeInCart || subtotal <= 0 || couponCode) {
+      clearPromotion();
       return;
     }
-    setPromotionEvaluating(true);
-    try {
-      const promoCart = cart
-        .filter((l) => (l.type === "service" || l.type === "product") && l.refId > 0 && l.unitPrice > 0)
-        .map((l) => ({ type: l.type, id: l.refId, qty: l.quantity, unitPrice: l.unitPrice }));
-      const now = new Date();
-      const res = await fetch(`/api/manage/promotions?slug=${encodeURIComponent(slug)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-        body: JSON.stringify({
-          action: "evaluate",
-          cart_json: JSON.stringify(promoCart),
-          date: now.toISOString().slice(0, 10),
-          time: `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
-          client_id: clientId ?? 0,
-        }),
-      });
-      const data: { ok?: boolean; error?: string; best?: { promotionId: number; title: string; discount: number } | null } = await res.json().catch(() => ({}));
-      const best = data?.best;
-      if (res.ok && data?.ok && best && best.discount > 0) {
-        setPromotionId(best.promotionId);
-        setPromotionName(best.title);
-        setPromotionDiscountRaw(roundMoney(best.discount));
-        setPromotionMsg({ text: `Promozione "${best.title}" applicata.`, ok: true });
-      } else {
-        clearPromotion();
-        setPromotionMsg({ text: "Nessuna promozione applicabile a questo carrello.", ok: false });
-      }
-    } catch {
+    const promoCart = cart
+      .filter((l) => (l.type === "service" || l.type === "product") && l.refId > 0 && l.unitPrice > 0)
+      .map((l) => ({ type: l.type, id: l.refId, qty: l.quantity, unitPrice: l.unitPrice }));
+    if (promoCart.length === 0) {
       clearPromotion();
-      setPromotionMsg({ text: "Errore durante la verifica delle promozioni.", ok: false });
-    } finally {
-      setPromotionEvaluating(false);
+      return;
     }
-  }, [subtotal, cart, clientId, slug, clearPromotion]);
+    const myReq = ++promotionReqRef.current;
+    const timer = setTimeout(async () => {
+      try {
+        const now = new Date();
+        const res = await fetch(`/api/manage/promotions?slug=${encodeURIComponent(slug)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+          body: JSON.stringify({
+            action: "evaluate",
+            cart_json: JSON.stringify(promoCart),
+            date: now.toISOString().slice(0, 10),
+            time: `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
+            client_id: clientId ?? 0,
+          }),
+        });
+        const data: { ok?: boolean; best?: { promotionId: number; title: string; discount: number } | null } = await res.json().catch(() => ({}));
+        if (myReq !== promotionReqRef.current) return; // stale
+        const best = data?.best;
+        if (res.ok && data?.ok && best && best.discount > 0) {
+          setPromotionId(best.promotionId);
+          setPromotionName(best.title);
+          setPromotionDiscountRaw(roundMoney(best.discount));
+        } else {
+          clearPromotion();
+        }
+      } catch {
+        if (myReq === promotionReqRef.current) clearPromotion();
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [cart, subtotal, clientId, couponCode, hasRechargeInCart, slug, clearPromotion]);
+
+  // Lock ricarica (pos.js syncRechargeExclusivePricingState): con una ricarica in
+  // carrello coupon, buoni, promozioni, sconti e punti vengono AZZERATI e i controlli
+  // disabilitati; il couponHelp mostra il messaggio verbatim (reso nel JSX).
+  useEffect(() => {
+    if (!hasRechargeInCart) return;
+    clearCouponState();
+    setCouponInput("");
+    setCouponMsg(null);
+    setDiscountType("none");
+    setDiscountValue("0");
+    setPointsUseInput("0");
+    clearPromotion();
+  }, [hasRechargeInCart, clearCouponState, clearPromotion]);
 
   // ---- Residui mutators ----
   // Picking a different giftcard resets the applied amount (the balances differ).
@@ -1759,15 +2107,17 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   // "Max" for fidelity points: apply the most the client can spend on this sale —
   // min(balance, floor(payable / euroPerPoint)). The pointsUsed memo re-clamps.
   function useMaxPoints() {
-    setPointsUseInput(String(Math.max(0, Math.min(pointsBalance, maxPointsByAmount))));
+    setPointsUseInput(String(maxPointsUse));
   }
 
   async function handleCheckout(event: React.FormEvent) {
     event.preventDefault();
     setErrorMsg("");
     setSuccessMsg("");
-    if (cart.length === 0) {
-      setErrorMsg("Aggiungi almeno un elemento prima di concludere la vendita.");
+    // syncConcludeState legacy: qualunque motivo di blocco (carrello vuoto, mittente
+    // GiftBox/GiftCard, cliente richiesto, scelta/piano rate) ferma il submit.
+    if (concludeBlockReason) {
+      setErrorMsg(concludeBlockReason);
       return;
     }
     // Mirror the backend's "Pagamento insufficiente" client-side.
@@ -1950,18 +2300,18 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
       // sales.source_quote_id + flips the quote to 'converted'. 0 for a normal POS sale.
       source_quote_id: quoteSaleId > 0 ? quoteSaleId : 0,
       notes: notes.trim(),
-      // RATEIZZAZIONE: when a rate plan is active (mode installment + client + count >= 2),
-      // send the plan params as JSON. The backend writes the sale_installment_plans row + N
-      // sale_installments rows scheduling the financed remainder (total - acconto). Omitted
-      // (empty) for a single payment — the common path.
-      installment_plan: installmentActive
+      // RATEIZZAZIONE: when a rate plan is active (scelta Rateizzato + piano salvato), send
+      // the SNAPSHOT params as JSON. The backend writes the sale_installment_plans row + N
+      // sale_installments rows scheduling the financed remainder (net total - acconto).
+      // Omitted (empty) for a single payment — the common path.
+      installment_plan: installmentActive && installmentPlan
         ? JSON.stringify({
-            count: installmentCount,
-            down_payment: installmentDownPayment,
-            interval_value: installmentIntervalValue,
-            interval_unit: installmentIntervalUnit,
-            first_due_date: installmentFirstDueValue,
-            note: installmentNote.trim(),
+            count: installmentPlan.count,
+            down_payment: installmentPlan.downPayment,
+            interval_value: installmentPlan.intervalValue,
+            interval_unit: installmentPlan.intervalUnit,
+            first_due_date: installmentPlan.firstDue,
+            note: installmentPlan.note,
           })
         : "",
     };
@@ -2019,8 +2369,11 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
       setCouponOpen(false);
       setBaseMethod("cash");
       setNotes("");
-      // Reset the rate plan back to "pagamento unico" (+ default params) for the next sale.
-      setInstallmentMode("single");
+      // Reset rateizzazione legacy post-vendita: scelta di nuovo VUOTA (obbligatoria alla
+      // prossima vendita con totale > 0), piano e notice azzerati, bozza ai default.
+      setInstallmentChoice("");
+      setInstallmentPlan(null);
+      setInstallmentNotice("");
       setInstallmentDownInput("0");
       setInstallmentCountInput("3");
       setInstallmentIntervalValueInput("1");
@@ -2477,41 +2830,18 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
               </div>
 
               <div className="pos-bottom-bar mt-3">
-                {/* Advanced line types — rendered faithfully, modals open but non-wired. */}
-                <button
-                  type="button"
-                  className="btn btn-light pos-bottom-btn"
-                  id="posBtnPackages"
-                  data-bs-toggle="modal"
-                  data-bs-target="#posModalPackages"
-                >
+                {/* Pre-check legacy al click (pos.js btnPackages/btnRecharge/btnGiftbox/
+                    btnGiftcard): gli alert verbatim bloccano l'apertura del modale. */}
+                <button type="button" className="btn btn-light pos-bottom-btn" id="posBtnPackages" onClick={openPackagesModal}>
                   <i className="bi bi-box-seam me-1"></i>Pacchetti
                 </button>
-                <button
-                  type="button"
-                  className="btn btn-light pos-bottom-btn"
-                  id="posBtnRecharge"
-                  data-bs-toggle="modal"
-                  data-bs-target="#posModalRecharge"
-                >
+                <button type="button" className="btn btn-light pos-bottom-btn" id="posBtnRecharge" onClick={openRechargeModal}>
                   <i className="bi bi-arrow-repeat me-1"></i>Ricariche
                 </button>
-                <button
-                  type="button"
-                  className="btn btn-light pos-bottom-btn"
-                  id="posBtnGiftbox"
-                  data-bs-toggle="modal"
-                  data-bs-target="#posModalGiftbox"
-                >
+                <button type="button" className="btn btn-light pos-bottom-btn" id="posBtnGiftbox" onClick={openGiftboxModal}>
                   <i className="bi bi-gift me-1"></i>GiftBox
                 </button>
-                <button
-                  type="button"
-                  className="btn btn-light pos-bottom-btn"
-                  id="posBtnGiftcard"
-                  data-bs-toggle="modal"
-                  data-bs-target="#posModalGiftcard"
-                >
+                <button type="button" className="btn btn-light pos-bottom-btn" id="posBtnGiftcard" onClick={openGiftcardModal}>
                   <i className="bi bi-credit-card-2-front me-1"></i>GiftCard
                 </button>
               </div>
@@ -2558,22 +2888,26 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                 </select>
               </div>
 
+              {/* Badge cliente legacy (pos.js syncClientMetaUI): Fidelity SI/NO in base
+                  all'adesione (tessera attiva), '—' senza cliente; Punti '…' finché il
+                  fetch residui non risolve, '0' senza cliente. */}
               <div className="d-flex flex-wrap align-items-center gap-2 mb-2">
                 <span className="badge bg-light text-dark">
-                  Fidelity: <span id="posClientAdhering">—</span>
+                  Fidelity: <span id="posClientAdhering">{clientId ? (residualsLoading ? "—" : residuals?.fidelityAdhering ? "SI" : "NO") : "—"}</span>
                 </span>
                 <span className="badge bg-light text-dark">
-                  Punti: <span id="posClientPoints">{clientId ? pointsBalance : 0}</span>
+                  Punti: <span id="posClientPoints">{clientId ? (residualsLoading ? "…" : pointsBalance) : 0}</span>
                 </span>
               </div>
+              {/* posRedeemInfo legacy a 3 stati: testo default senza cliente, "Caricamento
+                  punti disponibili…" col riscatto attivo finché i punti non sono caricati,
+                  vuoto una volta caricati. */}
               <div className="small text-muted mb-3" id="posRedeemInfo">
                 {!clientId
-                  ? "Seleziona un cliente per vedere punti, credito, omaggi disponibili."
-                  : residualsLoading
-                    ? "Caricamento residui…"
-                    : creditAvailable > 0 || (residuals?.giftcards.length ?? 0) > 0
-                      ? `Residui disponibili: Credito ${fmtEUR(creditAvailable)}${(residuals?.giftcards.length ?? 0) > 0 ? `, ${residuals?.giftcards.length} GiftCard` : ""}.`
-                      : "Nessun credito o GiftCard disponibile per il cliente."}
+                  ? `Seleziona un cliente per vedere ${ctx?.fidelityRedeemEnabled ? "punti, credito" : "credito"} disponibili.`
+                  : ctx?.fidelityRedeemEnabled && residualsLoading
+                    ? "Caricamento punti disponibili…"
+                    : ""}
               </div>
 
               <label className="form-label small text-muted mb-1">Coupon</label>
@@ -2583,8 +2917,9 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                 </div>
                 <a
                   href="#"
-                  className="text-success small text-decoration-underline"
+                  className={`text-success small text-decoration-underline${hasRechargeInCart ? " text-muted" : ""}`}
                   id="couponToggle"
+                  aria-disabled={hasRechargeInCart ? "true" : "false"}
                   onClick={(e) => {
                     e.preventDefault();
                     setCouponOpen((v) => !v);
@@ -2601,6 +2936,8 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                       id="coupon_code"
                       placeholder="ES. WELCOME10"
                       value={couponInput}
+                      disabled={hasRechargeInCart}
+                      readOnly={!!couponCode}
                       onChange={(e) => setCouponInput(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
@@ -2613,7 +2950,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                       className="btn btn-outline-success"
                       type="button"
                       id="couponApplyBtn"
-                      disabled={couponApplying}
+                      disabled={couponApplying || hasRechargeInCart}
                       onClick={() => void applyCoupon()}
                     >
                       Applica
@@ -2622,47 +2959,22 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                       className="btn btn-outline-secondary"
                       type="button"
                       id="couponRemoveBtn"
-                      disabled={couponApplying}
+                      disabled={couponApplying || hasRechargeInCart}
                       onClick={removeCoupon}
                     >
                       Rimuovi
                     </button>
                   </div>
+                  {/* couponHelp legacy: col lock ricarica mostra il messaggio verbatim
+                      (neutro); altrimenti gli esiti del preview. Le promozioni AUTO sono
+                      silenziose (nessun box "Rileva promozione" nel legacy). */}
                   <div
-                    className={`form-text${couponMsg ? (couponMsg.ok ? " text-success" : " text-danger") : ""}`}
+                    className={`form-text${!hasRechargeInCart && couponMsg ? (couponMsg.ok ? " text-success" : " text-danger") : ""}`}
                     id="couponHelp"
                   >
-                    {couponMsg?.text ?? ""}
-                  </div>
-                </div>
-
-                <div className="mt-2" id="posPromotionBox">
-                  <div className="input-group input-group-sm">
-                    <button
-                      className="btn btn-outline-primary"
-                      type="button"
-                      id="posPromotionDetectBtn"
-                      disabled={promotionEvaluating || subtotal <= 0}
-                      onClick={() => void detectPromotion()}
-                    >
-                      <i className="bi bi-magic me-1" />
-                      {promotionEvaluating ? "Verifica…" : "Rileva promozione"}
-                    </button>
-                    {promotionId > 0 ? (
-                      <button
-                        className="btn btn-outline-secondary"
-                        type="button"
-                        onClick={() => {
-                          clearPromotion();
-                          setPromotionMsg(null);
-                        }}
-                      >
-                        Rimuovi
-                      </button>
-                    ) : null}
-                  </div>
-                  <div className={`form-text${promotionMsg ? (promotionMsg.ok ? " text-success" : " text-danger") : ""}`}>
-                    {promotionMsg?.text ?? "Applica automaticamente la migliore promozione attiva sul carrello."}
+                    {hasRechargeInCart
+                      ? "Con una ricarica in carrello coupon, buoni, promozioni, sconti e punti non sono applicabili."
+                      : couponMsg?.text ?? ""}
                   </div>
                 </div>
               </div>
@@ -2675,6 +2987,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                     name="discount_type"
                     id="discount_type"
                     value={discountType}
+                    disabled={hasRechargeInCart}
                     onChange={(e) => setDiscountType(e.target.value as "none" | "percent" | "fixed")}
                   >
                     <option value="none">Nessuno</option>
@@ -2692,6 +3005,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                     name="discount_value"
                     id="discount_value"
                     value={discountValue}
+                    disabled={hasRechargeInCart}
                     onChange={(e) => setDiscountValue(e.target.value)}
                   />
                 </div>
@@ -2702,22 +3016,25 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                   (punti x euroPerPoint) is clamped to min(balance, floor(payable / euroPerPoint))
                   and subtracted from the total. "Max" applies the most spendable. fidelity_points_use
                   is sent on checkout (the backend re-validates + consumes the points). */}
-              <div id="posFidelityRedeemBox" className={fidelityEnabled ? "" : "d-none"}>
-                <label className="form-label small text-muted mb-1">
-                  Punti da usare (disp. <strong>{pointsBalance}</strong>)
-                </label>
+              {/* Box punti legacy (pos.php 6277-6284 + pos.js sync): visibile solo con max
+                  spendibile > 0; help CONCATENATO "Disponibili • Max • Saldo • Prenotati •
+                  Min • Stai usando ~€" (con il messaggio saldo negativo quando serve). */}
+              <div id="posFidelityRedeemBox" className={fidelityEnabled && maxPointsUse > 0 ? "" : "d-none"}>
+                <label className="form-label small text-muted mb-1">Punti da usare</label>
                 <div className="input-group input-group-sm mb-1">
                   <input
                     type="number"
                     step="1"
                     min="0"
+                    max={maxPointsUse}
                     className="form-control"
                     name="fidelity_points_use"
                     id="fidelity_points_use"
                     value={pointsUseInput}
+                    disabled={hasRechargeInCart}
                     onChange={(e) => setPointsUseInput(e.target.value)}
                   />
-                  <button type="button" className="btn btn-outline-secondary" id="pointsMaxBtn" onClick={useMaxPoints}>
+                  <button type="button" className="btn btn-outline-secondary" id="pointsMaxBtn" disabled={hasRechargeInCart} onClick={useMaxPoints}>
                     Max
                   </button>
                 </div>
@@ -2729,9 +3046,15 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                     ? "Punti insufficienti."
                     : pointsBelowMin
                       ? `Per usare i punti devi usarne almeno ${minPoints}.`
-                      : pointsUsed > 0
-                        ? `${pointsUsed} punti = sconto ${fmtEUR(fidelityDiscount)} (${fmtEUR(euroPerPoint)}/punto).`
-                        : `1 punto = ${fmtEUR(euroPerPoint)}${minPoints > 0 ? `, minimo ${minPoints} punti.` : "."}`}
+                      : (() => {
+                          let msg = `Disponibili: ${pointsBalance} Punti • Max: ${maxPointsUse} Punti`;
+                          if (Math.abs(pointsBalanceRaw) > 0) msg += ` • Saldo: ${pointsBalanceRaw}`;
+                          if (pointsReservedVal > 0) msg += ` • Prenotati: ${pointsReservedVal}`;
+                          if (pointsBalanceRaw < 0) msg += " • Saldo negativo: i punti disponibili restano 0 finché non vengono compensati da nuovi accrediti.";
+                          if (minPoints > 0) msg += ` • Min: ${minPoints}`;
+                          if (pointsUsed > 0) msg += ` • Stai usando ~€ ${(pointsUsed * euroPerPoint).toFixed(2).replace(".", ",")}`;
+                          return msg;
+                        })()}
                 </div>
               </div>
 
@@ -2787,27 +3110,31 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                     (Contanti/Carta/Assegno/Bonifico) for the REMAINDER after residui.
                     base = total − credito − giftcard; the residui are applied in the
                     Residui panel above. The bar shows the residui applied + the base. */}
-                <div className="mb-3 pos-payment-type-card" id="posPaymentTypeBox">
-                  <div className="d-flex justify-content-between align-items-center mb-2">
-                    <div className="small text-muted">Tipo pagamento</div>
-                  </div>
-
-                  {/* Radio btn-check legacy (Contanti/Carta/Assegno/Bonifico) al
-                      posto della select — pos.php 6298-6319. */}
-                  <div className="row g-2 mb-2" role="group" aria-label="Metodo di pagamento">
+                {/* Radio btn-check legacy (pos.php 6298-6319) con la logica di
+                    syncPaymentTypeControls: radio disabilitati (+ card is-disabled) con
+                    totale a 0 e help a due stati verbatim. */}
+                <div
+                  className={`mb-3 pos-payment-type-card${paymentTypeEnabled ? "" : " is-disabled"}`}
+                  id="posPaymentTypeBox"
+                  aria-disabled={paymentTypeEnabled ? "false" : "true"}
+                >
+                  <div className="small text-muted mb-2">Tipo pagamento</div>
+                  <div className="pos-payment-type-grid">
                     {(["cash", "card", "check", "bank"] as PaymentMethod[]).map((method) => (
-                      <div className="col-6" key={method}>
+                      <div className="pos-payment-type-option" key={method}>
                         <input
-                          type="radio"
                           className="btn-check"
+                          type="radio"
                           name="payment_type"
-                          id={`posPaymentType_${method}`}
+                          id={`posPaymentType${method.charAt(0).toUpperCase()}${method.slice(1)}`}
+                          value={method}
                           checked={baseMethod === method}
+                          disabled={!paymentTypeEnabled}
                           onChange={() => setBaseMethod(method)}
                         />
                         <label
-                          className="btn btn-sm btn-outline-secondary w-100"
-                          htmlFor={`posPaymentType_${method}`}
+                          className="pos-payment-type-label"
+                          htmlFor={`posPaymentType${method.charAt(0).toUpperCase()}${method.slice(1)}`}
                           title={method === "card" ? "Carta di Credito" : method === "bank" ? "Bonifico" : undefined}
                         >
                           {PAYMENT_METHOD_LABELS[method]}
@@ -2815,126 +3142,120 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                       </div>
                     ))}
                   </div>
-
-                  <div className="input-group input-group-sm mb-2" id="posPaymentBaseRow">
-                    <span className="input-group-text">€</span>
-                    <input
-                      className="form-control text-end"
-                      id="posPaymentBaseAmount"
-                      type="text"
-                      readOnly
-                      value={baseAmount.toFixed(2)}
-                      aria-label="Importo a carico del metodo base"
-                    />
-                  </div>
-
-                  {residuiTotal > 0 ? (
-                    <div className="d-flex justify-content-between small text-muted" id="posPaymentResiduiRow">
-                      <span>Residui applicati</span>
-                      <span id="posPaymentResiduiVal">- {fmtEUR(residuiTotal)}</span>
-                    </div>
-                  ) : null}
-                  <div className="d-flex justify-content-between small" id="posPaymentPaidRow">
-                    <span className="text-muted">Pagato</span>
-                    <span id="posPaymentPaidVal">{fmtEUR(paidTotal)}</span>
-                  </div>
-                  <div
-                    className={`d-flex justify-content-between small${remainingToPay > 0 ? " text-danger fw-semibold" : " text-muted"}`}
-                    id="posPaymentRemainingRow"
-                  >
-                    <span>Rimanente</span>
-                    <span id="posPaymentRemainingVal">{fmtEUR(remainingToPay)}</span>
-                  </div>
-
                   <div className="form-text mt-2" id="posPaymentTypeHelp">
-                    {paymentInsufficient
-                      ? "Pagamento insufficiente: i pagamenti devono coprire il totale."
-                      : "Seleziona come paga il cliente il residuo dopo eventuali credito/GiftCard."}
+                    {paymentTypeEnabled ? "Seleziona come paga il cliente." : "Totale a 0: nessun tipo di pagamento selezionabile."}
                   </div>
                 </div>
 
-                {/* Rateizzazione (installment plan) — WIRED: the staff chooses "Pagamento
-                    unico" (no plan) or "Rateizzato" (the modal configures acconto + rate +
-                    intervallo + prima scadenza). When a rate plan is active, the summary shows
-                    the financed remainder + the per-rata schedule, and checkout sends
-                    installment_plan JSON (the backend writes the sale_installment_plans row +
-                    the sale_installments rows). A rate plan needs a real client + positive
-                    total; the badge prompts when those are missing. */}
-                <div className="mb-3 pos-installment-card" id="posInstallmentCard">
+                {/* Rateizzazione — card legacy (pos.php 6321-6351 + pos.js
+                    renderInstallmentCard): scelta OBBLIGATORIA quando il totale è > 0
+                    (badge fisso "Scelta obbligatoria"), headline a 5 stati, bottoni con
+                    is-selected/is-pending e testo dinamico, help in cascata (+ notice
+                    contestuale), riepilogo dal piano SALVATO. */}
+                <div
+                  className={`mb-3 pos-installment-card${!canChooseSingle && installmentChoice !== "installment" && !installmentPlan ? " is-disabled" : ""}${installmentChoiceRequired ? " is-required" : ""}`}
+                  id="posInstallmentCard"
+                >
                   <div className="d-flex justify-content-between align-items-center gap-2 mb-2">
                     <div className="small text-muted mb-0" id="posInstallmentHeadline">
-                      Seleziona modalità di saldo
+                      {!canChooseSingle
+                        ? "Pagamento unico / rateizzato"
+                        : !installmentChoice
+                          ? "Seleziona modalità di saldo"
+                          : installmentChoice === "single"
+                            ? "Pagamento in unica soluzione selezionato"
+                            : installmentPlan
+                              ? "Pagamento rateizzato configurato"
+                              : "Pagamento rateizzato da configurare"}
                     </div>
                     <span
-                      className={`badge rounded-pill pos-installment-required-badge${installmentMode === "installment" && (!clientId || clientId <= 0 || total <= 0.00001) ? "" : " d-none"}`}
+                      className={`badge rounded-pill pos-installment-required-badge${installmentChoiceRequired ? "" : " d-none"}`}
                       id="posInstallmentRequiredBadge"
                     >
-                      {!clientId || clientId <= 0 ? "Seleziona un cliente" : "Totale a zero"}
+                      Scelta obbligatoria
                     </span>
                   </div>
                   <div className="pos-installment-choice-grid">
                     <button
                       type="button"
-                      className={`btn pos-installment-choice-btn${installmentMode === "single" ? " active" : ""}`}
+                      className={`btn pos-installment-choice-btn${installmentChoice === "single" ? " is-selected" : ""}`}
                       id="posInstallmentSingleBtn"
-                      aria-pressed={installmentMode === "single"}
+                      disabled={!canChooseSingle}
+                      aria-pressed={installmentChoice === "single"}
                       onClick={chooseInstallmentSingle}
                     >
                       Pagamento unico
                     </button>
                     <button
                       type="button"
-                      className={`btn pos-installment-choice-btn${installmentMode === "installment" ? " active" : ""}`}
+                      className={`btn pos-installment-choice-btn${installmentChoice === "installment" && installmentPlan ? " is-selected" : ""}${installmentChoice === "installment" && !installmentPlan ? " is-pending" : ""}`}
                       id="posInstallmentConfigureBtn"
-                      aria-pressed={installmentMode === "installment"}
-                      data-bs-toggle="modal"
-                      data-bs-target="#posInstallmentModal"
+                      disabled={!canConfigureInstallment}
+                      aria-pressed={installmentChoice === "installment"}
+                      onClick={openInstallmentModal}
                     >
-                      Rateizzato
+                      {installmentPlan ? "Modifica piano" : installmentChoice === "installment" ? "Configura piano" : "Rateizzato"}
                     </button>
                   </div>
                   <div className="form-text mt-2" id="posInstallmentHelp">
-                    Seleziona esplicitamente se il cliente paga in unica soluzione oppure con un piano rate.
+                    {installmentHelpText}
                   </div>
 
-                  <div className={`pos-installment-summary${installmentActive ? "" : " d-none"}`} id="posInstallmentSummary">
-                    <div className="small fw-semibold mb-1" id="posInstallmentSummaryText">
-                      Piano rate: acconto {fmtEUR(installmentDownPayment)} • residuo {fmtEUR(installmentFinanced)} •{" "}
-                      {installmentCount} rate • prima scadenza {installmentFirstDueValue}
-                    </div>
-                    <div
-                      className={`small text-muted mb-2${installmentNote.trim() ? "" : " d-none"}`}
-                      id="posInstallmentSummaryNote"
-                    >
-                      {installmentNote.trim()}
-                    </div>
-                    <div className="table-responsive mb-2" id="posInstallmentScheduleWrap">
-                      <table className="table table-sm mb-2 pos-installment-schedule-table">
-                        <thead>
-                          <tr>
-                            <th>Rata</th>
-                            <th>Scadenza</th>
-                            <th className="text-end">Importo</th>
-                          </tr>
-                        </thead>
-                        <tbody id="posInstallmentScheduleBody">
-                          {installmentSchedule.map((row) => (
-                            <tr key={row.no}>
-                              <td>{row.no}</td>
-                              <td>{row.dueDate}</td>
-                              <td className="text-end">{fmtEUR(row.amount)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                  <div className={`pos-installment-summary${installmentPlan ? "" : " d-none"}`} id="posInstallmentSummary">
+                    {installmentPlan ? (
+                      <>
+                        <div className="small fw-semibold mb-1" id="posInstallmentSummaryText">
+                          {[
+                            `Acconto oggi ${fmtEUR(installmentPlan.downPayment)}`,
+                            `Residuo ${fmtEUR(installmentPlan.financed)}`,
+                            `${installmentPlan.count} rate`,
+                            `Cadenza ${installmentPlan.intervalValue} ${
+                              installmentPlan.intervalUnit === "day"
+                                ? installmentPlan.intervalValue === 1 ? "giorno" : "giorni"
+                                : installmentPlan.intervalUnit === "week"
+                                  ? installmentPlan.intervalValue === 1 ? "settimana" : "settimane"
+                                  : installmentPlan.intervalValue === 1 ? "mese" : "mesi"
+                            }`,
+                            `Prima scadenza ${fmtDMY(installmentPlan.firstDue)}`,
+                          ].join(" • ")}
+                        </div>
+                        <div
+                          className={`small text-muted mb-2${installmentPlan.note ? "" : " d-none"}`}
+                          id="posInstallmentSummaryNote"
+                        >
+                          {installmentPlan.note ? `Note: ${installmentPlan.note}` : ""}
+                        </div>
+                        <div
+                          className={`table-responsive${installmentPlan.schedule.length ? "" : " d-none"}`}
+                          id="posInstallmentScheduleWrap"
+                        >
+                          <table className="table table-sm mb-2 pos-installment-schedule-table">
+                            <thead>
+                              <tr>
+                                <th>Rata</th>
+                                <th>Scadenza</th>
+                                <th className="text-end">Importo</th>
+                              </tr>
+                            </thead>
+                            <tbody id="posInstallmentScheduleBody">
+                              {installmentPlan.schedule.map((row) => (
+                                <tr key={row.no}>
+                                  <td>Rata {row.no}</td>
+                                  <td>{fmtDMY(row.dueDate)}</td>
+                                  <td className="text-end">{fmtEUR(row.amount)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </>
+                    ) : null}
                     <div className="d-flex gap-2">
                       <button
                         type="button"
                         className="btn btn-outline-primary btn-sm"
                         id="posInstallmentEditBtn"
-                        data-bs-toggle="modal"
-                        data-bs-target="#posInstallmentModal"
+                        onClick={openInstallmentModal}
                       >
                         Modifica
                       </button>
@@ -2951,7 +3272,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                   className={`d-flex justify-content-between text-muted small${promotionDiscount > 0 ? "" : " d-none"}`}
                   id="posPromotionRow"
                 >
-                  <span>{promotionName ? `Promozione (${promotionName})` : "Promozione"}</span>
+                  <span>{promotionName ? `Promozione: ${promotionName}` : "Coupon / Promo"}</span>
                   <span>- {fmtEUR(promotionDiscount)}</span>
                 </div>
 
@@ -2959,7 +3280,8 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                   className={`d-flex justify-content-between text-muted small${codeDiscount > 0 ? "" : " d-none"}`}
                   id="posCodeDiscountRow"
                 >
-                  <span id="posCodeDiscountLabel">{couponCode ? `Coupon (${couponCode})` : "Coupon"}</span>
+                  {/* Etichetta legacy (pos.js recalcTotals codeLabel): generica "Coupon / Promo". */}
+                  <span id="posCodeDiscountLabel">Coupon / Promo</span>
                   <span id="posCodeDiscountVal">- {fmtEUR(codeDiscount)}</span>
                 </div>
 
@@ -2993,7 +3315,8 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
 
                 <div className="d-flex justify-content-between">
                   <span>Totale</span>
-                  <strong id="posTotalVal">{fmtEUR(total)}</strong>
+                  {/* Totale legacy: NETTO dei residui applicati (recalcTotals currentPosTotal). */}
+                  <strong id="posTotalVal">{fmtEUR(netTotal)}</strong>
                 </div>
               </div>
 
@@ -3008,17 +3331,22 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                 onChange={(e) => setNotes(e.target.value)}
               ></textarea>
 
+              {/* syncConcludeState legacy: bottone disabilitato + motivo SEMPRE visibile in
+                  posConcludeHelp (title incluso) finché c'è un blocco; gli errori del
+                  submit (server) usano lo stesso help. */}
               <button
                 className="btn btn-success w-100 mt-3"
                 type="submit"
                 id="posConcludeBtn"
-                disabled={submitting || paymentInsufficient || pointsBelowMin || pointsOverBalance || cart.length === 0}
+                disabled={submitting || !!concludeBlockReason || paymentInsufficient || pointsBelowMin || pointsOverBalance}
+                aria-disabled={submitting || !!concludeBlockReason ? "true" : "false"}
+                title={concludeBlockReason || undefined}
               >
                 <i className="bi bi-check2-circle me-1"></i>
                 {submitting ? "Conclusione…" : "Concludi"}
               </button>
-              <div className={`small text-danger mt-2${errorMsg ? "" : " d-none"}`} id="posConcludeHelp">
-                {errorMsg}
+              <div className={`small text-danger mt-2${errorMsg || concludeBlockReason ? "" : " d-none"}`} id="posConcludeHelp">
+                {errorMsg || concludeBlockReason}
               </div>
               {successMsg ? <div className="small text-success mt-2">{successMsg}</div> : null}
             </div>
@@ -3211,7 +3539,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                     </div>
                     <div className="col-12 col-md-6">
                       <label className="form-label small text-muted mb-1">Totale vendita</label>
-                      <input type="text" className="form-control" id="posInstallmentSaleTotal" value={fmtEUR(total)} readOnly />
+                      <input type="text" className="form-control" id="posInstallmentSaleTotal" value={fmtEUR(netTotal)} readOnly />
                     </div>
                     <div className="col-12 col-md-6">
                       <label className="form-label small text-muted mb-1">Tipo pagamento</label>
@@ -3308,7 +3636,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                     </div>
                     <div className="d-flex justify-content-between small mb-3">
                       <span>Ultima scadenza</span>
-                      <strong id="posInstallmentPreviewLastDue">{installmentLastDue || "—"}</strong>
+                      <strong id="posInstallmentPreviewLastDue">{installmentLastDue ? fmtDMY(installmentLastDue) : "—"}</strong>
                     </div>
                     <div className="table-responsive">
                       <table className="table table-sm mb-0 pos-installment-schedule-table">
@@ -3322,8 +3650,8 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                         <tbody id="posInstallmentPreviewBody">
                           {installmentSchedule.map((row) => (
                             <tr key={row.no}>
-                              <td>{row.no}</td>
-                              <td>{row.dueDate}</td>
+                              <td>Rata {row.no}</td>
+                              <td>{fmtDMY(row.dueDate)}</td>
                               <td className="text-end">{fmtEUR(row.amount)}</td>
                             </tr>
                           ))}
