@@ -134,6 +134,7 @@ export type StockDocumentRow = {
   notes: string;
   locationId: number | null;
   isCanceled: boolean;
+  attachmentName: string;
   items: Array<{
     id: number;
     productId: number;
@@ -415,7 +416,10 @@ export async function saveStockMovement(slug: string, body: Record<string, strin
     await insertStockDocumentItem(slug, docId, item);
     if (effectiveCause === "carico") await setProductIncoming(slug, item.productId, locationId, item.incomingFlag ? item.incomingQty : 0, item.incomingFlag ? item.incomingEta : null);
   }
-  return getManageProductsContext(slug, { locationId, includeInactive: true });
+  // stockDocId in risposta: serve al form per caricare l'allegato del
+  // documento appena creato (stock-doc-attachment, port di stock_moves.php).
+  const context = await getManageProductsContext(slug, { locationId, includeInactive: true });
+  return { ...context, stockDocId: docId } as typeof context & { stockDocId: number };
 }
 
 // recomputeIncoming — faithful port of stock_moves.php recomputeIncoming (~212-243): a product's
@@ -643,6 +647,7 @@ async function listStockDocuments(slug: string, locationId: number): Promise<Sto
     notes: String(row.notes ?? ""),
     locationId: nullableNumber(row.location_id),
     isCanceled: Number(row.is_canceled ?? 0) === 1,
+    attachmentName: String(row.attachment_name ?? ""),
     items: itemMap.get(Number(row.id ?? 0)) ?? [],
   }));
 }

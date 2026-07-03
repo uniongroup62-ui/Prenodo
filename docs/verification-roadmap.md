@@ -1971,3 +1971,46 @@ esteso. api_dashboard_performance: gia' portato dentro /api/manage/dashboard
 DIFFERITO: fail-closed sedi multi-utente (l'utente admin vede tutto; il
 fail-closed 1=0 legacy scatta con operatori senza sedi autorizzate — da
 riverificare in V10 multi-sede P11).
+
+## V9 ALLEGATI/BINARI — CHIUSA (2026-07-03, 24 test e2e PASS su R2 reale)
+Fonte legacy: uploads/.htaccess (privati: clients|client_sheets|costs|
+stock_docs), client_document.php, costs.php $handleCostUpload,
+stock_moves.php $handleUpload + stock_doc_attachment.php, staff.php +
+process_uploaded_staff_photo, ProductPageHelpers products_handle_images_upload,
+services.php categorie, business_profile.php logo/cover, PrivacyConsent/
+PrivacyPdf. Batteria: e2e-uploads.mjs (multipart reali contro R2, cleanup via
+azioni API che cancellano anche gli oggetti R2).
+GAP FIXATO: ALLEGATO DOCUMENTO MAGAZZINO mancava del tutto (TODO esplicito
+nel form). Nuova route /api/manage/stock-doc-attachment (gemella di
+cost-attachment): upload/rimozione multipart su R2 PRIVATO
+(t{tenant}/stock_docs/{docId}/{random}.{ext}), solo PDF/JPG max 5 MB con i
+messaggi legacy verbatim ("File troppo grande (max 5 MB)", "Formato non
+supportato (solo PDF o JPG)"), download 302 presigned gated su
+stock_moves.manage (come stock_doc_attachment.php via .htaccess+streaming).
+saveStockMovement ora ritorna stockDocId; il form Nuovo carico/scarico ha il
+campo file e carica DOPO il salvataggio (errore upload non annulla il
+movimento, come il legacy); lista+dettaglio movimenti mostrano il link
+allegato (attachmentName esposto).
+VERIFICATO 1:1 (live): documenti cliente (10MB pdf/png/jpg/webp, 302
+presigned, delete, guardie GDPR gia' V-precedenti), allegati costi (5MB
+pdf/jpg), foto staff (URL pubblico R2, rimozione), immagini prodotto (max 5
+con comportamento legacy riempi-fino-a-5 + errore "Limite massimo: 5
+immagini per prodotto." per le eccedenti, set main, delete), immagine
+categoria, allegato magazzino. Tutti i pulsanti upload della UI cablati.
+DIVERGENZE DOCUMENTATE (accettate):
+- Niente compressione server-side (GD resize/WebP, Ghostscript /ebook):
+  file salvati come caricati su R2.
+- Il Next valida il MIME DICHIARATO dal client; il legacy sniffa il
+  contenuto (app_detect_file_mime). L'estensione e' comunque forzata dal
+  MIME e R2 serve col content-type salvato (niente esecuzione lato server).
+- Logo/cover/gallery sedi su FILESYSTEM public/uploads (non R2): su Amplify
+  (filesystem effimero) andranno migrati a R2 PRIMA del deploy — gia'
+  tracciato nella memoria storage.
+MODULO MANCANTE RIMANDATO (non solo allegati): SCHEDE CLIENTE
+(client_sheets) — il componente Next e' solo markup: nessun salvataggio
+record (client_sheet_records.values JSON), nessun upload foto/documenti
+(5 file x campo, 5MB, jpg/png o pdf/doc/docx/odt/xls/xlsx), nessun serving
+(client_sheet_attachment.php). Area dedicata in V10/P-schede.
+NON-GAP: PDF privacy/consensi generati on-the-fly + firmati su R2 privato
+(gia' verificati); PDF preventivo generato on demand non salvato (legacy
+uguale).

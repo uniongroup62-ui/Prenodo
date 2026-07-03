@@ -33,6 +33,7 @@ type StockDocument = {
   notes: string;
   locationId: number | null;
   isCanceled: boolean;
+  attachmentName?: string;
   items: StockItem[];
 };
 
@@ -513,6 +514,19 @@ export function StockMovesContent() {
                           )}
                         </td>
                         <td className="text-end costs-nowrap">
+                          {d.attachmentName ? (
+                            <>
+                              <a
+                                className="btn btn-sm btn-outline-primary"
+                                href={`/api/manage/stock-doc-attachment?slug=${encodeURIComponent(slug)}&id=${d.id}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                title={d.attachmentName}
+                              >
+                                <i className="bi bi-paperclip" />
+                              </a>{" "}
+                            </>
+                          ) : null}
                           <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => setDetailDoc(d)}>
                             Apri
                           </button>
@@ -572,6 +586,16 @@ export function StockMovesContent() {
                         <span className="badge bg-light text-dark">Annullato</span>
                       ) : (
                         <span className="badge bg-success-subtle text-success">Attivo</span>
+                      )}
+                    </dd>
+                    <dt className="col-sm-3">Documento allegato</dt>
+                    <dd className="col-sm-3">
+                      {detailDoc.attachmentName ? (
+                        <a href={`/api/manage/stock-doc-attachment?slug=${encodeURIComponent(slug)}&id=${detailDoc.id}`} target="_blank" rel="noreferrer">
+                          {detailDoc.attachmentName}
+                        </a>
+                      ) : (
+                        "—"
                       )}
                     </dd>
                   </dl>

@@ -14,10 +14,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 // Submits to /api/manage/products (action=move_stock) with items_json, which
 // inserts the stock_docs + stock_doc_items and adjusts product stock/incoming.
 //
-// TODO: the legacy form also uploads a document ATTACHMENT (input file
-// attachment, PDF/JPG compressed into attachment_* columns). The JSON
-// /api/manage/products move pipeline does not accept a multipart file, so the
-// attachment field is not ported here.
+// L'allegato documento (PDF/JPG, max 5 MB come stock_moves.php) viene caricato
+// DOPO il salvataggio su /api/manage/stock-doc-attachment usando lo stockDocId
+// tornato dalla move; un errore di upload non annulla il movimento (parita'
+// col legacy, dove il documento e' gia' inserito quando l'upload fallisce).
 
 type ProductLite = { id: number; name: string; sku: string; supplier: string };
 
@@ -61,6 +61,7 @@ export function StockMoveFormContent() {
   const [documentNumber, setDocumentNumber] = useState("");
   const [documentDate, setDocumentDate] = useState("");
   const [notes, setNotes] = useState("");
+  const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
 
   // Product line repeater state
   const [rows, setRows] = useState<Row[]>([]);
@@ -212,6 +213,25 @@ export function StockMoveFormContent() {
         setSaving(false);
         return;
       }
+      // Allegato documento (facoltativo): upload separato col doc id appena creato.
+      const stockDocId = Number(j.stockDocId ?? 0);
+      if (attachmentFile && stockDocId > 0) {
+        const fd = new FormData();
+        fd.set("stock_doc_id", String(stockDocId));
+        fd.set("attachment", attachmentFile);
+        const up = await fetch(`/api/manage/stock-doc-attachment?slug=${encodeURIComponent(slug)}`, {
+          method: "POST",
+          headers: { "x-tenant-slug": slug },
+          body: fd,
+        });
+        const uj = await up.json().catch(() => ({}));
+        if (!up.ok || uj.ok === false) {
+          // Movimento gia' registrato: segnala solo l'errore allegato (come il legacy).
+          setError(`Movimento salvato, ma allegato non caricato: ${String(uj.error ?? "errore upload")}`);
+          setSaving(false);
+          return;
+        }
+      }
       backToList();
     } catch {
       setError("Errore nel salvataggio del movimento.");
@@ -292,6 +312,17 @@ export function StockMoveFormContent() {
                 <div className="col-md-4">
                   <label className="form-label">Data documento</label>
                   <input className="form-control" type="date" name="document_date" value={documentDate} onChange={(e) => setDocumentDate(e.target.value)} />
+                </div>
+
+                <div className="col-12">
+                  <label className="form-label">Documento allegato (PDF o JPG, max 5 MB)</label>
+                  <input
+                    className="form-control"
+                    type="file"
+                    name="attachment"
+                    accept="application/pdf,image/jpeg"
+                    onChange={(e) => setAttachmentFile(e.target.files?.[0] ?? null)}
+                  />
                 </div>
 
                 <div className="col-12">
