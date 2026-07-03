@@ -1153,7 +1153,7 @@ GAP CONFERMATI (ordine di gravita'):
   first, lotto legacy-init, expire con lock/unlock per prenotazioni
   protette, reconcile, applyExpirySettingsToOpenLots al salvataggio, punti
   in scadenza/scaduti nel wallet, calendario scadenze, 2 cron).
-- F2 ADESIONE TESSERA incoerente: earn POS + redeem POS non chiamano
+- [CHIUSO 2026-07-03] F2 ADESIONE TESSERA incoerente: earn POS + redeem POS non chiamano
   fidelityIsClientAdhering (prenotazioni e pubblico si'). Legacy: earn/
   manual bloccati per non-aderenti, availablePoints=0 senza tessera; il
   fallback adhesion_mode (all/include/exclude) si applica SOLO se la
@@ -1166,7 +1166,7 @@ GAP CONFERMATI (ordine di gravita'):
   su level_period_days) -> le campagne per-livello sono inerti. Manca anche
   la cascata cleanup livelli eliminati (promo/omaggi/campagne aggiornati o
   disattivati + prenotazioni pulite) e i preview/conferme.
-- F5 TESSERE: rinnovo automatico su attivita' (fidelity_card_try_auto_renew
+- [PARZIALE 2026-07-03: auto-renew FATTO] F5 TESSERE: rinnovo automatico su attivita' (fidelity_card_try_auto_renew
   _by_activity su earn sale/appointment) non implementato; membership
   settings senza applyMode (preserve/disable_expiry con snapshot/
   restore_existing_from_snapshot), campi restore non inviati, modal
@@ -1226,3 +1226,20 @@ con avviso UI, unlock->expire al giro successivo, cambio scadenza 30->60gg
 riallinea, expiringSoon nella warn window, cron ok. Cleanup completo; il
 lotto legacy-init di Luca Rossi (22pt, senza scadenza) e' il backfill
 CORRETTO del motore sul saldo preesistente.
+
+### Chiusura gap FIDELITY F2 + auto-renew F5a (2026-07-03, 10/10 test live PASS)
+Adesione tessera (fidelityIsClientAdhering) ora richiesta OVUNQUE come nel
+legacy: earn al checkout POS, earn al completamento appuntamento
+(handleAppointmentStatusChange ~2603), eligibility punti sulle ricariche
+(credit_wallet_recharge_points_eligible), redeem in cassa
+(resolveFidelityRedemption -> "Cliente non aderisce alla Fidelity.") e residui
+POS (punti spendibili = 0 senza tessera attiva, box redeem non offerto).
+I percorsi prenotazioni/pubblico erano gia' gated. NOTA OPERATIVA: senza
+tessere emesse i punti NON si accumulano piu' (comportamento PHP identico) —
+le tessere si emettono da Fidelity -> Adesione.
+AUTO-RENEW tessera (fidelity_card_try_auto_renew_by_activity, Helpers ~4975):
+un earn da vendita/appuntamento dentro la finestra di rinnovo estende
+expires_at di una durata piena (validity da fidelity_adhesion_json); fuori
+finestra o dopo la scadenza nessun rinnovo. Agganciato in addDbWalletMovement
+(earn>0 con source sale/appointment). Verificato: +12 mesi in finestra,
+invariata fuori finestra.

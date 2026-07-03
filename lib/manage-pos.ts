@@ -25,6 +25,7 @@ import {
   evaluatePromotionsForCart,
   getDbAppointmentForEdit,
   listDbQuotes,
+  fidelityIsClientAdhering,
   listFidelityCampaigns,
   previewDbCoupon,
   redeemDbGiftCard,
@@ -319,7 +320,10 @@ export async function getManagePosResiduals(slug: string, clientId: number): Pro
     dbWalletBalance(id, slug).catch(() => ({ credit: 0, points: 0 })),
     dbClientGiftcards(slug, id).catch(() => []),
   ]);
-  const normalizedPoints = normalizePoints(points);
+  // F2: come Fidelity::availablePoints, un cliente NON aderente (tessera assente/
+  // scaduta/disattivata) non ha punti spendibili — il box redeem non si offre.
+  const adhering = await fidelityIsClientAdhering(slug, id).catch(() => false);
+  const normalizedPoints = adhering ? normalizePoints(points) : 0;
   return {
     ok: true,
     clientId: id,
@@ -568,11 +572,10 @@ export async function checkoutManageSale(
   // netto di credito/GiftCard usati" (pos.php ~4671-4695): the sale total AFTER discounts MINUS the
   // residui the client redeemed (their own wallet credit + GiftCard balance), so points accrue only
   // on NEW external spend and never on redeemed residui. Computed just below, once the residui are
-  // resolved (line ~528). Gated on fidelity_enabled + fidelity_points_enabled + a real client;
-  // persisted on the sale row + AWARDED after the insert, reversed on void. TODO(parity): per-item
-  // earn eligibility + campaigns (calcEarnPointsForCartWithCampaign) AND the card-adhesion gate
-  // (Fidelity::isClientAdhering) — deferred to the Fidelity subsystem (the migrated `cards` table is
-  // empty, so a strict adhesion gate here would zero out earning for every client).
+  // resolved (line ~528). Gated on fidelity_enabled + fidelity_points_enabled + a real client
+  // + l'ADESIONE tessera (F2 — Fidelity::isClientAdhering: senza tessera attiva non si
+  // accumulano punti, come nel legacy con la tabella cards presente); persisted on the sale
+  // row + AWARDED after the insert, reversed on void.
   const earnSettings = await getFidelityEarnSettings(slug);
 
   // Residui: validate the wallet CREDIT + GiftCard tenders against the client's real
@@ -588,7 +591,10 @@ export async function checkoutManageSale(
   // Campaign-aware earn: points accrue only under the ACTIVE campaign for the sale date
   // (no campaign => 0), using its step/tiers + min_spend + level eligibility; the
   // campaign id is stamped on the sale (sales.fidelity_campaign_id).
-  const campaignEarn = earnSettings.enabled && client.id > 0 ? await computeCampaignEarn(slug, earnBase, client.id, earnSettings.earnStep) : { points: 0, campaignId: 0 };
+  const campaignEarn =
+    earnSettings.enabled && client.id > 0 && (await fidelityIsClientAdhering(slug, client.id))
+      ? await computeCampaignEarn(slug, earnBase, client.id, earnSettings.earnStep)
+      : { points: 0, campaignId: 0 };
   const pointsEarned = campaignEarn.points;
 
   for (const item of items) {
@@ -4471,7 +4477,9 @@ async function issueRechargeFromSale(
   // points accrue only under the ACTIVE fidelity campaign for today (no campaign => 0),
   // applying its step/tiers + min_spend + card-level eligibility.
   const earnSettings = await getFidelityEarnSettings(slug);
-  const eligible = earnPointsFlag && earnSettings.enabled;
+  // Eligibility ricariche (F2 — credit_wallet_recharge_points_eligible): programma
+  // attivo E cliente ADERENTE (tessera attiva), come nel legacy.
+  const eligible = earnPointsFlag && earnSettings.enabled && (await fidelityIsClientAdhering(slug, clientId));
   const earnBase = earnSettings.earnOnBonus ? totalAmount : baseAmount;
   const pointsEarned = eligible ? (await computeCampaignEarn(slug, earnBase, clientId, earnSettings.earnStep)).points : 0;
 
@@ -4686,7 +4694,10 @@ export async function awardAppointmentFidelityOnDone(slug: string, appointmentId
     // just the campaign default, NOT a fallback), applying its step/tiers + min_spend + card-
     // level eligibility. The campaign id is stamped on the appointment like on the sale.
     const earnSettings = await getFidelityEarnSettings(slug);
-    if (earnSettings.enabled && (await fidelityEarnOnAppointmentDone(slug))) {
+    // F2: come il legacy handleAppointmentStatusChange (~2603), un cliente non
+    // aderente non accumula punti al completamento (il redeem prenotato viene
+    // comunque regolato prima di questo blocco).
+    if (earnSettings.enabled && (await fidelityEarnOnAppointmentDone(slug)) && (await fidelityIsClientAdhering(slug, clientId))) {
       const campaignEarn = await computeCampaignEarn(slug, earnable, clientId, earnSettings.earnStep);
       const pointsEarned = campaignEarn.points;
       if (pointsEarned > 0) {
@@ -5336,6 +5347,9 @@ async function resolveFidelityRedemption(
   const settings = await getFidelityRedeemSettings(slug);
   if (!settings.redeemEnabled) throw new Error("Sconto punti non abilitato.");
   if (clientId <= 0) throw new Error("Seleziona un cliente per usare i punti.");
+  // F2: adesione tessera richiesta anche in cassa (pos.php ~4520: il redeem
+  // legacy rifiuta i non aderenti; availablePoints=0 senza tessera).
+  if (!(await fidelityIsClientAdhering(slug, clientId))) throw new Error("Cliente non aderisce alla Fidelity.");
 
   // Expire-on-read: i punti scaduti non sono spendibili (Fidelity::availablePoints).
   const lotsSettings = await fidelityLotsSettings(slug).catch(() => ({ expireEnabled: false, expireDays: 0, expireWarnDays: 0 }));

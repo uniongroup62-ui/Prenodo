@@ -5109,6 +5109,11 @@ export async function addDbWalletMovement(
       lotsSettings,
     ).catch(() => undefined);
     await reconcilePointLots(slug, clientId).catch(() => false);
+    // Rinnovo automatico tessera su earn da attività (port of Fidelity::addTransaction
+    // ~1662-1667: earn>0 con source sale/appointment -> fidelity_card_try_auto_renew).
+    if (txKind === "earn" && points > 0 && ["sale", "appointment"].includes(String(txSourceType ?? ""))) {
+      await fidelityCardTryAutoRenewByActivity(slug, clientId).catch(() => false);
+    }
     source = "transactions";
   }
 
@@ -11058,6 +11063,63 @@ function cardDefaultExpiresAt(cfg: { enabled: boolean; value: number; unit: stri
   if (!cfg.enabled || cfg.value <= 0) return null;
   const base = normalizeClientDate(baseYmd) ?? todayIso();
   return addCardDuration(base, cfg.value, cfg.unit);
+}
+
+// Finestra di rinnovo automatico tessera (port of fidelity_card_renewal_window_config):
+// attiva solo se la scadenza tessera è configurata (validity > 0), il rinnovo è
+// abilitato e la finestra è > 0 (clampata sotto la durata).
+function parseCardRenewalWindowConfig(raw: unknown): { enabled: boolean; value: number; unit: string } {
+  const s = String(raw ?? "").trim();
+  let data: Record<string, unknown> = {};
+  if (s !== "") { try { const p = JSON.parse(s); if (p && typeof p === "object" && !Array.isArray(p)) data = p as Record<string, unknown>; } catch { data = {}; } }
+  const validity = parseCardValidityConfig(raw);
+  const storedEnabled = Object.prototype.hasOwnProperty.call(data, "renewal_enabled")
+    ? truthyFlag(data.renewal_enabled)
+    : Math.trunc(Number(data.renewal_window_value ?? 0) || 0) > 0;
+  let value = Math.max(0, Math.trunc(Number(data.renewal_window_value ?? 0) || 0));
+  if (value > 36500) value = 36500;
+  let unit = String(data.renewal_window_unit ?? "days").toLowerCase();
+  if (!["days", "months", "years"].includes(unit)) unit = "days";
+  const enabled = validity.enabled && validity.value > 0 && storedEnabled && value > 0;
+  return { enabled, value: enabled ? value : 0, unit };
+}
+
+// Rinnovo automatico tessera su attività (port of fidelity_card_try_auto_renew_by_activity,
+// Helpers.php ~4975): quando un earn da vendita/appuntamento cade nella finestra di
+// rinnovo (tra scadenza-finestra e scadenza), la tessera ATTIVA del cliente viene
+// estesa di una durata piena (expires_at + validity). Best-effort: mai bloccante.
+export async function fidelityCardTryAutoRenewByActivity(slug: string, clientId: number): Promise<boolean> {
+  if (clientId <= 0) return false;
+  const bizRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_adhesion_json", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const rawCfg = bizRows[0]?.fidelity_adhesion_json;
+  const validity = parseCardValidityConfig(rawCfg);
+  if (!validity.enabled || validity.value <= 0) return false;
+  const renewal = parseCardRenewalWindowConfig(rawCfg);
+  if (!renewal.enabled) return false;
+
+  const cardRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "cards",
+    columns: "id, expires_at",
+    where: "client_id = ? AND status = 'active'",
+    params: [clientId],
+    orderBy: "CASE WHEN expires_at IS NULL THEN 1 ELSE 0 END ASC, expires_at DESC, id DESC",
+    limit: 1,
+  }).catch(() => [] as RowDataPacket[]);
+  const card = cardRows[0];
+  if (!card) return false;
+  const expiresAt = normalizeClientDate(String(card.expires_at ?? "").slice(0, 10));
+  if (!expiresAt) return false; // tessera senza scadenza: nulla da rinnovare
+
+  const activityDate = todayIso();
+  const windowStart = addCardDuration(expiresAt, -Math.abs(renewal.value), renewal.unit);
+  if (activityDate < windowStart) return false; // fuori finestra
+  if (activityDate > expiresAt) return false; // già scaduta: serve Riattiva tessera
+
+  const newExpiresAt = addCardDuration(expiresAt, validity.value, validity.unit);
+  if (!newExpiresAt || newExpiresAt <= expiresAt) return false;
+  await tenantUpdate({ slug, table: "cards", id: Number(card.id), values: { expires_at: newExpiresAt } }).catch(() => 0);
+  return true;
 }
 
 // Port of fidelity_card_code_normalize: strip whitespace, cut to 20 chars.
