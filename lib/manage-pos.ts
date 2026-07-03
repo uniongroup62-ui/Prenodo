@@ -98,6 +98,10 @@ export type ManagePosContext = {
   // Riscatto punti abilitato (testo dinamico posRedeemInfo legacy:
   // "Seleziona un cliente per vedere [punti, ]credito disponibili.").
   fidelityRedeemEnabled: boolean;
+  // Blocco info Fidelity sotto Concludi (pos.php 6399-6411): "Fidelity attivo:
+  // accredito secondo la campagna punti valida al momento della vendita • / nessuna
+  // campagna punti attiva oggi • 1 punto = € X".
+  fidelityEarnInfo: { euroPerPoint: number; earnStep: number; campaignActiveToday: boolean };
 };
 
 // A single row of the "Movimenti" list (port of pos_history.php's $events entry). One of four
@@ -233,6 +237,14 @@ export async function getManagePosContext(
   // pos.php 5922-5926; 'omaggi' è morto: $giftsV2Enabled resta false).
   const redeemSettings = await getFidelityRedeemSettings(slug).catch(() => ({ redeemEnabled: false, euroPerPoint: 0.1, minPoints: 0 }));
 
+  // Blocco info Fidelity legacy sotto Concludi: earn step + campagna attiva OGGI
+  // (stesso predicato di computeCampaignEarn). Best-effort.
+  const earnInfoSettings = await getFidelityEarnSettings(slug).catch(() => ({ enabled: false, earnStep: 10, earnOnBonus: true }));
+  const todayForCampaign = todayIso();
+  const campaignActiveToday = await listFidelityCampaigns(slug)
+    .then((campaigns) => campaigns.some((c) => c.active && (c.startsAt === "" || c.startsAt <= todayForCampaign) && (c.endsAt === "" || c.endsAt >= todayForCampaign)))
+    .catch(() => false);
+
   return {
     ok: true,
     sourceMode: "database",
@@ -244,6 +256,7 @@ export async function getManagePosContext(
     catalog: { clients, services, products, packages, giftboxes, rechargeTemplates },
     locations: locationContext.locations.map((location) => ({ id: location.id, name: location.name })),
     fidelityRedeemEnabled: redeemSettings.redeemEnabled,
+    fidelityEarnInfo: { euroPerPoint: redeemSettings.euroPerPoint, earnStep: earnInfoSettings.earnStep, campaignActiveToday },
   };
 }
 
@@ -543,7 +556,7 @@ export async function checkoutManageSale(
   // promotion discount joins the sale discount like a coupon; the applied promo + its
   // discount are stamped on the sale and a promotion_redemptions row is recorded below.
   let promoDiscount = 0;
-  let promoApplied: { id: number; name: string; nonDiscountedSubtotal: number } | null = null;
+  let promoApplied: { id: number; name: string; nonDiscountedSubtotal: number; stackableWithFidelity: boolean } | null = null;
   if (input.promotionId && input.promotionId > 0) {
     const now = new Date();
     const promoCart: PromoCartLine[] = items
@@ -553,7 +566,9 @@ export async function checkoutManageSale(
     const chosen = evaluated.promotions.find((p) => p.promotionId === input.promotionId);
     if (!chosen || !chosen.eligible || chosen.discount <= 0) throw new Error("La promozione selezionata non è applicabile a questa vendita.");
     promoDiscount = Math.min(subtotal, chosen.discount);
-    promoApplied = { id: chosen.promotionId, name: chosen.title, nonDiscountedSubtotal: roundMoney(Math.max(0, subtotal - chosen.eligibleAmount)) };
+    // nonDiscountedSubtotal ESATTO dal motore (righe con sconto unitario nullo, pos.php
+    // 1620-1639) + cumulabilità con la Fidelity (bitmask stackable) per il cap punti.
+    promoApplied = { id: chosen.promotionId, name: chosen.title, nonDiscountedSubtotal: chosen.nonDiscountedSubtotal, stackableWithFidelity: chosen.stackableWithFidelity };
   }
 
   const couponCode = clean(input.couponCode, 40);
@@ -582,8 +597,19 @@ export async function checkoutManageSale(
   // capped by the client balance + the amount still payable after manual + promo + coupon.
   // The points discount is ADDED to the sale discount (so the total drops) and the points
   // are consumed below, linked to the sale id. Mirrors pos.php: discount += fid_discount.
-  const baseForPoints = roundMoney(Math.max(0, subtotal - manualDiscount - promoDiscount - couponDiscount));
-  const redemption = await resolveFidelityRedemption(slug, client.id, input.fidelityPointsUse ?? 0, baseForPoints);
+  let baseForPoints = roundMoney(Math.max(0, subtotal - manualDiscount - promoDiscount - couponDiscount));
+  let pointsRequest = input.fidelityPointsUse ?? 0;
+  // Promo NON cumulabile con la Fidelity (pos.php 4466-4512): i punti mordono solo
+  // sulla parte del carrello NON scontata dalla promo (con ripartizione proporzionale
+  // dello sconto manuale); se non esiste parte non-promo la richiesta punti si azzera
+  // SILENZIOSAMENTE come nel legacy.
+  if (promoApplied && !promoApplied.stackableWithFidelity) {
+    const nonDisc = Math.max(0, promoApplied.nonDiscountedSubtotal);
+    const manualPortion = subtotal > 0.00001 && manualDiscount > 0 ? manualDiscount * (nonDisc / subtotal) : 0;
+    baseForPoints = roundMoney(Math.max(0, nonDisc - manualPortion));
+    if (baseForPoints <= 0.00001) pointsRequest = 0;
+  }
+  const redemption = await resolveFidelityRedemption(slug, client.id, pointsRequest, baseForPoints);
   const discount = Math.min(subtotal, roundMoney(manualDiscount + promoDiscount + couponDiscount + redemption.discount));
   const total = roundMoney(Math.max(0, subtotal - discount));
   const payments = normalizePayments(input.payments, total);
@@ -606,6 +632,24 @@ export async function checkoutManageSale(
   const planDownPayment = activePlan ? roundMoney(Math.min(Math.max(0, activePlan.downPayment ?? 0), Math.max(0, planNetTotal - 0.01))) : 0;
   const paidFloor = activePlan ? roundMoney(residualTendersTotal + planDownPayment) : total;
   if (paidAmount + 0.00001 < paidFloor) throw new Error("Pagamento insufficiente.");
+
+  // SCELTA OBBLIGATORIA unico/rateizzato lato server (pos.php 4623-4663): con totale
+  // (netto residui) > 0 la vendita deve dichiarare la modalità di saldo; le ricariche
+  // ammettono solo il pagamento unico; la scelta Rateizzato richiede piano e cliente.
+  const installmentChoice = input.installmentChoice === "single" || input.installmentChoice === "installment" ? input.installmentChoice : "";
+  const cartHasRecharge = items.some((item) => item.type === "recharge");
+  if (planNetTotal > 0.00001) {
+    if (!installmentChoice) {
+      throw new Error("Seleziona se il cliente paga in unica soluzione o rateizzato prima di concludere la vendita.");
+    }
+    if (cartHasRecharge && installmentChoice !== "single") {
+      throw new Error("Le ricariche credito possono essere concluse solo con pagamento in unica soluzione.");
+    }
+    if (installmentChoice === "installment") {
+      if (client.id <= 0) throw new Error("Seleziona un cliente per configurare la rateizzazione.");
+      if (!activePlan) throw new Error("Configura il piano rate prima di concludere la vendita.");
+    }
+  }
 
   // Nota vendita legacy (pos.php 4666-4669): "Rateizzazione: acconto € X •
   // residuo € Y • N rate • prima scadenza YYYY-MM-DD".
@@ -648,11 +692,32 @@ export async function checkoutManageSale(
   for (const item of items) {
     if (item.type === "product" && item.refId > 0 && item.status !== "ordered") {
       const available = await currentProductStock(slug, item.refId, locationId);
-      if (available + 0.00001 < item.quantity) throw new Error(`Giacenza insufficiente per ${item.name}.`);
+      // Verbatim legacy (pos.php 3928).
+      if (available + 0.00001 < item.quantity) throw new Error(`Stock insufficiente per ${item.name}`);
     }
   }
 
   const baseMethod = resolveBaseMethod(payments);
+
+  // Righe note vendita legacy (pos.php: promo 4273, coupon 4426-4430, sconto manuale
+  // 4460, GiftCard utilizzata 4587-4589, credito 4607, tipo pagamento 4627): le note
+  // della vendita raccontano lo scontrino come nel PHP (visibili nel dettaglio vendita).
+  const legacyNoteLines: string[] = [];
+  if (promoApplied && promoDiscount > 0.00001) {
+    legacyNoteLines.push(`Promozione: ${promoApplied.name || "PROMO"} -${formatMoney(promoDiscount)}`);
+  }
+  if (couponCode && couponDiscount > 0.00001) {
+    legacyNoteLines.push(`Coupon: ${couponCode.toUpperCase()}`);
+    legacyNoteLines.push(`Sconto coupon: - € ${formatMoney(couponDiscount)}`);
+  }
+  if (manualDiscount > 0.00001) legacyNoteLines.push(`Sconto manuale: -€ ${formatMoney(manualDiscount)}`);
+  if (residui.giftcardUsed > 0.00001) {
+    legacyNoteLines.push(`GiftCard utilizzata${residui.giftcardCode ? ` (${residui.giftcardCode})` : ""}: -€ ${formatMoney(residui.giftcardUsed)}`);
+  }
+  if (residui.creditUsed > 0.00001) legacyNoteLines.push(`Credito utilizzato: -€ ${formatMoney(residui.creditUsed)}`);
+  // "Tipo pagamento: {label}" solo con totale (netto) > 0, come il legacy (pos.php 4623-4627).
+  if (planNetTotal > 0.00001) legacyNoteLines.push(`Tipo pagamento: ${LEGACY_PAYMENT_TYPE_LABELS[baseMethod] ?? ""}`.trimEnd());
+
   const salesTable = await tenantTable(slug, "sales");
   const saleId = await tenantInsert(salesTable, await filterColumns(salesTable.name, {
     client_id: client.id > 0 ? client.id : null,
@@ -661,7 +726,7 @@ export async function checkoutManageSale(
     discount,
     total,
     coupon_code: emptyToNull(couponCode),
-    notes: saleNotes(input.notes, input.appointmentId, baseMethod, installmentNoteLine),
+    notes: saleNotes(input.notes, input.appointmentId, baseMethod, installmentNoteLine, legacyNoteLines),
     status: "done",
     // IN-POS quote import: link the sale back to the source quote (faithful to pos.php:4802
     // UPDATE sales SET source_quote_id). The quote itself is flipped to 'converted' below.
@@ -754,6 +819,11 @@ export async function checkoutManageSale(
   // il source_line_id è l'id riga sale_items appena inserito.
   const giftLines: Array<{ type: string; refId: number; qty: number; lineTotal: number; saleItemId: number }> = [];
 
+  // Tag note post-emissione legacy: "Pacchetti: CP#12, CP#13" e "Ricariche: R#5"
+  // (pos.php 5457-5458 / 5638-5639), appesi alle note vendita dopo gli insert.
+  const createdClientPackages: number[] = [];
+  const createdRecharges: number[] = [];
+
   for (const item of items) {
     const saleItemId = await insertSaleItem(slug, saleId, item);
     if ((item.type === "service" || item.type === "product") && item.refId > 0) {
@@ -763,7 +833,10 @@ export async function checkoutManageSale(
       await adjustProductStock(slug, item.refId, locationId, -item.quantity);
     }
     if (item.type === "prepaid" && client.id > 0) await issuePrepaidFromSale(slug, saleId, saleItemId, client.id, item);
-    if (item.type === "package" && client.id > 0) await issuePackageFromSale(slug, saleId, client.id, item);
+    if (item.type === "package" && client.id > 0) {
+      const clientPackageId = await issuePackageFromSale(slug, saleId, client.id, item);
+      if (clientPackageId > 0) createdClientPackages.push(clientPackageId);
+    }
     // SELL a GiftCard: issue a real giftcards row owned by the chosen recipient (so it
     // appears in their residui/voucher). The card amount is the line price (qty 1). A
     // bench sale (no buyer + no recipient picked) cannot own a card, so it is gated on a
@@ -791,7 +864,21 @@ export async function checkoutManageSale(
     // SELL a RECHARGE: insert a recharges row (base/bonus/total/points), CREDIT the wallet by
     // base+bonus, and EARN fidelity points (when earn_points + eligible). A recharge tops up
     // a real client's wallet, so it requires client.id > 0 (a bench sale has no wallet).
-    if (item.type === "recharge" && client.id > 0) await issueRechargeFromSale(slug, saleId, client.id, item, locationId, operator.id);
+    if (item.type === "recharge" && client.id > 0) {
+      const rechargeId = await issueRechargeFromSale(slug, saleId, client.id, item, locationId, operator.id);
+      if (rechargeId > 0) createdRecharges.push(rechargeId);
+    }
+  }
+
+  // Append note legacy "Pacchetti: CP#..." / "Ricariche: R#..." (best-effort).
+  if (createdClientPackages.length || createdRecharges.length) {
+    const extraLines: string[] = [];
+    if (createdClientPackages.length) extraLines.push(`Pacchetti: ${createdClientPackages.map((id) => `CP#${id}`).join(", ")}`);
+    if (createdRecharges.length) extraLines.push(`Ricariche: ${createdRecharges.map((id) => `R#${id}`).join(", ")}`);
+    const saleRows = await tenantSelect<RowDataPacket>({ slug, table: "sales", columns: "notes", where: "id = ?", params: [saleId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    const currentNotes = String(saleRows[0]?.notes ?? "").trim();
+    const merged = [currentNotes, ...extraLines].filter(Boolean).join("\n");
+    await tenantUpdate({ slug, table: "sales", id: saleId, values: { notes: merged } }).catch(() => 0);
   }
 
   if (input.appointmentId && input.appointmentId > 0) {
@@ -4421,9 +4508,9 @@ async function issuePrepaidFromSale(slug: string, saleId: number, saleItemId: nu
   })).catch(() => undefined);
 }
 
-async function issuePackageFromSale(slug: string, saleId: number, clientId: number, item: PosSaleItem): Promise<void> {
+async function issuePackageFromSale(slug: string, saleId: number, clientId: number, item: PosSaleItem): Promise<number> {
   const table = await tenantTable(slug, "client_packages").catch(() => null);
-  if (!table) return;
+  if (!table) return 0;
   // Sessions come from the package TEMPLATE (sum of package_services / package_items, or
   // packages.sessions_total) — faithful to the legacy issue logic, NOT the cart qty (the
   // package line is always qty 1 at the bundle price). Fall back to the line qty only when
@@ -4476,6 +4563,7 @@ async function issuePackageFromSale(slug: string, saleId: number, clientId: numb
       }
     }
   }
+  return clientPackageId;
 }
 
 // Per-service breakdown for a sold package, faithful to the legacy pkReadPackageServicesBreakdown
@@ -4647,20 +4735,21 @@ function tierPointsForSpend(amount: number, tiers: Array<{ minSpend: number; poi
 // (clients.fidelity_level). Returns the campaign id so the caller stamps
 // sales.fidelity_campaign_id. earnStepFallback is the businesses default step used
 // when the campaign leaves earn_step_euro at 0.
-async function computeCampaignEarn(slug: string, amount: number, clientId: number, earnStepFallback: number): Promise<{ points: number; campaignId: number }> {
-  if (amount <= 0.0000001) return { points: 0, campaignId: 0 };
+async function computeCampaignEarn(slug: string, amount: number, clientId: number, earnStepFallback: number): Promise<{ points: number; campaignId: number; campaignName: string }> {
+  if (amount <= 0.0000001) return { points: 0, campaignId: 0, campaignName: "" };
   const today = todayIso();
   const campaign = (await listFidelityCampaigns(slug)).find(
     (c) => c.active && (c.startsAt === "" || c.startsAt <= today) && (c.endsAt === "" || c.endsAt >= today),
   );
-  if (!campaign) return { points: 0, campaignId: 0 };
+  if (!campaign) return { points: 0, campaignId: 0, campaignName: "" };
+  const campaignName = String(campaign.name ?? "");
   if (campaign.eligibleLevels.length > 0) {
-    if (clientId <= 0) return { points: 0, campaignId: campaign.id };
+    if (clientId <= 0) return { points: 0, campaignId: campaign.id, campaignName };
     const rows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "fidelity_level", where: "id = ?", params: [clientId], limit: 1 }).catch(() => [] as RowDataPacket[]);
     const level = (String(rows[0]?.fidelity_level ?? "").trim().toLowerCase()) || "base";
-    if (!campaign.eligibleLevels.includes(level)) return { points: 0, campaignId: campaign.id };
+    if (!campaign.eligibleLevels.includes(level)) return { points: 0, campaignId: campaign.id, campaignName };
   }
-  if (campaign.minSpend > 0.0000001 && amount + 0.0000001 < campaign.minSpend) return { points: 0, campaignId: campaign.id };
+  if (campaign.minSpend > 0.0000001 && amount + 0.0000001 < campaign.minSpend) return { points: 0, campaignId: campaign.id, campaignName };
   let points = 0;
   if (campaign.earnMode === "tiers") {
     points = tierPointsForSpend(amount, campaign.tiers);
@@ -4668,7 +4757,31 @@ async function computeCampaignEarn(slug: string, amount: number, clientId: numbe
     const step = campaign.earnStepEuro > 0 ? campaign.earnStepEuro : earnStepFallback;
     points = step > 0 ? amount / step : 0;
   }
-  return { points: normalizePoints(points), campaignId: campaign.id };
+  return { points: normalizePoints(points), campaignId: campaign.id, campaignName };
+}
+
+// Preview punti su ricarica (port di pos.php mode=preview_recharge_points ->
+// pos_recharge_points_info): campagna-aware, gated su earn attivo + adesione tessera.
+// Best-effort: non lancia mai (il calcolo definitivo avviene comunque al Concludi).
+export async function getManageRechargePointsPreview(
+  slug: string,
+  clientId: number,
+  amount: number,
+): Promise<{ ok: true; eligible: boolean; points: number; campaignId: number; campaignName: string; error: string }> {
+  const cid = Math.max(0, Number(clientId) || 0);
+  const amt = roundMoney(Math.max(0, Number(amount) || 0));
+  const out = { ok: true as const, eligible: false, points: 0, campaignId: 0, campaignName: "", error: "" };
+  if (cid <= 0 || amt <= 0.00001) return out;
+  try {
+    const earnSettings = await getFidelityEarnSettings(slug);
+    if (!earnSettings.enabled) return { ...out, error: "Accumulo punti non attivo." };
+    const adhering = await fidelityIsClientAdhering(slug, cid).catch(() => false);
+    if (!adhering) return { ...out, error: "Cliente non aderente alla Fidelity." };
+    const earn = await computeCampaignEarn(slug, amt, cid, earnSettings.earnStep);
+    return { ...out, eligible: earn.points > 0, points: earn.points, campaignId: earn.campaignId, campaignName: earn.campaignName };
+  } catch {
+    return out;
+  }
 }
 
 // SETTLE the fidelity for an appointment that just transitioned to 'done' — faithful port
@@ -5404,7 +5517,7 @@ function resolveBaseMethod(payments: PosPayment[]): PosPaymentMethod {
   return base ? base.method : "card";
 }
 
-type ResiduiTenders = { creditUsed: number; giftcardId: number; giftcardUsed: number };
+type ResiduiTenders = { creditUsed: number; giftcardId: number; giftcardUsed: number; giftcardCode: string };
 
 // Validate + clamp the residui tenders (wallet CREDIT + one GiftCard) against the
 // client's real balances and the sale total. Throws on an over-spend so the checkout
@@ -5417,20 +5530,25 @@ async function resolveResiduiTenders(
 ): Promise<ResiduiTenders> {
   const creditReq = paymentAmount(payments, "wallet");
   const giftcardReq = paymentAmount(payments, "giftcard");
-  if (creditReq <= 0 && giftcardReq <= 0) return { creditUsed: 0, giftcardId: 0, giftcardUsed: 0 };
-  if (clientId <= 0) throw new Error("Seleziona un cliente per usare credito o GiftCard.");
+  if (creditReq <= 0 && giftcardReq <= 0) return { creditUsed: 0, giftcardId: 0, giftcardUsed: 0, giftcardCode: "" };
+  // Messaggi verbatim legacy (pos.php 3187/3194).
+  if (clientId <= 0) {
+    throw new Error(giftcardReq > 0 ? "Per usare una GiftCard devi selezionare un cliente." : "Per usare il credito devi selezionare un cliente.");
+  }
 
   // GiftCard first (legacy order): the picked card's id rides on the giftcard tender.
   let giftcardId = 0;
   let giftcardUsed = 0;
+  let giftcardCode = "";
   if (giftcardReq > 0) {
     const tender = payments.find((payment) => payment.method === "giftcard" && payment.amount > 0);
     giftcardId = Math.max(0, Number(tender?.giftcardId ?? 0) || 0);
-    if (giftcardId <= 0) throw new Error("Seleziona la GiftCard da utilizzare.");
+    if (giftcardId <= 0) throw new Error("Seleziona la GiftCard da usare tra i residui del cliente.");
     const available = (await dbClientGiftcards(slug, clientId)).find((card) => card.id === giftcardId);
-    if (!available) throw new Error("La GiftCard selezionata non è disponibile per il cliente.");
+    if (!available) throw new Error("La GiftCard selezionata non è disponibile tra i residui del cliente.");
+    giftcardCode = available.code;
     giftcardUsed = roundMoney(Math.min(giftcardReq, available.balance, total));
-    if (giftcardUsed + 0.00001 < giftcardReq) throw new Error("Saldo GiftCard insufficiente.");
+    if (giftcardUsed + 0.00001 < giftcardReq) throw new Error("Saldo GiftCard non disponibile.");
   }
 
   // Credit covers what is left of the total after the giftcard.
@@ -5439,10 +5557,10 @@ async function resolveResiduiTenders(
     const { credit } = await dbWalletBalance(clientId, slug);
     const remaining = roundMoney(Math.max(0, total - giftcardUsed));
     creditUsed = roundMoney(Math.min(creditReq, Math.max(0, credit), remaining));
-    if (creditUsed + 0.00001 < creditReq) throw new Error("Credito disponibile insufficiente.");
+    if (creditUsed + 0.00001 < creditReq) throw new Error("Credito insufficiente (saldo modificato da un'altra operazione). Riprova.");
   }
 
-  return { creditUsed, giftcardId, giftcardUsed };
+  return { creditUsed, giftcardId, giftcardUsed, giftcardCode };
 }
 
 type FidelityRedemption = { pointsUsed: number; discount: number };
@@ -5603,13 +5721,23 @@ function emptyToNull(value: unknown): string | null {
 // legacy POS likewise records the payment type as a notes line ("Tipo pagamento: ...").
 const BASE_METHOD_MARKER = "[posmethod:";
 
-function saleNotes(notes: unknown, appointmentId?: number, baseMethod?: PosPaymentMethod, installmentLine?: string): string | null {
+// Etichette legacy per la riga note "Tipo pagamento: ..." (pos_payment_type_label).
+const LEGACY_PAYMENT_TYPE_LABELS: Partial<Record<PosPaymentMethod, string>> = {
+  cash: "Contanti",
+  card: "Carta di Credito",
+  check: "Assegno",
+  transfer: "Bonifico",
+};
+
+function saleNotes(notes: unknown, appointmentId?: number, baseMethod?: PosPaymentMethod, installmentLine?: string, legacyLines?: string[]): string | null {
   const lines = [];
   const text = clean(notes, 2000);
   if (text) lines.push(text);
-  if (appointmentId && appointmentId > 0) lines.push(`Appuntamento #${appointmentId}`);
+  // Righe scontrino legacy (Promozione/Coupon/Sconto manuale/GiftCard/Credito/Tipo pagamento).
+  for (const line of legacyLines ?? []) if (line) lines.push(line);
   // Nota rateizzazione legacy (acconto/residuo/rate/prima scadenza).
   if (installmentLine) lines.push(installmentLine);
+  if (appointmentId && appointmentId > 0) lines.push(`Appuntamento #${appointmentId}`);
   if (baseMethod) lines.push(`${BASE_METHOD_MARKER}${baseMethod}]`);
   return lines.length ? lines.join("\n") : null;
 }

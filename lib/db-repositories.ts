@@ -9549,7 +9549,22 @@ export type PromoCartLine = { type: "service" | "product"; id: number; qty: numb
 // legacy eval breakdown_services): old = list, now = discounted, badge = "-10%" /
 // "-€ 5,00" (Italian money format, fmt_money).
 export type PromoServiceBreakdown = { old: number; now: number; discount: number; badge: string };
-export type PromoEvalResult = { promotionId: number; title: string; eligible: boolean; discount: number; reason: string; eligibleQty: number; eligibleAmount: number; breakdownServices: Record<number, PromoServiceBreakdown> };
+export type PromoEvalResult = {
+  promotionId: number;
+  title: string;
+  eligible: boolean;
+  discount: number;
+  reason: string;
+  eligibleQty: number;
+  eligibleAmount: number;
+  breakdownServices: Record<number, PromoServiceBreakdown>;
+  // Cumulabilità legacy (Promotions::normalizeStackable bitmask) + subtotale NON
+  // scontato dalla promo (pos.php preview_auto_promo: cap dei punti spendibili
+  // quando la promo non è cumulabile con la Fidelity).
+  stackableWithFidelity: boolean;
+  stackableWithCoupon: boolean;
+  nonDiscountedSubtotal: number;
+};
 
 const PROMO_CANCELLED_STATES = ["canceled", "cancelled", "annullato", "annullata", "rejected", "rifiutato", "rifiutata", "deleted", "eliminato", "eliminata"];
 // Vendite annullate ai fini del conteggio utilizzi (Promotions.php ~4857: il set
@@ -9759,7 +9774,7 @@ function promoBadgePercent(value: number): string {
 // scope=all group => largest-remainder pro-rata across the group's units.
 // Besides the total it now returns the per-service breakdown (unit old/now/
 // discount + badge) the drawer/booking price panels render.
-function computePromoDiscountCents(promo: RowDataPacket, ch: PromoChildren, cart: PromoCartLine[]): { discountC: number; eligibleQty: number; eligibleAmountC: number; breakdownServices: Record<number, PromoServiceBreakdown> } {
+function computePromoDiscountCents(promo: RowDataPacket, ch: PromoChildren, cart: PromoCartLine[]): { discountC: number; eligibleQty: number; eligibleAmountC: number; breakdownServices: Record<number, PromoServiceBreakdown>; nonDiscountedC: number } {
   const svcMode = String(promo.apply_services_mode ?? "all").toLowerCase();
   const prdMode = String(promo.apply_products_mode ?? "none").toLowerCase();
   const cents = (v: number) => Math.round(v * 100);
@@ -9883,6 +9898,27 @@ function computePromoDiscountCents(promo: RowDataPacket, ch: PromoChildren, cart
   for (const u of units) discountC += Math.max(0, Math.min(u.unitC, u.discC));
   if (discountC > eligibleAmountC) discountC = eligibleAmountC;
 
+  // Subtotale NON scontato dalla promo (pos.php preview_auto_promo 1620-1639): somma
+  // delle righe service/product con sconto unitario nullo — righe fuori scope incluse.
+  let nonDiscountedC = 0;
+  {
+    const discByLine = new Map<PromoLine, number>();
+    for (const line of lines) discByLine.set(line, line.units.reduce((s, u) => s + Math.max(0, Math.min(u.unitC, u.discC)), 0));
+    const linesByKey = new Map<string, number>();
+    for (const line of lines) {
+      const key = `${line.type}:${line.id}`;
+      linesByKey.set(key, (linesByKey.get(key) ?? 0) + (discByLine.get(line) ?? 0));
+    }
+    for (const line of cart) {
+      const id = Math.trunc(Number(line.id)) || 0;
+      const qty = Math.max(1, Math.trunc(Number(line.qty)) || 1);
+      const unitC = cents(Math.max(0, Number(line.unitPrice) || 0));
+      if (id <= 0 || unitC <= 0) continue;
+      const lineDisc = linesByKey.get(`${line.type}:${id}`) ?? 0;
+      if (lineDisc <= 0) nonDiscountedC += unitC * qty;
+    }
+  }
+
   // Per-service breakdown (aggregate lines by service id; legacy svcAgg): unit
   // old/now/discount + badge ("-p%" when the whole line is percent-discounted,
   // else "-€ <avg unit>"; conflicting badges across lines fall back to money).
@@ -9920,14 +9956,15 @@ function computePromoDiscountCents(promo: RowDataPacket, ch: PromoChildren, cart
     breakdownServices[sid] = { old: oldUnit, now: nowUnit, discount: discUnit, badge };
   }
 
-  return { discountC: Math.max(0, discountC), eligibleQty, eligibleAmountC, breakdownServices };
+  return { discountC: Math.max(0, discountC), eligibleQty, eligibleAmountC, breakdownServices, nonDiscountedC };
 }
 
 // Evaluate one active promotion against a cart + context (port of the guard chain
 // in evaluatePromotion: active/date/blackout/time-window/location/excluded/target,
 // then the discount). date=YYYY-MM-DD, time=HH:MM (optional), locationId optional.
 function evaluateOnePromotion(promo: RowDataPacket, ch: PromoChildren, cart: PromoCartLine[], date: string, time: string, clientId: number, locationId: number, ctx: PromoClientCtx | null): PromoEvalResult {
-  const base: PromoEvalResult = { promotionId: Number(promo.id ?? 0), title: String(promo.title ?? ""), eligible: false, discount: 0, reason: "", eligibleQty: 0, eligibleAmount: 0, breakdownServices: {} };
+  const stack = promoStackMeta(promo);
+  const base: PromoEvalResult = { promotionId: Number(promo.id ?? 0), title: String(promo.title ?? ""), eligible: false, discount: 0, reason: "", eligibleQty: 0, eligibleAmount: 0, breakdownServices: {}, stackableWithFidelity: stack.stackableWithFidelity, stackableWithCoupon: stack.stackableWithCoupon, nonDiscountedSubtotal: 0 };
 
   if (Number(promo.is_active ?? 0) !== 1) return { ...base, reason: "Promozione non attiva." };
   const start = String(promo.starts_at ?? "").slice(0, 10);
@@ -9953,18 +9990,25 @@ function evaluateOnePromotion(promo: RowDataPacket, ch: PromoChildren, cart: Pro
   const targetOk = checkPromoTarget(target, promo, ctx, date);
   if (targetOk !== true) return { ...base, reason: targetOk };
 
-  const { discountC, eligibleQty, eligibleAmountC, breakdownServices } = computePromoDiscountCents(promo, ch, cart);
+  const { discountC, eligibleQty, eligibleAmountC, breakdownServices, nonDiscountedC } = computePromoDiscountCents(promo, ch, cart);
   if (eligibleQty <= 0) return { ...base, reason: "Nessun servizio/prodotto nel carrello rientra nello scope della promozione." };
   const discount = roundMoney(discountC / 100);
-  return { promotionId: base.promotionId, title: base.title, eligible: discount > 0, discount, reason: discount > 0 ? "Promozione valida." : "Nessuno sconto applicabile.", eligibleQty, eligibleAmount: roundMoney(eligibleAmountC / 100), breakdownServices };
+  return { ...base, eligible: discount > 0, discount, reason: discount > 0 ? "Promozione valida." : "Nessuno sconto applicabile.", eligibleQty, eligibleAmount: roundMoney(eligibleAmountC / 100), breakdownServices, nonDiscountedSubtotal: roundMoney(nonDiscountedC / 100) };
 }
 
 // Evaluate ALL active promotions against a cart; return the eligible ones (discount
 // desc) + the best. Loads each promotion's child mappings in batch (tenant-safe).
-export async function evaluatePromotionsForCart(slug: string, cart: PromoCartLine[], date: string, time: string, clientId: number, locationId: number, opts: { excludeAppointmentId?: number | null; excludeSaleId?: number | null } = {}): Promise<{ promotions: PromoEvalResult[]; best: PromoEvalResult | null }> {
+export async function evaluatePromotionsForCart(slug: string, cart: PromoCartLine[], date: string, time: string, clientId: number, locationId: number, opts: { excludeAppointmentId?: number | null; excludeSaleId?: number | null; autoOnly?: boolean } = {}): Promise<{ promotions: PromoEvalResult[]; best: PromoEvalResult | null }> {
   const day = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : todayIso();
   const t = promoNormTime(time);
-  const promos = await tenantSelect<RowDataPacket>({ slug, table: "promotions", where: "COALESCE(is_active,0) = 1", orderBy: "priority DESC, id ASC" }).catch(() => [] as RowDataPacket[]);
+  let promos = await tenantSelect<RowDataPacket>({ slug, table: "promotions", where: "COALESCE(is_active,0) = 1", orderBy: "priority DESC, id ASC" }).catch(() => [] as RowDataPacket[]);
+  // AUTO-applicazione POS (pos.php preview_auto_promo 1545-1548): le promo con
+  // coupon_code sono "su codice" e NON auto-applicabili; senza cliente selezionato
+  // saltano anche le promo con limite per-cliente (pos_promotion_requires_client).
+  if (opts.autoOnly) {
+    promos = promos.filter((p) => String(p.coupon_code ?? "").trim() === "");
+    if (clientId <= 0) promos = promos.filter((p) => (Math.trunc(Number(p.per_customer_limit ?? 0)) || 0) <= 0);
+  }
   if (promos.length === 0) return { promotions: [], best: null };
   const ids = promos.map((p) => Number(p.id));
   const inList = ids.map(() => "?").join(",");
@@ -10017,6 +10061,124 @@ export async function evaluatePromotionsForCart(slug: string, cart: PromoCartLin
 
   const eligible = results.filter((r) => r.eligible).sort((a, b) => b.discount - a.discount);
   return { promotions: eligible, best: eligible[0] ?? null };
+}
+
+// Prezzi promo per i TILE del catalogo POS (port di pos.php mode=catalog_promos
+// 1654-1872): ogni servizio/prodotto visibile è valutato DA SOLO (qty=1, prezzo
+// corrente da DB) contro le promo automatiche (mai quelle "su codice"); la mappa
+// {service:{id:{...}}, product:{...}} pilota badge "Promo"/"-N%" + prezzo barrato.
+// Il prezzo promo è SOLO display: la riga va in carrello a prezzo pieno e lo sconto
+// arriva dall'auto-promo sul totale.
+export type CatalogTilePromoInfo = {
+  promo_id: number;
+  promo_name: string;
+  unit_price: number;
+  promo_unit_price: number;
+  unit_discount: number;
+  percent: number;
+};
+export async function evaluateCatalogTilePromos(
+  slug: string,
+  items: Array<{ type: "service" | "product"; id: number }>,
+  clientId: number,
+  locationId: number,
+): Promise<{ enabled: number; map: { service: Record<string, CatalogTilePromoInfo>; product: Record<string, CatalogTilePromoInfo> } }> {
+  const out: { enabled: number; map: { service: Record<string, CatalogTilePromoInfo>; product: Record<string, CatalogTilePromoInfo> } } = { enabled: 1, map: { service: {}, product: {} } };
+  const wanted = items
+    .filter((it) => (it.type === "service" || it.type === "product") && Number(it.id) > 0)
+    .slice(0, 80); // limite legacy anti-richieste pesanti
+  if (!wanted.length) return out;
+
+  const day = todayIso();
+  const now = new Date();
+  const t = promoNormTime(`${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`);
+
+  // Carica promo attive + figli + contesto cliente UNA volta (a differenza del PHP che
+  // rivaluta listForContext per item — stessa semantica, costo lineare).
+  let promos = await tenantSelect<RowDataPacket>({ slug, table: "promotions", where: "COALESCE(is_active,0) = 1", orderBy: "priority DESC, id ASC" }).catch(() => [] as RowDataPacket[]);
+  promos = promos.filter((p) => String(p.coupon_code ?? "").trim() === "");
+  if (clientId <= 0) promos = promos.filter((p) => (Math.trunc(Number(p.per_customer_limit ?? 0)) || 0) <= 0);
+  if (!promos.length) return out;
+  const ids = promos.map((p) => Number(p.id));
+  const inList = ids.map(() => "?").join(",");
+  const grab = async (table: string): Promise<Map<number, RowDataPacket[]>> => {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table, where: `promotion_id IN (${inList})`, params: ids }).catch(() => [] as RowDataPacket[]);
+    const map = new Map<number, RowDataPacket[]>();
+    for (const r of rows) { const pid = Number(r.promotion_id ?? 0); if (!map.has(pid)) map.set(pid, []); map.get(pid)!.push(r); }
+    return map;
+  };
+  const [boMap, twMap, svcMap, prdMap, locMap] = await Promise.all([grab("promotion_blackout_dates"), grab("promotion_time_windows"), grab("promotion_services"), grab("promotion_products"), grab("promotion_locations")]);
+  const ctx = clientId > 0 ? await loadPromoClientCtx(slug, clientId, day, t) : null;
+
+  const children = new Map<number, PromoChildren>();
+  for (const promo of promos) {
+    const pid = Number(promo.id);
+    const defMap = (rows: RowDataPacket[] | undefined, refCol: string) => {
+      const m = new Map<number, { type: "percent" | "fixed"; value: number; minQty: number }>();
+      for (const r of rows ?? []) { const t2 = String(r.discount_type ?? "percent").toLowerCase() === "fixed" ? "fixed" : "percent"; m.set(Number(r[refCol] ?? 0), { type: t2 as "percent" | "fixed", value: Math.max(0, Number(r.discount_value ?? 0) || 0), minQty: Math.max(1, Number(r.min_qty ?? 1) || 1) }); }
+      return m;
+    };
+    children.set(pid, {
+      blackouts: new Set((boMap.get(pid) ?? []).map((r) => (typeof r.blackout_date === "string" ? r.blackout_date.slice(0, 10) : r.blackout_date ? toIso(r.blackout_date).slice(0, 10) : "")).filter(Boolean)),
+      windows: (twMap.get(pid) ?? []).map((r) => ({ day: Number(r.day_of_week ?? 0), start: String(r.start_time ?? "").slice(0, 5), end: String(r.end_time ?? "").slice(0, 5) })),
+      serviceDefs: defMap(svcMap.get(pid), "service_id"),
+      productDefs: defMap(prdMap.get(pid), "product_id"),
+      locationIds: new Set((locMap.get(pid) ?? []).map((r) => Number(r.location_id ?? 0)).filter((n) => n > 0)),
+    });
+  }
+
+  // Limite utilizzi per cliente: conteggiato UNA volta per promo (non dipende dall'item).
+  const blockedByLimit = new Set<number>();
+  if (clientId > 0) {
+    for (const promo of promos) {
+      const limit = Math.trunc(Number(promo.per_customer_limit ?? 0)) || 0;
+      if (limit <= 0) continue;
+      const used = await promotionUsageCount(slug, Number(promo.id), { clientId });
+      if (used >= limit) blockedByLimit.add(Number(promo.id));
+    }
+  }
+
+  // Prezzi correnti da DB (anti-tampering, come il legacy).
+  const svcIds = wanted.filter((it) => it.type === "service").map((it) => Number(it.id));
+  const prdIds = wanted.filter((it) => it.type === "product").map((it) => Number(it.id));
+  const priceOf = new Map<string, number>();
+  if (svcIds.length) {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, price", where: `id IN (${svcIds.map(() => "?").join(",")}) AND COALESCE(is_active,1) = 1`, params: svcIds }).catch(() => [] as RowDataPacket[]);
+    for (const r of rows) priceOf.set(`service:${Number(r.id)}`, roundMoney(Math.max(0, Number(r.price ?? 0))));
+  }
+  if (prdIds.length) {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "products", columns: "id, price", where: `id IN (${prdIds.map(() => "?").join(",")}) AND COALESCE(is_active,1) = 1`, params: prdIds }).catch(() => [] as RowDataPacket[]);
+    for (const r of rows) priceOf.set(`product:${Number(r.id)}`, roundMoney(Math.max(0, Number(r.price ?? 0))));
+  }
+
+  for (const it of wanted) {
+    const id = Number(it.id);
+    const price = priceOf.get(`${it.type}:${id}`) ?? 0;
+    if (price <= 0.00001) continue;
+    const cart: PromoCartLine[] = [{ type: it.type, id, qty: 1, unitPrice: price }];
+    let chosen: PromoEvalResult | null = null;
+    for (const promo of promos) {
+      const pid = Number(promo.id);
+      if (blockedByLimit.has(pid)) continue;
+      const ev = evaluateOnePromotion(promo, children.get(pid)!, cart, day, t, clientId, locationId, ctx);
+      if (!ev.eligible || ev.discount <= 0.00001) continue;
+      if (!chosen || ev.discount > chosen.discount) chosen = ev;
+    }
+    if (!chosen) continue;
+    const unitDisc = roundMoney(Math.min(price, Math.max(0, chosen.discount)));
+    const promoPrice = roundMoney(Math.max(0, price - unitDisc));
+    if (price - promoPrice <= 0.00001) continue;
+    const pct = price > 0.00001 ? Math.round(((price - promoPrice) / price) * 100 * 100) / 100 : 0;
+    out.map[it.type][String(id)] = {
+      promo_id: chosen.promotionId,
+      promo_name: chosen.title,
+      unit_price: price,
+      promo_unit_price: promoPrice,
+      unit_discount: roundMoney(price - promoPrice),
+      percent: pct,
+    };
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

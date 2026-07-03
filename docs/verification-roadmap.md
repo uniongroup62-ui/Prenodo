@@ -2752,3 +2752,83 @@ acconto, piano su totale NETTO con GiftCard residuo 100-20=80, guardia
 RESIDUI DOCUMENTATI: fidLabel fisso "Punti" (config etichetta non portata);
 badge Fidelity mostra "—" durante il fetch (il legacy ha l'adesione
 pre-renderizzata nelle option); promo AUTO non cumulata col coupon (M1).
+
+## Pagamenti — AUDIT ESAUSTIVO legacy vs Next (2026-07-04, seconda passata)
+
+Doppio inventario completo (agent su pos.php 7148 righe + pos.js 5948 righe vs
+route/manage-pos/pos-content) + test live sugli endpoint AJAX PHP (curl con
+sessione). GAP REALI trovati e chiusi:
+
+1. PROMO TILE CATALOGO (mode=catalog_promos): nel Next il badge "Promo" e il
+   prezzo barrato erano markup statico d-none. Portato: nuova
+   evaluateCatalogTilePromos (ogni tile valutato da solo qty=1, prezzi da DB,
+   promo "su codice" e per-cliente-senza-cliente escluse, limite utilizzi
+   contato una volta per promo), azione POST catalog_promos, effetto UI
+   debounced 220ms con chiave cid|mode|ids (pos.js loadTilePromos) e render
+   tileSetPromo (badge "-N%" o "Promo", title=nome promo, prezzo promo).
+   Il click aggiunge a prezzo pieno (sconto dall'auto-promo, come legacy).
+2. AUTO-PROMO auto_only: l'evaluate del POS ora esclude le promo con
+   coupon_code ("su codice", pos.php 1545-1548) e, senza cliente, quelle con
+   per_customer_limit (pos_promotion_requires_client).
+3. CAP PUNTI CON PROMO NON CUMULABILE (stackable bitmask): client
+   (calcMaxPointsUse 1942-1947) e server (pos.php 4466-4512) ora limitano i
+   punti alla parte NON scontata dalla promo (nonDiscountedSubtotal ESATTO dal
+   motore, con ripartizione proporzionale dello sconto manuale); senza parte
+   non-promo la richiesta punti si azzera IN SILENZIO come il legacy.
+4. SCELTA UNICO/RATEIZZATO OBBLIGATORIA ANCHE SERVER-SIDE (pos.php 4631):
+   nuovo input installment_choice; con totale netto > 0 e scelta assente il
+   checkout fallisce con "Seleziona se il cliente paga in unica soluzione o
+   rateizzato prima di concludere la vendita."; ricariche solo con single;
+   installment richiede cliente + piano.
+5. NOTE VENDITA LEGACY: "Promozione: {nome} -{importo}", "Coupon: {CODE}" +
+   "Sconto coupon: - € {n}", "Sconto manuale: -€ {n}", "GiftCard utilizzata
+   ({code}): -€ {n}", "Credito utilizzato: -€ {n}", "Tipo pagamento:
+   {Contanti|Carta di Credito|Assegno|Bonifico}", e post-emissione
+   "Pacchetti: CP#12, CP#13" / "Ricariche: R#5" (fmt_money it-IT).
+6. MESSAGGI RESIDUI VERBATIM (pos.php 3187-4013 + 5717-5749): "Per usare il
+   credito/una GiftCard devi selezionare un cliente.", "Seleziona la GiftCard
+   da usare tra i residui del cliente.", "La GiftCard selezionata non è
+   disponibile tra i residui del cliente.", "Saldo GiftCard non disponibile.",
+   "Credito insufficiente (saldo modificato da un'altra operazione). Riprova.";
+   stock: "Stock insufficiente per {nome}".
+7. MITTENTE GIFTCARD: la riga giftcard memorizza il mittente (gc_client_id);
+   cambio cliente -> Concludi bloccato con "La GiftCard è collegata a un
+   mittente diverso. Rimuovila e ricreala per il mittente selezionato.".
+8. GUARDIE TILE (pos.js addItem 189-198): con GiftCard/ricarica in carrello i
+   tile alert-ano "Non puoi aggiungere altri elementi..." / "Non puoi
+   aggiungere servizi o prodotti...".
+9. PREVIEW PUNTI RICARICA (mode=preview_recharge_points): nuova azione
+   recharge_points_preview + riga legacy "Punti accreditati" nel modale
+   (debounced, '...' in caricamento, campagna nel title); avviso "Nessun
+   modello di ricarica disponibile..." a lista modelli vuota.
+10. BLOCCO INFO FIDELITY sotto Concludi (pos.php 6399-6411): "Fidelity attivo:
+    accredito secondo la campagna punti valida al momento della vendita • /
+    nessuna campagna punti attiva oggi • 1 punto = € X" (contesto:
+    fidelityEarnInfo con campaignActiveToday).
+11. ETICHETTA "Sconto Fidelity (N Punti)" (pos.js 3497) + notice "Pagamento in
+    unica soluzione selezionato." al click su Pagamento unico (pos.js 3635).
+12. QUOTE LOCK (pos.js 1833-1865 + pos.php 5996-6170): con ?quote= il POS ora
+    BLOCCA righe (qty readonly, rimozione disabilitata con title "Riga
+    bloccata dal preventivo collegato"), catalogo (alert + tile/bottom bar
+    disabilitati, "Catalogo bloccato: ..."), coupon/promozioni ("Con un
+    preventivo collegato coupon e promozioni non sono applicabili."), sconti e
+    cliente; banner legacy "Preventivo #N • Cliente: X caricato in Pagamenti."
+    + "Torna al preventivo".
+FALSI GAP confermati dormienti ANCHE nel legacy (nessuna azione): omaggi v2
+(client_gifts_v2, $giftsV2Enabled=false hardcoded; gift_instance_id mai letto
+da POST), Buono new_coupon_* (hidden non renderizzati), pos_action
+issue_giftbox/issue_giftcard/create_recharge/sell_package (handler standalone
+mai invocati dalla UI), mode=client_credit (mai chiamato dal JS),
+pkSyncExpiryHint duplicata. DIVERGENZA DATI (non codice): il confronto live
+cliente 9 differisce tra MySQL e Supabase per drift di dati di test (la query
+e la semantica credito clients.credit_balance sono identiche).
+RESIDUI DELIBERATI: coupon+promo AUTO non cumulati (M1 approvato; il legacy
+tenta lo stacking coupon_eval_after_promotion), pacchetti come contenuto
+GiftBox (in_giftbox) non portati (la GiftBox Next avvolge servizi/prodotti),
+lock credito "informativo" del modale Residui (hint legacy 3062-3063) non
+mostrato.
+Verifica: batteria audit2 14/14 (scelta obbligatoria verbatim, catalog_promos
+-20% con prezzo/percent/nome, auto_only esclude promo su codice, punti azzerati
+con promo non cumulabile + sconto promo applicato, note legacy Promozione/
+Sconto manuale/Tipo pagamento, preview ricarica) + regressione batteria piano
+rate 16/16 + 18/18 marker bundle nuovi + typecheck.

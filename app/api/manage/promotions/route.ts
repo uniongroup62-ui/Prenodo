@@ -73,7 +73,11 @@ export async function POST(request: Request) {
       if (!canAny(session.user.perms, ["promotions.manage", "pos.manage"])) return jsonError("Permesso promozioni mancante.", 403);
       let cart: PromoCartLine[] = [];
       try { const parsed = JSON.parse(String(body.cart_json ?? "[]")); if (Array.isArray(parsed)) cart = parsed as PromoCartLine[]; } catch { cart = []; }
-      const result = await evaluatePromotionsForCart(tenantSlug, cart, String(body.date ?? ""), String(body.time ?? ""), parseInteger(body.client_id, 0), parseInteger(body.location_id, 0));
+      // auto_only=1 (POS auto-applicazione, pos.php preview_auto_promo 1545-1548):
+      // esclude le promo "su codice" (coupon_code) e, senza cliente, quelle con
+      // limite per-cliente (pos_promotion_requires_client).
+      const autoOnly = String(body.auto_only ?? "") === "1" || String(body.auto_only ?? "").toLowerCase() === "true";
+      const result = await evaluatePromotionsForCart(tenantSlug, cart, String(body.date ?? ""), String(body.time ?? ""), parseInteger(body.client_id, 0), parseInteger(body.location_id, 0), { autoOnly });
       return Response.json({ ok: true, sourceMode: "database", ...result });
     }
 

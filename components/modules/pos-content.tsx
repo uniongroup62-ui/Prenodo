@@ -50,10 +50,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 // start/expiry/note from the line) and a client_prepaid_services row (purchased_qty =
 // line qty) — issuance is gated on a real client (a bench sale cannot issue).
 //
-// LEFT STATIC / NON-WIRED (rendered faithfully for visual fidelity only): the remaining
-// advanced line types and their modals — Ricariche, GiftBox, GiftCard (ISSUE), and the
-// installment (rate) plan. These dialogs are reproduced verbatim but their buttons do not
-// mutate state yet.
+// WIRED (advanced line types): anche Ricariche, GiftBox (draft dal carrello), GiftCard
+// (riga carrello con emissione al Concludi) e la rateizzazione (scelta obbligatoria +
+// piano snapshot) sono completamente cablati — vedi le rispettive sezioni sotto.
 
 type CatalogService = {
   id: number;
@@ -222,6 +221,19 @@ type PosContext = {
   };
   // Riscatto punti abilitato (testo dinamico posRedeemInfo legacy).
   fidelityRedeemEnabled?: boolean;
+  // Blocco info Fidelity sotto Concludi (pos.php 6399-6411).
+  fidelityEarnInfo?: { euroPerPoint: number; earnStep: number; campaignActiveToday: boolean };
+};
+
+// Info promo per un tile del catalogo (mode=catalog_promos legacy): prezzo promo
+// unitario + percentuale per badge "-N%" e prezzo barrato. Display-only.
+type TilePromoInfo = {
+  promo_id: number;
+  promo_name: string;
+  unit_price: number;
+  promo_unit_price: number;
+  unit_discount: number;
+  percent: number;
 };
 
 // The client's spendable residui (wallet CREDIT + GiftCards) + the FIDELITY points balance
@@ -281,6 +293,10 @@ type CartLine = {
   recipientClientId?: number;
   recipientName?: string;
   recipientEmail?: string;
+  // Mittente al momento dell'aggiunta (legacy items[gc_client_id]): se il cliente
+  // selezionato cambia, Concludi si blocca ("La GiftCard è collegata a un mittente
+  // diverso. Rimuovila e ricreala per il mittente selezionato.").
+  senderClientId?: number;
   code?: string;
   eventType?: string;
   message?: string;
@@ -539,7 +555,19 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   const [promotionId, setPromotionId] = useState(0);
   const [promotionName, setPromotionName] = useState("");
   const [promotionDiscountRaw, setPromotionDiscountRaw] = useState(0);
+  // Cumulabilità della promo con la Fidelity + subtotale non scontato (pos.js
+  // window.posPricing.promo_allows_fidelity / promo_non_discounted_subtotal): quando
+  // la promo NON è cumulabile, i punti mordono solo sulla parte non-promo del carrello.
+  const [promotionAllowsFidelity, setPromotionAllowsFidelity] = useState(true);
+  const [promotionNonDiscounted, setPromotionNonDiscounted] = useState(0);
   const promotionReqRef = useRef(0);
+
+  // Mappa promo dei tile catalogo (mode=catalog_promos legacy): badge "Promo"/"-N%" +
+  // prezzo barrato sui tile; il click aggiunge comunque a prezzo pieno (lo sconto arriva
+  // dall'auto-promo sul carrello).
+  const [tilePromos, setTilePromos] = useState<{ service: Record<string, TilePromoInfo>; product: Record<string, TilePromoInfo> }>({ service: {}, product: {} });
+  const tilePromoKeyRef = useRef("");
+  const tilePromoReqRef = useRef(0);
 
   // Payment: ONE base method for the remainder after residui (faithful single
   // payment_type radio). Defaults to Contanti.
@@ -668,6 +696,10 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   const [rechargeBonusValueInput, setRechargeBonusValueInput] = useState("0");
   const [rechargeEarnPoints, setRechargeEarnPoints] = useState(true);
   const [rechargeNoteInput, setRechargeNoteInput] = useState("");
+  // Preview "Punti accreditati" della ricarica (mode=preview_recharge_points legacy).
+  const [rechargePointsPreview, setRechargePointsPreview] = useState<{ points: number; campaignName: string; error: string } | null>(null);
+  const [rechargePointsLoading, setRechargePointsLoading] = useState(false);
+  const rechargePointsReqRef = useRef(0);
 
   // Checkout state.
   const [submitting, setSubmitting] = useState(false);
@@ -695,6 +727,10 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   // a successful checkout. (Full cart-lock — disabling tiles/coupon/promo — is a later refinement.)
   const [quoteSaleId, setQuoteSaleId] = useState(0);
   const [quoteSaleCode, setQuoteSaleCode] = useState("");
+  // QUOTE LOCK legacy (pos.js posQuoteLockActive): con un preventivo collegato righe,
+  // catalogo, coupon/promozioni e sconti sono BLOCCATI (si può solo concludere la
+  // vendita coerente col preventivo).
+  const quoteLockActive = quoteSaleId > 0;
   const quotePreloadRef = useRef(false);
 
   const successTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -911,6 +947,47 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
       .map((p) => ({ id: p.id, name: p.name, price: parsePrice(p.price), stock: p.stock }));
   }, [catalogMode, catalogSearch, catalogCategory, services, products]);
 
+  // Promo dei tile catalogo (pos.js loadTilePromos, debounce 220ms, max 60 item): per i
+  // tile visibili chiede al server la mappa {service/product -> prezzo promo}; una chiave
+  // cid|mode|ids evita richieste duplicate; un req-id scarta le risposte stantie.
+  useEffect(() => {
+    // Quote lock legacy (loadTilePromos): promo tile azzerate e nessuna richiesta.
+    if (quoteLockActive) {
+      tilePromoKeyRef.current = "";
+      setTilePromos({ service: {}, product: {} });
+      return;
+    }
+    const items = tiles.slice(0, 60).map((tile) => ({ type: catalogMode, id: tile.id }));
+    const key = `${clientId ?? 0}|${catalogMode}|${items.map((it) => it.id).join(",")}`;
+    if (key === tilePromoKeyRef.current) return;
+    const myReq = ++tilePromoReqRef.current;
+    if (!items.length) {
+      tilePromoKeyRef.current = key;
+      setTilePromos({ service: {}, product: {} });
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/manage/pos?slug=${encodeURIComponent(slug)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+          body: JSON.stringify({ action: "catalog_promos", client_id: clientId ?? 0, items_json: JSON.stringify(items) }),
+        });
+        const data: { ok?: boolean; enabled?: number; map?: { service?: Record<string, TilePromoInfo>; product?: Record<string, TilePromoInfo> } } = await res.json().catch(() => ({}));
+        if (myReq !== tilePromoReqRef.current) return; // stale
+        tilePromoKeyRef.current = key;
+        if (res.ok && data?.ok && data.enabled && data.map) {
+          setTilePromos({ service: data.map.service ?? {}, product: data.map.product ?? {} });
+        } else {
+          setTilePromos({ service: {}, product: {} });
+        }
+      } catch {
+        if (myReq === tilePromoReqRef.current) setTilePromos({ service: {}, product: {} });
+      }
+    }, 220);
+    return () => clearTimeout(timer);
+  }, [tiles, catalogMode, clientId, slug, quoteLockActive]);
+
   // ---- cart math (mirrors pos.js + lib/manage-pos.ts) ----
   const subtotal = useMemo(
     () => roundMoney(cart.reduce((sum, line) => sum + line.unitPrice * line.quantity, 0)),
@@ -940,6 +1017,8 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
       setPromotionId(0);
       setPromotionName("");
       setPromotionDiscountRaw(0);
+      setPromotionAllowsFidelity(true);
+      setPromotionNonDiscounted(0);
     }
   }
 
@@ -976,11 +1055,18 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   }, [residuals]);
   const pointsBalance = useMemo(() => Math.max(0, Math.floor(residuals?.points ?? 0)), [residuals]);
   const minPoints = useMemo(() => Math.max(0, Math.floor(residuals?.fidelity.minPoints ?? 0)), [residuals]);
-  // The amount still payable after manual + promo + coupon — the cap the points discount fits into.
-  const baseForPoints = useMemo(
-    () => roundMoney(Math.max(0, subtotal - manualDiscount - promotionDiscount - codeDiscount)),
-    [subtotal, manualDiscount, promotionDiscount, codeDiscount],
-  );
+  // The amount still payable after manual + promo + coupon — the cap the points discount
+  // fits into. Con una promo NON cumulabile con la Fidelity (pos.js calcMaxPointsUse
+  // 1942-1947), i punti mordono SOLO sulla parte non-promo del carrello, al netto della
+  // quota proporzionale di sconto manuale.
+  const baseForPoints = useMemo(() => {
+    if (promotionId > 0 && promotionDiscount > 0 && !promotionAllowsFidelity) {
+      const nonDisc = Math.max(0, promotionNonDiscounted);
+      const manualPortion = subtotal > 0.00001 && manualDiscount > 0 ? manualDiscount * (nonDisc / subtotal) : 0;
+      return roundMoney(Math.max(0, nonDisc - manualPortion));
+    }
+    return roundMoney(Math.max(0, subtotal - manualDiscount - promotionDiscount - codeDiscount));
+  }, [subtotal, manualDiscount, promotionDiscount, codeDiscount, promotionId, promotionAllowsFidelity, promotionNonDiscounted]);
   // The most whole points the payable amount allows: floor(baseForPoints / euroPerPoint).
   const maxPointsByAmount = useMemo(
     () => (euroPerPoint > 0 ? Math.floor((baseForPoints + 1e-9) / euroPerPoint) : 0),
@@ -1220,8 +1306,13 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
       return false;
     });
     if (currentClientId <= 0 && requiresClient) return "Seleziona un cliente per concludere la vendita.";
-    if (cart.some((l) => l.type === "giftcard") && currentClientId <= 0) {
-      return "Seleziona un mittente per emettere una GiftCard.";
+    const giftcardLine = cart.find((l) => l.type === "giftcard");
+    if (giftcardLine) {
+      const senderId = giftcardLine.senderClientId ?? 0;
+      if (senderId <= 0 && currentClientId <= 0) return "Seleziona un mittente per emettere una GiftCard.";
+      if (currentClientId > 0 && senderId > 0 && senderId !== currentClientId) {
+        return "La GiftCard è collegata a un mittente diverso. Rimuovila e ricreala per il mittente selezionato.";
+      }
     }
     return installmentBlockReason;
   }, [cart, gbDraft, clientId, installmentBlockReason]);
@@ -1237,6 +1328,9 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   }, []);
 
   function selectClient(id: number, name: string) {
+    // Quote lock legacy (lockedQuoteClientId): il cliente del preventivo non si cambia —
+    // la selezione manuale è ignorata (il seed del preventivo passa da qui prima del lock).
+    if (quoteLockActive && clientId && clientId > 0 && id !== clientId) return;
     setClientId(id);
     setClientName(name);
   }
@@ -1254,7 +1348,8 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   function chooseInstallmentSingle() {
     setInstallmentPlan(null);
     setInstallmentChoice("single");
-    setInstallmentNotice("");
+    // Notice legacy (pos.js 3635: applyInstallmentChoice('single', ...)).
+    setInstallmentNotice("Pagamento in unica soluzione selezionato.");
   }
   function openInstallmentModal() {
     if (hasRechargeInCart) {
@@ -1349,7 +1444,25 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
     [clientId, residuals],
   );
 
+  // Guardie legacy addItem (pos.js 185-198): quote lock + GiftCard/ricariche esclusive.
+  function cartBlocksCatalogAdd(): boolean {
+    if (quoteLockActive) {
+      window.alert("Con un preventivo collegato non puoi aggiungere elementi al carrello.");
+      return true;
+    }
+    if (cart.some((l) => l.type === "giftcard")) {
+      window.alert("Non puoi aggiungere altri elementi: è presente una GiftCard in carrello. Rimuovila per continuare.");
+      return true;
+    }
+    if (cart.some((l) => l.type === "recharge")) {
+      window.alert("Non puoi aggiungere servizi o prodotti: è presente una ricarica in carrello. Le ricariche vanno vendute da sole.");
+      return true;
+    }
+    return false;
+  }
+
   function addTile(tile: { id: number; name: string; price: number }) {
+    if (cartBlocksCatalogAdd()) return;
     const type = catalogMode;
     setCart((prev) => {
       const existing = prev.find((l) => l.type === type && l.refId === tile.id);
@@ -1378,6 +1491,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   // status — issuance requires a client (gated server-side), but the line can be added
   // without one. Adding from a service tile via the "P" affordance.
   function addPrepaidTile(tile: { id: number; name: string; price: number }) {
+    if (cartBlocksCatalogAdd()) return;
     setCart((prev) => {
       const existing = prev.find((l) => l.type === "prepaid" && l.refId === tile.id);
       if (existing) {
@@ -1703,6 +1817,8 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
         quantity: 1,
         unitPrice: amount,
         status: "prepaid",
+        // Mittente legacy (items[gc_client_id]) per il blocco "mittente diverso".
+        senderClientId: clientId ?? 0,
         expiresAt: expiresAt || undefined,
         recipientClientId: recipientClientId > 0 ? recipientClientId : undefined,
         recipientName: recipientName || undefined,
@@ -1885,6 +2001,39 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
     () => (rechargeEarnPoints ? rechargeTotal : rechargeBase),
     [rechargeEarnPoints, rechargeTotal, rechargeBase],
   );
+  // Preview punti "Punti accreditati" (rcFetchPointsPreview legacy): campagna-aware,
+  // debounced; un req-id scarta le risposte stantie. 0 senza cliente/importo.
+  useEffect(() => {
+    const myReq = ++rechargePointsReqRef.current;
+    if (!clientId || clientId <= 0 || rechargeEarnBase <= 0.00001) {
+      setRechargePointsPreview(null);
+      setRechargePointsLoading(false);
+      return;
+    }
+    setRechargePointsLoading(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/manage/pos?slug=${encodeURIComponent(slug)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+          body: JSON.stringify({ action: "recharge_points_preview", client_id: clientId, amount: rechargeEarnBase }),
+        });
+        const j: { ok?: boolean; points?: number; campaignName?: string; error?: string } = await res.json().catch(() => ({}));
+        if (myReq !== rechargePointsReqRef.current) return; // stale
+        setRechargePointsPreview({
+          points: Math.max(0, Number(j?.points ?? 0) || 0),
+          campaignName: String(j?.campaignName ?? ""),
+          error: String(j?.error ?? ""),
+        });
+        setRechargePointsLoading(false);
+      } catch {
+        if (myReq !== rechargePointsReqRef.current) return;
+        setRechargePointsPreview({ points: 0, campaignName: "", error: "Preview punti non disponibile: il calcolo verra eseguito alla chiusura vendita." });
+        setRechargePointsLoading(false);
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [clientId, rechargeEarnBase, slug]);
 
   // Picking a template precompiles the base/bonus/earn-points (all still editable). The empty
   // option (id 0) is a custom amount — leaves the fields as typed.
@@ -2033,6 +2182,8 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
     setPromotionId(0);
     setPromotionName("");
     setPromotionDiscountRaw(0);
+    setPromotionAllowsFidelity(true);
+    setPromotionNonDiscounted(0);
   }, []);
 
   // Auto-promozioni legacy (pos.js fetchPreview -> preview_auto_promo, debounce 250ms,
@@ -2041,7 +2192,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   // appare nel dettaglio prezzi. promotion_id is sent on checkout, where the backend
   // re-evaluates + records the redemption. Un req-id scarta le risposte stantie.
   useEffect(() => {
-    if (hasRechargeInCart || subtotal <= 0 || couponCode) {
+    if (quoteLockActive || hasRechargeInCart || subtotal <= 0 || couponCode) {
       clearPromotion();
       return;
     }
@@ -2061,19 +2212,24 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
           headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
           body: JSON.stringify({
             action: "evaluate",
+            // Solo promo AUTO-applicabili (mai quelle "su codice"; senza cliente
+            // saltano quelle con limite per-cliente) — pos.php preview_auto_promo.
+            auto_only: 1,
             cart_json: JSON.stringify(promoCart),
             date: now.toISOString().slice(0, 10),
             time: `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`,
             client_id: clientId ?? 0,
           }),
         });
-        const data: { ok?: boolean; best?: { promotionId: number; title: string; discount: number } | null } = await res.json().catch(() => ({}));
+        const data: { ok?: boolean; best?: { promotionId: number; title: string; discount: number; stackableWithFidelity?: boolean; nonDiscountedSubtotal?: number } | null } = await res.json().catch(() => ({}));
         if (myReq !== promotionReqRef.current) return; // stale
         const best = data?.best;
         if (res.ok && data?.ok && best && best.discount > 0) {
           setPromotionId(best.promotionId);
           setPromotionName(best.title);
           setPromotionDiscountRaw(roundMoney(best.discount));
+          setPromotionAllowsFidelity(best.stackableWithFidelity !== false);
+          setPromotionNonDiscounted(roundMoney(Math.max(0, Number(best.nonDiscountedSubtotal ?? 0))));
         } else {
           clearPromotion();
         }
@@ -2082,7 +2238,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
       }
     }, 250);
     return () => clearTimeout(timer);
-  }, [cart, subtotal, clientId, couponCode, hasRechargeInCart, slug, clearPromotion]);
+  }, [cart, subtotal, clientId, couponCode, hasRechargeInCart, quoteLockActive, slug, clearPromotion]);
 
   // Lock ricarica (pos.js syncRechargeExclusivePricingState): con una ricarica in
   // carrello coupon, buoni, promozioni, sconti e punti vengono AZZERATI e i controlli
@@ -2296,6 +2452,9 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
       // 'done' (checkoutManageSale sets appointments.status='done' when appointment_id>0) and
       // stamps "Appuntamento #<id>" on the sale notes. 0 for a normal POS sale.
       appointment_id: appointmentSaleId > 0 ? appointmentSaleId : 0,
+      // Scelta unico/rateizzato legacy (installment_choice_mode): il server la
+      // pretende quando il totale netto è > 0 (pos.php 4631).
+      installment_choice: installmentChoice,
       // "Vendita da preventivo": link the sale to the source quote so the backend sets
       // sales.source_quote_id + flips the quote to 'converted'. 0 for a normal POS sale.
       source_quote_id: quoteSaleId > 0 ? quoteSaleId : 0,
@@ -2451,11 +2610,22 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
           was pre-loaded from that quote. The checkout sends source_quote_id, so concluding the sale
           links it (sales.source_quote_id) + flips the quote to 'converted'. */}
       {quoteSaleId > 0 ? (
+        // Banner legacy (pos.php 5996-6002): preventivo + cliente bloccati in Pagamenti,
+        // con link "Torna al preventivo".
         <div className="alert alert-info d-flex align-items-center gap-2" id="posQuoteBanner">
           <i className="bi bi-file-earmark-text"></i>
-          <span>
-            Vendita da preventivo <strong>{quoteSaleCode}</strong> — concludendo la vendita il preventivo verrà segnato come convertito.
-          </span>
+          <div className="flex-grow-1">
+            <div>
+              Preventivo <strong>#{quoteSaleCode || quoteSaleId}</strong> • Cliente: <strong>{clientName || "—"}</strong> caricato in Pagamenti.
+            </div>
+            <div className="small">
+              Il cliente resta associato al preventivo durante il pagamento. Per mantenere coerenza con il preventivo,
+              righe, catalogo e sconti sono bloccati in Pagamenti.
+            </div>
+          </div>
+          <a className="btn btn-sm btn-outline-primary" href={`/${slug}/quote_detail?id=${quoteSaleId}`}>
+            Torna al preventivo
+          </a>
         </div>
       ) : null}
 
@@ -2543,9 +2713,10 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                     <div className="fw-semibold" id="posClientLabel">
                       {clientName || "—"}
                     </div>
+                    {/* Quote lock legacy: cliente bloccato (clear nascosto, pos.js 3880). */}
                     <button
                       type="button"
-                      className={`btn btn-sm btn-link text-muted p-0${clientId ? "" : " d-none"}`}
+                      className={`btn btn-sm btn-link text-muted p-0${clientId && !quoteLockActive ? "" : " d-none"}`}
                       id="posClientClearBtn"
                       title="Rimuovi cliente selezionato"
                       onClick={clearClient}
@@ -2692,15 +2863,22 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                             step={1}
                             value={line.quantity}
                             disabled={isPackage || isGiftcard || isGiftbox || isRecharge}
-                            onChange={(e) => setQty(line.key, Number.parseInt(e.target.value, 10))}
+                            readOnly={quoteLockActive}
+                            onChange={(e) => {
+                              if (quoteLockActive) return;
+                              setQty(line.key, Number.parseInt(e.target.value, 10));
+                            }}
                           />
                         </td>
                         <td className="text-end small">{fmtEUR(line.unitPrice)}</td>
                         <td className="text-end small line-total">{fmtEUR(line.unitPrice * line.quantity)}</td>
                         <td className="text-end">
+                          {/* Quote lock legacy: riga non rimovibile (title verbatim). */}
                           <button
                             type="button"
                             className="btn btn-sm btn-outline-danger"
+                            disabled={quoteLockActive}
+                            title={quoteLockActive ? "Riga bloccata dal preventivo collegato" : undefined}
                             onClick={() => removeLine(line.key)}
                           >
                             ✕
@@ -2817,11 +2995,25 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                           ) : null}
                         </div>
                         <div className="text-end">
-                          <div className="pos-tile-price-row">
-                            <span className="pos-tile-price-old d-none">{fmtEUR(tile.price)}</span>
-                            <span className="pos-tile-price">{fmtEUR(tile.price)}</span>
-                            <span className="badge bg-success pos-tile-promo-badge d-none">Promo</span>
-                          </div>
+                          {/* Promo tile legacy (pos.js tileSetPromo): prezzo pieno barrato +
+                              prezzo promo + badge "-N%" (o "Promo") col nome promo nel title.
+                              Il click aggiunge comunque a prezzo pieno. */}
+                          {(() => {
+                            const info = tilePromos[catalogMode][String(tile.id)];
+                            const hasPromo = !!info && info.promo_unit_price + 1e-9 < tile.price;
+                            return (
+                              <div className="pos-tile-price-row">
+                                <span className={`pos-tile-price-old${hasPromo ? "" : " d-none"}`}>{fmtEUR(tile.price)}</span>
+                                <span className="pos-tile-price">{fmtEUR(hasPromo ? info.promo_unit_price : tile.price)}</span>
+                                <span
+                                  className={`badge bg-success pos-tile-promo-badge${hasPromo ? "" : " d-none"}`}
+                                  title={hasPromo && info.promo_name ? info.promo_name : undefined}
+                                >
+                                  {hasPromo && info.percent >= 1 ? `-${Math.round(info.percent)}%` : "Promo"}
+                                </span>
+                              </div>
+                            );
+                          })()}
                         </div>
                       </div>
                     </div>
@@ -2829,19 +3021,28 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                 )}
               </div>
 
+              {/* Alert legacy quote lock (pos.php 6168-6170). */}
+              {quoteLockActive ? (
+                <div className="alert alert-secondary small mt-3 mb-0" id="posCatalogLockedAlert">
+                  Catalogo bloccato: con un preventivo collegato non puoi aggiungere servizi, prodotti, pacchetti,
+                  ricariche, GiftBox o GiftCard.
+                </div>
+              ) : null}
+
               <div className="pos-bottom-bar mt-3">
                 {/* Pre-check legacy al click (pos.js btnPackages/btnRecharge/btnGiftbox/
-                    btnGiftcard): gli alert verbatim bloccano l'apertura del modale. */}
-                <button type="button" className="btn btn-light pos-bottom-btn" id="posBtnPackages" onClick={openPackagesModal}>
+                    btnGiftcard): gli alert verbatim bloccano l'apertura del modale;
+                    disabilitati col quote lock (pos.php 6175-6188). */}
+                <button type="button" className="btn btn-light pos-bottom-btn" id="posBtnPackages" disabled={quoteLockActive} onClick={openPackagesModal}>
                   <i className="bi bi-box-seam me-1"></i>Pacchetti
                 </button>
-                <button type="button" className="btn btn-light pos-bottom-btn" id="posBtnRecharge" onClick={openRechargeModal}>
+                <button type="button" className="btn btn-light pos-bottom-btn" id="posBtnRecharge" disabled={quoteLockActive} onClick={openRechargeModal}>
                   <i className="bi bi-arrow-repeat me-1"></i>Ricariche
                 </button>
-                <button type="button" className="btn btn-light pos-bottom-btn" id="posBtnGiftbox" onClick={openGiftboxModal}>
+                <button type="button" className="btn btn-light pos-bottom-btn" id="posBtnGiftbox" disabled={quoteLockActive} onClick={openGiftboxModal}>
                   <i className="bi bi-gift me-1"></i>GiftBox
                 </button>
-                <button type="button" className="btn btn-light pos-bottom-btn" id="posBtnGiftcard" onClick={openGiftcardModal}>
+                <button type="button" className="btn btn-light pos-bottom-btn" id="posBtnGiftcard" disabled={quoteLockActive} onClick={openGiftcardModal}>
                   <i className="bi bi-credit-card-2-front me-1"></i>GiftCard
                 </button>
               </div>
@@ -2917,9 +3118,9 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                 </div>
                 <a
                   href="#"
-                  className={`text-success small text-decoration-underline${hasRechargeInCart ? " text-muted" : ""}`}
+                  className={`text-success small text-decoration-underline${hasRechargeInCart || quoteLockActive ? " text-muted" : ""}`}
                   id="couponToggle"
-                  aria-disabled={hasRechargeInCart ? "true" : "false"}
+                  aria-disabled={hasRechargeInCart || quoteLockActive ? "true" : "false"}
                   onClick={(e) => {
                     e.preventDefault();
                     setCouponOpen((v) => !v);
@@ -2936,7 +3137,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                       id="coupon_code"
                       placeholder="ES. WELCOME10"
                       value={couponInput}
-                      disabled={hasRechargeInCart}
+                      disabled={hasRechargeInCart || quoteLockActive}
                       readOnly={!!couponCode}
                       onChange={(e) => setCouponInput(e.target.value)}
                       onKeyDown={(e) => {
@@ -2950,7 +3151,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                       className="btn btn-outline-success"
                       type="button"
                       id="couponApplyBtn"
-                      disabled={couponApplying || hasRechargeInCart}
+                      disabled={couponApplying || hasRechargeInCart || quoteLockActive}
                       onClick={() => void applyCoupon()}
                     >
                       Applica
@@ -2959,7 +3160,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                       className="btn btn-outline-secondary"
                       type="button"
                       id="couponRemoveBtn"
-                      disabled={couponApplying || hasRechargeInCart}
+                      disabled={couponApplying || hasRechargeInCart || quoteLockActive}
                       onClick={removeCoupon}
                     >
                       Rimuovi
@@ -2969,12 +3170,14 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                       (neutro); altrimenti gli esiti del preview. Le promozioni AUTO sono
                       silenziose (nessun box "Rileva promozione" nel legacy). */}
                   <div
-                    className={`form-text${!hasRechargeInCart && couponMsg ? (couponMsg.ok ? " text-success" : " text-danger") : ""}`}
+                    className={`form-text${!hasRechargeInCart && !quoteLockActive && couponMsg ? (couponMsg.ok ? " text-success" : " text-danger") : ""}`}
                     id="couponHelp"
                   >
-                    {hasRechargeInCart
-                      ? "Con una ricarica in carrello coupon, buoni, promozioni, sconti e punti non sono applicabili."
-                      : couponMsg?.text ?? ""}
+                    {quoteLockActive
+                      ? "Con un preventivo collegato coupon e promozioni non sono applicabili."
+                      : hasRechargeInCart
+                        ? "Con una ricarica in carrello coupon, buoni, promozioni, sconti e punti non sono applicabili."
+                        : couponMsg?.text ?? ""}
                   </div>
                 </div>
               </div>
@@ -2987,7 +3190,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                     name="discount_type"
                     id="discount_type"
                     value={discountType}
-                    disabled={hasRechargeInCart}
+                    disabled={hasRechargeInCart || quoteLockActive}
                     onChange={(e) => setDiscountType(e.target.value as "none" | "percent" | "fixed")}
                   >
                     <option value="none">Nessuno</option>
@@ -3005,7 +3208,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                     name="discount_value"
                     id="discount_value"
                     value={discountValue}
-                    disabled={hasRechargeInCart}
+                    disabled={hasRechargeInCart || quoteLockActive}
                     onChange={(e) => setDiscountValue(e.target.value)}
                   />
                 </div>
@@ -3297,7 +3500,8 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                   className={`d-flex justify-content-between text-muted small${fidelityDiscount > 0 ? "" : " d-none"}`}
                   id="posFidelityRow"
                 >
-                  <span id="posFidelityLabel">Sconto Punti{pointsUsed > 0 ? ` (${pointsUsed} pt)` : ""}</span>
+                  {/* Etichetta legacy (pos.js 3497): "Sconto Fidelity (N Punti)". */}
+                  <span id="posFidelityLabel">{fidelityDiscount > 0 ? `Sconto Fidelity (${pointsUsed} Punti)` : "Sconto Punti"}</span>
                   <span id="posFidelityVal">- {fmtEUR(fidelityDiscount)}</span>
                 </div>
 
@@ -3349,12 +3553,24 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                 {errorMsg || concludeBlockReason}
               </div>
               {successMsg ? <div className="small text-success mt-2">{successMsg}</div> : null}
+
+              {/* Blocco info Fidelity legacy (pos.php 6399-6411), visibile col riscatto
+                  punti attivo: stato campagna punti + valore punto. */}
+              {ctx?.fidelityRedeemEnabled ? (
+                <div className="small text-muted mt-3">
+                  Fidelity attivo:{" "}
+                  {ctx.fidelityEarnInfo?.campaignActiveToday
+                    ? "accredito secondo la campagna punti valida al momento della vendita •"
+                    : "nessuna campagna punti attiva oggi •"}{" "}
+                  1 punto = € {(ctx.fidelityEarnInfo?.euroPerPoint ?? 0.1).toFixed(2).replace(".", ",")}
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
       </form>
 
-      {/* ===================== MODALI (resi fedelmente; avanzati non collegati) ===================== */}
+      {/* ===================== MODALI (tutti wired: Residui, Rate, Ricariche, Pacchetti, GiftBox, GiftCard) ===================== */}
 
       {/* MODAL: RESIDUI */}
       <div className="modal fade" id="posResidualsModal" tabIndex={-1} aria-hidden="true">
@@ -3716,6 +3932,12 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
               <div className="form-text">
                 Seleziona un modello <strong>(opzionale)</strong>: precompila importo e bonus (puoi modificare i valori).
               </div>
+              {rechargeTemplates.length === 0 ? (
+                <div className="alert alert-light border small mt-2 mb-0">
+                  Nessun modello di ricarica disponibile. Puoi comunque inserire importo e bonus manualmente, oppure crearne
+                  uno nella pagina Ricariche.
+                </div>
+              ) : null}
 
               <div className="row g-2 mt-2">
                 <div className="col-6">
@@ -3800,10 +4022,16 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                   <span>Totale credito caricato</span>
                   <span id="posRechargePrevTotal">{fmtEUR(rechargeTotal)}</span>
                 </div>
+                {/* Riga legacy "Punti accreditati" (pos.php 6654 + rcFetchPointsPreview):
+                    preview campagna-aware via action=recharge_points_preview; '...' in
+                    caricamento; il nome campagna (o l'errore) nel title. */}
                 <div className="d-flex justify-content-between small text-muted">
-                  <span>Calcolo punti su</span>
-                  <span id="posRechargePrevPoints">
-                    {rechargeEarnPoints ? `Importo + bonus (${fmtEUR(rechargeEarnBase)})` : `Solo importo (${fmtEUR(rechargeEarnBase)})`}
+                  <span>Punti accreditati</span>
+                  <span
+                    id="posRechargePrevPoints"
+                    title={rechargePointsPreview?.campaignName ? `Campagna: ${rechargePointsPreview.campaignName}` : rechargePointsPreview?.error || undefined}
+                  >
+                    {rechargePointsLoading ? "..." : `${(rechargePointsPreview?.points ?? 0).toFixed(2).replace(".", ",")}`}
                   </span>
                 </div>
               </div>

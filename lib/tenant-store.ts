@@ -246,6 +246,9 @@ export type PosCheckoutInput = {
   // sale_installments rows scheduling the financed remainder (total - downPayment). The sale
   // total + payments are unchanged: the plan only documents/schedules the financing.
   installmentPlan?: PosInstallmentPlanInput;
+  // SCELTA unico/rateizzato (legacy installment_choice_mode): obbligatoria lato server
+  // quando il totale netto residui è > 0 (pos.php 4631).
+  installmentChoice?: "single" | "installment" | "";
   // IN-POS QUOTE IMPORT (faithful to pos.php ?quote_id=N): when set, the cart was pre-loaded
   // (locked) from this quote — the checkout links the sale to it (sales.source_quote_id) and
   // flips the quote to 'converted' (+ converted_sale_id). 0 / undefined = a normal sale.

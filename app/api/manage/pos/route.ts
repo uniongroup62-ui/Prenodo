@@ -2,8 +2,9 @@ import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/ap
 import { currentManageSession } from "@/lib/manage-auth";
 import { resolveManageLocationId } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
-import { cancelManageSale, checkoutManageSale, deleteCancelledSale, getManagePosAppointmentCart, getManagePosContext, getManagePosQuoteCart, getManagePosResiduals, getManageSaleDetail, markManageSaleItemCollected, markPrepaidManualExecution, undoManageSaleItemCollected, undoPrepaidManualExecution } from "@/lib/manage-pos";
+import { cancelManageSale, checkoutManageSale, deleteCancelledSale, getManagePosAppointmentCart, getManagePosContext, getManagePosQuoteCart, getManagePosResiduals, getManageRechargePointsPreview, getManageSaleDetail, markManageSaleItemCollected, markPrepaidManualExecution, undoManageSaleItemCollected, undoPrepaidManualExecution } from "@/lib/manage-pos";
 import type { PointsStornoMode } from "@/lib/manage-pos";
+import { evaluateCatalogTilePromos } from "@/lib/db-repositories";
 import { can, canAny } from "@/lib/role-permissions";
 import type {
   PosCheckoutInput,
@@ -102,6 +103,32 @@ export async function POST(request: Request) {
   const action = String(body.action ?? url.searchParams.get("action") ?? "checkout");
 
   try {
+    // Prezzi promo per i tile del catalogo (port di pos.php mode=catalog_promos):
+    // ogni servizio/prodotto visibile valutato da solo contro le promo automatiche.
+    if (action === "catalog_promos") {
+      if (!canAny(session.user.perms, ["pos.manage", "pos.movements"])) return jsonError("Permesso POS mancante.", 403);
+      let items: Array<{ type: "service" | "product"; id: number }> = [];
+      try {
+        const parsed = JSON.parse(String(body.items_json ?? body.items ?? "[]")) as Array<Record<string, unknown>>;
+        if (Array.isArray(parsed)) {
+          items = parsed
+            .map((it) => ({ type: String(it?.type ?? "").toLowerCase() as "service" | "product", id: parseInteger(it?.id, 0) }))
+            .filter((it) => (it.type === "service" || it.type === "product") && it.id > 0);
+        }
+      } catch {
+        items = [];
+      }
+      const locationId = await resolveManageLocationId({ slug: tenantSlug, raw: body.location_id === undefined ? null : body.location_id, fallbackCurrent: true });
+      const result = await evaluateCatalogTilePromos(tenantSlug, items, parseInteger(body.client_id, 0), locationId);
+      return Response.json({ ok: true, ...result });
+    }
+
+    // Preview punti su ricarica (port di pos.php mode=preview_recharge_points).
+    if (action === "recharge_points_preview") {
+      if (!canAny(session.user.perms, ["pos.manage", "pos.movements"])) return jsonError("Permesso POS mancante.", 403);
+      return Response.json(await getManageRechargePointsPreview(tenantSlug, parseInteger(body.client_id, 0), parseNumber(body.amount, 0)));
+    }
+
     if (action === "checkout") {
       if (!can(session.user.perms, "pos.manage")) return jsonError("Permesso cassa mancante.", 403);
       const input = await checkoutInputFromBody(body, tenantSlug);
@@ -253,6 +280,12 @@ async function checkoutInputFromBody(body: Record<string, string>, tenantSlug: s
     // RATEIZZAZIONE: the optional installment plan params (faithful to the legacy
     // installment_plan_json POST field). Present only when the staff chose "Rateizzato".
     installmentPlan: installmentPlanFromBody(body),
+    // Scelta unico/rateizzato legacy (installment_choice_mode): obbligatoria server-side
+    // quando il totale netto residui è > 0 (pos.php 4631).
+    installmentChoice: ((): "single" | "installment" | "" => {
+      const v = String(body.installment_choice ?? body.installment_choice_mode ?? "").trim().toLowerCase();
+      return v === "single" || v === "installment" ? v : "";
+    })(),
     // IN-POS quote import: the source quote id when the cart was pre-loaded (locked) from a quote.
     sourceQuoteId: parseInteger(body.source_quote_id ?? body.quote_id, 0),
     items: saleItemsFromBody(body),
