@@ -61,7 +61,7 @@ import {
   type PointLotScheduleRow,
 } from "@/lib/fidelity-lots";
 import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
-import { giftRecalcClient, giftRollbackAppointmentSelection } from "@/lib/gifts-engine";
+import { giftPersistGlobalResetMarker, giftRecalcClient, giftRollbackAppointmentSelection } from "@/lib/gifts-engine";
 import { assertAppointmentSlotAvailable, busyCabinRangesForDate, busyRangesForDate, staffTimeoffReasonForRange, type AppointmentSlotSegment, type CabinBusyRange } from "@/lib/public-booking-db";
 
 export async function listDbLocations(slug: string): Promise<Location[]> {
@@ -10527,11 +10527,21 @@ export async function setFidelityEnabled(
       }
       const giftsTable = await tenantTable(slug, "gifts").catch(() => null);
       if (giftsTable && (await columnExists(giftsTable.name, "auto_disabled_by_fidelity"))) {
+        // Id PRIMA dell'update, per i marker di fine sospensione.
+        const toRestore = await dbQuery<RowDataPacket[]>(
+          `SELECT id FROM ${quoteIdentifier(giftsTable.name)} WHERE tenant_id = ? AND COALESCE(auto_disabled_by_fidelity,0) = 1${(await columnExists(giftsTable.name, "deleted_at")) ? " AND deleted_at IS NULL" : ""}`,
+          [giftsTable.tenantId ?? 0],
+        ).catch(() => [] as RowDataPacket[]);
         const res = await dbExecute(
           `UPDATE ${quoteIdentifier(giftsTable.name)} SET active = 1, auto_disabled_by_fidelity = 0 WHERE tenant_id = ? AND COALESCE(auto_disabled_by_fidelity,0) = 1${(await columnExists(giftsTable.name, "deleted_at")) ? " AND deleted_at IS NULL" : ""}`,
           [giftsTable.tenantId ?? 0],
         ).catch(() => ({ affectedRows: 0 }));
         restoredGifts = Number(res.affectedRows ?? 0) || 0;
+        // Marker fine sospensione (setGiftActive ramo Fidelity ~3835-3846): chiude
+        // l'intervallo aperto cosi' gli eventi successivi tornano a contare.
+        for (const g of toRestore) {
+          await giftPersistGlobalResetMarker(slug, Number(g.id ?? 0), "fidelity_disabled_end", "Campagna riattivata dalla Fidelity").catch(() => undefined);
+        }
       }
     }
     let message = "Fidelity attivata";
@@ -12720,6 +12730,8 @@ export async function giftFormCatalog(slug: string): Promise<{
   services: GiftFormCatalogItem[];
   products: GiftFormCatalogItem[];
   locations: GiftFormCatalogItem[];
+  levels: Array<{ key: string; label: string }>;
+  clients: GiftFormCatalogItem[];
 }> {
   const serviceRows = await tenantSelect<RowDataPacket>({
     slug,
@@ -12742,6 +12754,17 @@ export async function giftFormCatalog(slug: string): Promise<{
     orderBy: "sort_order ASC, name ASC, id ASC",
   }).catch(() => [] as RowDataPacket[]);
 
+  // Livelli Punti configurati (editor avanzato: checkbox eligible_levels_points)
+  // + clienti per il picker "Escludi clienti".
+  const levelsCfg = await getFidelityLevelsSettings(slug).catch(() => ({ enabled: false, pointsEnabled: false, levels: [] as Array<{ key: string; label?: string; name?: string }> }));
+  const clientRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "clients",
+    columns: "id, full_name",
+    orderBy: "full_name ASC, id ASC",
+    limit: 2000,
+  }).catch(() => [] as RowDataPacket[]);
+
   return {
     services: serviceRows.map((row) => ({ id: Number(row.id ?? 0), name: String(row.name ?? "") })),
     products: productRows.map((row) => {
@@ -12750,6 +12773,11 @@ export async function giftFormCatalog(slug: string): Promise<{
       return { id: Number(row.id ?? 0), name: sku ? `${name} (${sku})` : name };
     }),
     locations: locationRows.map((row) => ({ id: Number(row.id ?? 0), name: String(row.name ?? "") })),
+    levels: (levelsCfg.levels ?? []).map((l) => ({
+      key: String(l.key ?? "").trim().toLowerCase(),
+      label: String((l as { label?: string; name?: string }).label ?? (l as { name?: string }).name ?? l.key ?? ""),
+    })).filter((l) => l.key !== ""),
+    clients: clientRows.map((row) => ({ id: Number(row.id ?? 0), name: String(row.full_name ?? "") || `#${Number(row.id ?? 0)}` })),
   };
 }
 
@@ -12783,6 +12811,8 @@ export type ManageGiftRecord = {
   locationIds: number[];
   rewardItems: GiftCampaignRewardItem[];
   rule: GiftRuleRecord;
+  eligibleLevelsPoints: string[];
+  excludedClientIds: number[];
 };
 
 function normalizeGiftRewardType(value: unknown): GiftCampaignRewardItem["type"] {
@@ -12878,6 +12908,18 @@ export async function getManageGift(slug: string, id: number): Promise<ManageGif
     }
   }
 
+  // Livelli idonei + clienti esclusi (JSON, editor avanzato Blocco 4).
+  let eligibleLevelsPoints: string[] = [];
+  try {
+    const p = JSON.parse(String(g.eligible_levels_points ?? "[]"));
+    if (Array.isArray(p)) eligibleLevelsPoints = p.map((x) => String(x ?? "").trim().toLowerCase()).filter(Boolean);
+  } catch { eligibleLevelsPoints = []; }
+  let excludedClientIds: number[] = [];
+  try {
+    const p = JSON.parse(String(g.excluded_client_ids ?? "[]"));
+    if (Array.isArray(p)) excludedClientIds = p.map((x) => Number(x) || 0).filter((n) => n > 0);
+  } catch { excludedClientIds = []; }
+
   return {
     id,
     name: String(g.name ?? ""),
@@ -12892,6 +12934,8 @@ export async function getManageGift(slug: string, id: number): Promise<ManageGif
     locationIds,
     rewardItems,
     rule,
+    eligibleLevelsPoints,
+    excludedClientIds,
   };
 }
 
@@ -12901,20 +12945,51 @@ export async function getManageGift(slug: string, id: number): Promise<ManageGif
 // posted as a JSON string (reward_items_json) because parseRequestBody flattens
 // arrays. The advanced Fidelity targeting (eligible_levels_points) and the
 // excluded-clients list are NOT written here — see the form TODO.
-export async function saveManageGift(slug: string, body: Record<string, string>, id: number): Promise<ManageGiftRecord> {
-  const name = String(body.name ?? "").trim();
-  if (name === "") throw new Error("Nome campagna obbligatorio.");
+export async function saveManageGift(slug: string, body: Record<string, string>, id: number): Promise<ManageGiftRecord & { message?: string }> {
+  const name = String(body.name ?? "").trim().slice(0, 120);
+  if (name === "") throw new Error("Nome obbligatorio");
 
   const fidelityOnly = String(body.fidelity_only ?? "") === "1";
   const active = String(body.active ?? "") === "1";
   const termsEnabled = String(body.terms_enabled ?? "") === "1";
   const termsText = String(body.terms_text ?? "");
 
+  // CLONE (gifts.php action=clone / saveGift ~2846-2855): clone_source_id forza
+  // un nuovo INSERT; la sorgente viene ritirata dopo il salvataggio.
+  const cloneSourceId = Math.max(0, Number.parseInt(String(body.clone_source_id ?? "0"), 10) || 0);
+  if (cloneSourceId > 0) {
+    const src = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "id", where: "id = ? AND deleted_at IS NULL", params: [cloneSourceId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    if (!src[0]) throw new Error("Campagna omaggio sorgente non trovata");
+    id = 0;
+  }
+
   const from = normalizeClientDate(body.valid_from);
   const to = normalizeClientDate(body.valid_to);
-  if (!from) throw new Error('Inserisci una data "Valido dal" valida.');
-  if (!to) throw new Error('Inserisci una data "Valido al" valida.');
-  if (from > to) throw new Error('La data "Valido al" deve essere successiva a "Valido dal".');
+  if (!from || !to) throw new Error("Validità dal e Validità al sono obbligatori.");
+  if (from >= to) throw new Error("Validità al deve essere almeno il giorno successivo a Validità dal.");
+  // Anti-retroattività (solo creazione, saveGift ~3018): una nuova campagna non
+  // può partire nel passato (la finestra eventi non deve pescare lo storico).
+  if (id <= 0 && from < todayIso()) throw new Error("Validità dal non può essere nel passato per una nuova campagna.");
+
+  // LIVELLI PUNTI idonei (saveGift ~2900-2920): whitelist dai livelli configurati,
+  // forzati a [] con eligibility all_clients, OBBLIGATORI con fidelity_only.
+  const levelsCfg = await getFidelityLevelsSettings(slug).catch(() => ({ enabled: false, pointsEnabled: false, levels: [] as Array<{ key: string }> }));
+  const levelWhitelist = new Set(levelsCfg.levels.map((l) => String(l.key ?? "").trim().toLowerCase()).filter(Boolean));
+  let eligibleLevels: string[] = [];
+  if (fidelityOnly) {
+    try {
+      const p = JSON.parse(String(body.eligible_levels_points_json ?? body.eligible_levels_points ?? "[]"));
+      if (Array.isArray(p)) eligibleLevels = [...new Set(p.map((x) => String(x ?? "").trim().toLowerCase()).filter((k) => levelWhitelist.has(k)))];
+    } catch { eligibleLevels = []; }
+    if (eligibleLevels.length === 0 && levelWhitelist.size > 0) throw new Error("Seleziona almeno un livello Punti.");
+  }
+
+  // CLIENTI ESCLUSI (saveGift ~2922-2926): JSON array di id > 0.
+  let excludedClientIds: number[] = [];
+  try {
+    const p = JSON.parse(String(body.excluded_client_ids_json ?? body.excluded_client_ids ?? "[]"));
+    if (Array.isArray(p)) excludedClientIds = [...new Set(p.map((x) => Number(x) || 0).filter((n) => n > 0))];
+  } catch { excludedClientIds = []; }
 
   const expiresAfterRaw = String(body.expires_after_days ?? "").trim();
   const expiresAfterDays = expiresAfterRaw === "" ? null : Math.max(0, parseInt(expiresAfterRaw, 10) || 0);
@@ -12953,12 +13028,18 @@ export async function saveManageGift(slug: string, body: Record<string, string>,
     name,
     description: String(body.description ?? "").trim() || null,
     eligibility: fidelityOnly ? "fidelity_only" : "all_clients",
+    eligible_levels_points: fidelityOnly && eligibleLevels.length ? JSON.stringify(eligibleLevels) : null,
+    excluded_client_ids: excludedClientIds.length ? JSON.stringify(excludedClientIds) : null,
     reward_type: String(firstReward.type ?? "custom"),
     reward_service_id: Number(firstReward.service_id ?? 0) || null,
     reward_product_id: Number(firstReward.product_id ?? 0) || null,
     reward_custom_label: String(firstReward.custom_label ?? "") || null,
     reward_custom_details: String(firstReward.custom_details ?? "") || null,
     reward_items_json: JSON.stringify(rewardItems),
+    // La logica "Ripetibile" è stata RIMOSSA dal legacy (saveGift ~2976-2978):
+    // ogni campagna è guadagnabile una sola volta.
+    repeatable: 0,
+    max_redemptions_per_client: 1,
     active: active ? 1 : 0,
     valid_from: from,
     valid_to: to,
@@ -12967,12 +13048,41 @@ export async function saveManageGift(slug: string, body: Record<string, string>,
     terms_text: termsText,
   };
 
+  // CONFLITTO CAMPAGNE (findConflictingActiveCampaign ~3052-3060): con active=1
+  // e una regola su servizio/prodotto, un'altra campagna ATTIVA con lo stesso
+  // target e periodo sovrapposto blocca il salvataggio.
+  const conflictRuleServiceId = Number.parseInt(String(body.rule_service_id ?? "0"), 10) || 0;
+  const conflictRuleProductId = Number.parseInt(String(body.rule_product_id ?? "0"), 10) || 0;
+  if (active && (conflictRuleServiceId > 0 || conflictRuleProductId > 0)) {
+    const giftsT = await tenantTable(slug, "gifts");
+    const setsT = await tenantTable(slug, "gift_rule_sets");
+    const rulesT = await tenantTable(slug, "gift_rules");
+    const target = conflictRuleServiceId > 0 ? "r.target_service_id = ?" : "r.target_product_id = ?";
+    // La sorgente di un clone è esclusa dal conflitto: viene ritirata al salvataggio.
+    const conflictRows = await dbQuery<RowDataPacket[]>(
+      `SELECT g.id, g.name FROM ${quoteIdentifier(giftsT.name)} g
+         JOIN ${quoteIdentifier(setsT.name)} s ON s.gift_id = g.id AND s.tenant_id = g.tenant_id
+         JOIN ${quoteIdentifier(rulesT.name)} r ON r.rule_set_id = s.id AND r.tenant_id = g.tenant_id
+        WHERE g.tenant_id = ? AND g.id <> ? AND g.id <> ? AND g.deleted_at IS NULL AND COALESCE(g.active,0) = 1
+          AND ${target}
+          AND g.valid_from <= ? AND g.valid_to >= ?
+        LIMIT 1`,
+      [giftsT.tenantId ?? 0, id > 0 ? id : 0, cloneSourceId > 0 ? cloneSourceId : 0, conflictRuleServiceId > 0 ? conflictRuleServiceId : conflictRuleProductId, to, from],
+    ).catch(() => [] as RowDataPacket[]);
+    if (conflictRows[0]) {
+      throw new Error(`Esiste già una campagna omaggio attiva per questi servizi/prodotti nello stesso periodo (ID #${Number(conflictRows[0].id)}): ${String(conflictRows[0].name ?? "")}. Disattiva o modifica quella campagna per continuare.`);
+    }
+  }
+
   let giftId = id;
+  let wasActive = false;
   if (giftId > 0) {
-    const existing = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "id", where: "id = ? AND deleted_at IS NULL", params: [giftId], limit: 1 });
+    const existing = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "id, active", where: "id = ? AND deleted_at IS NULL", params: [giftId], limit: 1 });
     if (!existing[0]) throw new Error("Campagna non trovata.");
+    wasActive = Number(existing[0].active ?? 0) === 1;
     await tenantUpdate({ slug, table: "gifts", id: giftId, values });
   } else {
+    if (cloneSourceId > 0) values.cloned_from_gift_id = cloneSourceId;
     giftId = await tenantInsert(await tenantTable(slug, "gifts"), values);
   }
 
@@ -12987,7 +13097,11 @@ export async function saveManageGift(slug: string, body: Record<string, string>,
     await tenantInsert(locTable, { gift_id: giftId, location_id: locationId }).catch(() => 0);
   }
 
-  // Rebuild the single unlock rule (gift_rule_sets + gift_rules).
+  // Rebuild the single unlock rule (gift_rule_sets + gift_rules) — DELETE +
+  // reinsert come il legacy (saveGift ~3187-3336), MA preservando created_at di
+  // set e regola quando la FIRMA della regola (tipo/comparatore/soglia/target) è
+  // invariata: created_at è il floor anti-retroattivo della finestra eventi, e
+  // un semplice risalvataggio non deve azzerare i progressi dei clienti.
   const ruleType = normalizeGiftRuleType(body.rule_type);
   const ruleThresholdRaw = String(body.rule_threshold ?? "1").replace(",", ".");
   const ruleThreshold = Math.max(0, Number.parseFloat(ruleThresholdRaw) || 0);
@@ -12996,7 +13110,28 @@ export async function saveManageGift(slug: string, body: Record<string, string>,
 
   const setTable = await tenantTable(slug, "gift_rule_sets");
   const ruleTable = await tenantTable(slug, "gift_rules");
-  const existingSets = await tenantSelect<RowDataPacket>({ slug, table: "gift_rule_sets", columns: "id", where: "gift_id = ?", params: [giftId] }).catch(() => [] as RowDataPacket[]);
+  const existingSets = await tenantSelect<RowDataPacket>({ slug, table: "gift_rule_sets", columns: "id, created_at", where: "gift_id = ?", params: [giftId], orderBy: "sort_order ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
+  const preservedSetCreatedAt = existingSets[0]?.created_at ?? null;
+  let preservedRuleCreatedAt: unknown = null;
+  if (existingSets[0]) {
+    const prevRules = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "gift_rules",
+      columns: "rule_type, comparator, threshold, target_service_id, target_product_id, created_at",
+      where: "rule_set_id = ?",
+      params: [Number(existingSets[0].id)],
+      orderBy: "sort_order ASC, id ASC",
+      limit: 1,
+    }).catch(() => [] as RowDataPacket[]);
+    const prev = prevRules[0];
+    const sameSignature = prev
+      && String(prev.rule_type ?? "") === ruleType
+      && String(prev.comparator ?? ">=") === ">="
+      && Math.abs(Number(prev.threshold ?? 0) - ruleThreshold) < 0.0000001
+      && Number(prev.target_service_id ?? 0) === (ruleType === "service_qty" ? ruleServiceId : 0)
+      && Number(prev.target_product_id ?? 0) === (ruleType === "product_qty" ? ruleProductId : 0);
+    if (sameSignature) preservedRuleCreatedAt = prev.created_at ?? null;
+  }
   for (const set of existingSets) {
     const setId = Number(set.id ?? 0);
     await dbExecute(
@@ -13008,7 +13143,12 @@ export async function saveManageGift(slug: string, body: Record<string, string>,
     `DELETE FROM ${quoteIdentifier(setTable.name)} WHERE gift_id = ?${setTable.mode === "shared" && (await columnExists(setTable.name, "tenant_id")) ? " AND tenant_id = ?" : ""}`,
     setTable.mode === "shared" && (await columnExists(setTable.name, "tenant_id")) ? [giftId, setTable.tenantId ?? 0] : [giftId],
   ).catch(() => undefined);
-  const ruleSetId = await tenantInsert(setTable, { gift_id: giftId, set_operator: "and", sort_order: 0 });
+  const ruleSetId = await tenantInsert(setTable, {
+    gift_id: giftId,
+    set_operator: "and",
+    sort_order: 0,
+    ...(preservedSetCreatedAt ? { created_at: preservedSetCreatedAt } : {}),
+  });
   await tenantInsert(ruleTable, {
     rule_set_id: ruleSetId,
     rule_type: ruleType,
@@ -13018,11 +13158,36 @@ export async function saveManageGift(slug: string, body: Record<string, string>,
     target_product_id: ruleType === "product_qty" ? (ruleProductId || null) : null,
     window_type: "all_time",
     sort_order: 0,
+    ...(preservedRuleCreatedAt ? { created_at: preservedRuleCreatedAt } : {}),
   }).catch(() => 0);
+
+  // Marker sospensione: creazione disattivata (saveGift ~3340-3348) o cambio di
+  // stato attivo in modifica (coerente con setGiftActive).
+  if (id <= 0 && !active) {
+    await giftPersistGlobalResetMarker(slug, giftId, "campaign_disabled_start", "Campagna creata disattivata").catch(() => undefined);
+  } else if (id > 0 && wasActive !== active) {
+    await giftPersistGlobalResetMarker(slug, giftId, active ? "campaign_disabled_end" : "campaign_disabled_start", active ? "Campagna riattivata" : "Campagna disattivata").catch(() => undefined);
+  }
+
+  // RITIRO SORGENTE CLONE (retireClonedSourceGift ~2783-2828): la sorgente viene
+  // disattivata con replaced_by_gift_id/replaced_at; se era attiva scrive il
+  // marker di sospensione 'Campagna clonata'.
+  let message: string | undefined;
+  if (cloneSourceId > 0) {
+    const srcRows = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "id, active", where: "id = ?", params: [cloneSourceId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    const srcWasActive = Number(srcRows[0]?.active ?? 0) === 1;
+    const retireValues: Record<string, unknown> = { active: 0, auto_disabled_by_fidelity: 0, replaced_by_gift_id: giftId, replaced_at: new Date(), updated_at: new Date() };
+    const updated = await tenantUpdate({ slug, table: "gifts", id: cloneSourceId, values: retireValues }).catch(() => 0);
+    if (!updated) throw new Error("Clone creato ma campagna sorgente non disattivabile. Salvataggio annullato.");
+    if (srcWasActive) {
+      await giftPersistGlobalResetMarker(slug, cloneSourceId, "campaign_disabled_start", "Campagna clonata").catch(() => undefined);
+    }
+    message = "Clone campagna creato";
+  }
 
   const saved = await getManageGift(slug, giftId);
   if (!saved) throw new Error("Campagna non salvata.");
-  return saved;
+  return message ? { ...saved, message } : saved;
 }
 
 // ---- Gift CAMPAIGN list / toggle / delete (gifts.php) -------------------------
@@ -13163,7 +13328,7 @@ async function giftActivationContentIssues(slug: string, id: number): Promise<st
 // deleted/disabled service or product; a manual toggle clears auto_disabled.
 export async function toggleManageGift(slug: string, id: number, active: boolean, by: number): Promise<{ ok: true; active: boolean }> {
   if (id <= 0) throw new Error("Campagna non valida.");
-  const rows = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "id, deleted_at", where: "id = ?", params: [id], limit: 1 });
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "id, active, deleted_at", where: "id = ?", params: [id], limit: 1 });
   if (!rows[0]) throw new Error("Campagna omaggio non trovata.");
   if (rows[0].deleted_at) throw new Error("Campagna omaggio eliminata.");
   if (active) {
@@ -13172,7 +13337,19 @@ export async function toggleManageGift(slug: string, id: number, active: boolean
       throw new Error(`Non è possibile riattivare la campagna omaggio: contiene servizi o prodotti eliminati/disattivati. ${issues.join("; ")}.`);
     }
   }
+  const wasActive = Number(rows[0].active ?? 0) === 1;
   await tenantUpdate({ slug, table: "gifts", id, values: { active: active ? 1 : 0, auto_disabled_by_fidelity: 0, updated_by: by > 0 ? by : null, updated_at: new Date() } });
+  // Marker intervalli di sospensione (setGiftActive ~3835-3846): gli eventi
+  // avvenuti mentre la campagna e' disattivata non contano nella maturazione.
+  if (wasActive !== active) {
+    await giftPersistGlobalResetMarker(
+      slug,
+      id,
+      active ? "campaign_disabled_end" : "campaign_disabled_start",
+      active ? "Campagna riattivata" : "Campagna disattivata",
+      by,
+    ).catch(() => undefined);
+  }
   return { ok: true, active };
 }
 

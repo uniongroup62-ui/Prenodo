@@ -273,6 +273,84 @@ type GiftRuleRow = {
 type RuleResult = { type: string; current: number; needed: number; comparator: string; ok: boolean };
 export type GiftEvaluation = { ok: boolean; rules: RuleResult[] };
 
+// Livelli idonei della campagna (parseEligibleLevels ~12648): JSON array di
+// chiavi livello lowercase; vuoto = nessun filtro.
+export function parseGiftEligibleLevels(raw: unknown): string[] {
+  const s = clean(raw);
+  if (!s) return [];
+  try {
+    const p = JSON.parse(s);
+    return Array.isArray(p) ? p.map((x) => clean(x).toLowerCase()).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+// Livello punti attuale del cliente. Il legacy lo calcola runtime
+// (Fidelity::calcClientLevelPoints); il Next mantiene clients.fidelity_level
+// aggiornata a ogni movimento punti / cambio tessera (F4
+// recalcClientFidelityLevel), quindi la colonna è lo snapshot equivalente.
+export async function giftClientLevelKey(slug: string, clientId: number): Promise<string> {
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "fidelity_level", where: "id = ?", params: [clientId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  return clean(rows[0]?.fidelity_level).toLowerCase();
+}
+
+// Marker globale in gift_progress_resets (persistGlobalProgressResetMarker
+// ~6259): client_id=0, source_instance_id NULL. Usato per gli intervalli di
+// sospensione campagna (campaign/fidelity_disabled_start|end) e i marker di
+// creazione/clonazione.
+export async function giftPersistGlobalResetMarker(slug: string, giftId: number, sourceState: string, reason: string, by?: number | null): Promise<void> {
+  if (giftId <= 0) return;
+  const table = await tenantTable(slug, "gift_progress_resets").catch(() => null);
+  if (!table) return;
+  const now = new Date();
+  await tenantInsert(table, {
+    gift_id: giftId,
+    client_id: 0,
+    source_instance_id: null,
+    source_state: clean(sourceState).slice(0, 40),
+    reset_at: now,
+    reason: clean(reason).slice(0, 255) || null,
+    created_by: by && by > 0 ? by : null,
+    created_at: now,
+  }).catch(() => 0);
+}
+
+type DisabledInterval = { fromTs: number; toTs: number };
+
+// Intervalli di sospensione della campagna (globalDisabledIntervalsForGift
+// ~6465): accoppia i marker globali *_disabled_start -> *_disabled_end in
+// [{from,to}]; uno start senza end = intervallo APERTO fino a fine finestra
+// (gli eventi da lì in poi restano esclusi finché la campagna è sospesa).
+async function globalDisabledIntervalsForGift(slug: string, giftId: number, windowToTs: number | null): Promise<DisabledInterval[]> {
+  const rows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "gift_progress_resets",
+    columns: "source_state, reset_at",
+    where: "gift_id = ? AND client_id = 0 AND source_state IN ('campaign_disabled_start','campaign_disabled_end','fidelity_disabled_start','fidelity_disabled_end','disabled_start','disabled_end','campaign_disabled_st','fidelity_disabled_st')",
+    params: [giftId],
+    orderBy: "reset_at ASC, id ASC",
+  }).catch(() => [] as RowDataPacket[]);
+  const intervals: DisabledInterval[] = [];
+  let openStart: number | null = null;
+  for (const row of rows) {
+    const state = clean(row.source_state).toLowerCase();
+    const ts = tsOf(row.reset_at);
+    if (ts === null) continue;
+    if (state.includes("start") || state.endsWith("_st")) {
+      if (openStart === null) openStart = ts;
+    } else if (openStart !== null) {
+      if (ts > openStart) intervals.push({ fromTs: openStart, toTs: ts });
+      openStart = null;
+    }
+  }
+  if (openStart !== null) {
+    const far = windowToTs !== null ? Math.max(windowToTs, openStart + 1) : Date.parse("9999-12-31T23:59:59");
+    intervals.push({ fromTs: openStart, toTs: far });
+  }
+  return intervals;
+}
+
 function compare(cur: number, cmp: string, thr: number): boolean {
   const e = 1e-7;
   switch (cmp) {
@@ -300,6 +378,7 @@ async function evaluateGiftRulesForClient(
   windowFromTs: number | null,
   windowToTs: number | null,
   requireFidelityAtEvent: boolean,
+  disabledIntervals: DisabledInterval[] = [],
 ): Promise<GiftEvaluation> {
   if (windowFromTs === null || windowToTs === null || windowToTs <= windowFromTs) return { ok: false, rules: [] };
   const eventsTable = await tenantTable(slug, "events").catch(() => null);
@@ -307,6 +386,13 @@ async function evaluateGiftRulesForClient(
   if (!eventsTable) return { ok: false, rules: [] };
   const tenantId = Number(eventsTable.tenantId ?? 0);
   const cardSql = requireFidelityAtEvent && cardsTable ? cardCoversEventSql(cardsTable.name, Number(cardsTable.tenantId ?? 0)) : "";
+  // Esclusione eventi negli intervalli di sospensione campagna
+  // (appendGiftDisabledIntervalsEventExclusion ~6566): bound inferiore
+  // inclusivo, superiore esclusivo.
+  const disabledSql = disabledIntervals.length
+    ? ` AND NOT (${disabledIntervals.map(() => "(fe.occurred_at >= ? AND fe.occurred_at < ?)").join(" OR ")})`
+    : "";
+  const disabledParams = disabledIntervals.flatMap((iv) => [toSql(new Date(iv.fromTs)), toSql(new Date(iv.toTs))]);
 
   const results: RuleResult[] = [];
   const bySet = new Map<number, { op: "and" | "or"; oks: boolean[] }>();
@@ -318,8 +404,8 @@ async function evaluateGiftRulesForClient(
     const toSqlStr = toSql(new Date(windowToTs));
     const base = `FROM ${quoteIdentifier(eventsTable.name)} fe WHERE fe.tenant_id = ${tenantId} AND fe.client_id = ? AND fe.is_valid = 1
       AND fe.occurred_at >= ? AND fe.occurred_at <= ?
-      AND (fe.created_at IS NULL OR fe.created_at >= ?)${cardSql ? ` AND ${cardSql}` : ""}`;
-    const params: unknown[] = [clientId, fromSql, toSqlStr, fromSql];
+      AND (fe.created_at IS NULL OR fe.created_at >= ?)${cardSql ? ` AND ${cardSql}` : ""}${disabledSql}`;
+    const params: unknown[] = [clientId, fromSql, toSqlStr, fromSql, ...disabledParams];
 
     let sql = "";
     let needed = rule.threshold;
@@ -472,6 +558,20 @@ export async function giftRecalcClient(slug: string, clientId: number, onlyGiftI
       continue;
     }
 
+    // Livelli punti idonei (recalcClient ~7605-7627): eligible_levels_points non
+    // vuoto richiede il livello ATTUALE del cliente nella lista; lista vuota =
+    // nessun filtro (retrocompat).
+    const eligibleLevels = parseGiftEligibleLevels(gift.eligible_levels_points);
+    if (eligibleLevels.length > 0) {
+      const levelKey = await giftClientLevelKey(slug, clientId);
+      if (!levelKey || !eligibleLevels.includes(levelKey)) {
+        if (instance && state === "accumulo") {
+          await tenantUpdate({ slug, table: "gift_instances", id: Number(instance.id), values: { state: "annullato", is_active: 0, cancel_reason: "Livello non idoneo", updated_at: now } }).catch(() => 0);
+        }
+        continue;
+      }
+    }
+
     // Single-use: un'istanza disponibile/riscattata/scaduta blocca nuovi cicli.
     const blockingRows = await tenantSelect<RowDataPacket>({
       slug,
@@ -528,7 +628,10 @@ export async function giftRecalcClient(slug: string, clientId: number, onlyGiftI
     if (isAvailable && !forceRecheckAvailable) continue;
     const windowTo = isAvailable && forceRecheckAvailable ? (tsOf(instance?.unlocked_at) ?? validToTs) : validToTs;
 
-    const evaluation = await evaluateGiftRulesForClient(slug, clientId, rules, windowFrom, windowTo, clean(gift.eligibility) === "fidelity_only");
+    // Intervalli di sospensione: gli eventi caduti mentre la campagna era
+    // disattivata (o sospesa dalla Fidelity) non contano mai.
+    const disabledIntervals = await globalDisabledIntervalsForGift(slug, gid, windowTo);
+    const evaluation = await evaluateGiftRulesForClient(slug, clientId, rules, windowFrom, windowTo, clean(gift.eligibility) === "fidelity_only", disabledIntervals);
 
     // Regressione disponibile -> accumulo (solo forceRecheck).
     if (isAvailable && forceRecheckAvailable && !evaluation.ok) {

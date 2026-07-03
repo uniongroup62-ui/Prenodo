@@ -1479,3 +1479,63 @@ Next e' stato ALLINEATO (prima consumava al salvataggio senza transazioni):
   resta disponibile), done ultima unita' (chiusura source appointment),
   cancel-done (riapertura + tx cancel + usati netti corretti), annullo
   pending (tx pending->cancel), oversubscribe rifiutato.
+
+### CHIUSURA F12 BLOCCO 4 — EDITOR AVANZATO + SOSPENSIONI (2026-07-03, 16
+### test PASS + regression 16+12 PASS) — F12 GIFTS V2 COMPLETO
+NON-GAP CONFERMATI dall'agente sul legacy:
+- MULTI-SET REGOLE: lo schema li supporta ma gifts.php/saveGift impongono UN
+  solo set (AND) e UNA sola regola ("E' consentita una sola regola di sblocco
+  per campagna", saveGift ~3029; window_type forzato 'all_time'). L'editor
+  Next a regola singola era GIA' fedele.
+- REPEATABLE/max_redemptions: rimossi dalla UI legacy, forzati repeatable=0 /
+  max=1 al save (~2976-2978) — ora forzati anche nel Next.
+- GiftLoyaltyAttribution (1048 righe): ORTOGONALE a Gifts v2 — gestisce il
+  cliente DESTINATARIO di GiftCard/GiftBox (recipient_client_id) garantendo
+  che punti/omaggi della vendita di emissione restino al compratore. Non fa
+  parte del modulo campagne; eventuale port nell'area GiftCard/GiftBox.
+PORTATO in questo blocco:
+- LIVELLI PUNTI (eligible_levels_points, JSON array chiavi lowercase):
+  checkbox nell'editor (visibili con fidelity_only, whitelist dai livelli
+  configurati, obbligo "Seleziona almeno un livello Punti."), gate nel motore
+  (recalc: annulla accumulo con cancel_reason 'Livello non idoneo'; redeem
+  manuale: "Livello cliente non idoneo per questo gift"). Il livello cliente
+  e' clients.fidelity_level (snapshot mantenuto da F4 a ogni movimento —
+  equivalente del calcolo runtime legacy Fidelity::calcClientLevelPoints).
+- ESCLUSIONI (excluded_client_ids JSON): picker aggiungi/rimuovi nell'editor;
+  il gate motore esisteva dal Blocco 1 ('Cliente escluso dalla campagna').
+- CLONE (action=clone): prefill con date ricalcolate se passate + alert +
+  "Salva clone"; al salvataggio nuovo insert con cloned_from_gift_id, ritiro
+  sorgente (active=0, replaced_by_gift_id, replaced_at, marker
+  campaign_disabled_start 'Campagna clonata' se era attiva, sorgente esclusa
+  dal conflict-check), messaggio "Clone campagna creato".
+- VALIDAZIONI SAVE legacy: "Nome obbligatorio" (trunc 120), "Validita' dal e
+  Validita' al sono obbligatori.", "Validita' al deve essere almeno il giorno
+  successivo...", anti-retroattivita' creazione ("Validita' dal non puo'
+  essere nel passato..."), CONFLITTO campagne attive stesso target
+  servizio/prodotto e periodo sovrapposto ("Esiste gia' una campagna omaggio
+  attiva per questi servizi/prodotti nello stesso periodo (ID #x): Nome...").
+- CREATED_AT PRESERVATION (saveGift ~3207-3305): il DELETE+reinsert di
+  set/regola preserva created_at quando la firma della regola
+  (tipo/comparatore/soglia/target) e' invariata — created_at e' il floor
+  anti-retroattivo della finestra eventi e un semplice risalvataggio non deve
+  azzerare i progressi (verificato G5: v1 -> resave -> v2 -> unlock).
+- INTERVALLI DI SOSPENSIONE (globalDisabledIntervalsForGift ~6465 +
+  appendGiftDisabledIntervalsEventExclusion ~6566): marker globali client_id=0
+  in gift_progress_resets scritti da toggle campagna (campaign_disabled_start
+  'Campagna disattivata' / _end 'Campagna riattivata'), creazione disattivata
+  ('Campagna creata disattivata'), clone ('Campagna clonata'), riattivazione
+  Fidelity (fidelity_disabled_end 'Campagna riattivata dalla Fidelity' per i
+  gift auto_disabled ripristinati); la valutazione regole esclude gli eventi
+  negli intervalli accoppiati start->end (NOT(occurred_at >= from AND < to),
+  bound sup. esclusivo; start APERTO = esclusione fino a fine finestra).
+  Verificato G4: vendita durante la sospensione non conta mai.
+- TEST (16 PASS batteria G + regression 16 motore + 12 ciclo appuntamenti,
+  cleanup CLEAN): anti-retroattivita' creazione, repeatable forzato,
+  conflitto, marker toggle e clone, esclusione eventi sospesi (2/3 dopo 3
+  vendite di cui 1 sospesa), created_at preservation, gate livelli
+  (non idoneo/idoneo), esclusioni via editor, clone completo con retire.
+
+## F12 GIFTS V2 COMPLETO (Blocchi 1-4 chiusi 2026-07-03, ~85 test live).
+Tutte le aree del modulo Omaggi legacy sono portate o documentate non-gap.
+Divergenza minore documentata: il filtro residuali in valutazione e' applicato
+alla registrazione degli eventi (input-side) anziche' rifiltrato in SQL.

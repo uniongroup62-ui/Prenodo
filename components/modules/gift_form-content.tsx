@@ -38,9 +38,12 @@ type RewardItem = {
 
 type GiftForm = {
   id: number;
+  clone_source_id: number;
   name: string;
   description: string;
   fidelity_only: boolean;
+  eligible_levels: string[];
+  excluded_client_ids: number[];
   active: boolean;
   terms_enabled: boolean;
   terms_text: string;
@@ -73,6 +76,9 @@ function emptyRewardItem(): RewardItem {
 function emptyForm(): GiftForm {
   return {
     id: 0,
+    clone_source_id: 0,
+    eligible_levels: [],
+    excluded_client_ids: [],
     name: "",
     description: "",
     fidelity_only: false,
@@ -91,25 +97,31 @@ function emptyForm(): GiftForm {
   };
 }
 
-function resolveAction(): "new" | "edit" {
+function resolveAction(): "new" | "edit" | "clone" {
   if (typeof window === "undefined") return "new";
-  return new URLSearchParams(window.location.search).get("action") === "edit" ? "edit" : "new";
+  const a = new URLSearchParams(window.location.search).get("action");
+  return a === "edit" || a === "clone" ? a : "new";
 }
 
 export function GiftFormContent() {
   const slug = tenantSlug();
-  const [action] = useState<"new" | "edit">(resolveAction);
+  const [action] = useState<"new" | "edit" | "clone">(resolveAction);
   const [form, setForm] = useState<GiftForm>(emptyForm());
   const [services, setServices] = useState<CatalogItem[]>([]);
   const [products, setProducts] = useState<CatalogItem[]>([]);
   const [locations, setLocations] = useState<CatalogItem[]>([]);
+  const [levels, setLevels] = useState<Array<{ key: string; label: string }>>([]);
+  const [clients, setClients] = useState<CatalogItem[]>([]);
+  const [cloneSourceName, setCloneSourceName] = useState("");
+  const [excludeCandidate, setExcludeCandidate] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const act = params.get("action") === "edit" ? "edit" : "new";
+    const actRaw = params.get("action");
+    const act = actRaw === "edit" || actRaw === "clone" ? actRaw : "new";
     const id = Number.parseInt(params.get("id") ?? "", 10);
 
     const ctxPromise = fetch(`/api/manage/gifts?slug=${encodeURIComponent(slug)}&action=context`, {
@@ -120,11 +132,13 @@ export function GiftFormContent() {
         setServices(Array.isArray(j.services) ? j.services : []);
         setProducts(Array.isArray(j.products) ? j.products : []);
         setLocations(Array.isArray(j.locations) ? j.locations : []);
+        setLevels(Array.isArray(j.levels) ? j.levels : []);
+        setClients(Array.isArray(j.clients) ? j.clients : []);
         return j;
       })
       .catch(() => ({}));
 
-    if (act === "edit" && Number.isFinite(id) && id > 0) {
+    if ((act === "edit" || act === "clone") && Number.isFinite(id) && id > 0) {
       Promise.all([
         ctxPromise,
         fetch(`/api/manage/gifts?slug=${encodeURIComponent(slug)}&action=get&id=${id}`, {
@@ -137,16 +151,30 @@ export function GiftFormContent() {
             return;
           }
           const g = j.gift;
+          // Modalità CLONE (gifts.php ~643-665): id azzerato, clone_source_id
+          // valorizzato, date ricalcolate se nel passato (from=oggi, to=domani).
+          const today = new Date().toISOString().slice(0, 10);
+          const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+          let vFrom = String(g.validFrom ?? "").slice(0, 10);
+          let vTo = String(g.validTo ?? "").slice(0, 10);
+          if (act === "clone") {
+            if (!vFrom || vFrom < today) vFrom = today;
+            if (!vTo || vTo <= vFrom) vTo = vFrom === today ? tomorrow : vFrom;
+            setCloneSourceName(String(g.name ?? ""));
+          }
           setForm({
-            id: Number(g.id ?? id),
+            id: act === "clone" ? 0 : Number(g.id ?? id),
+            clone_source_id: act === "clone" ? Number(g.id ?? id) : 0,
             name: String(g.name ?? ""),
             description: String(g.description ?? ""),
             fidelity_only: Boolean(g.fidelityOnly),
+            eligible_levels: Array.isArray(g.eligibleLevelsPoints) ? g.eligibleLevelsPoints.map(String) : [],
+            excluded_client_ids: Array.isArray(g.excludedClientIds) ? g.excludedClientIds.map(Number).filter((n: number) => n > 0) : [],
             active: Boolean(g.active),
             terms_enabled: Boolean(g.termsEnabled),
             terms_text: String(g.termsText ?? "") || DEFAULT_TERMS,
-            valid_from: String(g.validFrom ?? "").slice(0, 10),
-            valid_to: String(g.validTo ?? "").slice(0, 10),
+            valid_from: vFrom,
+            valid_to: vTo,
             expires_after_days: String(g.expiresAfterDays ?? ""),
             location_ids: (g.locationIds ?? []).map(Number).filter((n: number) => n > 0),
             reward_items: ((g.rewardItems ?? []) as Array<Record<string, unknown>>).map((it) => ({
@@ -236,6 +264,10 @@ export function GiftFormContent() {
       setError("Aggiungi almeno un elemento da regalare.");
       return;
     }
+    if (form.fidelity_only && levels.length > 0 && form.eligible_levels.length === 0) {
+      setError("Seleziona almeno un livello Punti.");
+      return;
+    }
 
     setSaving(true);
     try {
@@ -250,9 +282,12 @@ export function GiftFormContent() {
       const payload: Record<string, unknown> = {
         action: "save",
         id: String(form.id),
+        clone_source_id: String(form.clone_source_id),
         name,
         description: form.description,
         fidelity_only: form.fidelity_only ? "1" : "0",
+        eligible_levels_points_json: JSON.stringify(form.eligible_levels),
+        excluded_client_ids_json: JSON.stringify(form.excluded_client_ids),
         active: form.active ? "1" : "0",
         terms_enabled: form.terms_enabled ? "1" : "0",
         terms_text: form.terms_text,
@@ -284,7 +319,7 @@ export function GiftFormContent() {
     }
   }
 
-  const title = action === "new" ? "Nuova campagna" : "Modifica campagna";
+  const title = action === "new" ? "Nuova campagna" : action === "clone" ? "Clona campagna" : "Modifica campagna";
 
   return (
     <div className="container-fluid">
@@ -306,12 +341,20 @@ export function GiftFormContent() {
 
       {error ? <div className="alert alert-danger">{error}</div> : null}
 
+      {action === "clone" && cloneSourceName ? (
+        <div className="alert alert-info">
+          Al salvataggio verrà creato un <strong>clone</strong> di &quot;{cloneSourceName}&quot;: la campagna precedente sarà
+          disattivata automaticamente e i progressi dei clienti ripartiranno dalla nuova campagna.
+        </div>
+      ) : null}
+
       {loading ? (
         <div className="card p-3 text-muted small">Caricamento…</div>
       ) : (
         <div className="card p-3 mb-3">
           <form method="post" id="giftForm" onSubmit={onSubmit}>
             <input type="hidden" name="id" value={form.id} />
+            <input type="hidden" name="clone_source_id" value={form.clone_source_id} />
 
             <div className="row g-3">
               <div className="col-md-6">
@@ -331,6 +374,86 @@ export function GiftFormContent() {
                   <label className="form-check-label" htmlFor="giftFidelityOnly">Solo clienti con Fidelity</label>
                 </div>
                 <div className="form-text">Se disabilitato, tutti i clienti possono usufruire dell&apos;omaggio.</div>
+              </div>
+
+              {/* LIVELLI PUNTI idonei (gifts.php ~887-923): richiesti con fidelity_only. */}
+              {form.fidelity_only && levels.length > 0 ? (
+                <div className="col-12">
+                  <label className="form-label">Livelli Punti</label>
+                  <div className="border rounded p-2 d-flex gap-3 flex-wrap">
+                    {levels.map((lvl) => (
+                      <div className="form-check" key={lvl.key}>
+                        <input
+                          className="form-check-input"
+                          type="checkbox"
+                          id={`gift_lvl_${lvl.key}`}
+                          checked={form.eligible_levels.includes(lvl.key)}
+                          onChange={(e) => {
+                            setForm((prev) => {
+                              const cur = new Set(prev.eligible_levels);
+                              if (e.target.checked) cur.add(lvl.key);
+                              else cur.delete(lvl.key);
+                              return { ...prev, eligible_levels: [...cur] };
+                            });
+                          }}
+                        />
+                        <label className="form-check-label" htmlFor={`gift_lvl_${lvl.key}`}>{lvl.label || lvl.key}</label>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="form-text">Seleziona i livelli Punti che possono maturare questo omaggio (obbligatorio con &quot;Solo clienti con Fidelity&quot;).</div>
+                </div>
+              ) : null}
+
+              {/* ESCLUDI CLIENTI (gifts.php ~925-947): picker aggiungi/rimuovi. */}
+              <div className="col-12">
+                <label className="form-label">Escludi clienti</label>
+                <div className="d-flex gap-2 align-items-start flex-wrap">
+                  <input
+                    className="form-control"
+                    style={{ maxWidth: 320 }}
+                    list="giftExcludeCandidates"
+                    value={excludeCandidate}
+                    onChange={(e) => setExcludeCandidate(e.target.value)}
+                    placeholder="Cerca cliente…"
+                  />
+                  <datalist id="giftExcludeCandidates">
+                    {clients.filter((c) => !form.excluded_client_ids.includes(c.id)).map((c) => (
+                      <option key={c.id} value={`${c.name} #${c.id}`} />
+                    ))}
+                  </datalist>
+                  <button
+                    className="btn btn-outline-secondary"
+                    type="button"
+                    onClick={() => {
+                      const m = /#(\d+)\s*$/.exec(excludeCandidate);
+                      const cid = m ? Number.parseInt(m[1], 10) : 0;
+                      if (cid > 0 && !form.excluded_client_ids.includes(cid)) {
+                        setForm((prev) => ({ ...prev, excluded_client_ids: [...prev.excluded_client_ids, cid] }));
+                      }
+                      setExcludeCandidate("");
+                    }}
+                  >
+                    Aggiungi
+                  </button>
+                </div>
+                {form.excluded_client_ids.length > 0 ? (
+                  <div className="d-flex gap-2 flex-wrap mt-2">
+                    {form.excluded_client_ids.map((cid) => (
+                      <span key={cid} className="badge text-bg-secondary">
+                        {clients.find((c) => c.id === cid)?.name ?? `#${cid}`}
+                        <button
+                          type="button"
+                          className="btn-close btn-close-white ms-1"
+                          style={{ fontSize: "0.6em" }}
+                          aria-label="Rimuovi"
+                          onClick={() => setForm((prev) => ({ ...prev, excluded_client_ids: prev.excluded_client_ids.filter((x) => x !== cid) }))}
+                        />
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="form-text">I clienti esclusi non maturano né riscattano questo omaggio.</div>
               </div>
 
               <div className="col-md-6">
@@ -618,7 +741,7 @@ export function GiftFormContent() {
             <div className="mt-4 d-flex gap-2">
               <button className="btn btn-primary" type="submit" disabled={saving}>
                 <i className="bi bi-check2-circle me-1" />
-                {saving ? "Salvataggio…" : action === "edit" ? "Salva modifiche" : "Salva"}
+                {saving ? "Salvataggio…" : action === "edit" ? "Salva modifiche" : action === "clone" ? "Salva clone" : "Salva"}
               </button>
               <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/gifts`}>
                 Annulla

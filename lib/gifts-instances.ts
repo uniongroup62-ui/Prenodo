@@ -26,7 +26,7 @@ import "server-only";
 import { randomBytes } from "crypto";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { columnExists, dbQuery, quoteIdentifier, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
-import { giftExpireInstance, giftRecalcClient } from "@/lib/gifts-engine";
+import { giftClientLevelKey, giftExpireInstance, giftRecalcClient, parseGiftEligibleLevels } from "@/lib/gifts-engine";
 import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
 import { deleteDbAppointment } from "@/lib/db-repositories";
 
@@ -628,6 +628,13 @@ export async function redeemGiftInstanceItems(
   const manualOverride = !!progress.manual || !!progress.eligibility_override;
   if (clean(gift.eligibility).toLowerCase() === "fidelity_only" && !manualOverride) {
     if (!(await clientAdhering(slug, Number(inst.client_id ?? 0)))) throw new Error("Cliente non aderisce alla Fidelity");
+    // Livelli idonei (redeemInstanceItems ~5267): il livello ATTUALE del cliente
+    // deve rientrare nella lista della campagna (vuota = nessun filtro).
+    const eligibleLevels = parseGiftEligibleLevels(gift.eligible_levels_points);
+    if (eligibleLevels.length > 0) {
+      const levelKey = await giftClientLevelKey(slug, Number(inst.client_id ?? 0));
+      if (!levelKey || !eligibleLevels.includes(levelKey)) throw new Error("Livello cliente non idoneo per questo gift");
+    }
   }
 
   const items = await giftInstanceRewardItemsState(slug, instanceId, gift);

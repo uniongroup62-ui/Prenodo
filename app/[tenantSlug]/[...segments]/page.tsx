@@ -392,7 +392,7 @@ export default async function TenantPage({
   // Faithful gift CAMPAIGN editor (gifts.php action=new|edit). The gifts
   // campaigns list links to index.php?page=gifts&action=new|edit; route those to
   // the faithful campaign editor (instead of the Tailwind ManagementApp fallback).
-  if (page === "gifts" && (query.action === "new" || query.action === "edit")) {
+  if (page === "gifts" && (query.action === "new" || query.action === "edit" || query.action === "clone")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
         <GiftFormContent />

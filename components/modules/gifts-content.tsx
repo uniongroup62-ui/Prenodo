@@ -317,6 +317,9 @@ export function GiftsContent() {
                           <a className="btn btn-sm btn-outline-primary me-1" href={href(`&action=edit&id=${c.id}`)}>
                             <i className="bi bi-pencil" /> Modifica
                           </a>
+                          <a className="btn btn-sm btn-outline-secondary me-1" href={href(`&action=clone&id=${c.id}`)} title="Clona campagna">
+                            <i className="bi bi-files" /> Clona
+                          </a>
                           <button className="btn btn-sm btn-outline-secondary me-1" type="button" onClick={() => toggle(c)} disabled={busy}>
                             {c.active ? "Disattiva" : "Attiva"}
                           </button>
