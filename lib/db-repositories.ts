@@ -49,6 +49,17 @@ import type {
   WalletMovementType,
 } from "@/lib/tenant-store";
 import { tenantDelete, tenantInsert, tenantSelect, tenantTable, tenantUpdate, columnExists, dbExecute, dbQuery, quoteIdentifier, tableExists, tenantIdForSlug, withTenantTransaction, type TenantTable } from "@/lib/tenant-db";
+import {
+  applyExpirySettingsToOpenLots,
+  applyLotsDelta,
+  ensureLotsInitialized,
+  expireClientLots,
+  expiringSoonPoints,
+  fidelityLotsSettings,
+  pointLotsSchedule,
+  reconcilePointLots,
+  type PointLotScheduleRow,
+} from "@/lib/fidelity-lots";
 import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
 import { assertAppointmentSlotAvailable, busyCabinRangesForDate, busyRangesForDate, staffTimeoffReasonForRange, type AppointmentSlotSegment, type CabinBusyRange } from "@/lib/public-booking-db";
 
@@ -5060,14 +5071,29 @@ export async function addDbWalletMovement(
   }
 
   if (points !== 0) {
-    const nextPoints = before.points + points;
+    // POINT_LOTS (port of Fidelity::addTransaction, F1): prima di un movimento
+    // negativo con scadenza attiva i lotti scaduti vengono processati (il saldo
+    // può ridursi), poi il saldo viene riletto; il movimento crea/consuma lotti
+    // e il reconcile riallinea. Best-effort sui lotti: un guasto non blocca il
+    // movimento (il cron reconcile ripara).
+    const lotsSettings = await fidelityLotsSettings(slug).catch(() => ({ expireEnabled: false, expireDays: 0, expireWarnDays: 0 }));
+    if (points < 0 && lotsSettings.expireEnabled) {
+      await expireClientLots(slug, clientId).catch(() => 0);
+    }
+    await ensureLotsInitialized(slug, clientId, lotsSettings).catch(() => undefined);
+    const currentPoints = normalizeFidelityPoints(
+      (await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "points", where: "id = ?", params: [clientId], limit: 1 }).catch(() => []))[0]?.points ?? before.points,
+    );
+    const nextPoints = currentPoints + points;
+    const txKind = type === "points_redeem" ? "redeem" : type === "points_earn" ? "earn" : "manual";
+    const txSourceType = input.source_type ?? input.source ?? source;
     const transactionId = await tenantInsert(await tenantTable(slug, "transactions"), {
       client_id: clientId,
-      kind: type === "points_redeem" ? "redeem" : type === "points_earn" ? "earn" : "manual",
+      kind: txKind,
       // Prefer the EXPLICIT source_type (e.g. 'appointment'); fall back to the legacy
       // input.source string, then the credit-side source. source_id/created_by are
       // schema-guarded by tenantInsert (undefined values are dropped before the INSERT).
-      source_type: input.source_type ?? input.source ?? source,
+      source_type: txSourceType,
       source_id: input.source_id !== undefined && input.source_id > 0 ? input.source_id : undefined,
       delta_points: points,
       amount: amount || null,
@@ -5077,6 +5103,12 @@ export async function addDbWalletMovement(
     });
     if (!id) id = transactionId;
     await tenantUpdate({ slug, table: "clients", id: clientId, values: { points: nextPoints } });
+    await applyLotsDelta(
+      slug,
+      { clientId, transactionId, kind: txKind, sourceType: String(txSourceType ?? "manual"), sourceId: input.source_id, delta: points },
+      lotsSettings,
+    ).catch(() => undefined);
+    await reconcilePointLots(slug, clientId).catch(() => false);
     source = "transactions";
   }
 
@@ -10653,6 +10685,15 @@ export async function saveFidelityPointsSettings(slug: string, body: Record<stri
     updated_at: new Date(),
   });
   await tenantUpdate({ slug, table: "businesses", id: bizId, values });
+
+  // Scadenza cambiata -> riallinea i lotti aperti alla nuova impostazione
+  // (port of fidelity_points.php ~2135-2143: Fidelity::applyExpirySettingsToOpenLots
+  // dopo il commit). Best-effort: il cron reconcile ripara eventuali code.
+  const prevExpireEnabled = Number(existing.fidelity_expire_enabled ?? 0) === 1;
+  const prevExpireDays = Math.max(0, Math.round(Number(existing.fidelity_expire_days ?? 0)));
+  if (prevExpireEnabled !== expireEnabled || (expireEnabled && prevExpireDays !== expireDays)) {
+    await applyExpirySettingsToOpenLots(slug, expireEnabled, expireDays).catch(() => null);
+  }
   return getFidelityPointsSettings(slug);
 }
 
@@ -11295,6 +11336,14 @@ export type FidelityWalletDetail = {
   available: number;
   movements: FidelityWalletMovement[];
   pending: FidelityWalletPending[];
+  // F1 — scadenze punti (point_lots): punti in scadenza entro expire_warn_days,
+  // calendario lotti residui, avvisi lock-lots e disponibile negativo.
+  expireEnabled: boolean;
+  expireWarnDays: number;
+  expiringSoon: number;
+  lockedPoints: number;
+  availableNegative: boolean;
+  schedule: PointLotScheduleRow[];
 };
 export type FidelityWalletClient = { id: number; name: string; email: string; points: number };
 export type FidelityWalletData = {
@@ -11333,10 +11382,16 @@ async function fidelityReservedPoints(slug: string, clientId: number): Promise<n
 }
 
 async function getFidelityWalletDetail(slug: string, clientId: number): Promise<FidelityWalletDetail | null> {
+  // Expire-on-read (port of Fidelity::availablePoints ~2154): con scadenza attiva
+  // i lotti scaduti vengono processati prima di leggere il saldo.
+  const lotsSettings = await fidelityLotsSettings(slug).catch(() => ({ expireEnabled: false, expireDays: 0, expireWarnDays: 30 }));
+  if (lotsSettings.expireEnabled) await expireClientLots(slug, clientId).catch(() => 0);
+
   const clientRows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, full_name, email, points", where: "id = ?", params: [clientId], limit: 1 });
   if (!clientRows[0]) return null;
   const pointsBalance = normalizeFidelityPoints(clientRows[0].points ?? 0);
-  const reserved = Math.min(await fidelityReservedPoints(slug, clientId), Math.max(0, pointsBalance));
+  const reservedRaw = await fidelityReservedPoints(slug, clientId);
+  const reserved = Math.min(reservedRaw, Math.max(0, pointsBalance));
   const available = normalizeFidelityPoints(pointsBalance - reserved);
 
   const txRows = await tenantSelect<RowDataPacket>({ slug, table: "transactions", columns: "id, kind, source_type, delta_points, note, created_at", where: "client_id = ?", params: [clientId], orderBy: "id DESC", limit: 100 }).catch(() => [] as RowDataPacket[]);
@@ -11367,6 +11422,11 @@ async function getFidelityWalletDetail(slug: string, clientId: number): Promise<
     giftPoints: normalizeFidelityPoints(r.gift_points ?? 0),
   }));
 
+  // F1 — dettaglio scadenze dal calendario lotti.
+  const schedule = await pointLotsSchedule(slug, clientId).catch(() => [] as PointLotScheduleRow[]);
+  const lockedPoints = schedule.filter((l) => l.isLock).reduce((s, l) => s + l.remaining, 0);
+  const expiringSoon = lotsSettings.expireEnabled ? await expiringSoonPoints(slug, clientId).catch(() => 0) : 0;
+
   return {
     clientId,
     clientName: String(clientRows[0].full_name ?? ""),
@@ -11377,6 +11437,12 @@ async function getFidelityWalletDetail(slug: string, clientId: number): Promise<
     available,
     movements,
     pending,
+    expireEnabled: lotsSettings.expireEnabled,
+    expireWarnDays: lotsSettings.expireWarnDays,
+    expiringSoon,
+    lockedPoints,
+    availableNegative: pointsBalance - reservedRaw < 0,
+    schedule,
   };
 }
 
@@ -11461,9 +11527,13 @@ export async function fidelityWalletManualMove(
   const nextPoints = normalizeFidelityPoints(curPts + delta);
   if (delta < 0 && nextPoints < 0) throw new Error("Operazione non riuscita (punti insufficienti).");
 
-  await tenantInsert(await tenantTable(slug, "transactions"), {
+  const manualKind = delta < 0 ? "adjust" : "manual";
+  // POINT_LOTS (F1): init dei lotti sul saldo PRE-movimento, poi il movimento
+  // crea/consuma lotti come ogni transazione punti (Fidelity::addTransaction).
+  await ensureLotsInitialized(slug, clientId).catch(() => undefined);
+  const manualTxId = await tenantInsert(await tenantTable(slug, "transactions"), {
     client_id: clientId,
-    kind: delta < 0 ? "adjust" : "manual",
+    kind: manualKind,
     source_type: "manual",
     delta_points: delta,
     note: cleanNote === "" ? null : cleanNote,
@@ -11471,6 +11541,8 @@ export async function fidelityWalletManualMove(
     created_at: new Date(),
   });
   await tenantUpdate({ slug, table: "clients", id: clientId, values: { points: nextPoints } });
+  await applyLotsDelta(slug, { clientId, transactionId: manualTxId, kind: manualKind, sourceType: "manual", delta }).catch(() => undefined);
+  await reconcilePointLots(slug, clientId).catch(() => false);
 
   let message = delta > 0 ? `Aggiunti ${pts} Punti` : `Rimossi ${pts} Punti`;
   if (op === "remove") {

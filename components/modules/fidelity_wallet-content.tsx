@@ -9,11 +9,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 // The client list is scoped to Fidelity CARD HOLDERS (like the legacy). Selecting a
 // client opens the detail (saldo / prenotati / disponibili / movimenti / prenotazioni).
 // Manual moves are adhesion-gated and, on removal, protect reserved (booked) points.
-// NB: the legacy point_lots expiry schedule is omitted — the Next never writes lots.
+// F1: il motore point_lots è ATTIVO — il dettaglio espone punti in scadenza,
+// calendario scadenze lotti, avvisi lock/negativo, e le tabelle sono paginate
+// 20/pagina come il legacy.
 
 type WalletClient = { id: number; name: string; email: string; points: number };
 type WalletMovement = { id: number; kind: string; deltaPoints: number; note: string; sourceType: string; createdAt: string };
 type WalletPending = { id: number; publicCode: string; startsAt: string; status: string; discountPoints: number; giftPoints: number };
+type WalletLot = { lotId: number; sourceType: string; isLock: boolean; earnedAt: string; expiresAt: string | null; remaining: number; expired: boolean };
 type WalletDetail = {
   clientId: number;
   clientName: string;
@@ -24,6 +27,12 @@ type WalletDetail = {
   available: number;
   movements: WalletMovement[];
   pending: WalletPending[];
+  expireEnabled: boolean;
+  expireWarnDays: number;
+  expiringSoon: number;
+  lockedPoints: number;
+  availableNegative: boolean;
+  schedule: WalletLot[];
 };
 type Wallet = { fidelityEnabled: boolean; pointsEnabled: boolean; clients: WalletClient[]; detail: WalletDetail | null };
 
@@ -53,6 +62,13 @@ export function FidelityWalletContent() {
   const [busy, setBusy] = useState(false);
 
   const [filterText, setFilterText] = useState("");
+  // Paginazione 20/pagina di movimenti e prenotati (legacy fidelity_wallet 20/pag).
+  const [movPage, setMovPage] = useState(1);
+  const [pendPage, setPendPage] = useState(1);
+  useEffect(() => {
+    setMovPage(1);
+    setPendPage(1);
+  }, [selectedId]);
 
   // Manual operation form.
   const [moveClientId, setMoveClientId] = useState("");
@@ -217,8 +233,67 @@ export function FidelityWalletContent() {
                         <div className="text-muted small">Disponibili</div>
                         <div className="h5 m-0 text-primary">{detail.available}</div>
                       </div>
+                      {detail.expireEnabled ? (
+                        <div>
+                          <div className="text-muted small">In scadenza ({detail.expireWarnDays} gg)</div>
+                          <div className={`h5 m-0 ${detail.expiringSoon > 0 ? "text-warning" : ""}`}>{detail.expiringSoon}</div>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
+
+                  {detail.availableNegative ? (
+                    <div className="alert alert-warning mt-3 mb-0 py-2">
+                      I punti prenotati sugli appuntamenti aperti superano il saldo: il disponibile risulterebbe negativo. Verifica le prenotazioni in sospeso.
+                    </div>
+                  ) : null}
+                  {detail.lockedPoints > 0 ? (
+                    <div className="alert alert-info mt-3 mb-0 py-2">
+                      {detail.lockedPoints} punti scaduti sono vincolati a prenotazioni aperte (lock): verranno liberati o scadranno alla chiusura degli appuntamenti collegati.
+                    </div>
+                  ) : null}
+                  {detail.schedule.some((l) => l.expired) ? (
+                    <div className="alert alert-warning mt-3 mb-0 py-2">
+                      Sono presenti punti già scaduti non ancora processati: verranno azzerati al prossimo passaggio della scadenza automatica.
+                    </div>
+                  ) : null}
+
+                  {detail.expireEnabled && detail.schedule.length > 0 ? (
+                    <>
+                      <hr />
+                      <div className="fw-semibold mb-2">Calendario scadenze</div>
+                      <div className="table-responsive">
+                        <table className="table table-sm align-middle mb-0">
+                          <thead>
+                            <tr>
+                              <th>Guadagnati il</th>
+                              <th>Scadenza</th>
+                              <th>Origine</th>
+                              <th className="text-end">Punti residui</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {detail.schedule.map((lot) => (
+                              <tr key={lot.lotId} className={lot.expired ? "table-warning" : undefined}>
+                                <td>{fmtDateTime(lot.earnedAt)}</td>
+                                <td>
+                                  {lot.isLock ? (
+                                    <span className="badge bg-info text-dark">Vincolato (prenotazioni)</span>
+                                  ) : lot.expiresAt ? (
+                                    fmtDateTime(lot.expiresAt)
+                                  ) : (
+                                    "Mai"
+                                  )}
+                                </td>
+                                <td className="text-muted small">{lot.isLock ? "lock" : lot.sourceType || "—"}</td>
+                                <td className="text-end fw-semibold">{lot.remaining}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  ) : null}
 
                   {detail.pending.length > 0 ? (
                     <>
@@ -236,7 +311,7 @@ export function FidelityWalletContent() {
                             </tr>
                           </thead>
                           <tbody>
-                            {detail.pending.map((p) => (
+                            {detail.pending.slice((pendPage - 1) * 20, pendPage * 20).map((p) => (
                               <tr key={p.id}>
                                 <td>{p.publicCode || `#${p.id}`}</td>
                                 <td>{fmtDateTime(p.startsAt)}</td>
@@ -248,6 +323,15 @@ export function FidelityWalletContent() {
                           </tbody>
                         </table>
                       </div>
+                      {detail.pending.length > 20 ? (
+                        <div className="d-flex justify-content-between align-items-center mt-2">
+                          <div className="text-muted small">Pagina {pendPage} di {Math.ceil(detail.pending.length / 20)}</div>
+                          <div className="btn-group btn-group-sm">
+                            <button className="btn btn-outline-secondary" type="button" disabled={pendPage <= 1} onClick={() => setPendPage((p) => p - 1)}>«</button>
+                            <button className="btn btn-outline-secondary" type="button" disabled={pendPage >= Math.ceil(detail.pending.length / 20)} onClick={() => setPendPage((p) => p + 1)}>»</button>
+                          </div>
+                        </div>
+                      ) : null}
                     </>
                   ) : null}
 
@@ -271,7 +355,7 @@ export function FidelityWalletContent() {
                             </td>
                           </tr>
                         ) : (
-                          detail.movements.map((mvt) => (
+                          detail.movements.slice((movPage - 1) * 20, movPage * 20).map((mvt) => (
                             <tr key={mvt.id}>
                               <td>{fmtDateTime(mvt.createdAt)}</td>
                               <td>{KIND_LABELS[mvt.kind] ?? mvt.kind}</td>
@@ -286,6 +370,15 @@ export function FidelityWalletContent() {
                       </tbody>
                     </table>
                   </div>
+                  {detail.movements.length > 20 ? (
+                    <div className="d-flex justify-content-between align-items-center mt-2">
+                      <div className="text-muted small">Pagina {movPage} di {Math.ceil(detail.movements.length / 20)}</div>
+                      <div className="btn-group btn-group-sm">
+                        <button className="btn btn-outline-secondary" type="button" disabled={movPage <= 1} onClick={() => setMovPage((p) => p - 1)}>«</button>
+                        <button className="btn btn-outline-secondary" type="button" disabled={movPage >= Math.ceil(detail.movements.length / 20)} onClick={() => setMovPage((p) => p + 1)}>»</button>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 

@@ -1148,7 +1148,7 @@ NON-GAP scoperti (il legacy li ha RIMOSSI — il Next e' gia' corretto):
 - earn_mode/conflict_policy/redeem_auto_discount: costanti nel legacy.
 
 GAP CONFERMATI (ordine di gravita'):
-- F1 POINT_LOTS mai scritti: scadenza punti configurabile ma NON operativa.
+- [CHIUSO 2026-07-03] F1 POINT_LOTS mai scritti: scadenza punti configurabile ma NON operativa.
   Manca l'intero motore lotti (creazione su earn, consumo FIFO con lock
   first, lotto legacy-init, expire con lock/unlock per prenotazioni
   protette, reconcile, applyExpirySettingsToOpenLots al salvataggio, punti
@@ -1178,7 +1178,7 @@ GAP CONFERMATI (ordine di gravita'):
   (161-390), form livelli duplicato inerte (563-747), seconda tabella
   campagne statica (749-787), statistiche hardcoded 0 (795-826), banner
   campagna statico (143-151), header obsoleto.
-- F8 fidelity_wallet: paginazione 20/pag + sezioni scadenze (con F1).
+- [CHIUSO 2026-07-03] F8 fidelity_wallet: paginazione 20/pag + sezioni scadenze (con F1).
 - F12 GIFTS V2 (omaggi): portato ~30-35% (CRUD campagne + redeem in
   prenotazione). MANCA il motore: tabella events mai scritta (recordSale/
   recordAppointmentDone/recordProductOrder), recalcClient/evaluateRules
@@ -1197,3 +1197,32 @@ PIANO BLOCCHI (ordine proposto):
 5. F5b membership settings applyMode/snapshot + F7 pulizia UI morta
 6. F12 Gifts v2 (area a se', 4-5 sotto-blocchi — solo se vuoi il modulo
    omaggi operativo: oggi il tenant non lo usa)
+
+### Chiusura gap FIDELITY F1+F8 (2026-07-03, 11/11 comportamenti verificati live)
+Nuovo lib/fidelity-lots.ts — port di Fidelity.php ~2138-3594: lotto per ogni
+earn (expires_at = fine giornata earned_at+expire_days), init 'legacy' sui
+saldi senza lotti, consumo FIFO sui redeem (lock-first, scadenza crescente,
+NULL per ultimi; senza filtro con scadenza off), scadenza con lock/unlock
+(protectedReserved = prenotazioni aperte create prima di oggi; requiredLocked
+= min(protetti, lock+scaduti); lock@YmdHis con expires NULL e source_id del
+lotto origine; unlock con scadenza dal metadato, fallback just-before-now),
+transazioni kind='expire' source='lot' idempotenti sul vincolo unico,
+reconcile che NON tocca clients.points, applyExpirySettingsToOpenLots al
+salvataggio impostazioni, expiringSoonPoints e calendario lotti.
+AGGANCI: addDbWalletMovement (tutte le transazioni punti: earn POS/appuntamenti,
+redeem, storni) + fidelityWalletManualMove + expire-on-read su wallet detail,
+residui POS e resolveFidelityRedemption + saveFidelityPointsSettings.
+UI wallet: card "In scadenza (N gg)", Calendario scadenze, avvisi (disponibile
+negativo, punti vincolati, scaduti non processati), paginazione 20/pag su
+movimenti e prenotati (chiude F8).
+SCOPERTA: i 2 cron (api/cron/fidelity-expire + fidelity-reconcile-lots)
+ESISTEVANO gia' come port completi self-contained (l'audit li aveva mancati) —
+mantenuti; la lib e' allineata al loro comportamento (stesso fallback
+parseLockExpiry, stessi source_id). Duplicazione della logica lotti tra lib e
+cron annotata come debito tecnico accettato.
+Test live: earn->lotto, manuale->lotto, FIFO 7 su 2 lotti, expire-on-read con
+transazione -8 e saldo ridotto, lock parziale min(prenotati,disponibili)=1
+con avviso UI, unlock->expire al giro successivo, cambio scadenza 30->60gg
+riallinea, expiringSoon nella warn window, cron ok. Cleanup completo; il
+lotto legacy-init di Luca Rossi (22pt, senza scadenza) e' il backfill
+CORRETTO del motore sul saldo preesistente.

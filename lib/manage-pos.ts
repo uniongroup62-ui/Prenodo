@@ -31,6 +31,7 @@ import {
   refundDbGiftCard,
   type PromoCartLine,
 } from "@/lib/db-repositories";
+import { expireClientLots, fidelityLotsSettings } from "@/lib/fidelity-lots";
 import { getManageLocationContext } from "@/lib/manage-locations";
 import {
   columnExists,
@@ -310,6 +311,10 @@ export async function getManagePosResiduals(slug: string, clientId: number): Pro
   if (id <= 0) {
     return { ok: true, clientId: 0, credit: 0, giftcards: [], points: 0, fidelity: { enabled: false, euroPerPoint: settings.euroPerPoint, minPoints: settings.minPoints } };
   }
+  // Expire-on-read (port of Fidelity::availablePoints): con scadenza punti attiva
+  // i lotti scaduti vengono processati prima di esporre il saldo spendibile.
+  const lotsSettings = await fidelityLotsSettings(slug).catch(() => ({ expireEnabled: false, expireDays: 0, expireWarnDays: 0 }));
+  if (lotsSettings.expireEnabled) await expireClientLots(slug, id).catch(() => 0);
   const [{ credit, points }, giftcards] = await Promise.all([
     dbWalletBalance(id, slug).catch(() => ({ credit: 0, points: 0 })),
     dbClientGiftcards(slug, id).catch(() => []),
@@ -5331,6 +5336,10 @@ async function resolveFidelityRedemption(
   const settings = await getFidelityRedeemSettings(slug);
   if (!settings.redeemEnabled) throw new Error("Sconto punti non abilitato.");
   if (clientId <= 0) throw new Error("Seleziona un cliente per usare i punti.");
+
+  // Expire-on-read: i punti scaduti non sono spendibili (Fidelity::availablePoints).
+  const lotsSettings = await fidelityLotsSettings(slug).catch(() => ({ expireEnabled: false, expireDays: 0, expireWarnDays: 0 }));
+  if (lotsSettings.expireEnabled) await expireClientLots(slug, clientId).catch(() => 0);
 
   const { points } = await dbWalletBalance(clientId, slug);
   const available = normalizePoints(Math.max(0, points));
