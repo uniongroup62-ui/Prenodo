@@ -113,8 +113,10 @@ function rowFromField(field: SheetField, locked: boolean): BuilderRow {
   };
 }
 
-export function ClientSheetTemplatesContent() {
-  const slug = tenantSlug();
+export function ClientSheetTemplatesContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [templates, setTemplates] = useState<SheetTemplate[]>([]);
   const [locations, setLocations] = useState<LocationRow[]>([]);
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null);

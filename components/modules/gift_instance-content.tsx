@@ -94,8 +94,10 @@ function fmtDt(iso: string): string {
   return iso.length >= 16 ? `${d} ${iso.slice(11, 16)}` : d;
 }
 
-export function GiftInstanceContent() {
-  const slug = tenantSlug();
+export function GiftInstanceContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const instanceId = instanceIdFromUrl();
   const [detail, setDetail] = useState<Detail | null>(null);
   const [loading, setLoading] = useState(true);

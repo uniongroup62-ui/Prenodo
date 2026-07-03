@@ -97,8 +97,10 @@ function pct(n: number): string {
   return `${n.toFixed(4)}%`;
 }
 
-export function StaffAvailabilityContent() {
-  const slug = tenantSlug();
+export function StaffAvailabilityContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   const [date, setDate] = useState<string>(todayIso());
   const [locationId, setLocationId] = useState<number>(0);

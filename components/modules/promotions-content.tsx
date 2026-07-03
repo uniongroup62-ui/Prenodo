@@ -51,8 +51,10 @@ function fmtDiscount(p: Promotion): string {
   return `${p.discountValue}%`;
 }
 
-export function PromotionsContent() {
-  const slug = tenantSlug();
+export function PromotionsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Preferisci la prop dal server: il fallback window-only rende slug=""
+  // in SSR e i link diventano "//promotions?..." (protocol-relative rotti).
+  const slug = slugProp || tenantSlug();
   const [promotions, setPromotions] = useState<Promotion[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");

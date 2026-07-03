@@ -2203,3 +2203,15 @@ e' stato RISCRITTO sul markup estratto dall'istanza PHP LIVE
 - COPIATO public/assets/css/pages/promotions.css dal legacy (mancava:
   classi promo-* senza stili). Verifica: tutti i marker legacy presenti nel
   bundle, "Visibilità marketplace" assente; batteria 38/38 riconfermata.
+
+## FIX — "Nuova promozione" irraggiungibile (ERR_NAME_NOT_RESOLVED)
+Il bottone portava a "//promotions?action=new": slug vuoto in SSR (helper
+window-only) -> URL protocol-relative col browser che cerca l'host
+"promotions". Stessa classe del bug //appointments gia' visto sul calendario.
+FIX: PromotionsContent/PromotionFormContent (+ 8 moduli con lo stesso pattern:
+client_consents, client_sheets, client_sheet_templates, gift_instance,
+locations, reports, resources, staff_availability) ora accettano la prop
+slug dal server (`slug={tenantSlug}` gia' passata dalla pagina) con fallback
+window; PromotionFormContent riceve la prop anche dal ramo action=new|edit.
+Verificato in SSR: href corretto /centroesteticoelite/promotions?action=new,
+nessun link protocol-relative residuo nella pagina.

@@ -29,8 +29,10 @@ function tenantSlug(): string {
 
 type ResourceForm = { id: number; name: string; description: string; qty_total: number; locations: ResourceLocationRow[] };
 
-export function ResourcesContent() {
-  const slug = tenantSlug();
+export function ResourcesContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [items, setItems] = useState<SharedResource[]>([]);
   const [locations, setLocations] = useState<Array<{ id: number; name: string }>>([]);
   const [loading, setLoading] = useState(true);

@@ -83,8 +83,10 @@ const RECORD_GROUP_META: Record<string, { title: string; desc: string }> = {
   },
 };
 
-export function ClientConsentsContent() {
-  const slug = tenantSlug();
+export function ClientConsentsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [clientId, setClientId] = useState(0);
   const [state, setState] = useState<PageState | null>(null);
   const [loading, setLoading] = useState(true);

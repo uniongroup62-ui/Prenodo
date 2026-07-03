@@ -105,8 +105,10 @@ function emptyLocationForm(): LocationForm {
   return { id: 0, name: "", address: "", legal_region: "", legal_province: "", legal_city: "", legal_cap: "", phone: "", email: "", whatsapp: "", facebook_url: "", instagram_url: "", tiktok_url: "", booking_enabled: true };
 }
 
-export function LocationsContent() {
-  const slug = tenantSlug();
+export function LocationsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [ctx, setCtx] = useState<Ctx | null>(null);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState("");

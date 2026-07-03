@@ -129,8 +129,10 @@ function granularityLabel(granularity: string, rangeDays: number): string {
   return effective === "daily" ? "Per giorno" : effective === "weekly" ? "Per settimana" : "Per mese";
 }
 
-export function ReportsContent() {
-  const slug = tenantSlug();
+export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   const todayIso = new Date().toISOString().slice(0, 10);
   const monthStartIso = `${todayIso.slice(0, 7)}-01`;

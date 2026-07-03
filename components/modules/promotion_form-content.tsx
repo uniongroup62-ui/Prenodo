@@ -92,8 +92,9 @@ type FormContext = {
 
 const DAY_LABELS = ["", "Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"];
 
-export function PromotionFormContent() {
-  const slug = tenantSlug();
+export function PromotionFormContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita (SSR-safe, come PromotionsContent).
+  const slug = slugProp || tenantSlug();
   const [action] = useState<"new" | "edit">(resolveAction);
   const [form, setForm] = useState<PromotionForm>(emptyForm());
   const [loading, setLoading] = useState(true);

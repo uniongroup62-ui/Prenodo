@@ -83,8 +83,10 @@ function formatValue(field: SheetField, value: unknown): string {
   return raw;
 }
 
-export function ClientSheetsContent() {
-  const slug = tenantSlug();
+export function ClientSheetsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [clientId, setClientId] = useState(0);
   const [client, setClient] = useState<Client | null>(null);
   const [templates, setTemplates] = useState<SheetTemplate[]>([]);
