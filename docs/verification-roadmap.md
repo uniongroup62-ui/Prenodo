@@ -1607,3 +1607,44 @@ DA VERIFICARE (in ordine di priorita' — un'area per "procedi"):
 - V10 RESIDUE: accessibility, marketplace (impostazioni), business_profile,
   locations (multi-sede: P11 differito), appointments_plan, commissions,
   api_sms_callback (OpenAPI SMS), api_user_prefs.
+
+## V1 DASHBOARD — CHIUSA (2026-07-03, 13 test PASS, commit sotto)
+Confronto con dashboard.php (737 righe) + api_dashboard_performance.php (281)
++ dashboard.js. La UI Next era gia' fedele (KPI, statistica settimanale con
+grafico, prossimi appuntamenti, avvisi, scadenziario); i CALCOLI divergevano
+e sono stati riscritti in lib/manage-dashboard.ts con le query legacy:
+- KPI Clienti: con sede = COUNT(DISTINCT client_id) dall'UNION di clients/
+  appointments/sales della sede (dashboard.php:59-95); senza sede COUNT(*).
+  (Prima: length della lista clienti, nessuna sede.)
+- KPI Appuntamenti oggi: blacklist stati legacy (canceled/no_show/rejected/
+  annullato/rifiutato... dashboard.php:34) + filtro sede permissivo
+  (location_id = sede OR IS NULL). (Prima: contava anche gli annullati.)
+- KPI Vendite ultimi 30gg: SUM(total) con sale_date >= NOW()-30gg, stati
+  attivi, sede. (Prima: createdAt, nessuna sede.)
+- STATISTICA SETTIMANALE (api_dashboard_performance): conta SOLO
+  status='scheduled' (diverso dai KPI top!); RICAVI = SUM(
+  appointment_services.price*qty, fallback services.price) degli appuntamenti
+  scheduled — NON le vendite POS (verificato T5c: una vendita non muove i
+  ricavi weekly); ore = SUM(ends_at-starts_at); nuovi clienti su created_at;
+  delta % vs settimana precedente con regola _pct_change (null quando prev=0
+  e cur>0 -> reso "—" muted, port di setDelta); serie = ricavi appuntamenti
+  per giorno lun->dom. (Prima: tutti gli stati, ricavi dalle vendite,
+  fallback 60min sulle ore, +100% sul delta da zero.)
+- PROSSIMI APPUNTAMENTI: starts_at in [NOW(), +7gg), SOLO pending/scheduled,
+  LIMIT 10, servizi STRING_AGG, formato d/m H:i, gated calendar.view (card
+  assente senza permesso). (Prima: da oggi in poi senza finestra, stati
+  !=Completato, limit 8, nessun gating.)
+- SCADENZIARIO E COSTI: is_paid=0 con residuo GREATEST(amount-paid_amount,0),
+  Scaduti = due_date < oggi, Questo mese = BETWEEN 1..fine mese, sede, gated
+  costs.manage|costs.items. (Prima: status derivato, niente residuo/gating.)
+- Rimosso il campo notifications dal payload (il legacy non ha quella card;
+  la UI non la rendeva). Avvisi: gia' port dedicato fedele
+  (manage-dashboard-alerts) con permessi + sede — invariato.
+- TEST (13 PASS, cleanup CLEAN): parita' numerica KPI con query legacy
+  indipendenti, scheduled/pending/canceled esercitati sui tre contatori
+  (blacklist vs scheduled-only), ricavi weekly da appointment_services e non
+  dalle vendite, serie giornaliera, upcoming con finestra e stati, vendita
+  POS che muove solo il KPI 30gg, delta null, gating card admin. Confermato
+  anche il filtro sede permissivo (un appuntamento su altra sede resta fuori).
+Non-gap: la dashboard legacy e' read-only (nessuna azione rapida ne' cambio
+stato dalla lista); l'avviso Tessere Fidelity legacy NON filtra per sede.

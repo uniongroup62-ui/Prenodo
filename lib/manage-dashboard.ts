@@ -1,0 +1,249 @@
+import "server-only";
+
+// DASHBOARD (V1 campagna di verifica) — port fedele dei calcoli di
+// app/pages/dashboard.php (737 righe) + api_dashboard_performance.php (281):
+//  - KPI top: Clienti (con sede: COUNT DISTINCT client_id dall'UNION di
+//    clients/appointments/sales della sede; senza sede: COUNT(*) clients),
+//    Appuntamenti oggi (blacklist stati annullati), Vendite ultimi 30gg
+//    (SUM(total) con sale_date >= NOW()-30gg, stati attivi);
+//  - Statistica settimanale (api_dashboard_performance): SOLO status
+//    'scheduled', ricavi = SUM(appointment_services.price*qty) con fallback
+//    services.price (NON le vendite POS), ore = SUM(ends_at-starts_at),
+//    nuovi clienti su created_at; delta % vs settimana precedente (null
+//    quando prev=0 e current>0, reso "—" muted); serie = ricavi appuntamenti
+//    per giorno lun->dom;
+//  - Prossimi appuntamenti: starts_at in [NOW(), NOW()+7gg), SOLO
+//    pending/scheduled, LIMIT 10, servizi aggregati, formato d/m H:i —
+//    gated calendar.view;
+//  - Scadenziario e Costi: is_paid=0 con residuo GREATEST(amount-paid_amount,
+//    0), Scaduti (due_date < oggi) e Questo mese (BETWEEN 1..fine mese) —
+//    gated costs.manage|costs.items;
+//  - filtro SEDE permissivo come il legacy (location_id = ? OR IS NULL).
+
+import type { RowDataPacket } from "@/lib/tenant-db";
+import { columnExists, dbQuery, quoteIdentifier, tenantTable } from "@/lib/tenant-db";
+
+const num = (v: unknown) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+function isoLocal(d: Date): string {
+  return [d.getFullYear(), String(d.getMonth() + 1).padStart(2, "0"), String(d.getDate()).padStart(2, "0")].join("-");
+}
+function addDaysIso(date: string, days: number): string {
+  const d = new Date(`${date}T12:00:00`);
+  d.setDate(d.getDate() + days);
+  return isoLocal(d);
+}
+function mondayOf(date: string): string {
+  const d = new Date(`${date}T12:00:00`);
+  const day = d.getDay() || 7;
+  d.setDate(d.getDate() - day + 1);
+  return isoLocal(d);
+}
+
+// Stati appuntamento ESCLUSI dai KPI (dashboard.php:34, blacklist).
+const CANCELLED_APPT = ["canceled", "cancelled", "no_show", "no show", "no-show", "noshow", "non presentato", "rejected", "annullato", "annullata", "rifiutato", "rifiutata"];
+// Stati vendita ESCLUSI (dashboard.php:35).
+const CANCELLED_SALE = ["cancelled", "canceled", "annullata", "annullato"];
+
+const apptActiveSql = (alias: string) => `LOWER(TRIM(COALESCE(${alias}.status,''))) NOT IN (${CANCELLED_APPT.map((s) => `'${s}'`).join(",")})`;
+const saleActiveSql = (alias: string) => `LOWER(TRIM(COALESCE(${alias}.status,''))) NOT IN (${CANCELLED_SALE.map((s) => `'${s}'`).join(",")})`;
+// Filtro sede PERMISSIVO legacy (dashboard.php:41-56): include location NULL.
+const locFilter = (alias: string, locationId: number) => (locationId > 0 ? ` AND (${alias}.location_id = ${locationId} OR ${alias}.location_id IS NULL)` : "");
+
+// _pct_change (api_dashboard_performance:16-22): null quando prev=0 e cur>0.
+function pctChange(current: number, previous: number): number | null {
+  if (previous === 0) return current === 0 ? 0 : null;
+  return Math.round(((current - previous) / previous) * 100);
+}
+
+export type DashboardWeeklyMetric = { label: string; value: string; deltaPct: number | null };
+
+export type ManageDashboardPayload = {
+  stats: Array<{ label: string; value: string; detail: string }>;
+  weekly: { range: string; metrics: DashboardWeeklyMetric[]; series: Array<{ date: string; label: string; revenue: number }> };
+  // null quando manca calendar.view (la card non viene resa, come il legacy).
+  upcoming: Array<{ date: string; clientName: string; serviceName: string }> | null;
+  // null quando mancano costs.manage/costs.items.
+  costs: { overdueAmount: number; overdueCount: number; monthAmount: number; monthCount: number } | null;
+};
+
+export async function getManageDashboard(
+  slug: string,
+  opts: { locationId: number; canSeeCalendar: boolean; canSeeCosts: boolean },
+): Promise<ManageDashboardPayload> {
+  const locationId = Math.max(0, opts.locationId || 0);
+  const apptTable = await tenantTable(slug, "appointments");
+  const T = apptTable.tenantId ?? 0;
+  const clientsTable = await tenantTable(slug, "clients");
+  const salesTable = await tenantTable(slug, "sales");
+  const today = isoLocal(new Date());
+
+  // --- KPI Clienti (dashboard.php:59-95) ---
+  let kpiClients = 0;
+  if (locationId > 0) {
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT COUNT(DISTINCT client_id) AS c FROM (
+         SELECT id AS client_id FROM ${quoteIdentifier(clientsTable.name)} WHERE tenant_id = ${T} AND (location_id = ${locationId} OR location_id IS NULL)
+         UNION SELECT a.client_id FROM ${quoteIdentifier(apptTable.name)} a WHERE a.tenant_id = ${T} AND a.client_id IS NOT NULL${locFilter("a", locationId)}
+         UNION SELECT s.client_id FROM ${quoteIdentifier(salesTable.name)} s WHERE s.tenant_id = ${T} AND s.client_id IS NOT NULL${locFilter("s", locationId)}
+       ) u WHERE client_id IS NOT NULL`,
+      [],
+    ).catch(() => [] as RowDataPacket[]);
+    kpiClients = num(rows[0]?.c);
+  } else {
+    const rows = await dbQuery<RowDataPacket[]>(`SELECT COUNT(*) AS c FROM ${quoteIdentifier(clientsTable.name)} WHERE tenant_id = ${T}`, []).catch(() => [] as RowDataPacket[]);
+    kpiClients = num(rows[0]?.c);
+  }
+
+  // --- KPI Appuntamenti oggi (dashboard.php:97-104) ---
+  const apptTodayRows = await dbQuery<RowDataPacket[]>(
+    `SELECT COUNT(*) AS c FROM ${quoteIdentifier(apptTable.name)} a
+      WHERE a.tenant_id = ${T} AND a.starts_at::date = ? AND ${apptActiveSql("a")}${locFilter("a", locationId)}`,
+    [today],
+  ).catch(() => [] as RowDataPacket[]);
+  const kpiApptToday = num(apptTodayRows[0]?.c);
+
+  // --- KPI Vendite ultimi 30gg (dashboard.php:105-130) ---
+  const sales30Rows = await dbQuery<RowDataPacket[]>(
+    `SELECT COALESCE(SUM(s.total),0) AS s FROM ${quoteIdentifier(salesTable.name)} s
+      WHERE s.tenant_id = ${T} AND s.sale_date >= NOW() - interval '30 days' AND ${saleActiveSql("s")}${locFilter("s", locationId)}`,
+    [],
+  ).catch(() => [] as RowDataPacket[]);
+  const kpiSales30 = round2(num(sales30Rows[0]?.s));
+
+  // --- Statistica settimanale (api_dashboard_performance.php:82-245) ---
+  // Settimana corrente lun->dom + settimana precedente per i delta; conta SOLO
+  // status='scheduled' ("Prenotato"); ricavi dai servizi degli appuntamenti.
+  const weekStart = mondayOf(today);
+  const weekEnd = addDaysIso(weekStart, 6);
+  const prevStart = addDaysIso(weekStart, -7);
+  const prevEnd = addDaysIso(weekStart, -1);
+  const asTable = await tenantTable(slug, "appointment_services");
+  const svcTable = await tenantTable(slug, "services");
+  const hasAsQty = await columnExists(asTable.name, "qty");
+
+  const weekAgg = async (from: string, to: string) => {
+    const where = `a.tenant_id = ${T} AND LOWER(TRIM(COALESCE(a.status,''))) = 'scheduled' AND a.starts_at >= ? AND a.starts_at < ?${locFilter("a", locationId)}`;
+    const params = [`${from} 00:00:00`, `${addDaysIso(to, 1)} 00:00:00`];
+    const cntRows = await dbQuery<RowDataPacket[]>(`SELECT COUNT(DISTINCT a.id) AS c FROM ${quoteIdentifier(apptTable.name)} a WHERE ${where}`, params).catch(() => [] as RowDataPacket[]);
+    const revRows = await dbQuery<RowDataPacket[]>(
+      `SELECT COALESCE(SUM(COALESCE(sv.price, s.price, 0) * ${hasAsQty ? "COALESCE(sv.qty, 1)" : "1"}),0) AS r
+         FROM ${quoteIdentifier(apptTable.name)} a
+         JOIN ${quoteIdentifier(asTable.name)} sv ON sv.appointment_id = a.id AND sv.tenant_id = a.tenant_id
+         LEFT JOIN ${quoteIdentifier(svcTable.name)} s ON s.id = sv.service_id AND s.tenant_id = a.tenant_id
+        WHERE ${where}`,
+      params,
+    ).catch(() => [] as RowDataPacket[]);
+    const hourRows = await dbQuery<RowDataPacket[]>(
+      `SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (a.ends_at - a.starts_at)) / 60), 0) AS m FROM ${quoteIdentifier(apptTable.name)} a WHERE ${where} AND a.ends_at IS NOT NULL`,
+      params,
+    ).catch(() => [] as RowDataPacket[]);
+    const clientWhere = `c.tenant_id = ${T} AND c.created_at::date >= ? AND c.created_at::date <= ?${locationId > 0 ? ` AND (c.location_id = ${locationId} OR c.location_id IS NULL)` : ""}`;
+    const newRows = await dbQuery<RowDataPacket[]>(`SELECT COUNT(*) AS c FROM ${quoteIdentifier(clientsTable.name)} c WHERE ${clientWhere}`, [from, to]).catch(() => [] as RowDataPacket[]);
+    return {
+      appointments: num(cntRows[0]?.c),
+      revenue: round2(num(revRows[0]?.r)),
+      hours: round2(num(hourRows[0]?.m) / 60),
+      newClients: num(newRows[0]?.c),
+    };
+  };
+  const [cur, prev] = await Promise.all([weekAgg(weekStart, weekEnd), weekAgg(prevStart, prevEnd)]);
+
+  // Serie ricavi giornalieri (api_dashboard_performance.php:216-245).
+  const dailyRows = await dbQuery<RowDataPacket[]>(
+    `SELECT a.starts_at::date AS d, COALESCE(SUM(COALESCE(sv.price, s.price, 0) * ${hasAsQty ? "COALESCE(sv.qty, 1)" : "1"}),0) AS r
+       FROM ${quoteIdentifier(apptTable.name)} a
+       JOIN ${quoteIdentifier(asTable.name)} sv ON sv.appointment_id = a.id AND sv.tenant_id = a.tenant_id
+       LEFT JOIN ${quoteIdentifier(svcTable.name)} s ON s.id = sv.service_id AND s.tenant_id = a.tenant_id
+      WHERE a.tenant_id = ${T} AND LOWER(TRIM(COALESCE(a.status,''))) = 'scheduled'
+        AND a.starts_at >= ? AND a.starts_at < ?${locFilter("a", locationId)}
+      GROUP BY a.starts_at::date`,
+    [`${weekStart} 00:00:00`, `${addDaysIso(weekEnd, 1)} 00:00:00`],
+  ).catch(() => [] as RowDataPacket[]);
+  const revenueByDate = new Map(dailyRows.map((r) => [String(r.d).slice(0, 10), round2(num(r.r))]));
+  const series = Array.from({ length: 7 }, (_, i) => {
+    const date = addDaysIso(weekStart, i);
+    return { date, label: `${date.slice(8, 10)}/${date.slice(5, 7)}`, revenue: revenueByDate.get(date) ?? 0 };
+  });
+
+  const fmtEuro = (n: number) => `${n.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} euro`;
+  const fmtHours = (n: number) => `${n.toLocaleString("it-IT", { maximumFractionDigits: 1 })} h`;
+
+  // --- Prossimi appuntamenti (dashboard.php:214-237) ---
+  let upcoming: ManageDashboardPayload["upcoming"] = null;
+  if (opts.canSeeCalendar) {
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT a.starts_at, c.full_name AS client_name,
+              COALESCE(NULLIF(STRING_AGG(DISTINCT s.name, ', '), ''), '') AS services
+         FROM ${quoteIdentifier(apptTable.name)} a
+         LEFT JOIN ${quoteIdentifier(clientsTable.name)} c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
+         LEFT JOIN ${quoteIdentifier(asTable.name)} sv ON sv.appointment_id = a.id AND sv.tenant_id = a.tenant_id
+         LEFT JOIN ${quoteIdentifier(svcTable.name)} s ON s.id = sv.service_id AND s.tenant_id = a.tenant_id
+        WHERE a.tenant_id = ${T} AND a.starts_at >= NOW() AND a.starts_at < NOW() + interval '7 days'
+          AND LOWER(TRIM(COALESCE(a.status,''))) IN ('pending','scheduled')${locFilter("a", locationId)}
+        GROUP BY a.id, a.starts_at, c.full_name
+        ORDER BY a.starts_at ASC
+        LIMIT 10`,
+      [],
+    ).catch(() => [] as RowDataPacket[]);
+    upcoming = rows.map((r) => {
+      const dt = String(r.starts_at ?? "");
+      const d = new Date(dt.includes("T") ? dt : dt.replace(" ", "T"));
+      const p = (n2: number) => String(n2).padStart(2, "0");
+      const label = Number.isNaN(d.getTime()) ? dt.slice(0, 16) : `${p(d.getDate())}/${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}`;
+      return { date: label, clientName: String(r.client_name ?? "") || "—", serviceName: String(r.services ?? "") || "—" };
+    });
+  }
+
+  // --- Scadenziario e Costi (dashboard.php:132-206) ---
+  let costs: ManageDashboardPayload["costs"] = null;
+  if (opts.canSeeCosts) {
+    const costsTable = await tenantTable(slug, "costs").catch(() => null);
+    if (costsTable) {
+      const hasPaidAmount = await columnExists(costsTable.name, "paid_amount");
+      const residual = hasPaidAmount ? "GREATEST(COALESCE(amount,0) - COALESCE(paid_amount,0), 0)" : "COALESCE(amount,0)";
+      const monthStart = `${today.slice(0, 7)}-01`;
+      const nextMonth = new Date(`${monthStart}T12:00:00`);
+      nextMonth.setMonth(nextMonth.getMonth() + 1);
+      const monthEnd = addDaysIso(isoLocal(nextMonth), -1);
+      const locSql = locationId > 0 && (await columnExists(costsTable.name, "location_id")) ? ` AND (location_id = ${locationId} OR location_id IS NULL)` : "";
+      const overdueRows = await dbQuery<RowDataPacket[]>(
+        `SELECT COALESCE(SUM(${residual}),0) AS s, COUNT(*) AS c FROM ${quoteIdentifier(costsTable.name)}
+          WHERE tenant_id = ${costsTable.tenantId ?? 0} AND COALESCE(is_paid,0) = 0 AND due_date < ?${locSql}`,
+        [today],
+      ).catch(() => [] as RowDataPacket[]);
+      const monthRows = await dbQuery<RowDataPacket[]>(
+        `SELECT COALESCE(SUM(${residual}),0) AS s, COUNT(*) AS c FROM ${quoteIdentifier(costsTable.name)}
+          WHERE tenant_id = ${costsTable.tenantId ?? 0} AND COALESCE(is_paid,0) = 0 AND due_date >= ? AND due_date <= ?${locSql}`,
+        [monthStart, monthEnd],
+      ).catch(() => [] as RowDataPacket[]);
+      costs = {
+        overdueAmount: round2(num(overdueRows[0]?.s)),
+        overdueCount: num(overdueRows[0]?.c),
+        monthAmount: round2(num(monthRows[0]?.s)),
+        monthCount: num(monthRows[0]?.c),
+      };
+    }
+  }
+
+  return {
+    stats: [
+      { label: "Clienti", value: String(kpiClients), detail: "anagrafiche attive" },
+      { label: "Appuntamenti oggi", value: String(kpiApptToday), detail: "agenda operativa" },
+      { label: "Vendite ultimi 30gg", value: fmtEuro(kpiSales30), detail: "vendite attive" },
+    ],
+    weekly: {
+      range: `${weekStart.slice(8, 10)}/${weekStart.slice(5, 7)}/${weekStart.slice(0, 4)} - ${weekEnd.slice(8, 10)}/${weekEnd.slice(5, 7)}/${weekEnd.slice(0, 4)}`,
+      metrics: [
+        { label: "Appuntamenti", value: String(cur.appointments), deltaPct: pctChange(cur.appointments, prev.appointments) },
+        { label: "Ricavi", value: fmtEuro(cur.revenue), deltaPct: pctChange(cur.revenue, prev.revenue) },
+        { label: "Ore lavorate", value: fmtHours(cur.hours), deltaPct: pctChange(cur.hours, prev.hours) },
+        { label: "Nuovi clienti", value: String(cur.newClients), deltaPct: pctChange(cur.newClients, prev.newClients) },
+      ],
+      series,
+    },
+    upcoming,
+    costs,
+  };
+}

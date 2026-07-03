@@ -5,8 +5,9 @@ import { useEffect, useRef, useState } from "react";
 // Faithful port of the PHP dashboard main content (app/pages/dashboard.php +
 // assets/js/pages/dashboard.js), fed by the existing /api/manage/dashboard.
 
-type Metric = { label: string; value: string; detail: string; tone?: string };
-type SeriesPoint = { date: string; label: string; revenue: number; appointments: number };
+type Metric = { label: string; value: string; detail: string };
+type WeeklyMetric = { label: string; value: string; deltaPct: number | null };
+type SeriesPoint = { date: string; label: string; revenue: number };
 // Grouped dashboard "Avvisi" alert — faithful port of the legacy $alerts[] item.
 type DashboardAlert = {
   key: string;
@@ -21,13 +22,14 @@ type DashboardAlert = {
 };
 type DashboardData = {
   stats: Metric[];
-  weekly: { range: string; metrics: Metric[]; series: SeriesPoint[] };
-  appointments: { today: Appt[]; upcoming: Appt[] };
+  weekly: { range: string; metrics: WeeklyMetric[]; series: SeriesPoint[] };
+  // null = permesso calendar.view mancante (card nascosta, come il legacy).
+  upcoming: Appt[] | null;
   alerts: DashboardAlert[];
-  notifications: Array<{ id?: number | string; title?: string; message?: string }>;
-  costs: { overdueAmount: number; monthAmount: number; overdueCount: number; monthCount: number };
+  // null = permessi costs.manage/costs.items mancanti (card nascosta).
+  costs: { overdueAmount: number; monthAmount: number; overdueCount: number; monthCount: number } | null;
 };
-type Appt = { date?: string; time?: string; clientName?: string; serviceName?: string };
+type Appt = { date?: string; clientName?: string; serviceName?: string };
 
 const OVERVIEW_ICONS = ["people", "calendar-check", "cash-coin"];
 const WEEKLY_ICONS = ["calendar-check", "cash-coin", "clock", "person-plus"];
@@ -39,10 +41,14 @@ function euro(value: string): string {
 function fmtEuro(n: number): string {
   return `€ ${n.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
-function toneClass(tone?: string): string {
-  if (tone === "good") return "text-success";
-  if (tone === "bad") return "text-danger";
-  return "text-muted";
+// Port di setDelta (dashboard.js:30-41): verde >0, rosso <0, muted per 0/null.
+function deltaClass(deltaPct: number | null): string {
+  if (deltaPct === null || deltaPct === 0) return "text-muted";
+  return deltaPct > 0 ? "text-success" : "text-danger";
+}
+function deltaText(deltaPct: number | null): string {
+  if (deltaPct === null) return "—";
+  return `${deltaPct > 0 ? "+" : ""}${deltaPct}%`;
 }
 
 export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: string }) {
@@ -118,7 +124,7 @@ export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: 
     };
   }, [data]);
 
-  const upcoming = data?.appointments.upcoming ?? [];
+  const upcoming = data?.upcoming ?? null;
   const alerts = data?.alerts ?? [];
 
   return (
@@ -177,7 +183,7 @@ export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: 
                             <i className={`bi bi-${WEEKLY_ICONS[i] ?? "bar-chart"}`} />
                           </div>
                         </div>
-                        <div className={`small mt-1 ${toneClass(metric.tone)}`}>{metric.detail}</div>
+                        <div className={`small mt-1 ${deltaClass(metric.deltaPct)}`}>{deltaText(metric.deltaPct)}</div>
                       </div>
                     </div>
                   ))}
@@ -198,49 +204,51 @@ export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: 
 
           <div className="col-xl-3 col-lg-4">
             <div className="dashboard-side-stack">
-              <div className="card dashboard-card dashboard-side-card dashboard-upcoming-card">
-                <div className="card-header dashboard-card-header fw-semibold d-flex justify-content-between align-items-center">
-                  <span className="dashboard-card-title">
-                    <i className="bi bi-clock" />
-                    <span>Prossimi appuntamenti</span>
-                  </span>
-                  <a className="btn btn-sm btn-outline-secondary" href={`/${slug}/calendar`}>
-                    <i className="bi bi-calendar3 me-1" />
-                    Calendario
-                  </a>
-                </div>
-                <div className="table-responsive">
-                  <table className="table dashboard-table mb-0">
-                    <thead>
-                      <tr>
-                        <th>Data</th>
-                        <th>Cliente</th>
-                        <th>Servizio</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {upcoming.length === 0 ? (
+              {upcoming !== null ? (
+                <div className="card dashboard-card dashboard-side-card dashboard-upcoming-card">
+                  <div className="card-header dashboard-card-header fw-semibold d-flex justify-content-between align-items-center">
+                    <span className="dashboard-card-title">
+                      <i className="bi bi-clock" />
+                      <span>Prossimi appuntamenti</span>
+                    </span>
+                    <a className="btn btn-sm btn-outline-secondary" href={`/${slug}/calendar`}>
+                      <i className="bi bi-calendar3 me-1" />
+                      Calendario
+                    </a>
+                  </div>
+                  <div className="table-responsive">
+                    <table className="table dashboard-table mb-0">
+                      <thead>
                         <tr>
-                          <td colSpan={3} className="dashboard-empty-cell">
-                            <div className="dashboard-empty-state">
-                              <i className="bi bi-calendar2-week" />
-                              <span>Nessun appuntamento in arrivo</span>
-                            </div>
-                          </td>
+                          <th>Data</th>
+                          <th>Cliente</th>
+                          <th>Servizio</th>
                         </tr>
-                      ) : (
-                        upcoming.map((appt, i) => (
-                          <tr key={i}>
-                            <td>{[appt.date, appt.time].filter(Boolean).join(" ")}</td>
-                            <td>{appt.clientName ?? "—"}</td>
-                            <td>{appt.serviceName ?? "—"}</td>
+                      </thead>
+                      <tbody>
+                        {upcoming.length === 0 ? (
+                          <tr>
+                            <td colSpan={3} className="dashboard-empty-cell">
+                              <div className="dashboard-empty-state">
+                                <i className="bi bi-calendar2-week" />
+                                <span>Nessun appuntamento in arrivo</span>
+                              </div>
+                            </td>
                           </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
+                        ) : (
+                          upcoming.map((appt, i) => (
+                            <tr key={i}>
+                              <td>{appt.date ?? "—"}</td>
+                              <td>{appt.clientName ?? "—"}</td>
+                              <td>{appt.serviceName ?? "—"}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
+              ) : null}
 
               <div className="card dashboard-card dashboard-side-card dashboard-alerts">
                 <div className="card-header dashboard-card-header fw-semibold d-flex justify-content-between align-items-center">
@@ -287,38 +295,40 @@ export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: 
                 )}
               </div>
 
-              <div className="card dashboard-card dashboard-side-card dashboard-costs">
-                <div className="card-header dashboard-card-header fw-semibold d-flex justify-content-between align-items-center">
-                  <span className="dashboard-card-title">
-                    <i className="bi bi-calendar2-check" />
-                    <span>Scadenziario e Costi</span>
-                  </span>
-                  <a className="btn btn-sm btn-outline-secondary" href={`/${slug}/costs`}>
-                    <i className="bi bi-box-arrow-up-right me-1" />
-                    Apri
-                  </a>
-                </div>
-                <div className="card-body dashboard-costs-body">
-                  <div className="row g-3">
-                    <div className="col-6">
-                      <div className="text-muted small">Scaduti</div>
-                      <div className="h5 fw-bold mb-0">{fmtEuro(data?.costs.overdueAmount ?? 0)}</div>
-                      <div className="small text-muted">{data?.costs.overdueCount ?? 0} voci</div>
-                      <a className="small dashboard-link-action" href={`/${slug}/costs?tab=scadenziario&status=open`}>
-                        Vedi scaduti
-                      </a>
-                    </div>
-                    <div className="col-6">
-                      <div className="text-muted small">Questo mese</div>
-                      <div className="h5 fw-bold mb-0">{fmtEuro(data?.costs.monthAmount ?? 0)}</div>
-                      <div className="small text-muted">{data?.costs.monthCount ?? 0} voci</div>
-                      <a className="small dashboard-link-action" href={`/${slug}/costs?tab=scadenziario&status=open`}>
-                        Vedi mese
-                      </a>
+              {data?.costs ? (
+                <div className="card dashboard-card dashboard-side-card dashboard-costs">
+                  <div className="card-header dashboard-card-header fw-semibold d-flex justify-content-between align-items-center">
+                    <span className="dashboard-card-title">
+                      <i className="bi bi-calendar2-check" />
+                      <span>Scadenziario e Costi</span>
+                    </span>
+                    <a className="btn btn-sm btn-outline-secondary" href={`/${slug}/costs`}>
+                      <i className="bi bi-box-arrow-up-right me-1" />
+                      Apri
+                    </a>
+                  </div>
+                  <div className="card-body dashboard-costs-body">
+                    <div className="row g-3">
+                      <div className="col-6">
+                        <div className="text-muted small">Scaduti</div>
+                        <div className="h5 fw-bold mb-0">{fmtEuro(data.costs.overdueAmount)}</div>
+                        <div className="small text-muted">{data.costs.overdueCount} voci</div>
+                        <a className="small dashboard-link-action" href={`/${slug}/costs?tab=scadenziario&status=open`}>
+                          Vedi scaduti
+                        </a>
+                      </div>
+                      <div className="col-6">
+                        <div className="text-muted small">Questo mese</div>
+                        <div className="h5 fw-bold mb-0">{fmtEuro(data.costs.monthAmount)}</div>
+                        <div className="small text-muted">{data.costs.monthCount} voci</div>
+                        <a className="small dashboard-link-action" href={`/${slug}/costs?tab=scadenziario&status=open`}>
+                          Vedi mese
+                        </a>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
+              ) : null}
             </div>
           </div>
         </div>
