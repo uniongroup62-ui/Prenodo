@@ -1916,3 +1916,58 @@ Cleanup: cliente/appuntamento/preventivi/tessera ZZV7 rimossi, righe
 reminders create durante i test eliminate (anche quelle delle
 rischedulazioni su appuntamenti reali), automation_settings ripristinata
 al valore pre-test -> CLEAN.
+
+## V8 REPORT — CHIUSA (2026-07-03, 20 test e2e PASS, parita' numerica)
+Fonte legacy: app/pages/reports.php (2156 righe) + api_dashboard_performance.php.
+Batteria: e2e-reports.mjs (dati sintetici in finestra isolata gen-2020, cleanup
+completo; verifica i NUMERI, non solo le shape).
+GAP GRAVI TROVATI E FIXATI (lib/manage-reports.ts riscritta + componente):
+1. "INCASSO" SBAGLIATO: il Next sommava sales.total; il legacy usa il modello a
+   EVENTI DI INCASSO (fetchCollectionEvents 585-765) = vendite SENZA piano rate
+   (per sale_date) + acconti dei piani + rate PAGATE (per paid_at, cash-basis).
+   Con una vendita da 90 a rate (acconto 30 + 1 rata pagata 30) il legacy
+   incassa 60, il vecchio Next mostrava 90. Ora identico (test K1: 210 vs
+   venduto 240). Aggiunti Movimenti incasso + ripartizione METODI DI PAGAMENTO
+   (regex legacy "Tipo pagamento: X" nelle note; ordine Contanti/Carte/
+   Assegno/Bonifico/Non indicato, share % a 1 decimale).
+2. Scontrino medio ora = AVG(s.total) come il legacy (prima sold/cnt — uguale
+   in assenza di NULL ma allineato); Venduto/Lordo (SUM total/subtotal) e
+   sconti visibili (discount+fidelity_discount) esposti.
+3. Tile HARDCODED ora calcolate: Genere prevalente (Equilibrato/Donne/Uomini/
+   Non indicato + "N con genere indicato"), Eta' media (>=1900-01-01, <= oggi,
+   fasce <18..65+, N/D senza date), Costi (due_date BETWEEN inclusivo, pagato:
+   is_paid=1 con paid_amount 0 vale amount; residuo GREATEST(amount-paid,0)),
+   Commissioni (staff_commission_payments per COALESCE(movement_datetime,
+   created_at), entry_status='cancelled' escluse) — entrambe perm-gated come
+   il legacy (costs.manage|costs.items / commissions.manage).
+4. Prenotazioni: aggiunti i bucket legacy (pending/scheduled/done/canceled/
+   no_show con i set di sinonimi IT/EN 914-918) + trend attive + filtro sede
+   dual-schema (location_id diretto O bridge appointment_locations).
+5. Top servizi/prodotti: aggiunte le esclusioni legacy per nome (%giftcard%,
+   %giftbox%, %ricarica%, %pacchetto%) e tipo IN (service,product), conteggio
+   vendite DISTINCT s.id; etichette fallback top clienti ("Cliente #id",
+   "Cliente non associato"). Tipologie di vendita (donut) con etichette
+   Servizio/Prodotto/Pacchetto/GiftCard/GiftBox/Ricarica/Voce (Prodotto sempre
+   presente).
+6. Operatori: fusione vendite (operator_name) + ORE LAVORATE dai segmenti
+   degli appuntamenti eseguiti (duration_minutes o ends-starts) + numero app.
+   + scontrino medio (prima solo vendite).
+7. COMPONENTE: i 10 canvas Chart.js erano MORTI (nessun codice di disegno) —
+   ora tutti disegnati (window.Chart, palette legacy reports.php:1330);
+   raggruppamento auto/giorno/settimana/mese attivo (auto: <=45gg giorno,
+   <=180 settimana, altrimenti mese); modalita' confronto attive (auto/
+   periodo precedente/anno precedente/mese/personalizzato -> compare_from/
+   compare_to all'API) con "Confronto effettivo" reale; delta con semantica
+   legacy formatDeltaInfo ("Nuovo rispetto al confronto", "Nessuna
+   variazione", "Non confrontabile" per lo scontrino medio); i 3 modali
+   "Mostra altro" popolati con ricerca; date default dinamiche (erano
+   hardcoded 2026-06-01/29).
+NON-GAP: export CSV/PDF dei report NON esiste nemmeno nel legacy.
+NOTE SCHEMA: il CHECK migrato su sale_items.item_type ammette solo
+service/product/package (il POS Next scrive solo questi) — le etichette
+GiftCard/GiftBox/Ricarica restano mappate per parita' se il CHECK verra'
+esteso. api_dashboard_performance: gia' portato dentro /api/manage/dashboard
+(V1, status='scheduled' secco + pctChange null-semantics verificati).
+DIFFERITO: fail-closed sedi multi-utente (l'utente admin vede tutto; il
+fail-closed 1=0 legacy scatta con operatori senza sedi autorizzate — da
+riverificare in V10 multi-sede P11).

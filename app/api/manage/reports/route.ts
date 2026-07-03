@@ -3,7 +3,7 @@ import { listDbClients, listDbProducts, listDbSales, posDbSummary } from "@/lib/
 import { getManageReports } from "@/lib/manage-reports";
 import { currentManageSession } from "@/lib/manage-auth";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
-import { can } from "@/lib/role-permissions";
+import { can, canAny } from "@/lib/role-permissions";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -23,7 +23,14 @@ export async function GET(request: Request) {
       listDbClients({ slug: tenantSlug }),
       listDbProducts({ slug: tenantSlug }),
       // Date-filtered analytics (from/to = YYYY-MM-DD; default = current month).
-      getManageReports(tenantSlug, url.searchParams.get("from") ?? "", url.searchParams.get("to") ?? "", parseInteger(url.searchParams.get("location_id"), 0), compare),
+      // Costi/Commissioni sono perm-gated come nel legacy (reports.php:1203/1268);
+      // compare_from/compare_to permettono le modalita' di confronto della pagina.
+      getManageReports(tenantSlug, url.searchParams.get("from") ?? "", url.searchParams.get("to") ?? "", parseInteger(url.searchParams.get("location_id"), 0), compare, {
+        includeCosts: canAny(session.user.perms, ["costs.manage", "costs.items"]),
+        includeCommissions: can(session.user.perms, "commissions.manage"),
+        compareFrom: url.searchParams.get("compare_from") ?? undefined,
+        compareTo: url.searchParams.get("compare_to") ?? undefined,
+      }),
     ]);
 
     return Response.json({
