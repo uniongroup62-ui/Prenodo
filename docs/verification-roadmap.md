@@ -1161,7 +1161,7 @@ GAP CONFERMATI (ordine di gravita'):
 - F3 TOGGLE: manca il RIPRISTINO su riattivazione (promotions/gifts
   auto_disabled_by_fidelity -> riattivati) + auto_disabled_by_points sulle
   campagne quando si spengono i punti + messaggi composti legacy.
-- F4 LIVELLI mai promossi: clients.fidelity_level mai ricalcolato
+- [CHIUSO 2026-07-03] F4 LIVELLI mai promossi: clients.fidelity_level mai ricalcolato
   (legacy: recalcClientLevelLocked su ogni transazione, earnedPointsInLastDays
   su level_period_days) -> le campagne per-livello sono inerti. Manca anche
   la cascata cleanup livelli eliminati (promo/omaggi/campagne aggiornati o
@@ -1243,3 +1243,25 @@ expires_at di una durata piena (validity da fidelity_adhesion_json); fuori
 finestra o dopo la scadenza nessun rinnovo. Agganciato in addDbWalletMovement
 (earn>0 con source sale/appointment). Verificato: +12 mesi in finestra,
 invariata fuori finestra.
+
+### Chiusura gap FIDELITY F4 (2026-07-03, 9/9 test live PASS)
+- calcClientFidelityLevelKey (port calcClientLevelPoints ~2774 +
+  earnedPointsInLastDays): livello dal MATURATO (delta positivi in
+  transactions nel periodo fidelity_level_period_days, 0=sempre), ''
+  per non aderenti o sezione spenta; il redeem non abbassa il livello.
+- recalcClientFidelityLevel agganciato a: ogni transazione punti
+  (addDbWalletMovement), emissione/stato/riattivazione tessera, e
+  save_levels (ricalcolo di massa: titolari tessera + livelli residui).
+- CASCATA livelli eliminati (port fidelity_levels_cleanup_deleted_levels):
+  key rimosse da fidelity_campaigns.eligible_points_levels,
+  promotions.target_fidelity_levels (target_type=fidelity) e
+  gifts.eligible_levels_points; righe rimaste senza livelli target ->
+  disattivate; prenotazioni aperte delle promo disattivate ripulite.
+  Guard conferma legacy ("Conferma prima l'eliminazione del livello a punti
+  \"X\".") + confirm nella UI livelli con flag fidelity_delete_confirmed;
+  messaggio composto "Livelli Card salvati. N campagne punti disattivate...".
+Verificato live: base->argento->oro con gli earn, redeem non retrocede,
+eliminazione livello senza conferma rifiutata, con conferma cascata su
+campagna target (svuotata+disattivata) e livello cliente ricalcolato oro->
+argento. RESTA (minore): la firma-hash legacy per la conferma cambio soglie
+(qui la conferma copre le eliminazioni; il cambio soglie ricalcola e basta).

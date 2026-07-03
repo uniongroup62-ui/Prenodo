@@ -5114,6 +5114,9 @@ export async function addDbWalletMovement(
     if (txKind === "earn" && points > 0 && ["sale", "appointment"].includes(String(txSourceType ?? ""))) {
       await fidelityCardTryAutoRenewByActivity(slug, clientId).catch(() => false);
     }
+    // F4: ricalcolo del livello card dai punti maturati (recalcClientLevelLocked
+    // su ogni transazione punti, Fidelity.php ~1706).
+    await recalcClientFidelityLevel(slug, clientId).catch(() => "");
     source = "transactions";
   }
 
@@ -10822,6 +10825,69 @@ function normalizeLevelKey(v: string): string {
 // two levels with the same min points. When disabled the existing levels are
 // preserved (only the toggle flips). Persists fidelity_levels_enabled +
 // fidelity_card_levels_json ({format:'split', points_enabled, points_levels}).
+// F4 — livello cliente dai punti maturati (port of Fidelity::calcClientLevelPoints
+// ~2774 + earnedPointsInLastDays ~2821): somma dei delta POSITIVI in transactions
+// nel periodo fidelity_level_period_days (0 = da sempre); il livello è quello con
+// min_points più alto <= maturati. '' per non aderenti o sezione disattivata.
+export async function calcClientFidelityLevelKey(slug: string, clientId: number): Promise<string> {
+  if (clientId <= 0) return "";
+  const points = await getFidelityPointsSettings(slug);
+  const levelsCfg = await getFidelityLevelsSettings(slug);
+  if (!points.globalEnabled || !levelsCfg.enabled || !levelsCfg.pointsEnabled || levelsCfg.levels.length === 0) return "";
+  if (!(await fidelityIsClientAdhering(slug, clientId))) return "";
+
+  const bizRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_level_period_days", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const periodDays = Math.max(0, Math.min(36500, Math.round(Number(bizRows[0]?.fidelity_level_period_days ?? 365))));
+
+  const where = periodDays > 0 ? "client_id = ? AND delta_points > 0 AND created_at >= ?" : "client_id = ? AND delta_points > 0";
+  const params: unknown[] = periodDays > 0 ? [clientId, new Date(Date.now() - periodDays * 86400000)] : [clientId];
+  const sumRows = await tenantSelect<RowDataPacket>({ slug, table: "transactions", columns: "COALESCE(SUM(delta_points),0) AS s", where, params }).catch(() => [] as RowDataPacket[]);
+  const earned = Math.max(0, normalizeFidelityPoints(sumRows[0]?.s ?? 0));
+
+  let best = "";
+  let bestMin = -1;
+  for (const level of levelsCfg.levels) {
+    if (level.minPoints <= earned && level.minPoints > bestMin) {
+      best = level.key;
+      bestMin = level.minPoints;
+    }
+  }
+  return best;
+}
+
+// recalcClientLevelLocked (Fidelity.php ~3596): scrive clients.fidelity_level solo
+// quando programma e livelli sono attivi. Best-effort, mai bloccante.
+export async function recalcClientFidelityLevel(slug: string, clientId: number): Promise<string> {
+  if (clientId <= 0) return "";
+  const points = await getFidelityPointsSettings(slug);
+  const levelsCfg = await getFidelityLevelsSettings(slug);
+  if (!points.globalEnabled || !levelsCfg.enabled) return "";
+  const key = await calcClientFidelityLevelKey(slug, clientId);
+  await tenantUpdate({ slug, table: "clients", id: clientId, values: { fidelity_level: key } }).catch(() => 0);
+  return key;
+}
+
+// Ricalcolo di massa (save_levels legacy ~1074-1086): titolari tessera + chi ha
+// ancora un livello assegnato (per azzerare i residui).
+async function recalcAllClientFidelityLevels(slug: string, cap = 2000): Promise<number> {
+  const cardRows = await tenantSelect<RowDataPacket>({ slug, table: "cards", columns: "DISTINCT client_id", where: "client_id > 0", limit: cap }).catch(() => [] as RowDataPacket[]);
+  const levelRows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id", where: "COALESCE(fidelity_level,'') <> ''", limit: cap }).catch(() => [] as RowDataPacket[]);
+  const ids = [...new Set([...cardRows.map((r) => Number(r.client_id ?? 0)), ...levelRows.map((r) => Number(r.id ?? 0))])].filter((n) => n > 0).slice(0, cap);
+  for (const clientId of ids) await recalcClientFidelityLevel(slug, clientId).catch(() => "");
+  return ids.length;
+}
+
+// Rimuove una key di livello da una colonna JSON-array e disattiva la riga quando
+// la lista resta vuota (cascata legacy fidelity_levels_cleanup_deleted_levels).
+function stripLevelKeys(raw: unknown, removed: Set<string>): { changed: boolean; empty: boolean; next: string } {
+  let list: string[] = [];
+  const s = String(raw ?? "").trim();
+  if (s !== "") { try { const p = JSON.parse(s); if (Array.isArray(p)) list = p.map((x) => String(x)); } catch { list = []; } }
+  if (list.length === 0) return { changed: false, empty: false, next: s };
+  const next = list.filter((k) => !removed.has(k));
+  return { changed: next.length !== list.length, empty: next.length === 0, next: JSON.stringify(next) };
+}
+
 export async function saveFidelityLevels(slug: string, body: Record<string, string>): Promise<FidelityLevelsSettings> {
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "id, fidelity_card_levels_json", orderBy: "id ASC", limit: 1 });
   if (!rows[0]) throw new Error("Business non trovato.");
@@ -10869,6 +10935,70 @@ export async function saveFidelityLevels(slug: string, body: Record<string, stri
     levels = parsed;
   }
 
+  // F4 — cascata legacy sui livelli RIMOSSI (o sull'intera sezione disattivata):
+  // le key spariscono da campagne punti / promozioni target-fidelity / omaggi;
+  // le righe rimaste senza livelli target vengono disattivate; le prenotazioni
+  // aperte delle promozioni disattivate perdono la promozione.
+  const prevKeys = existing.pointsEnabled ? existing.levels.map((l) => l.key) : [];
+  const nextKeys = pointsEnabled ? levels.map((l) => l.key) : [];
+  const removedKeys = new Set(prevKeys.filter((k) => !nextKeys.includes(k)));
+  const truthyFlagLocal = (v: unknown) => ["1", "true", "on", "yes"].includes(String(v ?? "").toLowerCase());
+
+  const cascade = { campUpd: 0, campOff: 0, promoUpd: 0, promoOff: 0, giftUpd: 0, giftOff: 0, apptCleared: 0 };
+  if (removedKeys.size > 0) {
+    // Conferma legacy: eliminare livelli richiede la conferma dal popup.
+    if (!truthyFlagLocal(body.fidelity_delete_confirmed) && !truthyFlagLocal(body.fidelity_disable_confirmed)) {
+      const removedNames = existing.levels.filter((l) => removedKeys.has(l.key)).map((l) => l.name);
+      throw new Error(`Conferma prima l'eliminazione del livello a punti "${removedNames[0] ?? ""}".`);
+    }
+
+    // Campagne punti (fidelity_campaigns.eligible_points_levels).
+    const campRows = await tenantSelect<RowDataPacket>({ slug, table: "fidelity_campaigns", columns: "id, active, eligible_points_levels", where: "deleted_at IS NULL" }).catch(() => [] as RowDataPacket[]);
+    for (const row of campRows) {
+      const res = stripLevelKeys(row.eligible_points_levels, removedKeys);
+      if (!res.changed) continue;
+      const deactivate = res.empty && Number(row.active ?? 0) === 1;
+      await tenantUpdate({ slug, table: "fidelity_campaigns", id: Number(row.id), values: { eligible_points_levels: res.next, ...(deactivate ? { active: 0 } : {}), updated_at: new Date() } }).catch(() => 0);
+      if (deactivate) cascade.campOff += 1; else cascade.campUpd += 1;
+    }
+
+    // Promozioni target Fidelity (promotions.target_fidelity_levels).
+    const promoTable = await tenantTable(slug, "promotions").catch(() => null);
+    if (promoTable && (await columnExists(promoTable.name, "target_fidelity_levels"))) {
+      const promoRows = await tenantSelect<RowDataPacket>({ slug, table: "promotions", columns: "id, is_active, target_fidelity_levels", where: "target_type = 'fidelity'" }).catch(() => [] as RowDataPacket[]);
+      const deactivatedPromoIds: number[] = [];
+      for (const row of promoRows) {
+        const res = stripLevelKeys(row.target_fidelity_levels, removedKeys);
+        if (!res.changed) continue;
+        const deactivate = res.empty && Number(row.is_active ?? 0) === 1;
+        await tenantUpdate({ slug, table: "promotions", id: Number(row.id), values: { target_fidelity_levels: res.next, ...(deactivate ? { is_active: 0 } : {}) } }).catch(() => 0);
+        if (deactivate) { cascade.promoOff += 1; deactivatedPromoIds.push(Number(row.id)); } else cascade.promoUpd += 1;
+      }
+      // Prenotazioni aperte collegate alle promozioni disattivate (clearPendingAppointments).
+      const apptTable = await tenantTable(slug, "appointments").catch(() => null);
+      if (deactivatedPromoIds.length > 0 && apptTable && (await columnExists(apptTable.name, "promotion_id"))) {
+        const ph = deactivatedPromoIds.map(() => "?").join(",");
+        cascade.apptCleared = Number((await dbExecute(
+          `UPDATE ${quoteIdentifier(apptTable.name)} SET promotion_id = NULL, discount_type = NULL, discount_value = NULL WHERE tenant_id = ? AND status IN ('pending','scheduled') AND promotion_id IN (${ph})`,
+          [apptTable.tenantId ?? 0, ...deactivatedPromoIds],
+        ).catch(() => ({ affectedRows: 0 }))).affectedRows ?? 0) || 0;
+      }
+    }
+
+    // Omaggi (gifts.eligible_levels_points).
+    const giftsTable = await tenantTable(slug, "gifts").catch(() => null);
+    if (giftsTable && (await columnExists(giftsTable.name, "eligible_levels_points"))) {
+      const giftRows = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "id, active, eligible_levels_points", where: "deleted_at IS NULL" }).catch(() => [] as RowDataPacket[]);
+      for (const row of giftRows) {
+        const res = stripLevelKeys(row.eligible_levels_points, removedKeys);
+        if (!res.changed) continue;
+        const deactivate = res.empty && Number(row.active ?? 0) === 1;
+        await tenantUpdate({ slug, table: "gifts", id: Number(row.id), values: { eligible_levels_points: res.next, ...(deactivate ? { active: 0 } : {}), updated_at: new Date() } }).catch(() => 0);
+        if (deactivate) cascade.giftOff += 1; else cascade.giftUpd += 1;
+      }
+    }
+  }
+
   const json = JSON.stringify({ format: "split", points_enabled: pointsEnabled ? 1 : 0, points_levels: levels.map((l) => ({ key: l.key, name: l.name, min_points: l.minPoints })) });
   const values = await filterColumns((await tenantTable(slug, "businesses")).name, {
     fidelity_levels_enabled: enabled ? 1 : 0,
@@ -10876,7 +11006,21 @@ export async function saveFidelityLevels(slug: string, body: Record<string, stri
     updated_at: new Date(),
   });
   await tenantUpdate({ slug, table: "businesses", id: bizId, values });
-  return getFidelityLevelsSettings(slug);
+
+  // Ricalcolo livelli clienti (legacy save_levels ~1074-1086).
+  await recalcAllClientFidelityLevels(slug).catch(() => 0);
+
+  const settings = await getFidelityLevelsSettings(slug);
+  // Messaggio composto legacy "Livelli Card salvati" + dettaglio cascata.
+  const parts: string[] = [];
+  if (cascade.promoUpd) parts.push(`${cascade.promoUpd} promozioni aggiornate`);
+  if (cascade.promoOff) parts.push(`${cascade.promoOff} promozioni disattivate`);
+  if (cascade.giftUpd) parts.push(`${cascade.giftUpd} campagne omaggio aggiornate`);
+  if (cascade.giftOff) parts.push(`${cascade.giftOff} campagne omaggio disattivate`);
+  if (cascade.campUpd) parts.push(`${cascade.campUpd} campagne punti aggiornate`);
+  if (cascade.campOff) parts.push(`${cascade.campOff} campagne punti disattivate`);
+  if (cascade.apptCleared) parts.push(`${cascade.apptCleared} prenotazioni aggiornate`);
+  return { ...settings, message: `Livelli Card salvati${parts.length ? `. ${parts.join(", ")}.` : ""}` } as FidelityLevelsSettings & { message: string };
 }
 
 // Two campaign periods overlap (null start = -inf, null end = +inf).
@@ -11299,6 +11443,8 @@ export async function issueFidelityCard(slug: string, body: Record<string, strin
     credit: credit > 0 ? credit : 0,
   });
   await rememberCardCode(slug, code, cardId, clientId, "card_create", "");
+  // F4: la nuova tessera rende il cliente aderente -> ricalcolo livello.
+  await recalcClientFidelityLevel(slug, clientId).catch(() => "");
 
   return { ok: true, code, cardId };
 }
@@ -11323,6 +11469,8 @@ export async function updateFidelityCardStatus(slug: string, cardId: number, sta
   if (status === "inactive" && clientId > 0) {
     releasedAppointments = await releasePendingAppointmentFidelityForClient(slug, clientId);
   }
+  // F4: lo stato tessera cambia l'adesione -> ricalcolo livello.
+  if (clientId > 0) await recalcClientFidelityLevel(slug, clientId).catch(() => "");
   return { ok: true, status, releasedAppointments };
 }
 
@@ -11340,6 +11488,9 @@ export async function reactivateFidelityCard(slug: string, cardId: number): Prom
   if (newExpires === null) throw new Error("Imposta prima una durata tessera in Fidelity → Adesione → Impostazioni tessera Fidelity per poter riattivare la tessera.");
 
   await tenantUpdate({ slug, table: "cards", id: cardId, values: { expires_at: newExpires, status: "active" } });
+  // F4: la riattivazione ripristina l'adesione -> ricalcolo livello.
+  const reactClientId = Number((await tenantSelect<RowDataPacket>({ slug, table: "cards", columns: "client_id", where: "id = ?", params: [cardId], limit: 1 }).catch(() => []))[0]?.client_id ?? 0);
+  if (reactClientId > 0) await recalcClientFidelityLevel(slug, reactClientId).catch(() => "");
   return { ok: true, expiresAt: newExpires };
 }
 

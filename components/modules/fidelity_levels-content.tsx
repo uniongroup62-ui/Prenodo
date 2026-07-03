@@ -55,6 +55,9 @@ export function FidelityLevelsContent() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
+  // Le key salvate sul server: servono per rilevare le eliminazioni e chiedere
+  // la conferma legacy prima della cascata.
+  const [savedKeys, setSavedKeys] = useState<string[]>([]);
 
   useEffect(() => {
     fetch(`/api/manage/fidelity?slug=${encodeURIComponent(slug)}&action=levels`, {
@@ -64,6 +67,7 @@ export function FidelityLevelsContent() {
       .then((j: LevelsResponse) => {
         const apiLevels = j.levels?.levels ?? [];
         setLevels(apiLevels.length === 0 ? DEFAULT_LEVELS : toRows(apiLevels));
+        setSavedKeys(apiLevels.map((l) => l.key));
       })
       .catch(() => setLevels(DEFAULT_LEVELS));
   }, [slug]);
@@ -91,6 +95,19 @@ export function FidelityLevelsContent() {
     e.preventDefault();
     setError("");
     setSaved(false);
+
+    // Conferma legacy: eliminare un livello aggiorna/disattiva a cascata le
+    // campagne punti, le promozioni target-Fidelity e gli omaggi che lo usano.
+    const currentKeys = new Set(levels.map((l) => l.key).filter(Boolean));
+    const removed = savedKeys.filter((k) => !currentKeys.has(k));
+    let deleteConfirmed = false;
+    if (removed.length > 0) {
+      deleteConfirmed = window.confirm(
+        `Eliminare ${removed.length === 1 ? "il livello" : "i livelli"} "${removed.join('", "')}"? Le campagne punti, le promozioni e gli omaggi che lo usano verranno aggiornati o disattivati e i livelli dei clienti ricalcolati.`,
+      );
+      if (!deleteConfirmed) return;
+    }
+
     setSaving(true);
     try {
       const levelsJson = JSON.stringify(
@@ -108,6 +125,7 @@ export function FidelityLevelsContent() {
           fidelity_levels_enabled: "1",
           fidelity_levels_points_enabled: "1",
           levels_json: levelsJson,
+          ...(deleteConfirmed ? { fidelity_delete_confirmed: "1" } : {}),
         }),
       });
       const j: LevelsResponse = await res.json().catch(() => ({ ok: false }));
@@ -116,6 +134,7 @@ export function FidelityLevelsContent() {
       }
       // Re-hydrate from the canonical persisted result (base ensured, sorted, deduped).
       setLevels(toRows(j.levels.levels));
+      setSavedKeys(j.levels.levels.map((l) => l.key));
       setSaved(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Impossibile salvare i livelli.");
