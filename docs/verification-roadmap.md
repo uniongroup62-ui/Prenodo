@@ -2256,3 +2256,31 @@ campagna e' inline invece che in modale; wallet filtro "Filtra/Reset" GET vs
 ricerca live; colonne calendario scadenze piu' ricche del legacy.
 BONUS: completato lo sweep slug-SSR sui file CRLF che il primo giro aveva
 saltato (74 componenti) — stessa classe del bug //promotions.
+
+## PUNTI — RESIDUI PIXEL-PERFECT CHIUSI (2026-07-03)
+Completati i residui grafici della passata Punti (testi estratti dal PHP live
+con ?new_campaign=1):
+1. FORM CAMPAGNA IN MODALE (fidelityCampaignFormModal) come il legacy:
+   titolo "Nuova campagna"/"Modifica campagna" + "Per una campagna sempre
+   attiva lascia vuote le date...", campi Nome campagna / Data attivazione
+   ("Vuota = subito.") / Data scadenza + checkbox "Mai" / Stato switch;
+   sezione "Accredito in campagna" con radio Fisso/Scaglioni, input-group
+   "1 punto ogni ... EUR", "Spesa minima ... EUR" ("0 = nessun minimo."),
+   tabella scaglioni Spesa minima|Punti + "Aggiungi scaglione" + "Regola:
+   si applica lo scaglione piu alto raggiunto."; sezione "Destinatari
+   campagna" con radio "Tutti i livelli" + "Livelli Punti" per livello
+   (lista da action=levels, prima era un input free-text). Footer "Salva
+   campagna". Round-trip API verificato (save/toggle/delete ok, cleanup).
+2. MODALE "Disattivare campagna punti?" (toggle-off) con "Disattiva
+   campagna" e MODALE "Eliminare campagna punti?" con "Riepilogo impatto"
+   verbatim ("Se la campagna ha storico operativo, verra rimossa
+   dall'elenco e disattivata...") + "Motivo eliminazione (opzionale)"
+   inviato all'API + "Elimina campagna" (prima window.confirm).
+3. MODALI conferma impostazioni: "Disattiva sconto tramite punti" (Cosa
+   succede continuando / Conferma disattivazione) e "Confermare scadenza
+   punti?" (Riepilogo impatto / Cosa non cambia / Conferma e salva) — il
+   testo di impatto arriva dal round-trip server come prima, ma renderizzato
+   nel modale legacy invece che in window.confirm.
+Verifica: tutti i 15 marker verbatim presenti nel bundle della pagina.
+Restano window.confirm SOLO nei flussi livelli (threshold/delete cascade),
+gia' documentati.

@@ -98,50 +98,56 @@ export function FidelityPointsContent({ slug: slugProp }: { slug?: string } = {}
       .catch(() => {});
   }, [slug]);
 
-  async function saveSettings(e: React.FormEvent) {
-    e.preventDefault();
-    if (savingSettings) return;
+  // Le conferme legacy sono un round-trip: il server rifiuta con il testo del
+  // popup ("Prima di disattivare ..." / "Prima di modificare la scadenza ...");
+  // il MODALE legacy (disableRedeemConfirmModal / fidelityExpiryConfirmModal)
+  // fa ripartire il salvataggio coi flag di conferma.
+  const [confirmDialog, setConfirmDialog] = useState<{ kind: "redeem" | "expiry"; text: string } | null>(null);
+
+  async function runSaveSettings(extraFlags: Record<string, string>) {
     setSavingSettings(true);
     setSettingsError("");
     setSettingsFlash("");
     try {
-      // Le conferme legacy sono un round-trip: il server rifiuta con il testo del
-      // popup ("Prima di disattivare ..." / "Prima di modificare la scadenza ...");
-      // il confirm() dell'operatore fa ripartire il salvataggio coi flag.
-      const extraFlags: Record<string, string> = {};
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const res = await fetch(`/api/manage/fidelity?slug=${encodeURIComponent(slug)}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-          body: JSON.stringify({
-            action: "save_points_settings",
-            fidelity_points_enabled: pointsEnabled ? "1" : "0",
-            fidelity_expire_enabled: expireEnabled ? "1" : "0",
-            fidelity_expire_days: expireDays,
-            fidelity_expire_warn_days: expireWarnDays,
-            fidelity_redeem_enabled: redeemEnabled ? "1" : "0",
-            fidelity_redeem_euro_per_point: redeemEuroPerPoint,
-            fidelity_redeem_min_points: redeemMinPoints,
-            ...extraFlags,
-          }),
-        });
-        const j = await res.json().catch(() => ({}));
-        if (!res.ok || j?.error) {
-          const err = String(j?.error ?? "Impossibile salvare le impostazioni.");
-          if (err.startsWith("Prima di disattivare") && !extraFlags.fidelity_disable_confirmed) {
-            if (window.confirm(err)) { extraFlags.fidelity_disable_confirmed = "1"; continue; }
-          } else if (err.startsWith("Prima di modificare la scadenza") && !extraFlags.fidelity_expiry_confirmed) {
-            if (window.confirm(err)) { extraFlags.fidelity_expiry_confirmed = "1"; continue; }
-          }
-          setSettingsError(err);
-        } else {
-          setSettingsFlash(String(j?.settings?.message ?? "") || "Impostazioni Fidelity salvate");
+      const res = await fetch(`/api/manage/fidelity?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+        body: JSON.stringify({
+          action: "save_points_settings",
+          fidelity_points_enabled: pointsEnabled ? "1" : "0",
+          fidelity_expire_enabled: expireEnabled ? "1" : "0",
+          fidelity_expire_days: expireDays,
+          fidelity_expire_warn_days: expireWarnDays,
+          fidelity_redeem_enabled: redeemEnabled ? "1" : "0",
+          fidelity_redeem_euro_per_point: redeemEuroPerPoint,
+          fidelity_redeem_min_points: redeemMinPoints,
+          ...extraFlags,
+        }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || j?.error) {
+        const err = String(j?.error ?? "Impossibile salvare le impostazioni.");
+        if (err.startsWith("Prima di disattivare") && !extraFlags.fidelity_disable_confirmed) {
+          setConfirmDialog({ kind: "redeem", text: err });
+          return;
         }
-        break;
+        if (err.startsWith("Prima di modificare la scadenza") && !extraFlags.fidelity_expiry_confirmed) {
+          setConfirmDialog({ kind: "expiry", text: err });
+          return;
+        }
+        setSettingsError(err);
+      } else {
+        setSettingsFlash(String(j?.settings?.message ?? "") || "Impostazioni Fidelity salvate");
       }
     } finally {
       setSavingSettings(false);
     }
+  }
+
+  async function saveSettings(e: React.FormEvent) {
+    e.preventDefault();
+    if (savingSettings) return;
+    await runSaveSettings({});
   }
 
   function href(suffix: string): string {
@@ -453,6 +459,56 @@ export function FidelityPointsContent({ slug: slugProp }: { slug?: string } = {}
       </div>
 
       {/* Movimenti spostati in pagina dedicata: Fidelity > Movimenti */}
+
+      {/* MODALI di conferma legacy: disableRedeemConfirmModal ("Disattiva
+          sconto tramite punti") e fidelityExpiryConfirmModal ("Confermare
+          scadenza punti?") — il testo di impatto arriva dal server. */}
+      {confirmDialog ? (
+        <div
+          className="modal fade show d-block"
+          id={confirmDialog.kind === "redeem" ? "disableRedeemConfirmModal" : "fidelityExpiryConfirmModal"}
+          tabIndex={-1}
+          style={{ background: "rgba(0,0,0,.5)" }}
+        >
+          <div className="modal-dialog modal-dialog-centered">
+            <div className="modal-content">
+              <div className="modal-header">
+                <h5 className="modal-title fw-bold m-0">
+                  {confirmDialog.kind === "redeem" ? "Disattiva sconto tramite punti" : "Confermare scadenza punti?"}
+                </h5>
+                <button type="button" className="btn-close" aria-label="Chiudi" onClick={() => setConfirmDialog(null)} />
+              </div>
+              <div className="modal-body">
+                <div className="fw-semibold">{confirmDialog.kind === "redeem" ? "Cosa succede continuando" : "Riepilogo impatto"}</div>
+                <div className="text-muted small mt-1">{confirmDialog.text}</div>
+                {confirmDialog.kind === "expiry" ? (
+                  <>
+                    <div className="fw-semibold mt-3">Cosa non cambia</div>
+                    <div className="text-muted small mt-1">Storico movimenti, prenotazioni e vendite restano invariati.</div>
+                  </>
+                ) : null}
+              </div>
+              <div className="modal-footer">
+                <button className="btn btn-outline-secondary" type="button" onClick={() => setConfirmDialog(null)}>
+                  Annulla
+                </button>
+                <button
+                  className={`btn ${confirmDialog.kind === "redeem" ? "btn-warning" : "btn-primary"}`}
+                  type="button"
+                  disabled={savingSettings}
+                  onClick={() => {
+                    const flag: Record<string, string> = confirmDialog.kind === "redeem" ? { fidelity_disable_confirmed: "1" } : { fidelity_expiry_confirmed: "1" };
+                    setConfirmDialog(null);
+                    void runSaveSettings(flag);
+                  }}
+                >
+                  {confirmDialog.kind === "redeem" ? "Conferma disattivazione" : "Conferma e salva"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
