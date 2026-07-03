@@ -1539,3 +1539,71 @@ PORTATO in questo blocco:
 Tutte le aree del modulo Omaggi legacy sono portate o documentate non-gap.
 Divergenza minore documentata: il filtro residuali in valutazione e' applicato
 alla registrazione degli eventi (input-side) anziche' rifiltrato in SQL.
+
+# CAMPAGNA DI VERIFICA FUNZIONE-PER-FUNZIONE (avviata 2026-07-03)
+Confronto sistematico PHP (localhost/manage, 86 pagine in app/pages/) vs Next.
+Metodo per area: 1) agente Explore sul sorgente PHP (comportamenti, query,
+messaggi esatti); 2) test live sulle API/pagine Next con dati throwaway e
+cleanup; 3) fix delle divergenze con messaggi legacy; 4) chiusura qui.
+
+## FIX APERTURA CAMPAGNA — Orari -> Calendario (2026-07-03, commit 0fd0d3f)
+Bug segnalato dall'utente: cambiare l'orario (es. venerdi chiusura 16/17)
+non aggiornava i limiti del calendario (restava 19:00).
+CAUSA: business_hours ha righe PER SEDE (location_id=21, aggiornate dal
+salvataggio Orari) + righe GLOBALI legacy (location_id NULL, ferme al seed
+09-19 di ensure_default_hours, Helpers.php:6698-6700). Il contesto calendario
+Next restituiva TUTTE le righe e il componente faceva min/max sull'unione:
+max(16:00, 19:00) = 19:00.
+FIX (fedele a calendar.php:171-181): fallback PER GIORNO sede -> globale (la
+riga della sede sovrascrive la globale per quel dow); chiusure ed eccezioni
+filtrate per sede corrente o globali; fallback componente allineato al legacy
+(min/max settimanali, 07:00-22:00 solo senza orari; bound del giorno =
+chiusura di QUEL weekday incl. seconda fascia closes2). Il booking pubblico
+era GIA' corretto (preferredLocationRow). Verificato live (4 PASS, restore
+pulito). Comportamenti legacy confermati dall'agente e gia' presenti nel Next:
+appuntamenti esistenti fuori orario restano visibili (asse espanso
+dinamicamente, port di _computeDynamicAxisForEvents); il calendario interno
+NON blocca il salvataggio fuori orario (solo il booking pubblico filtra gli
+slot); giorni chiusi = colonna grigia. Allineati anche i messaggi di
+validazione Orari mancanti ("se il giorno non e chiuso devi compilare
+apertura e chiusura.", "per l'orario spezzato devi compilare sia riapertura
+sia chiusura 2.", "la chiusura 2 deve essere successiva alla riapertura.",
+"(prima fascia)").
+
+## MATRICE PAGINE LEGACY -> NEXT (stato al 2026-07-03)
+GIA' VERIFICATE CON TEST LIVE (aree chiuse nelle sezioni sopra):
+pos, pos_history, pos_sale_detail, pos_prepaids, pos_preorders, pos_settings,
+pos_success (schermata in pos-content), installments_manage, fidelity,
+fidelity_points, fidelity_levels, fidelity_membership(+settings),
+fidelity_wallet, gifts, gift_instance, gift_voucher, giftcard(+settings,
+voucher, detail), giftbox(+settings, voucher, instance), packages,
+package_settings, recharges, credit_movements, wallet, coupons, promotions,
+quotes, quote_settings, quote_public, suppliers, clients (lista, drawer,
+GDPR, consensi, cascade-delete), client_sheets, client_sheet_templates,
+consent_modules, consent_public, gdpr_public, appointments, calendar (+fix
+orari), hours/resources (+fix e messaggi), services, service_categories,
+products, costs, stock_moves, onboarding.
+
+DA VERIFICARE (in ordine di priorita' — un'area per "procedi"):
+- V1 DASHBOARD (dashboard.php + api_dashboard_performance): la prima
+  schermata del gestionale — widget, KPI, agenda del giorno. Mai testata.
+- V2 SETTINGS (settings.php) + configuration: impostazioni generali tenant.
+- V3 STAFF + STAFF_AVAILABILITY: anagrafica operatori, turni/presenze
+  (staff_availability kind turno/presenza, serie ricorrenti), intersezione
+  con gli orari di apertura nel calendario e negli slot.
+- V4 CABINS + RESOURCES: l'audit iniziale segnalava il form cabine stub.
+- V5 BOOKING PUBBLICO end-to-end (booking.php wizard: servizi -> operatore
+  -> slot -> conferma; build_slots con orari/turni/cabine) + PUBLIC_ACCOUNT
+  (area cliente: login, prenotazioni, annullo) + PUBLIC_MARKETPLACE.
+- V6 AUTH: login/logout/forgot_password/reset_password (manage) +
+  manage_account (profilo/cambio password) + roles/permissions.
+- V7 NOTIFICATIONS + AUTOMATION (+ notifications_birthdays/installments/
+  quotes): regole, invii email, badge campanella.
+- V8 REPORTS + api_dashboard_performance: parita' NUMERICA dei report
+  (incassi, servizi, operatori) su dati identici.
+- V9 ALLEGATI/BINARI: client-document, cost-attachment, staff-photo,
+  product-image, category-image (R2), stock_doc_attachment,
+  client_sheet_attachment, endpoint logo (index.php?page=logo).
+- V10 RESIDUE: accessibility, marketplace (impostazioni), business_profile,
+  locations (multi-sede: P11 differito), appointments_plan, commissions,
+  api_sms_callback (OpenAPI SMS), api_user_prefs.

@@ -1405,9 +1405,11 @@ function parseHoursRows(value: string): Array<{ dow: number; opens: string | nul
   });
 }
 
+// Validazioni orari con i messaggi legacy esatti (hours.php ~161-199).
 function validateHourRow(row: { dow: number; opens: string | null; closes: string | null; opens2: string | null; closes2: string | null; is_closed: number }): void {
   const label = dayLabels[row.dow] ?? `Giorno ${row.dow}`;
   if (row.is_closed) return;
+  if (!row.opens || !row.closes) throw new Error(`${label}: se il giorno non e chiuso devi compilare apertura e chiusura.`);
   validateTimePair(row.opens, row.closes, label);
   if (row.opens2 || row.closes2) validateSplit(row.opens, row.closes, row.opens2, row.closes2, label);
 }
@@ -1420,11 +1422,14 @@ function validateTimePair(opens: string | null, closes: string | null, label: st
 }
 
 function validateSplit(opens: string | null, closes: string | null, opens2: string | null, closes2: string | null, label: string): void {
-  validateTimePair(opens, closes, label);
-  validateTimePair(opens2, closes2, label);
+  if (!opens2 || !closes2) throw new Error(`${label}: per l'orario spezzato devi compilare sia riapertura sia chiusura 2.`);
+  if (!opens || !closes) throw new Error(`${label}: per l'orario spezzato devi compilare anche apertura e chiusura.`);
   const close1 = timeToMinutes(closes);
   const open2 = timeToMinutes(opens2);
-  if (close1 !== null && open2 !== null && open2 < close1) throw new Error(`${label}: la riapertura deve essere uguale o successiva alla chiusura.`);
+  const close2 = timeToMinutes(closes2);
+  if (open2 === null || close2 === null) throw new Error(`${label}: formato orario non valido.`);
+  if (close1 !== null && open2 < close1) throw new Error(`${label}: la riapertura deve essere uguale o successiva alla chiusura (prima fascia).`);
+  if (close2 <= open2) throw new Error(`${label}: la chiusura 2 deve essere successiva alla riapertura.`);
 }
 
 function groupDateRanges(rows: Array<{ id: number; date: string; reason: string }>): CalendarDateRange[] {
