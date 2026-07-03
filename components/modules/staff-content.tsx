@@ -94,6 +94,36 @@ export function StaffContent() {
     return `/${encodeURIComponent(slug)}/${`staff${suffix}`.replace("&", "?")}`;
   }
 
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+
+  // Messaggio post-redirect dal form (staff.php redirect ?msg=Operatore salvato).
+  useEffect(() => {
+    const m = new URLSearchParams(window.location.search).get("msg");
+    if (m) setMsg(m);
+  }, []);
+
+  // Eliminazione operatore con i vincoli/messaggi legacy dal server
+  // (prenotazioni storiche, servizi associati, storico commissioni, owner).
+  async function removeStaff(s: StaffMember) {
+    if (!window.confirm(`Eliminare l'operatore "${s.fullName}"?`)) return;
+    setMsg("");
+    setErr("");
+    try {
+      const res = await fetch(`/api/manage/resources?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-tenant-slug": slug },
+        body: JSON.stringify({ action: "staff_delete", id: String(s.id) }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || j.ok === false) throw new Error(String(j.error || "Errore eliminazione operatore."));
+      setMsg("Operatore eliminato");
+      load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Errore eliminazione operatore.");
+    }
+  }
+
   return (
     <div className="container-fluid">
       <div className="bs-page-header">
@@ -234,14 +264,15 @@ export function StaffContent() {
                         <a className="btn btn-sm btn-outline-secondary" href={href(`&action=edit&id=${s.id}`)}>
                           Modifica
                         </a>{" "}
-                        <a
+                        <button
                           className="btn btn-sm btn-outline-danger"
-                          href={href(`&action=delete&id=${s.id}`)}
+                          type="button"
                           data-staff-name={s.fullName}
                           data-staff-delete="1"
+                          onClick={() => removeStaff(s)}
                         >
                           Elimina
-                        </a>
+                        </button>
                       </td>
                     </tr>
                   );

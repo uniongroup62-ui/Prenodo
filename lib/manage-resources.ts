@@ -413,9 +413,16 @@ export async function saveStaffMember(slug: string, body: Record<string, string>
   const color = normalizeColor(body.calendar_color ?? body.color, 0);
   const locationIds = parseIdList(body.location_ids ?? body.locationIds);
   if (!fullName) throw new Error("Nome operatore obbligatorio.");
-  if (fullName.toUpperCase() === "SSO") throw new Error("Nome operatore riservato.");
-  if (id <= 0 && (!email || !password)) throw new Error("Email e password obbligatorie per creare l'account.");
+  if (fullName.toUpperCase() === "SSO") throw new Error("Nome operatore riservato (SSO)");
+  if (id <= 0 && !email) throw new Error("Email obbligatoria");
+  if (id <= 0 && !password) throw new Error("Password obbligatoria");
   if (email) await ensureStaffEmailAvailable(slug, email, id);
+  // "Seleziona almeno una sede per l'operatore." (staff.php:823) — solo quando
+  // il tenant ha sedi configurate (con la tabella assente il legacy salta il check).
+  if (locationIds.length === 0) {
+    const locs = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "id", limit: 1 }).catch(() => [] as RowDataPacket[]);
+    if (locs.length > 0) throw new Error("Seleziona almeno una sede per l'operatore.");
+  }
 
   if (id > 0 && !isActive) {
     await ensureStaffCanDeactivate(slug, id);
@@ -615,8 +622,9 @@ export async function saveAvailabilityEvent(slug: string, body: Record<string, s
   const editId = parseInteger(body.event_id ?? body.id, 0);
   const editTable = String(body.event_table ?? body.table ?? "");
   const applySeries = truthy(body.apply_series ?? body.applySeries);
-  if (staffId <= 0 || !startDateRaw || !endDateRaw || !timeFrom || !timeTo) throw new Error("Compila tutti i campi obbligatori.");
-  validateTimePair(timeFrom, timeTo, "Disponibilita");
+  if (staffId <= 0 || !startDateRaw || !endDateRaw || !timeFrom || !timeTo) throw new Error("Compila tutti i campi obbligatori (Al, Dalle, Alle)");
+  if (hhmmToMin(timeTo) === null || hhmmToMin(timeFrom) === null) throw new Error("Inserisci orari validi (HH:MM)");
+  if ((hhmmToMin(timeTo) ?? 0) <= (hhmmToMin(timeFrom) ?? 0)) throw new Error("Gli orari selezionati non sono validi");
   await ensureStaffAvailableForLocation(slug, staffId, locationId);
 
   const [startDate, endDate] = orderedDates(startDateRaw, endDateRaw);
@@ -670,6 +678,140 @@ export async function saveAvailabilityEvent(slug: string, body: Record<string, s
 
   const range = weekRange(startDate);
   return listStaffAvailability(slug, locationId, range.start, range.end);
+}
+
+function hhmmToMin(value: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(value || "");
+  if (!m) return null;
+  const h = Number(m[1]);
+  const mm = Number(m[2]);
+  return h >= 0 && h <= 23 && mm >= 0 && mm <= 59 ? h * 60 + mm : null;
+}
+
+// DUPLICA SETTIMANA (staff_availability.php do=copy_week ~723-908): copia SOLO
+// turno/presenza dal lunedì della settimana origine a quella di destinazione,
+// filtro operatore opzionale, overwrite = svuota prima la destinazione,
+// altrimenti salta i duplicati esatti; le serie vengono rimappate a nuovi uid.
+export async function copyWeekAvailability(slug: string, body: Record<string, string>): Promise<{ message: string; events: StaffAvailabilityEvent[] }> {
+  const locationId = parseInteger(body.location_id ?? body.locationId, 0);
+  const sourceRaw = normalizeDate(body.source_week);
+  const targetRaw = normalizeDate(body.target_week);
+  if (!sourceRaw || !targetRaw) throw new Error("Seleziona settimana di origine e destinazione");
+  const source = weekRange(sourceRaw);
+  const target = weekRange(targetRaw);
+  if (source.start === target.start) throw new Error("La settimana di destinazione è uguale a quella di origine");
+  const copyStaffId = parseInteger(body.copy_staff_id, 0);
+  const overwrite = truthy(body.overwrite);
+  if (copyStaffId > 0) await ensureStaffAvailableForLocation(slug, copyStaffId, locationId);
+
+  const table = await tenantTable(slug, "staff_availability");
+  const hasLocation = await columnExists(table.name, "location_id");
+  const where: string[] = ["kind IN ('turno','presenza')", "starts_at >= ?", "starts_at < ?"];
+  const params: unknown[] = [`${source.start} 00:00:00`, `${source.end} 00:00:00`];
+  if (copyStaffId > 0) { where.push("staff_id = ?"); params.push(copyStaffId); }
+  if (hasLocation && locationId > 0) { where.push("(location_id = ? OR location_id IS NULL)"); params.push(locationId); }
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "staff_availability", where: where.join(" AND "), params, orderBy: "starts_at ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
+  if (!rows.length) throw new Error("Nessun turno da copiare");
+
+  if (overwrite) {
+    const delWhere: string[] = ["kind IN ('turno','presenza')", "starts_at >= ?", "starts_at < ?"];
+    const delParams: unknown[] = [table.tenantId ?? 0, `${target.start} 00:00:00`, `${target.end} 00:00:00`];
+    if (copyStaffId > 0) { delWhere.push("staff_id = ?"); delParams.push(copyStaffId); }
+    await dbExecute(
+      `DELETE FROM ${quoteIdentifier(table.name)} WHERE tenant_id = ? AND ${delWhere.join(" AND ")}`,
+      delParams,
+    ).catch(() => ({ affectedRows: 0 }));
+  }
+  const existing = overwrite
+    ? []
+    : await tenantSelect<RowDataPacket>({ slug, table: "staff_availability", where: "kind IN ('turno','presenza') AND starts_at >= ? AND starts_at < ?", params: [`${target.start} 00:00:00`, `${target.end} 00:00:00`], orderBy: "" }).catch(() => [] as RowDataPacket[]);
+  const existingKeys = new Set(existing.map((r) => `${Number(r.staff_id)}|${String(r.kind)}|${dateTimeString(r.starts_at)}|${dateTimeString(r.ends_at)}`));
+
+  // Rimappa le serie a nuovi uid, coerenti per serie di origine.
+  const seriesMap = new Map<string, string>();
+  const offsetDays = Math.round((new Date(`${target.start}T12:00:00`).getTime() - new Date(`${source.start}T12:00:00`).getTime()) / 86400000);
+  let copied = 0;
+  for (const row of rows) {
+    const starts = dateTimeString(row.starts_at);
+    const ends = dateTimeString(row.ends_at);
+    const newStart = `${addDays(starts.slice(0, 10), offsetDays)} ${starts.slice(11, 19)}`;
+    const newEnd = `${addDays(ends.slice(0, 10), offsetDays)} ${ends.slice(11, 19)}`;
+    const key = `${Number(row.staff_id)}|${String(row.kind)}|${newStart}|${newEnd}`;
+    if (existingKeys.has(key)) continue;
+    const srcSeries = String(row.series_uid ?? "");
+    let newSeries: string | null = null;
+    if (srcSeries) {
+      if (!seriesMap.has(srcSeries)) seriesMap.set(srcSeries, randomSeriesUid());
+      newSeries = seriesMap.get(srcSeries) ?? null;
+    }
+    await tenantInsert(table, await filterColumns(table.name, {
+      staff_id: Number(row.staff_id),
+      location_id: hasLocation ? (row.location_id ?? null) : undefined,
+      kind: String(row.kind),
+      starts_at: newStart,
+      ends_at: newEnd,
+      series_uid: newSeries,
+    }));
+    copied += 1;
+  }
+  const events = await listStaffAvailability(slug, locationId, target.start, target.end);
+  if (copied === 0) return { message: "Nessun evento copiato (già presenti)", events };
+  return { message: `Settimana duplicata: ${copied} eventi`, events };
+}
+
+// VERIFICA CONFLITTI APPUNTAMENTI (staff_availability.php do=check_appt_conflicts
+// ~436-720): avviso NON bloccante — appuntamenti pending/scheduled dell'operatore
+// che si sovrappongono alle occorrenze del nuovo evento.
+export async function checkAvailabilityConflicts(slug: string, body: Record<string, string>): Promise<Array<{ date: string; timeFrom: string; timeTo: string; client: string; service: string }>> {
+  const staffId = parseInteger(body.staff_id ?? body.staffId, 0);
+  const startDate = normalizeDate(body.date_from ?? body.dateFrom);
+  const endDate = normalizeDate(body.date_to ?? body.dateTo) || startDate;
+  const timeFrom = normalizeTime(body.time_from ?? body.timeFrom);
+  const timeTo = normalizeTime(body.time_to ?? body.timeTo);
+  if (staffId <= 0 || !startDate || !timeFrom || !timeTo) return [];
+  const type = normalizeAvailabilityType(body.event_type ?? body.type ?? "turno");
+  const repeat = String(body.repeat ?? "none");
+  const occDates = repeat === "none" && !["turno", "presenza"].includes(type)
+    ? datesBetween(startDate, endDate ?? startDate)
+    : repeat === "none"
+      ? [startDate]
+      : occurrenceDates(startDate, repeat, normalizeDate(body.repeat_until ?? body.repeatUntil), parseIdList(body.dows));
+  if (!occDates.length) return [];
+
+  const apptTable = await tenantTable(slug, "appointments");
+  const clientsTable = await tenantTable(slug, "clients");
+  const staffLinkTable = await tenantTable(slug, "appointment_staff").catch(() => null);
+  // L'operatore vive sul bridge appointment_staff (appointments non ha
+  // staff_id in questo schema); la colonna diretta è usata solo se esiste.
+  const hasDirectStaff = await columnExists(apptTable.name, "staff_id");
+  if (!staffLinkTable && !hasDirectStaff) return [];
+  const out: Array<{ date: string; timeFrom: string; timeTo: string; client: string; service: string }> = [];
+  for (const date of occDates.slice(0, 62)) {
+    const from = `${date} ${timeFrom}:00`;
+    const to = `${date} ${timeTo}:00`;
+    const staffJoin = staffLinkTable ? `LEFT JOIN ${quoteIdentifier(staffLinkTable.name)} ast ON ast.appointment_id = a.id AND ast.tenant_id = a.tenant_id` : "";
+    const conds: string[] = [];
+    const condParams: unknown[] = [];
+    if (hasDirectStaff) { conds.push("a.staff_id = ?"); condParams.push(staffId); }
+    if (staffLinkTable) { conds.push("ast.staff_id = ?"); condParams.push(staffId); }
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT DISTINCT a.id, a.starts_at, a.ends_at, c.full_name AS client_name
+         FROM ${quoteIdentifier(apptTable.name)} a
+         ${staffJoin}
+         LEFT JOIN ${quoteIdentifier(clientsTable.name)} c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
+        WHERE a.tenant_id = ? AND LOWER(TRIM(COALESCE(a.status,''))) IN ('pending','scheduled')
+          AND (${conds.join(" OR ")})
+          AND a.starts_at < ? AND a.ends_at > ?
+        ORDER BY a.starts_at ASC`,
+      [apptTable.tenantId ?? 0, ...condParams, to, from],
+    ).catch(() => [] as RowDataPacket[]);
+    for (const r of rows) {
+      const s = dateTimeString(r.starts_at);
+      const e = dateTimeString(r.ends_at);
+      out.push({ date, timeFrom: s.slice(11, 16), timeTo: e.slice(11, 16), client: String(r.client_name ?? "") || "—", service: "" });
+    }
+  }
+  return out;
 }
 
 export async function deleteAvailabilityEvent(slug: string, body: Record<string, string>): Promise<StaffAvailabilityEvent[]> {
@@ -1198,7 +1340,7 @@ async function ensureWithinBusinessHours(slug: string, locationId: number, date:
   if (locationId <= 0) return;
   const intervals = await businessIntervalsForDate(slug, locationId, date);
   if (!intervals.length) {
-    if (requireOpen) throw new Error(`Nessun orario di apertura per il giorno ${date}.`);
+    if (requireOpen) throw new Error(`Nessun orario di apertura per il giorno ${date} (controlla Orari/Straordinari/Chiusure)`);
     return;
   }
   const fromMin = timeToMinutes(from);

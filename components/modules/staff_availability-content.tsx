@@ -104,6 +104,13 @@ export function StaffAvailabilityContent() {
   const [locationId, setLocationId] = useState<number>(0);
   const [data, setData] = useState<ResourcesData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
+  // Edit di un evento esistente (event_id/event_table del form legacy).
+  const [evEditId, setEvEditId] = useState(0);
+  const [evEditTable, setEvEditTable] = useState("");
 
   // Controlled value for the date "Vai" form input.
   const [dateInput, setDateInput] = useState<string>(todayIso());
@@ -133,7 +140,7 @@ export function StaffAvailabilityContent() {
     return () => {
       cancelled = true;
     };
-  }, [slug, date, locationId]);
+  }, [slug, date, locationId, reloadTick]);
 
   const activeLocationId = data?.activeLocationId ?? (locationId > 0 ? locationId : 0);
   const locations = data?.locations ?? [];
@@ -278,6 +285,151 @@ export function StaffAvailabilityContent() {
     { value: "0", label: "Domenica" },
   ];
 
+  async function postResources(fields: Record<string, string>): Promise<Record<string, unknown> | null> {
+    setBusy(true);
+    setMsg("");
+    setErr("");
+    try {
+      const res = await fetch(`/api/manage/resources?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-tenant-slug": slug },
+        body: JSON.stringify(fields),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || j.ok === false) throw new Error(String(j.error || "Operazione non riuscita."));
+      return j as Record<string, unknown>;
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Operazione non riuscita.");
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function closeOffcanvas() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    const el = document.getElementById("offcanvasEvent");
+    if (el && w.bootstrap?.Offcanvas) w.bootstrap.Offcanvas.getOrCreateInstance(el).hide();
+    const modal = document.getElementById("modalCopyWeek");
+    if (modal && w.bootstrap?.Modal) w.bootstrap.Modal.getOrCreateInstance(modal).hide();
+  }
+
+  function resetEventForm() {
+    setEvEditId(0);
+    setEvEditTable("");
+    setEvStaffId("");
+    setEvType("Turno");
+    setEvDateFrom(date);
+    setEvDateTo(date);
+    setEvTimeFrom("");
+    setEvTimeTo("");
+    setEvRepeat("none");
+    setEvRepeatUntil("");
+    setEvDows({});
+    setEvApplySeries(false);
+  }
+
+  // Salvataggio evento (do=save_event): prima l'avviso NON bloccante sui
+  // conflitti con appuntamenti esistenti (check_appt_conflicts), poi il save.
+  async function submitEvent(e: React.FormEvent) {
+    e.preventDefault();
+    const fields: Record<string, string> = {
+      action: "availability_save",
+      location_id: String(activeLocationId || locationId || 0),
+      event_id: String(evEditId),
+      event_table: evEditTable,
+      staff_id: evStaffId,
+      event_type: evType.toLowerCase(),
+      date_from: evDateFrom,
+      date_to: evDateTo,
+      time_from: evTimeFrom,
+      time_to: evTimeTo,
+      repeat: evRepeat,
+      repeat_until: evRepeatUntil,
+      dows: Object.entries(evDows).filter(([, v]) => v).map(([k]) => k).join(","),
+      apply_series: evApplySeries ? "1" : "0",
+    };
+    // Avviso conflitti (modale legacy "Attenzione: appuntamenti già presenti").
+    const chk = await postResources({ ...fields, action: "availability_check_conflicts" });
+    if (chk === null) return;
+    const conflicts = Array.isArray(chk.conflicts) ? (chk.conflicts as Array<{ date: string; timeFrom: string; timeTo: string; client: string }>) : [];
+    if (conflicts.length) {
+      const list = conflicts.slice(0, 8).map((c) => `${c.date} ${c.timeFrom}-${c.timeTo} • ${c.client}`).join("\n");
+      const go = globalThis.confirm(`Attenzione: appuntamenti già presenti\n\n${list}${conflicts.length > 8 ? `\n…e altri ${conflicts.length - 8}` : ""}\n\nGli appuntamenti esistenti NON vengono modificati. Salvare comunque l'evento?`);
+      if (!go) return;
+    }
+    const j = await postResources(fields);
+    if (j) {
+      setMsg(["turno", "presenza"].includes(evType.toLowerCase()) ? "Disponibilità salvata" : "Periodo salvato");
+      resetEventForm();
+      closeOffcanvas();
+      setReloadTick((t) => t + 1);
+    }
+  }
+
+  // Duplica settimana (do=copy_week) con i messaggi legacy dal server.
+  async function submitCopyWeek(e: React.FormEvent) {
+    e.preventDefault();
+    const j = await postResources({
+      action: "availability_copy_week",
+      location_id: String(activeLocationId || locationId || 0),
+      source_week: copySourceInput,
+      target_week: copyTargetInput,
+      copy_staff_id: copyStaffId,
+      overwrite: copyOverwrite ? "1" : "0",
+    });
+    if (j) {
+      setMsg(String(j.message ?? "Settimana duplicata"));
+      closeOffcanvas();
+      setReloadTick((t) => t + 1);
+    }
+  }
+
+  // Modifica: precompila il form legacy e apre l'offcanvas.
+  function editEvent(ev: AvailabilityEvent) {
+    setEvEditId(ev.id);
+    setEvEditTable(ev.table === "timeoff" ? "timeoff" : "availability");
+    setEvStaffId(String(ev.staffId));
+    const t = String(ev.type ?? "turno").toLowerCase();
+    setEvType(t.charAt(0).toUpperCase() + t.slice(1));
+    setEvDateFrom(ev.dateFrom || date);
+    setEvDateTo(ev.dateTo || ev.dateFrom || date);
+    setEvTimeFrom(ev.timeFrom || "");
+    setEvTimeTo(ev.timeTo || "");
+    setEvRepeat("none");
+    setEvRepeatUntil("");
+    setEvDows({});
+    setEvApplySeries(false);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    const el = document.getElementById("offcanvasEvent");
+    if (el && w.bootstrap?.Offcanvas) w.bootstrap.Offcanvas.getOrCreateInstance(el).show();
+  }
+
+  // Eliminazione evento/serie con le conferme legacy.
+  async function removeEvent(ev: AvailabilityEvent) {
+    const isTimeoff = ev.table === "timeoff";
+    let scopeSeries = false;
+    if (!isTimeoff && ev.seriesUid) {
+      scopeSeries = globalThis.confirm("Rimuovere l'intera serie? (Annulla = solo questo evento)");
+    }
+    const confirmText = isTimeoff ? "Rimuovere questo periodo?" : scopeSeries ? "Rimuovere l'intera serie?" : "Rimuovere questo evento?";
+    if (!scopeSeries && !globalThis.confirm(confirmText)) return;
+    const j = await postResources({
+      action: "availability_delete",
+      id: String(ev.id),
+      table: isTimeoff ? "timeoff" : "availability",
+      apply_series: scopeSeries ? "1" : "0",
+      location_id: String(activeLocationId || locationId || 0),
+      date,
+    });
+    if (j) {
+      setMsg(isTimeoff ? "Periodo rimosso" : "Evento rimosso");
+      setReloadTick((t) => t + 1);
+    }
+  }
+
   return (
     <div className="container-fluid">
       <link rel="stylesheet" href="/assets/css/pages/staff_availability.css" />
@@ -353,6 +505,9 @@ export function StaffAvailabilityContent() {
           </div>
         </div>
       </div>
+
+      {msg ? <div className="alert alert-success">{msg}</div> : null}
+      {err ? <div className="alert alert-danger">{err}</div> : null}
 
       <div className="avail-legend mb-2">
         <span>
@@ -461,8 +616,27 @@ export function StaffAvailabilityContent() {
                               left: pct(l),
                               width: pct(w),
                             }}
+                            title={`${ev.type} • ${label}`}
                           >
-                            {label}
+                            <span className="me-1">{label}</span>
+                            <button
+                              type="button"
+                              className="btn btn-link btn-sm p-0 text-white"
+                              title="Modifica"
+                              onClick={() => editEvent(ev)}
+                              disabled={busy}
+                            >
+                              <i className="bi bi-pencil" />
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-link btn-sm p-0 text-white ms-1"
+                              title="Elimina"
+                              onClick={() => removeEvent(ev)}
+                              disabled={busy}
+                            >
+                              <i className="bi bi-x-lg" />
+                            </button>
                           </div>
                         );
                       })}
@@ -497,7 +671,7 @@ export function StaffAvailabilityContent() {
       <div className="modal fade" id="modalCopyWeek" tabIndex={-1} aria-labelledby="modalCopyWeekLabel" aria-hidden="true">
         <div className="modal-dialog">
           <div className="modal-content">
-            <form method="post">
+            <form method="post" onSubmit={submitCopyWeek}>
               <input type="hidden" name="do" value="copy_week" />
               <input type="hidden" name="location_id" value={locParam} />
               <div className="modal-header">
@@ -593,7 +767,7 @@ export function StaffAvailabilityContent() {
           <button type="button" className="btn-close" data-bs-dismiss="offcanvas" aria-label="Close" />
         </div>
         <div className="offcanvas-body">
-          <form method="post" id="eventForm">
+          <form method="post" id="eventForm" onSubmit={submitEvent}>
             <input type="hidden" name="do" value="save_event" />
             <input type="hidden" name="location_id" value={locParam} />
             <input type="hidden" name="confirm_appt_conflicts" id="f_confirm_appt_conflicts" value="0" />

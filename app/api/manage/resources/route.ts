@@ -2,6 +2,8 @@ import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import { currentManageSession } from "@/lib/manage-auth";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import {
+  checkAvailabilityConflicts,
+  copyWeekAvailability,
   deleteAvailabilityEvent,
   deleteCabin,
   deleteClosureRange,
@@ -158,6 +160,20 @@ export async function POST(request: Request) {
       if (!can(activeUser.perms, "hours.manage")) return jsonError("Permesso Orari richiesto.", 403);
       const exceptions = await deleteExceptionRange(tenantSlug, body);
       return Response.json({ ok: true, exceptions });
+    }
+
+    // Duplica settimana (staff_availability.php do=copy_week).
+    if (action === "availability_copy_week") {
+      if (!can(activeUser.perms, "staff_availability.manage")) return jsonError("Permesso Disponibilita richiesto.", 403);
+      const result = await copyWeekAvailability(tenantSlug, body);
+      return Response.json({ ok: true, ...result });
+    }
+
+    // Avviso conflitti appuntamenti (do=check_appt_conflicts) — non bloccante.
+    if (action === "availability_check_conflicts") {
+      if (!can(activeUser.perms, "staff_availability.manage")) return jsonError("Permesso Disponibilita richiesto.", 403);
+      const conflicts = await checkAvailabilityConflicts(tenantSlug, body);
+      return Response.json({ ok: true, conflicts });
     }
 
     if (action === "availability_save") {
