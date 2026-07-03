@@ -1,4 +1,5 @@
 import { activeTenantSlugs, assertCronAuth } from "@/lib/cron";
+import { giftExpireDueInstancesBatch } from "@/lib/gifts-engine";
 import { dbExecute, dbQuery, tenantIdForSlug } from "@/lib/tenant-db";
 import type { RowDataPacket } from "@/lib/tenant-db";
 
@@ -13,9 +14,10 @@ export const runtime = "nodejs";
 //      expireClientLots -> expireDueLotsLocked), writing `expire` transactions,
 //      zeroing the expired lots and decreasing the client points balance.
 //
-// Gifts expiry (Gifts::expireDueInstancesBatch) is intentionally NOT ported:
-// it lives in a separate module and the legacy cron already wraps it in a
-// best-effort try/catch that ignores absence. See TODO below.
+//   3) expires due GIFT instances (Gifts::expireDueInstancesBatch via
+//      lib/gifts-engine.giftExpireDueInstancesBatch) — best-effort like the
+//      legacy cron's try/catch: 'disponibile' oltre expires_at -> 'scaduto',
+//      annullando le prenotazioni pending/scheduled collegate all'istanza.
 //
 // Every statement is scoped by tenant_id = ? (no withTenant / app.tenant_id).
 // MySQL -> Postgres: handled by the tenant-db shim (? -> $n, backticks, etc.).
@@ -474,7 +476,7 @@ export async function GET(request: Request) {
 
   try {
     const slugs = await activeTenantSlugs();
-    const results: Array<{ tenant: string; expired: number; cardsExpired: number }> = [];
+    const results: Array<{ tenant: string; expired: number; cardsExpired: number; giftsExpired: number }> = [];
     let total = 0;
 
     // gift_points_used column is present in the migrated schema; detect once.
@@ -494,7 +496,15 @@ export async function GET(request: Request) {
       const settings = await fidelitySettings(tenantId);
       const expired = await expireDueLotsBatch(tenantId, settings, hasGiftCol, 500);
 
-      results.push({ tenant: slug, expired, cardsExpired });
+      // Scadenza istanze omaggio (legacy cron: try { Gifts::expireDueInstancesBatch }).
+      let giftsExpired = 0;
+      try {
+        giftsExpired = (await giftExpireDueInstancesBatch(slug, 500)).expired;
+      } catch {
+        giftsExpired = 0;
+      }
+
+      results.push({ tenant: slug, expired, cardsExpired, giftsExpired });
       total += expired;
     }
 

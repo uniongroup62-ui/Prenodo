@@ -1304,3 +1304,63 @@ argento. RESTA (minore): la firma-hash legacy per la conferma cambio soglie
 ## AREA FIDELITY CORE COMPLETA (F1-F8 tutti chiusi, 2026-07-03).
 Resta solo F12 Gifts v2 (motore omaggi, ~65% mancante) come area opzionale
 dedicata + i non-gap documentati (label punti fissa, item_rules dismesse).
+
+### CHIUSURA F12 BLOCCO 1 — MOTORE GIFTS V2 (2026-07-03, 24 test live PASS)
+Nuovo `lib/gifts-engine.ts`, port del motore di app/lib/Gifts.php (tracking
+~4137-4716, resets/finestre ~6150-6660, recalcClient ~7258-7996,
+evaluateRulesForClient ~8151-8526, scadenze ~10759-10883):
+- EVENTI: giftUpsertTrackingEvent = INSERT ... ON CONFLICT sull'indice unico
+  events_uq_fid_events_src (tenant_id,event_type,source_type,source_id,
+  source_line_id) — idempotente, is_valid torna 1 al re-record; invalidazione
+  SOLO via UPDATE is_valid=0 per sorgente (giftInvalidateSource, con recalc
+  forceRecheck dei clienti coinvolti). giftRecordSale: righe service/product
+  con sconto vendita ripartito proporzionalmente (source_line_id =
+  sale_item_id); giftRecordAppointmentDone: righe appointment_services NON
+  residuali (esclusi i service_id riscattati via appointment_gift/giftbox/
+  package/prepaid_service_items), raggruppate per servizio (source_line_id =
+  service_id), sconto appuntamento ripartito; se non resta nulla invalida gli
+  eventi della sorgente. recordProductOrder legacy = no-op, NON portato.
+- REGOLE: service_qty/product_qty contano COUNT(DISTINCT source_type:source_id)
+  (2 righe stessa vendita = 1, verificato B1), appointments_count DISTINCT
+  source_id, total_spend SUM(amount) netto sconti (B2), first_visit forzata a
+  appointments_count>=1; comparatori >,>=,=,<=,< con eps 1e-7; set in OR tra
+  loro, and/or dentro il set. Finestra anti-retroattiva: from = max(valid_from,
+  gifts.created_at, ultimo riscatto+1s, reset persistiti+1s, created_at di
+  set/regola), to = valid_to; doppio filtro anche su events.created_at.
+  fidelity_only: adesione attuale richiesta + contano solo gli eventi dentro
+  la finestra di validita' di una tessera del cliente (granularita' a giorno
+  come il DATE legacy: same-day emesso = coperto; verificato B3 con eventi
+  retrodatati esclusi).
+- MATURAZIONE (giftRecalcClient): esclusioni excluded_client_ids, campagna
+  attiva ORA (fuori periodo: accumulo->scaduto a fine campagna, congelamento
+  altrimenti), single-use = un'istanza disponibile/riscattato/scaduto blocca
+  nuovi cicli (T6), una sola istanza attiva per gift+cliente (duplicate
+  chiuse), istanza accumulo creata solo al primo progresso, unlock
+  accumulo->disponibile al MOMENTO del ricalcolo (unlocked_at=now, expires_at
+  = fine giornata now+expires_after_days), regressione disponibile->accumulo
+  SOLO con forceRecheck (storni, T4: la rivalutazione usa la finestra congelata
+  a unlocked_at), progress_json = esito valutazione + stato.
+- SCADENZE: giftExpireInstance (disponibile oltre expires_at -> 'scaduto' +
+  annullo prenotazioni pending/scheduled collegate via appointment_gift_items);
+  giftExpireDueInstancesBatch agganciato al cron api/cron/fidelity-expire
+  (campo giftsExpired nel risultato per tenant, T8 verificato via CRON_SECRET).
+- AGGANCI: checkoutManageSale -> giftRecordSale (best-effort, dopo l'insert
+  righe); cancelManageSale -> giftInvalidateSource('sale'); appointments route
+  status->done -> giftRecordAppointmentDone; cancel_done da 'done' ->
+  giftInvalidateSource('appointment') (T9); sync-on-read in
+  quickBookClientGifts (drawer "Usa Omaggio") = Gifts::syncClientProgressOnRead.
+- DIVERGENZE DOCUMENTATE: filtro residuali applicato alla REGISTRAZIONE (gli
+  eventi Next nascono gia' filtrati; il filtro gemello in valutazione del
+  legacy serve solo per dati storici MySQL); intervalli di sospensione
+  campagna (gift_progress_resets campaign_disabled_start/end) NON ancora
+  esclusi dal conteggio (i marker sono pero' gia' esclusi dal calcolo del
+  reset-floor); token voucher lazy ensureGiftVoucherToken pronto per Blocco 2.
+- TEST (2 batterie, 24 PASS, cleanup CLEAN): T1-T9 ciclo completo (evento
+  vendita, accumulo 1/2, unlock con scadenza 23:59:59, idempotenza, storno ->
+  is_valid=0 + regressione, ri-unlock, single-use, appointment_done con
+  amount netto, cron scadenza, cancel-done); B1-B3 meccaniche fini (DISTINCT
+  per vendita, sconto ripartito su total_spend, fidelity_only con copertura
+  tessera per-evento).
+Prossimi blocchi F12: B2 pagina istanza + azioni (riscatto parziale/annullo/
+note/voucher email), B3 assegnazione manuale + redeem POS, B4 editor avanzato
+(livelli/esclusioni/multi-set/clona) + GiftLoyaltyAttribution.

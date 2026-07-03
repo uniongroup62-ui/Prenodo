@@ -30,6 +30,7 @@ import {
 } from "@/lib/db-repositories";
 import { lifecycleKindForStatusChange, sendAppointmentLifecycleEmail } from "@/lib/appointment-lifecycle-email";
 import { awardAppointmentFidelityOnDone } from "@/lib/manage-pos";
+import { giftInvalidateSource, giftRecordAppointmentDone } from "@/lib/gifts-engine";
 import { currentManageSession } from "@/lib/manage-auth";
 import { resolveManageLocationId } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -533,6 +534,9 @@ export async function POST(request: Request) {
       // storno is the dedicated cancel-done flow (a later step), not this call.
       if (newPhpStatus === "done" && oldPhpStatus !== "done") {
         await awardAppointmentFidelityOnDone(tenantSlug, id, session.user.id).catch(() => undefined);
+        // OMAGGI (F12): l'esecuzione registra gli eventi appointment_done (righe non
+        // residuali) e ricalcola la maturazione (Gifts::recordAppointmentDone).
+        await giftRecordAppointmentDone(tenantSlug, id).catch(() => undefined);
       }
       // Port of automation_send_email('approved'|'rejected', id): fire AFTER the
       // DB write, gated on emailConfigured() + the kind's toggle (all handled
@@ -577,6 +581,9 @@ export async function POST(request: Request) {
         // email kind depends on the transition (e.g. pending->canceled = 'rejected').
         const oldPhpStatus = (await getDbAppointmentPhpStatus(tenantSlug, id)) ?? "done";
         const appointment = await cancelDoneAppointment(tenantSlug, id, targetStatus, session.user.id, reason);
+        // OMAGGI (F12): l'annullo di un eseguito invalida gli eventi appointment_done
+        // e fa regredire l'eventuale maturazione ottenuta con quell'appuntamento.
+        if (oldPhpStatus === "done") await giftInvalidateSource(tenantSlug, "appointment", id).catch(() => undefined);
         // Lifecycle email: same transition mapping the status path fires; gated +
         // error-swallowed inside the helper.
         const kind = lifecycleKindForStatusChange(oldPhpStatus, targetStatus);

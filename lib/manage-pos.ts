@@ -33,6 +33,7 @@ import {
   type PromoCartLine,
 } from "@/lib/db-repositories";
 import { expireClientLots, fidelityLotsSettings } from "@/lib/fidelity-lots";
+import { giftInvalidateSource, giftRecordSale } from "@/lib/gifts-engine";
 import { getManageLocationContext } from "@/lib/manage-locations";
 import {
   columnExists,
@@ -702,8 +703,15 @@ export async function checkoutManageSale(
   // tables). Faithful to pos_success.php showing "GiftCard/GiftBox emessa (CODE)".
   const issuedVouchers: IssuedVoucher[] = [];
 
+  // OMAGGI (F12): righe servizio/prodotto per il tracking eventi (Gifts::recordSale) —
+  // il source_line_id è l'id riga sale_items appena inserito.
+  const giftLines: Array<{ type: string; refId: number; qty: number; lineTotal: number; saleItemId: number }> = [];
+
   for (const item of items) {
     const saleItemId = await insertSaleItem(slug, saleId, item);
+    if ((item.type === "service" || item.type === "product") && item.refId > 0) {
+      giftLines.push({ type: item.type, refId: item.refId, qty: item.quantity, lineTotal: item.total, saleItemId });
+    }
     if (item.type === "product" && item.refId > 0 && item.status !== "ordered") {
       await adjustProductStock(slug, item.refId, locationId, -item.quantity);
     }
@@ -741,6 +749,13 @@ export async function checkoutManageSale(
 
   if (input.appointmentId && input.appointmentId > 0) {
     await tenantUpdate({ slug, table: "appointments", id: input.appointmentId, values: { status: "done" } }).catch(() => 0);
+  }
+
+  // OMAGGI (F12): eventi service_sold/product_sold + ricalcolo maturazione del cliente
+  // (Gifts::recordSale, chiamato dal legacy subito dopo l'insert vendita). Best-effort:
+  // un problema omaggi non deve mai far fallire la cassa.
+  if (client.id > 0 && giftLines.length) {
+    await giftRecordSale(slug, saleId, client.id, giftLines, subtotal, discount, locationId).catch(() => undefined);
   }
 
   // RATEIZZAZIONE: when a rate plan was configured (count >= 2) AND the sale has a real
@@ -1025,6 +1040,10 @@ export async function cancelManageSale(
     note: cancelNote(input.saleId, input.userName, reason, stockMode, productItems),
   });
   await cancelLinkedSaleResidues(slug, input.saleId, reason, saleRow, input.userId, pointsModes);
+
+  // OMAGGI (F12): lo storno invalida gli eventi di tracking della vendita e ricalcola
+  // la maturazione (un "disponibile" non più coperto regredisce ad accumulo).
+  await giftInvalidateSource(slug, "sale", input.saleId).catch(() => undefined);
 
   const updated = await getSale(slug, input.saleId);
   return {

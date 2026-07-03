@@ -61,6 +61,7 @@ import {
   type PointLotScheduleRow,
 } from "@/lib/fidelity-lots";
 import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
+import { giftRecalcClient } from "@/lib/gifts-engine";
 import { assertAppointmentSlotAvailable, busyCabinRangesForDate, busyRangesForDate, staffTimeoffReasonForRange, type AppointmentSlotSegment, type CabinBusyRange } from "@/lib/public-booking-db";
 
 export async function listDbLocations(slug: string): Promise<Location[]> {
@@ -16004,6 +16005,9 @@ async function giftRewardRedeemedQty(
 // is the reward's ARRAY INDEX in reward_items_json (parity with the legacy index).
 async function quickBookClientGifts(slug: string, clientId: number): Promise<QuickBookClientGift[]> {
   if (clientId <= 0) return [];
+  // SYNC-ON-READ (Gifts::syncClientProgressOnRead): riallinea la maturazione del
+  // cliente PRIMA di elencare i disponibili (unlock maturati nel frattempo, scadenze).
+  await giftRecalcClient(slug, clientId).catch(() => undefined);
   let instances: RowDataPacket[] = [];
   try {
     const giftTable = await tenantTable(slug, "gift_instances");
