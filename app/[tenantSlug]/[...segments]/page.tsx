@@ -437,7 +437,7 @@ export default async function TenantPage({
   if (page === "giftcard" && (query.action === "edit" || query.action === "view")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
-        <GiftCardDetailContent />
+        <GiftCardDetailContent slug={tenantSlug} />
       </ManageShell>
     );
   }
@@ -449,7 +449,7 @@ export default async function TenantPage({
   if (page === "giftbox" && (query.action === "view" || query.action === "edit_instance")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
-        <GiftBoxInstanceDetailContent />
+        <GiftBoxInstanceDetailContent slug={tenantSlug} />
       </ManageShell>
     );
   }
@@ -460,7 +460,7 @@ export default async function TenantPage({
   if (page === "giftbox" && (query.action === "new" || query.action === "edit")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
-        <GiftBoxFormContent />
+        <GiftBoxFormContent slug={tenantSlug} />
       </ManageShell>
     );
   }

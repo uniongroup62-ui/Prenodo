@@ -2443,3 +2443,59 @@ DIVERGENZE DOCUMENTATE: i bottoni dello stato bloccato non sono gated sui
 permessi services.manage/products.manage (il componente non ha le perms;
 la pagina di destinazione resta comunque protetta); il bug legacy del filtro
 (hidden page=pacchetti invece di packages, riga 3989) non riprodotto.
+
+## GIFTBOX / GIFTCARD MANAGE (giftcard.php / giftbox.php / *_settings) — PARITA (2026-07-03)
+Le pagine settings e i voucher pubblici erano gia' fedeli; dettagli e liste
+avevano UI semplificate. Fatto in questa passata:
+1. LISTE EMESSE RISCRITTE (giftcard action=list / giftbox tab=instances):
+   filtri legacy Mittente / Cerca ("Codice, destinatario...") / Stato
+   (Tutti/Attiva/Riscattata/Scaduta/Annullata) + "Tutte le sedi" solo
+   multi-sede; colonne legacy Codice | Mittente | Destinatario | [Sede] |
+   (Iniziale | Saldo per giftcard) | Stato | Emessa | Scadenza | (Riscatto per
+   giftbox) | Azioni; Codice e bottone stampa linkano il voucher pubblico via
+   token; azione "Dettaglio" (era "Apri"). Nuove API action=manage_list con
+   righe arricchite (mittente da clients, sede, badge legacy, token voucher)
+   filtrate per sede corrente salvo all_locations=1; empty state su conteggio
+   NON filtrato. BADGE LEGACY: redeemed -> "Riscattata" bg-info (il Next
+   mostrava "Utilizzata" bg-secondary), expired -> bg-warning, cancelled ->
+   bg-danger; per giftbox issued -> "Attiva". Stato effettivo: expires_at
+   passato + attiva => Scaduta (il legacy esegue expireDue* a ogni accesso).
+2. HEADER LEGACY: giftcard [Torna alla lista][Crea GiftCard -> pos se non
+   vuota]; giftbox [← Fidelity][Impostazioni][Crea GiftBox se non vuota] —
+   rimosso il bottone "Template GiftBox" inventato dal Next (il legacy
+   raggiunge tab=boxes dalla hub Fidelity).
+3. TAB TEMPLATE (tab=boxes) riscritto sul markup live: barra "Template
+   GiftBox (contenuti + regole base)" + [Nuova GiftBox]; card header "GiftBox"
+   + "N totali"; colonne Nome | Stato (Attiva/Disattiva) | Costo punti |
+   Livello (Tutti i clienti / Punti: keys / Fidelity) | Contenuti | Istanze |
+   Validita (d/m/Y → d/m/Y); vuoto "Nessuna GiftBox."; confirm delete legacy
+   "Eliminare questa GiftBox?" (era un testo inventato).
+4. EDITOR TEMPLATE: aggiunto il blocco "Livelli Card (obbligatorio)" /
+   "Livelli Punti" (gbLevelsWrap) visibile con "Solo clienti con Fidelity",
+   con PERSISTENZA eligible_levels_points (whitelist dai livelli configurati)
+   e validazione verbatim "Errore: seleziona almeno un livello Punti." —
+   era un TODO dichiarato. Header pagina legacy (Fidelity / GiftBox + barra
+   template) al posto del titolo inventato "Nuova/Modifica GiftBox".
+5. FIX getFidelityLevelsSettings: senza livelli JSON configurati ricostruisce
+   i default legacy Bronze/Silver/Gold dalle soglie (Fidelity.php ~579,
+   default 200/500) — il PHP live elenca i livelli anche prima della prima
+   configurazione, il Next tornava lista vuota (blocco Livelli invisibile).
+6. Slug prop ai 3 carve-out (dettaglio giftcard, dettaglio istanza giftbox,
+   editor template) — classe bug SSR //pagina.
+Verifica: 55/55 marker verbatim nel bundle (liste, tab template, editor,
+entrambe le settings); battery e2e 23/23 (validazioni template verbatim,
+livelli obbligatori/azzerati, colonna Livello, manage_list giftbox+giftcard,
+issue giftcard -> mittente risolto + badge Attiva -> redeem parziale/totale ->
+"Riscattata" bg-info -> update destinatario da anagrafica; cleanup CLEAN via
+pg incluse le righe da tentativi di validazione).
+RESIDUI DOCUMENTATI (dettagli card/istanza — UI semplificata funzionante):
+- giftcard edit legacy: card riepilogo completa (Evento, Voucher nascondi
+  importo, Inizio validita), modale "Modifica scadenza GiftCard", card "Invio
+  email al destinatario", riscatto per-item (giftcard_items), colonne
+  movimenti Sede/Operatore, select Mittente/Evento. Il Next copre riscatto
+  importo, destinatario+cliente, messaggio/nota interna, movimenti base.
+- giftbox edit_instance legacy: riscatto PARZIALE per-item con tabella
+  Tot/Usati/Da riscattare + "Seleziona tutti i rimanenti", modale scadenza,
+  invio email, movimenti virtuali. Il Next copre riscatto totale, annulla,
+  destinatario (gli appuntamenti riscattano gia' i singoli item).
+- Topup/cancel giftcard assenti anche nel legacy (disabilitati): parita'.

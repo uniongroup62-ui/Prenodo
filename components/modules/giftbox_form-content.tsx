@@ -80,6 +80,10 @@ export function GiftBoxFormContent({ slug: slugProp }: { slug?: string } = {}) {
   const [form, setForm] = useState<GiftBoxForm>(emptyForm());
   const [services, setServices] = useState<CatalogItem[]>([]);
   const [products, setProducts] = useState<CatalogItem[]>([]);
+  // Livelli Punti configurati in Fidelity (giftbox.php gbLevelsWrap): con
+  // "Solo clienti con Fidelity" attivo la selezione è OBBLIGATORIA.
+  const [levels, setLevels] = useState<{ key: string; name: string }[]>([]);
+  const [eligibleLevels, setEligibleLevels] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -99,6 +103,15 @@ export function GiftBoxFormContent({ slug: slugProp }: { slug?: string } = {}) {
         return j;
       })
       .catch(() => ({}));
+
+    // Livelli Punti dai settaggi Fidelity (per il blocco gbLevelsWrap).
+    fetch(`/api/manage/fidelity?slug=${encodeURIComponent(slug)}&action=levels`, { headers: { "x-tenant-slug": slug } })
+      .then((r) => r.json())
+      .then((j) => {
+        const lv = (j?.levels?.levels ?? []) as Array<Record<string, unknown>>;
+        setLevels(lv.map((l) => ({ key: String(l.key ?? "").toLowerCase(), name: String(l.name ?? l.key ?? "") })).filter((l) => l.key !== ""));
+      })
+      .catch(() => setLevels([]));
 
     if (act === "edit" && Number.isFinite(id) && id > 0) {
       Promise.all([
@@ -121,6 +134,7 @@ export function GiftBoxFormContent({ slug: slugProp }: { slug?: string } = {}) {
             custom_label: String(it.customLabel ?? ""),
             custom_details: String(it.customDetails ?? ""),
           }));
+          setEligibleLevels(Array.isArray(t.eligibleLevelsPoints) ? t.eligibleLevelsPoints.map((k: unknown) => String(k)) : []);
           setForm({
             id: Number(t.id ?? id),
             name: String(t.name ?? ""),
@@ -188,6 +202,10 @@ export function GiftBoxFormContent({ slug: slugProp }: { slug?: string } = {}) {
       setError("Aggiungi almeno un contenuto alla GiftBox.");
       return;
     }
+    if (form.fidelity_only && levels.length > 0 && eligibleLevels.length === 0) {
+      setError("Errore: seleziona almeno un livello Punti.");
+      return;
+    }
 
     setSaving(true);
     try {
@@ -210,6 +228,7 @@ export function GiftBoxFormContent({ slug: slugProp }: { slug?: string } = {}) {
         sort_order: form.sort_order,
         valid_from: form.valid_from,
         valid_to: form.valid_to,
+        eligible_levels_points_json: JSON.stringify(eligibleLevels),
         items_json: JSON.stringify(itemsJson),
       };
       const res = await fetch(`/api/manage/giftboxes?slug=${encodeURIComponent(slug)}`, {
@@ -219,18 +238,16 @@ export function GiftBoxFormContent({ slug: slugProp }: { slug?: string } = {}) {
       });
       const j = await res.json();
       if (!res.ok || !j.ok) {
-        setError(String(j.error ?? "Errore nel salvataggio della GiftBox."));
+        setError(String(j.error ?? "Errore: impossibile salvare la GiftBox. Verifica nome, livelli e contenuti."));
         setSaving(false);
         return;
       }
       backToList();
     } catch {
-      setError("Errore nel salvataggio della GiftBox.");
+      setError("Errore: impossibile salvare la GiftBox. Verifica nome, livelli e contenuti.");
       setSaving(false);
     }
   }
-
-  const title = action === "new" ? "Nuova GiftBox" : "Modifica GiftBox";
 
   return (
     <div className="container-fluid">
@@ -239,13 +256,33 @@ export function GiftBoxFormContent({ slug: slugProp }: { slug?: string } = {}) {
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Programma fedelta</div>
-          <h1 className="bs-page-title">{title}</h1>
-          <div className="bs-page-subtitle">Configura il template GiftBox e i suoi contenuti.</div>
+          <h1 className="bs-page-title">Fidelity / GiftBox</h1>
+          <div className="bs-page-subtitle">Gestisci template, voucher e GiftBox emesse.</div>
         </div>
         <div className="bs-page-actions">
-          <a className="btn btn-outline-secondary btn-pill" href={`/${encodeURIComponent(slug)}/giftbox`}>
-            <i className="bi bi-arrow-left me-1" />
-            GiftBox
+          <div className="d-flex gap-2">
+            <a className="btn btn-outline-secondary btn-pill" href={`/${encodeURIComponent(slug)}/fidelity`}>
+              <i className="bi bi-arrow-left me-1" />
+              Fidelity
+            </a>
+            <a className="btn btn-outline-secondary btn-pill" href={`/${encodeURIComponent(slug)}/giftbox_settings`}>
+              <i className="bi bi-gear me-1" />
+              Impostazioni
+            </a>
+            <a className="btn btn-primary btn-pill" href={`/${encodeURIComponent(slug)}/pos`}>
+              <i className="bi bi-plus-lg me-1" />
+              Crea GiftBox
+            </a>
+          </div>
+        </div>
+      </div>
+
+      <div className="d-flex justify-content-between align-items-center mb-3">
+        <div className="text-muted small">Template GiftBox (contenuti + regole base)</div>
+        <div className="d-flex gap-2">
+          <a className="btn btn-primary btn-pill" href={`/${encodeURIComponent(slug)}/giftbox?action=new`}>
+            <i className="bi bi-plus-circle me-1" />
+            Nuova GiftBox
           </a>
         </div>
       </div>
@@ -307,6 +344,44 @@ export function GiftBoxFormContent({ slug: slugProp }: { slug?: string } = {}) {
                 />
                 <div className="form-text">Se &gt; 0, in fase di emissione puoi scegliere se scalare i punti.</div>
               </div>
+
+              {form.fidelity_only ? (
+                <div className="col-12" id="gbLevelsWrap">
+                  <hr />
+                  <div className="fw-semibold">Livelli Card (obbligatorio)</div>
+                  <div className="text-muted small">
+                    Visibile solo se <strong>Solo clienti con Fidelity</strong> e attivo. Seleziona almeno un livello Punti.
+                  </div>
+
+                  <div className="row g-3 mt-1">
+                    <div className="col-md-12">
+                      <div className="text-muted small fw-semibold">Livelli Punti</div>
+                      {levels.length === 0 ? (
+                        <div className="text-muted small mt-2">Nessun livello Punti configurato.</div>
+                      ) : (
+                        <div className="d-flex flex-wrap gap-2 mt-2">
+                          {levels.map((l) => (
+                            <div className="form-check" key={l.key}>
+                              <input
+                                className="form-check-input"
+                                type="checkbox"
+                                id={`gb_lvl_pts_${l.key}`}
+                                checked={eligibleLevels.includes(l.key)}
+                                onChange={(e) =>
+                                  setEligibleLevels((prev) => (e.target.checked ? Array.from(new Set([...prev, l.key])) : prev.filter((k) => k !== l.key)))
+                                }
+                              />
+                              <label className="form-check-label" htmlFor={`gb_lvl_pts_${l.key}`}>
+                                {l.name || l.key}
+                              </label>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
 
               <div className="col-md-3">
                 <label className="form-label">Ordine</label>

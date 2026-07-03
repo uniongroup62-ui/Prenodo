@@ -1,6 +1,7 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
-import { getManageGiftCard, issueDbGiftCard, listDbClients, listDbGiftCards, redeemDbGiftCard, updateManageGiftCard } from "@/lib/db-repositories";
+import { getManageGiftCard, issueDbGiftCard, listDbClients, listDbGiftCards, listManageGiftcardRows, redeemDbGiftCard, updateManageGiftCard } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
+import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { canAny } from "@/lib/role-permissions";
 
@@ -27,6 +28,18 @@ export async function GET(request: Request) {
       if (!detail) return jsonError("GiftCard non trovata.", 404);
       const clients = (await listDbClients({ slug: tenantSlug })).map((c) => ({ id: c.id, name: c.name }));
       return Response.json({ ok: true, sourceMode: "database", detail, clients });
+    }
+
+    // Lista MANAGE legacy (giftcard.php list): righe con Mittente/Sede/badge,
+    // filtrate sulla sede corrente salvo all_locations=1 (0 = nessuna sede =
+    // sempre visibile); l'empty state usa il conteggio NON filtrato.
+    if (action === "manage_list") {
+      const allRows = await listManageGiftcardRows(tenantSlug);
+      const allLocations = ["1", "true", "on", "yes", "all"].includes(String(url.searchParams.get("all_locations") ?? "").trim().toLowerCase());
+      const locationContext = await getManageLocationContext(tenantSlug).catch(() => null);
+      const filterLocationId = allLocations ? 0 : (locationContext?.currentLocationId ?? 0);
+      const rows = filterLocationId > 0 ? allRows.filter((r) => r.locationId === 0 || r.locationId === filterLocationId) : allRows;
+      return Response.json({ ok: true, sourceMode: "database", rows, totalCount: allRows.length, locationsCount: locationContext?.locations.length ?? 0 });
     }
 
     return Response.json({

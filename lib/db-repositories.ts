@@ -5225,10 +5225,13 @@ export type ManageGiftCard = {
   canEdit: boolean;
 };
 
+// Meta stato legacy (giftcard_page_status_meta): redeemed → "Riscattata" info,
+// expired → warning, cancelled → danger. La chiave interna "used" mappa il
+// codice DB "redeemed".
 const GIFTCARD_STATUS_META: Record<string, { label: string; badge: string }> = {
   active: { label: "Attiva", badge: "bg-success" },
-  used: { label: "Utilizzata", badge: "bg-secondary" },
-  expired: { label: "Scaduta", badge: "bg-warning text-dark" },
+  used: { label: "Riscattata", badge: "bg-info" },
+  expired: { label: "Scaduta", badge: "bg-warning" },
   cancelled: { label: "Annullata", badge: "bg-danger" },
 };
 
@@ -5322,6 +5325,117 @@ export async function updateManageGiftCard(
   });
   await tenantUpdate({ slug, table: "giftcards", id, values });
   return { ok: true };
+}
+
+// ---- Liste MANAGE GiftCard / GiftBox (giftcard.php list / giftbox.php tab=instances) ----
+// Righe legacy: Codice | Mittente | Destinatario | [Sede] | ... con badge stato
+// legacy e link al voucher pubblico. Lo stato effettivo marca "expired" quando
+// expires_at è passato e la card/istanza è ancora attiva (il legacy esegue
+// expireDue* all'ingresso pagina; qui è calcolato in lettura).
+export type ManageGiftIssueRow = {
+  id: number;
+  code: string;
+  // Token del voucher pubblico (link/QR): la lista legacy linka il Codice al voucher.
+  publicToken: string;
+  senderId: number;
+  senderName: string;
+  recipientName: string;
+  recipientEmail: string;
+  locationId: number;
+  locationName: string;
+  status: string;
+  statusLabel: string;
+  statusBadge: string;
+  issuedAt: string;
+  expiresAt: string;
+  redeemedAt: string;
+  initialAmount: number;
+  balance: number;
+};
+
+function giftIssueStatusMeta(kind: "giftcard" | "giftbox", raw: string, expiresAt: string): { status: string; label: string; badge: string } {
+  let code = raw.trim().toLowerCase();
+  if (code === "canceled") code = "cancelled";
+  if (kind === "giftbox" && (code === "issued" || code === "active")) code = "issued";
+  const activeCodes = kind === "giftbox" ? ["issued"] : ["active"];
+  if (activeCodes.includes(code) && expiresAt !== "" && expiresAt.slice(0, 10) < todayIso()) code = "expired";
+  const map: Record<string, { label: string; badge: string }> = {
+    active: { label: "Attiva", badge: "success" },
+    issued: { label: "Attiva", badge: "success" },
+    redeemed: { label: "Riscattata", badge: "info" },
+    expired: { label: "Scaduta", badge: "warning" },
+    cancelled: { label: "Annullata", badge: "danger" },
+  };
+  const meta = map[code] ?? { label: code !== "" ? code.charAt(0).toUpperCase() + code.slice(1) : "—", badge: "secondary" };
+  return { status: code, label: meta.label, badge: `bg-${meta.badge}` };
+}
+
+async function giftIssueSenderNames(slug: string, ids: number[]): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  const clean = [...new Set(ids.filter((n) => n > 0))];
+  if (!clean.length) return out;
+  const ph = clean.map(() => "?").join(",");
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, full_name", where: `id IN (${ph})`, params: clean }).catch(() => [] as RowDataPacket[]);
+  for (const r of rows) out.set(Number(r.id ?? 0), String(r.full_name ?? "").trim());
+  return out;
+}
+
+export async function listManageGiftcardRows(slug: string): Promise<ManageGiftIssueRow[]> {
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "giftcards", orderBy: "issued_at DESC, id DESC" });
+  const senders = await giftIssueSenderNames(slug, rows.map((r) => Number(r.client_id ?? 0)));
+  return rows.map((r) => {
+    const expires = r.expires_at ? String(r.expires_at).slice(0, 10) : "";
+    const meta = giftIssueStatusMeta("giftcard", String(r.status ?? "active"), expires);
+    const senderId = Number(r.client_id ?? 0);
+    return {
+      id: Number(r.id ?? 0),
+      code: String(r.code ?? ""),
+      publicToken: String(r.voucher_public_token ?? ""),
+      senderId,
+      senderName: senders.get(senderId) || (senderId > 0 ? `Cliente #${senderId}` : "—"),
+      recipientName: String(r.recipient_name ?? "").trim() || "—",
+      recipientEmail: String(r.recipient_email ?? "").trim(),
+      locationId: Number(r.location_id ?? 0),
+      locationName: String(r.location_name ?? "").trim(),
+      status: meta.status,
+      statusLabel: meta.label,
+      statusBadge: meta.badge,
+      issuedAt: r.issued_at ? toIso(r.issued_at).slice(0, 10) : "",
+      expiresAt: expires,
+      redeemedAt: r.redeemed_at ? toIso(r.redeemed_at).slice(0, 10) : "",
+      initialAmount: roundMoney(Number(r.initial_amount ?? 0)),
+      balance: roundMoney(Number(r.balance ?? 0)),
+    };
+  });
+}
+
+export async function listManageGiftboxRows(slug: string): Promise<ManageGiftIssueRow[]> {
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "giftbox_instances", orderBy: "issued_at DESC, id DESC" });
+  const senders = await giftIssueSenderNames(slug, rows.map((r) => Number(r.client_id ?? 0)));
+  return rows.map((r) => {
+    const expires = r.expires_at ? String(r.expires_at).slice(0, 10) : "";
+    const meta = giftIssueStatusMeta("giftbox", String(r.status ?? "issued"), expires);
+    const senderId = Number(r.client_id ?? 0);
+    return {
+      id: Number(r.id ?? 0),
+      code: String(r.code ?? ""),
+      publicToken: String(r.voucher_public_token ?? ""),
+      senderId,
+      senderName: senders.get(senderId) || (senderId > 0 ? `Cliente #${senderId}` : "—"),
+      recipientName: String(r.recipient_name ?? "").trim() || "—",
+      recipientEmail: String(r.recipient_email ?? "").trim(),
+      locationId: Number(r.location_id ?? 0),
+      locationName: String(r.location_name ?? "").trim(),
+      status: meta.status,
+      statusLabel: meta.label,
+      statusBadge: meta.badge,
+      issuedAt: r.issued_at ? toIso(r.issued_at).slice(0, 10) : (r.created_at ? toIso(r.created_at).slice(0, 10) : ""),
+      expiresAt: expires,
+      redeemedAt: r.redeemed_at ? toIso(r.redeemed_at).slice(0, 10) : "",
+      initialAmount: 0,
+      balance: 0,
+    };
+  });
 }
 
 // Inverse of redeemDbGiftCard, exported for the POS void flow: refund `amount` back
@@ -11580,10 +11694,28 @@ function parseFidelityCardLevels(raw: unknown): { pointsEnabled: boolean; levels
 }
 
 export async function getFidelityLevelsSettings(slug: string): Promise<FidelityLevelsSettings> {
-  const rows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_levels_enabled, fidelity_card_levels_json", orderBy: "id ASC", limit: 1 });
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_levels_enabled, fidelity_card_levels_json, fidelity_level_period_days, fidelity_silver_threshold, fidelity_gold_threshold", orderBy: "id ASC", limit: 1 })
+    .catch(async () => tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_levels_enabled, fidelity_card_levels_json", orderBy: "id ASC", limit: 1 }));
   const r = rows[0] ?? ({} as RowDataPacket);
   const parsed = parseFidelityCardLevels(r.fidelity_card_levels_json);
-  return { enabled: Number(r.fidelity_levels_enabled ?? 0) === 1, pointsEnabled: parsed.pointsEnabled, levels: parsed.levels };
+  // Migrazione legacy (Fidelity.php ~579): senza livelli JSON ricostruisce
+  // Bronze/Silver/Gold dalle vecchie soglie (default 200/500). Cosi' il blocco
+  // "Livelli Punti" (GiftBox/Gifts) elenca i livelli anche prima della prima
+  // configurazione, come la pagina PHP live.
+  let levels = parsed.levels;
+  if (levels.length === 0) {
+    let silver = Math.trunc(Number(r.fidelity_silver_threshold ?? 200)) || 0;
+    if (silver < 0) silver = 0;
+    let gold = Math.trunc(Number(r.fidelity_gold_threshold ?? 500)) || 0;
+    if (gold < 0) gold = 0;
+    if (gold < silver) gold = silver;
+    levels = [
+      { key: "bronze", name: "Bronze", minPoints: 0 },
+      { key: "silver", name: "Silver", minPoints: silver },
+      { key: "gold", name: "Gold", minPoints: gold },
+    ];
+  }
+  return { enabled: Number(r.fidelity_levels_enabled ?? 0) === 1, pointsEnabled: parsed.pointsEnabled, levels };
 }
 
 function normalizeLevelKey(v: string): string {
@@ -14074,6 +14206,8 @@ export type GiftBoxTemplateRecord = {
   name: string;
   description: string;
   fidelityOnly: boolean;
+  // Livelli Punti abilitati (giftbox.php gbLevelsWrap, obbligatori con fidelityOnly).
+  eligibleLevelsPoints: string[];
   pointsCost: string;
   active: boolean;
   sortOrder: string;
@@ -14087,9 +14221,10 @@ function normalizeGiftBoxItemType(value: unknown): GiftBoxTemplateItem["itemType
   return v === "service" || v === "product" || v === "custom" ? v : "custom";
 }
 
-// Lightweight list of giftbox TEMPLATES (for the template grid). Port of
-// GiftBox::listGiftBoxes(false): non-deleted boxes ordered by sort_order.
-export async function listManageGiftBoxTemplates(slug: string): Promise<Array<{ id: number; name: string; active: boolean; pointsCost: number; itemsCount: number }>> {
+// Lista TEMPLATE per il tab boxes legacy: Nome | Stato | Costo punti | Livello
+// (Tutti i clienti / Punti: keys / Fidelity) | Contenuti | Istanze | Validità.
+// Port of GiftBox::listGiftBoxes(false): non-deleted boxes ordered by sort_order.
+export async function listManageGiftBoxTemplates(slug: string): Promise<Array<{ id: number; name: string; description: string; active: boolean; pointsCost: number; itemsCount: number; instancesCount: number; levelLabel: string; validFrom: string; validTo: string }>> {
   const rows = await tenantSelect<RowDataPacket>({
     slug,
     table: "giftboxes",
@@ -14099,12 +14234,29 @@ export async function listManageGiftBoxTemplates(slug: string): Promise<Array<{ 
   return Promise.all(rows.map(async (row) => {
     const id = Number(row.id ?? 0);
     const itemRows = await tenantSelect<RowDataPacket>({ slug, table: "giftbox_items", columns: "id", where: "giftbox_id = ?", params: [id] }).catch(() => [] as RowDataPacket[]);
+    const instRows = await tenantSelect<RowDataPacket>({ slug, table: "giftbox_instances", columns: "id", where: "giftbox_id = ?", params: [id] }).catch(() => [] as RowDataPacket[]);
+    // Colonna Livello legacy: eligibility all_clients → "Tutti i clienti";
+    // fidelity_only con livelli → "Punti: {keys}"; altrimenti "Fidelity".
+    let levelLabel = "Tutti i clienti";
+    if (String(row.eligibility ?? "fidelity_only") === "fidelity_only") {
+      let keys: string[] = [];
+      try {
+        const parsed = JSON.parse(String(row.eligible_levels_points ?? "[]"));
+        if (Array.isArray(parsed)) keys = parsed.map((k) => String(k ?? "").trim()).filter(Boolean);
+      } catch { keys = []; }
+      levelLabel = keys.length > 0 ? `Punti: ${keys.join(", ")}` : "Fidelity";
+    }
     return {
       id,
       name: String(row.name ?? ""),
+      description: String(row.description ?? ""),
       active: Number(row.active ?? 0) === 1,
       pointsCost: roundMoney(Number(row.points_cost ?? 0)),
       itemsCount: itemRows.length,
+      instancesCount: instRows.length,
+      levelLabel,
+      validFrom: row.valid_from ? toIso(row.valid_from).slice(0, 10) : "",
+      validTo: row.valid_to ? toIso(row.valid_to).slice(0, 10) : "",
     };
   }));
 }
@@ -14133,11 +14285,18 @@ export async function getManageGiftBoxTemplate(slug: string, id: number): Promis
     customDetails: String(row.custom_details ?? ""),
   }));
 
+  let eligibleLevelsPoints: string[] = [];
+  try {
+    const parsed = JSON.parse(String(gb.eligible_levels_points ?? "[]"));
+    if (Array.isArray(parsed)) eligibleLevelsPoints = parsed.map((k) => String(k ?? "").trim().toLowerCase()).filter(Boolean);
+  } catch { eligibleLevelsPoints = []; }
+
   return {
     id,
     name: String(gb.name ?? ""),
     description: String(gb.description ?? ""),
     fidelityOnly: String(gb.eligibility ?? "fidelity_only") === "fidelity_only",
+    eligibleLevelsPoints,
     pointsCost: gb.points_cost != null ? String(roundMoney(Number(gb.points_cost ?? 0))) : "0",
     active: Number(gb.active ?? 0) === 1,
     sortOrder: gb.sort_order != null ? String(gb.sort_order) : "0",
@@ -14150,14 +14309,29 @@ export async function getManageGiftBoxTemplate(slug: string, id: number): Promis
 // Create / update a giftbox template, faithful to giftbox.php POST(action=new|
 // edit) / GiftBox::saveGiftBox: writes the giftboxes row and rebuilds its
 // giftbox_items. Items are posted as a JSON string (items_json) because
-// parseRequestBody flattens arrays. The advanced Fidelity targeting
-// (eligible_levels_points) is NOT written here — see the form TODO.
+// parseRequestBody flattens arrays. Con fidelity_only i "Livelli Punti"
+// (eligible_levels_points_json) sono OBBLIGATORI come nel legacy
+// ("Errore: seleziona almeno un livello Punti.") e vengono validati contro i
+// livelli configurati in Fidelity.
 export async function saveManageGiftBoxTemplate(slug: string, body: Record<string, string>, id: number): Promise<GiftBoxTemplateRecord> {
   const name = String(body.name ?? "").trim();
   if (name === "") throw new Error("Nome GiftBox obbligatorio.");
 
   const fidelityOnly = String(body.fidelity_only ?? "") === "1";
   const active = String(body.active ?? "") === "1";
+
+  // Livelli Punti (giftbox.php gbLevelsWrap): whitelist dai livelli configurati,
+  // obbligatori con fidelity_only, azzerati con all_clients.
+  let eligibleLevels: string[] = [];
+  if (fidelityOnly) {
+    const levelsCfg = await getFidelityLevelsSettings(slug).catch(() => ({ enabled: false, pointsEnabled: false, levels: [] as Array<{ key: string }> }));
+    const whitelist = new Set(levelsCfg.levels.map((l) => String(l.key ?? "").trim().toLowerCase()).filter(Boolean));
+    try {
+      const parsed = JSON.parse(String(body.eligible_levels_points_json ?? body.eligible_levels_points ?? "[]"));
+      if (Array.isArray(parsed)) eligibleLevels = [...new Set(parsed.map((k) => String(k ?? "").trim().toLowerCase()).filter((k) => whitelist.has(k)))];
+    } catch { eligibleLevels = []; }
+    if (eligibleLevels.length === 0 && whitelist.size > 0) throw new Error("Errore: seleziona almeno un livello Punti.");
+  }
   const pointsCost = roundMoney(Math.max(0, Number(String(body.points_cost ?? "0").replace(",", ".")) || 0));
   const sortOrder = Number.parseInt(String(body.sort_order ?? "0"), 10) || 0;
   const from = normalizeClientDate(body.valid_from);
@@ -14197,6 +14371,7 @@ export async function saveManageGiftBoxTemplate(slug: string, body: Record<strin
     name,
     description: String(body.description ?? "").trim() || null,
     eligibility: fidelityOnly ? "fidelity_only" : "all_clients",
+    eligible_levels_points: fidelityOnly && eligibleLevels.length ? JSON.stringify(eligibleLevels) : null,
     points_cost: pointsCost,
     active: active ? 1 : 0,
     sort_order: sortOrder,
