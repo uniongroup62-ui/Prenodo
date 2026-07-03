@@ -240,6 +240,8 @@ export function ManageShell({
   const [notif, setNotif] = useState<NotifCounts>({ count: 0, quotes: 0, installments: 0, birthdays: 0 });
   const [locations, setLocations] = useState<ShellLocation[]>([]);
   const [currentLocationId, setCurrentLocationId] = useState(0);
+  const [needsLocationSelection, setNeedsLocationSelection] = useState(false);
+  const [shellContextLoaded, setShellContextLoaded] = useState(false);
   const [supportAccess, setSupportAccess] = useState<ShellSupport | null>(null);
   const [closureRange, setClosureRange] = useState<ShellClosure | null>(null);
   const supportExpiresLabel = formatSupportExpires(supportAccess?.expires_at);
@@ -262,6 +264,8 @@ export function ManageShell({
         });
         setLocations(Array.isArray(data.locations) ? data.locations : []);
         setCurrentLocationId(Number(data.currentLocationId ?? 0));
+        setNeedsLocationSelection(Boolean(data.needsLocationSelection));
+        setShellContextLoaded(true);
         setSupportAccess(data.supportAccess ?? null);
         setClosureRange(data.closureRange ?? null);
       })
@@ -415,6 +419,51 @@ export function ManageShell({
       setSearchOpen(false);
     }
   };
+
+  // GATE SELEZIONE SEDE — port di View::locationGate (View.php 913-977): un
+  // utente multi-sede senza sede corrente (o senza sedi assegnate) vede il
+  // chooser a schermo intero PRIMA del gestionale, come il blocco globale di
+  // index.php 606-638. La scelta passa da switchLocation (equivalente del
+  // legacy ?set_location_id=).
+  if (shellContextLoaded && needsLocationSelection) {
+    return (
+      <>
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" precedence="bs" />
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" precedence="bs" />
+        <link rel="stylesheet" href="/assets/css/app.css" precedence="app" />
+        <div className="min-vh-100 d-flex align-items-center justify-content-center bg-light p-3">
+          <div className="card shadow-sm" style={{ maxWidth: 480, width: "100%" }}>
+            <div className="card-body p-4">
+              <div className="text-muted small text-uppercase fw-semibold">Sede operativa</div>
+              <h1 className="h4 fw-bold mt-1 mb-2">Seleziona sede</h1>
+              {locations.length === 0 ? (
+                <div className="text-muted">
+                  Nessuna sede attiva risulta assegnata al tuo operatore. Chiedi a un amministratore di aggiornare le sedi abilitate prima di continuare.
+                </div>
+              ) : (
+                <>
+                  <div className="text-muted mb-3">Scegli la sede su cui vuoi lavorare. Il gestionale verra caricato dopo la selezione.</div>
+                  <div className="vstack gap-2">
+                    {locations.map((location) => (
+                      <button
+                        key={location.id}
+                        type="button"
+                        className="btn btn-outline-primary d-flex justify-content-between align-items-center"
+                        onClick={() => switchLocation(Number(location.id))}
+                      >
+                        <span className="fw-semibold">{location.name || `Sede #${location.id}`}</span>
+                        <span className="small">Continua con questa sede</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>

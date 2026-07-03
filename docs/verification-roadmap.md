@@ -2063,3 +2063,45 @@ Messaggi verificati: "Tab salvato correttamente.", "Tab eliminato.",
 "File eliminato." + tutte le validazioni (26 assert).
 DIVERGENZA DOCUMENTATA: layout meta allegati (note/posizione da
 attachment_meta) portato come passthrough minimale (posizione = ordine).
+
+## V10 RESIDUO — CHIUSA (2026-07-03, 17 test e2e PASS) — CAMPAGNA V1-V10 COMPLETA
+Batteria: e2e-v10-residuo.mjs. Verifiche + fix:
+1. SMS CALLBACK (api_sms_callback.php) — MANCAVA la route ricevente: il cron
+   passava il callback URL al provider ma nessun endpoint riceveva le DLR
+   (stati consegna persi). Nuova app/api/public/sms-callback: POST only
+   (405 "Metodo non consentito."), secret obbligatorio timing-safe da
+   ?token= / X-OpenAPI-SMS-Secret / X-Callback-Secret (403 "Callback SMS non
+   configurata." / "Token callback non valido."), ricerca ricorsiva
+   case-insensitive di rid/message_id/stato nei payload annidati (anche JSON
+   dentro stringhe), 422 payload vuoto / identificativi mancanti, mapping
+   legacy (DELIVERED -> sent+delivered_at; UNDELIVERABLE/REJECTED/EXPIRED ->
+   failed + last_error "SMS provider: STATO"), update reminders per rid o
+   per provider_message_id, 404 "Reminder SMS non trovato.",
+   provider_response_json troncato a 65000. Env: OPENAPI_SMS_CALLBACK_SECRET
+   + OPENAPI_SMS_CALLBACK_URL (da puntare a /api/public/sms-callback in prod).
+2. USER PREFS (api_user_prefs.php) — MANCAVA: nuova
+   app/api/manage/user-prefs con le colonne legacy su users
+   (calendar_day_staff_order: array id unici positivi max 200, perm
+   calendar.view; browser_notification_preferences: quotes/installments/
+   birthdays/fidelity_cards con appointments SEMPRE locked, perm
+   notifications.view), shapes JSON identiche ({ok,order}, {ok,preferences,
+   locked:["appointments"],configurable}), "Azione non valida." /
+   "Permesso negato.". Colonne aggiunte su Supabase (ALTER additive).
+   NB client: preferences va inviato come stringa JSON (parseRequestBody
+   appiattisce gli oggetti annidati).
+3. GATE MULTI-SEDE (port di View::locationGate + index.php 606-638) —
+   MANCAVA il chooser: un operatore multi-sede senza sede corrente vedeva
+   shell vuota. Ora manage-shell mostra il gate a schermo intero ("Seleziona
+   sede" / "Sede operativa" / "Scegli la sede su cui vuoi lavorare. Il
+   gestionale verra caricato dopo la selezione." / "Continua con questa
+   sede" / messaggio nessuna-sede legacy) finche' la sede non e' scelta
+   (switch via POST /api/manage/locations, che riscrive la sessione).
+   Verificato live: operatore con 2 sedi -> needsLocationSelection=true,
+   switch -> sede corrente impostata, sede non consentita -> 403.
+VERIFICATE GIA' COMPLETE (nessun fix): accessibility (pagina credenziali
+account: verifica email a codice, cambio email, cambio password — GET/POST
+DB-backed), marketplace settings (flag centrale marketplace_public_allowed
+solo SaaS-admin fail-closed + modal per-sede con categorie e sync directory).
+DIFFERITO OLTRE LA CAMPAGNA: barra support-access topbar (getSupportAccess
+stub null); "all locations" mode per-request (app_all_locations_filter_enabled)
+usato dal legacy su alcune liste — il Next filtra per sede corrente di sessione.
