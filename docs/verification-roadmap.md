@@ -2635,3 +2635,51 @@ scheda" + #posResidualsModal (il Next usa i controlli inline equivalenti);
 pacchetti "in GiftBox" (badge GiftBox sulla riga pacchetto + inclusione nel
 contenuto); percorso diretto posAction=issue_giftbox/issue_giftcard non
 usato dalla UI legacy attuale.
+
+## PAGAMENTI — AUDIT COMPLETO FUNZIONE-PER-FUNZIONE (2026-07-04, richiesta utente)
+Doppio inventario esaustivo (pos.php 7148 righe + pos.js 5948 + pagine
+pos_history/pos_prepaids/pos_preorders/pos_settings/pos_sale_detail/
+pos_success) vs Next. PARITA' GIA' PRESENTI e confermate: sidebar completa
+(Movimenti/Prepagati/Preordini/Impostazioni), checkout completo, vendita da
+preventivo (quote_cart + lock + converted), residui/punti/coupon/promo/rate,
+annulla vendita (motivazione obbligatoria + magazzino restore/no_restore +
+storno punti normal/negative/skip anche per-ricarica), elimina vendita
+annullata, ritiri preordini e esecuzioni prepagati con qty parziale e
+timeline, ricevuta stampabile con Buoni emessi, header Cassa e Movimenti.
+FALSI GAP smontati dall'inventario legacy (parita' senza intervento):
+- modali "Nuovo cliente"/"Trova"/"Scheda semplificata" NON esistono nel POS
+  legacy (sono del quick-booking drawer globale); in cassa c'e' solo il link
+  alla rubrica, come nel Next;
+- creazione "Buono" in cassa (new_coupon): backend+JS legacy pronti ma gli
+  hidden NON sono renderizzati nel form corrente -> feature DORMIENTE anche
+  nel legacy, non portata;
+- "Codice tessera": display statico "—" ANCHE nel legacy (pos.js non lo
+  popola mai);
+- pos_success come pagina autonoma: nel Next e' la ricevuta inline (parita'
+  funzionale, divergenza di navigazione documentata).
+FIX DI QUESTA PASSATA:
+1. RESIDUI COME IL LEGACY: il box mostra SOLO il riepilogo dinamico
+   ("Credito disponibile € X • N GiftCard disponibili • Non utilizzabili con
+   una ricarica in carrello • In uso: ...") + link "Apri scheda" che apre il
+   modale #posResidualsModal ORA WIRED (card Credito con checkbox+Importo da
+   usare+Usa max; card GiftCard con lista radio+importo+Usa max; "Applica"
+   copia nei valori applicati). Prima i controlli erano inline nel box e il
+   modale era markup morto con id duplicati.
+2. STATO VUOTO CLIENTI (pos.php 5943-5959): card "Nessun cliente
+   disponibile" con testo verbatim + bottoni Nuovo cliente/Apri Clienti.
+3. posRedeemInfo default verbatim: "Seleziona un cliente per vedere punti,
+   credito, omaggi disponibili." (era "...credito disponibili.").
+4. FILTRO AREE CATALOGO wired: select "Tutte le aree" ora filtra per
+   categoria (distinte da servizi/prodotti correnti, reset al cambio tab) —
+   era una select statica.
+5. RICEVUTA: blocco "Fidelity" con Punti usati / Punti guadagnati
+   (pos_success.php card Totali) — checkout ora ritorna
+   fidelityPointsEarned.
+Verifica: 19/19 marker verbatim; battery e2e 6/6 (fidelityPointsEarned nella
+risposta, item_status executed persistito, client_residuals, snapshot/restore
+punti cliente, cleanup CLEAN).
+RESIDUI DOCUMENTATI: modes AJAX legacy client_gifts_v2/preview_auto_promo/
+catalog_promos coperti da flussi equivalenti Next (omaggi auto al checkout da
+appuntamento, Rileva promozione); vendita da appuntamento e' un EXTRA Next
+(il legacy incassa gli appuntamenti dal quick-booking); pacchetti "in
+GiftBox" (badge) ancora da portare.

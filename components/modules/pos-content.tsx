@@ -205,6 +205,8 @@ type ReceiptData = {
   // GiftCard/GiftBox codes this sale ISSUED (from the checkout response `issuedVouchers`),
   // shown in the "Buoni emessi" receipt section so staff can give the code to the customer.
   issuedVouchers: IssuedVoucher[];
+  // Punti Fidelity maturati (pos_success.php blocco "Fidelity": Punti usati/guadagnati).
+  pointsEarned: number;
 };
 
 type PosContext = {
@@ -474,6 +476,8 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   // Catalog UI state.
   const [catalogMode, setCatalogMode] = useState<"service" | "product">("service");
   const [catalogSearch, setCatalogSearch] = useState("");
+  // Filtro area/categoria del catalogo (select "Tutte le aree" legacy).
+  const [catalogCategory, setCatalogCategory] = useState("");
   const [clientSearch, setClientSearch] = useState("");
 
   // Cart.
@@ -532,6 +536,11 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   const [creditUseInput, setCreditUseInput] = useState("0");
   const [giftcardId, setGiftcardId] = useState(0);
   const [giftcardUseInput, setGiftcardUseInput] = useState("0");
+  // Draft del modale Residui (legacy #posResidualsModal): seedato all'apertura
+  // ("Apri scheda") dai valori applicati, copiato negli applicati su "Applica".
+  const [rmCreditAmt, setRmCreditAmt] = useState("0");
+  const [rmGiftcardId, setRmGiftcardId] = useState(0);
+  const [rmGiftcardAmt, setRmGiftcardAmt] = useState("0");
   // FIDELITY points the staff applies as a discount (raw typed value; re-clamped below).
   const [pointsUseInput, setPointsUseInput] = useState("0");
   const residualsReqRef = useRef(0);
@@ -840,17 +849,25 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
     );
   }, [clients, clientSearch]);
 
+  // Aree/categorie del catalogo per il select "Tutte le aree" (legacy
+  // posCatalogCategory): distinte dalla modalità corrente.
+  const catalogCategories = useMemo(() => {
+    const src = catalogMode === "service" ? services.map((s) => s.category) : products.map((p) => p.category);
+    return Array.from(new Set(src.map((c) => (c ?? "").trim()).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  }, [catalogMode, services, products]);
+
   const tiles = useMemo(() => {
     const q = catalogSearch.trim().toLowerCase();
+    const cat = catalogCategory.trim();
     if (catalogMode === "service") {
       return services
-        .filter((s) => !q || s.name.toLowerCase().includes(q))
+        .filter((s) => (!q || s.name.toLowerCase().includes(q)) && (!cat || (s.category ?? "").trim() === cat))
         .map((s) => ({ id: s.id, name: s.name, price: parsePrice(s.price), stock: undefined as number | undefined }));
     }
     return products
-      .filter((p) => !q || p.name.toLowerCase().includes(q) || (p.sku ?? "").toLowerCase().includes(q))
+      .filter((p) => (!q || p.name.toLowerCase().includes(q) || (p.sku ?? "").toLowerCase().includes(q)) && (!cat || (p.category ?? "").trim() === cat))
       .map((p) => ({ id: p.id, name: p.name, price: parsePrice(p.price), stock: p.stock }));
-  }, [catalogMode, catalogSearch, services, products]);
+  }, [catalogMode, catalogSearch, catalogCategory, services, products]);
 
   // ---- cart math (mirrors pos.js + lib/manage-pos.ts) ----
   const subtotal = useMemo(
@@ -1734,17 +1751,6 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   }, [subtotal, cart, clientId, slug, clearPromotion]);
 
   // ---- Residui mutators ----
-  // "Usa max" for credit: apply the most the credit can cover (clamped to the remaining
-  // total after the giftcard) — the creditUse memo re-clamps, so set the raw cap here.
-  function useMaxCredit() {
-    const remainingAfterGiftcard = roundMoney(Math.max(0, total - giftcardUse));
-    setCreditUseInput(roundMoney(Math.min(creditAvailable, remainingAfterGiftcard)).toFixed(2));
-  }
-  // "Usa max" for the chosen giftcard: apply the most it can cover (clamped to total).
-  function useMaxGiftcard() {
-    if (!selectedGiftcard) return;
-    setGiftcardUseInput(roundMoney(Math.min(selectedGiftcard.balance, total)).toFixed(2));
-  }
   // Picking a different giftcard resets the applied amount (the balances differ).
   function chooseGiftcard(id: number) {
     setGiftcardId(id);
@@ -1998,6 +2004,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
         baseMethodLabel: PAYMENT_METHOD_LABELS[baseMethod],
         baseAmount,
         issuedVouchers,
+        pointsEarned: Math.max(0, Number(json?.fidelityPointsEarned ?? 0) || 0),
       });
       // Reset the sale state.
       const saleCode = json?.sale?.code ? ` (${json.sale.code})` : "";
@@ -2099,7 +2106,30 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
         </div>
       ) : null}
 
-      <form method="post" id="posForm" onSubmit={handleCheckout}>
+      {/* Stato vuoto legacy (pos.php 5943-5959): senza clienti attivi la cassa
+          non è operabile — GiftBox/GiftCard/ricariche/pacchetti richiedono
+          sempre un mittente o titolare. */}
+      {ctx && clients.length === 0 ? (
+        <div className="card p-4 text-center">
+          <h5 className="fw-bold">Nessun cliente disponibile</h5>
+          <p className="text-muted mb-3">
+            Per registrare una vendita in Pagamenti devi prima creare almeno un cliente attivo. GiftBox, GiftCard, ricariche e pacchetti richiedono sempre un mittente o
+            titolare selezionato dalla rubrica.
+          </p>
+          <div className="d-flex justify-content-center gap-2 flex-wrap">
+            <a className="btn btn-primary" href={`/${encodeURIComponent(slug)}/clients?action=new`}>
+              <i className="bi bi-person-plus me-1" />
+              Nuovo cliente
+            </a>
+            <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/clients`}>
+              <i className="bi bi-people me-1" />
+              Apri Clienti
+            </a>
+          </div>
+        </div>
+      ) : null}
+
+      <form method="post" id="posForm" onSubmit={handleCheckout} className={ctx && clients.length === 0 ? "d-none" : undefined}>
         <input type="hidden" name="location_id" value={ctx?.activeLocationId ?? ""} />
 
         <div className="pos-grid">
@@ -2346,8 +2376,18 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                   />
                 </div>
 
-                <select className="form-select form-select-sm pos-catalog-category" id="posCatalogCategory">
+                <select
+                  className="form-select form-select-sm pos-catalog-category"
+                  id="posCatalogCategory"
+                  value={catalogCategory}
+                  onChange={(e) => setCatalogCategory(e.target.value)}
+                >
                   <option value="">Tutte le aree</option>
+                  {catalogCategories.map((cat) => (
+                    <option value={cat} key={cat}>
+                      {cat}
+                    </option>
+                  ))}
                 </select>
 
                 <div
@@ -2359,7 +2399,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                     type="button"
                     className={`btn btn-outline-primary${catalogMode === "service" ? " active" : ""}`}
                     id="posCatalogBtnServices"
-                    onClick={() => setCatalogMode("service")}
+                    onClick={() => { setCatalogMode("service"); setCatalogCategory(""); }}
                   >
                     <i className="bi bi-scissors me-1"></i>Servizi
                   </button>
@@ -2367,7 +2407,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                     type="button"
                     className={`btn btn-outline-primary${catalogMode === "product" ? " active" : ""}`}
                     id="posCatalogBtnProducts"
-                    onClick={() => setCatalogMode("product")}
+                    onClick={() => { setCatalogMode("product"); setCatalogCategory(""); }}
                   >
                     <i className="bi bi-bag me-1"></i>Prodotti
                   </button>
@@ -2528,7 +2568,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
               </div>
               <div className="small text-muted mb-3" id="posRedeemInfo">
                 {!clientId
-                  ? "Seleziona un cliente per vedere credito disponibili."
+                  ? "Seleziona un cliente per vedere punti, credito, omaggi disponibili."
                   : residualsLoading
                     ? "Caricamento residui…"
                     : creditAvailable > 0 || (residuals?.giftcards.length ?? 0) > 0
@@ -2695,82 +2735,47 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                 </div>
               </div>
 
-              {/* Residui (credito/giftcard) — WIRED: shown when the selected client has a
-                  wallet credit balance and/or available GiftCards. The staff applies an
-                  amount from credit and/or a chosen giftcard (clamped to min(balance,
-                  remaining)); the applied amounts drive the price detail + the checkout
-                  tenders. The hidden inputs mirror the legacy POST field names. */}
+              {/* Residui (credito/giftcard) — box legacy: SOLO riepilogo + link
+                  "Apri scheda" che apre il modale #posResidualsModal (i controlli
+                  vivono nel modale, come pos.php 6286-6296 + renderResidualsModal). */}
               <div
                 className={`card p-2 mb-2${clientId && (creditAvailable > 0 || (residuals?.giftcards.length ?? 0) > 0) ? "" : " d-none"}`}
                 id="posResidualsBox"
               >
                 <div className="d-flex justify-content-between align-items-center">
                   <div className="fw-semibold">Residui</div>
+                  <a
+                    href="#"
+                    className="small text-decoration-none"
+                    id="posResidualsOpen"
+                    data-bs-toggle="modal"
+                    data-bs-target="#posResidualsModal"
+                    onClick={() => {
+                      // Seed del draft modale dai valori applicati.
+                      setRmCreditAmt(creditUseInput);
+                      setRmGiftcardId(giftcardId);
+                      setRmGiftcardAmt(giftcardUseInput);
+                    }}
+                  >
+                    Apri scheda
+                  </a>
                 </div>
-                <div className="small mt-1 mb-2 text-muted" id="posResidualsSummary">
-                  Usa Credito e/o GiftCard per coprire il totale.
+                <div className="small mt-2" id="posResidualsSummary">
+                  {(() => {
+                    const parts: string[] = [];
+                    if (creditAvailable > 0.00001) parts.push(`Credito disponibile ${fmtEUR(creditAvailable)}`);
+                    const gcCount = residuals?.giftcards.length ?? 0;
+                    if (gcCount > 0) parts.push(gcCount === 1 ? "1 GiftCard disponibile" : `${gcCount} GiftCard disponibili`);
+                    if (cart.some((l) => l.type === "recharge")) parts.push("Non utilizzabili con una ricarica in carrello");
+                    const applied: string[] = [];
+                    if (giftcardId > 0 && giftcardUse > 0.00001) {
+                      applied.push(`GiftCard ${selectedGiftcard?.code || `#${giftcardId}`} ${fmtEUR(giftcardUse)}`);
+                    }
+                    if (creditUse > 0.00001) applied.push(`Credito ${fmtEUR(creditUse)}`);
+                    if (applied.length) parts.push(`In uso: ${applied.join(" • ")}`);
+                    return parts.join(" • ");
+                  })()}
                 </div>
-
-                {/* Credito */}
-                {creditAvailable > 0 ? (
-                  <div className="mb-2" id="posResidualCreditInline">
-                    <label className="form-label small text-muted mb-1">
-                      Credito (disp. <strong>{fmtEUR(creditAvailable)}</strong>)
-                    </label>
-                    <div className="input-group input-group-sm">
-                      <span className="input-group-text">€</span>
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        className="form-control text-end"
-                        id="posResidualCreditAmount"
-                        value={creditUseInput}
-                        onChange={(e) => setCreditUseInput(e.target.value)}
-                      />
-                      <button type="button" className="btn btn-outline-secondary" id="posResidualCreditMaxBtn" onClick={useMaxCredit}>
-                        Usa max
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-
-                {/* GiftCard */}
-                {(residuals?.giftcards.length ?? 0) > 0 ? (
-                  <div className="mb-1" id="posResidualGiftcardInline">
-                    <label className="form-label small text-muted mb-1">GiftCard</label>
-                    <select
-                      className="form-select form-select-sm mb-1"
-                      id="posResidualGiftcardSelect"
-                      value={giftcardId}
-                      onChange={(e) => chooseGiftcard(Number.parseInt(e.target.value, 10) || 0)}
-                    >
-                      <option value={0}>Nessuna</option>
-                      {residuals?.giftcards.map((card) => (
-                        <option value={card.id} key={card.id}>
-                          {card.code || `GiftCard #${card.id}`} — {fmtEUR(card.balance)}
-                        </option>
-                      ))}
-                    </select>
-                    {selectedGiftcard ? (
-                      <div className="input-group input-group-sm">
-                        <span className="input-group-text">€</span>
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          className="form-control text-end"
-                          id="posResidualGiftcardAmount"
-                          value={giftcardUseInput}
-                          onChange={(e) => setGiftcardUseInput(e.target.value)}
-                        />
-                        <button type="button" className="btn btn-outline-secondary" id="posResidualGiftcardMaxBtn" onClick={useMaxGiftcard}>
-                          Usa max
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
 
                 <input type="hidden" name="credit_use" id="pos_credit_use" value={creditUse} readOnly />
                 <input type="hidden" name="giftcard_id" id="pos_giftcard_id" value={giftcardId} readOnly />
@@ -3041,59 +3046,143 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
             </div>
             <div className="modal-body">
               <div className="small text-muted mb-3">
-                Cliente: <strong id="posResidualsClientLabel">—</strong>
+                Cliente: <strong id="posResidualsClientLabel">{clientId ? clientName : "—"}</strong>
               </div>
 
-              <div className="alert alert-light border small d-none" id="posResidualsEmptyState">
-                Nessun residuo disponibile per il cliente selezionato.
-              </div>
-
-              <div className="card p-3 mb-3 d-none" id="posResidualCreditCard">
-                <div className="fw-semibold mb-1">Credito</div>
-                <div className="small text-muted mb-3">
-                  Utilizza il credito disponibile del cliente per questa vendita.
+              {creditAvailable <= 0 && (residuals?.giftcards.length ?? 0) === 0 ? (
+                <div className="alert alert-light border small" id="posResidualsEmptyState">
+                  Nessun residuo disponibile per il cliente selezionato.
                 </div>
+              ) : null}
 
-                <div className="form-check mb-2">
-                  <input className="form-check-input" type="checkbox" id="posResidualCreditToggle" />
-                  <label className="form-check-label" htmlFor="posResidualCreditToggle">
-                    Disponibile: <strong id="posResidualCreditAvail">€ 0,00</strong>
-                  </label>
-                </div>
+              {creditAvailable > 0 ? (
+                <div className="card p-3 mb-3" id="posResidualCreditCard">
+                  <div className="fw-semibold mb-1">Credito</div>
+                  <div className="small text-muted mb-3">Utilizza il credito disponibile del cliente per questa vendita.</div>
 
-                <label className="form-label small text-muted mb-1">Importo da usare</label>
-                <div className="input-group input-group-sm">
-                  <input type="number" step="0.01" min="0" className="form-control" id="posResidualCreditAmount" defaultValue="0" />
-                  <button type="button" className="btn btn-outline-secondary" id="posResidualCreditMaxBtn">
-                    Usa max
-                  </button>
-                </div>
-                <div className="form-text" id="posResidualCreditHint"></div>
-              </div>
+                  <div className="form-check mb-2">
+                    <input
+                      className="form-check-input"
+                      type="checkbox"
+                      id="posResidualCreditToggle"
+                      checked={Number(rmCreditAmt.replace(",", ".")) > 0}
+                      onChange={(e) => setRmCreditAmt(e.target.checked ? String(roundMoney(Math.min(creditAvailable, total))) : "0")}
+                    />
+                    <label className="form-check-label" htmlFor="posResidualCreditToggle">
+                      Disponibile: <strong id="posResidualCreditAvail">{fmtEUR(creditAvailable)}</strong>
+                    </label>
+                  </div>
 
-              <div className="card p-3 d-none" id="posResidualGiftcardCard">
-                <div className="fw-semibold mb-1">GiftCard</div>
-                <div className="small text-muted mb-3">Seleziona una GiftCard disponibile e scegli l'importo da usare.</div>
-
-                <div id="posResidualGiftcardList" className="mb-3"></div>
-
-                <div className="d-none" id="posResidualGiftcardControls">
                   <label className="form-label small text-muted mb-1">Importo da usare</label>
                   <div className="input-group input-group-sm">
-                    <input type="number" step="0.01" min="0" className="form-control" id="posResidualGiftcardAmount" defaultValue="0" />
-                    <button type="button" className="btn btn-outline-secondary" id="posResidualGiftcardMaxBtn">
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      className="form-control"
+                      id="posResidualCreditAmount"
+                      value={rmCreditAmt}
+                      onChange={(e) => setRmCreditAmt(e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-outline-secondary"
+                      id="posResidualCreditMaxBtn"
+                      onClick={() => setRmCreditAmt(String(roundMoney(Math.min(creditAvailable, total))))}
+                    >
                       Usa max
                     </button>
                   </div>
-                  <div className="form-text" id="posResidualGiftcardHint"></div>
                 </div>
-              </div>
+              ) : null}
+
+              {(residuals?.giftcards.length ?? 0) > 0 ? (
+                <div className="card p-3" id="posResidualGiftcardCard">
+                  <div className="fw-semibold mb-1">GiftCard</div>
+                  <div className="small text-muted mb-3">Seleziona una GiftCard disponibile e scegli l&apos;importo da usare.</div>
+
+                  <div id="posResidualGiftcardList" className="mb-3">
+                    {residuals?.giftcards.map((card) => (
+                      <div className="form-check" key={card.id}>
+                        <input
+                          className="form-check-input"
+                          type="radio"
+                          name="posResidualGiftcardPick"
+                          id={`posResidualGiftcard_${card.id}`}
+                          checked={rmGiftcardId === card.id}
+                          onChange={() => {
+                            setRmGiftcardId(card.id);
+                            setRmGiftcardAmt(String(roundMoney(Math.min(card.balance, total))));
+                          }}
+                        />
+                        <label className="form-check-label" htmlFor={`posResidualGiftcard_${card.id}`}>
+                          {card.code || `GiftCard #${card.id}`} — <strong>{fmtEUR(card.balance)}</strong>
+                        </label>
+                      </div>
+                    ))}
+                    <div className="form-check">
+                      <input
+                        className="form-check-input"
+                        type="radio"
+                        name="posResidualGiftcardPick"
+                        id="posResidualGiftcard_none"
+                        checked={rmGiftcardId === 0}
+                        onChange={() => {
+                          setRmGiftcardId(0);
+                          setRmGiftcardAmt("0");
+                        }}
+                      />
+                      <label className="form-check-label" htmlFor="posResidualGiftcard_none">
+                        Nessuna
+                      </label>
+                    </div>
+                  </div>
+
+                  {rmGiftcardId > 0 ? (
+                    <div id="posResidualGiftcardControls">
+                      <label className="form-label small text-muted mb-1">Importo da usare</label>
+                      <div className="input-group input-group-sm">
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="form-control"
+                          id="posResidualGiftcardAmount"
+                          value={rmGiftcardAmt}
+                          onChange={(e) => setRmGiftcardAmt(e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-outline-secondary"
+                          id="posResidualGiftcardMaxBtn"
+                          onClick={() => {
+                            const card = residuals?.giftcards.find((c) => c.id === rmGiftcardId);
+                            setRmGiftcardAmt(String(roundMoney(Math.min(card?.balance ?? 0, total))));
+                          }}
+                        >
+                          Usa max
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
             <div className="modal-footer">
               <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal">
                 Chiudi
               </button>
-              <button type="button" className="btn btn-primary" id="posResidualsApplyBtn">
+              <button
+                type="button"
+                className="btn btn-primary"
+                id="posResidualsApplyBtn"
+                onClick={() => {
+                  setCreditUseInput(rmCreditAmt);
+                  chooseGiftcard(rmGiftcardId);
+                  setGiftcardUseInput(rmGiftcardId > 0 ? rmGiftcardAmt : "0");
+                  closePosModal("posResidualsModal");
+                }}
+              >
                 Applica
               </button>
             </div>
@@ -4233,6 +4322,29 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
               <span className="fw-semibold">Totale</span>
               <span className="fw-semibold">{fmtEUR(Number(lastSale.sale.total ?? 0))}</span>
             </div>
+
+            {/* Fidelity (pos_success.php card "Totali" blocco "Fidelity"):
+                Punti usati / Punti guadagnati sulla vendita. */}
+            {lastSale.pointsUsed > 0 || lastSale.pointsEarned > 0 ? (
+              <>
+                <hr />
+                <div className="mt-1">
+                  <div className="fw-semibold mb-1">Fidelity</div>
+                  {lastSale.pointsUsed > 0 ? (
+                    <div className="d-flex justify-content-between small">
+                      <span className="text-muted">Punti usati</span>
+                      <span>{lastSale.pointsUsed}</span>
+                    </div>
+                  ) : null}
+                  {lastSale.pointsEarned > 0 ? (
+                    <div className="d-flex justify-content-between small">
+                      <span className="text-muted">Punti guadagnati</span>
+                      <span>{lastSale.pointsEarned}</span>
+                    </div>
+                  ) : null}
+                </div>
+              </>
+            ) : null}
 
             {/* Buoni emessi: the GiftCard/GiftBox codes this sale ISSUED (from the checkout
                 response), so staff can hand the code to the customer. Port of pos_success.php's

@@ -494,7 +494,7 @@ export async function checkoutManageSale(
   slug: string,
   input: PosCheckoutInput,
   operator: { id: number | null; name: string },
-): Promise<ManagePosContext & { sale: PosSale; issuedVouchers: IssuedVoucher[] }> {
+): Promise<ManagePosContext & { sale: PosSale; issuedVouchers: IssuedVoucher[]; fidelityPointsEarned: number }> {
   const locationContext = await getManageLocationContext(slug);
   const locationId = normalizeLocationId(input.locationId ?? locationContext.currentLocationId, locationContext.locations);
   if (locationId <= 0) throw new Error("Seleziona una sede per la vendita.");
@@ -814,6 +814,9 @@ export async function checkoutManageSale(
     sale,
     // The GiftCard/GiftBox codes this sale issued, for the printable receipt (empty when none).
     issuedVouchers,
+    // Punti Fidelity maturati sulla vendita (pos_success.php blocco "Fidelity":
+    // Punti usati / Punti guadagnati).
+    fidelityPointsEarned: pointsEarned,
   };
 }
 
