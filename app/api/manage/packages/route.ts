@@ -1,6 +1,7 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import { addManageClientPackageUsage, consumeDbClientPackage, deleteManagePackageCatalog, getManageClientPackage, getManagePackageCatalog, getPackageCatalogFormContext, issueDbClientPackage, listDbPackageState, listManagePackageCatalog, saveManagePackageCatalog, updateManageClientPackageExpiry } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
+import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { canAny } from "@/lib/role-permissions";
 
@@ -21,10 +22,19 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
 
     // Faithful catalog LIST (tab=catalog): the package templates + contents/sedi/
-    // price/validity/sold columns.
+    // price/validity/sold columns. Come il legacy la lista è filtrata sulla sede
+    // corrente ([] sedi = vendibile ovunque) salvo all_locations=1; empty state e
+    // filtro "Tutte le sedi" (solo multi-sede) si basano sul conteggio NON filtrato.
     if (url.searchParams.get("action") === "catalog") {
       if (!canAny(session.user.perms, packageCatalogPerms)) return jsonError("Permesso catalogo pacchetti mancante.", 403);
-      return Response.json({ ok: true, sourceMode: "database", catalog: await listManagePackageCatalog(tenantSlug) });
+      const allRows = await listManagePackageCatalog(tenantSlug);
+      const allLocations = ["1", "true", "on", "yes", "all"].includes(String(url.searchParams.get("all_locations") ?? "").trim().toLowerCase());
+      const locationContext = await getManageLocationContext(tenantSlug).catch(() => null);
+      const filterLocationId = allLocations ? 0 : (locationContext?.currentLocationId ?? 0);
+      const catalog = filterLocationId > 0
+        ? allRows.filter((r) => r.locationIds.length === 0 || r.locationIds.includes(filterLocationId))
+        : allRows;
+      return Response.json({ ok: true, sourceMode: "database", catalog, totalCount: allRows.length, locationsCount: locationContext?.locations.length ?? 0 });
     }
 
     // Catalog editor context (services + products + sedi for the contents rows).

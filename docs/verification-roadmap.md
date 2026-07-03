@@ -2391,3 +2391,55 @@ DIVERGENZE DOCUMENTATE: il preview coupon del POS Next non cumula con le promo
 AUTO (il POS Next usa promozioni selezionate dall'operatore, divergenza M1 gia'
 approvata); "Tutto il carrello (legacy)" visibile solo su coupon storici con
 scope=all, come il legacy.
+
+## PACCHETTI CATALOGO (packages.php tab=catalog) — PARITA GRAFICA + FUNZIONALE (2026-07-03)
+Il CRUD era gia' portato (packages/package_services/package_items/
+package_pricing/package_locations, prezzo SEMPRE calcolato dalle righe);
+i gap erano grafici e di validazione. Fatto:
+1. HEADER LEGACY su lista ed editor: il legacy usa lo STESSO header su tutti
+   i tab (titolo "Pacchetti", kicker "Gestione pacchetti e sedute",
+   sottotitolo "Configura catalogo, assegnazioni clienti e sedute residue.")
+   con bottoni [Impostazioni][Pacchetti clienti][Nuovo pacchetto|Catalogo];
+   il Next aveva titoli propri ("Catalogo pacchetti", "Nuovo pacchetto") ->
+   riscritti come il live.
+2. FORM EDITOR RISCRITTO sul markup live estratto (action=catalog_new):
+   ordine campi legacy (Nome -> Contenuto pacchetto -> Validita -> Stato ->
+   Sedi abilitate -> Descrizione); box #pkgItemsBox con colonne Servizio /
+   Prodotto | Quantita | Prezzo listino | Sconto | Totale riga; COMBOBOX
+   RICERCABILE per riga (port di .app-combobox: bottone form-control +
+   dropdown con "Cerca…") al posto della select piatta; bottoni separati
+   "Aggiungi servizio" / "Aggiungi prodotto" (disabilitato con title
+   "Nessun prodotto disponibile in Magazzino") al posto della colonna Tipo;
+   totali DENTRO il box (Subtotale righe / Sconto sul totale / Totale
+   pacchetto readonly + "Calcolato automaticamente." + hint "Sedute servizi:
+   N • Prodotti: M"); Stato select Attivo/Disattivo (era uno switch); Sedi
+   abilitate come TABELLA Sede|Vendibile (era una checkbox-list); campo
+   DESCRIZIONE aggiunto (mancava del tutto nella UI; il backend lo salvava
+   gia'); validita placeholder "Es. 365" + help verbatim.
+3. STATO BLOCCATO (packages.php 3678-3704) portato: con catalog_new e nessun
+   servizio attivo -> sezione .package-catalog-blocked "Nessun contenuto
+   attivo disponibile" con testi verbatim e bottoni Nuovo servizio / Nuovo
+   prodotto / Torna al catalogo (il CSS esisteva gia' ma era orfano).
+4. VALIDAZIONI SERVER mancanti aggiunte a saveManagePackageCatalog:
+   "Nome obbligatorio" (senza punto, come il legacy); righe con servizio/
+   prodotto inesistente O DISATTIVO rifiutate ("Servizio non valido o non
+   attivo nel pacchetto." / "Prodotto non valido...); compatibilita' sede
+   per ogni riga via service_locations / product_stocks ("Un servizio del
+   pacchetto non e abilitato per tutte le sedi selezionate." / "Un
+   prodotto..."). Ordinamento lista legacy (attivi prima, poi nome).
+5. FILTRO SEDE LISTA: default = sede corrente di sessione (package_locations
+   vuoto = ovunque), all_locations=1 disattiva; card "Tutte le sedi" solo
+   multi-sede; empty state sul conteggio NON filtrato.
+6. Slug prop ai carve-out router (PackagesCatalogFormContent +
+   ClientPackageDetailContent) — stessa classe del bug SSR //pagina.
+Verifica: 44/44 marker verbatim nel bundle (lista + editor new/edit + stato
+bloccato); battery e2e 27/27 (context, 6 validazioni verbatim, calcolo prezzo
+97.20 = righe scontate -10% totale, round-trip catalog_get con description/
+sconti/sedi, edit con ricalcolo 52, filtro sede, issue istanza -> soldCount 1
+-> delete con detach (storico conservato, package_id=NULL), cleanup CLEAN
+incluse le istanze cliente via pg). Pacchetto temporaneo creato sul PHP live
+per il confronto markup rimosso dal MySQL (packages + 4 tabelle figlie).
+DIVERGENZE DOCUMENTATE: i bottoni dello stato bloccato non sono gated sui
+permessi services.manage/products.manage (il componente non ha le perms;
+la pagina di destinazione resta comunque protetta); il bug legacy del filtro
+(hidden page=pacchetti invece di packages, riga 3989) non riprodotto.

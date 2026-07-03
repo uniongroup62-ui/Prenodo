@@ -5417,6 +5417,8 @@ export type ManagePackageCatalogRow = {
   isActive: boolean;
   contentsSummary: string;
   locationLabel: string;
+  // Sedi abilitate ([] = vendibile ovunque) — usato dal filtro sede della lista.
+  locationIds: number[];
   sessionsTotal: number;
   price: number;
   validityDays: number | null;
@@ -5428,7 +5430,8 @@ export type ManagePackageCatalogRow = {
 // package_services / packages.service_id), the enabled-sedi label, total sedute,
 // price, validity + the sold count (client_packages referencing the template).
 export async function listManagePackageCatalog(slug: string): Promise<ManagePackageCatalogRow[]> {
-  const rows = await tenantSelect<RowDataPacket>({ slug, table: "packages", orderBy: "name ASC, id DESC" });
+  // Ordinamento legacy (packages.php lista catalogo): attivi prima, poi nome.
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "packages", orderBy: "COALESCE(is_active,1) DESC, name ASC" });
   const ids = rows.map((r) => Number(r.id ?? 0)).filter((n) => n > 0);
   if (ids.length === 0) return [];
   const ph = ids.map(() => "?").join(",");
@@ -5516,6 +5519,7 @@ export async function listManagePackageCatalog(slug: string): Promise<ManagePack
       isActive: Number(row.is_active ?? 1) === 1,
       contentsSummary,
       locationLabel,
+      locationIds: locIds,
       sessionsTotal: Math.max(0, Number(row.sessions_total ?? 0)),
       price: roundMoney(Number(row.price ?? 0)),
       validityDays: validity > 0 ? validity : null,
@@ -5657,7 +5661,8 @@ async function syncPackageLocations(slug: string, packageId: number, locationIds
 // >=1 service, and (when sedi exist) >=1 sede.
 export async function saveManagePackageCatalog(slug: string, body: Record<string, string>, id: number): Promise<{ id: number }> {
   const name = String(body.name ?? "").trim();
-  if (name === "") throw new Error("Nome obbligatorio.");
+  // Verbatim legacy (packages.php 1708): senza punto finale.
+  if (name === "") throw new Error("Nome obbligatorio");
   const description = String(body.description ?? "").trim();
   const validityRaw = Math.trunc(Number(body.validity_days ?? 0));
   const validityDays = validityRaw > 0 ? validityRaw : null;
@@ -5687,17 +5692,39 @@ export async function saveManagePackageCatalog(slug: string, body: Record<string
     if (String(it.item_type ?? it.itemType ?? "service") === "product") prodIds.add(iid);
     else svcIds.add(iid);
   }
+  // Solo servizi/prodotti ATTIVI sono validi come contenuto (packages.php
+  // ~1809-1840: riga rifiutata con messaggio verbatim se inesistente/disattivo,
+  // e ogni riga deve essere abilitata per TUTTE le sedi selezionate).
   const svcPrice = new Map<number, number>();
   const prodPrice = new Map<number, number>();
   if (svcIds.size > 0) {
     const ids = Array.from(svcIds);
     const ph = ids.map(() => "?").join(",");
-    for (const r of await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, price", where: `id IN (${ph})`, params: ids }).catch(() => [] as RowDataPacket[])) svcPrice.set(Number(r.id ?? 0), Number(r.price ?? 0));
+    for (const r of await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, price", where: `id IN (${ph}) AND COALESCE(is_active,1) = 1`, params: ids }).catch(() => [] as RowDataPacket[])) svcPrice.set(Number(r.id ?? 0), Number(r.price ?? 0));
+    for (const sid of ids) if (!svcPrice.has(sid)) throw new Error("Servizio non valido o non attivo nel pacchetto.");
   }
   if (prodIds.size > 0) {
     const ids = Array.from(prodIds);
     const ph = ids.map(() => "?").join(",");
-    for (const r of await tenantSelect<RowDataPacket>({ slug, table: "products", columns: "id, price", where: `id IN (${ph})`, params: ids }).catch(() => [] as RowDataPacket[])) prodPrice.set(Number(r.id ?? 0), Number(r.price ?? 0));
+    for (const r of await tenantSelect<RowDataPacket>({ slug, table: "products", columns: "id, price", where: `id IN (${ph}) AND COALESCE(is_active,1) = 1`, params: ids }).catch(() => [] as RowDataPacket[])) prodPrice.set(Number(r.id ?? 0), Number(r.price ?? 0));
+    for (const pid of ids) if (!prodPrice.has(pid)) throw new Error("Prodotto non valido o non attivo nel pacchetto.");
+  }
+  // Compatibilità sede per ogni riga (app_service_location_allowed /
+  // app_product_location_enabled: nessuna riga di mapping = valido ovunque).
+  const checkLocationIds = locationIds.filter((n) => n > 0);
+  if (checkLocationIds.length > 0) {
+    for (const sid of svcIds) {
+      const rows = await tenantSelect<RowDataPacket>({ slug, table: "service_locations", columns: "location_id", where: "service_id = ?", params: [sid] }).catch(() => [] as RowDataPacket[]);
+      if (rows.length === 0) continue;
+      const allowed = new Set(rows.map((r) => Number(r.location_id ?? 0)));
+      if (checkLocationIds.some((lid) => !allowed.has(lid))) throw new Error("Un servizio del pacchetto non e abilitato per tutte le sedi selezionate.");
+    }
+    for (const pid of prodIds) {
+      const rows = await tenantSelect<RowDataPacket>({ slug, table: "product_stocks", columns: "location_id, is_enabled", where: "product_id = ?", params: [pid] }).catch(() => [] as RowDataPacket[]);
+      if (rows.length === 0) continue;
+      const allowed = new Set(rows.filter((r) => Number(r.is_enabled ?? 1) === 1).map((r) => Number(r.location_id ?? 0)));
+      if (checkLocationIds.some((lid) => !allowed.has(lid))) throw new Error("Un prodotto del pacchetto non e abilitato per tutte le sedi selezionate.");
+    }
   }
 
   const lines: Array<{ item_type: string; item_id: number; qty: number; unit_price: number; discount_type: string; discount_value: number; line_total: number; sort_order: number }> = [];

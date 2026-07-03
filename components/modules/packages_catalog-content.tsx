@@ -35,14 +35,23 @@ export function PackagesCatalogContent({ slug: slugProp }: { slug?: string } = {
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
   const [rows, setRows] = useState<CatalogRow[]>([]);
+  const [allLocations, setAllLocations] = useState(false);
+  // Conteggio NON filtrato (empty state) + numero sedi (il filtro "Tutte le
+  // sedi" esiste solo per i tenant multi-sede, come il legacy).
+  const [totalCount, setTotalCount] = useState(0);
+  const [locationsCount, setLocationsCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(0);
 
-  const load = useCallback(() => {
+  const load = useCallback((all?: boolean) => {
     setLoading(true);
-    fetch(`/api/manage/packages?slug=${encodeURIComponent(slug)}&action=catalog`, { headers: { "x-tenant-slug": slug } })
+    fetch(`/api/manage/packages?slug=${encodeURIComponent(slug)}&action=catalog${all ? "&all_locations=1" : ""}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
-      .then((j) => setRows(Array.isArray(j.catalog) ? j.catalog : []))
+      .then((j) => {
+        setRows(Array.isArray(j.catalog) ? j.catalog : []);
+        setTotalCount(Number(j.totalCount ?? (Array.isArray(j.catalog) ? j.catalog.length : 0)));
+        setLocationsCount(Number(j.locationsCount ?? 0));
+      })
       .catch(() => setRows([]))
       .finally(() => setLoading(false));
   }, [slug]);
@@ -78,7 +87,9 @@ export function PackagesCatalogContent({ slug: slugProp }: { slug?: string } = {
     }
   }
 
-  const hasAny = rows.length > 0;
+  // Empty state sul conteggio NON filtrato (come il legacy).
+  const hasAny = totalCount > 0;
+  const showLocationsFilter = locationsCount > 1;
 
   return (
     <div className="container-fluid">
@@ -87,18 +98,18 @@ export function PackagesCatalogContent({ slug: slugProp }: { slug?: string } = {
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Gestione pacchetti e sedute</div>
-          <h1 className="bs-page-title">Catalogo pacchetti</h1>
-          <div className="bs-page-subtitle">Crea e gestisci i pacchetti vendibili da Pagamenti.</div>
+          <h1 className="bs-page-title">Pacchetti</h1>
+          <div className="bs-page-subtitle">Configura catalogo, assegnazioni clienti e sedute residue.</div>
         </div>
         <div className="bs-page-actions">
           <div className="d-flex gap-2 flex-wrap justify-content-end">
-            <a className="btn btn-outline-secondary" href={page("packages&tab=clients")}>
-              <i className="bi bi-people me-1" />
-              Pacchetti clienti
-            </a>
             <a className="btn btn-outline-secondary" href={page("package_settings")}>
               <i className="bi bi-gear me-1" />
               Impostazioni
+            </a>
+            <a className="btn btn-outline-secondary" href={page("packages&tab=clients")}>
+              <i className="bi bi-people me-1" />
+              Pacchetti clienti
             </a>
             <a className="btn btn-primary" href={page("packages&tab=catalog&action=catalog_new")}>
               <i className="bi bi-plus-lg me-1" />
@@ -107,6 +118,42 @@ export function PackagesCatalogContent({ slug: slugProp }: { slug?: string } = {
           </div>
         </div>
       </div>
+
+      {hasAny && showLocationsFilter ? (
+        <div className="card p-3 mb-3">
+          <form
+            className="row g-2 align-items-end"
+            onSubmit={(e) => {
+              e.preventDefault();
+              load(allLocations);
+            }}
+          >
+            <div className="col-lg-8 d-flex align-items-center justify-content-start">
+              <div className="form-check mb-2">
+                <input
+                  className="form-check-input"
+                  type="checkbox"
+                  id="pkgCatalogAllLocations"
+                  checked={allLocations}
+                  onChange={(e) => setAllLocations(e.target.checked)}
+                />
+                <label className="form-check-label" htmlFor="pkgCatalogAllLocations">
+                  Tutte le sedi
+                </label>
+              </div>
+            </div>
+            <div className="col-lg-4 d-flex align-items-end gap-2 app-filter-actions">
+              <button className="btn btn-outline-primary app-filter-submit" type="submit">
+                <i className="bi bi-search me-1" />
+                Filtra
+              </button>
+              <a className="btn btn-outline-secondary app-filter-reset" href={page("packages&tab=catalog")}>
+                Reset
+              </a>
+            </div>
+          </form>
+        </div>
+      ) : null}
 
       {!loading && !hasAny ? (
         <div className="card border-0 shadow-sm package-empty-card">
@@ -176,7 +223,7 @@ export function PackagesCatalogContent({ slug: slugProp }: { slug?: string } = {
                     </td>
                   </tr>
                 ) : null}
-                {!loading && !hasAny ? (
+                {!loading && rows.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="text-muted p-3">
                       Nessun pacchetto in catalogo per i filtri selezionati.

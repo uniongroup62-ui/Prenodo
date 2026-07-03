@@ -416,7 +416,7 @@ export default async function TenantPage({
   if (page === "packages" && tab === "catalog" && (query.action === "catalog_new" || query.action === "catalog_edit")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
-        <PackagesCatalogFormContent />
+        <PackagesCatalogFormContent slug={tenantSlug} />
       </ManageShell>
     );
   }
@@ -427,7 +427,7 @@ export default async function TenantPage({
   if (page === "packages" && (query.action === "view" || query.action === "client_view")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
-        <ClientPackageDetailContent />
+        <ClientPackageDetailContent slug={tenantSlug} />
       </ManageShell>
     );
   }
