@@ -2014,3 +2014,52 @@ record (client_sheet_records.values JSON), nessun upload foto/documenti
 NON-GAP: PDF privacy/consensi generati on-the-fly + firmati su R2 privato
 (gia' verificati); PDF preventivo generato on demand non salvato (legacy
 uguale).
+
+## V10-SCHEDE CLIENTE — MODULO COSTRUITO E CHIUSO (2026-07-03, 26 test e2e PASS)
+Fonte legacy: app/lib/ClientSheets.php (1817 righe) + client_sheets.php +
+client_sheet_templates.php + client_sheet_attachment.php. Stato di partenza
+Next: SOLO impalcatura UI (markup fedele ma form morti, nessuna route,
+nessuna persistenza; la pagina Configura schede leggeva perfino la tabella
+sbagliata client_sheet_presets). Batteria: e2e-client-sheets.mjs.
+COSTRUITO DA ZERO:
+1. lib/client-sheets.ts — port completo di ClientSheets.php:
+   - normalizzazione campi (10 tipi: text/textarea/number/date/select/
+     checkbox/photo_before/photo_after/photo/document; id slugificati e
+     dedupati _2/_3; placeholder solo text/textarea/number, unit solo number,
+     options solo select; campo nascosto "note seduta" scartato);
+   - validazioni template coi messaggi legacy VERBATIM incl. virgolette
+     curve ('Compila "Unità" per il campo "X".');
+   - regole di LOCK con compilazioni esistenti: nome/descrizione bloccati,
+     campi esistenti immutabili (confronto per firma JSON) con append-only
+     in fondo, sedi usate non rimovibili; conflitto slug+sede tra attivi;
+   - sedi per template (client_sheet_template_locations upsert + disable);
+   - delete template: HARD senza record, SOFT (deleted_at) con record
+     (storico conservato, verificato in D2);
+   - salvataggio record: values_json = {fieldId: value} con coercizione
+     legacy (numero virgola->punto + check numerico, checkbox '1'/'0',
+     data normalizzata, select dentro le opzioni, required), header
+     (titolo/data seduta/prossima/operatore/note), fields_snapshot_json
+     congelato al salvataggio (i vecchi record restano coerenti);
+   - allegati su R2 PRIVATO (t{tenant}/client_sheets/{clientId}/record_{id}/
+     photos|documents/{fieldSlug}_{random}.{ext}): max 5 per campo, 5MB,
+     foto JPG/PNG, documenti PDF/DOC/DOCX/ODT/XLS/XLSX, messaggi legacy;
+     insert-poi-upload-poi-update come il legacy con rollback best-effort;
+     rimozioni differite a salvataggio riuscito;
+   - delete_attachment immediato, delete_record con pulizia oggetti R2,
+     download via presigned (equivalente di client_sheet_attachment.php).
+2. app/api/manage/client-sheets/route.ts — dispatcher _action legacy
+   (save_template/delete_template/save_record/delete_record/
+   delete_attachment) + GET templates/records/KPI + download allegato,
+   perm client_sheets.manage.
+3. Componenti riscritti FUNZIONANTI: client_sheets-content (3 colonne,
+   tiles reali, form dinamico dai campi del template o dallo snapshot,
+   allegati con rimozione+download, storico con riepilogo "label: value"
+   formato legacy Sì/No / N foto / d/m/Y / numero+unità) e
+   client_sheet_templates-content (builder React con righe campo, UI
+   per-tipo come TYPE_UI, preset dimagrimento/viso/laser, sedi, edit
+   con lock visivo, delete coi confirm legacy).
+Messaggi verificati: "Tab salvato correttamente.", "Tab eliminato.",
+"Scheda tecnica salvata correttamente.", "Scheda tecnica eliminata.",
+"File eliminato." + tutte le validazioni (26 assert).
+DIVERGENZA DOCUMENTATA: layout meta allegati (note/posizione da
+attachment_meta) portato come passthrough minimale (posizione = ordine).

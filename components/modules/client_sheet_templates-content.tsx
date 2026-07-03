@@ -1,37 +1,89 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-// Faithful port of the PHP "Configura schede" page
-// (app/pages/client_sheet_templates.php, ?page=client_sheet_templates).
-// Reusable technical-tab templates per location/client. Fed by the existing
-// DB-backed /api/manage/configuration?module=client_sheet_templates route
-// (records) and /api/manage/locations (location checklist).
+// Port funzionante di app/pages/client_sheet_templates.php ("Configura
+// schede"): lista template reali (client_sheet_templates via
+// /api/manage/client-sheets), builder React con righe campo dinamiche
+// (mostra/nasconde Unità/Placeholder/Opzioni per tipo come il TYPE_UI legacy),
+// preset hardcoded (dimagrimento/viso/laser), sedi abilitate, salvataggio
+// action=save_template coi messaggi legacy ("Tab salvato correttamente.",
+// "Tab eliminato.") e regole di lock lato server quando esistono compilazioni.
 
-type TemplateRecord = {
+type SheetField = {
+  id?: string;
+  label: string;
+  type: string;
+  required?: number;
+  placeholder?: string;
+  help?: string;
+  unit?: string;
+  options?: string[];
+};
+
+type SheetTemplate = {
   id: number;
-  module: string;
   title: string;
-  detail: string;
-  value: string;
-  active: boolean;
-  updatedAt?: string | null;
+  description: string;
+  isActive: boolean;
+  fields: Array<Required<SheetField> & { id: string }>;
+  locationIds: number[];
+  recordCount: number;
+  lastRecordDate: string | null;
 };
 
-type ConfigResponse = {
-  ok?: boolean;
-  module?: { records?: TemplateRecord[] };
-  records?: TemplateRecord[];
+type BuilderRow = {
+  key: number;
+  id: string;
+  label: string;
+  type: string;
+  required: boolean;
+  placeholder: string;
+  help: string;
+  unit: string;
+  optionsRaw: string;
+  locked: boolean;
 };
 
-type LocationRow = {
-  id: number;
-  name?: string;
-};
+type LocationRow = { id: number; name?: string };
 
-type LocationsResponse = {
-  locations?: LocationRow[];
-  currentLocationId?: number;
+const TYPE_OPTIONS: Array<[string, string]> = [
+  ["text", "Testo breve"],
+  ["textarea", "Testo lungo"],
+  ["number", "Numero / misura"],
+  ["date", "Data"],
+  ["select", "Scelta da elenco"],
+  ["checkbox", "Sì / No"],
+  ["photo_before", "Foto prima"],
+  ["photo_after", "Foto dopo"],
+  ["photo", "Foto generica"],
+  ["document", "Documento"],
+];
+
+// Preset hardcoded legacy (client_sheet_templates.php $presetData).
+const PRESETS: Record<string, SheetField[]> = {
+  blank: [],
+  dimagrimento: [
+    { label: "Peso", type: "number", unit: "kg", required: 1, placeholder: "Es. 72.4", help: "Rilevazione peso della seduta" },
+    { label: "Circonferenza vita", type: "number", unit: "cm", placeholder: "Es. 84" },
+    { label: "Foto prima", type: "photo_before" },
+    { label: "Foto dopo", type: "photo_after" },
+  ],
+  viso: [
+    { label: "Tipo pelle", type: "select", options: ["Secca", "Mista", "Grassa", "Sensibile", "Acneica"], required: 1 },
+    { label: "Obiettivo trattamento", type: "text", required: 1, placeholder: "Es. illuminante, anti-age, purificante" },
+    { label: "Zone critiche", type: "textarea", help: "Macchie, rossori, impurità, rughe" },
+    { label: "Foto prima", type: "photo_before" },
+    { label: "Foto dopo", type: "photo_after" },
+  ],
+  laser: [
+    { label: "Zona trattata", type: "text", required: 1 },
+    { label: "Fototipo", type: "select", options: ["I", "II", "III", "IV", "V", "VI"], required: 1 },
+    { label: "Energia impostata", type: "number", unit: "J" },
+    { label: "Note operatore", type: "textarea" },
+    { label: "Foto prima", type: "photo_before" },
+    { label: "Foto dopo", type: "photo_after" },
+  ],
 };
 
 function tenantSlug(): string {
@@ -39,61 +91,178 @@ function tenantSlug(): string {
   return window.location.pathname.split("/")[1] || "";
 }
 
+function itDate(iso: string | null): string {
+  if (!iso) return "—";
+  const [y, m, d] = iso.split("-");
+  return d && m && y ? `${d}/${m}/${y}` : iso;
+}
+
+let rowCounter = 1;
+function rowFromField(field: SheetField, locked: boolean): BuilderRow {
+  return {
+    key: rowCounter++,
+    id: String(field.id ?? ""),
+    label: field.label ?? "",
+    type: field.type ?? "text",
+    required: Number(field.required ?? 0) === 1,
+    placeholder: field.placeholder ?? "",
+    help: field.help ?? "",
+    unit: field.unit ?? "",
+    optionsRaw: (field.options ?? []).join(", "),
+    locked,
+  };
+}
+
 export function ClientSheetTemplatesContent() {
   const slug = tenantSlug();
-
-  const [records, setRecords] = useState<TemplateRecord[]>([]);
+  const [templates, setTemplates] = useState<SheetTemplate[]>([]);
   const [locations, setLocations] = useState<LocationRow[]>([]);
-  const [currentLocationId, setCurrentLocationId] = useState<number>(0);
+  const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [returnClientId, setReturnClientId] = useState(0);
 
-  useEffect(() => {
-    if (!slug) return;
-    fetch(`/api/manage/configuration?module=client_sheet_templates&slug=${encodeURIComponent(slug)}`, {
-      headers: { "x-tenant-slug": slug },
-    })
-      .then((r) => r.json())
-      .then((j: ConfigResponse) => {
-        const recs = j.module?.records ?? j.records ?? [];
-        setRecords(Array.isArray(recs) ? recs : []);
-      })
-      .catch(() => setRecords([]));
+  // Stato builder.
+  const [editingId, setEditingId] = useState(0);
+  const [editingLocked, setEditingLocked] = useState(false);
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [isActive, setIsActive] = useState(true);
+  const [rows, setRows] = useState<BuilderRow[]>([]);
+  const [locationIds, setLocationIds] = useState<number[]>([]);
 
-    fetch(`/api/manage/locations?slug=${encodeURIComponent(slug)}`, {
-      headers: { "x-tenant-slug": slug },
-    })
+  const load = useCallback(() => {
+    fetch(`/api/manage/client-sheets?slug=${encodeURIComponent(slug)}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
-      .then((j: LocationsResponse) => {
-        setLocations(Array.isArray(j.locations) ? j.locations : []);
-        setCurrentLocationId(Number(j.currentLocationId ?? 0));
+      .then((j) => setTemplates(Array.isArray(j.templates) ? j.templates : []))
+      .catch(() => setTemplates([]));
+    fetch(`/api/manage/locations?slug=${encodeURIComponent(slug)}`, { headers: { "x-tenant-slug": slug } })
+      .then((r) => r.json())
+      .then((j) => {
+        const list: LocationRow[] = Array.isArray(j.locations) ? j.locations : [];
+        setLocations(list);
+        setLocationIds((prev) => (prev.length ? prev : list.map((l) => Number(l.id))));
       })
-      .catch(() => {
-        setLocations([]);
-        setCurrentLocationId(0);
-      });
+      .catch(() => setLocations([]));
   }, [slug]);
 
-  const href = useCallback(
-    (suffix: string): string =>
-      `/${encodeURIComponent(slug)}/${`client_sheet_templates${suffix}`.replace("&", "?")}`,
-    [slug],
-  );
+  useEffect(() => {
+    load();
+    const params = new URLSearchParams(window.location.search);
+    setReturnClientId(Number(params.get("return_client_id") ?? "0") || 0);
+  }, [load]);
 
-  const totalTabs = records.length;
-  const activeTabs = useMemo(() => records.filter((r) => r.active).length, [records]);
+  // Prefill ?edit_template= una volta caricata la lista.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const editId = Number(params.get("edit_template") ?? "0") || 0;
+    if (editId > 0 && templates.length && editingId !== editId) {
+      const template = templates.find((t) => t.id === editId);
+      if (template) startEdit(template);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templates]);
 
-  // Field-row select options (verbatim from PHP).
-  const typeOptions: Array<[string, string]> = [
-    ["text", "Testo breve"],
-    ["textarea", "Testo lungo"],
-    ["number", "Numero / misura"],
-    ["date", "Data"],
-    ["select", "Scelta da elenco"],
-    ["checkbox", "Sì / No"],
-    ["photo_before", "Foto prima"],
-    ["photo_after", "Foto dopo"],
-    ["photo", "Foto generica"],
-    ["document", "Documento"],
-  ];
+  const startNew = (preset = "blank") => {
+    setEditingId(0);
+    setEditingLocked(false);
+    setTitle("");
+    setDescription("");
+    setIsActive(true);
+    setRows((PRESETS[preset] ?? []).map((f) => rowFromField(f, false)));
+    setLocationIds(locations.map((l) => Number(l.id)));
+    setMessage(null);
+  };
+
+  const startEdit = (template: SheetTemplate) => {
+    const locked = template.recordCount > 0;
+    setEditingId(template.id);
+    setEditingLocked(locked);
+    setTitle(template.title);
+    setDescription(template.description);
+    setIsActive(template.isActive);
+    setRows(template.fields.map((f) => rowFromField(f, locked)));
+    setLocationIds(template.locationIds.length ? template.locationIds : locations.map((l) => Number(l.id)));
+    setMessage(null);
+  };
+
+  const addRow = () => setRows((prev) => [...prev, rowFromField({ label: "", type: "text" }, false)]);
+  const removeRow = (key: number) => setRows((prev) => prev.filter((r) => r.key !== key || r.locked));
+  const updateRow = (key: number, patch: Partial<BuilderRow>) =>
+    setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+
+  const submitTemplate = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSaving(true);
+    setMessage(null);
+    try {
+      const fields = rows.map((r) => ({
+        id: r.id,
+        label: r.label,
+        type: r.type,
+        required: r.required ? 1 : 0,
+        placeholder: r.placeholder,
+        help: r.help,
+        unit: r.unit,
+        options: r.optionsRaw,
+      }));
+      const response = await fetch(`/api/manage/client-sheets?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-tenant-slug": slug },
+        body: JSON.stringify({
+          _action: "save_template",
+          template_id: String(editingId),
+          title,
+          description,
+          is_active: isActive ? "1" : "0",
+          fields_json: JSON.stringify(fields),
+          location_ids_json: JSON.stringify(locationIds),
+        }),
+      });
+      const json = await response.json().catch(() => ({}));
+      if (json.ok) {
+        setMessage({ text: json.message || "Tab salvato correttamente.", ok: true });
+        setTemplates(Array.isArray(json.templates) ? json.templates : []);
+        if (!editingId) startNew();
+      } else {
+        setMessage({ text: String(json.error ?? "Operazione non riuscita."), ok: false });
+      }
+    } catch {
+      setMessage({ text: "Operazione non riuscita.", ok: false });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteTemplate = async (template: SheetTemplate) => {
+    const confirmText = template.recordCount > 0
+      ? "Eliminare questo tab? Le compilazioni gia salvate resteranno conservate nello storico cliente, ma il tab non sara piu disponibile per nuove compilazioni."
+      : "Eliminare questo tab?";
+    if (!globalThis.confirm(confirmText)) return;
+    const response = await fetch(`/api/manage/client-sheets?slug=${encodeURIComponent(slug)}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-tenant-slug": slug },
+      body: JSON.stringify({ _action: "delete_template", template_id: String(template.id) }),
+    });
+    const json = await response.json().catch(() => ({}));
+    if (json.ok) {
+      setMessage({ text: json.message || "Tab eliminato.", ok: true });
+      setTemplates(Array.isArray(json.templates) ? json.templates : []);
+      if (editingId === template.id) startNew();
+    } else {
+      setMessage({ text: String(json.error ?? "Operazione non riuscita."), ok: false });
+    }
+  };
+
+  const totalTabs = templates.length;
+  const activeTabs = templates.filter((t) => t.isActive).length;
+  const totalRecords = templates.reduce((sum, t) => sum + t.recordCount, 0);
+  const lastRecordDate = templates.map((t) => t.lastRecordDate).filter(Boolean).sort().pop() ?? null;
+
+  const typeUi = (type: string) => ({
+    unit: type === "number",
+    placeholder: ["text", "textarea", "number"].includes(type),
+    options: type === "select",
+  });
 
   return (
     <div className="container-fluid">
@@ -107,14 +276,21 @@ export function ClientSheetTemplatesContent() {
         </div>
         <div className="bs-page-actions">
           <div className="d-flex gap-2 flex-wrap justify-content-end align-items-center">
-            <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/clients`}>
-              <i className="bi bi-arrow-left me-1" />
-              Clienti
-            </a>
-            <a className="btn btn-primary" href={href("&new_template=1")}>
+            {returnClientId > 0 ? (
+              <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/client_sheets?client_id=${returnClientId}`}>
+                <i className="bi bi-arrow-left me-1" />
+                Torna alle compilazioni
+              </a>
+            ) : (
+              <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/clients`}>
+                <i className="bi bi-arrow-left me-1" />
+                Clienti
+              </a>
+            )}
+            <button className="btn btn-primary" type="button" onClick={() => startNew()}>
               <i className="bi bi-plus-lg me-1" />
               Nuovo tab
-            </a>
+            </button>
           </div>
         </div>
       </div>
@@ -137,11 +313,15 @@ export function ClientSheetTemplatesContent() {
         <div className="col-md-4">
           <div className="sheet-tile">
             <div className="text-muted small">Compilazioni collegate</div>
-            <div className="value">0</div>
-            <div className="text-muted small mt-2">ultima: &mdash;</div>
+            <div className="value">{totalRecords}</div>
+            <div className="text-muted small mt-2">ultima: {itDate(lastRecordDate)}</div>
           </div>
         </div>
       </div>
+
+      {message ? (
+        <div className={`alert ${message.ok ? "alert-success" : "alert-danger"}`}>{message.text}</div>
+      ) : null}
 
       <div className="row g-3">
         <div className="col-xl-4">
@@ -154,39 +334,41 @@ export function ClientSheetTemplatesContent() {
                 </div>
                 <div className="text-muted small">Template riutilizzabili per i clienti della sede.</div>
               </div>
-              <a className="btn btn-sm btn-outline-primary" href={href("&new_template=1")}>
+              <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => startNew()}>
                 <i className="bi bi-plus-lg" />
-              </a>
+              </button>
             </div>
 
-            {records.length === 0 ? (
+            {templates.length === 0 ? (
               <div className="sheet-empty-state">
-                <div className="mb-2 sheet-empty-icon">
-                  <i className="bi bi-journal-text" />
-                </div>
                 <div className="fw-semibold">Nessun tab configurato</div>
-                <div className="text-muted small mt-2">
-                  Crea il primo tab tecnico per renderlo disponibile nelle compilazioni cliente.
-                </div>
+                <div className="text-muted small mt-2">Crea il primo tab tecnico per iniziare a compilare le schede cliente.</div>
               </div>
             ) : (
-              <div className="vstack gap-2">
-                {records.map((rec) => (
-                  <a
-                    key={rec.id}
-                    className="sheet-tab-item d-flex justify-content-between align-items-center gap-2"
-                    href={href(`&edit_template=${rec.id}`)}
-                  >
-                    <div className="min-w-0">
-                      <div className="fw-semibold text-truncate">{rec.title}</div>
-                      {rec.detail ? <div className="text-muted small text-truncate">{rec.detail}</div> : null}
+              <div className="list-group">
+                {templates.map((template) => (
+                  <div className={`list-group-item${editingId === template.id ? " active" : ""}`} key={template.id}>
+                    <div className="d-flex justify-content-between align-items-start gap-2">
+                      <div>
+                        <div className="fw-semibold">
+                          {template.title}
+                          {!template.isActive ? <span className="badge bg-light text-dark ms-2">Disattivo</span> : null}
+                        </div>
+                        <div className={`small ${editingId === template.id ? "" : "text-muted"}`}>
+                          {template.fields.length} campi · {template.recordCount} compilazioni
+                          {template.lastRecordDate ? ` · ultima ${itDate(template.lastRecordDate)}` : ""}
+                        </div>
+                      </div>
+                      <div className="d-flex gap-1">
+                        <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => startEdit(template)}>
+                          <i className="bi bi-pencil" />
+                        </button>
+                        <button type="button" className="btn btn-sm btn-outline-danger" onClick={() => deleteTemplate(template)}>
+                          <i className="bi bi-trash" />
+                        </button>
+                      </div>
                     </div>
-                    {rec.active ? (
-                      <span className="badge text-bg-success">Attivo</span>
-                    ) : (
-                      <span className="badge text-bg-secondary">Disattivo</span>
-                    )}
-                  </a>
+                  </div>
                 ))}
               </div>
             )}
@@ -194,243 +376,174 @@ export function ClientSheetTemplatesContent() {
         </div>
 
         <div className="col-xl-8">
-          <div className="sheet-surface p-0 overflow-hidden">
-            <div className="border-bottom bg-light-subtle px-3 py-2 text-center fw-semibold">
-              <i className="bi bi-sliders me-1" />
-              Nuovo tab
+          <div className="sheet-surface p-3 p-lg-4">
+            <div className="fw-semibold mb-1">
+              <i className="bi bi-tools me-2" />
+              {editingId ? `Modifica tab · ${title || "senza nome"}` : "Nuovo tab"}
             </div>
-            <div className="p-3 p-lg-4">
-              <form method="post" id="sheetTemplateForm" className="vstack gap-3" noValidate>
-                <input type="hidden" name="_csrf" value="" />
-                <input type="hidden" name="_action" value="save_template" />
-                <input type="hidden" name="template_id" value="0" />
-                <input type="hidden" name="location_id" value={String(currentLocationId || "")} />
-                <div className="alert alert-danger d-none mb-0 sheet-builder-alert" id="sheetTemplateValidationAlert" />
+            <div className="text-muted small mb-3">
+              {editingLocked
+                ? "Questo tab ha compilazioni associate: nome, descrizione e campi esistenti sono bloccati. Puoi aggiungere nuovi campi in fondo."
+                : "Definisci nome, sedi e campi personalizzati del tab."}
+            </div>
 
-                <div className="card border-0 bg-light-subtle">
-                  <div className="card-body">
-                    <div className="row g-3 align-items-end">
-                      <div className="col-md-5">
-                        <label className="form-label fw-semibold">Nome tab</label>
-                        <input
-                          type="text"
-                          className="form-control"
-                          name="title"
-                          defaultValue=""
-                          placeholder="Es. Dimagrimento, Viso, Laser"
-                        />
-                      </div>
-                      <div className="col-md-5">
-                        <label className="form-label fw-semibold">Descrizione</label>
-                        <input
-                          type="text"
-                          className="form-control"
-                          name="description"
-                          defaultValue=""
-                          placeholder="Es. Misure e foto prima/dopo"
-                        />
-                      </div>
-                      <div className="col-md-2">
-                        <div className="form-check form-switch mt-4">
-                          <input
-                            className="form-check-input"
-                            type="checkbox"
-                            role="switch"
-                            id="template_active"
-                            name="is_active"
-                            value="1"
-                            defaultChecked
-                          />
-                          <label className="form-check-label" htmlFor="template_active">
-                            Tab attivo
-                          </label>
-                        </div>
-                      </div>
-                      <div className="col-12">
-                        <label className="form-label fw-semibold">Sedi abilitate</label>
-                        <input type="hidden" name="location_ids[]" value="" />
-                        <div className="row g-2">
-                          {locations.map((loc) => {
-                            const checked = currentLocationId
-                              ? loc.id === currentLocationId
-                              : false;
-                            return (
-                              <div className="col-sm-6 col-lg-4" key={loc.id}>
-                                <label
-                                  className="border rounded-3 px-3 py-2 d-flex align-items-center gap-2 h-100 bg-white"
-                                  htmlFor={`template_location_${loc.id}`}
-                                >
-                                  <input
-                                    className="form-check-input m-0"
-                                    type="checkbox"
-                                    id={`template_location_${loc.id}`}
-                                    name="location_ids[]"
-                                    value={String(loc.id)}
-                                    defaultChecked={checked}
-                                  />
-                                  <span className="small fw-semibold text-truncate">
-                                    <i className="bi bi-geo-alt me-1 text-primary" />
-                                    {loc.name ?? `Sede ${loc.id}`}
-                                  </span>
-                                </label>
-                              </div>
-                            );
-                          })}
-                        </div>
-                        <div className="form-text">
-                          Il tab comparira nelle compilazioni dei clienti aperti da queste sedi.
-                        </div>
-                      </div>
-                      <div className="col-12">
-                        <div className="sheet-builder-toolbar">
-                          <div className="text-muted small">
-                            Scegli un preset per partire veloce oppure costruisci la scheda da zero.
-                          </div>
-                          <div className="d-flex gap-2 flex-wrap">
-                            <select className="form-select form-select-sm sheet-preset-select" id="sheetPresetSelect" defaultValue="blank">
-                              <option value="blank">Preset vuoto</option>
-                              <option value="dimagrimento">Preset dimagrimento</option>
-                              <option value="viso">Preset viso</option>
-                              <option value="laser">Preset laser</option>
-                            </select>
-                            <button className="btn btn-sm btn-outline-primary" type="button" id="applySheetPreset">
-                              <i className="bi bi-magic me-1" />
-                              Carica preset
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+            <form className="vstack gap-3" onSubmit={submitTemplate}>
+              <div className="row g-3">
+                <div className="col-md-6">
+                  <label className="form-label fw-semibold">Nome tab</label>
+                  <input className="form-control" value={title} onChange={(e) => setTitle(e.target.value)} disabled={editingLocked} required />
+                </div>
+                <div className="col-md-6">
+                  <label className="form-label fw-semibold">Parti da un preset</label>
+                  <select
+                    className="form-select"
+                    defaultValue=""
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        setRows((PRESETS[e.target.value] ?? []).map((f) => rowFromField(f, false)));
+                        e.target.value = "";
+                      }
+                    }}
+                    disabled={editingLocked}
+                  >
+                    <option value="">Scegli un preset...</option>
+                    <option value="blank">Vuoto</option>
+                    <option value="dimagrimento">Dimagrimento</option>
+                    <option value="viso">Trattamento viso</option>
+                    <option value="laser">Epilazione laser</option>
+                  </select>
+                </div>
+                <div className="col-12">
+                  <label className="form-label fw-semibold">Descrizione</label>
+                  <textarea className="form-control" rows={2} value={description} onChange={(e) => setDescription(e.target.value)} disabled={editingLocked} />
+                </div>
+                <div className="col-12">
+                  <div className="form-check form-switch">
+                    <input className="form-check-input" type="checkbox" id="sheetTemplateActive" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
+                    <label className="form-check-label" htmlFor="sheetTemplateActive">Tab attivo</label>
                   </div>
                 </div>
-
-                <div className="card">
-                  <div className="card-header d-flex justify-content-between align-items-center gap-2 flex-wrap">
-                    <div>
-                      <span className="fw-semibold">
-                        <i className="bi bi-ui-checks-grid me-2" />
-                        Campi personalizzati
-                      </span>
-                      <div className="text-muted small mt-1">Ogni compilazione eredita questi campi.</div>
-                    </div>
-                    <button className="btn btn-outline-primary btn-sm" type="button" id="addSheetFieldRow">
-                      <i className="bi bi-plus-circle me-1" />
-                      Aggiungi campo
-                    </button>
+                <div className="col-12">
+                  <label className="form-label fw-semibold">Sedi abilitate</label>
+                  <div className="d-flex flex-wrap gap-3">
+                    {locations.map((location) => (
+                      <div className="form-check" key={location.id}>
+                        <input
+                          className="form-check-input"
+                          type="checkbox"
+                          id={`sheetLoc${location.id}`}
+                          checked={locationIds.includes(Number(location.id))}
+                          onChange={(e) =>
+                            setLocationIds((prev) =>
+                              e.target.checked
+                                ? [...prev, Number(location.id)]
+                                : prev.filter((id) => id !== Number(location.id)),
+                            )
+                          }
+                        />
+                        <label className="form-check-label" htmlFor={`sheetLoc${location.id}`}>{location.name ?? `Sede #${location.id}`}</label>
+                      </div>
+                    ))}
                   </div>
-                  <div className="card-body">
-                    <div id="sheetFieldBuilder" data-allow-empty="0">
-                      <div className="sheet-field-row border rounded-3 p-3 mb-3 bg-light-subtle" data-field-row="">
-                        <div className="row g-3 align-items-start">
-                          <div className="col-md-4">
-                            <label className="form-label">
-                              Etichetta campo <span className="text-danger">*</span>
-                            </label>
-                            <input type="hidden" name="fields[row_0][id]" value="" />
-                            <input
-                              type="text"
-                              className="form-control"
-                              name="fields[row_0][label]"
-                              defaultValue=""
-                              placeholder="Es. Peso, Circonferenza vita, Foto prima"
-                              data-field-label-input=""
-                              required
-                            />
+                </div>
+              </div>
+
+              <hr className="my-1" />
+
+              <div className="d-flex justify-content-between align-items-center">
+                <div className="fw-semibold">Campi personalizzati</div>
+                <button type="button" className="btn btn-sm btn-outline-primary" onClick={addRow}>
+                  <i className="bi bi-plus-lg me-1" />
+                  Aggiungi campo
+                </button>
+              </div>
+
+              {rows.length === 0 ? (
+                <div className="text-muted small">Aggiungi almeno un campo personalizzato per la scheda.</div>
+              ) : (
+                <div className="vstack gap-3">
+                  {rows.map((row, index) => {
+                    const ui = typeUi(row.type);
+                    return (
+                      <div className={`border rounded p-3${row.locked ? " bg-light" : ""}`} key={row.key}>
+                        <div className="d-flex justify-content-between align-items-center mb-2">
+                          <div className="fw-semibold small">
+                            Campo #{index + 1}
+                            {row.locked ? <span className="badge bg-secondary ms-2">Campo bloccato</span> : null}
                           </div>
-                          <div className="col-md-3">
-                            <label className="form-label">Tipo</label>
-                            <select className="form-select" name="fields[row_0][type]" data-field-type="" defaultValue="text">
-                              {typeOptions.map(([value, label]) => (
-                                <option value={value} key={value}>
-                                  {label}
-                                </option>
+                          {!row.locked ? (
+                            <button type="button" className="btn btn-sm btn-outline-danger" onClick={() => removeRow(row.key)}>
+                              <i className="bi bi-trash" />
+                            </button>
+                          ) : null}
+                        </div>
+                        <div className="row g-2">
+                          <div className="col-md-5">
+                            <label className="form-label small text-muted">Etichetta campo</label>
+                            <input className="form-control form-control-sm" value={row.label} onChange={(e) => updateRow(row.key, { label: e.target.value })} disabled={row.locked} />
+                          </div>
+                          <div className="col-md-4">
+                            <label className="form-label small text-muted">Tipo</label>
+                            <select className="form-select form-select-sm" value={row.type} onChange={(e) => updateRow(row.key, { type: e.target.value })} disabled={row.locked}>
+                              {TYPE_OPTIONS.map(([value, label]) => (
+                                <option value={value} key={value}>{label}</option>
                               ))}
                             </select>
                           </div>
-                          <div className="col-md-2 d-none" data-field-unit-wrap="">
-                            <label className="form-label">
-                              Unita <span className="text-danger">*</span>
-                            </label>
-                            <input
-                              type="text"
-                              className="form-control"
-                              name="fields[row_0][unit]"
-                              defaultValue=""
-                              placeholder="kg, cm, ml"
-                              data-field-unit-input=""
-                            />
-                          </div>
-                          <div className="col-md-2">
-                            <label className="form-label">Obbligatorio</label>
-                            <div className="form-check form-switch mt-2">
+                          <div className="col-md-3 d-flex align-items-end">
+                            <div className="form-check">
                               <input
                                 className="form-check-input"
                                 type="checkbox"
-                                role="switch"
-                                name="fields[row_0][required]"
-                                value="1"
+                                id={`fieldReq${row.key}`}
+                                checked={row.required}
+                                onChange={(e) => updateRow(row.key, { required: e.target.checked })}
+                                disabled={row.locked}
                               />
-                              <label className="form-check-label">Si</label>
+                              <label className="form-check-label small" htmlFor={`fieldReq${row.key}`}>Obbligatorio</label>
                             </div>
                           </div>
-                          <div className="col-md-1 d-flex justify-content-end align-items-start pt-md-4">
-                            <button type="button" className="btn btn-outline-danger btn-sm" data-remove-field-row="">
-                              <i className="bi bi-trash" />
-                            </button>
-                          </div>
-                          <div className="col-md-6" data-field-placeholder-wrap="">
-                            <label className="form-label">Placeholder / esempio</label>
-                            <input
-                              type="text"
-                              className="form-control"
-                              name="fields[row_0][placeholder]"
-                              defaultValue=""
-                              placeholder="Es. 72.5 oppure Pelle sensibile"
-                            />
-                          </div>
-                          <div className="col-md-6" data-field-help-wrap="">
-                            <label className="form-label">Aiuto operatore</label>
-                            <input
-                              type="text"
-                              className="form-control"
-                              name="fields[row_0][help]"
-                              defaultValue=""
-                              placeholder="Suggerimento visualizzato sotto il campo"
-                            />
-                          </div>
-                          <div className="col-12 d-none" data-field-options-wrap="">
-                            <label className="form-label">
-                              Opzioni elenco <span className="text-danger">*</span>
-                            </label>
-                            <input
-                              type="text"
-                              className="form-control"
-                              name="fields[row_0][options_raw]"
-                              defaultValue=""
-                              placeholder="Opzione 1, Opzione 2, Opzione 3"
-                              data-field-options-input=""
-                            />
-                            <div className="form-text">Usa una virgola per separare le scelte del menu a tendina.</div>
+                          {ui.unit ? (
+                            <div className="col-md-3">
+                              <label className="form-label small text-muted">Unità</label>
+                              <input className="form-control form-control-sm" value={row.unit} onChange={(e) => updateRow(row.key, { unit: e.target.value })} disabled={row.locked} placeholder="Es. kg, cm" />
+                            </div>
+                          ) : null}
+                          {ui.placeholder ? (
+                            <div className="col-md-4">
+                              <label className="form-label small text-muted">Placeholder</label>
+                              <input className="form-control form-control-sm" value={row.placeholder} onChange={(e) => updateRow(row.key, { placeholder: e.target.value })} disabled={row.locked} />
+                            </div>
+                          ) : null}
+                          {ui.options ? (
+                            <div className="col-md-5">
+                              <label className="form-label small text-muted">Opzioni elenco</label>
+                              <input className="form-control form-control-sm" value={row.optionsRaw} onChange={(e) => updateRow(row.key, { optionsRaw: e.target.value })} disabled={row.locked} placeholder="Voce 1, Voce 2, Voce 3" />
+                            </div>
+                          ) : null}
+                          <div className="col-12">
+                            <label className="form-label small text-muted">Testo di aiuto</label>
+                            <input className="form-control form-control-sm" value={row.help} onChange={(e) => updateRow(row.key, { help: e.target.value })} disabled={row.locked} />
                           </div>
                         </div>
                       </div>
-                    </div>
-                  </div>
+                    );
+                  })}
                 </div>
+              )}
 
-                <div className="d-flex justify-content-between align-items-center gap-2 flex-wrap">
-                  <div className="text-muted small">
-                    I campi foto accettano fino a 5 immagini, mentre il campo documento accetta fino a 5 file.
-                  </div>
-                  <div className="d-flex gap-2 flex-wrap">
-                    <button className="btn btn-primary" type="submit">
-                      <i className="bi bi-check2-circle me-1" />
-                      Salva tab
-                    </button>
-                  </div>
-                </div>
-              </form>
-            </div>
+              <div className="d-flex gap-2">
+                <button className="btn btn-primary" type="submit" disabled={saving}>
+                  <i className="bi bi-check2-circle me-1" />
+                  Salva tab
+                </button>
+                {editingId ? (
+                  <button type="button" className="btn btn-outline-secondary" onClick={() => startNew()}>
+                    Annulla modifica
+                  </button>
+                ) : null}
+              </div>
+            </form>
           </div>
         </div>
       </div>
