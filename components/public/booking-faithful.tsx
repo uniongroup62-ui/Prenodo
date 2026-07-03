@@ -100,6 +100,9 @@ type BookingContext = {
   staff: BookingStaff[];
   benefits: BookingBenefit[];
   today: string;
+  // booking_choose_staff_enabled: se false lo step Professionista viene
+  // SALTATO e l'operatore è assegnato automaticamente (legacy CHOOSE_STAFF_ENABLED).
+  chooseStaffEnabled?: boolean;
 };
 
 type BookingSlot = {
@@ -306,6 +309,8 @@ export function BookingFaithful({
   }, [step, slug, date, serviceIds, locationId, operatorId]);
 
   const ctx = context;
+  // Default true finché il context non è caricato (nessuno skip prematuro).
+  const chooseStaffEnabled = ctx ? ctx.chooseStaffEnabled !== false : true;
   const selectedLocation = ctx?.locations.find((item) => item.id === locationId) ?? null;
   const selectedServices = useMemo(
     () => (ctx ? ctx.services.filter((service) => serviceIds.includes(service.id)) : []),
@@ -586,7 +591,17 @@ export function BookingFaithful({
     setError("");
     if (!isFinalStep) {
       if (!canContinue) return;
-      setStep((current) => Math.min(7, current + 1));
+      // Con la scelta operatore disattivata (booking_choose_staff_enabled=0) lo
+      // step 4 "Professionista" viene SALTATO come nel legacy (skippedStaffStep):
+      // resta "Qualsiasi" e l'operatore arriva dallo slot (auto-assegnazione).
+      setStep((current) => {
+        let next = Math.min(7, current + 1);
+        if (next === 4 && !chooseStaffEnabled) {
+          setOperatorId("any");
+          next = 5;
+        }
+        return next;
+      });
       return;
     }
     if (!canContinue) return;
@@ -649,7 +664,11 @@ export function BookingFaithful({
 
   function handleBack() {
     setError("");
-    setStep((current) => Math.max(1, current - 1));
+    setStep((current) => {
+      let prev = Math.max(1, current - 1);
+      if (prev === 4 && !chooseStaffEnabled) prev = 3;
+      return prev;
+    });
   }
 
   const businessInitial = (ctx?.business.name ?? "").trim().charAt(0).toUpperCase() || "B";

@@ -68,6 +68,9 @@ export type PublicBookingContext = {
   staff: PublicBookingStaff[];
   benefits: PublicBookingBenefit[];
   today: string;
+  // businesses.booking_choose_staff_enabled (booking.php $choose_staff_step):
+  // se false il wizard SALTA lo step Professionista e auto-assegna l'operatore.
+  chooseStaffEnabled: boolean;
 };
 
 export type PublicBookingSlot = {
@@ -207,6 +210,7 @@ export async function publicBookingContext(slug: string): Promise<PublicBookingC
     })),
     benefits: await publicBookingBenefits(slug),
     today,
+    chooseStaffEnabled: Number(business.booking_choose_staff_enabled ?? 0) === 1,
   };
 }
 

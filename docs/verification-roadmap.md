@@ -2499,3 +2499,34 @@ RESIDUI DOCUMENTATI (dettagli card/istanza — UI semplificata funzionante):
   invio email, movimenti virtuali. Il Next copre riscatto totale, annulla,
   destinatario (gli appuntamenti riscattano gia' i singoli item).
 - Topup/cancel giftcard assenti anche nel legacy (disabilitati): parita'.
+
+## IMPOSTAZIONI BOOKING (booking.php manage + hours + locations/services) — PARITA (2026-07-03)
+L'area era gia' molto coperta: la pagina manage "Booking / Opzioni della
+prenotazione online" (scelta operatore, annullamento cliente + tempo minimo
+con clamp 8760h/365gg, card "Link prenotazione online"), la pagina "Orari &
+chiusure" (3 tab con orario spezzato/chiusure/straordinari), il toggle
+"Abilita in prenotazioni online" per sede (con gating piano) e per servizio,
+e booking_about_text nel Profilo attivita' erano gia' fedeli e verificati coi
+marker. PARITA' CONFERMATE (comportamenti fissi identici al legacy, NON
+configurabili nemmeno li'): step slot HARDCODED 5 minuti (build_slots
+$step=5*60), prenotazione pubblica SEMPRE 'pending' ("Richiesta inviata / In
+attesa di approvazione"), nessun anticipo minimo/massimo configurabile (solo
+"no slot passati oggi"), cancel policy consumata SOLO dall'area cliente.
+FIX DI QUESTA PASSATA:
+1. booking_choose_staff_enabled ERA SALVATO MA INERTE lato pubblico: il
+   wizard mostrava sempre lo step "Professionista". Ora il context pubblico
+   espone chooseStaffEnabled (businesses.booking_choose_staff_enabled) e il
+   wizard SALTA lo step 4 quando disattivato, forzando "Qualsiasi" con
+   auto-assegnazione dallo slot — port di CHOOSE_STAFF_ENABLED /
+   skippedStaffStep di booking-wizard.js (211/233/4161).
+Verifica: 20/20 marker verbatim (pagina Booking, Orari & chiusure, Sedi);
+battery e2e 12/12 con snapshot/restore delle impostazioni reali (save
+round-trip 4 campi, clamp legacy 99999h->8760 e 999gg->365, context
+chooseStaffEnabled true/false, filtri booking_enabled sede+servizio nel
+context, griglia slot a passo 5 minuti).
+DIVERGENZA DELIBERATA (decisione utente PENDENTE, gia' tracciata): il legacy
+RICHIEDE il login cliente per prenotare (BookingAuth, verifica email 6 cifre,
+guest esplicitamente rimosso — booking.php 2940/7307/9313); il Next consente
+la prenotazione guest con auto-link dell'account per email
+(upsertPublicCustomerFromBooking), coi benefici cliente comunque gated sulla
+sessione. Da decidere prima del deploy se riprodurre il gate legacy.
