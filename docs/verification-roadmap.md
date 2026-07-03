@@ -2176,3 +2176,30 @@ GAP FIXATI:
 VERIFICA NUMERICA: 10% su 100+50 -> 15; fixed 30 pro-rata -> 20+10;
 min_qty gate; badge "-10%" e prezzi 100->90 sia in preview drawer sia
 sulle righe appointment_services dell'appuntamento reale (U1b).
+
+## PROMOZIONI — ALLINEAMENTO GRAFICO EDITOR (2026-07-03, segnalazione utente)
+L'editor Next divergeva visivamente dal PHP (screenshot a confronto). Il form
+e' stato RISCRITTO sul markup estratto dall'istanza PHP LIVE
+(promotions.php action=new via sessione autenticata, 25KB):
+- form dentro card con header interno (titolo + "Configura regole, target e
+  validità. La promozione verrà applicata automaticamente anche nel booking."
+  + Salva/Annulla in alto E in basso);
+- Informazioni: Attiva + "Cumulabile (opz.)" AFFIANCATI col sub-box
+  "Cumulabile con:" (Sconto punti Fidelity / Coupon) e la nota legacy
+  "Se non selezioni alcun metodo, verra' abilitato lo Sconto punti Fidelity."
+  (default 4 replicato al submit); Sedi abilitate come TABELLA Sede|Valida;
+- Servizi/Prodotti: picker coi pannelli "Sconto rapido (selezionati)"
+  (Tipo/Valore/Qta min + Applica + suggerimento), ricerca, righe con
+  controlli sconto inline; sezione "Sconto" con help dinamico e i box
+  globali; colonna destra: Validità con "Giorni / orari validi" (righe
+  Giorno/Da/A/X + Aggiungi) e "Date escluse (blackout)" SOTTO le date (non
+  piu' a sinistra); Target clienti coi box condizionali e "Clienti esclusi"
+  a select + "Aggiungi all'esclusione" + lista selezionati con rimozione
+  (non piu' checkbox-list di tutti i clienti); Limiti utilizzo con l'help
+  legacy completo ("...In sospeso / Prenotato; le prenotazioni annullate
+  liberano il limite.").
+- RIMOSSO il select "Visibilità marketplace": il legacy NON lo mostra
+  (backend salva sempre 'auto'); il valore caricato in edit e' conservato.
+- COPIATO public/assets/css/pages/promotions.css dal legacy (mancava:
+  classi promo-* senza stili). Verifica: tutti i marker legacy presenti nel
+  bundle, "Visibilità marketplace" assente; batteria 38/38 riconfermata.
