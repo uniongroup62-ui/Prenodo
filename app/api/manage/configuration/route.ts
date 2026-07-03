@@ -181,7 +181,12 @@ async function saveFeatureSettings(
     return null;
   }
   if (moduleId === "fidelity_membership") {
-    if (action === "save" || action === "save_fidelity_card_validity_default") return { message: "Impostazioni tessera Fidelity salvate.", module: await saveFidelityCardValidityDefault(slug, body) };
+    if (action === "save" || action === "save_fidelity_card_validity_default") {
+      // Il writer compone il messaggio legacy per modalità (snapshot/restore/
+      // preserve, "Nessuna modifica da salvare.", clamp finestra).
+      const saved = await saveFidelityCardValidityDefault(slug, body);
+      return { message: saved.message ?? "Impostazioni tessera Fidelity salvate.", module: saved };
+    }
     return null;
   }
   return null;

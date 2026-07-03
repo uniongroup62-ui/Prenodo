@@ -1166,7 +1166,7 @@ GAP CONFERMATI (ordine di gravita'):
   su level_period_days) -> le campagne per-livello sono inerti. Manca anche
   la cascata cleanup livelli eliminati (promo/omaggi/campagne aggiornati o
   disattivati + prenotazioni pulite) e i preview/conferme.
-- [PARZIALE 2026-07-03: auto-renew FATTO] F5 TESSERE: rinnovo automatico su attivita' (fidelity_card_try_auto_renew
+- [CHIUSO 2026-07-03] F5 TESSERE: rinnovo automatico su attivita' (fidelity_card_try_auto_renew
   _by_activity su earn sale/appointment) non implementato; membership
   settings senza applyMode (preserve/disable_expiry con snapshot/
   restore_existing_from_snapshot), campi restore non inviati, modal
@@ -1174,7 +1174,7 @@ GAP CONFERMATI (ordine di gravita'):
 - [CHIUSO 2026-07-03] F6 SAVE_SETTINGS punti: mancavano conferme popup legacy (rimozione sconti
   da prenotazioni aperte su disattivazione, conferma cambio scadenza) +
   messaggi composti + applyExpirySettingsToOpenLots post-commit (dipende F1).
-- F7 UI MORTA in fidelity_points-content.tsx: 5 modali senza handler
+- [CHIUSO 2026-07-03] F7 UI MORTA in fidelity_points-content.tsx: 5 modali senza handler
   (161-390), form livelli duplicato inerte (563-747), seconda tabella
   campagne statica (749-787), statistiche hardcoded 0 (795-826), banner
   campagna statico (143-151), header obsoleto.
@@ -1282,3 +1282,25 @@ argento. RESTA (minore): la firma-hash legacy per la conferma cambio soglie
   nel modello a detrazione del Next); campagne disattivate con auto flag ai
   punti-off; messaggio composto completo. applyExpirySettingsToOpenLots
   spostato sotto il guard expiryChanged unico.
+
+### Chiusura gap FIDELITY F5b+F7 (2026-07-03, 11/11 comportamenti verificati)
+- F5b saveFidelityCardValidityDefault ora e' il port COMPLETO del legacy:
+  applyMode preserve_existing / disable_expiry (snapshot {cardId: scadenza} +
+  card_existing_restore_value/unit nel JSON, tessere rese senza scadenza,
+  scadute-inactive riattivate) / restore_existing_from_snapshot (scadenze
+  recuperate dallo snapshot, fallback issued_at+durata, ripristinate-scadute
+  -> inactive); "Nessuna modifica da salvare."; conferma obbligatoria come
+  round-trip confirm+flag (modal statica rimossa); clamp finestra rinnovo <
+  durata con suffisso messaggio; messaggi legacy per modalita' passati dal
+  dispatcher configuration.
+- F7 fidelity_points-content dimezzato (38.8k -> 19k): rimosse le 5 modali
+  morte, il form livelli duplicato inerte (sostituito da card riepilogo ->
+  editor fidelity_levels) e la seconda tabella campagne statica; banner
+  "nessuna campagna attiva" ora DINAMICO (stats.activeCampaignToday);
+  statistiche reali via getFidelityPointsStats (emessi/usati/scaduti dal
+  ledger transactions + campagne attive) esposte su GET points_settings;
+  header aggiornato.
+
+## AREA FIDELITY CORE COMPLETA (F1-F8 tutti chiusi, 2026-07-03).
+Resta solo F12 Gifts v2 (motore omaggi, ~65% mancante) come area opzionale
+dedicata + i non-gap documentati (label punti fissa, item_rules dismesse).

@@ -4,13 +4,11 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 
 // Faithful port of the PHP page app/pages/fidelity_membership_settings.php
 // (?page=fidelity_membership_settings): Fidelity card validity / auto-renewal /
-// expiry-reminder settings form, a "how it works" aside and a confirm modal.
-//
-// The PHP page pre-fills the form from a `data-initial-settings` JSON attribute
-// on the form element. The existing Next.js DB API
-// (/api/manage/configuration?module=fidelity_membership) does NOT expose those
-// specific fidelity_card_* fields, so the values below mirror the captured PHP
-// defaults and are refined from the API `settings` object when present.
+// expiry-reminder settings form + "how it works" aside. Interamente DB-backed
+// (F5b): il salvataggio applica gli applyMode legacy (preserve / disable_expiry
+// con SNAPSHOT delle scadenze / restore_existing_from_snapshot), la conferma è
+// il round-trip confirm()+flag (sostituisce la vecchia modal statica) e i
+// messaggi per modalità arrivano dal server.
 
 const DEFAULT_INITIAL_SETTINGS = {
   expiryEnabled: 0,
@@ -88,29 +86,44 @@ export function FidelityMembershipSettingsContent() {
     setSaving(true);
     setFeedback(null);
     try {
-      const res = await fetch(`/api/manage/configuration?slug=${encodeURIComponent(slug)}&module=fidelity_membership`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-        body: JSON.stringify({
-          slug,
-          module: "fidelity_membership",
-          action: "save_fidelity_card_validity_default",
-          fidelity_card_expiry_enabled: fd.get("fidelity_card_expiry_enabled") ? "1" : "0",
-          fidelity_card_default_validity_value: String(fd.get("fidelity_card_default_validity_value") ?? ""),
-          fidelity_card_default_validity_unit: String(fd.get("fidelity_card_default_validity_unit") ?? "days"),
-          fidelity_card_renewal_enabled: fd.get("fidelity_card_renewal_enabled") ? "1" : "0",
-          fidelity_card_renewal_window_value: String(fd.get("fidelity_card_renewal_window_value") ?? ""),
-          fidelity_card_renewal_window_unit: String(fd.get("fidelity_card_renewal_window_unit") ?? "days"),
-          fidelity_card_expiry_reminder_days: String(fd.get("fidelity_card_expiry_reminder_days") ?? ""),
-        }),
-      });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok || j?.ok === false) {
-        setFeedback({ type: "danger", text: String(j?.error ?? j?.message ?? "Errore.") });
+      // Conferma legacy come round-trip: il server rifiuta con "Conferma il
+      // salvataggio..." e il confirm() dell'operatore fa ripartire la richiesta
+      // col flag (sostituisce la vecchia modal statica).
+      const extraFlags: Record<string, string> = {};
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const res = await fetch(`/api/manage/configuration?slug=${encodeURIComponent(slug)}&module=fidelity_membership`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+          body: JSON.stringify({
+            slug,
+            module: "fidelity_membership",
+            action: "save_fidelity_card_validity_default",
+            fidelity_card_expiry_enabled: fd.get("fidelity_card_expiry_enabled") ? "1" : "0",
+            fidelity_card_default_validity_value: String(fd.get("fidelity_card_default_validity_value") ?? ""),
+            fidelity_card_default_validity_unit: String(fd.get("fidelity_card_default_validity_unit") ?? "days"),
+            fidelity_card_renewal_enabled: fd.get("fidelity_card_renewal_enabled") ? "1" : "0",
+            fidelity_card_renewal_window_value: String(fd.get("fidelity_card_renewal_window_value") ?? ""),
+            fidelity_card_renewal_window_unit: String(fd.get("fidelity_card_renewal_window_unit") ?? "days"),
+            fidelity_card_expiry_reminder_days: String(fd.get("fidelity_card_expiry_reminder_days") ?? ""),
+            ...extraFlags,
+          }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || j?.ok === false) {
+          const err = String(j?.error ?? j?.message ?? "Errore.");
+          if (err.startsWith("Conferma il salvataggio") && !extraFlags.fidelity_card_apply_to_existing_confirmed) {
+            if (window.confirm("Confermi il salvataggio delle impostazioni tessera Fidelity? Le modifiche alla scadenza verranno applicate anche alle tessere esistenti (snapshot/ripristino automatico).")) {
+              extraFlags.fidelity_card_apply_to_existing_confirmed = "1";
+              continue;
+            }
+          }
+          setFeedback({ type: "danger", text: err });
+          return;
+        }
+        setFeedback({ type: "success", text: String(j?.message ?? "Impostazioni tessera Fidelity salvate.") });
+        load();
         return;
       }
-      setFeedback({ type: "success", text: String(j?.message ?? "Impostazioni tessera Fidelity salvate.") });
-      load();
     } catch {
       setFeedback({ type: "danger", text: "Errore di rete." });
     } finally {
@@ -388,44 +401,6 @@ export function FidelityMembershipSettingsContent() {
         </div>
       </div>
 
-      <div className="modal fade" id="fidelityCardValidityConfirmModal" tabIndex={-1} aria-hidden="true">
-        <div className="modal-dialog modal-dialog-centered">
-          <div className="modal-content">
-            <div className="modal-header">
-              <h5 className="modal-title">Aggiorna tessere Fidelity</h5>
-              <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Chiudi" />
-            </div>
-            <div className="modal-body">
-              <div className="alert alert-warning mb-3">
-                <div className="fw-semibold mb-1" id="fidelityCardValidityConfirmText">
-                  Le modifiche avranno effetto sulle nuove tessere Fidelity e sulle tessere scadute che verranno
-                  riattivate.
-                </div>
-                <div className="small mb-0" id="fidelityCardValidityConfirmDetail">
-                  Le tessere attive già esistenti non subiranno variazioni di durata. Se riattivi la scadenza automatica,
-                  le tessere già presenti recupereranno prima l&apos;ultima data di scadenza memorizzata e torneranno
-                  attive automaticamente se quella data è ancora valida; se manca una data specifica verrà usata la durata
-                  memorizzata. Rinnovo automatico e promemoria, se modificati, si aggiornano anche per le tessere già
-                  presenti.
-                </div>
-              </div>
-              <div className="small text-danger d-none mb-2" id="fidelityCardValidityConfirmImpact">
-                Riattivando la scadenza automatica, alcune tessere già presenti potrebbero tornare scadute e le
-                prenotazioni in stato In sospeso / Prenotato del cliente perderebbero le agevolazioni Fidelity collegate.
-              </div>
-              <div className="small text-muted">Prima di salvare, conferma se vuoi continuare oppure annullare.</div>
-            </div>
-            <div className="modal-footer">
-              <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal">
-                Annulla
-              </button>
-              <button type="button" className="btn btn-primary" id="fidelityCardValidityConfirmSubmit">
-                Conferma e salva
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

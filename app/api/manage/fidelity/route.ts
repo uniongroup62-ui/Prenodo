@@ -1,5 +1,5 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
-import { addDbWalletMovement, dbWalletBalance, deleteFidelityCampaign, deleteFidelityCard, fidelityWalletManualMove, getFidelityEnabled, getFidelityLevelsSettings, getFidelityMembership, getFidelityPointsSettings, getFidelityWallet, getManageCreditMovements, issueFidelityCard, listDbClients, listDbWalletMovements, listFidelityCampaigns, manualCreditDebit, reactivateFidelityCard, saveFidelityCampaign, saveFidelityLevels, saveFidelityPointsSettings, setFidelityEnabled, toggleFidelityCampaign, updateFidelityCardStatus } from "@/lib/db-repositories";
+import { addDbWalletMovement, dbWalletBalance, deleteFidelityCampaign, deleteFidelityCard, fidelityWalletManualMove, getFidelityEnabled, getFidelityLevelsSettings, getFidelityMembership, getFidelityPointsSettings, getFidelityPointsStats, getFidelityWallet, getManageCreditMovements, issueFidelityCard, listDbClients, listDbWalletMovements, listFidelityCampaigns, manualCreditDebit, reactivateFidelityCard, saveFidelityCampaign, saveFidelityLevels, saveFidelityPointsSettings, setFidelityEnabled, toggleFidelityCampaign, updateFidelityCardStatus } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
 import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -27,7 +27,14 @@ export async function GET(request: Request) {
 
     // Fidelity Points earn/redeem/expire settings (fidelity_points.php).
     if (url.searchParams.get("action") === "points_settings") {
-      return Response.json({ ok: true, sourceMode: "database", settings: await getFidelityPointsSettings(tenantSlug) });
+      // stats = colonna destra legacy della pagina Punti (emessi/usati/scaduti/
+      // campagne attive) + campagna attiva oggi per il banner.
+      return Response.json({
+        ok: true,
+        sourceMode: "database",
+        settings: await getFidelityPointsSettings(tenantSlug),
+        stats: await getFidelityPointsStats(tenantSlug),
+      });
     }
 
     // Fidelity POINTS campaigns list (fidelity_campaigns).

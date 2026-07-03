@@ -10666,6 +10666,40 @@ export async function getFidelityPointsSettings(slug: string): Promise<FidelityP
   };
 }
 
+// F7 — statistiche reali della pagina Punti (colonna destra legacy): punti
+// emessi/usati/scaduti dal ledger transactions + campagne attive + campagna
+// attiva oggi (per il banner).
+export type FidelityPointsStats = { emitted: number; used: number; expired: number; activeCampaigns: number; activeCampaignToday: string };
+export async function getFidelityPointsStats(slug: string): Promise<FidelityPointsStats> {
+  const sum = async (where: string): Promise<number> => {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "transactions", columns: "COALESCE(SUM(delta_points),0) AS s", where }).catch(() => [] as RowDataPacket[]);
+    return Math.abs(normalizeFidelityPoints(rows[0]?.s ?? 0));
+  };
+  const emitted = await sum("delta_points > 0");
+  const used = await sum("kind = 'redeem'");
+  const expired = await sum("kind = 'expire'");
+
+  let activeCampaigns = 0;
+  let activeCampaignToday = "";
+  const campRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "fidelity_campaigns",
+    columns: "name, starts_at, ends_at",
+    where: "COALESCE(active,0) = 1 AND deleted_at IS NULL",
+  }).catch(() => [] as RowDataPacket[]);
+  activeCampaigns = campRows.length;
+  const today = new Date().toISOString().slice(0, 10);
+  for (const c of campRows) {
+    const starts = String(c.starts_at ?? "").slice(0, 10);
+    const ends = String(c.ends_at ?? "").slice(0, 10);
+    if ((starts === "" || starts <= today) && (ends === "" || ends >= today)) {
+      activeCampaignToday = String(c.name ?? "");
+      break;
+    }
+  }
+  return { emitted, used, expired, activeCampaigns, activeCampaignToday };
+}
+
 // Save the fidelity points earn/redeem/expire settings (port of fidelity_points.php
 // save_settings): the earn step (€/point), redeem toggle + rate + min points, and
 // the points-expiry window. When the Points module is OFF the redeem/expiry prefs

@@ -462,14 +462,39 @@ export async function getFidelityMembershipSettings(slug: string): Promise<Confi
   };
 }
 
-export async function saveFidelityCardValidityDefault(slug: string, input: Record<string, unknown>): Promise<ConfigModuleState> {
+// Durata in giorni approssimata (solo per il CLAMP finestra<durata; le date reali
+// usano l'aritmetica di calendario in addDurationYmd).
+function durationDaysApprox(value: number, unit: ExpiryUnit): number {
+  return unit === "years" ? value * 365 : unit === "months" ? value * 30 : value;
+}
+
+// Y-m-d + durata (giorni/mesi/anni con clamp del giorno — fidelity_card_add_duration_ymd).
+function addDurationYmd(baseYmd: string, value: number, unit: ExpiryUnit): string {
+  const [y, m, d] = baseYmd.split("-").map((p) => Number.parseInt(p, 10));
+  if (unit === "days") {
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    dt.setUTCDate(dt.getUTCDate() + value);
+    return dt.toISOString().slice(0, 10);
+  }
+  const months = unit === "years" ? value * 12 : value;
+  const total = y * 12 + (m - 1) + months;
+  const ny = Math.floor(total / 12);
+  const nm = ((total % 12) + 12) % 12;
+  const dim = new Date(Date.UTC(ny, nm + 1, 0)).getUTCDate();
+  return `${String(ny).padStart(4, "0")}-${String(nm + 1).padStart(2, "0")}-${String(Math.min(d, dim)).padStart(2, "0")}`;
+}
+
+// F5b — port completo di fidelity_membership_settings.php save_fidelity_card_validity_default:
+// applyMode preserve/disable_expiry(+snapshot)/restore_from_snapshot, conferma richiesta,
+// "Nessuna modifica da salvare.", clamp finestra rinnovo, messaggi legacy per modalità.
+export async function saveFidelityCardValidityDefault(slug: string, input: Record<string, unknown>): Promise<ConfigModuleState & { message?: string }> {
   const id = await businessId(slug);
 
   const expiryEnabled = enabledFlag(input.fidelity_card_expiry_enabled);
   const validityValue = normalizeValidityValue(input.fidelity_card_default_validity_value);
   const validityUnit = normalizeUnit(input.fidelity_card_default_validity_unit);
   let renewalEnabled = enabledFlag(input.fidelity_card_renewal_enabled);
-  const renewalValue = normalizeValidityValue(input.fidelity_card_renewal_window_value);
+  let renewalValue = normalizeValidityValue(input.fidelity_card_renewal_window_value);
   const renewalUnit = normalizeUnit(input.fidelity_card_renewal_window_unit);
   const reminderDays = normalizeValidityValue(input.fidelity_card_expiry_reminder_days);
 
@@ -479,9 +504,90 @@ export async function saveFidelityCardValidityDefault(slug: string, input: Recor
   // Renewal/reminder only apply while expiry is enabled.
   if (!expiryEnabled) renewalEnabled = 0;
 
+  // Clamp legacy: la finestra di rinnovo resta INFERIORE alla durata tessera.
+  let windowClamped = false;
+  if (renewalEnabled && expiryEnabled && renewalValue > 0 && durationDaysApprox(renewalValue, renewalUnit) >= durationDaysApprox(validityValue, validityUnit)) {
+    renewalValue = Math.max(0, durationDaysApprox(validityValue, validityUnit) - 1);
+    windowClamped = true;
+  }
+
   // Read-modify-write the JSON blob so unrelated adhesion keys are preserved.
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_adhesion_json", where: "id = ?", params: [id], limit: 1 });
   const current = parseAdhesion(rows[0]?.fidelity_adhesion_json);
+  const prevExpiryEnabled = cardExpiryEnabled(current);
+
+  // "Nessuna modifica da salvare." (fidelity_membership_settings.php ~209).
+  const unchanged =
+    prevExpiryEnabled === (expiryEnabled === 1) &&
+    normalizeValidityValue(current.card_default_validity_value) === validityValue &&
+    normalizeUnit(current.card_default_validity_unit) === validityUnit &&
+    (renewalStoredEnabled(current) ? 1 : 0) === renewalEnabled &&
+    normalizeValidityValue(current.renewal_window_value) === renewalValue &&
+    normalizeUnit(current.renewal_window_unit) === renewalUnit &&
+    normalizeValidityValue(current.expiry_reminder_days) === reminderDays;
+  if (unchanged) {
+    return { ...(await getFidelityMembershipSettings(slug)), message: "Nessuna modifica da salvare." };
+  }
+
+  // Conferma legacy prima di applicare alle tessere esistenti.
+  const confirmed = ["1", "true", "on", "yes"].includes(String(input.fidelity_card_apply_to_existing_confirmed ?? "").toLowerCase());
+  if (!confirmed) {
+    throw new Error("Conferma il salvataggio delle impostazioni tessera Fidelity prima di continuare.");
+  }
+
+  // applyMode (fidelity_membership_settings.php ~229-257): scadenza ON->OFF salva
+  // lo snapshot delle scadenze correnti; OFF->ON le ripristina dallo snapshot.
+  const today = new Date().toISOString().slice(0, 10);
+  let applyMode: "preserve_existing" | "disable_expiry" | "restore_existing_from_snapshot" = "preserve_existing";
+  if (prevExpiryEnabled && !expiryEnabled) applyMode = "disable_expiry";
+  else if (!prevExpiryEnabled && expiryEnabled) applyMode = "restore_existing_from_snapshot";
+
+  const cardRows = await tenantSelect<RowDataPacket>({ slug, table: "cards", columns: "id, client_id, issued_at, expires_at, status", orderBy: "id ASC" }).catch(() => [] as RowDataPacket[]);
+  let cardsReactivated = 0;
+  let cardsDeactivated = 0;
+
+  if (applyMode === "disable_expiry") {
+    // Snapshot {cardId: 'Y-m-d'} + durata di ripristino nel JSON
+    // (card_existing_restore_* — fidelity_card_store_existing_restore_expiry_map).
+    const snapshot: Record<string, string> = {};
+    for (const card of cardRows) {
+      const exp = String(card.expires_at ?? "").slice(0, 10);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(exp)) snapshot[String(card.id)] = exp;
+    }
+    current.card_existing_restore_value = validityValue > 0 ? validityValue : normalizeValidityValue(current.card_default_validity_value);
+    current.card_existing_restore_unit = validityValue > 0 ? validityUnit : normalizeUnit(current.card_default_validity_unit);
+    current.card_existing_restore_expiry_dates = snapshot;
+    for (const card of cardRows) {
+      const exp = String(card.expires_at ?? "").slice(0, 10);
+      const expiredByDate = /^\d{4}-\d{2}-\d{2}$/.test(exp) && exp < today;
+      const values: Record<string, unknown> = { expires_at: null };
+      if (String(card.status ?? "active") === "inactive" && expiredByDate) {
+        values.status = "active";
+        cardsReactivated += 1;
+      }
+      await tenantUpdate({ slug, table: "cards", id: Number(card.id), values }).catch(() => 0);
+    }
+  } else if (applyMode === "restore_existing_from_snapshot") {
+    const snapshot = current.card_existing_restore_expiry_dates && typeof current.card_existing_restore_expiry_dates === "object"
+      ? (current.card_existing_restore_expiry_dates as Record<string, string>)
+      : {};
+    let restoreValue = normalizeValidityValue(current.card_existing_restore_value);
+    let restoreUnit = normalizeUnit(current.card_existing_restore_unit);
+    if (restoreValue <= 0) { restoreValue = validityValue; restoreUnit = validityUnit; }
+    for (const card of cardRows) {
+      const issued = String(card.issued_at ?? "").slice(0, 10);
+      const snapExp = String(snapshot[String(card.id)] ?? "");
+      const restored = /^\d{4}-\d{2}-\d{2}$/.test(snapExp)
+        ? snapExp
+        : addDurationYmd(/^\d{4}-\d{2}-\d{2}$/.test(issued) ? issued : today, restoreValue, restoreUnit);
+      const values: Record<string, unknown> = { expires_at: restored };
+      if (restored < today && String(card.status ?? "active") === "active") {
+        values.status = "inactive";
+        cardsDeactivated += 1;
+      }
+      await tenantUpdate({ slug, table: "cards", id: Number(card.id), values }).catch(() => 0);
+    }
+  }
 
   current.card_expiry_enabled = expiryEnabled;
   current.card_default_validity_value = validityValue;
@@ -492,5 +598,21 @@ export async function saveFidelityCardValidityDefault(slug: string, input: Recor
   current.expiry_reminder_days = reminderDays;
 
   await tenantUpdate({ slug, table: "businesses", id, values: { fidelity_adhesion_json: JSON.stringify(current) } });
-  return getFidelityMembershipSettings(slug);
+
+  // Messaggi legacy per modalità (fidelity_membership_settings.php ~288-333).
+  let message = "Impostazioni tessera Fidelity salvate.";
+  if (applyMode === "disable_expiry") {
+    message = "Impostazioni tessera Fidelity salvate. Tutte le tessere Fidelity già presenti sono state rese senza scadenza.";
+    if (cardsReactivated > 0) message += ` ${cardsReactivated} ${cardsReactivated === 1 ? "tessera precedentemente scaduta è tornata attiva" : "tessere precedentemente scadute sono tornate attive"}.`;
+    message += " Rinnovo automatico e promemoria di scadenza non sono disponibili finché non riattivi la scadenza.";
+  } else if (applyMode === "restore_existing_from_snapshot") {
+    message = "Impostazioni tessera Fidelity salvate. Le tessere Fidelity già presenti hanno recuperato l'ultima data di scadenza memorizzata.";
+    if (cardsDeactivated > 0) message += ` ${cardsDeactivated} ${cardsDeactivated === 1 ? "tessera con scadenza ripristinata già trascorsa resta non attiva" : "tessere con scadenza ripristinata già trascorsa restano non attive"} finché non usi Riattiva tessera.`;
+    message += " La durata impostata ora si applicherà alle nuove tessere e alle tessere scadute che verranno riattivate.";
+  } else if (prevExpiryEnabled && expiryEnabled && cardRows.length > 0) {
+    message = "Impostazioni tessera Fidelity salvate. La nuova durata si applicherà solo alle nuove tessere Fidelity e alle tessere scadute che verranno riattivate; le tessere attive già esistenti non sono state modificate.";
+  }
+  if (windowClamped) message += " La finestra di rinnovo è stata adeguata per restare inferiore alla durata tessera.";
+
+  return { ...(await getFidelityMembershipSettings(slug)), message };
 }
