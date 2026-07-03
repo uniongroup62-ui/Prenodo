@@ -280,7 +280,7 @@ export function GiftBoxInstanceDetailContent({ slug: slugProp }: { slug?: string
         <div className="card p-3 text-muted small">Caricamento…</div>
       ) : !detail ? null : (
         <div className="row g-3">
-          <div className="col-lg-7">
+          <div className="col-lg-5">
             {/* ===== Card riepilogo ===== */}
             <div className="card p-3 mb-3">
               <div className="d-flex justify-content-between align-items-start">
@@ -688,7 +688,7 @@ export function GiftBoxInstanceDetailContent({ slug: slugProp }: { slug?: string
           </div>
 
           {/* ===== Colonna destra: Movimenti ===== */}
-          <div className="col-lg-5">
+          <div className="col-lg-7">
             <div className="card">
               <div className="card-header fw-semibold">Movimenti</div>
               <div className="table-responsive">
