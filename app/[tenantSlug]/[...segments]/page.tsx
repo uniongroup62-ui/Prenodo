@@ -27,6 +27,7 @@ import { CabinsContent } from "@/components/modules/cabins-content";
 import { GiftcardContent } from "@/components/modules/giftcard-content";
 import { GiftCardDetailContent } from "@/components/modules/giftcard_detail-content";
 import { GiftsContent } from "@/components/modules/gifts-content";
+import { GiftInstanceContent } from "@/components/modules/gift_instance-content";
 import { GiftFormContent } from "@/components/modules/gift_form-content";
 import { GiftBoxFormContent } from "@/components/modules/giftbox_form-content";
 import { GiftBoxInstanceDetailContent } from "@/components/modules/giftbox_instance_detail-content";
@@ -88,6 +89,7 @@ import { CalendarContent } from "@/components/modules/calendar-content";
 import { AppointmentsContent } from "@/components/modules/appointments-content";
 import { BookingFaithful } from "@/components/public/booking-faithful";
 import { GiftBoxVoucherFaithful } from "@/components/public/giftbox-voucher-faithful";
+import { GiftVoucherFaithful } from "@/components/public/gift-voucher-faithful";
 import { GiftCardVoucherFaithful } from "@/components/public/giftcard-voucher-faithful";
 import { QuotePublicFaithful } from "@/components/public/quote-public-faithful";
 import { GdprPublicFaithful } from "@/components/public/gdpr-public-faithful";
@@ -120,6 +122,7 @@ const FAITHFUL_MODULES: Record<string, React.ComponentType<{ slug?: string }>> =
   staff: StaffContent,
   hours: HoursContent,
   gifts: GiftsContent,
+  gift_instance: GiftInstanceContent,
   giftcard: GiftcardContent,
   resources: ResourcesContent,
   giftbox: GiftboxContent,
@@ -196,6 +199,12 @@ export default async function TenantPage({
   }
   if (page === "giftcard_voucher" && query.public === "1") {
     return <GiftCardVoucherFaithful slug={tenantSlug} token={query.token ?? ""} embed={query.embed === "1"} />;
+  }
+  // Public GIFT (omaggio) voucher viewer (gift_voucher.php public mode; the
+  // voucher email "Vedi Voucher" links here):
+  //   /<slug>/gift_voucher?public=1&embed=1&token=<64hex>
+  if (page === "gift_voucher" && query.public === "1") {
+    return <GiftVoucherFaithful slug={tenantSlug} token={query.token ?? ""} embed={query.embed === "1"} />;
   }
 
   // Public GDPR signature page (gdpr_public.php: token 64 hex, no login):

@@ -1,6 +1,8 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
 import { deleteManageGift, getManageGift, giftFormCatalog, issueDbGift, listDbGifts, listManageGifts, redeemDbGift, saveManageGift, toggleManageGift } from "@/lib/db-repositories";
+import { assignGiftManual, cancelGiftInstance, checkGiftManualAssignmentEligibility, deleteClosedGiftInstance, getGiftInstanceDetail, listGiftInstances, redeemGiftInstanceItems, sendGiftVoucherEmailManage, updateGiftInstanceInternalNote, updateGiftInstanceNote } from "@/lib/gifts-instances";
 import { currentManageSession } from "@/lib/manage-auth";
+import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can, canAny } from "@/lib/role-permissions";
 
@@ -44,6 +46,35 @@ export async function GET(request: Request) {
       return Response.json({ ok: true, sourceMode: "database", campaigns: await listManageGifts(tenantSlug) });
     }
 
+    // Istanze assegnate (gifts.php ~1155-1591): filtri inst_client_id /
+    // inst_gift_id / inst_state + paginazione 25/pagina (inst_p).
+    if (action === "instances") {
+      if (!can(session.user.perms, "gifts.manage")) return jsonError("Permesso omaggi mancante.", 403);
+      const instances = await listGiftInstances(tenantSlug, {
+        clientId: parseInteger(url.searchParams.get("inst_client_id"), 0),
+        giftId: parseInteger(url.searchParams.get("inst_gift_id"), 0),
+        state: url.searchParams.get("inst_state") ?? "",
+        page: parseInteger(url.searchParams.get("inst_p"), 1),
+      });
+      return Response.json({ ok: true, sourceMode: "database", instances });
+    }
+
+    // Dettaglio istanza (gift_instance.php ?id=N / Gifts::instanceDetails),
+    // con stato derivato + auto-scadenza alla lettura.
+    if (action === "instance") {
+      if (!can(session.user.perms, "gifts.manage")) return jsonError("Permesso omaggi mancante.", 403);
+      const detail = await getGiftInstanceDetail(tenantSlug, parseInteger(url.searchParams.get("id"), 0));
+      if (!detail) return jsonError("Omaggio non trovato.", 404);
+      return Response.json({ ok: true, sourceMode: "database", instance: detail });
+    }
+
+    // Pre-check idoneità assegnazione manuale (gifts.php _mode=assign_manual_check).
+    if (action === "assign_manual_check") {
+      if (!can(session.user.perms, "gifts.manage")) return jsonError("Permesso omaggi mancante.", 403);
+      const check = await checkGiftManualAssignmentEligibility(tenantSlug, parseInteger(url.searchParams.get("gift_id"), 0), parseInteger(url.searchParams.get("client_id"), 0));
+      return Response.json({ ok: true, sourceMode: "database", ...check });
+    }
+
     return Response.json({
       ok: true,
       sourceMode: "database",
@@ -85,6 +116,81 @@ export async function POST(request: Request) {
       if (!can(session.user.perms, "gifts.manage")) return jsonError("Permesso omaggi mancante.", 403);
       const result = await deleteManageGift(tenantSlug, parseInteger(body.id, 0), session.user.id);
       return Response.json({ sourceMode: "database", ...result, campaigns: await listManageGifts(tenantSlug) });
+    }
+
+    // ------ AZIONI ISTANZA (gift_instance.php POST _mode=...) ------
+    const instanceActions = ["redeem_instance_partial", "cancel_instance", "delete_instance", "update_instance_note", "update_instance_internal_note", "send_email", "assign_manual"];
+    if (instanceActions.includes(String(action))) {
+      if (!can(session.user.perms, "gifts.manage")) return jsonError("Permesso omaggi mancante.", 403);
+      const instanceId = parseInteger(body.instance_id ?? body.id, 0);
+
+      // Riscatto manuale/parziale: redeem_qty_json = {"<reward_item_index>": qty}
+      // (stringa JSON: parseRequestBody appiattisce i valori non-stringa).
+      if (action === "redeem_instance_partial") {
+        const qtyByItem: Record<number, number> = {};
+        let raw: unknown = null;
+        try { raw = JSON.parse(String(body.redeem_qty_json ?? body.redeem_qty ?? "{}")); } catch { raw = null; }
+        if (raw && typeof raw === "object") {
+          for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+            const idx = parseInteger(k, -1);
+            const qty = parseInteger(v, 0);
+            if (idx >= 0 && qty > 0) qtyByItem[idx] = qty;
+          }
+        }
+        const locationContext = await getManageLocationContext(tenantSlug).catch(() => null);
+        const currentLocation = locationContext?.locations.find((l) => l.id === locationContext.currentLocationId) ?? null;
+        const result = await redeemGiftInstanceItems(tenantSlug, {
+          instanceId,
+          qtyByItem,
+          by: session.user.id,
+          sourceType: "manual",
+          note: String(body.redeem_note ?? ""),
+          location: locationContext ? { id: locationContext.currentLocationId, name: currentLocation?.name ?? "" } : null,
+        });
+        return Response.json({ sourceMode: "database", ...result, instance: await getGiftInstanceDetail(tenantSlug, instanceId) });
+      }
+
+      if (action === "cancel_instance") {
+        const confirmed = ["1", "true", "on", "yes"].includes(String(body.confirm_cancel_linked_appointments ?? "").toLowerCase());
+        const result = await cancelGiftInstance(tenantSlug, instanceId, session.user.id, String(body.cancel_reason ?? ""), confirmed);
+        return Response.json({ sourceMode: "database", ...result, instance: await getGiftInstanceDetail(tenantSlug, instanceId) });
+      }
+
+      if (action === "delete_instance") {
+        const result = await deleteClosedGiftInstance(tenantSlug, instanceId, session.user.id);
+        return Response.json({ sourceMode: "database", ...result });
+      }
+
+      if (action === "update_instance_note") {
+        const result = await updateGiftInstanceNote(tenantSlug, instanceId, String(body.note ?? ""));
+        return Response.json({ sourceMode: "database", ...result });
+      }
+
+      if (action === "update_instance_internal_note") {
+        const result = await updateGiftInstanceInternalNote(tenantSlug, instanceId, String(body.internal_note ?? body.note ?? ""));
+        return Response.json({ sourceMode: "database", ...result });
+      }
+
+      if (action === "send_email") {
+        const result = await sendGiftVoucherEmailManage(tenantSlug, instanceId, String(body.send_to ?? ""));
+        return Response.json({ sourceMode: "database", ...result, instance: await getGiftInstanceDetail(tenantSlug, instanceId) });
+      }
+
+      // Assegnazione manuale (gifts.php _mode=assign_manual): crea/riusa
+      // un'istanza DISPONIBILE per il cliente, anche senza regole completate.
+      if (action === "assign_manual") {
+        const locationContext = await getManageLocationContext(tenantSlug).catch(() => null);
+        const currentLocation = locationContext?.locations.find((l) => l.id === locationContext.currentLocationId) ?? null;
+        const result = await assignGiftManual(tenantSlug, {
+          giftId: parseInteger(body.gift_id, 0),
+          clientId: parseInteger(body.client_id, 0),
+          expiresDays: body.expires_days !== undefined && String(body.expires_days).trim() !== "" ? parseInteger(body.expires_days, 0) : null,
+          by: session.user.id,
+          forceIneligible: ["1", "true", "on", "yes"].includes(String(body.force_ineligible ?? "").toLowerCase()),
+          location: locationContext ? { id: locationContext.currentLocationId, name: currentLocation?.name ?? "" } : null,
+        });
+        return Response.json({ sourceMode: "database", ...result });
+      }
     }
 
     if (action === "issue") {

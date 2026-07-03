@@ -1364,3 +1364,74 @@ evaluateRulesForClient ~8151-8526, scadenze ~10759-10883):
 Prossimi blocchi F12: B2 pagina istanza + azioni (riscatto parziale/annullo/
 note/voucher email), B3 assegnazione manuale + redeem POS, B4 editor avanzato
 (livelli/esclusioni/multi-set/clona) + GiftLoyaltyAttribution.
+
+### CHIUSURA F12 BLOCCO 2 — DETTAGLIO ISTANZA + AZIONI (2026-07-03, 21 test PASS)
+Port di gift_instance.php (1188 righe) + le funzioni istanza di Gifts.php.
+Nuovo `lib/gifts-instances.ts`:
+- DETTAGLIO (getGiftInstanceDetail = instanceDetails ~4931 + pagina): codice
+  OM-000000, stato con badge legacy, date (creato/sbloccato/scadenza/annullo),
+  progressione regole da progress_json (✅/⏳ label: current/needed + badge
+  ASSEGNAZIONE MANUALE), reward items "Tot/Usati/Da riscattare" via
+  redeemedRewardQtyByInstance (SUM redeem-cancel da gift_transactions per
+  chiave reward_item_index:service_id + fallback appointment_gift_items
+  redeemed_at senza doppi conteggi), quantità "in sospeso" su prenotazioni
+  pending/scheduled, movimenti (listTransactions, label italiane per tipo +
+  riga virtuale Emissione), prenotazioni collegate, token voucher lazy.
+- STATO DERIVATO (applyDerivedInstanceState ~2095-2171): fully-redeemed ->
+  chiusura a 'riscattato'; riscattato con residuo tornato >0 -> REOPEN a
+  'disponibile' con redeemed_* azzerati (verificato C5); accumulo oltre
+  valid_to -> scaduto; disponibile oltre expires_at -> scaduto via engine.
+- RISCATTO PARZIALE (redeemGiftInstanceItems ~5152): selezione per item
+  troncata al residuo, pre-validazione "Quantità non disponibile per "X". N
+  già in sospeso su prenotazioni.", guardie legacy (non attivo/non
+  disponibile/scaduto/"Cliente non aderisce alla Fidelity" con override
+  manuale), tx redeem per item (nota default "Riscatto manuale"/"Riscatto su
+  prenotazione #N"), stock premio prodotto decrementato best-effort, chiusura
+  SOLO a residuo 0 con points_spent=0 e recalc per i ripetibili; messaggi
+  "Riscatto registrato"/"Omaggio riscattato completamente". Il parametro API
+  è redeem_qty_json (stringa JSON: parseRequestBody appiattisce gli oggetti).
+- ANNULLO (cancelGiftInstance ~5395): solo da disponibile ("Solo un omaggio
+  disponibile può essere annullato"), blocco con conferma popup se esistono
+  prenotazioni collegate ("Sono presenti prenotazioni collegate... Conferma
+  l'annullamento dal popup per procedere." -> round-trip confirm UI), annullo
+  automatico prenotazioni + suffisso ": annullate automaticamente N...",
+  progress_json con marcatori reset (reset_window_from = now+1s), tx
+  gift_cancel, chiusura altre istanze attive dello stesso gift/cliente.
+- ELIMINAZIONE (deleteClosedGiftInstance ~5529): solo accumulo/annullato/
+  scaduto, elimina prenotazioni collegate via deleteDbAppointment (con
+  redeem-restore), purga appointment_gift_items + gift_transactions, scrive il
+  marker in gift_progress_resets (source_state = stato alla delete) e ricalcola.
+- NOTE: nota cliente (visibile su voucher/email) e nota interna (solo
+  backend), max 2000, messaggi "Nota cliente salvata"/"Nota interna salvata".
+- EMAIL VOUCHER (sendGiftVoucherEmailManage ~12200): guardie per stato
+  (annullato/scaduto/già riscattato/non ancora disponibile), HTML legacy
+  (header verde, codice OM + "MOSTRA QUESTO CODICE IN CASSA", bottone "Vedi
+  Voucher" -> /slug/gift_voucher?public=1&embed=1&token=, dettagli, contenuto,
+  nota cliente, condizioni), oggetto legacy, last_email_sent_at/to aggiornati.
+- ASSEGNAZIONE MANUALE (assignGiftManual ~5883): validità obbligatoria del
+  gift, idoneità con force_ineligible round-trip (ineligible+canForce ->
+  confirm UI), doppioni ("Omaggio già disponibile...", "Campagna già maturata
+  ..."), nasce DISPONIBILE con unlocked_at=now e scadenza fine giornata
+  (+expires_days override o expires_after_days), progress_json manual=true,
+  riusa un accumulo attivo se presente.
+- UI: components/modules/gift_instance-content.tsx (layout legacy 2 colonne:
+  riepilogo/invio voucher/riscatta anche parziale con "Seleziona tutti i
+  rimanenti"/nota cliente/nota interna + colonna Movimenti a 7 colonne),
+  sezione "Omaggi assegnati" in gifts-content (filtri stato+cliente,
+  paginazione 25, badge stato legacy, link occhio al dettaglio, form
+  "Assegna gift manualmente" con datalist clienti), route fedele
+  /slug/gift_instance?id=N nel router.
+- VOUCHER PUBBLICO: /slug/gift_voucher?public=1&embed=1&token=<64hex> (router
+  pre-sessione) -> components/public/gift-voucher-faithful.tsx (watermark per
+  stato, tabella VOCE/TOT/USATA/RIMANENTE, nota cliente, condizioni con
+  default 3 righe, barcode JsBarcode, stampa) su /api/public/gift-voucher
+  (token-only 64hex, 404 sul miss).
+- TEST (21 PASS, cleanup CLEAN): dettaglio completo, riscatto parziale con tx,
+  chiusura completa points_spent=0, guard su riscattato, reopen derivato,
+  annullo con tx gift_cancel, note, guard email, voucher pubblico (+404 e
+  pagina senza login), delete con marker source_state e purge, assegnazione
+  manuale con scadenza fine giornata e blocco doppione, lista filtrata,
+  pagina manage 200.
+Restano: B3 redeem POS con gift_instance_id (assegnazione manuale ANTICIPATA
+qui), B4 editor avanzato (livelli/esclusioni/multi-set/clona/termini) +
+GiftLoyaltyAttribution + esclusione intervalli sospensione dal conteggio.

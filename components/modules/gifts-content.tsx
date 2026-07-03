@@ -3,13 +3,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 // Faithful port of the PHP fidelity/gifts page (app/pages/gifts.php): the Omaggi
-// CAMPAIGN manager. Fed by /api/manage/gifts:
+// CAMPAIGN manager + the ASSIGNED INSTANCES list (gifts.php ~1155-1591) + the
+// manual assignment modal (~2030-2097). Fed by /api/manage/gifts:
 //   - GET  action=campaigns -> ManageGiftListRow[] (name, reward, validity, status, instances)
+//   - GET  action=instances (inst_client_id/inst_gift_id/inst_state/inst_p, 25/pagina)
 //   - POST action=toggle_active (id, active)   — activate/deactivate (content-gated)
 //   - POST action=delete (id)                  — cascade delete
-// The create/edit editor lives in gift_form-content (router: gifts action=new|edit).
-// Deferred (documented): the accumulation/tracking engine, per-instance detail
-// (gift_instance.php), manual assignment, terms/excluded-clients, clone.
+//   - POST action=assign_manual (gift_id, client_id, expires_days, force_ineligible)
+// The create/edit editor lives in gift_form-content (router: gifts action=new|edit);
+// the per-instance detail is gift_instance-content (route /slug/gift_instance?id=N).
 
 type Campaign = {
   id: number;
@@ -37,6 +39,35 @@ function fmtDate(ymd: string): string {
   return `${d}/${m}/${y}`;
 }
 
+type InstanceRow = {
+  id: number;
+  createdAt: string;
+  clientId: number;
+  clientName: string;
+  giftId: number;
+  giftName: string;
+  locationName: string;
+  state: string;
+  expiresAt: string;
+  manual: boolean;
+};
+
+type InstancesPage = { rows: InstanceRow[]; page: number; perPage: number; totalPages: number; total: number };
+
+// Badge stato istanza legacy (gifts.php ~1560-1564).
+function instStateBadge(state: string): string {
+  if (state === "disponibile") return "text-bg-success";
+  if (state === "riscattato") return "text-bg-dark";
+  if (state === "scaduto") return "text-bg-warning text-dark";
+  if (state === "annullato") return "text-bg-danger";
+  return "text-bg-secondary";
+}
+
+function fmtDtShort(iso: string): string {
+  if (!iso || iso.length < 10) return "—";
+  return `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
+}
+
 export function GiftsContent() {
   const slug = tenantSlug();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -46,6 +77,43 @@ export function GiftsContent() {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  // Istanze assegnate (gifts.php vista istanze): filtri + paginazione 25/pagina.
+  const [instances, setInstances] = useState<InstancesPage | null>(null);
+  const [instState, setInstState] = useState("");
+  const [instClientId, setInstClientId] = useState(() => {
+    if (typeof window === "undefined") return 0;
+    return Number.parseInt(new URLSearchParams(window.location.search).get("inst_client_id") ?? "0", 10) || 0;
+  });
+  const [instPage, setInstPage] = useState(1);
+  // Assegnazione manuale.
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [assignGiftId, setAssignGiftId] = useState("");
+  const [assignClient, setAssignClient] = useState("");
+  const [assignDays, setAssignDays] = useState("");
+  const [clients, setClients] = useState<Array<{ id: number; name: string }>>([]);
+
+  const loadInstances = useCallback(() => {
+    const params = new URLSearchParams({ slug, action: "instances", inst_p: String(instPage) });
+    if (instState) params.set("inst_state", instState);
+    if (instClientId > 0) params.set("inst_client_id", String(instClientId));
+    return fetch(`/api/manage/gifts?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
+      .then((r) => r.json())
+      .then((j) => setInstances((j.instances ?? null) as InstancesPage | null))
+      .catch(() => setInstances(null));
+  }, [slug, instPage, instState, instClientId]);
+
+  useEffect(() => { loadInstances(); }, [loadInstances]);
+
+  useEffect(() => {
+    if (!assignOpen || clients.length) return;
+    fetch(`/api/manage/clients?slug=${encodeURIComponent(slug)}`, { headers: { "x-tenant-slug": slug } })
+      .then((r) => r.json())
+      .then((j) => {
+        const list = Array.isArray(j.clients) ? j.clients : [];
+        setClients(list.map((c: { id: number; full_name?: string; name?: string }) => ({ id: Number(c.id), name: String(c.full_name ?? c.name ?? `#${c.id}`) })));
+      })
+      .catch(() => setClients([]));
+  }, [assignOpen, clients.length, slug]);
 
   const load = useCallback(() => {
     return fetch(`/api/manage/gifts?slug=${encodeURIComponent(slug)}&action=campaigns`, { headers: { "x-tenant-slug": slug } })
@@ -104,6 +172,51 @@ export function GiftsContent() {
     if (!window.confirm(`Eliminare la campagna omaggio "${c.name}"? Le istanze accumulate e i premi collegati verranno rimossi.`)) return;
     const j = await post({ action: "delete", id: String(c.id) });
     if (j) setMsg("Campagna eliminata.");
+  }
+
+  // Assegnazione manuale (gifts.php _mode=assign_manual): crea un'istanza in
+  // stato Disponibile; se il cliente non è idoneo (fidelity_only) il server
+  // risponde ineligible+canForce e la UI chiede conferma per forzare.
+  async function submitAssign(e: React.FormEvent) {
+    e.preventDefault();
+    const giftId = Number.parseInt(assignGiftId, 10) || 0;
+    const m = /#(\d+)\s*$/.exec(assignClient);
+    const clientId = m ? Number.parseInt(m[1], 10) : Number.parseInt(assignClient, 10) || 0;
+    if (giftId <= 0 || clientId <= 0) {
+      setErr("Seleziona campagna e cliente.");
+      return;
+    }
+    const fields: Record<string, string> = { action: "assign_manual", gift_id: String(giftId), client_id: String(clientId) };
+    if (assignDays.trim() !== "") fields.expires_days = assignDays.trim();
+    setBusy(true);
+    setMsg("");
+    setErr("");
+    try {
+      const call = async (extra: Record<string, string> = {}) => {
+        const res = await fetch(`/api/manage/gifts?slug=${encodeURIComponent(slug)}`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-tenant-slug": slug },
+          body: JSON.stringify({ ...fields, ...extra }),
+        });
+        return { status: res.status, json: (await res.json().catch(() => ({}))) as Record<string, unknown> };
+      };
+      let r = await call();
+      if (r.json.ineligible && r.json.canForce) {
+        if (!window.confirm(`${String(r.json.error ?? "Cliente non idoneo.")}\n\nAssegnare comunque l'omaggio?`)) return;
+        r = await call({ force_ineligible: "1" });
+      }
+      if (r.status >= 400 || r.json.ok === false) throw new Error(String(r.json.error || "Operazione non riuscita."));
+      setMsg(String(r.json.message ?? "Gift assegnato"));
+      setAssignOpen(false);
+      setAssignGiftId("");
+      setAssignClient("");
+      setAssignDays("");
+      await loadInstances();
+    } catch (e2) {
+      setErr(e2 instanceof Error ? e2.message : "Operazione non riuscita.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -217,6 +330,125 @@ export function GiftsContent() {
                 </tbody>
               </table>
             </div>
+          </div>
+
+          {/* OMAGGI ASSEGNATI (gifts.php vista istanze ~1155-1591) */}
+          <div className="card mt-3">
+            <div className="card-body pb-0">
+              <div className="d-flex justify-content-between align-items-end flex-wrap gap-2 mb-2">
+                <div>
+                  <h2 className="h6 mb-1">Omaggi assegnati</h2>
+                  <div className="text-muted small">Istanze accumulate, disponibili e riscattate dei clienti.</div>
+                </div>
+                <div className="d-flex gap-2 align-items-end flex-wrap">
+                  <div>
+                    <label className="form-label small mb-1">Stato</label>
+                    <select className="form-select form-select-sm" value={instState} onChange={(e) => { setInstState(e.target.value); setInstPage(1); }}>
+                      <option value="">Tutti</option>
+                      <option value="accumulo">Accumulo</option>
+                      <option value="disponibile">Disponibile</option>
+                      <option value="riscattato">Riscattato</option>
+                      <option value="scaduto">Scaduto</option>
+                      <option value="annullato">Annullato</option>
+                    </select>
+                  </div>
+                  {instClientId > 0 ? (
+                    <button className="btn btn-sm btn-outline-secondary" type="button" onClick={() => { setInstClientId(0); setInstPage(1); }}>
+                      Cliente #{instClientId} ✕
+                    </button>
+                  ) : null}
+                  <button className="btn btn-sm btn-success" type="button" onClick={() => setAssignOpen((v) => !v)}>
+                    <i className="bi bi-check2 me-1" />
+                    Assegna gift manualmente
+                  </button>
+                </div>
+              </div>
+
+              {assignOpen ? (
+                <form className="border rounded p-3 mb-3" onSubmit={submitAssign}>
+                  <div className="row g-2 align-items-end">
+                    <div className="col-lg-4">
+                      <label className="form-label small">Campagna</label>
+                      <select className="form-select form-select-sm" value={assignGiftId} onChange={(e) => setAssignGiftId(e.target.value)} required>
+                        <option value="">Seleziona campagna…</option>
+                        {campaigns.filter((c) => c.active).map((c) => (
+                          <option key={c.id} value={String(c.id)}>{c.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="col-lg-4">
+                      <label className="form-label small">Cliente</label>
+                      <input className="form-control form-control-sm" list="giftAssignClients" value={assignClient} onChange={(e) => setAssignClient(e.target.value)} placeholder="Cerca cliente…" required />
+                      <datalist id="giftAssignClients">
+                        {clients.map((c) => (
+                          <option key={c.id} value={`${c.name} #${c.id}`} />
+                        ))}
+                      </datalist>
+                    </div>
+                    <div className="col-lg-2">
+                      <label className="form-label small">Scadenza (giorni)</label>
+                      <input className="form-control form-control-sm" type="number" min={1} value={assignDays} onChange={(e) => setAssignDays(e.target.value)} placeholder="Predefinita" />
+                    </div>
+                    <div className="col-lg-2">
+                      <button className="btn btn-sm btn-success w-100" type="submit" disabled={busy}>Assegna</button>
+                    </div>
+                  </div>
+                  <div className="form-text mt-1">
+                    Crea un&apos;istanza in stato <strong>Disponibile</strong> per il cliente, anche se non ha ancora completato le regole. Se vuoto, usa la scadenza configurata sull&apos;omaggio.
+                  </div>
+                </form>
+              ) : null}
+            </div>
+            <div className="table-responsive">
+              <table className="table mb-0 align-middle">
+                <thead>
+                  <tr>
+                    <th>Data</th>
+                    <th>Cliente</th>
+                    <th>Gift</th>
+                    <th>Sede</th>
+                    <th>Stato</th>
+                    <th>Scadenza</th>
+                    <th className="text-end">Dettagli</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {!instances || instances.rows.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="text-muted p-3">Nessun omaggio assegnato trovato.</td>
+                    </tr>
+                  ) : (
+                    instances.rows.map((r) => (
+                      <tr key={r.id}>
+                        <td>{fmtDtShort(r.createdAt)}</td>
+                        <td>
+                          {r.clientName}
+                          {r.manual ? <span className="badge text-bg-info ms-1">Manuale</span> : null}
+                        </td>
+                        <td>{r.giftName}</td>
+                        <td>{r.locationName || "—"}</td>
+                        <td><span className={`badge ${instStateBadge(r.state)} text-uppercase`}>{r.state}</span></td>
+                        <td>{r.expiresAt ? fmtDtShort(r.expiresAt) : "—"}</td>
+                        <td className="text-end">
+                          <a className="btn btn-sm btn-outline-primary" href={`/${encodeURIComponent(slug)}/gift_instance?id=${r.id}`} title="Apri dettagli">
+                            <i className="bi bi-eye" />
+                          </a>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+            {instances && instances.totalPages > 1 ? (
+              <div className="d-flex justify-content-between align-items-center p-2 border-top">
+                <span className="text-muted small">Pagina {instances.page} di {instances.totalPages} • {instances.total} istanze</span>
+                <div className="btn-group">
+                  <button className="btn btn-sm btn-outline-secondary" type="button" disabled={instances.page <= 1} onClick={() => setInstPage((p) => Math.max(1, p - 1))}>‹</button>
+                  <button className="btn btn-sm btn-outline-secondary" type="button" disabled={instances.page >= instances.totalPages} onClick={() => setInstPage((p) => p + 1)}>›</button>
+                </div>
+              </div>
+            ) : null}
           </div>
         </>
       )}
