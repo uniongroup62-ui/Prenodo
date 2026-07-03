@@ -362,7 +362,7 @@ export default async function TenantPage({
   if (page === "coupons" && (query.action === "new" || query.action === "edit")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
-        <CouponFormContent />
+        <CouponFormContent slug={tenantSlug} />
       </ManageShell>
     );
   }

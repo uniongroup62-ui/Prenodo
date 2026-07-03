@@ -1,7 +1,8 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
 import { todayIso } from "@/lib/appointment-engine";
-import { cancelManageCoupon, createDbCoupon, deleteManageCoupon, evalBestPromotionForAppointment, getCouponFormContext, getManageCoupon, listDbCoupons, listManageCoupons, previewDbCoupon, redeemDbCoupon, saveManageCoupon } from "@/lib/db-repositories";
+import { cancelManageCoupon, couponGenerateCode, createDbCoupon, deleteManageCoupon, evalBestPromotionForAppointment, getCouponFormContext, getManageCoupon, listDbCoupons, listManageCoupons, previewDbCoupon, redeemDbCoupon, saveManageCoupon, type CouponPreviewItem } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
+import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can, canAny } from "@/lib/role-permissions";
 
@@ -38,10 +39,30 @@ export async function GET(request: Request) {
       return Response.json({ ok: true, source: "coupons?action=form_context", sourceMode: "database", context: await getCouponFormContext(tenantSlug) });
     }
 
+    // Server-side code generation (port of coupons.php ?do=gen_code): unique vs
+    // existing coupons AND vs Promotion coupon codes.
+    if (url.searchParams.get("action") === "gen_code") {
+      if (!can(session.user.perms, "coupons.manage")) return jsonError("Permesso buoni mancante.", 403);
+      return Response.json({ ok: true, source: "coupons?do=gen_code", sourceMode: "database", code: await couponGenerateCode(tenantSlug) });
+    }
+
+    // LIST (default). Legacy filters by the session's current sede unless
+    // all_locations=1 ([] enabled sedi = valid everywhere); the empty state and
+    // the "Nuovo coupon" header button key off the UNFILTERED count, and the
+    // "Tutte le sedi" filter card only renders for multi-sede tenants.
+    const allCoupons = await listManageCoupons(tenantSlug);
+    const allLocations = ["1", "true", "on", "yes", "all"].includes(String(url.searchParams.get("all_locations") ?? "").trim().toLowerCase());
+    const locationContext = await getManageLocationContext(tenantSlug).catch(() => null);
+    const filterLocationId = allLocations ? 0 : (locationContext?.currentLocationId ?? 0);
+    const coupons = filterLocationId > 0
+      ? allCoupons.filter((c) => c.locationIds.length === 0 || c.locationIds.includes(filterLocationId))
+      : allCoupons;
     return Response.json({
       ok: true,
       sourceMode: "database",
-      coupons: await listManageCoupons(tenantSlug),
+      coupons,
+      totalCount: allCoupons.length,
+      locationsCount: locationContext?.locations.length ?? 0,
     });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Errore coupon.");
@@ -114,15 +135,39 @@ export async function POST(request: Request) {
     const subtotal = parseNumber(body.subtotal, 0);
     // Booking context forwarded by the quick-booking drawer (port of the legacy
     // action=coupon_preview inputs): service ids, location, appointment date/time, client id
-    // and the editing appointment id. All optional + backward-compatible — the POS preview
-    // (which posts only { code, subtotal }) is unchanged. Currently only appt_date changes the
-    // outcome (active-window validated as of the booked day); see previewDbCoupon.
+    // and the editing appointment id. The POS preview posts items_json (cart lines
+    // {type, id, line}) like the legacy mode=preview_discount, so apply_scope
+    // restrictions bite on the real cart; without items/service_ids the eligible
+    // base falls back to the subtotal for the all/all_services_products scopes.
     const serviceIds = String(body.service_ids ?? "")
       .split(",")
       .map((v) => parseInteger(v, 0))
       .filter((n) => n > 0);
-    const locationId = parseInteger(body.location_id, 0) || null;
-    const clientId = parseInteger(body.client_id, 0) || null;
+    let items: CouponPreviewItem[] | undefined;
+    try {
+      const parsed = JSON.parse(String(body.items_json ?? "[]"));
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        items = parsed
+          .map((it: Record<string, unknown>) => ({
+            type: String(it.type ?? "") === "product" ? ("product" as const) : ("service" as const),
+            id: parseInteger(it.id, 0),
+            line: Math.max(0, parseNumber(it.line, 0)),
+            categoryId: parseInteger(it.category_id ?? it.categoryId, 0) || null,
+          }))
+          .filter((it) => it.id > 0 && ["service", "product"].includes(String((it as { type: string }).type)) && it.line > 0);
+        if (!items.length) items = undefined;
+      }
+    } catch {
+      items = undefined;
+    }
+    // Sede: quella esplicita, altrimenti la sede corrente di sessione (il POS
+    // legacy valida sempre contro $posLocationId).
+    const locationContext = await getManageLocationContext(tenantSlug).catch(() => null);
+    const locationId = (parseInteger(body.location_id, 0) || locationContext?.currentLocationId || 0) || null;
+    // Legacy semantics: client_id INVIATO ma 0 = "nessun cliente selezionato"
+    // (un limite per-cliente allora esige la selezione); ASSENTE = flusso senza
+    // cliente (limite non verificabile).
+    const clientId = body.client_id === undefined ? null : parseInteger(body.client_id, 0);
     const apptDate = typeof body.appt_date === "string" ? body.appt_date : null;
     const apptTime = typeof body.appt_time === "string" ? body.appt_time : null;
     // Legacy coupon-vs-promo stacking (coupon_eval_after_promotion, called by the
@@ -161,6 +206,7 @@ export async function POST(request: Request) {
     }
     const preview = await previewDbCoupon(code, effectiveSubtotal, tenantSlug, {
       serviceIds: effectiveServiceIds,
+      items,
       locationId,
       clientId,
       appointmentId: parseInteger(body.appointment_id, 0) || null,

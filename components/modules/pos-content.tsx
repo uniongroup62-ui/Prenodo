@@ -1535,10 +1535,18 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
     const myReq = ++couponReqRef.current;
     setCouponApplying(true);
     try {
+      // Carrello reale al preview (legacy mode=preview_discount): l'apply_scope
+      // del coupon morde su servizi/prodotti effettivi; client_id abilita il
+      // limite di utilizzo per cliente.
+      const itemsJson = JSON.stringify(
+        cart
+          .filter((l) => (l.type === "service" || l.type === "product") && l.refId > 0 && l.unitPrice * l.quantity > 0)
+          .map((l) => ({ type: l.type, id: l.refId, line: roundMoney(l.unitPrice * l.quantity) })),
+      );
       const res = await fetch(`/api/manage/coupons?slug=${encodeURIComponent(slug)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-        body: JSON.stringify({ action: "preview", code, subtotal }),
+        body: JSON.stringify({ action: "preview", code, subtotal, items_json: itemsJson, client_id: clientId ?? 0 }),
       });
       const data: { ok?: boolean; error?: string; preview?: { valid?: boolean; discount?: number; reason?: string } } =
         await res.json().catch(() => ({}));
@@ -1563,7 +1571,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
     } finally {
       if (myReq === couponReqRef.current) setCouponApplying(false);
     }
-  }, [couponInput, subtotal, slug, clearCouponState]);
+  }, [couponInput, subtotal, slug, clearCouponState, cart, clientId]);
 
   // Remove: clear the applied coupon + the typed code + the feedback.
   const removeCoupon = useCallback(() => {

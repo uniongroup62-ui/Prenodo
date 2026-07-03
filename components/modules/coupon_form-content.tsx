@@ -11,12 +11,9 @@ import { useEffect, useState } from "react";
 //   - Attiva per (apply_scope), Valido dal / Valido al (valid_from / valid_to)
 // Submits to /api/manage/coupons (action=save; create when no id, update with
 // id — the code is immutable on edit, faithful to the readonly legacy input).
-//
-// TODO: the legacy editor also renders the scope-restricted catalogs
-// (service_category_ids[]/service_ids[]/product_category_ids[]/product_ids[]
-// multi-selects) and the per-location "Sedi abilitate" toggles. Those catalogs
-// and the coupon_locations sync are not part of the current coupon data
-// pipeline (listDbCoupons / coupons table), so they are not yet ported here.
+// Also ported: the scope-restricted catalogs (service/product multi-selects),
+// the per-location "Sedi abilitate" toggles (coupon_locations sync) and the
+// server-side code generation (?do=gen_code) with the coupons.js client fallback.
 
 type CouponForm = {
   id: number;
@@ -64,6 +61,8 @@ type CouponMeta = {
   cancelledAt: string;
   cancelledByLabel: string;
   cancelledReason: string;
+  salesCount: number;
+  appointmentsCount: number;
   canCancel: boolean;
 };
 
@@ -146,6 +145,17 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
       })
       .catch(() => setContext({ locations: [], serviceCategories: [], services: [], productCategories: [], products: [], defaultLocationIds: [] }));
 
+    // NEW: il legacy pre-compila il campo Codice con un codice generato
+    // server-side (coupons.php value=coupons_generate_code()).
+    if (act !== "edit") {
+      fetch(`/api/manage/coupons?slug=${encodeURIComponent(slug)}&action=gen_code`, { headers: { "x-tenant-slug": slug } })
+        .then((r) => r.json())
+        .then((j) => {
+          if (j?.code) setForm((prev) => (prev.code === "" ? { ...prev, code: String(j.code).toUpperCase() } : prev));
+        })
+        .catch(() => undefined);
+    }
+
     const editPromise =
       act === "edit" && Number.isFinite(id) && id > 0
         ? fetch(`/api/manage/coupons?slug=${encodeURIComponent(slug)}&action=get&id=${id}`, {
@@ -181,6 +191,8 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
                 cancelledAt: String(c.cancelledAt ?? ""),
                 cancelledByLabel: String(c.cancelledByLabel ?? "—"),
                 cancelledReason: String(c.cancelledReason ?? ""),
+                salesCount: Number(c.salesCount ?? 0),
+                appointmentsCount: Number(c.appointmentsCount ?? 0),
                 canCancel: Boolean(c.canCancel),
               });
               setSel({
@@ -212,13 +224,27 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
     setSel((prev) => ({ ...prev, [key]: ids }));
   }
 
-  // Generate a random coupon code (mirrors coupons.js fallback charset); the
-  // server rejects a duplicate/promotion-clashing code on save.
-  function generateCode() {
+  // Server-side unique code (port of coupons.js "Genera": fetch ?do=gen_code,
+  // uppercase; local random charset fallback when the endpoint fails).
+  function clientRandomCode(): string {
     const chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
     let out = "";
     for (let i = 0; i < 10; i += 1) out += chars.charAt(Math.floor(Math.random() * chars.length));
-    set("code", out);
+    return out;
+  }
+
+  async function generateCode() {
+    try {
+      const res = await fetch(`/api/manage/coupons?slug=${encodeURIComponent(slug)}&action=gen_code`, { headers: { "x-tenant-slug": slug } });
+      const j = await res.json();
+      if (j?.code) {
+        set("code", String(j.code).toUpperCase());
+        return;
+      }
+    } catch {
+      /* fallback client-side */
+    }
+    set("code", clientRandomCode());
   }
 
   function set<K extends keyof CouponForm>(key: K, value: CouponForm[K]) {
@@ -353,8 +379,7 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
         </div>
         <div className="bs-page-actions">
           <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/coupons`}>
-            <i className="bi bi-arrow-left me-1" />
-            Torna ai coupon
+            &larr; Buoni
           </a>
         </div>
       </div>
@@ -430,6 +455,9 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
                       Da questo momento il coupon non sarà più utilizzabile per nuove vendite o prenotazioni. Le
                       vendite/prenotazioni già associate manterranno il coupon storico.
                     </div>
+                  </div>
+                  <div className="small text-muted mb-3">
+                    Storico collegato: <strong>{meta.salesCount}</strong> vendite e <strong>{meta.appointmentsCount}</strong> prenotazioni.
                   </div>
                   <label className="form-label">Motivazione (opzionale)</label>
                   <textarea
@@ -603,7 +631,7 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
                       <thead>
                         <tr>
                           <th>Sede</th>
-                          <th className="text-center">Valido</th>
+                          <th className="text-center coupons-location-valid-cell">Valido</th>
                         </tr>
                       </thead>
                       <tbody>

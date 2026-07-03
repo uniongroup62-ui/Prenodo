@@ -56,18 +56,31 @@ export function CouponsContent({ slug: slugProp }: { slug?: string } = {}) {
   const slug = slugProp || tenantSlug();
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [allLocations, setAllLocations] = useState(false);
+  // Conteggio NON filtrato (empty state + bottone header) e numero sedi attive
+  // (il filtro "Tutte le sedi" esiste solo per i tenant multi-sede, come il
+  // legacy $couponShowAllLocationsFilter).
+  const [totalCount, setTotalCount] = useState(0);
+  const [locationsCount, setLocationsCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(0);
 
-  const load = useCallback(() => {
+  const load = useCallback((all?: boolean) => {
     setLoading(true);
-    fetch(`/api/manage/coupons?slug=${encodeURIComponent(slug)}`, {
+    const flag = all === undefined ? allLocations : all;
+    fetch(`/api/manage/coupons?slug=${encodeURIComponent(slug)}${flag ? "&all_locations=1" : ""}`, {
       headers: { "x-tenant-slug": slug },
     })
       .then((r) => r.json())
-      .then((j) => setCoupons(Array.isArray(j.coupons) ? j.coupons : []))
+      .then((j) => {
+        setCoupons(Array.isArray(j.coupons) ? j.coupons : []);
+        setTotalCount(Number(j.totalCount ?? (Array.isArray(j.coupons) ? j.coupons.length : 0)));
+        setLocationsCount(Number(j.locationsCount ?? 0));
+      })
       .catch(() => setCoupons([]))
       .finally(() => setLoading(false));
+    // Il filtro si applica SOLO al submit "Filtra" (come il form GET legacy):
+    // allLocations è letto al momento della chiamata, non è una dipendenza.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
 
   useEffect(() => {
@@ -104,8 +117,14 @@ export function CouponsContent({ slug: slugProp }: { slug?: string } = {}) {
     }
   }
 
-  const hasAnyCoupons = coupons.length > 0;
+  // Empty state / bottone header sul conteggio NON filtrato (legacy
+  // $hasAnyCoupons calcolato prima del filtro sede).
+  const hasAnyCoupons = totalCount > 0;
   const showEmptyState = !loading && !hasAnyCoupons;
+  // Legacy: la card filtro "Tutte le sedi" esiste solo con più sedi. NOTA:
+  // il legacy nasconde per bug ANCHE la tabella nei tenant mono-sede
+  // (coupons.php 1168/1250) — qui la tabella resta visibile (fix deliberato).
+  const showLocationsFilter = locationsCount > 1;
 
   return (
     <div className="container-fluid">
@@ -144,14 +163,13 @@ export function CouponsContent({ slug: slugProp }: { slug?: string } = {}) {
         </div>
       ) : null}
 
-      {hasAnyCoupons ? (
-        <>
+      {hasAnyCoupons && showLocationsFilter ? (
           <div className="card p-3 mb-3">
             <form
               className="row g-2 align-items-end"
               onSubmit={(e) => {
                 e.preventDefault();
-                load();
+                load(allLocations);
               }}
             >
               <div className="col-lg-8 d-flex align-items-center justify-content-start">
@@ -181,7 +199,9 @@ export function CouponsContent({ slug: slugProp }: { slug?: string } = {}) {
               </div>
             </form>
           </div>
+      ) : null}
 
+      {hasAnyCoupons ? (
           <div className="card">
             <div className="table-responsive">
               <table className="table mb-0 align-middle">
@@ -259,7 +279,6 @@ export function CouponsContent({ slug: slugProp }: { slug?: string } = {}) {
               </table>
             </div>
           </div>
-        </>
       ) : null}
     </div>
   );

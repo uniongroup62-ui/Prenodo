@@ -8106,17 +8106,19 @@ export async function createDbCoupon(input: Partial<CouponRule>, slug: string): 
   return getSingleCoupon(slug, id);
 }
 
-// Optional booking context forwarded from the quick-booking drawer's coupon preview
-// (port of the legacy api_appointments action=coupon_preview inputs). Every field is
-// optional so the plain (code, subtotal, slug) call from the POS still works unchanged.
-// Currently only `apptDate` affects the outcome — the coupon active-window is validated
-// AS OF the appointment date (like the legacy coupon_validate_row($appt_date)) instead of
-// today, so a coupon that is valid on the booked day previews correctly. The remaining
-// fields (serviceIds, locationId, clientId, appointmentId) are accepted for forward-compat
-// (the migrated Postgres coupons have no per-scope / per-client / per-location restriction
-// columns, so they do not yet change the result — see the TODO).
+// Booking/POS context for the coupon preview (port of the legacy
+// coupon_validate_row + coupon_eval_discount inputs). Every field is optional so
+// the plain (code, subtotal, slug) call still works: without items/serviceIds the
+// eligible base falls back to the whole subtotal for the all/all_services_products
+// scopes (legacy coupon_applicable_subtotal with $items=null).
+// clientId semantics (legacy): null = client not applicable to this flow (limit
+// skipped); 0 = "no client selected" (a per-client limit then REQUIRES one);
+// >0 = enforce the per-client limit against that client's active usage.
+export type CouponPreviewItem = { type: "service" | "product"; id: number; line: number; categoryId?: number | null };
+
 export type CouponPreviewContext = {
   serviceIds?: number[];
+  items?: CouponPreviewItem[];
   locationId?: number | null;
   clientId?: number | null;
   appointmentId?: number | null;
@@ -8124,31 +8126,236 @@ export type CouponPreviewContext = {
   apptTime?: string | null;
 };
 
+// € formatter for the legacy reason strings (fmt_money: it-IT, 2 decimals).
+function couponMoneyIt(n: number): string {
+  return Number(n || 0).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Active per-client usage of a coupon code (port of coupon_usage_counters with
+// $clientId): sales matched by coupon_code OR the "Coupon: CODE" notes marker +
+// appointments matched by the notes marker, excluding cancelled/rejected rows.
+const COUPON_CANCELLED_STATES = new Set(["cancelled", "canceled", "annullato", "annullata", "cancellato", "cancellata", "rejected", "rifiutato", "rifiutata"]);
+
+async function couponClientActiveUsedCount(slug: string, code: string, clientId: number): Promise<number> {
+  if (clientId <= 0 || code === "") return 0;
+  const likeNeedle = `%${`Coupon: ${code}`.toUpperCase()}%`;
+  let active = 0;
+  const salesRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "sales",
+    columns: "id, status, coupon_code, notes",
+    where: "client_id = ? AND (UPPER(COALESCE(coupon_code,'')) = ? OR UPPER(COALESCE(notes,'')) LIKE ?)",
+    params: [clientId, code, likeNeedle],
+  }).catch(() => [] as RowDataPacket[]);
+  for (const r of salesRows) {
+    const meta = extractCouponMetaFromNotes(r.notes);
+    const storedCode = normalizeCouponCode(String(r.coupon_code ?? ""));
+    const rowCode = storedCode !== "" ? storedCode : normalizeCouponCode(meta.code);
+    if (rowCode !== code) continue;
+    if (!COUPON_CANCELLED_STATES.has(String(r.status ?? "").trim().toLowerCase())) active++;
+  }
+  const apptRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "appointments",
+    columns: "id, status, notes",
+    where: "client_id = ? AND UPPER(COALESCE(notes,'')) LIKE ?",
+    params: [clientId, likeNeedle],
+  }).catch(() => [] as RowDataPacket[]);
+  for (const r of apptRows) {
+    const meta = extractCouponMetaFromNotes(r.notes);
+    if (normalizeCouponCode(meta.code) !== code) continue;
+    if (!COUPON_CANCELLED_STATES.has(String(r.status ?? "").trim().toLowerCase())) active++;
+  }
+  return active;
+}
+
+// Resolve the missing categoryId of preview items (needed by the category
+// scopes) from the services/products catalog, one query per family.
+async function couponResolveItemCategories(slug: string, items: CouponPreviewItem[]): Promise<CouponPreviewItem[]> {
+  const svcIds = [...new Set(items.filter((it) => it.type === "service" && !(Number(it.categoryId ?? 0) > 0) && it.id > 0).map((it) => it.id))];
+  const prodIds = [...new Set(items.filter((it) => it.type === "product" && !(Number(it.categoryId ?? 0) > 0) && it.id > 0).map((it) => it.id))];
+  const svcCat = new Map<number, number>();
+  const prodCat = new Map<number, number>();
+  if (svcIds.length) {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, category_id", where: `id IN (${svcIds.map(() => "?").join(",")})`, params: svcIds }).catch(() => [] as RowDataPacket[]);
+    for (const r of rows) svcCat.set(Number(r.id ?? 0), Number(r.category_id ?? 0));
+  }
+  if (prodIds.length) {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "products", columns: "id, category_id", where: `id IN (${prodIds.map(() => "?").join(",")})`, params: prodIds }).catch(() => [] as RowDataPacket[]);
+    for (const r of rows) prodCat.set(Number(r.id ?? 0), Number(r.category_id ?? 0));
+  }
+  return items.map((it) => {
+    if (Number(it.categoryId ?? 0) > 0) return it;
+    const cat = it.type === "service" ? svcCat.get(it.id) : prodCat.get(it.id);
+    return { ...it, categoryId: cat && cat > 0 ? cat : null };
+  });
+}
+
+// Does one cart item fall inside the coupon's apply_scope? Port of
+// coupon_item_matches_scope (Helpers.php ~2825-2870).
+function couponItemMatchesScope(
+  scope: string,
+  lists: { serviceCategoryIds: number[]; serviceIds: number[]; productCategoryIds: number[]; productIds: number[] },
+  item: CouponPreviewItem,
+): boolean {
+  if (scope === "all") return true;
+  if (scope === "all_services_products") return item.type === "service" || item.type === "product";
+  if (scope === "service_categories") {
+    return item.type === "service" && lists.serviceCategoryIds.length > 0 && Number(item.categoryId ?? 0) > 0 && lists.serviceCategoryIds.includes(Number(item.categoryId));
+  }
+  if (scope === "services") {
+    return item.type === "service" && lists.serviceIds.length > 0 && item.id > 0 && lists.serviceIds.includes(item.id);
+  }
+  if (scope === "products") {
+    return item.type === "product" && lists.productIds.length > 0 && item.id > 0 && lists.productIds.includes(item.id);
+  }
+  if (scope === "product_categories") {
+    return item.type === "product" && lists.productCategoryIds.length > 0 && Number(item.categoryId ?? 0) > 0 && lists.productCategoryIds.includes(Number(item.categoryId));
+  }
+  return true;
+}
+
+// Full legacy preview: coupon_validate_row (stato/sede/date/limite per cliente)
+// + coupon_eval_discount (base eleggibile per apply_scope, minimo sul totale o
+// sull'eleggibile, sconto percent/fixed cappato). Reason strings verbatim.
 export async function previewDbCoupon(
   code: string,
   subtotal: number,
   slug: string,
   context?: CouponPreviewContext,
-): Promise<{ valid: boolean; discount: number; reason: string; coupon?: CouponRule }> {
-  const coupon = await getCouponByCode(slug, code);
-  if (!coupon) return { valid: false, discount: 0, reason: "Coupon non trovato." };
-  // Validate the active window AS OF the appointment date when supplied (legacy parity);
-  // fall back to today otherwise. A malformed date is ignored (uses today).
+): Promise<{ valid: boolean; discount: number; reason: string; eligibleSubtotal?: number; coupon?: CouponRule }> {
+  const normalized = normalizeCouponCode(code);
+  if (normalized === "") return { valid: false, discount: 0, reason: "Coupon non trovato." };
+  // Raw row needed for apply_scope + the *_ids_json allow-lists (coupon_find
+  // already excludes deleted_at, so a deleted coupon reads "non trovato").
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "coupons", where: "code = ? AND deleted_at IS NULL", params: [normalized], limit: 1 });
+  if (!rows[0]) return { valid: false, discount: 0, reason: "Coupon non trovato." };
+  const row = rows[0];
+  const coupon = await mapCoupon(slug, row);
+
+  // ---- coupon_validate_row ----
+  if (Number(row.is_active ?? 1) !== 1) return { valid: false, discount: 0, reason: "Coupon disattivato.", coupon };
+
+  const locationId = Number(context?.locationId ?? 0);
+  if (locationId > 0) {
+    // app_coupon_location_allowed: no coupon_locations rows = valid everywhere.
+    const locRows = await tenantSelect<RowDataPacket>({ slug, table: "coupon_locations", columns: "location_id", where: "coupon_id = ?", params: [coupon.id] }).catch(() => [] as RowDataPacket[]);
+    const allowed = locRows.map((r) => Number(r.location_id ?? 0)).filter((n) => n > 0);
+    if (allowed.length > 0 && !allowed.includes(locationId)) {
+      return { valid: false, discount: 0, reason: "Coupon non valido per questa sede.", coupon };
+    }
+  }
+
   const rawDate = String(context?.apptDate ?? "").trim();
-  const asOf = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : undefined;
-  if (!coupon.active || !activeWindow(coupon.startsAt, coupon.endsAt, asOf)) return { valid: false, discount: 0, reason: "Coupon non attivo.", coupon };
-  if (coupon.usageLimit > 0 && coupon.usedCount >= coupon.usageLimit) return { valid: false, discount: 0, reason: "Coupon esaurito.", coupon };
-  if (subtotal < coupon.minSubtotal) return { valid: false, discount: 0, reason: "Minimo carrello non raggiunto.", coupon };
-  // TODO(coupon apply_scope): the legacy also honours the coupon's apply_scope (restricting
-  // the eligible subtotal to a service/product allow-list) and per-location/per-client rules.
-  // The migrated coupons table has no such columns yet, so the whole payable subtotal is used.
-  return { valid: true, discount: discountValue(coupon.type, coupon.value, subtotal), reason: "Coupon valido.", coupon };
+  const asOf = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : todayIso();
+  if (coupon.startsAt !== "" && coupon.startsAt > asOf) return { valid: false, discount: 0, reason: "Coupon non ancora attivo per la data selezionata.", coupon };
+  if (coupon.endsAt !== "" && coupon.endsAt < asOf) return { valid: false, discount: 0, reason: "Coupon scaduto per la data selezionata.", coupon };
+
+  // usage_limit è PER CLIENTE (legacy): con clientId===null il flusso non ha un
+  // cliente da vincolare e il limite non è verificabile (nessun esaurito globale).
+  const clientId = context?.clientId === undefined || context?.clientId === null ? null : Number(context.clientId);
+  if (coupon.usageLimit > 0 && clientId !== null && clientId <= 0) {
+    return { valid: false, discount: 0, reason: "Seleziona un cliente per usare questo coupon.", coupon };
+  }
+  if (coupon.usageLimit > 0 && clientId !== null && clientId > 0) {
+    const used = await couponClientActiveUsedCount(slug, normalized, clientId);
+    if (used >= coupon.usageLimit) {
+      return { valid: false, discount: 0, reason: `Limite di utilizzo per cliente raggiunto (${used}/${coupon.usageLimit}).`, coupon };
+    }
+  }
+
+  // ---- coupon_eval_discount ----
+  const scope = normalizeCouponScope(String(row.apply_scope ?? "all"));
+  const lists = {
+    serviceCategoryIds: decodeCouponIdsJson(row.service_category_ids_json),
+    serviceIds: decodeCouponIdsJson(row.service_ids_json),
+    productCategoryIds: decodeCouponIdsJson(row.product_category_ids_json),
+    productIds: decodeCouponIdsJson(row.product_ids_json),
+  };
+
+  // Items: explicit cart lines win; otherwise derive service lines (list price +
+  // category) from serviceIds like the legacy appt pricing context.
+  let items: CouponPreviewItem[] | null = Array.isArray(context?.items) && context!.items!.length > 0 ? context!.items! : null;
+  if (!items && Array.isArray(context?.serviceIds) && context!.serviceIds!.length > 0) {
+    const ids = [...new Set(context!.serviceIds!.filter((n) => n > 0))];
+    if (ids.length) {
+      const svcRows = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, price, category_id", where: `id IN (${ids.map(() => "?").join(",")})`, params: ids }).catch(() => [] as RowDataPacket[]);
+      const byId = new Map<number, RowDataPacket>();
+      for (const r of svcRows) byId.set(Number(r.id ?? 0), r);
+      // Preserve duplicates: the same service booked twice counts twice.
+      items = context!.serviceIds!
+        .filter((n) => n > 0 && byId.has(n))
+        .map((n) => ({ type: "service" as const, id: n, line: roundMoney(Math.max(0, Number(byId.get(n)!.price ?? 0))), categoryId: Number(byId.get(n)!.category_id ?? 0) || null }));
+      if (!items.length) items = null;
+    }
+  }
+  if (items) items = await couponResolveItemCategories(slug, items);
+
+  const safeSubtotal = roundMoney(Math.max(0, subtotal));
+  // coupon_applicable_subtotal: without items only the all/all_services_products
+  // scopes fall back to the whole subtotal; restricted scopes give 0.
+  let eligibleSubtotal: number;
+  if (!items) {
+    eligibleSubtotal = scope === "all" || scope === "all_services_products" ? safeSubtotal : 0;
+  } else {
+    let sumAll = 0;
+    let sumEligible = 0;
+    for (const it of items) {
+      const line = roundMoney(Math.max(0, Number(it.line ?? 0)));
+      if (line <= 0.0000001) continue;
+      sumAll += line;
+      if (couponItemMatchesScope(scope, lists, it)) sumEligible += line;
+    }
+    eligibleSubtotal = scope === "all" ? (safeSubtotal > 0.0000001 ? safeSubtotal : roundMoney(sumAll)) : roundMoney(sumEligible);
+  }
+  if (safeSubtotal > 0.0000001 && eligibleSubtotal > safeSubtotal) eligibleSubtotal = safeSubtotal;
+  eligibleSubtotal = roundMoney(Math.max(0, eligibleSubtotal));
+
+  const minSubtotal = roundMoney(Math.max(0, coupon.minSubtotal));
+  const minimumBase = scope !== "all" && items ? eligibleSubtotal : safeSubtotal;
+  const meetsMinimum = !(minSubtotal > 0.0000001 && minimumBase + 0.0000001 < minSubtotal);
+
+  let discount = 0;
+  if (meetsMinimum && eligibleSubtotal > 0.0000001) {
+    discount = coupon.type === "percent" ? eligibleSubtotal * (coupon.value / 100) : coupon.value;
+  }
+  if (discount < 0) discount = 0;
+  if (discount > eligibleSubtotal) discount = eligibleSubtotal;
+  if (discount > safeSubtotal) discount = safeSubtotal;
+  discount = roundMoney(discount);
+
+  if (meetsMinimum && eligibleSubtotal > 0.0000001 && discount > 0.0000001) {
+    return { valid: true, discount, reason: "Coupon valido.", eligibleSubtotal, coupon };
+  }
+  if (!meetsMinimum && minSubtotal > 0.0000001) {
+    return { valid: false, discount: 0, reason: `Importo minimo richiesto: ${couponMoneyIt(minSubtotal)}.`, eligibleSubtotal, coupon };
+  }
+  if (eligibleSubtotal <= 0.0000001) {
+    return { valid: false, discount: 0, reason: "Nessun servizio/prodotto selezionato rientra nel coupon.", eligibleSubtotal, coupon };
+  }
+  return { valid: false, discount: 0, reason: "Coupon non applicabile.", eligibleSubtotal, coupon };
 }
 
-export async function redeemDbCoupon(code: string, subtotal: number, slug: string): Promise<{ coupon: CouponRule; discount: number }> {
-  const preview = await previewDbCoupon(code, subtotal, slug);
+export async function redeemDbCoupon(code: string, subtotal: number, slug: string, context?: CouponPreviewContext): Promise<{ coupon: CouponRule; discount: number }> {
+  const preview = await previewDbCoupon(code, subtotal, slug, context);
   if (!preview.valid || !preview.coupon) throw new Error(preview.reason);
   return { coupon: preview.coupon, discount: preview.discount };
+}
+
+// Server-side coupon code generation (port of coupons_generate_code): readable
+// charset (no 0/1/I/L/O), 10 chars, up to 50 attempts avoiding both existing
+// coupon codes and Promotion coupon_code clashes; 12-char random fallback.
+export async function couponGenerateCode(slug: string): Promise<string> {
+  const chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  const rand = (len: number) => Array.from({ length: len }, () => chars.charAt(Math.floor(Math.random() * chars.length))).join("");
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const code = rand(10);
+    const dup = await tenantSelect<RowDataPacket>({ slug, table: "coupons", columns: "id", where: "code = ?", params: [code], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    if (dup[0]) continue;
+    if (await couponPromoCodeExists(slug, code)) continue;
+    return code;
+  }
+  return rand(12);
 }
 
 // Editable coupon record for the NEW / EDIT form. Extends the list CouponRule
@@ -8165,6 +8372,9 @@ export type ManageCouponRecord = CouponRule & {
   cancelledByLabel: string;
   cancelledReason: string;
   activeUsedCount: number;
+  // "Storico collegato: X vendite e Y prenotazioni." nel modale disattivazione.
+  salesCount: number;
+  appointmentsCount: number;
   canCancel: boolean;
   serviceCategoryIds: number[];
   serviceIds: number[];
@@ -8208,6 +8418,8 @@ export async function getManageCoupon(slug: string, id: number): Promise<ManageC
     cancelledByLabel: await couponUserLabel(slug, Number(row.cancelled_by ?? 0)),
     cancelledReason: String(row.cancelled_reason ?? ""),
     activeUsedCount: stats.activeUsedCount,
+    salesCount: stats.salesCount,
+    appointmentsCount: stats.appointmentsCount,
     canCancel: Number(row.is_active ?? 0) === 1 && !row.deleted_at,
     serviceCategoryIds: decodeCouponIdsJson(row.service_category_ids_json),
     serviceIds: decodeCouponIdsJson(row.service_ids_json),
@@ -8385,7 +8597,9 @@ export async function saveManageCoupon(slug: string, body: Record<string, string
     if (!existing[0]) throw new Error("Coupon non trovato.");
     await tenantUpdate({ slug, table: "coupons", id: couponId, values });
   } else {
-    const code = normalizeCouponCode(String(body.code ?? ""));
+    // Normalizzazione legacy (coupon_normalize_code): upper + rimozione spazi,
+    // SENZA strippare i caratteri invalidi — così la regex li rifiuta davvero.
+    const code = String(body.code ?? "").trim().toUpperCase().replace(/\s+/g, "");
     if (!code) throw new Error("Inserisci un codice.");
     if (!/^[A-Z0-9][A-Z0-9_-]{0,39}$/.test(code)) throw new Error("Codice non valido. Usa solo lettere, numeri, - e _. (Max 40)");
     const dup = await tenantSelect<RowDataPacket>({ slug, table: "coupons", columns: "id", where: "code = ? AND deleted_at IS NULL", params: [code], limit: 1 });
@@ -8614,6 +8828,9 @@ export type ManageCouponListRow = CouponRule & {
   applyScope: string;
   scopeLabel: string;
   locationLabel: string;
+  // Enabled sedi ids ([] = valid everywhere) — the list location filter
+  // (legacy app_filter_coupon_ids_by_location) keys off this.
+  locationIds: number[];
   activeUsedCount: number;
 };
 
@@ -8648,6 +8865,7 @@ export async function listManageCoupons(slug: string): Promise<ManageCouponListR
       applyScope: String(row.apply_scope ?? "all"),
       scopeLabel: couponScopeLabel(String(row.apply_scope ?? "all")),
       locationLabel,
+      locationIds: ids,
       activeUsedCount: stats.activeUsedCount,
     });
   }

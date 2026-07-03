@@ -2338,3 +2338,56 @@ CLEAN; la cascata delete campagna rimuove istanze/transazioni/regole).
 DIVERGENZE DOCUMENTATE: modali ricchi cancel/delete della pagina istanza
 restano window.confirm con testo server; il modale Riepilogo non include
 l'editing inline Condizioni/esclusioni (coperto dall'editor).
+
+## BUONI / COUPON (coupons.php) — PARITA GRAFICA + FUNZIONALE (2026-07-03)
+UI gia' molto fedele (lista 10 colonne, editor, modale disattivazione); i gap
+veri erano nel motore preview e nel filtro sede. Fatto:
+1. MOTORE PREVIEW RISCRITTO (previewDbCoupon = coupon_validate_row +
+   coupon_eval_discount): rimossi i reason inventati ("Coupon non attivo.",
+   "Coupon esaurito.", "Minimo carrello non raggiunto.") a favore dei verbatim
+   legacy: "Coupon non trovato." / "Coupon disattivato." / "Coupon non valido
+   per questa sede." / "Coupon non ancora attivo per la data selezionata." /
+   "Coupon scaduto per la data selezionata." / "Seleziona un cliente per usare
+   questo coupon." / "Limite di utilizzo per cliente raggiunto (used/limit)." /
+   "Importo minimo richiesto: X." / "Nessun servizio/prodotto selezionato
+   rientra nel coupon." / "Coupon non applicabile.". Il LIMITE era applicato
+   sul conteggio GLOBALE: ora e' PER CLIENTE come il legacy (conteggio attivo
+   da sales.coupon_code/marker note + appointments marker note, stati annullati
+   esclusi). apply_scope ORA ONORATO: base eleggibile calcolata sugli item del
+   carrello (coupon_item_matches_scope su servizi/prodotti/categorie), minimo
+   confrontato con l'eleggibile per scope ristretti, sconto cappato a
+   eleggibile e subtotale. Vincolo sede via coupon_locations (vuoto = tutte).
+2. CALL-SITE: il checkout POS (manage-pos) passa il carrello reale + cliente +
+   sede e mappa i reason eval nelle varianti Cassa verbatim ("Coupon non
+   applicabile: importo minimo richiesto X." / "Coupon non applicabile agli
+   articoli presenti nel carrello."); il POS UI invia items_json + client_id
+   al preview; drawer e booking pubblico passavano gia' service_ids (ora la
+   preview costruisce gli item dal listino servizi). Fix: la route trattava
+   client_id=0 come assente -> "Seleziona un cliente" non scattava mai.
+3. FIX VALIDAZIONE CODICE: normalizeCouponCode strippava i caratteri invalidi
+   PRIMA della regex ("??bad!!" -> "BAD" salvato!); ora normalizzazione legacy
+   (upper + solo spazi rimossi) e la regex rifiuta davvero.
+4. LISTA: filtro sede implementato (default = sede corrente di sessione via
+   coupon_locations, all_locations=1 disattiva; empty state e bottone "Nuovo
+   coupon" sul conteggio NON filtrato come il legacy). Card filtro "Tutte le
+   sedi" solo per tenant multi-sede ($couponShowAllLocationsFilter). FIX
+   DELIBERATO di un bug legacy: coupons.php racchiude ANCHE la tabella nel
+   gate multi-sede, quindi un tenant mono-sede non vede MAI i coupon creati
+   (verificato sul PHP live: coupon creato -> lista vuota); nel Next la
+   tabella resta visibile.
+5. EDITOR: back-button "← Buoni" come il legacy (era "Torna ai coupon");
+   codice PRE-GENERATO server-side all'apertura del form new + bottone
+   "Genera" via nuova GET action=gen_code (charset senza 0/1/I/L/O, unicita'
+   vs coupons E promozioni, fallback client); modale disattivazione completata
+   con "Storico collegato: X vendite e Y prenotazioni." (salesCount/
+   appointmentsCount aggiunti a action=get); classe coupons-location-valid-cell
+   sulla colonna Valido; slug prop al carve-out router (bug SSR //pagina).
+Verifica: 39/39 marker verbatim nel bundle (lista + editor new/edit); battery
+e2e 38/38 (gen_code, 6 validazioni save verbatim, duplicato, lista filtrata
+sede/all_locations, preview base/scope/fuori-scope/minimo/date/as-of/limite
+cliente/sede, cancel+audit+doppio, delete hard, cleanup CLEAN). Coupon
+temporaneo creato sul PHP live per il confronto markup rimosso dal MySQL.
+DIVERGENZE DOCUMENTATE: il preview coupon del POS Next non cumula con le promo
+AUTO (il POS Next usa promozioni selezionate dall'operatore, divergenza M1 gia'
+approvata); "Tutto il carrello (legacy)" visibile solo su coupon storici con
+scope=all, come il legacy.

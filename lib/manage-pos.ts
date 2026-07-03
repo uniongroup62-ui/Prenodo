@@ -535,8 +535,23 @@ export async function checkoutManageSale(
   const couponCode = clean(input.couponCode, 40);
   let couponDiscount = 0;
   if (couponCode) {
-    const coupon = await previewDbCoupon(couponCode, subtotal, slug);
-    if (!coupon.valid) throw new Error(coupon.reason || "Coupon non valido.");
+    // Validazione legacy completa (pos.php ~4340-4400): coupon_validate_row con
+    // cliente (limite per-cliente) e sede POS + coupon_eval_discount sul carrello
+    // reale (apply_scope). I messaggi eval usano le varianti Cassa verbatim.
+    const couponItems = items
+      .filter((it) => (it.type === "service" || it.type === "product") && it.refId > 0 && it.total > 0)
+      .map((it) => ({ type: it.type === "product" ? ("product" as const) : ("service" as const), id: it.refId, line: it.total }));
+    const coupon = await previewDbCoupon(couponCode, subtotal, slug, {
+      items: couponItems.length ? couponItems : undefined,
+      clientId: client.id > 0 ? client.id : 0,
+      locationId,
+    });
+    if (!coupon.valid) {
+      let reason = coupon.reason || "Coupon non valido o non applicabile.";
+      if (reason.startsWith("Importo minimo richiesto:")) reason = `Coupon non applicabile: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`;
+      else if (reason === "Nessun servizio/prodotto selezionato rientra nel coupon.") reason = "Coupon non applicabile agli articoli presenti nel carrello.";
+      throw new Error(reason);
+    }
     couponDiscount = coupon.discount;
   }
   // FIDELITY points redemption: convert the requested points into an euro discount,
