@@ -3756,7 +3756,8 @@ async function buildSaleItems(slug: string, inputItems: PosSaleItemInput[], loca
       unitPrice,
       total: roundMoney(unitPrice * lineQty),
       // item_status solo per i prepagati (riga service+prepaid); le altre righe
-      // speciali restano senza stato come gli INSERT legacy.
+      // speciali restano senza stato come gli INSERT legacy (le righe service/
+      // product normali passano da normalizeItemStatus più sopra).
       status: input.type === "prepaid" ? "prepaid" : undefined,
       startDate: clean(input.startDate, 10) || undefined,
       expiresAt: clean(input.expiresAt, 10) || undefined,
@@ -3768,6 +3769,11 @@ async function buildSaleItems(slug: string, inputItems: PosSaleItemInput[], loca
       eventType: isVoucher ? clean(input.eventType, 40) || undefined : undefined,
       message: isVoucher ? clean(input.message, 2000) || undefined : undefined,
       hideAmount: isVoucher ? input.hideAmount === true : undefined,
+      // Voucher extra meta legacy (nota interna, invio email, mostra importo).
+      internalNote: isVoucher ? clean(input.internalNote, 2000) || undefined : undefined,
+      sendMode: isVoucher && (input.sendMode === "none" || input.sendMode === "now" || input.sendMode === "date") ? input.sendMode : undefined,
+      sendOn: isVoucher ? clean(input.sendOn, 10) || undefined : undefined,
+      showAmount: isVoucher && input.showAmount !== undefined ? input.showAmount === true : undefined,
       baseAmount: isRecharge ? rechargeBase : undefined,
       bonusKind: isRecharge ? rechargeBonusKind : undefined,
       bonusValue: isRecharge ? rechargeBonusValue : undefined,
@@ -4863,6 +4869,15 @@ async function issueGiftcardFromSale(slug: string, saleId: number, clientId: num
   const hideAmount = item.hideAmount === true ? 1 : 0;
   const hasTokenColumn = await columnExists(giftcardTable.name, "voucher_public_token");
 
+  // Invio email legacy (items[gc_send_mode/gc_send_on]): 'date' pianifica via
+  // scheduled_send_on (cron giftcard-send); 'now' invia subito al Concludi
+  // (best-effort, vedi sotto); 'none' non invia. Default legacy: 'now'.
+  const sendMode: "none" | "now" | "date" = item.sendMode === "none" || item.sendMode === "date" ? item.sendMode : "now";
+  const sendOn = item.sendOn && /^\d{4}-\d{2}-\d{2}$/.test(item.sendOn) ? item.sendOn : null;
+  // "Mostra importo e contenuto nella mail" (checkbox dedicato, default 1).
+  const showAmount = item.showAmount === undefined ? true : item.showAmount === true;
+  const customerNote = clean(item.note, 500);
+
   const giftcardId = await tenantInsert(giftcardTable, await filterColumns(giftcardTable.name, {
     voucher_public_token: hasTokenColumn ? randomHex(64) : undefined,
     code,
@@ -4872,8 +4887,7 @@ async function issueGiftcardFromSale(slug: string, saleId: number, clientId: num
     recipient_email: recipientEmail,
     event_type: clean(item.eventType, 32) || "giftcard",
     voucher_hide_amount: hideAmount,
-    // email_show_amount mirrors the modal hide-amount toggle (legacy default 1 = show).
-    email_show_amount: hideAmount ? 0 : 1,
+    email_show_amount: showAmount ? 1 : 0,
     initial_amount: amount,
     balance: amount,
     currency: "EUR",
@@ -4881,10 +4895,25 @@ async function issueGiftcardFromSale(slug: string, saleId: number, clientId: num
     issued_at: new Date(),
     expires_at: expiresAt,
     gift_message: clean(item.message, 2000) || null,
-    note: `Emessa da vendita #${saleId}`,
+    // "Nota per il cliente" + marker vendita (il dettaglio ricava linkedSaleId
+    // dal pattern "Vendita #N").
+    note: customerNote ? `${customerNote}\nEmessa da vendita #${saleId}` : `Emessa da vendita #${saleId}`,
+    internal_note: clean(item.internalNote, 2000) || null,
+    scheduled_send_on: sendMode === "date" && sendOn ? sendOn : null,
     location_id: locationId > 0 ? locationId : null,
   })).catch(() => 0);
   if (!giftcardId) return { id: 0, voucher: null };
+
+  // Invio immediato ("Invia subito alla conclusione della vendita"): best-effort
+  // come il legacy — un errore SMTP non blocca la vendita.
+  if (sendMode === "now" && recipientEmail) {
+    try {
+      const { sendGiftCardEmailManage } = await import("@/lib/gift-issue-details");
+      await sendGiftCardEmailManage(slug, giftcardId, recipientEmail, showAmount, clean(item.message, 2000));
+    } catch {
+      // invio non disponibile/fallito: la GiftCard resta emessa
+    }
+  }
 
   // 'issue' ledger row, tagged with the sale id (note marker + meta_json) so the void
   // reversal can find this exact card. Best-effort: a missing transactions table is a no-op.
@@ -5081,6 +5110,12 @@ async function issueGiftboxFromSale(slug: string, saleId: number, clientId: numb
   const hideAmount = item.hideAmount === true ? 1 : 0;
   const hasTokenColumn = await columnExists(instanceTable.name, "voucher_public_token");
 
+  // Invio email legacy (giftbox_send_mode/giftbox_send_on): come la giftcard.
+  const sendMode: "none" | "now" | "date" = item.sendMode === "none" || item.sendMode === "date" ? item.sendMode : "now";
+  const sendOn = item.sendOn && /^\d{4}-\d{2}-\d{2}$/.test(item.sendOn) ? item.sendOn : null;
+  const showDetails = item.showAmount === undefined ? true : item.showAmount === true;
+  const customerNote = clean(item.note, 500);
+
   const instanceId = await tenantInsert(instanceTable, await filterColumns(instanceTable.name, {
     voucher_public_token: hasTokenColumn ? randomHex(64) : undefined,
     giftbox_id: giftboxId,
@@ -5091,14 +5126,17 @@ async function issueGiftboxFromSale(slug: string, saleId: number, clientId: numb
     recipient_email: recipientEmail,
     event_type: clean(item.eventType, 40) || "giftbox",
     voucher_hide_amount: hideAmount,
+    email_show_details: showDetails ? 1 : 0,
     // status 'issued' is what the residui/redeem readers treat as available (NOT 'active').
     status: "issued",
     issued_at: new Date(),
     expires_at: expiresAt,
     points_cost: 0,
     gift_message: clean(item.message, 2000) || null,
-    // Sale linkage marker (no sale_id column on giftbox_instances) for the void reversal.
-    note: `${GIFTBOX_SALE_MARKER}${saleId}`,
+    // "Nota per il cliente" + marker vendita (no sale_id column on giftbox_instances).
+    note: customerNote ? `${customerNote}\n${GIFTBOX_SALE_MARKER}${saleId}` : `${GIFTBOX_SALE_MARKER}${saleId}`,
+    internal_note: clean(item.internalNote, 2000) || null,
+    scheduled_send_on: sendMode === "date" && sendOn ? sendOn : null,
     location_id: locationId > 0 ? locationId : null,
   })).catch(() => 0);
   if (!instanceId) return { id: 0, voucher: null };
@@ -5125,9 +5163,16 @@ async function issueGiftboxFromSale(slug: string, saleId: number, clientId: numb
     }
   }
 
-  // The in-GiftBox custom-build mode (refId 0 + item.customItems) is now wired via
-  // saveGiftboxFromCart above. TODO: the optional issue email (recipient_email /
-  // scheduled_send_on) remains out of scope; the giftbox-send cron handles delivery.
+  // Invio immediato ("Invia subito alla conclusione della vendita"): best-effort.
+  if (sendMode === "now" && recipientEmail) {
+    try {
+      const { sendGiftBoxInstanceEmail } = await import("@/lib/gift-issue-details");
+      await sendGiftBoxInstanceEmail(slug, instanceId, recipientEmail, showDetails, clean(item.message, 2000));
+    } catch {
+      // invio non disponibile/fallito: la GiftBox resta emessa
+    }
+  }
+
   return { id: instanceId, voucher: { type: "giftbox", code, recipientName, amount } };
 }
 

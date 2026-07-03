@@ -380,6 +380,15 @@ function normalizeSaleItemInput(item: Record<string, unknown>): PosSaleItemInput
     eventType: packageMetaString(item.eventType ?? item.event_type),
     message: packageMetaString(item.message ?? item.gift_message),
     hideAmount: parseBoolean(item.hideAmount ?? item.hide_amount),
+    // Voucher extra meta (items[gc_*] / giftbox_* draft legacy): nota interna,
+    // invio email (none|now|date + data) e "Mostra importo e contenuto".
+    internalNote: packageMetaString(item.internalNote ?? item.internal_note),
+    sendMode: ((): PosSaleItemInput["sendMode"] => {
+      const v = String(item.sendMode ?? item.send_mode ?? "").trim().toLowerCase();
+      return v === "none" || v === "now" || v === "date" ? v : undefined;
+    })(),
+    sendOn: packageMetaString(item.sendOn ?? item.send_on),
+    showAmount: item.showAmount === undefined && item.show_amount === undefined ? undefined : parseBoolean(item.showAmount ?? item.show_amount),
     // RECHARGE sale meta (faithful to the legacy recharge POST fields): the base/bonus/total
     // top-up + the earn-points-on-bonus toggle, read only for a type:"recharge" line. The
     // wallet credit + recharges row are written from these at checkout (issueRechargeFromSale).

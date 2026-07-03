@@ -2583,3 +2583,55 @@ Verifica: 64/64 marker verbatim nel bundle dei due dettagli; battery e2e
 validazioni verbatim su dati/scadenza/riscatto, parziale 1/3 -> PARZIALE ->
 completamento, contatori per-item, movimenti con operatore, giftcard update/
 expiry/redeem/nota, voucher pubblici; cleanup CLEAN).
+
+## POS PAGAMENTI — EMETTI GIFTBOX/GIFTCARD COME PHP (2026-07-03, segnalazione utente)
+Confronto screenshot: i modali POS divergevano dal legacy (GiftBox con
+template+prezzo inventati; GiftCard senza note/invio email). RIFATTI sul
+markup live estratto (#posModalGiftbox / #posModalGiftcard):
+1. MODALE "Emetti GiftBox" = MODELLO DRAFT LEGACY: niente piu' tab "Da
+   modello/Personalizzata", select template e campo Prezzo — la GiftBox
+   AVVOLGE le righe del carrello (box "Contenuto GiftBox" con i due testi
+   verbatim e tabella Tipo|Elemento|Q.ta'); i servizi devono essere
+   Prepagato e i prodotti Ordinato (messaggio blocco verbatim "Per creare
+   una GiftBox, i servizi devono essere impostati come Prepagato (...) e i
+   prodotti ... Ordinato (...)"); "Salva" memorizza il DRAFT (nessuna riga
+   carrello; footer con link "Elimina" + confirm "Eliminare la GiftBox?");
+   al Concludi le righe eleggibili diventano il contenuto (customItems) e la
+   vendita registra UNA riga "GiftBox • {code}" col totale, come pos.php.
+   Campi legacy completi: Evento (giftbox generica), Valida dal/al,
+   Destinatario+Email, "Destinatario già cliente" con ricerca e box
+   selezionato, Nascondi importo (help "prezzi listino"), Dedica, Nota per
+   il cliente, Nota interna, Invio email (Non inviare / subito / programmata
+   + Data invio + "Mostra importo e contenuto nella mail"). Validazioni JS
+   verbatim (mittente, evento, date, destinatario, email, data invio).
+2. MODALE "Emetti GiftCard": riordinato sul live (Importo/Evento/Valida/
+   Destinatario) + AGGIUNTI i campi che erano solo DOM morto o assenti:
+   "Destinatario già cliente" con ricerca (era una select), Nota per il
+   cliente, Nota interna, sezione Invio email completa; RIMOSSO il campo
+   "Codice (opzionale)" (non esiste nel legacy, codice sempre auto GC-...);
+   footer "Aggiungi alla lista"; etichetta riga carrello legacy
+   "GiftCard • {evento} • {destinatario}"; una sola GiftCard per vendita.
+3. TOGGLE STATO RIGA CARRELLO (pos.js buildItemStatusControl): badge +
+   switch "Eseguito / Prepagato" sui servizi e "Ritirato / Ordinato" sui
+   prodotti — mancava del tutto; item_status del toggle ora PERSISTITO al
+   checkout (buildSaleItems gia' normalizzava, la UI non lo esponeva).
+4. BACKEND EMISSIONE ESTESO (issueGiftcardFromSale/issueGiftboxFromSale):
+   nota cliente (giftcards/giftbox_instances.note + marker vendita), nota
+   interna (internal_note), invio email none|now|date (scheduled_send_on per
+   il cron *-send; invio IMMEDIATO best-effort al Concludi via
+   sendGiftCardEmailManage/sendGiftBoxInstanceEmail, SES-gated),
+   email_show_amount/email_show_details dal checkbox dedicato (prima
+   derivato erroneamente da hide-amount). Nuovi campi item pipeline:
+   internalNote/sendMode/sendOn/showAmount (tenant-store + route parsing).
+5. COLONNA DESTRA: "Tipo pagamento" a RADIO btn-check 2x2 (Contanti/Carta/
+   Assegno/Bonifico) come pos.php 6298-6319 (era una select).
+Verifica: 38/38 marker verbatim nel bundle POS; battery e2e 11/11 (checkout
+giftcard con note+scheduled_send_on+show_amount=0 senza invio immediato;
+checkout giftbox dal carrello: riga vendita "GiftBox • GBX-...", istanza con
+evento/hide/note/interna e contenuti servizio x2 dal carrello; item_status
+prepaid persistito; cleanup CLEAN via pg incluse vendite).
+RESIDUI DOCUMENTATI (colonna destra): card Residui legacy con link "Apri
+scheda" + #posResidualsModal (il Next usa i controlli inline equivalenti);
+pacchetti "in GiftBox" (badge GiftBox sulla riga pacchetto + inclusione nel
+contenuto); percorso diretto posAction=issue_giftbox/issue_giftcard non
+usato dalla UI legacy attuale.

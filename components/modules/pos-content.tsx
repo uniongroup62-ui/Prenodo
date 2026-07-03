@@ -238,7 +238,9 @@ type CartLine = {
   name: string;
   quantity: number;
   unitPrice: number;
-  status: "executed" | "collected" | "prepaid";
+  // Stato riga legacy (pos.js getRowStatusMeta): servizio Eseguito/Prepagato,
+  // prodotto Ritirato/Ordinato — richiesto anche per l'eleggibilità GiftBox.
+  status: "executed" | "collected" | "prepaid" | "ordered";
   // PACKAGE meta (qty is locked to 1; sessions are issued from the template). Carried to
   // checkout so the issued client_packages row gets the custom validity window + note.
   startDate?: string;
@@ -256,6 +258,11 @@ type CartLine = {
   eventType?: string;
   message?: string;
   hideAmount?: boolean;
+  // Voucher extra meta legacy (nota interna + invio email + mostra importo).
+  internalNote?: string;
+  sendMode?: "none" | "now" | "date";
+  sendOn?: string;
+  showAmount?: boolean;
   // RECHARGE meta (qty locked to 1; the line price is the BASE amount the client pays). Carried
   // to checkout so issueRechargeFromSale writes the recharges row + credits the wallet by
   // base+bonus. refId is the recharge_templates id (0 = custom amount).
@@ -268,6 +275,24 @@ type CartLine = {
   // Custom GiftBox build: the chosen services/products that compose a one-off box (only set on a
   // giftbox line with refId 0). Sent to checkout so saveGiftboxFromCart materialises the template.
   customItems?: Array<{ type: "service" | "product"; id: number; qty: number }>;
+};
+
+// Etichette evento legacy (GiftCard::eventMap) per la riga carrello
+// "GiftCard • {evento} • {destinatario}".
+const GC_EVENT_LABELS: Record<string, string> = {
+  giftcard: "GiftCard (generica)",
+  giftbox: "GiftBox (generica)",
+  compleanno: "Compleanno",
+  anniversario: "Anniversario",
+  capodanno: "Capodanno",
+  natale: "Natale",
+  epifania: "Epifania",
+  san_valentino: "San Valentino",
+  festa_donna: "Festa della Donna",
+  pasqua: "Pasqua",
+  pasquetta: "Pasquetta",
+  festa_mamma: "Festa della Mamma",
+  festa_papa: "Festa del Papà",
 };
 
 // Legacy POS base payment type (the single payment_type radio: cash/card/check/bank).
@@ -531,35 +556,55 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   const [gcRecipientName, setGcRecipientName] = useState("");
   const [gcRecipientEmail, setGcRecipientEmail] = useState("");
   const [gcRecipientClientId, setGcRecipientClientId] = useState(0);
-  const [gcCode, setGcCode] = useState("");
+  const [gcRecipientIsClient, setGcRecipientIsClient] = useState(false);
+  const [gcRecipientSearch, setGcRecipientSearch] = useState("");
   const [gcMessage, setGcMessage] = useState("");
   const [gcHideAmount, setGcHideAmount] = useState(false);
+  // Legacy items[gc_*]: nota per il cliente, nota interna, invio email
+  // (Non inviare / subito / programmata + data) e "Mostra importo e contenuto".
+  const [gcNote, setGcNote] = useState("");
+  const [gcInternalNote, setGcInternalNote] = useState("");
+  const [gcDoNotSend, setGcDoNotSend] = useState(false);
+  const [gcSendMode, setGcSendMode] = useState<"now" | "date">("now");
+  const [gcSendOn, setGcSendOn] = useState("");
+  const [gcShowAmount, setGcShowAmount] = useState(true);
 
-  // GIFTBOX sale modal (wired — CORE TEMPLATE sale): the chosen giftboxes template, the SALE
-  // price (the giftboxes table has no price, so the staff enters it), recipient (defaults to
-  // the selected sale client so the box lands in their residui, or a free-text name), expiry
-  // (seeded from the template validity, editable), event + dedica + hide-amount voucher fields.
-  // "Aggiungi" pushes a {type:"giftbox"} cart line; the box is issued server-side at checkout.
-  const [gbTemplateId, setGbTemplateId] = useState(0);
-  const [gbPrice, setGbPrice] = useState("");
+  // GIFTBOX come DRAFT legacy (pos.php giftbox_* hidden + gbSaveBtn): il modale
+  // NON aggiunge una riga carrello — la GiftBox avvolge i servizi Prepagato e i
+  // prodotti Ordinato già nel carrello e viene emessa al Concludi come UNA riga
+  // "GiftBox • {code}" col totale del contenuto. "Salva" memorizza il draft.
+  const [gbDraft, setGbDraft] = useState<null | {
+    eventType: string;
+    validFrom: string;
+    validTo: string;
+    recipientName: string;
+    recipientEmail: string;
+    recipientClientId: number;
+    hideAmount: boolean;
+    message: string;
+    note: string;
+    internalNote: string;
+    sendMode: "none" | "now" | "date";
+    sendOn: string;
+    showDetails: boolean;
+  }>(null);
   const [gbEventType, setGbEventType] = useState("giftbox");
   const [gbValidFrom, setGbValidFrom] = useState("");
-  const [gbExpiresAt, setGbExpiresAt] = useState("");
-  const [gbExpiresTouched, setGbExpiresTouched] = useState(false);
+  const [gbValidTo, setGbValidTo] = useState("");
   const [gbRecipientName, setGbRecipientName] = useState("");
   const [gbRecipientEmail, setGbRecipientEmail] = useState("");
   const [gbRecipientClientId, setGbRecipientClientId] = useState(0);
+  const [gbRecipientIsClient, setGbRecipientIsClient] = useState(false);
+  const [gbRecipientSearch, setGbRecipientSearch] = useState("");
   const [gbMessage, setGbMessage] = useState("");
   const [gbHideAmount, setGbHideAmount] = useState(false);
-  // GIFTBOX build mode: "template" sells a pre-defined giftboxes template; "custom" composes a
-  // one-off box from chosen catalog services/products (port of pos.php issue_giftbox custom-build,
-  // which builds a transient template via GiftBox::saveGiftBox). The chosen items post as the
-  // giftbox line's customItems (refId 0) and saveGiftboxFromCart materialises the template at checkout.
-  const [gbBuildMode, setGbBuildMode] = useState<"template" | "custom">("template");
-  const [gbCustomItems, setGbCustomItems] = useState<Array<{ key: string; type: "service" | "product"; id: number; name: string; qty: number }>>([]);
-  const [gbPickType, setGbPickType] = useState<"service" | "product">("service");
-  const [gbPickId, setGbPickId] = useState(0);
-  const [gbPickQty, setGbPickQty] = useState("1");
+  const [gbNote, setGbNote] = useState("");
+  const [gbInternalNote, setGbInternalNote] = useState("");
+  const [gbDoNotSend, setGbDoNotSend] = useState(false);
+  const [gbSendMode, setGbSendMode] = useState<"now" | "date">("now");
+  const [gbSendOn, setGbSendOn] = useState("");
+  const [gbShowDetails, setGbShowDetails] = useState(true);
+  const [gbError, setGbError] = useState("");
 
   // RECHARGE sale modal (wired): the chosen recharge_templates id (0 = custom amount), the base
   // amount the client pays, the bonus rule (kind/value), the earn-points-on-bonus toggle, and an
@@ -784,11 +829,6 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   const selectedPackage = useMemo(
     () => packages.find((p) => p.id === packageId) ?? null,
     [packages, packageId],
-  );
-  const giftboxes = useMemo(() => ctx?.catalog?.giftboxes ?? [], [ctx]);
-  const selectedGiftbox = useMemo(
-    () => giftboxes.find((g) => g.id === gbTemplateId) ?? null,
-    [giftboxes, gbTemplateId],
   );
   const rechargeTemplates = useMemo(() => ctx?.catalog?.rechargeTemplates ?? [], [ctx]);
 
@@ -1241,186 +1281,248 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
     setGcRecipientName("");
     setGcRecipientEmail("");
     setGcRecipientClientId(0);
-    setGcCode("");
+    setGcRecipientIsClient(false);
+    setGcRecipientSearch("");
     setGcMessage("");
     setGcHideAmount(false);
+    setGcNote("");
+    setGcInternalNote("");
+    setGcDoNotSend(false);
+    setGcSendMode("now");
+    setGcSendOn("");
+    setGcShowAmount(true);
   }
 
-  // "Aggiungi alla lista": validate the amount + recipient and push a {type:"giftcard"} cart
-  // line — qty 1 at the card amount, carrying the recipient/code/expiry/dedica/hide-amount.
-  // Faithful to the legacy issue_giftcard validation (positive amount, recipient required,
-  // "Valida al" must be after the issue date). The card is issued server-side at checkout.
+  // "Aggiungi alla lista" (pos.js gcCreateBtn): validazioni verbatim legacy
+  // (esclusività, mittente, importo, evento, destinatario, email, date, data
+  // invio) e push della riga {type:"giftcard"} con TUTTI i meta (note + invio
+  // email). La card viene emessa server-side al Concludi.
   function addGiftcardToCart() {
     setErrorMsg("");
-    const amount = roundMoney(Math.max(0, Number.parseFloat(gcAmount.replace(",", ".")) || 0));
-    if (amount <= 0) {
-      setErrorMsg("Inserisci un importo GiftCard valido.");
+    if (cart.some((l) => l.type === "recharge")) {
+      setErrorMsg("GiftCard e Ricariche non possono essere abbinate nella stessa vendita. Rimuovi la ricarica dal carrello per continuare.");
       return;
     }
-    // Recipient: an existing client (so the card lands in their residui) OR a free-text name,
-    // defaulting to the selected sale client when neither is set.
-    const recipientClientId = gcRecipientClientId > 0 ? gcRecipientClientId : (clientId ?? 0) > 0 ? (clientId as number) : 0;
-    const recipientName = gcRecipientName.trim() || (recipientClientId > 0 ? clientName.trim() : "");
-    if (recipientClientId <= 0 && !recipientName) {
-      setErrorMsg("Inserisci un destinatario per la GiftCard.");
+    if (gbDraft) {
+      setErrorMsg("GiftCard e GiftBox non possono essere abbinate nella stessa vendita. Elimina la GiftBox prima di creare la GiftCard.");
+      return;
+    }
+    if ((clientId ?? 0) <= 0) {
+      setErrorMsg("Seleziona un mittente prima di emettere una GiftCard.");
+      return;
+    }
+    const amount = roundMoney(Math.max(0, Number.parseFloat(gcAmount.replace(",", ".")) || 0));
+    if (amount <= 0) {
+      setErrorMsg("Inserisci un importo valido.");
+      return;
+    }
+    if (!gcEventType) {
+      setErrorMsg("Seleziona un evento.");
+      return;
+    }
+    const recipientClientId = gcRecipientIsClient ? gcRecipientClientId : 0;
+    if (gcRecipientIsClient && recipientClientId <= 0) {
+      setErrorMsg("Seleziona il cliente destinatario.");
+      return;
+    }
+    const recipientName = gcRecipientName.trim() || (recipientClientId > 0 ? clients.find((c) => c.id === recipientClientId)?.name?.trim() ?? "" : "");
+    if (!recipientName) {
+      setErrorMsg("Inserisci il destinatario.");
+      return;
+    }
+    const recipientEmail = gcRecipientEmail.trim();
+    const sendMode: "none" | "now" | "date" = gcDoNotSend ? "none" : gcSendMode;
+    if (recipientEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
+      setErrorMsg("Inserisci una email destinatario valida.");
+      return;
+    }
+    if (sendMode !== "none" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
+      setErrorMsg("Inserisci una email destinatario valida.");
       return;
     }
     const validFrom = gcValidFrom || today;
+    if (validFrom < today) {
+      setErrorMsg('GiftCard: la data "Valida dal" non puo essere nel passato.');
+      return;
+    }
     const expiresAt = gcExpiresAt.trim();
     if (expiresAt && !/^\d{4}-\d{2}-\d{2}$/.test(expiresAt)) {
-      setErrorMsg('Data "Valida al" non valida.');
+      setErrorMsg('GiftCard: data "Valida al" non valida.');
       return;
     }
     if (expiresAt && validFrom >= expiresAt) {
-      setErrorMsg('La data "Valida al" deve essere successiva a "Valida dal".');
+      setErrorMsg('GiftCard: la data "Valida al" deve essere almeno il giorno successivo a "Valida dal".');
       return;
     }
-    const code = gcCode.trim().toUpperCase();
-    const labelName = recipientName || (code ? code : "Destinatario");
+    if (sendMode === "date" && !/^\d{4}-\d{2}-\d{2}$/.test(gcSendOn)) {
+      setErrorMsg("Seleziona la data di invio.");
+      return;
+    }
+    const eventLabel = GC_EVENT_LABELS[gcEventType] ?? "GiftCard";
     setCart((prev) => [
       {
         key: `${Date.now()}-${Math.floor(Math.random() * 1000)}`,
         type: "giftcard",
         refId: 0,
-        name: `GiftCard ${labelName}`,
+        // Etichetta riga legacy: "GiftCard • {evento} • {destinatario}".
+        name: `GiftCard • ${eventLabel} • ${recipientName}`,
         quantity: 1,
         unitPrice: amount,
         status: "prepaid",
         expiresAt: expiresAt || undefined,
         recipientClientId: recipientClientId > 0 ? recipientClientId : undefined,
         recipientName: recipientName || undefined,
-        recipientEmail: gcRecipientEmail.trim() || undefined,
-        code: code || undefined,
+        recipientEmail: recipientEmail || undefined,
         eventType: gcEventType || "giftcard",
         message: gcMessage.trim() || undefined,
         hideAmount: gcHideAmount,
+        note: gcNote.trim() || undefined,
+        internalNote: gcInternalNote.trim() || undefined,
+        sendMode,
+        sendOn: sendMode === "date" ? gcSendOn : undefined,
+        showAmount: gcShowAmount,
       },
-      ...prev,
+      ...prev.filter((l) => l.type !== "giftcard"),
     ]);
     resetGiftcardModal();
     closePosModal("posModalGiftcard");
   }
 
-  // ---- GIFTBOX sale (wired — CORE TEMPLATE sale) ----
-  // The proposed "Valida al" for the chosen template: the staff's manual override once they've
-  // edited the field, else today/start + the template's validityDays (mirrors the package
-  // hint). Derived during render — re-selecting a template / changing the start re-seeds it.
-  const gbStartValue = gbValidFrom || today;
-  const proposedGiftboxExpiry = useMemo(
-    () => (selectedGiftbox && selectedGiftbox.validityDays > 0 ? addDaysYMD(gbStartValue, selectedGiftbox.validityDays) : ""),
-    [selectedGiftbox, gbStartValue],
+  // ---- GIFTBOX come DRAFT dal carrello (pos.js gbSaveBtn / gbReadCartSnapshot) ----
+  // Contenuto eleggibile: servizi in stato Prepagato (righe service prepaid +
+  // righe "+ Prepagato") e prodotti in stato Ordinato. Le righe non conformi
+  // bloccano il salvataggio col messaggio legacy.
+  const giftboxEligibleLines = useMemo(
+    () => cart.filter((l) => (l.type === "service" && l.status === "prepaid") || l.type === "prepaid" || (l.type === "product" && l.status === "ordered")),
+    [cart],
   );
-  const effectiveGiftboxExpiry = gbExpiresTouched ? gbExpiresAt : proposedGiftboxExpiry;
+  const giftboxBlockingMessage = useMemo(() => {
+    const badServices = cart.filter((l) => l.type === "service" && l.status !== "prepaid").map((l) => l.name);
+    const badProducts = cart.filter((l) => l.type === "product" && l.status !== "ordered").map((l) => l.name);
+    if (badServices.length === 0 && badProducts.length === 0) return "";
+    return `Per creare una GiftBox, i servizi devono essere impostati come Prepagato (${badServices.join(", ") || "—"}) e i prodotti devono essere impostati come Ordinato (${badProducts.join(", ") || "—"}).`;
+  }, [cart]);
+  const giftboxContentTotal = useMemo(
+    () => roundMoney(giftboxEligibleLines.reduce((s, l) => s + l.unitPrice * l.quantity, 0)),
+    [giftboxEligibleLines],
+  );
 
-  function chooseGiftboxTemplate(id: number) {
-    setGbTemplateId(id);
-    setGbExpiresAt("");
-    setGbExpiresTouched(false);
+  function resetGiftboxModal(keepDraft = false) {
+    if (!keepDraft) {
+      setGbEventType("giftbox");
+      setGbValidFrom("");
+      setGbValidTo("");
+      setGbRecipientName("");
+      setGbRecipientEmail("");
+      setGbRecipientClientId(0);
+      setGbRecipientIsClient(false);
+      setGbMessage("");
+      setGbHideAmount(false);
+      setGbNote("");
+      setGbInternalNote("");
+      setGbDoNotSend(false);
+      setGbSendMode("now");
+      setGbSendOn("");
+      setGbShowDetails(true);
+    }
+    setGbRecipientSearch("");
+    setGbError("");
   }
 
-  function resetGiftboxModal() {
-    setGbTemplateId(0);
-    setGbPrice("");
-    setGbEventType("giftbox");
-    setGbValidFrom("");
-    setGbExpiresAt("");
-    setGbExpiresTouched(false);
-    setGbRecipientName("");
-    setGbRecipientEmail("");
-    setGbRecipientClientId(0);
-    setGbMessage("");
-    setGbHideAmount(false);
-    setGbBuildMode("template");
-    setGbCustomItems([]);
-    setGbPickType("service");
-    setGbPickId(0);
-    setGbPickQty("1");
-  }
-
-  // Add the picked catalog service/product to the in-progress custom GiftBox contents.
-  function addItemToGiftboxBuild() {
-    if (gbPickId <= 0) {
-      setErrorMsg("Seleziona un servizio o prodotto da aggiungere alla GiftBox.");
+  // "Salva" (pos.js gbSaveBtn): NON aggiunge una riga — valida e memorizza il
+  // DRAFT; la GiftBox avvolge le righe eleggibili al Concludi.
+  function saveGiftboxDraft() {
+    setGbError("");
+    if ((clientId ?? 0) <= 0) {
+      setGbError("Seleziona un mittente prima di emettere una GiftBox.");
       return;
     }
-    const qty = Math.max(1, Number.parseInt(gbPickQty, 10) || 1);
-    const source = gbPickType === "service" ? services : products;
-    const found = source.find((x) => x.id === gbPickId);
-    const name = found?.name ?? (gbPickType === "service" ? "Servizio" : "Prodotto");
-    setGbCustomItems((prev) => [
-      ...prev,
-      { key: `${Date.now()}-${Math.floor(Math.random() * 1000)}`, type: gbPickType, id: gbPickId, name, qty },
-    ]);
-    setGbPickId(0);
-    setGbPickQty("1");
-    setErrorMsg("");
-  }
-
-  function removeGiftboxBuildItem(key: string) {
-    setGbCustomItems((prev) => prev.filter((x) => x.key !== key));
-  }
-
-  // "Aggiungi alla lista": validate the template + price + recipient + dates and push a
-  // {type:"giftbox"} cart line — qty 1 at the box price (refId = the template id), carrying the
-  // recipient/expiry/event/dedica/hide-amount. The box is issued server-side at checkout (an
-  // instance owned by the recipient + its items copied from the template's giftbox_items).
-  function addGiftboxToCart() {
-    setErrorMsg("");
-    const isCustom = gbBuildMode === "custom";
-    const tpl = isCustom ? null : giftboxes.find((g) => g.id === gbTemplateId);
-    if (isCustom) {
-      if (gbCustomItems.length === 0) {
-        setErrorMsg("Aggiungi almeno un servizio o prodotto alla GiftBox personalizzata.");
-        return;
-      }
-    } else if (!tpl) {
-      setErrorMsg("Seleziona una GiftBox.");
+    if (cart.some((l) => l.type === "giftcard")) {
+      setGbError("GiftCard e GiftBox non possono essere abbinate nella stessa vendita. Elimina la GiftBox prima di creare la GiftCard.");
       return;
     }
-    const price = roundMoney(Math.max(0, Number.parseFloat(gbPrice.replace(",", ".")) || 0));
-    if (price <= 0) {
-      setErrorMsg("Inserisci un prezzo GiftBox valido.");
+    if (cart.some((l) => l.type === "recharge")) {
+      setGbError("GiftBox e Ricariche non possono essere abbinate nella stessa vendita.");
       return;
     }
-    // Recipient: an existing client (so the box lands in their residui) OR a free-text name,
-    // defaulting to the selected sale client when neither is set.
-    const recipientClientId = gbRecipientClientId > 0 ? gbRecipientClientId : (clientId ?? 0) > 0 ? (clientId as number) : 0;
-    const recipientName = gbRecipientName.trim() || (recipientClientId > 0 ? clientName.trim() : "");
-    if (recipientClientId <= 0 && !recipientName) {
-      setErrorMsg("Inserisci un destinatario per la GiftBox.");
+    if (giftboxBlockingMessage) {
+      setGbError(giftboxBlockingMessage);
+      return;
+    }
+    if (giftboxEligibleLines.length === 0) {
+      setGbError("Aggiungi al carrello i servizi/prodotti da inserire nella GiftBox.");
+      return;
+    }
+    if (!gbEventType) {
+      setGbError("GiftBox: seleziona un evento.");
       return;
     }
     const validFrom = gbValidFrom || today;
-    const expiresAt = (effectiveGiftboxExpiry || "").trim();
-    if (expiresAt && !/^\d{4}-\d{2}-\d{2}$/.test(expiresAt)) {
-      setErrorMsg('Data "Valida al" non valida.');
+    if (!validFrom) {
+      setGbError('GiftBox: inserisci la data "Valida dal".');
       return;
     }
-    if (expiresAt && validFrom >= expiresAt) {
-      setErrorMsg('La data "Valida al" deve essere successiva a "Valida dal".');
+    if (validFrom < today) {
+      setGbError('GiftBox: la data "Valida dal" non puo essere nel passato.');
       return;
     }
-    const labelName = recipientName || (isCustom ? "personalizzata" : tpl!.name);
-    setCart((prev) => [
-      {
-        key: `${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-        type: "giftbox",
-        refId: isCustom ? 0 : tpl!.id,
-        name: `GiftBox ${labelName}`,
-        quantity: 1,
-        unitPrice: price,
-        status: "prepaid",
-        expiresAt: expiresAt || undefined,
-        recipientClientId: recipientClientId > 0 ? recipientClientId : undefined,
-        recipientName: recipientName || undefined,
-        recipientEmail: gbRecipientEmail.trim() || undefined,
-        eventType: gbEventType || "giftbox",
-        message: gbMessage.trim() || undefined,
-        hideAmount: gbHideAmount,
-        customItems: isCustom ? gbCustomItems.map((ci) => ({ type: ci.type, id: ci.id, qty: ci.qty })) : undefined,
-      },
-      ...prev,
-    ]);
+    const validTo = gbValidTo.trim();
+    if (validTo && validFrom >= validTo) {
+      setGbError('GiftBox: la data "Valida al" deve essere almeno il giorno successivo a "Valida dal".');
+      return;
+    }
+    const recipientClientId = gbRecipientIsClient ? gbRecipientClientId : 0;
+    if (gbRecipientIsClient && recipientClientId <= 0) {
+      setGbError("GiftBox: seleziona il cliente destinatario.");
+      return;
+    }
+    const recipientName = gbRecipientName.trim() || (recipientClientId > 0 ? clients.find((c) => c.id === recipientClientId)?.name?.trim() ?? "" : "");
+    if (!recipientName) {
+      setGbError("GiftBox: inserisci il destinatario.");
+      return;
+    }
+    const recipientEmail = gbRecipientEmail.trim();
+    const sendMode: "none" | "now" | "date" = gbDoNotSend ? "none" : gbSendMode;
+    if (recipientEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
+      setGbError("GiftBox: email destinatario non valida.");
+      return;
+    }
+    if (sendMode !== "none" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
+      setGbError("GiftBox: inserisci una email destinatario valida per inviare la GiftBox.");
+      return;
+    }
+    if (sendMode === "date") {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(gbSendOn)) {
+        setGbError("GiftBox: data invio non valida.");
+        return;
+      }
+      if (gbSendOn < today) {
+        setGbError("GiftBox: la data invio programmato non puo essere nel passato.");
+        return;
+      }
+    }
+    setGbDraft({
+      eventType: gbEventType,
+      validFrom,
+      validTo,
+      recipientName,
+      recipientEmail,
+      recipientClientId,
+      hideAmount: gbHideAmount,
+      message: gbMessage.trim(),
+      note: gbNote.trim(),
+      internalNote: gbInternalNote.trim(),
+      sendMode,
+      sendOn: sendMode === "date" ? gbSendOn : "",
+      showDetails: gbShowDetails,
+    });
+    closePosModal("posModalGiftbox");
+  }
+
+  // "Elimina" (link nel footer, pos.js): conferma legacy e reset del draft.
+  function deleteGiftboxDraft() {
+    if (typeof window !== "undefined" && !window.confirm("Eliminare la GiftBox?")) return;
+    setGbDraft(null);
     resetGiftboxModal();
     closePosModal("posModalGiftbox");
   }
@@ -1693,10 +1795,55 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
       return;
     }
 
+    // GIFTBOX draft attivo (legacy giftbox_draft): le righe eleggibili del
+    // carrello (servizi Prepagato + prodotti Ordinato) diventano il CONTENUTO
+    // della GiftBox e vengono sostituite da UNA riga giftbox col loro totale —
+    // il backend emette l'istanza (saveGiftboxFromCart) e la vendita registra
+    // "GiftBox • {code}" come il legacy.
+    let checkoutLines: CartLine[] = cart;
+    if (gbDraft) {
+      if (giftboxBlockingMessage) {
+        setErrorMsg(giftboxBlockingMessage);
+        return;
+      }
+      if (giftboxEligibleLines.length === 0) {
+        setErrorMsg("Aggiungi al carrello i servizi/prodotti da inserire nella GiftBox.");
+        return;
+      }
+      const eligibleKeys = new Set(giftboxEligibleLines.map((l) => l.key));
+      const giftboxLine: CartLine = {
+        key: "giftbox-draft",
+        type: "giftbox",
+        refId: 0,
+        name: `GiftBox • ${gbDraft.recipientName}`,
+        quantity: 1,
+        unitPrice: giftboxContentTotal,
+        status: "prepaid",
+        expiresAt: gbDraft.validTo || undefined,
+        recipientClientId: gbDraft.recipientClientId > 0 ? gbDraft.recipientClientId : undefined,
+        recipientName: gbDraft.recipientName || undefined,
+        recipientEmail: gbDraft.recipientEmail || undefined,
+        eventType: gbDraft.eventType || "giftbox",
+        message: gbDraft.message || undefined,
+        hideAmount: gbDraft.hideAmount,
+        note: gbDraft.note || undefined,
+        internalNote: gbDraft.internalNote || undefined,
+        sendMode: gbDraft.sendMode,
+        sendOn: gbDraft.sendOn || undefined,
+        showAmount: gbDraft.showDetails,
+        customItems: giftboxEligibleLines.map((l) => ({
+          type: l.type === "product" ? ("product" as const) : ("service" as const),
+          id: l.refId,
+          qty: l.quantity,
+        })),
+      };
+      checkoutLines = [giftboxLine, ...cart.filter((l) => !eligibleKeys.has(l.key))];
+    }
+
     // items_json / payments_json MUST be JSON strings: parseRequestBody() collapses
     // top-level arrays with join(","), so we stringify ourselves.
     const itemsJson = JSON.stringify(
-      cart.map((line) => ({
+      checkoutLines.map((line) => ({
         type: line.type,
         refId: line.refId,
         name: line.name,
@@ -1709,7 +1856,8 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
           ? { startDate: line.startDate ?? "", expiresAt: line.expiresAt ?? "", note: line.note ?? "" }
           : {}),
         // GiftCard meta (only set on giftcard lines): the backend reads these to issue the
-        // giftcards row with the chosen recipient/code/expiry/dedica/hide-amount.
+        // giftcards row with the chosen recipient/expiry/dedica/hide-amount + le note e
+        // l'invio email legacy (items[gc_*]).
         ...(line.type === "giftcard"
           ? {
               recipientClientId: line.recipientClientId ?? 0,
@@ -1720,11 +1868,16 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
               expiresAt: line.expiresAt ?? "",
               message: line.message ?? "",
               hideAmount: line.hideAmount ? 1 : 0,
+              note: line.note ?? "",
+              internalNote: line.internalNote ?? "",
+              sendMode: line.sendMode ?? "now",
+              sendOn: line.sendOn ?? "",
+              showAmount: line.showAmount === false ? 0 : 1,
             }
           : {}),
         // GiftBox meta (only set on giftbox lines): the backend reads these to issue the
-        // giftbox_instances row (owned by the recipient) + its items copied from the template
-        // (refId). The recipient/expiry/event/dedica/hide-amount mirror the giftcard fields.
+        // giftbox_instances row (owned by the recipient) + its items (dal carrello via
+        // customItems / dal template refId). Note + invio email come la giftcard.
         ...(line.type === "giftbox"
           ? {
               recipientClientId: line.recipientClientId ?? 0,
@@ -1734,6 +1887,11 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
               expiresAt: line.expiresAt ?? "",
               message: line.message ?? "",
               hideAmount: line.hideAmount ? 1 : 0,
+              note: line.note ?? "",
+              internalNote: line.internalNote ?? "",
+              sendMode: line.sendMode ?? "now",
+              sendOn: line.sendOn ?? "",
+              showAmount: line.showAmount === false ? 0 : 1,
               // Custom-build contents (nested array — survives the items_json JSON parse intact,
               // unlike a top-level body field). Present only for a refId-0 custom box.
               ...(line.customItems && line.customItems.length > 0 ? { customItems: line.customItems } : {}),
@@ -1844,6 +2002,8 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
       // Reset the sale state.
       const saleCode = json?.sale?.code ? ` (${json.sale.code})` : "";
       setCart([]);
+      setGbDraft(null);
+      resetGiftboxModal();
       setDiscountType("none");
       setDiscountValue("0");
       clearCouponState();
@@ -2100,6 +2260,46 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                         <td>
                           <div className="fw-semibold pos-item-name">{label}</div>
                           {subLine ? <div className="text-muted small">{subLine}</div> : null}
+                          {line.type === "service" || line.type === "product" ? (
+                            /* Stato riga legacy (buildItemStatusControl): badge +
+                               switch "Eseguito / Prepagato" (servizi) e
+                               "Ritirato / Ordinato" (prodotti). */
+                            <div className="d-flex align-items-center gap-2 mt-1">
+                              <span
+                                className={`badge js-item-status-label ${
+                                  line.type === "service"
+                                    ? line.status === "prepaid"
+                                      ? "text-bg-secondary"
+                                      : "text-bg-success"
+                                    : line.status === "ordered"
+                                      ? "text-bg-secondary"
+                                      : "text-bg-success"
+                                }`}
+                              >
+                                {line.type === "service" ? (line.status === "prepaid" ? "Prepagato" : "Eseguito") : line.status === "ordered" ? "Ordinato" : "Ritirato"}
+                              </span>
+                              <div className="form-check form-switch mb-0">
+                                <input
+                                  className="form-check-input js-item-status-toggle"
+                                  type="checkbox"
+                                  checked={line.type === "service" ? line.status !== "prepaid" : line.status !== "ordered"}
+                                  onChange={(e) => {
+                                    const on = e.target.checked;
+                                    setCart((prev) =>
+                                      prev.map((l) =>
+                                        l.key === line.key
+                                          ? { ...l, status: l.type === "service" ? (on ? "executed" : "prepaid") : on ? "collected" : "ordered" }
+                                          : l,
+                                      ),
+                                    );
+                                  }}
+                                />
+                                <label className="form-check-label small text-muted">
+                                  {line.type === "service" ? "Eseguito / Prepagato" : "Ritirato / Ordinato"}
+                                </label>
+                              </div>
+                            </div>
+                          ) : null}
                         </td>
                         <td>
                           <input
@@ -2584,23 +2784,34 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                     Residui panel above. The bar shows the residui applied + the base. */}
                 <div className="mb-3 pos-payment-type-card" id="posPaymentTypeBox">
                   <div className="d-flex justify-content-between align-items-center mb-2">
-                    <div className="small text-muted">Pagamento</div>
+                    <div className="small text-muted">Tipo pagamento</div>
+                  </div>
+
+                  {/* Radio btn-check legacy (Contanti/Carta/Assegno/Bonifico) al
+                      posto della select — pos.php 6298-6319. */}
+                  <div className="row g-2 mb-2" role="group" aria-label="Metodo di pagamento">
+                    {(["cash", "card", "check", "bank"] as PaymentMethod[]).map((method) => (
+                      <div className="col-6" key={method}>
+                        <input
+                          type="radio"
+                          className="btn-check"
+                          name="payment_type"
+                          id={`posPaymentType_${method}`}
+                          checked={baseMethod === method}
+                          onChange={() => setBaseMethod(method)}
+                        />
+                        <label
+                          className="btn btn-sm btn-outline-secondary w-100"
+                          htmlFor={`posPaymentType_${method}`}
+                          title={method === "card" ? "Carta di Credito" : method === "bank" ? "Bonifico" : undefined}
+                        >
+                          {PAYMENT_METHOD_LABELS[method]}
+                        </label>
+                      </div>
+                    ))}
                   </div>
 
                   <div className="input-group input-group-sm mb-2" id="posPaymentBaseRow">
-                    <select
-                      className="form-select"
-                      name="payment_type"
-                      id="posPaymentType"
-                      aria-label="Metodo di pagamento"
-                      value={baseMethod}
-                      onChange={(e) => setBaseMethod(e.target.value as PaymentMethod)}
-                    >
-                      <option value="cash">{PAYMENT_METHOD_LABELS.cash}</option>
-                      <option value="card">{PAYMENT_METHOD_LABELS.card}</option>
-                      <option value="check">{PAYMENT_METHOD_LABELS.check}</option>
-                      <option value="bank">{PAYMENT_METHOD_LABELS.bank}</option>
-                    </select>
                     <span className="input-group-text">€</span>
                     <input
                       className="form-control text-end"
@@ -3320,15 +3531,16 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
         </div>
       </div>
 
-      {/* MODAL: GIFTBOX — CORE TEMPLATE sale (wired): pick a giftboxes template, set the SALE
-          price + recipient (owner) + expiry, then "Aggiungi alla lista" pushes a {type:"giftbox"}
-          cart line. At checkout the backend issues a giftbox_instances row owned by the recipient
-          + copies the template's giftbox_items into giftbox_instance_items. The legacy in-GiftBox
-          custom-build mode (building a one-off box from cart services/products) is OUT OF SCOPE. */}
+      {/* MODAL: GIFTBOX (pos.php #posModalGiftbox) — la GiftBox avvolge i
+          servizi Prepagato + prodotti Ordinato già nel carrello ("Contenuto
+          GiftBox"); "Salva" memorizza il DRAFT (nessuna riga carrello) e al
+          Concludi il backend emette l'istanza con UNA riga vendita
+          "GiftBox • {code}" pari al totale del contenuto. */}
       <div className="modal fade" id="posModalGiftbox" tabIndex={-1} aria-hidden="true">
         <div className="modal-dialog">
           <div className="modal-content">
             <input type="hidden" id="posGiftboxClientId" value="" readOnly />
+            <input type="hidden" id="posGiftboxItems" value="" readOnly />
 
             <div className="modal-header">
               <h5 className="modal-title">Emetti GiftBox</h5>
@@ -3337,151 +3549,50 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
 
             <div className="modal-body">
               <div className="small text-muted mb-2">
-                Mittente: <strong id="posGiftboxClientLabel">{clientId ? clientName : "Cliente banco"}</strong>
+                Mittente: <strong id="posGiftboxClientLabel">{clientId ? clientName : "—"}</strong>
               </div>
 
-              <div className="btn-group w-100 mb-3" role="group" aria-label="Modalità GiftBox">
-                <input
-                  type="radio"
-                  className="btn-check"
-                  name="gbBuildMode"
-                  id="gbModeTemplate"
-                  autoComplete="off"
-                  checked={gbBuildMode === "template"}
-                  onChange={() => setGbBuildMode("template")}
-                />
-                <label className="btn btn-outline-primary" htmlFor="gbModeTemplate">Da modello</label>
-                <input
-                  type="radio"
-                  className="btn-check"
-                  name="gbBuildMode"
-                  id="gbModeCustom"
-                  autoComplete="off"
-                  checked={gbBuildMode === "custom"}
-                  onChange={() => setGbBuildMode("custom")}
-                />
-                <label className="btn btn-outline-primary" htmlFor="gbModeCustom">Personalizzata</label>
-              </div>
-
-              {gbBuildMode === "template" ? (
-                <>
-                  <label className="form-label">GiftBox</label>
-                  <select
-                    className="form-select"
-                    id="posGiftboxSelect"
-                    required
-                    value={gbTemplateId || ""}
-                    onChange={(e) => chooseGiftboxTemplate(Number.parseInt(e.target.value, 10) || 0)}
-                  >
-                    <option value="">Seleziona...</option>
-                    {giftboxes.map((g) => (
-                      <option value={g.id} data-name={g.name} data-validity-days={g.validityDays} key={g.id}>
-                        {g.name}
-                        {g.items.length > 0 ? ` (${g.items.length} voci)` : ""}
-                      </option>
-                    ))}
-                  </select>
-
-                  {selectedGiftbox && selectedGiftbox.items.length > 0 ? (
-                    <div className="border rounded p-2 mt-2" id="posGiftboxContentBox">
-                      <div className="fw-semibold mb-1 small">Contenuto GiftBox</div>
-                      <ul className="mb-0 small text-muted">
-                        {selectedGiftbox.items.map((it) => (
-                          <li key={it.giftboxItemId}>
-                            {(it.label || (it.itemType === "product" ? "Prodotto" : "Servizio"))}
-                            {it.qty > 1 ? ` ×${it.qty}` : ""}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
-                </>
-              ) : (
-                <div>
-                  <label className="form-label">Contenuto GiftBox personalizzata</label>
-                  <div className="row g-2">
-                    <div className="col-3">
-                      <select
-                        className="form-select"
-                        aria-label="Tipo elemento"
-                        value={gbPickType}
-                        onChange={(e) => { setGbPickType(e.target.value === "product" ? "product" : "service"); setGbPickId(0); }}
-                      >
-                        <option value="service">Servizio</option>
-                        <option value="product">Prodotto</option>
-                      </select>
-                    </div>
-                    <div className="col-6">
-                      <select
-                        className="form-select"
-                        aria-label="Elemento"
-                        value={gbPickId || ""}
-                        onChange={(e) => setGbPickId(Number.parseInt(e.target.value, 10) || 0)}
-                      >
-                        <option value="">Seleziona...</option>
-                        {(gbPickType === "service" ? services : products).map((x) => (
-                          <option value={x.id} key={x.id}>{x.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="col-2">
-                      <input
-                        className="form-control"
-                        type="number"
-                        min="1"
-                        step="1"
-                        aria-label="Quantità"
-                        value={gbPickQty}
-                        onChange={(e) => setGbPickQty(e.target.value)}
-                      />
-                    </div>
-                    <div className="col-1 d-grid">
-                      <button type="button" className="btn btn-outline-primary" onClick={addItemToGiftboxBuild} aria-label="Aggiungi al box">+</button>
-                    </div>
-                  </div>
-
-                  {gbCustomItems.length > 0 ? (
-                    <ul className="list-group mt-2">
-                      {gbCustomItems.map((ci) => (
-                        <li className="list-group-item d-flex justify-content-between align-items-center py-1" key={ci.key}>
-                          <span className="small">
-                            <span className="badge bg-light text-dark me-1">{ci.type === "product" ? "Prodotto" : "Servizio"}</span>
-                            {ci.name}{ci.qty > 1 ? ` ×${ci.qty}` : ""}
-                          </span>
-                          <button type="button" className="btn btn-sm btn-link text-danger p-0" onClick={() => removeGiftboxBuildItem(ci.key)} aria-label="Rimuovi">Rimuovi</button>
-                        </li>
-                      ))}
-                    </ul>
+              <div className="border rounded p-2">
+                <div className="fw-semibold mb-1">Contenuto GiftBox</div>
+                <div className="small text-muted mb-2">
+                  Verranno inseriti i servizi/prodotti selezionati nel carrello e gli eventuali pacchetti aggiunti in abbinamento alla GiftBox.
+                </div>
+                <div className="small text-muted">
+                  Per inserire un servizio nella GiftBox impostalo come <strong>Prepagato</strong>; per un prodotto impostalo come <strong>Ordinato</strong>.
+                </div>
+                <div className="mt-2 pos-scroll-180" id="posGiftboxCartSummary">
+                  {giftboxEligibleLines.length === 0 ? (
+                    <div className="text-muted small">Nessun elemento eleggibile nel carrello.</div>
                   ) : (
-                    <div className="form-text">Aggiungi i servizi/prodotti che comporranno la GiftBox.</div>
+                    <table className="table table-sm mb-0">
+                      <thead>
+                        <tr>
+                          <th>Tipo</th>
+                          <th>Elemento</th>
+                          <th className="text-end">Q.tà</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {giftboxEligibleLines.map((l) => (
+                          <tr key={l.key}>
+                            <td className="text-uppercase small">{l.type === "product" ? "PRODOTTO" : "SERVIZIO"}</td>
+                            <td className="small">{l.name}</td>
+                            <td className="text-end small">{l.quantity}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   )}
                 </div>
-              )}
+              </div>
+
+              {giftboxBlockingMessage ? <div className="alert alert-warning py-2 px-3 mt-2 small">{giftboxBlockingMessage}</div> : null}
+              {gbError ? <div className="alert alert-danger py-2 px-3 mt-2 small">{gbError}</div> : null}
 
               <div className="row g-2 mt-3">
-                <div className="col-6">
-                  <label className="form-label">Prezzo (€)</label>
-                  <input
-                    className="form-control"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    id="posGiftboxPrice"
-                    placeholder="Es. 50"
-                    required
-                    value={gbPrice}
-                    onChange={(e) => setGbPrice(e.target.value)}
-                  />
-                </div>
-                <div className="col-6">
+                <div className="col-12">
                   <label className="form-label">Evento</label>
-                  <select
-                    className="form-select"
-                    id="posGiftboxEventType"
-                    required
-                    value={gbEventType}
-                    onChange={(e) => setGbEventType(e.target.value)}
-                  >
+                  <select className="form-select" id="posGiftboxEventType" required value={gbEventType} onChange={(e) => setGbEventType(e.target.value)}>
                     <option value="giftbox">GiftBox (generica)</option>
                     <option value="compleanno">Compleanno</option>
                     <option value="anniversario">Anniversario</option>
@@ -3501,72 +3612,17 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
               <div className="row g-2 mt-3">
                 <div className="col-6">
                   <label className="form-label small text-muted mb-1">Valida dal</label>
-                  <input
-                    className="form-control"
-                    type="date"
-                    id="posGiftboxValidFrom"
-                    min={today}
-                    required
-                    value={gbValidFrom || today}
-                    onChange={(e) => setGbValidFrom(e.target.value)}
-                  />
+                  <input className="form-control" type="date" id="posGiftboxValidFrom" min={today} required value={gbValidFrom || today} onChange={(e) => setGbValidFrom(e.target.value)} />
                 </div>
                 <div className="col-6">
                   <label className="form-label small text-muted mb-1">Valida al</label>
-                  <input
-                    className="form-control"
-                    type="date"
-                    id="posGiftboxValidTo"
-                    min={addDaysYMD(gbValidFrom || today, 1)}
-                    value={effectiveGiftboxExpiry}
-                    onChange={(e) => {
-                      setGbExpiresTouched(true);
-                      setGbExpiresAt(e.target.value);
-                    }}
-                  />
+                  <input className="form-control" type="date" id="posGiftboxValidTo" value={gbValidTo} onChange={(e) => setGbValidTo(e.target.value)} />
                 </div>
               </div>
 
-              <div className="small text-muted mt-2" id="posGiftboxExpiryHint">
-                {selectedGiftbox
-                  ? proposedGiftboxExpiry
-                    ? `Scadenza proposta dal catalogo: ${proposedGiftboxExpiry}.`
-                    : "Questa GiftBox non ha una scadenza automatica (default 180 giorni)."
-                  : ""}
-              </div>
-
-              {/* Destinatario: un cliente esistente (la GiftBox finisce nei suoi residui) o un
-                  nome libero. Il select default sul cliente della vendita. */}
               <div className="row g-2 mt-3">
-                <div className="col-12">
-                  <label className="form-label small text-muted mb-1">Destinatario (cliente)</label>
-                  <select
-                    className="form-select"
-                    id="posGiftboxRecipientClientId"
-                    value={gbRecipientClientId || (clientId ?? 0)}
-                    onChange={(e) => {
-                      const id = Number.parseInt(e.target.value, 10) || 0;
-                      setGbRecipientClientId(id);
-                      const picked = clients.find((c) => c.id === id);
-                      if (picked) {
-                        setGbRecipientName(picked.name);
-                        if (picked.email) setGbRecipientEmail(picked.email);
-                      }
-                    }}
-                  >
-                    <option value={0}>Nessuno (usa nome libero)</option>
-                    {clients.map((c) => (
-                      <option value={c.id} key={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="row g-2 mt-2">
                 <div className="col-6">
-                  <label className="form-label small text-muted mb-1">Destinatario (nome)</label>
+                  <label className="form-label small text-muted mb-1">Destinatario</label>
                   <input
                     className="form-control"
                     type="text"
@@ -3574,6 +3630,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                     placeholder="Nome"
                     required
                     value={gbRecipientName}
+                    readOnly={gbRecipientIsClient && gbRecipientClientId > 0}
                     onChange={(e) => setGbRecipientName(e.target.value)}
                   />
                 </div>
@@ -3585,6 +3642,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                     id="posGiftboxRecipientEmail"
                     placeholder="Email (opzionale)"
                     value={gbRecipientEmail}
+                    readOnly={gbRecipientIsClient && gbRecipientClientId > 0}
                     onChange={(e) => setGbRecipientEmail(e.target.value)}
                   />
                 </div>
@@ -3592,56 +3650,189 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
 
               <div className="row g-2 mt-2">
                 <div className="col-12">
-                  <label className="form-label">Voucher (destinatario)</label>
-                  <div className="form-check mt-1">
+                  <div className="form-check">
                     <input
                       className="form-check-input"
                       type="checkbox"
-                      id="posGiftboxVoucherHideAmount"
-                      value="1"
-                      checked={gbHideAmount}
-                      onChange={(e) => setGbHideAmount(e.target.checked)}
+                      id="posGbRecipientExistingToggle"
+                      checked={gbRecipientIsClient}
+                      onChange={(e) => {
+                        setGbRecipientIsClient(e.target.checked);
+                        if (!e.target.checked) setGbRecipientClientId(0);
+                      }}
                     />
-                    <label className="form-check-label" htmlFor="posGiftboxVoucherHideAmount">
-                      Nascondi importo nel voucher pubblico (QR)
-                    </label>
-                  </div>
-                  <div className="form-text">
-                    Se attivo, nel voucher pubblico aperto dal QR/link non verrà mostrato l&apos;importo (prezzi listino).
+                    <label className="form-check-label" htmlFor="posGbRecipientExistingToggle">Destinatario già cliente</label>
                   </div>
                 </div>
               </div>
 
-              <label className="form-label mt-3">Messaggio di dedica</label>
-              <textarea
-                className="form-control"
-                id="posGiftboxMessage"
-                rows={3}
-                placeholder="(opzionale)"
-                value={gbMessage}
-                onChange={(e) => setGbMessage(e.target.value)}
-              ></textarea>
+              {gbRecipientIsClient ? (
+                <div className="mt-2" id="posGbRecipientExistingBox">
+                  {gbRecipientClientId > 0 ? (
+                    <div className="border rounded p-3 mb-2" id="posGbRecipientSelectedBox">
+                      <div className="d-flex justify-content-between align-items-start">
+                        <div>
+                          <div className="fw-semibold" id="posGbRecipientSelectedName">{clients.find((c) => c.id === gbRecipientClientId)?.name ?? `Cliente #${gbRecipientClientId}`}</div>
+                          <div className="text-muted small" id="posGbRecipientSelectedMeta">ID {gbRecipientClientId}</div>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-outline-danger"
+                          id="posGbRecipientRemoveBtn"
+                          title="Rimuovi destinatario"
+                          onClick={() => setGbRecipientClientId(0)}
+                        >
+                          <i className="bi bi-x-lg" />
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div id="posGbRecipientSearchWrap">
+                      <div className="input-group input-group-sm mb-2">
+                        <span className="input-group-text"><i className="bi bi-search" /></span>
+                        <input
+                          className="form-control"
+                          type="text"
+                          id="posGbRecipientClientSearch"
+                          placeholder="Cerca destinatario..."
+                          value={gbRecipientSearch}
+                          onChange={(e) => setGbRecipientSearch(e.target.value)}
+                        />
+                      </div>
+                      <div className="border rounded pos-scroll-160" id="posGbRecipientClientList">
+                        {clients
+                          .filter((c) => gbRecipientSearch.trim() === "" || c.name.toLowerCase().includes(gbRecipientSearch.trim().toLowerCase()))
+                          .slice(0, 20)
+                          .map((c) => (
+                            <button
+                              type="button"
+                              className="pos-client-row pos-client-row-compact"
+                              key={c.id}
+                              onClick={() => {
+                                setGbRecipientClientId(c.id);
+                                setGbRecipientName(c.name);
+                                setGbRecipientSearch("");
+                              }}
+                            >
+                              <div className="d-flex justify-content-between align-items-start">
+                                <div>
+                                  <div className="fw-semibold">{c.name}</div>
+                                </div>
+                                <div className="small text-muted">ID {c.id}</div>
+                              </div>
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : null}
 
-              <div className="small text-muted mt-3">
-                Nota: la GiftBox verrà aggiunta al carrello. Alla chiusura vendita (tasto <strong>Concludi</strong>)
-                verrà emessa e assegnata al destinatario (compare nei suoi residui). Per concludere, seleziona un
-                cliente o un destinatario.
+              <div className="row g-2 mt-2">
+                <div className="col-12">
+                  <label className="form-label">Voucher (destinatario)</label>
+                  <div className="form-check mt-1">
+                    <input className="form-check-input" type="checkbox" id="posGiftboxVoucherHideAmount" checked={gbHideAmount} onChange={(e) => setGbHideAmount(e.target.checked)} />
+                    <label className="form-check-label" htmlFor="posGiftboxVoucherHideAmount">Nascondi importo nel voucher pubblico (QR)</label>
+                  </div>
+                  <div className="form-text">Se attivo, nel voucher pubblico aperto dal QR/link non verrà mostrato l&apos;importo (prezzi listino).</div>
+                </div>
               </div>
+
+              <label className="form-label mt-3">Messaggio di dedica</label>
+              <textarea className="form-control" id="posGiftboxMessage" rows={3} placeholder="(opzionale)" value={gbMessage} onChange={(e) => setGbMessage(e.target.value)} />
+
+              <label className="form-label mt-3">Nota per il cliente</label>
+              <textarea className="form-control" id="posGiftboxNote" rows={2} placeholder="(opzionale)" value={gbNote} onChange={(e) => setGbNote(e.target.value)} />
+
+              <label className="form-label mt-3">Nota interna</label>
+              <textarea className="form-control" id="posGiftboxInternalNote" rows={2} placeholder="(opzionale)" value={gbInternalNote} onChange={(e) => setGbInternalNote(e.target.value)} />
+
+              <div className="mt-3">
+                <div className="fw-semibold mb-1">Invio email</div>
+
+                <div className="form-check mb-2">
+                  <input className="form-check-input" type="checkbox" id="posGbDoNotSend" checked={gbDoNotSend} onChange={(e) => setGbDoNotSend(e.target.checked)} />
+                  <label className="form-check-label" htmlFor="posGbDoNotSend">Non inviare</label>
+                </div>
+
+                <div className="form-check">
+                  <input
+                    className="form-check-input"
+                    type="radio"
+                    name="giftbox_send_mode_ui"
+                    id="posGbSendNow"
+                    checked={gbSendMode === "now"}
+                    disabled={gbDoNotSend}
+                    onChange={() => setGbSendMode("now")}
+                  />
+                  <label className="form-check-label" htmlFor="posGbSendNow">Invia subito alla conclusione della vendita</label>
+                </div>
+
+                <div className="form-check mt-2">
+                  <input
+                    className="form-check-input"
+                    type="radio"
+                    name="giftbox_send_mode_ui"
+                    id="posGbSendDate"
+                    checked={gbSendMode === "date"}
+                    disabled={gbDoNotSend}
+                    onChange={() => setGbSendMode("date")}
+                  />
+                  <label className="form-check-label" htmlFor="posGbSendDate">Invia in data programmata</label>
+                </div>
+
+                {!gbDoNotSend && gbSendMode === "date" ? (
+                  <div className="mt-2" id="posGbSendOnBox">
+                    <label className="form-label">Data invio</label>
+                    <input className="form-control" type="date" id="posGbSendOn" min={today} value={gbSendOn} onChange={(e) => setGbSendOn(e.target.value)} />
+                  </div>
+                ) : null}
+
+                <div className="form-check mt-3">
+                  <input className="form-check-input" type="checkbox" id="posGbShowDetails" checked={gbShowDetails} onChange={(e) => setGbShowDetails(e.target.checked)} />
+                  <label className="form-check-label" htmlFor="posGbShowDetails">Mostra importo e contenuto nella mail</label>
+                </div>
+                <div className="text-muted small">Se disattivato, nella mail non verrà mostrato il contenuto: il destinatario dovrà recarsi in negozio per scoprirlo.</div>
+              </div>
+
+              {gbDraft ? (
+                <div className="alert alert-info py-2 px-3 mt-3" id="posGiftboxTotalsHint">
+                  GiftBox attiva per <strong>{gbDraft.recipientName}</strong> • Totale contenuto {fmtEUR(giftboxContentTotal)} — verrà emessa al Concludi.
+                </div>
+              ) : null}
             </div>
 
             <div className="modal-footer">
-              <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal" id="posGiftboxCancelBtn">
-                Annulla
-              </button>
-              <button type="button" className="btn btn-primary" id="posGiftboxSaveBtn" onClick={addGiftboxToCart}>
-                <i className="bi bi-check2-circle me-1"></i>Aggiungi alla lista
+              {gbDraft ? (
+                <a
+                  href="#"
+                  className="link-danger me-auto"
+                  id="posGiftboxDeleteLink"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    deleteGiftboxDraft();
+                  }}
+                >
+                  Elimina
+                </a>
+              ) : null}
+              <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal" id="posGiftboxCancelBtn">Annulla</button>
+              <button type="button" className="btn btn-primary" id="posGiftboxSaveBtn" onClick={saveGiftboxDraft}>
+                <i className="bi bi-check2-circle me-1" />
+                Salva
               </button>
             </div>
           </div>
         </div>
       </div>
 
-      {/* MODAL: GIFTCARD */}
+      {/* MODAL: GIFTCARD (pos.php #posModalGiftcard) — la GiftCard viene
+          aggiunta al carrello e verrà emessa alla chiusura vendita. Campi
+          legacy: Importo, Evento, Valida dal/al, Destinatario (+ già cliente
+          con ricerca), Nascondi importo, Dedica, Nota per il cliente, Nota
+          interna, Invio email (Non inviare / subito / programmata + Mostra
+          importo e contenuto). */}
       <div className="modal fade" id="posModalGiftcard" tabIndex={-1} aria-hidden="true">
         <div className="modal-dialog">
           <div className="modal-content">
@@ -3654,7 +3845,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
 
             <div className="modal-body">
               <div className="small text-muted mb-2">
-                Mittente: <strong id="posGiftcardClientLabel">{clientId ? clientName : "Cliente banco"}</strong>
+                Mittente: <strong id="posGiftcardClientLabel">{clientId ? clientName : "—"}</strong>
               </div>
 
               <div className="row g-2">
@@ -3677,13 +3868,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
               <div className="row g-2 mt-3">
                 <div className="col-12">
                   <label className="form-label">Evento</label>
-                  <select
-                    className="form-select"
-                    id="posGcEventType"
-                    required
-                    value={gcEventType}
-                    onChange={(e) => setGcEventType(e.target.value)}
-                  >
+                  <select className="form-select" id="posGcEventType" required value={gcEventType} onChange={(e) => setGcEventType(e.target.value)}>
                     <option value="giftcard">GiftCard (generica)</option>
                     <option value="compleanno">Compleanno</option>
                     <option value="anniversario">Anniversario</option>
@@ -3703,61 +3888,17 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
               <div className="row g-2 mt-3">
                 <div className="col-6">
                   <label className="form-label small text-muted mb-1">Valida dal</label>
-                  <input
-                    className="form-control"
-                    type="date"
-                    id="posGcValidFrom"
-                    min={today}
-                    required
-                    value={gcValidFrom || today}
-                    onChange={(e) => setGcValidFrom(e.target.value)}
-                  />
+                  <input className="form-control" type="date" id="posGcValidFrom" min={today} required value={gcValidFrom || today} onChange={(e) => setGcValidFrom(e.target.value)} />
                 </div>
                 <div className="col-6">
                   <label className="form-label small text-muted mb-1">Valida al</label>
-                  <input
-                    className="form-control"
-                    type="date"
-                    id="posGcExpiresAt"
-                    value={gcExpiresAt}
-                    onChange={(e) => setGcExpiresAt(e.target.value)}
-                  />
-                  <div className="form-text">Vuoto = scadenza predefinita GiftCard (default 12 mesi).</div>
+                  <input className="form-control" type="date" id="posGcExpiresAt" value={gcExpiresAt} onChange={(e) => setGcExpiresAt(e.target.value)} />
                 </div>
               </div>
 
-              {/* Destinatario: un cliente esistente (la GiftCard finisce nei suoi residui) o
-                  un nome libero. Il select default sul cliente della vendita. */}
               <div className="row g-2 mt-3">
-                <div className="col-12">
-                  <label className="form-label small text-muted mb-1">Destinatario (cliente)</label>
-                  <select
-                    className="form-select"
-                    id="posGiftcardRecipientClientId"
-                    value={gcRecipientClientId || (clientId ?? 0)}
-                    onChange={(e) => {
-                      const id = Number.parseInt(e.target.value, 10) || 0;
-                      setGcRecipientClientId(id);
-                      const picked = clients.find((c) => c.id === id);
-                      if (picked) {
-                        setGcRecipientName(picked.name);
-                        if (picked.email) setGcRecipientEmail(picked.email);
-                      }
-                    }}
-                  >
-                    <option value={0}>Nessuno (usa nome libero)</option>
-                    {clients.map((c) => (
-                      <option value={c.id} key={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="row g-2 mt-2">
                 <div className="col-6">
-                  <label className="form-label small text-muted mb-1">Destinatario (nome)</label>
+                  <label className="form-label small text-muted mb-1">Destinatario</label>
                   <input
                     className="form-control"
                     type="text"
@@ -3765,6 +3906,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                     placeholder="Nome"
                     required
                     value={gcRecipientName}
+                    readOnly={gcRecipientIsClient && gcRecipientClientId > 0}
                     onChange={(e) => setGcRecipientName(e.target.value)}
                   />
                 </div>
@@ -3776,6 +3918,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                     id="posGcRecipientEmail"
                     placeholder="Email (opzionale)"
                     value={gcRecipientEmail}
+                    readOnly={gcRecipientIsClient && gcRecipientClientId > 0}
                     onChange={(e) => setGcRecipientEmail(e.target.value)}
                   />
                 </div>
@@ -3783,106 +3926,160 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
 
               <div className="row g-2 mt-2">
                 <div className="col-12">
-                  <label className="form-label small text-muted mb-1">Codice (opzionale)</label>
-                  <input
-                    className="form-control text-uppercase"
-                    type="text"
-                    id="posGcCode"
-                    placeholder="Auto se vuoto (GC-XXXX-XXXX-XXXX)"
-                    maxLength={24}
-                    value={gcCode}
-                    onChange={(e) => setGcCode(e.target.value.toUpperCase())}
-                  />
+                  <div className="form-check">
+                    <input
+                      className="form-check-input"
+                      type="checkbox"
+                      id="posGcRecipientExistingToggle"
+                      checked={gcRecipientIsClient}
+                      onChange={(e) => {
+                        setGcRecipientIsClient(e.target.checked);
+                        if (!e.target.checked) setGcRecipientClientId(0);
+                      }}
+                    />
+                    <label className="form-check-label" htmlFor="posGcRecipientExistingToggle">Destinatario già cliente</label>
+                  </div>
                 </div>
               </div>
+
+              {gcRecipientIsClient ? (
+                <div className="mt-2" id="posGcRecipientExistingBox">
+                  {gcRecipientClientId > 0 ? (
+                    <div className="border rounded p-3 mb-2" id="posGcRecipientSelectedBox">
+                      <div className="d-flex justify-content-between align-items-start">
+                        <div>
+                          <div className="fw-semibold" id="posGcRecipientSelectedName">{clients.find((c) => c.id === gcRecipientClientId)?.name ?? `Cliente #${gcRecipientClientId}`}</div>
+                          <div className="text-muted small" id="posGcRecipientSelectedMeta">ID {gcRecipientClientId}</div>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-outline-danger"
+                          id="posGcRecipientRemoveBtn"
+                          title="Rimuovi destinatario"
+                          onClick={() => setGcRecipientClientId(0)}
+                        >
+                          <i className="bi bi-x-lg" />
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div id="posGcRecipientSearchWrap">
+                      <div className="input-group input-group-sm mb-2">
+                        <span className="input-group-text"><i className="bi bi-search" /></span>
+                        <input
+                          className="form-control"
+                          type="text"
+                          id="posGcRecipientClientSearch"
+                          placeholder="Cerca destinatario..."
+                          value={gcRecipientSearch}
+                          onChange={(e) => setGcRecipientSearch(e.target.value)}
+                        />
+                      </div>
+                      <div className="border rounded pos-scroll-160" id="posGcRecipientClientList">
+                        {clients
+                          .filter((c) => gcRecipientSearch.trim() === "" || c.name.toLowerCase().includes(gcRecipientSearch.trim().toLowerCase()))
+                          .slice(0, 20)
+                          .map((c) => (
+                            <button
+                              type="button"
+                              className="pos-client-row pos-client-row-compact"
+                              key={c.id}
+                              onClick={() => {
+                                setGcRecipientClientId(c.id);
+                                setGcRecipientName(c.name);
+                                setGcRecipientSearch("");
+                              }}
+                            >
+                              <div className="d-flex justify-content-between align-items-start">
+                                <div>
+                                  <div className="fw-semibold">{c.name}</div>
+                                </div>
+                                <div className="small text-muted">ID {c.id}</div>
+                              </div>
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : null}
 
               <div className="row g-2 mt-2">
                 <div className="col-12">
                   <label className="form-label">Voucher (destinatario)</label>
                   <div className="form-check mt-1">
-                    <input
-                      className="form-check-input"
-                      type="checkbox"
-                      id="posGcVoucherHideAmount"
-                      value="1"
-                      checked={gcHideAmount}
-                      onChange={(e) => setGcHideAmount(e.target.checked)}
-                    />
-                    <label className="form-check-label" htmlFor="posGcVoucherHideAmount">
-                      Nascondi importo nel voucher pubblico (QR)
-                    </label>
+                    <input className="form-check-input" type="checkbox" id="posGcVoucherHideAmount" checked={gcHideAmount} onChange={(e) => setGcHideAmount(e.target.checked)} />
+                    <label className="form-check-label" htmlFor="posGcVoucherHideAmount">Nascondi importo nel voucher pubblico (QR)</label>
                   </div>
-                  <div className="form-text">
-                    Se attivo, nel voucher pubblico aperto dal QR/link non verrà mostrato importo e saldo.
-                  </div>
+                  <div className="form-text">Se attivo, nel voucher pubblico aperto dal QR/link non verrà mostrato importo e saldo.</div>
                 </div>
               </div>
 
               <label className="form-label mt-3">Messaggio di dedica</label>
-              <textarea
-                className="form-control"
-                id="posGcMessage"
-                rows={3}
-                placeholder="(opzionale)"
-                value={gcMessage}
-                onChange={(e) => setGcMessage(e.target.value)}
-              ></textarea>
+              <textarea className="form-control" id="posGcMessage" rows={3} placeholder="(opzionale)" value={gcMessage} onChange={(e) => setGcMessage(e.target.value)} />
 
               <label className="form-label mt-3">Nota per il cliente</label>
-              <textarea className="form-control" id="posGcNote" rows={2} placeholder="(opzionale)"></textarea>
+              <textarea className="form-control" id="posGcNote" rows={2} placeholder="(opzionale)" value={gcNote} onChange={(e) => setGcNote(e.target.value)} />
 
               <label className="form-label mt-3">Nota interna</label>
-              <textarea className="form-control" id="posGcInternalNote" rows={2} placeholder="(opzionale)"></textarea>
+              <textarea className="form-control" id="posGcInternalNote" rows={2} placeholder="(opzionale)" value={gcInternalNote} onChange={(e) => setGcInternalNote(e.target.value)} />
 
               <div className="mt-3">
                 <div className="fw-semibold mb-1">Invio email</div>
 
                 <div className="form-check mb-2">
-                  <input className="form-check-input" type="checkbox" id="posGcDoNotSend" value="1" />
-                  <label className="form-check-label" htmlFor="posGcDoNotSend">
-                    Non inviare
-                  </label>
+                  <input className="form-check-input" type="checkbox" id="posGcDoNotSend" checked={gcDoNotSend} onChange={(e) => setGcDoNotSend(e.target.checked)} />
+                  <label className="form-check-label" htmlFor="posGcDoNotSend">Non inviare</label>
                 </div>
 
                 <div className="form-check">
-                  <input className="form-check-input" type="radio" name="giftcard_send_mode" id="posGcSendNow" value="now" defaultChecked required />
+                  <input
+                    className="form-check-input"
+                    type="radio"
+                    name="giftcard_send_mode"
+                    id="posGcSendNow"
+                    checked={gcSendMode === "now"}
+                    disabled={gcDoNotSend}
+                    onChange={() => setGcSendMode("now")}
+                  />
                   <label className="form-check-label" htmlFor="posGcSendNow">
                     Invia subito alla conclusione della vendita
                   </label>
                 </div>
 
                 <div className="form-check mt-2">
-                  <input className="form-check-input" type="radio" name="giftcard_send_mode" id="posGcSendDate" value="date" required />
+                  <input
+                    className="form-check-input"
+                    type="radio"
+                    name="giftcard_send_mode"
+                    id="posGcSendDate"
+                    checked={gcSendMode === "date"}
+                    disabled={gcDoNotSend}
+                    onChange={() => setGcSendMode("date")}
+                  />
                   <label className="form-check-label" htmlFor="posGcSendDate">
                     Invia in data programmata
                   </label>
                 </div>
 
-                <div className="mt-2 d-none" id="posGcSendOnBox">
-                  <label className="form-label">Data invio</label>
-                  <input className="form-control" type="date" id="posGcSendOn" />
-                </div>
+                {!gcDoNotSend && gcSendMode === "date" ? (
+                  <div className="mt-2" id="posGcSendOnBox">
+                    <label className="form-label">Data invio</label>
+                    <input className="form-control" type="date" id="posGcSendOn" value={gcSendOn} onChange={(e) => setGcSendOn(e.target.value)} />
+                  </div>
+                ) : null}
 
                 <div className="form-check mt-3">
-                  <input className="form-check-input" type="checkbox" id="posGcShowAmount" value="1" defaultChecked />
-                  <label className="form-check-label" htmlFor="posGcShowAmount">
-                    Mostra importo e contenuto nella mail
-                  </label>
+                  <input className="form-check-input" type="checkbox" id="posGcShowAmount" checked={gcShowAmount} onChange={(e) => setGcShowAmount(e.target.checked)} />
+                  <label className="form-check-label" htmlFor="posGcShowAmount">Mostra importo e contenuto nella mail</label>
                 </div>
-                <div className="text-muted small">
-                  Se disattivato, nella mail non verrà mostrato l'importo (né i dettagli): il destinatario dovrà recarsi
-                  in negozio per scoprirli.
-                </div>
+                <div className="text-muted small">Se disattivato, nella mail non verrà mostrato l&apos;importo (né i dettagli): il destinatario dovrà recarsi in negozio per scoprirli.</div>
               </div>
             </div>
 
             <div className="modal-footer">
-              <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal">
-                Annulla
-              </button>
-              <button type="button" className="btn btn-primary" id="posGiftcardCreateBtn" onClick={addGiftcardToCart}>
-                Aggiungi alla lista
-              </button>
+              <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal">Annulla</button>
+              <button type="button" className="btn btn-primary" id="posGiftcardCreateBtn" onClick={addGiftcardToCart}>Aggiungi alla lista</button>
             </div>
           </div>
         </div>

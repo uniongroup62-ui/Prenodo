@@ -109,6 +109,16 @@ export type PosSaleItemInput = {
   eventType?: string;
   message?: string;
   hideAmount?: boolean;
+  // GiftCard/GiftBox voucher extra meta (pos.php items[gc_*] / giftbox_* draft):
+  // "Nota interna" (giftcards/giftbox_instances.internal_note), "Invio email"
+  // (sendMode none|now|date + sendOn → scheduled_send_on / invio immediato al
+  // Concludi) e "Mostra importo e contenuto nella mail" (email_show_amount /
+  // email_show_details). La "Nota per il cliente" riusa `note` (comune coi
+  // pacchetti). Ignorati per gli altri tipi riga.
+  internalNote?: string;
+  sendMode?: "none" | "now" | "date";
+  sendOn?: string;
+  showAmount?: boolean;
   // RECHARGE sale meta (faithful to pos.php recharge action + recharge_templates): the
   // top-up the staff configured in the "Ricarica credito" modal. Read only for a
   // type:"recharge" line at checkout (refId = the recharge_templates id, or 0 for a custom
@@ -163,6 +173,12 @@ export type PosSaleItem = {
   eventType?: string;
   message?: string;
   hideAmount?: boolean;
+  // Voucher extra meta legacy: nota interna, invio email (none|now|date + data)
+  // e "Mostra importo e contenuto nella mail".
+  internalNote?: string;
+  sendMode?: "none" | "now" | "date";
+  sendOn?: string;
+  showAmount?: boolean;
   // RECHARGE sale meta carried from the cart to issueRechargeFromSale (base/bonus/total/
   // earn-points). Set on a type:"recharge" line; refId is the recharge_templates id (0 =
   // custom amount). unitPrice/total = baseAmount (the client pays the base); totalAmount =
