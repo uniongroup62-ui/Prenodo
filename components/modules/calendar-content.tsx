@@ -957,19 +957,25 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
     return `/${encodeURIComponent(slug)}/${`${page}`.replace("&", "?")}`;
   }
 
-  // Open/close window (minutes) for a single day-of-week from business hours
-  // (fallback 09:00–19:00 when no rows). Shared by the Day window and the Week
-  // window (which unions this across the 7 day-of-weeks shown).
+  // Open/close window (minutes) for a single day-of-week from business hours.
+  // Fallback legacy (calendar.js getStoreScheduleForDow ~2084-2085): un dow
+  // senza righe usa il MIN/MAX SETTIMANALE (storeWeekMin/MaxTime), e solo in
+  // assenza totale di orari i default 07:00–22:00 (calendar.js:148-149).
   const windowForDow = useCallback(
     (dow: number): { open: number; close: number } => {
-      const todays = businessHours.filter((b) => b.dow === dow && !b.isClosed && b.openTime && b.closeTime);
-      let open = 9 * 60;
-      let close = 19 * 60;
+      const allOpen = businessHours.filter((b) => !b.isClosed && b.openTime && b.closeTime);
+      const weekMin = allOpen.length ? Math.min(...allOpen.map((b) => timeToMin(b.openTime) ?? 7 * 60)) : 7 * 60;
+      const weekMax = allOpen.length
+        ? Math.max(...allOpen.map((b) => timeToMin(b.closeTime2 || b.closeTime) ?? 22 * 60))
+        : 22 * 60;
+      const todays = allOpen.filter((b) => b.dow === dow);
+      let open = weekMin;
+      let close = weekMax;
       if (todays.length) {
-        const opens = todays.map((b) => timeToMin(b.openTime) ?? open);
-        const closes = todays.map((b) => timeToMin(b.closeTime) ?? close);
-        open = Math.min(...opens);
-        close = Math.max(...closes);
+        // Vista Giorno legacy: il bound è la chiusura DI QUEL weekday
+        // (closes2 || closes), non il massimo settimanale.
+        open = Math.min(...todays.map((b) => timeToMin(b.openTime) ?? weekMin));
+        close = Math.max(...todays.map((b) => timeToMin(b.closeTime2 || b.closeTime) ?? weekMax));
       }
       return { open, close };
     },

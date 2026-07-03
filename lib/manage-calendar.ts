@@ -2,6 +2,7 @@ import "server-only";
 
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { listDbAppointments, listDbLocations, listDbServices } from "@/lib/db-repositories";
+import { getManageLocationContext } from "@/lib/manage-locations";
 import { dbExecute, dbQuery, quoteIdentifier, columnExists, tableExists, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
 
 export type ManageCalendarStaff = {
@@ -102,7 +103,14 @@ export async function calendarContext(input: {
   const end = normalizeDate(input.end) || addDays(start, 1);
   await ensureCalendarSchema(input.slug);
 
-  const [staff, staffOrder, locations, services, appointments, notesPayload, businessHours, closures, exceptions] = await Promise.all([
+  // Sede corrente: gli orari/chiusure/eccezioni sono PER SEDE (business_hours.
+  // location_id) — il calendario deve usare le righe della sede attiva, non
+  // l'unione di tutte (una riga globale/di altra sede non aggiornata terrebbe
+  // il calendario sui vecchi orari, es. venerdì fino alle 19 dopo il cambio a 16).
+  const locationContext = await getManageLocationContext(input.slug).catch(() => null);
+  const currentLocationId = Number(locationContext?.currentLocationId ?? 0) || 0;
+
+  const [staff, staffOrder, locations, services, appointments, notesPayload, businessHoursAll, closuresAll, exceptionsAll] = await Promise.all([
     calendarStaff(input.slug),
     getCalendarDayStaffOrder(input.slug, input.userId),
     listDbLocations(input.slug),
@@ -113,6 +121,26 @@ export async function calendarContext(input: {
     listClosures({ slug: input.slug, start, end }),
     listBusinessHourExceptions({ slug: input.slug, start, end }),
   ]);
+
+  // Orari: fallback PER GIORNO sede -> globale, come la query legacy
+  // (calendar.php:171-181 "WHERE location_id IS NULL OR location_id=? ORDER BY
+  // dow ASC, (location_id IS NULL) DESC": la riga della sede sovrascrive la
+  // globale per quel dow; un dow senza riga di sede usa la globale).
+  const byDow = new Map<number, CalendarBusinessHour>();
+  for (const b of businessHoursAll) {
+    if (b.locationId === null || b.locationId === 0) {
+      if (!byDow.has(b.dow)) byDow.set(b.dow, b);
+    }
+  }
+  if (currentLocationId > 0) {
+    for (const b of businessHoursAll) {
+      if (b.locationId === currentLocationId) byDow.set(b.dow, b);
+    }
+  }
+  const businessHours = byDow.size ? [...byDow.values()] : businessHoursAll;
+  // Chiusure/eccezioni: valgono per la sede corrente o globali (NULL).
+  const closures = closuresAll.filter((c) => c.locationId === null || c.locationId === 0 || c.locationId === currentLocationId || currentLocationId <= 0);
+  const exceptions = exceptionsAll.filter((x) => x.locationId === null || x.locationId === 0 || x.locationId === currentLocationId || currentLocationId <= 0);
 
   return {
     date,
