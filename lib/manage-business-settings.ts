@@ -5,6 +5,14 @@ import path from "node:path";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { emptyToNull, parseInteger } from "@/lib/api-utils";
 import {
+  STORAGE_NOT_CONFIGURED_ERROR,
+  deletePublicObject,
+  putPublicObject,
+  storageConfigured,
+  storageKeyFromPublicUrl,
+  tenantStorageKey,
+} from "@/lib/storage";
+import {
   columnExists,
   dbExecute,
   dbQuery,
@@ -237,20 +245,25 @@ export async function uploadBusinessBrandingImage(slug: string, kind: "logo" | "
     throw new Error(kind === "logo" ? "Rimuovi il logo attuale prima di caricarne uno nuovo." : "Rimuovi la copertina attuale prima di caricarne una nuova.");
   }
 
+  // Cloudflare R2 PUBBLICO (come foto staff / immagini prodotto): su Amplify il
+  // filesystem è effimero, quindi il branding vive su R2 e nel DB si salva
+  // l'URL pubblico completo (publicAssetUrl/withOrigin fanno pass-through degli
+  // URL assoluti). I vecchi path /uploads/... restano leggibili finché non
+  // vengono sostituiti.
+  if (!storageConfigured()) throw new Error(STORAGE_NOT_CONFIGURED_ERROR);
   const ext = imageMimeToExt[file.type] ?? "jpg";
-  const publicPath = kind === "logo"
-    ? `/uploads/logo/${businessLogoFileBase(slug, Number(business.id ?? 1))}.${ext}`
-    : `/uploads/tenants/${safeSlug(slug)}/branding/cover.${ext}`;
-  const absPath = path.join(process.cwd(), "public", ...publicPath.split("/").filter(Boolean));
-  await mkdir(path.dirname(absPath), { recursive: true });
-  await removeSiblingImages(publicPath);
-  await writeFile(absPath, Buffer.from(await file.arrayBuffer()));
+  const target = await tenantTable(slug, "businesses");
+  const key = tenantStorageKey(
+    Number(target.tenantId ?? 0),
+    "branding",
+    kind === "logo" ? `logo-${Number(business.id ?? 1)}-${Date.now()}.${ext}` : `cover-${Date.now()}.${ext}`,
+  );
+  const publicPath = await putPublicObject(key, new Uint8Array(await file.arrayBuffer()), file.type);
 
   const values: Record<string, unknown> = kind === "logo"
     ? { logo_path: publicPath, logo_position_x: 50, logo_position_y: 50 }
     : { cover_path: publicPath, cover_position_x: 50, cover_position_y: 50 };
   if (kind === "logo") {
-    const target = await tenantTable(slug, "businesses");
     if (await columnExists(target.name, "logo_blob")) values.logo_blob = null;
     if (await columnExists(target.name, "logo_mime")) values.logo_mime = null;
     if (await columnExists(target.name, "logo_updated_at")) values.logo_updated_at = null;
@@ -265,8 +278,15 @@ export async function deleteBusinessBrandingImage(slug: string, kind: "logo" | "
   const business = await firstBusinessRow(slug);
   if (!business) throw new Error("Business non trovato.");
   const currentPath = String(kind === "logo" ? business.logo_path ?? "" : business.cover_path ?? "");
-  await deletePublicUpload(currentPath);
-  await removeDeterministicBusinessImageFiles(slug, Number(business.id ?? 1), kind);
+  // Nuovi asset su R2 (URL assoluto) -> delete dell'oggetto; path legacy
+  // /uploads/... -> pulizia filesystem come prima.
+  const r2Key = storageKeyFromPublicUrl(currentPath);
+  if (r2Key) {
+    await deletePublicObject(r2Key).catch(() => undefined);
+  } else {
+    await deletePublicUpload(currentPath);
+    await removeDeterministicBusinessImageFiles(slug, Number(business.id ?? 1), kind);
+  }
   const values: Record<string, unknown> = kind === "logo" ? { logo_path: null } : { cover_path: null };
   if (kind === "logo") {
     const target = await tenantTable(slug, "businesses");
@@ -390,14 +410,14 @@ export async function uploadLocationGalleryImages(slug: string, locationId: numb
     if (file.size > 5 * 1024 * 1024) throw new Error("Foto troppo grande (max 5 MB)");
     const ext = galleryMimeToExt[file.type];
     if (!ext) throw new Error("Formato non valido: carica JPG, PNG o WEBP");
+    if (!storageConfigured()) throw new Error(STORAGE_NOT_CONFIGURED_ERROR);
     const stamp = new Date();
     const p = (n: number) => String(n).padStart(2, "0");
     const ymdhis = `${stamp.getFullYear()}${p(stamp.getMonth() + 1)}${p(stamp.getDate())}${p(stamp.getHours())}${p(stamp.getMinutes())}${p(stamp.getSeconds())}`;
     const rand = Math.random().toString(16).slice(2, 10).padEnd(8, "0");
-    const publicPath = `/uploads/tenants/${safeSlug(slug)}/branding/locations/${locationId}/gallery/location_gallery_${ymdhis}_${rand}.${ext}`;
-    const absPath = path.join(process.cwd(), "public", ...publicPath.split("/").filter(Boolean));
-    await mkdir(path.dirname(absPath), { recursive: true });
-    await writeFile(absPath, Buffer.from(await file.arrayBuffer()));
+    // R2 pubblico: nel DB va l'URL completo (i path legacy /uploads restano validi).
+    const key = tenantStorageKey(Number(table.tenantId ?? 0), "branding", `locations-${locationId}-gallery-${ymdhis}_${rand}.${ext}`);
+    const publicPath = await putPublicObject(key, new Uint8Array(await file.arrayBuffer()), file.type);
     const sortRows = await tenantSelect<RowDataPacket>({ slug, table: "location_gallery_images", columns: "COALESCE(MAX(sort_order), 0) AS m", where: "location_id = ?", params: [locationId] }).catch(() => [] as RowDataPacket[]);
     await tenantInsert(table, { location_id: locationId, path: publicPath, sort_order: Number(sortRows[0]?.m ?? 0) + 10, is_active: 1 });
   }
@@ -408,7 +428,10 @@ export async function uploadLocationGalleryImages(slug: string, locationId: numb
 export async function deleteLocationGalleryImage(slug: string, locationId: number, imageId: number, publicOrigin = "") {
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "location_gallery_images", columns: "id, path", where: "id = ? AND location_id = ?", params: [imageId, locationId], limit: 1 }).catch(() => [] as RowDataPacket[]);
   if (!rows[0]) throw new Error("Foto gallery non trovata per questa sede");
-  await deletePublicUpload(String(rows[0].path ?? ""));
+  const storedPath = String(rows[0].path ?? "");
+  const galleryR2Key = storageKeyFromPublicUrl(storedPath);
+  if (galleryR2Key) await deletePublicObject(galleryR2Key).catch(() => undefined);
+  else await deletePublicUpload(storedPath);
   await tenantDelete({ slug, table: "location_gallery_images", id: imageId });
   // Ricompatta il sort_order a passo 10 (normalize_location_gallery_sort_order).
   const remaining = await tenantSelect<RowDataPacket>({ slug, table: "location_gallery_images", columns: "id", where: "location_id = ?", params: [locationId], orderBy: "sort_order ASC, id ASC" }).catch(() => [] as RowDataPacket[]);

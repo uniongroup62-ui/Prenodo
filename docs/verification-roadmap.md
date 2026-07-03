@@ -2105,3 +2105,20 @@ solo SaaS-admin fail-closed + modal per-sede con categorie e sync directory).
 DIFFERITO OLTRE LA CAMPAGNA: barra support-access topbar (getSupportAccess
 stub null); "all locations" mode per-request (app_all_locations_filter_enabled)
 usato dal legacy su alcune liste — il Next filtra per sede corrente di sessione.
+
+## DEPLOY-PREP 1 — BRANDING SU R2 (2026-07-03, 12 test e2e PASS)
+Rimosso l'ultimo consumatore di filesystem locale tra gli upload: logo/cover
+attivita' e gallery sedi ora scrivono su Cloudflare R2 PUBBLICO
+(t{tenant}/branding/...) e nel DB va l'URL pubblico completo — come foto
+staff e immagini prodotto. publicAssetUrl/withOrigin fanno gia' pass-through
+degli URL assoluti, quindi nessun cambiamento ai consumer (profilo, booking
+pubblico, marketplace sync). I vecchi path /uploads/... restano leggibili
+(sono committati nel repo e deployano con l'app); i delete sono R2-aware
+(URL assoluto -> deletePublicObject, path legacy -> unlink filesystem).
+Verificato live: upload logo/cover -> URL R2 raggiungibile (200), guard
+legacy "Rimuovi il logo attuale prima di caricarne uno nuovo.", delete ->
+NULL + oggetto R2 rimosso (404); gallery sede throwaway: upload multiplo
+(sort 10/20), formato invalido rifiutato col messaggio legacy, move up,
+delete con rimozione oggetti. NB parametri route: gallery_image_id (non
+image_id). Con questo NESSUN upload dipende piu' dal filesystem: il deploy
+Amplify (filesystem effimero) e' sbloccato lato storage.
