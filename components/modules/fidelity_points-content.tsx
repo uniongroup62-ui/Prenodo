@@ -180,7 +180,7 @@ export function FidelityPointsContent({ slug: slugProp }: { slug?: string } = {}
       {/* Banner legacy: SOLO quando i punti sono attivi ma nessuna campagna è
           attiva oggi (fidelity_points.php:3019). */}
       {pointsEnabled && stats && !stats.activeCampaignToday ? (
-        <div className="alert alert-info d-flex align-items-start gap-2">
+        <div className="alert alert-warning d-flex align-items-start gap-2">
           <div>
             <i className="bi bi-info-circle" />
           </div>
@@ -198,8 +198,6 @@ export function FidelityPointsContent({ slug: slugProp }: { slug?: string } = {}
           <div className="bs-page-subtitle">Gestisci punti, livelli e campagne Fidelity.</div>
         </div>
       </div>
-
-      <FidelityCampaignsSection slug={slug} />
 
       <div className="row g-3">
         <div className="col-lg-7">
@@ -373,6 +371,12 @@ export function FidelityPointsContent({ slug: slugProp }: { slug?: string } = {}
           {/* Editor Livelli Card INLINE come il legacy (fidelity_points.php
               #livelli-card): stesso componente della pagina dedicata, embedded. */}
           <FidelityLevelsContent slug={slug} embedded />
+
+          {/* Ordine colonna sinistra legacy: Impostazioni -> Livelli Card ->
+              Campagne punti (Card C, dentro col-lg-7 — non a tutta larghezza). */}
+          <div className="mt-3">
+            <FidelityCampaignsSection slug={slug} />
+          </div>
         </div>
 
         <div className="col-lg-5 ">

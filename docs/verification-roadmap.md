@@ -2284,3 +2284,12 @@ con ?new_campaign=1):
 Verifica: tutti i 15 marker verbatim presenti nel bundle della pagina.
 Restano window.confirm SOLO nei flussi livelli (threshold/delete cascade),
 gia' documentati.
+
+## PUNTI — FIX LAYOUT DA CONFRONTO SCREENSHOT (2026-07-03, segnalazione utente)
+Confronto side-by-side PHP live vs Next: (1) ORDINE SEZIONI — nel legacy la
+colonna sinistra e' Impostazioni -> Livelli Card -> Campagne punti (tutte in
+col-lg-7); il Next aveva le Campagne punti SOPRA a tutto e a tutta larghezza
+-> spostate in fondo alla colonna sinistra come Card C legacy. (2) Il banner
+"Punti Fidelity attivi, ma nessuna campagna..." nel PHP live e' GIALLO
+(alert-warning), non alert-info -> ripristinato alert-warning (la conferma
+visiva dello screenshot batte la classificazione dell'audit sorgente).
