@@ -1740,3 +1740,48 @@ RESIDUO documentato: vista SETTIMANA della pagina Disponibilita' (griglia
 il toggle Settimana esiste ma usa lo stesso layout. Vincoli di modifica
 sedi/disattivazione con servizio-scoperto per sede (messaggi con nome
 servizio/sede) coperti in forma semplificata da ensureStaffCanDeactivate.
+
+## V4 CABINE + RISORSE — CHIUSA (2026-07-03, 14 test PASS)
+Confronto con cabins.php (626 righe) + resources.php (859) + il motore
+condiviso di Helpers.php/booking.php. STATO TROVATO: cabine gia' portate
+(bulk per sede con anti-bypass blockingServices, soft delete is_active=0,
+blocker = service_cabins + services.cabin_id + appuntamenti futuri; vincolo
+cabina sugli slot gia' attivo); risorse col server CRUD fedele ma UI
+display-only con shape sbagliata E — gap sostanziale — NESSUN vincolo
+risorse su slot e salvataggio. PORTATO:
+- MOTORE RISORSE (nuovo, lib/public-booking-db sharedResourcesContext —
+  port di shared_resources_requirements_by_service:12299 + totali per sede
+  via resource_locations (qty 0 se is_enabled!=1, fallback qty_total) +
+  shared_resources_blocks_for_range:12492 + PEAK sweep-line per finestra):
+  gli slot cadono quando peak+unita' richieste > totale sede
+  (shared_resources_filter_slots:13705) e il SALVATAGGIO rilancia i messaggi
+  legacy (ensure_shared_resources_available_for_sequence:13804): 'Orario non
+  più disponibile: risorsa "X" non disponibile.' / '... esaurita (richieste
+  N, disponibili M).'. Integrato in publicBookingSlots (accanto al filtro
+  cabine) e in createDbAppointment (dopo assertAppointmentSlotAvailable).
+  Verificato live: con qty sede 2, due appuntamenti sovrapposti passano, il
+  terzo cade col messaggio esatto, uno slot non sovrapposto passa.
+- PEAK-GUARD riduzione quantita' (resources_resource_peak_usage:278-314):
+  la riduzione e' bloccata anche quando le prenotazioni future usano piu'
+  unita' contemporanee del nuovo limite ("Quantita non aggiornata:
+  prenotazioni esistenti oltre il nuovo limite.") oltre al vincolo servizi
+  gia' presente (messaggi sede/globale legacy).
+- UI RISORSE riscritta (era lista display-only con campi inesistenti):
+  lista Nome | Sedi/Quantita' | Descrizione | Azioni, form Nuova/Modifica
+  nella stessa pagina (name, description, qty_total, per-sede Attiva +
+  Quantita' sede), delete con popup bloccante legacy sui servizi collegati
+  + confirm "Eliminare questa risorsa?", messaggi "Risorsa creata/
+  aggiornata/eliminata".
+- MESSAGGI allineati: "Nome risorsa obbligatorio" (senza punto), "Risorsa
+  non eliminata: è associata a uno o più servizi." (accenti come il file
+  legacy), "Quantita non aggiornata: risorsa ancora utilizzata nei servizi
+  della sede.".
+- TEST (14 PASS, cleanup CLEAN): validazioni, creazione con qty sede,
+  capacita' concorrente (2 ok / 3o rifiutato / slot libero ok — con 3
+  cabine temporanee per isolare il vincolo risorse da quello cabine),
+  peak-guard su riduzione, vincolo servizi, delete bloccata/fisica completa,
+  cabine bulk add + soft delete.
+NON-GAP: bug legacy del filtro "Tutte le sedi" (variabile usata prima della
+definizione, sempre disattivo) NON replicato; hold/lock di concorrenza sul
+salvataggio risorse (shared_resources_acquire_resource_locks) demandato al
+check transazionale del save.

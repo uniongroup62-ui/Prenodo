@@ -2,7 +2,7 @@ import "server-only";
 
 import { randomBytes } from "crypto";
 import type { RowDataPacket } from "@/lib/tenant-db";
-import { columnExists, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
+import { columnExists, dbQuery, quoteIdentifier, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
 
 export type PublicBookingBusiness = {
   name: string;
@@ -210,6 +210,199 @@ export async function publicBookingContext(slug: string): Promise<PublicBookingC
   };
 }
 
+// ============================================================================
+// RISORSE CONDIVISE (V4) — port del vincolo di capacità concorrente legacy:
+// shared_resources_requirements_by_service (Helpers.php:12299), totali per sede
+// via resource_locations (app_resource_location_qty, 0 se is_enabled!=1,
+// fallback resources.qty_total), blocchi occupati [start,end,units] dagli
+// appuntamenti pending/scheduled del giorno (shared_resources_blocks_for_range
+// ~12492) e PEAK sweep-line per finestra (shared_resources_peak_used_for_
+// segment): uno slot cade se peak+need > totale (filter ~13705-13795); al
+// salvataggio la stessa verifica LANCIA i messaggi legacy (ensure_..._for_
+// sequence ~13804-13884).
+// ============================================================================
+
+type ResourceRequirement = { resourceId: number; qtyRequired: number; resourceName: string };
+
+async function sharedResourceRequirementsByService(slug: string, serviceIds: number[]): Promise<Map<number, ResourceRequirement[]>> {
+  const map = new Map<number, ResourceRequirement[]>();
+  if (!serviceIds.length) return map;
+  try {
+    const srTable = await tenantTable(slug, "service_resources");
+    const resTable = await tenantTable(slug, "resources");
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT sr.service_id, sr.resource_id, COALESCE(sr.qty_required, 1) AS qty_required, r.name AS resource_name
+         FROM ${quoteIdentifier(srTable.name)} sr
+         JOIN ${quoteIdentifier(resTable.name)} r ON r.id = sr.resource_id AND r.tenant_id = sr.tenant_id
+        WHERE sr.tenant_id = ? AND sr.service_id IN (${serviceIds.map(() => "?").join(",")})`,
+      [srTable.tenantId ?? 0, ...serviceIds],
+    );
+    for (const r of rows) {
+      const sid = Number(r.service_id ?? 0);
+      const list = map.get(sid) ?? [];
+      list.push({ resourceId: Number(r.resource_id ?? 0), qtyRequired: Math.max(1, Number(r.qty_required ?? 1) || 1), resourceName: String(r.resource_name ?? "") });
+      map.set(sid, list);
+    }
+  } catch { /* tabella assente: nessun vincolo */ }
+  return map;
+}
+
+// Totale disponibile per risorsa nella sede (resource_locations.qty_total se
+// is_enabled=1 e la riga sede esiste; altrimenti fallback resources.qty_total).
+async function sharedResourceTotals(slug: string, resourceIds: number[], locationId: number | null): Promise<Map<number, number>> {
+  const totals = new Map<number, number>();
+  if (!resourceIds.length) return totals;
+  const resTable = await tenantTable(slug, "resources");
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT id, COALESCE(qty_total, 0) AS qty_total FROM ${quoteIdentifier(resTable.name)} WHERE tenant_id = ? AND id IN (${resourceIds.map(() => "?").join(",")})`,
+    [resTable.tenantId ?? 0, ...resourceIds],
+  ).catch(() => [] as RowDataPacket[]);
+  for (const r of rows) totals.set(Number(r.id), Math.max(0, Number(r.qty_total ?? 0) || 0));
+  if (locationId && locationId > 0) {
+    try {
+      const rlTable = await tenantTable(slug, "resource_locations");
+      const locRows = await dbQuery<RowDataPacket[]>(
+        `SELECT resource_id, COALESCE(qty_total, 0) AS qty_total, COALESCE(is_enabled, 1) AS is_enabled
+           FROM ${quoteIdentifier(rlTable.name)} WHERE tenant_id = ? AND location_id = ? AND resource_id IN (${resourceIds.map(() => "?").join(",")})`,
+        [rlTable.tenantId ?? 0, locationId, ...resourceIds],
+      );
+      for (const r of locRows) {
+        totals.set(Number(r.resource_id), Number(r.is_enabled) === 1 ? Math.max(0, Number(r.qty_total ?? 0) || 0) : 0);
+      }
+    } catch { /* tabella assente: resta il fallback */ }
+  }
+  return totals;
+}
+
+type ResourceBlock = { start: number; end: number; units: number };
+
+// Blocchi occupati per risorsa nel giorno: righe servizio degli appuntamenti
+// pending/scheduled i cui servizi richiedono le risorse date. La finestra è il
+// segmento del servizio quando esiste, altrimenti l'intero appuntamento.
+async function sharedResourceBlocksForDate(
+  slug: string,
+  resourceIds: number[],
+  date: string,
+  excludeAppointmentId: number | null,
+): Promise<Map<number, ResourceBlock[]>> {
+  const blocks = new Map<number, ResourceBlock[]>();
+  if (!resourceIds.length) return blocks;
+  try {
+    const apptTable = await tenantTable(slug, "appointments");
+    const asTable = await tenantTable(slug, "appointment_services");
+    const srTable = await tenantTable(slug, "service_resources");
+    const segTable = await tenantTable(slug, "appointment_segments").catch(() => null);
+    const segJoin = segTable
+      ? `LEFT JOIN ${quoteIdentifier(segTable.name)} sg ON sg.appointment_id = a.id AND sg.tenant_id = a.tenant_id AND sg.service_id = sv.service_id`
+      : "";
+    const segCols = segTable ? ", sg.starts_at AS seg_start, sg.ends_at AS seg_end" : ", NULL AS seg_start, NULL AS seg_end";
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT a.id, a.starts_at, a.ends_at, sr.resource_id, COALESCE(sr.qty_required, 1) AS units${segCols}
+         FROM ${quoteIdentifier(apptTable.name)} a
+         JOIN ${quoteIdentifier(asTable.name)} sv ON sv.appointment_id = a.id AND sv.tenant_id = a.tenant_id
+         JOIN ${quoteIdentifier(srTable.name)} sr ON sr.service_id = sv.service_id AND sr.tenant_id = a.tenant_id
+         ${segJoin}
+        WHERE a.tenant_id = ? AND a.starts_at::date = ?
+          AND LOWER(TRIM(COALESCE(a.status,''))) IN ('pending','scheduled')
+          AND sr.resource_id IN (${resourceIds.map(() => "?").join(",")})
+          ${excludeAppointmentId ? "AND a.id <> ?" : ""}`,
+      excludeAppointmentId
+        ? [apptTable.tenantId ?? 0, date, ...resourceIds, excludeAppointmentId]
+        : [apptTable.tenantId ?? 0, date, ...resourceIds],
+    );
+    const toMin = (v: unknown): number | null => {
+      const s = v instanceof Date
+        ? `${String(v.getHours()).padStart(2, "0")}:${String(v.getMinutes()).padStart(2, "0")}`
+        : String(v ?? "").replace("T", " ").slice(11, 16);
+      return timeToMinutes(s);
+    };
+    for (const r of rows) {
+      const start = toMin(r.seg_start) ?? toMin(r.starts_at);
+      const end = toMin(r.seg_end) ?? toMin(r.ends_at);
+      if (start === null || end === null || end <= start) continue;
+      const rid = Number(r.resource_id ?? 0);
+      const list = blocks.get(rid) ?? [];
+      list.push({ start, end, units: Math.max(1, Number(r.units ?? 1) || 1) });
+      blocks.set(rid, list);
+    }
+  } catch { /* tabelle assenti */ }
+  return blocks;
+}
+
+// Picco di unità usate della risorsa dentro [start,end) — sweep sugli estremi.
+function resourcePeakInWindow(blocks: ResourceBlock[], start: number, end: number): number {
+  const overlapping = blocks.filter((b) => b.start < end && b.end > start);
+  if (!overlapping.length) return 0;
+  const points = [...new Set(overlapping.flatMap((b) => [Math.max(b.start, start), Math.min(b.end, end)]))];
+  let peak = 0;
+  for (const p of points) {
+    const used = overlapping.filter((b) => b.start <= p && b.end > p).reduce((s, b) => s + b.units, 0);
+    peak = Math.max(peak, used);
+  }
+  return peak;
+}
+
+// Contesto risorse per una sequenza di servizi: prepara requisiti/totali/blocchi
+// una volta e ritorna il checker per-slot (per il filtro) e l'assert (per il save).
+export async function sharedResourcesContext(
+  slug: string,
+  services: Array<{ id: number; durationMin: number }>,
+  locationId: number | null,
+  date: string,
+  excludeAppointmentId: number | null = null,
+): Promise<{
+  hasRequirements: boolean;
+  slotFree: (startMin: number) => boolean;
+  assertAvailable: (startMin: number) => void;
+}> {
+  const serviceIds = services.map((s) => s.id).filter((n) => n > 0);
+  const reqs = await sharedResourceRequirementsByService(slug, serviceIds);
+  const allResourceIds = [...new Set([...reqs.values()].flat().map((r) => r.resourceId))];
+  if (!allResourceIds.length) {
+    return { hasRequirements: false, slotFree: () => true, assertAvailable: () => undefined };
+  }
+  const totals = await sharedResourceTotals(slug, allResourceIds, locationId);
+  const blocks = await sharedResourceBlocksForDate(slug, allResourceIds, date, excludeAppointmentId);
+
+  // Finestre sequenziali per servizio (come il filtro cabine).
+  const windows: Array<{ offset: number; duration: number; reqs: ResourceRequirement[] }> = [];
+  let offset = 0;
+  for (const service of services) {
+    const dur = Math.max(5, service.durationMin);
+    const serviceReqs = reqs.get(service.id) ?? [];
+    if (serviceReqs.length) windows.push({ offset, duration: dur, reqs: serviceReqs });
+    offset += dur;
+  }
+
+  const evaluate = (startMin: number): { ok: boolean; resourceName: string; need: number; available: number; exhausted: boolean } => {
+    for (const win of windows) {
+      const segStart = startMin + win.offset;
+      const segEnd = segStart + win.duration;
+      for (const req of win.reqs) {
+        const total = totals.get(req.resourceId) ?? 0;
+        if (total <= 0) return { ok: false, resourceName: req.resourceName, need: req.qtyRequired, available: 0, exhausted: true };
+        const peak = resourcePeakInWindow(blocks.get(req.resourceId) ?? [], segStart, segEnd);
+        if (peak + req.qtyRequired > total) {
+          return { ok: false, resourceName: req.resourceName, need: req.qtyRequired, available: Math.max(0, total - peak), exhausted: false };
+        }
+      }
+    }
+    return { ok: true, resourceName: "", need: 0, available: 0, exhausted: false };
+  };
+
+  return {
+    hasRequirements: true,
+    slotFree: (startMin) => evaluate(startMin).ok,
+    assertAvailable: (startMin) => {
+      const res = evaluate(startMin);
+      if (res.ok) return;
+      // Messaggi legacy (Helpers.php:13865 / 13876).
+      if (res.exhausted) throw new Error(`Orario non più disponibile: risorsa "${res.resourceName}" non disponibile.`);
+      throw new Error(`Orario non più disponibile: risorsa "${res.resourceName}" esaurita (richieste ${res.need}, disponibili ${res.available}).`);
+    },
+  };
+}
+
 export async function publicBookingSlots({
   slug,
   date,
@@ -270,6 +463,17 @@ export async function publicBookingSlots({
       return !busyCabins.some((busy) => busy.cabinId === cabinId && busy.start < segEnd && busy.end > segStart);
     });
 
+  // RISORSE CONDIVISE (V4, port di shared_resources_filter_slots): uno slot
+  // cade se il picco d'uso concorrente + le unità richieste supera il totale
+  // della sede per una risorsa di un servizio della sequenza.
+  const resourcesCtx = await sharedResourcesContext(
+    slug,
+    services.map((s) => ({ id: Number(s.id ?? 0), durationMin: Math.max(5, Number(s.duration_min ?? 30)) })),
+    locationId ?? null,
+    normalizedDate,
+    excludeAppointmentId,
+  ).catch(() => ({ hasRequirements: false, slotFree: () => true, assertAvailable: () => undefined }));
+
   const slots: PublicBookingSlot[] = [];
   const minStart = minimumStartForDate(normalizedDate);
 
@@ -279,7 +483,7 @@ export async function publicBookingSlots({
       const free = candidates.find((candidate) =>
         candidateFree(candidate, start, start + duration, locationId ?? null, busyRanges),
       );
-      const available = Boolean(free) && cabinFree(start);
+      const available = Boolean(free) && cabinFree(start) && resourcesCtx.slotFree(start);
       slots.push({
         time: minutesToTime(start),
         available,

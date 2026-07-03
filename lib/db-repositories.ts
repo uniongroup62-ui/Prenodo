@@ -62,7 +62,7 @@ import {
 } from "@/lib/fidelity-lots";
 import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
 import { giftPersistGlobalResetMarker, giftRecalcClient, giftRollbackAppointmentSelection } from "@/lib/gifts-engine";
-import { assertAppointmentSlotAvailable, busyCabinRangesForDate, busyRangesForDate, staffTimeoffReasonForRange, type AppointmentSlotSegment, type CabinBusyRange } from "@/lib/public-booking-db";
+import { assertAppointmentSlotAvailable, busyCabinRangesForDate, busyRangesForDate, sharedResourcesContext, staffTimeoffReasonForRange, type AppointmentSlotSegment, type CabinBusyRange } from "@/lib/public-booking-db";
 
 export async function listDbLocations(slug: string): Promise<Location[]> {
   const table = await tenantTable(slug, "locations");
@@ -2183,6 +2183,24 @@ export async function createDbAppointment({
     segments: plan.segments.map((seg) => ({ staffId: seg.staffId, startsAt: seg.startsAt, endsAt: seg.endsAt, locationId, cabinId: seg.cabinId })),
     excludeHoldToken: token || null,
   });
+  // RISORSE CONDIVISE (V4, port di ensure_shared_resources_available_for_sequence):
+  // la capacità concorrente delle risorse dei servizi viene ricontrollata al
+  // salvataggio con i messaggi legacy ("Orario non più disponibile: risorsa ...").
+  {
+    const hhmm = String(plan.segments[0]?.startsAt ?? "").replace("T", " ").slice(11, 16);
+    const m = /^(\d{2}):(\d{2})$/.exec(hhmm);
+    const firstStart = m ? Number(m[1]) * 60 + Number(m[2]) : null;
+    if (firstStart !== null) {
+      const ctx = await sharedResourcesContext(
+        slug,
+        plan.services.map((service) => ({ id: Number(service.id ?? 0), durationMin: Math.max(5, Number(service.duration_min ?? 30)) })),
+        locationId ?? null,
+        date,
+        null,
+      ).catch(() => ({ hasRequirements: false, slotFree: () => true, assertAvailable: () => undefined }));
+      ctx.assertAvailable(firstStart);
+    }
+  }
   const appointments = await tenantTable(slug, "appointments");
   // Respect the requested status (normalized to the legacy code), default pending,
   // and generate a unique 5-digit booking code like the legacy ensure_unique_public_code.

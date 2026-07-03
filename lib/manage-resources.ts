@@ -174,7 +174,7 @@ export async function saveSharedResource(slug: string, body: Record<string, stri
   const description = cleanText(body.description ?? "", 5000);
   let qtyTotal = clampInt(body.qty_total ?? body.qtyTotal, 0, 1_000_000);
   const locations = parseJsonArray<Partial<SharedResourceLocation>>(body.locations_json ?? body.locations ?? "[]");
-  if (!name) throw new Error("Nome risorsa obbligatorio.");
+  if (!name) throw new Error("Nome risorsa obbligatorio");
 
   if (locations.length) {
     const enabledQty = locations.filter((item) => truthy(item.isEnabled)).map((item) => clampInt(item.qtyTotal, 0, 1_000_000));
@@ -200,7 +200,7 @@ export async function deleteSharedResource(slug: string, id: number): Promise<vo
   const resourceId = Math.max(0, Number(id) || 0);
   if (!resourceId) throw new Error("Risorsa non valida.");
   const linked = await resourceServiceLinks(slug, [resourceId]);
-  if ((linked.get(resourceId) ?? []).length) throw new Error("Risorsa non eliminata: e associata a uno o piu servizi.");
+  if ((linked.get(resourceId) ?? []).length) throw new Error("Risorsa non eliminata: è associata a uno o più servizi.");
   await deleteByOwner(slug, "resource_locations", "resource_id", resourceId);
   await deleteByOwner(slug, "service_resources", "resource_id", resourceId);
   await tenantDelete({ slug, table: "resources", id: resourceId });
@@ -1125,11 +1125,54 @@ async function saveResourceLocations(slug: string, resourceId: number, configs: 
 async function ensureResourceQtyCanChange(slug: string, resourceId: number, qtyTotal: number, configs: Array<Partial<SharedResourceLocation>>): Promise<void> {
   const links = await resourceServiceLinks(slug, [resourceId]);
   const maxRequired = Math.max(0, ...(links.get(resourceId) ?? []).map((link) => Number(link.qtyRequired ?? 1)));
-  if (qtyTotal < maxRequired) throw new Error("Quantita non aggiornata: risorsa ancora utilizzata nei servizi.");
+  if (qtyTotal < maxRequired) throw new Error("Quantità non aggiornata: risorsa ancora utilizzata nei servizi.");
   for (const config of configs) {
     if (!truthy(config.isEnabled)) continue;
     const qty = clampInt(config.qtyTotal, 0, 1_000_000);
-    if (qty < maxRequired) throw new Error("Quantita sede non aggiornata: risorsa ancora utilizzata nei servizi.");
+    if (qty < maxRequired) throw new Error("Quantita non aggiornata: risorsa ancora utilizzata nei servizi della sede.");
+  }
+  // PEAK-GUARD legacy (resources_resource_peak_usage ~278-314): la riduzione è
+  // bloccata anche quando le prenotazioni FUTURE già presenti usano più unità
+  // contemporanee del nuovo limite.
+  const peak = await resourceFuturePeakUsage(slug, resourceId);
+  if (qtyTotal < peak) throw new Error("Quantita non aggiornata: prenotazioni esistenti oltre il nuovo limite.");
+  for (const config of configs) {
+    if (!truthy(config.isEnabled)) continue;
+    if (clampInt(config.qtyTotal, 0, 1_000_000) < peak) throw new Error("Quantita non aggiornata: prenotazioni esistenti oltre il nuovo limite.");
+  }
+}
+
+// Picco di unità concorrenti usate dalla risorsa negli appuntamenti futuri
+// pending/scheduled (righe servizio dei servizi che la richiedono).
+async function resourceFuturePeakUsage(slug: string, resourceId: number): Promise<number> {
+  try {
+    const apptTable = await tenantTable(slug, "appointments");
+    const asTable = await tenantTable(slug, "appointment_services");
+    const srTable = await tenantTable(slug, "service_resources");
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT a.starts_at, a.ends_at, COALESCE(sr.qty_required, 1) AS units
+         FROM ${quoteIdentifier(apptTable.name)} a
+         JOIN ${quoteIdentifier(asTable.name)} sv ON sv.appointment_id = a.id AND sv.tenant_id = a.tenant_id
+         JOIN ${quoteIdentifier(srTable.name)} sr ON sr.service_id = sv.service_id AND sr.tenant_id = a.tenant_id
+        WHERE a.tenant_id = ? AND sr.resource_id = ? AND a.ends_at >= NOW()
+          AND LOWER(TRIM(COALESCE(a.status,''))) IN ('pending','scheduled')`,
+      [apptTable.tenantId ?? 0, resourceId],
+    );
+    const blocks = rows
+      .map((r) => ({
+        start: new Date(dateTimeString(r.starts_at).replace(" ", "T")).getTime(),
+        end: new Date(dateTimeString(r.ends_at).replace(" ", "T")).getTime(),
+        units: Math.max(1, Number(r.units ?? 1) || 1),
+      }))
+      .filter((b) => Number.isFinite(b.start) && Number.isFinite(b.end) && b.end > b.start);
+    let peak = 0;
+    for (const b of blocks) {
+      const used = blocks.filter((x) => x.start <= b.start && x.end > b.start).reduce((s, x) => s + x.units, 0);
+      peak = Math.max(peak, used);
+    }
+    return peak;
+  } catch {
+    return 0;
   }
 }
 
