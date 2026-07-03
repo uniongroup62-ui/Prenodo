@@ -2530,3 +2530,56 @@ guest esplicitamente rimosso — booking.php 2940/7307/9313); il Next consente
 la prenotazione guest con auto-link dell'account per email
 (upsertPublicCustomerFromBooking), coi benefici cliente comunque gated sulla
 sessione. Da decidere prima del deploy se riprodurre il gate legacy.
+
+## GIFTBOX/GIFTCARD — DETTAGLI COME PHP + FIX VOUCHER (2026-07-03, segnalazione utente)
+Confronto screenshot PHP live (edit_instance id=3) vs Next: i dettagli erano
+UI semplificate e il bottone Voucher non funzionava. RISCRITTI ENTRAMBI I
+DETTAGLI sul layout legacy, con nuovo modulo lib/gift-issue-details.ts:
+1. DETTAGLIO ISTANZA GIFTBOX (giftbox.php edit_instance): card riepilogo
+   (Codice+badge, Evento, Emessa il, Inizio validita, Scadenza con matita ->
+   modale "Modifica scadenza GiftBox" con validazioni verbatim, Riscatto
+   "X / Y utilizzati · Z disponibili" + badge PARZIALE + "in sospeso su
+   prenotazioni", Contenuto regalo); form "Dati GiftBox" (Mittente select con
+   "Seleziona un cliente", Evento con i 12 template legacy, Sede emissione
+   readonly + help verbatim, "Nascondi importo nel voucher pubblico (QR)",
+   Destinatario + "Destinatario già cliente" con ricerca e alert-info
+   verbatim, Nota per il cliente, Messaggio di dedica); card "Invio email al
+   destinatario" (send_email con "Mostra contenuto nella mail", Ultimo invio,
+   Invio programmato); card "Riscatta GiftBox (anche parziale)" con tabella
+   Elemento|Tot|Usati|Da riscattare, badge esaurito/in sospeso, "Seleziona
+   tutti i rimanenti"/"Svuota selezione", confirm "Registrare il riscatto
+   selezionato?", messaggi "Riscatto registrato (parziale)"/"GiftBox
+   riscattata completamente"; card "Nota interna"; colonna dx "Movimenti"
+   virtuali legacy (Data|Tipo|Quantita|Servizio/Prodotto|Sede|Nota|Operatore:
+   issue/redeem/pending/cancel/expire con note "Emissione GiftBox",
+   "In sospeso su prenotazione #X" ecc.). Header legacy [Lista GiftBox]
+   [Dettagli vendita][Voucher][Impostazioni][Crea GiftBox]. NOTA PARITA': il
+   legacy NON ha "Annulla GiftBox" in questa vista -> bottone rimosso (l'API
+   cancel resta per i flussi POS).
+2. DETTAGLIO GIFTCARD (giftcard.php edit): card riepilogo (Importo iniziale,
+   Saldo, Emessa il, Scadenza+matita, Evento, Sede emissione, Voucher
+   "Importo nascosto/visibile", Contenuto regalo con residui, Messaggio di
+   dedica); alert readonly "GiftCard annullata: dati, note, invii email e
+   operazioni non sono modificabili."; form "Dati GiftCard" ("Seleziona un
+   mittente."); "Invio email" con "Mostra importo e contenuto nella mail";
+   "Operazioni" con "Riscatta (scala credito)" + riscatto per-item
+   ("Segna come utilizzato", giftcard_items.redeemed_qty, messaggi verbatim
+   "Voce non trovata."/"Quantità eccede il residuo"); "Nota interna";
+   Movimenti con Sede e Operatore dal ledger.
+3. NUOVE AZIONI API: giftbox update_instance esteso (mittente/evento/hide/
+   dedica), update_instance_expiry, redeem_instance_partial (giftbox_
+   redemptions + redemption_items per-item, flip a redeemed quando tutto
+   consumato), update_instance_internal_note, send_email; giftcard update
+   esteso, update_expiry (+ledger expiry_change, riattivazione da scaduta),
+   update_internal_note, redeem_item, send_email. Email con template moderno
+   (SES-gated: "Invio email non disponibile" senza SES).
+4. FIX BOTTONE VOUCHER: token voucher_public_token BACKFILLATO lazy quando
+   mancante (64 hex generato e persistito alla lettura del dettaglio) e
+   bottoni/link puntati su /slug/gift*_voucher?public=1&embed=1&token= —
+   verificato end-to-end (pagina 200 + API pubblica risolve il token nel
+   codice) per entrambi.
+Verifica: 64/64 marker verbatim nel bundle dei due dettagli; battery e2e
+33/33 (istanza creata via pg su template throwaway: detail Full, eventi=12,
+validazioni verbatim su dati/scadenza/riscatto, parziale 1/3 -> PARZIALE ->
+completamento, contatori per-item, movimenti con operatore, giftcard update/
+expiry/redeem/nota, voucher pubblici; cleanup CLEAN).

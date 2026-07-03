@@ -2,7 +2,6 @@ import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import {
   cancelManageGiftBoxInstance,
   deleteManageGiftBoxTemplate,
-  getManageGiftBoxInstance,
   getManageGiftBoxTemplate,
   giftFormCatalog,
   issueDbGiftBox,
@@ -13,8 +12,8 @@ import {
   redeemDbGiftBox,
   redeemManageGiftBoxInstanceFull,
   saveManageGiftBoxTemplate,
-  updateManageGiftBoxInstance,
 } from "@/lib/db-repositories";
+import { GIFT_EVENT_OPTIONS, getGiftBoxInstanceFull, redeemGiftBoxInstancePartial, sendGiftBoxInstanceEmail, updateGiftBoxInstanceData, updateGiftBoxInstanceExpiry, updateGiftBoxInstanceInternalNote } from "@/lib/gift-issue-details";
 import { currentManageSession } from "@/lib/manage-auth";
 import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -58,13 +57,13 @@ export async function GET(request: Request) {
       return Response.json({ ok: true, source: "giftbox?action=get", sourceMode: "database", template });
     }
 
-    // Instance DETAIL (tab=instances action=view/edit_instance): header + items +
-    // redeemed/residual units + linked sale + redeem/cancel eligibility.
+    // Instance DETAIL (tab=instances action=view/edit_instance): vista legacy
+    // completa (riepilogo, dati, riscatto per-item, movimenti con sede/operatore).
     if (action === "view" || action === "edit_instance") {
-      const detail = await getManageGiftBoxInstance(tenantSlug, parseInteger(url.searchParams.get("id"), 0));
+      const detail = await getGiftBoxInstanceFull(tenantSlug, parseInteger(url.searchParams.get("id"), 0));
       if (!detail) return jsonError("GiftBox non trovata.", 404);
       const clients = (await listDbClients({ slug: tenantSlug })).map((c) => ({ id: c.id, name: c.name }));
-      return Response.json({ ok: true, sourceMode: "database", detail, clients });
+      return Response.json({ ok: true, sourceMode: "database", detail, clients, events: GIFT_EVENT_OPTIONS });
     }
 
     // Lista MANAGE legacy (giftbox.php tab=instances): righe con Mittente/Sede/
@@ -136,29 +135,88 @@ export async function POST(request: Request) {
     if (action === "redeem_full" || action === "redeem_instance") {
       const id = parseInteger(body.instance_id ?? body.id, 0);
       await redeemManageGiftBoxInstanceFull(tenantSlug, id, session.user.id);
-      const detail = await getManageGiftBoxInstance(tenantSlug, id);
+      const detail = await getGiftBoxInstanceFull(tenantSlug, id);
       return Response.json({ ok: true, source: "giftbox?action=redeem_full", sourceMode: "database", detail });
     }
 
-    // Update an instance's recipient/note/expiry (port of update_instance).
+    // "Dati GiftBox" (port of _mode=update_instance): mittente/evento/nascondi
+    // importo/destinatario/nota/dedica.
     if (action === "update_instance") {
       const id = parseInteger(body.instance_id ?? body.id, 0);
-      await updateManageGiftBoxInstance(tenantSlug, id, {
+      const result = await updateGiftBoxInstanceData(tenantSlug, id, {
+        senderClientId: parseInteger(body.client_id, 0),
+        eventType: body.event_type,
+        voucherHideAmount: ["1", "true", "on", "yes"].includes(String(body.voucher_hide_amount ?? "").toLowerCase()),
         recipientClientId: parseInteger(body.recipient_client_id, 0),
         recipientName: body.recipient_name,
         recipientEmail: body.recipient_email,
         note: body.note,
-        expiresAt: body.expires_at,
+        giftMessage: body.gift_message,
       });
-      const detail = await getManageGiftBoxInstance(tenantSlug, id);
-      return Response.json({ ok: true, source: "giftbox?action=update_instance", sourceMode: "database", detail });
+      const detail = await getGiftBoxInstanceFull(tenantSlug, id);
+      return Response.json({ ok: true, source: "giftbox?action=update_instance", sourceMode: "database", message: result.message, detail });
+    }
+
+    // Modale scadenza (port of _mode=update_instance_expiry).
+    if (action === "update_instance_expiry") {
+      const id = parseInteger(body.instance_id ?? body.id, 0);
+      const result = await updateGiftBoxInstanceExpiry(tenantSlug, id, String(body.expires_at ?? ""));
+      const detail = await getGiftBoxInstanceFull(tenantSlug, id);
+      return Response.json({ ok: true, source: "giftbox?action=update_instance_expiry", sourceMode: "database", message: result.message, detail });
+    }
+
+    // Riscatto PARZIALE per-item (port of _mode=redeem_instance_partial):
+    // redeem_qty_json = {"<instance_item_row_id>": qty} (stringa JSON:
+    // parseRequestBody appiattisce i valori non-stringa).
+    if (action === "redeem_instance_partial") {
+      const id = parseInteger(body.instance_id ?? body.id, 0);
+      const qtyByRowId: Record<number, number> = {};
+      try {
+        const raw = JSON.parse(String(body.redeem_qty_json ?? body.redeem_qty ?? "{}"));
+        if (raw && typeof raw === "object") {
+          for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+            const rowId = parseInteger(k, 0);
+            const qty = parseInteger(v, 0);
+            if (rowId > 0 && qty > 0) qtyByRowId[rowId] = qty;
+          }
+        }
+      } catch { /* selezione vuota -> errore legacy sotto */ }
+      const locationContext = await getManageLocationContext(tenantSlug).catch(() => null);
+      const currentLocation = locationContext?.locations.find((l) => l.id === locationContext.currentLocationId) ?? null;
+      const result = await redeemGiftBoxInstancePartial(
+        tenantSlug,
+        id,
+        qtyByRowId,
+        String(body.redeem_note ?? ""),
+        session.user.id,
+        locationContext ? { id: locationContext.currentLocationId, name: currentLocation?.name ?? "" } : null,
+      );
+      const detail = await getGiftBoxInstanceFull(tenantSlug, id);
+      return Response.json({ ok: true, source: "giftbox?action=redeem_instance_partial", sourceMode: "database", message: result.message, detail });
+    }
+
+    // Nota interna (port of _mode=update_instance_internal_note).
+    if (action === "update_instance_internal_note") {
+      const id = parseInteger(body.instance_id ?? body.id, 0);
+      const result = await updateGiftBoxInstanceInternalNote(tenantSlug, id, String(body.internal_note ?? body.note ?? ""));
+      const detail = await getGiftBoxInstanceFull(tenantSlug, id);
+      return Response.json({ ok: true, source: "giftbox?action=update_instance_internal_note", sourceMode: "database", message: result.message, detail });
+    }
+
+    // Invio email voucher (port of _mode=send_email).
+    if (action === "send_email") {
+      const id = parseInteger(body.instance_id ?? body.id, 0);
+      const showDetails = ["1", "true", "on", "yes"].includes(String(body.show_details ?? "").toLowerCase());
+      const result = await sendGiftBoxInstanceEmail(tenantSlug, id, String(body.send_to ?? ""), showDetails, String(body.send_gift_message ?? ""));
+      const detail = await getGiftBoxInstanceFull(tenantSlug, id);
+      return Response.json({ ok: true, source: "giftbox?action=send_email", sourceMode: "database", message: result.message, detail });
     }
 
     // Cancel an instance (port of cancel / GiftBox::cancelInstance).
     if (action === "cancel" || action === "cancel_instance") {
       const id = parseInteger(body.instance_id ?? body.id, 0);
       await cancelManageGiftBoxInstance(tenantSlug, id, session.user.id);
-      const detail = await getManageGiftBoxInstance(tenantSlug, id);
+      const detail = await getGiftBoxInstanceFull(tenantSlug, id);
       return Response.json({ ok: true, source: "giftbox?action=cancel", sourceMode: "database", detail });
     }
 
