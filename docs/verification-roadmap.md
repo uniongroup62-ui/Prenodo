@@ -1826,3 +1826,39 @@ NON-GAP: il book legacy NON invia email (ne' cliente ne' attivita'):
 campanella intercetta i pending via conteggio (come il Next).
 OPS: durante i test il dev server e' morto di nuovo con lo zombie su :3000
 (404 su route esistenti) — kill PID + rm -rf .next + restart risolve.
+
+## V6 AUTH MANAGE + RUOLI — CHIUSA (2026-07-03, 16 test e2e PASS)
+Fonte legacy: manage_account.php (E' la pagina auth: modes login/register/
+verify/forgot/reset), SaasProfessionalSignup.php, PasswordReset.php,
+Auth/roles.php. Batteria: e2e-auth-roles.mjs (scratchpad).
+VERIFICATO 1:1: login slug+email+password con messaggi legacy verbatim
+("Credenziali non valide.", "Account operatore disattivato.", "Gestionale
+non trovato o non attivo."); rate limit 10 fail/15min su login_attempts
+("Troppi tentativi di login. Riprova tra qualche minuto."); forgot/reset:
+messaggio generico anti-enumeration "Se l'email esiste...", token 64-hex
+sha256 TTL 60min, single-use ("Link non valido o scaduto."), mismatch
+"Le password non coincidono."; signup validazioni (slug in uso, password
+<8, mismatch); matrice permessi: ruoli FISSI (admin sempre-tutto,
+staff/altro configurabili via role_permissions, 61 definizioni), GET
+matrice + save_role_perms ok.
+FIX APPLICATI:
+1. lib/manage-auth.ts: loginManageUser ora controlla saas_tenants
+   (is_active/status/deleted_at) PRIMA della lookup utente -> "Gestionale
+   non trovato o non attivo." su slug inesistente/sospeso (prima
+   rispondeva "Credenziali non valide.").
+2. REVOCA LOGOUT server-side: le sessioni manage sono cookie firmati
+   stateless e il logout cancellava solo il cookie browser (un cookie
+   trattenuto restava valido 12h — il legacy fa session_destroy).
+   Aggiunta colonna users.session_epoch (INT DEFAULT 0, ALTER applicato
+   su Supabase): il login incorpora l'epoch nella sessione firmata,
+   currentManageSession la confronta col DB (undefined->0 per sessioni
+   pre-esistenti; errore DB transitorio -> allow), la route logout fa
+   UPDATE session_epoch+1 prima di cancellare il cookie -> API successive 401.
+   NB: le sessioni browser emesse prima del fix risultano invalidate al
+   primo logout dell'utente (re-login necessario, una tantum).
+NON-GAP (test corretto, non il codice): il messaggio "URL attivita gia
+in uso. Scegline un altro." e' SENZA accenti anche nel legacy
+(SaasProfessionalSignup.php:157) — la batteria si aspettava "già" e
+falliva a torto; parita' verbatim confermata.
+Cleanup: login_attempts svuotata, role_permissions 'altro' ripristinata,
+operatore/users/password_resets/signups zzv6* rimossi -> CLEAN.

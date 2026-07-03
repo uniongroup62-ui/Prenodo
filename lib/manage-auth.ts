@@ -24,6 +24,9 @@ export type ManageSession = {
   tenantSlug: string;
   user: ManageUser;
   issuedAt: number;
+  // Epoca di revoca: il logout incrementa users.session_epoch e invalida
+  // tutte le sessioni firmate emesse prima (parita' con session_destroy legacy).
+  epoch?: number;
 };
 
 type LoginResult =
@@ -55,6 +58,16 @@ export async function loginManageUser({
       return { ok: false, error: "Troppi tentativi di login. Riprova tra qualche minuto." };
     }
 
+    // Tenant inesistente o sospeso: messaggio legacy dedicato
+    // (SaasProfessionalSignup::login ~467-470, non distingue i due casi).
+    const tenantRows = await dbQuery<RowDataPacket[]>(
+      "SELECT id FROM saas_tenants WHERE slug = ? AND COALESCE(is_active,1) = 1 AND COALESCE(status,'active') = 'active' AND deleted_at IS NULL LIMIT 1",
+      [tenantSlug],
+    ).catch(() => [] as RowDataPacket[]);
+    if (!tenantRows[0]) {
+      return { ok: false, error: "Gestionale non trovato o non attivo." };
+    }
+
     const users = await tenantSelect<RowDataPacket>({
       slug: tenantSlug,
       table: "users",
@@ -76,7 +89,12 @@ export async function loginManageUser({
 
     await recordLoginAttempt(tenantSlug, normalizedEmail, ip, true);
     const user = await buildManageUser(tenantSlug, dbUser);
-    const session: ManageSession = { tenantSlug, user, issuedAt: Date.now() };
+    const session: ManageSession = {
+      tenantSlug,
+      user,
+      issuedAt: Date.now(),
+      epoch: Number(dbUser.session_epoch ?? 0) || 0,
+    };
     return { ok: true, session, redirectTo: `/${encodeURIComponent(tenantSlug)}/dashboard`, source: "database" };
   } catch {
     // SECURITY: no hardcoded/demo credential fallback. Auth is DB-only — a DB
@@ -110,7 +128,53 @@ export async function currentManageSession(slug: string): Promise<ManageSession 
   if (!session) return null;
   if (session.tenantSlug !== normalizeTenantSlug(slug)) return null;
   if (Date.now() - session.issuedAt > SESSION_TTL_SECONDS * 1000) return null;
+  if (!(await sessionEpochValid(session))) return null;
   return session;
+}
+
+// Confronta l'epoca della sessione con users.session_epoch: il logout
+// incrementa il contatore e rende non valide le sessioni gia' emesse
+// (equivalente della session_destroy() server-side legacy).
+async function sessionEpochValid(session: ManageSession): Promise<boolean> {
+  const userId = Number(session.user?.id ?? 0);
+  if (!userId) return true;
+  try {
+    if (!(await columnExists("users", "session_epoch"))) return true;
+    const rows = await tenantSelect<RowDataPacket>({
+      slug: session.tenantSlug,
+      table: "users",
+      where: "id = ?",
+      params: [userId],
+      limit: 1,
+    });
+    if (!rows[0]) return false;
+    return (Number(session.epoch ?? 0) || 0) >= (Number(rows[0].session_epoch ?? 0) || 0);
+  } catch {
+    // Errore DB transitorio: non buttare fuori l'utente per un blip di rete.
+    return true;
+  }
+}
+
+// Invalida tutte le sessioni firmate dell'utente (chiamata dal logout).
+export async function revokeManageSessions(slug: string, userId: number): Promise<void> {
+  const tenantSlug = normalizeTenantSlug(slug) ?? "";
+  if (!tenantSlug || !userId) return;
+  try {
+    if (!(await columnExists("users", "session_epoch"))) return;
+    const table = await tenantTable(tenantSlug, "users");
+    const clauses = ["id = ?"];
+    const params: unknown[] = [userId];
+    if (table.mode === "shared" && table.tenantId && await columnExists(table.name, "tenant_id")) {
+      clauses.push("tenant_id = ?");
+      params.push(table.tenantId);
+    }
+    await dbExecute(
+      `UPDATE \`${table.name}\` SET session_epoch = COALESCE(session_epoch, 0) + 1 WHERE ${clauses.join(" AND ")}`,
+      params,
+    );
+  } catch {
+    // best-effort: il cookie viene comunque cancellato dal chiamante
+  }
 }
 
 export function sessionCookieName(slug: string): string {
