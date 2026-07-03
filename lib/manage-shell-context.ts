@@ -213,7 +213,10 @@ async function countUpcomingBirthdays(slug: string): Promise<number> {
       slug,
       table: "clients",
       columns: "birth_date",
-      where: "birth_date IS NOT NULL AND birth_date <> '0000-00-00' AND TRIM(COALESCE(birth_date,'')) <> ''",
+      // birth_date è DATE su Postgres: la zero-date MySQL non può esistere e il
+      // confronto con '0000-00-00' LANCIA (query sempre fallita -> compleanni 0).
+      // Il filtro zero-date resta nel parser JS (birthdayDaysUntilNext).
+      where: "birth_date IS NOT NULL",
     });
     let count = 0;
     for (const row of rows) {

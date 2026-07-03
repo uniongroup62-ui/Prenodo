@@ -1178,7 +1178,7 @@ async function tenantBySlug(slugInput: string): Promise<TenantRow | null> {
       WHERE slug=?
         AND COALESCE(is_active,1)=1
         AND COALESCE(marketplace_public_allowed,1)=1
-        AND (deleted_at IS NULL OR deleted_at = '0000-00-00 00:00:00')
+        AND deleted_at IS NULL
       LIMIT 1`,
     [slug],
   ).catch(() => [] as TenantRow[]);

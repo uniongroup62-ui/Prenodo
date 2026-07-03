@@ -1785,3 +1785,44 @@ NON-GAP: bug legacy del filtro "Tutte le sedi" (variabile usata prima della
 definizione, sempre disattivo) NON replicato; hold/lock di concorrenza sul
 salvataggio risorse (shared_resources_acquire_resource_locks) demandato al
 check transazionale del save.
+
+## V5 AREA PUBBLICA (booking wizard + area cliente + marketplace) — CHIUSA
+## (2026-07-03, 14 test e2e PASS)
+Confronto con booking.php (~8000 righe wizard+book+customer API),
+public_account.php (account centrale marketplace), public_marketplace.php.
+STATO TROVATO: port Next molto avanzato (wizard 85k con step legacy, hold
+150s, benefit server-side promo>coupon>auto, 5 pagine account fedeli,
+marketplace /attivita con dettaglio, API /api/account con l'intero
+perimetro cliente: prenotazioni+annullo, pacchetti/credito/giftcard/
+prepagati/omaggi/fidelity/preordini/preventivi con decisione, preferiti,
+ICS; cancel policy con i messaggi legacy esatti).
+BUG POSTGRES TROVATI E CORRETTI (classe zero-date MySQL):
+- tenantBySlug (public-customer-account:1181) filtrava con
+  "deleted_at = '0000-00-00 00:00:00'": su Postgres la zero-date LANCIA
+  (date out of range) e il .catch mascherava l'errore -> il tenant risultava
+  sempre "non trovato" -> upsertPublicCustomerFromBooking NON creava mai
+  l'account/link dal booking (accountLinked sempre false, area cliente
+  vuota). Fix: deleted_at IS NULL. Verificato: il booking ora crea/linka
+  l'account e la lista prenotazioni del cliente lo vede.
+- countUpcomingBirthdays (manage-shell-context:216) confrontava birth_date
+  (DATE) con '0000-00-00' -> query sempre fallita -> campanella COMPLEANNI
+  sempre a 0 dal giorno del port. Fix: birth_date IS NOT NULL (il filtro
+  zero-date resta nel parser JS).
+VERIFICATO E2E (14 PASS, cleanup CLEAN incl. ripristino cancel policy):
+register cliente (devCode 6 cifre senza SES) -> verify -> login con
+sessione; hold_slot -> confirm -> appuntamento PENDING con public_code +
+cliente tenant creato + account linkato; stesso slot rifiutato; campanella
+manage (shell-context notif.appointments) conta il pending; area cliente
+vede la prenotazione con canCancel; annullo rifiutato con policy off
+("Cancellazione non disponibile.") e riuscito con policy on (status
+canceled); directory /attivita e dettaglio 200; pagina wizard 200.
+DIVERGENZA DOCUMENTATA: il legacy OBBLIGA il login cliente prima del book
+(redirect auth=1, dati presi dall'account, booking.php:7311); il Next
+permette il GUEST BOOKING dal wizard (dati dal form) con creazione/link
+automatico dell'account via upsert. Funzionalmente piu' permissivo; da
+allineare solo su richiesta (gate UI+server nel wizard).
+NON-GAP: il book legacy NON invia email (ne' cliente ne' attivita'):
+"Ti avviseremo via email" arriva solo all'approvazione manage; la
+campanella intercetta i pending via conteggio (come il Next).
+OPS: durante i test il dev server e' morto di nuovo con lo zombie su :3000
+(404 su route esistenti) — kill PID + rm -rf .next + restart risolve.
