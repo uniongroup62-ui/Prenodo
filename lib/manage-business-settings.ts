@@ -372,6 +372,65 @@ export async function saveLocationMarketplace(slug: string, input: Record<string
   return getBusinessSettingsContext(slug, publicOrigin);
 }
 
+// GALLERY SEDE (Helpers.php ~11642-11903 + locations.php location_gallery_*):
+// upload multiplo JPG/PNG/WEBP max 5MB in /uploads/tenants/<slug>/branding/
+// locations/<id>/gallery, righe location_gallery_images con sort_order a passo
+// 10; delete con rimozione file + ricompattazione; move = swap col vicino.
+// (Il resize GD 1600x1200/JPEG q84 del legacy non è replicato: si salvano i
+// byte originali — lo stesso fallback che il PHP usa senza GD.)
+const galleryMimeToExt: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
+
+export async function uploadLocationGalleryImages(slug: string, locationId: number, files: File[], publicOrigin = "") {
+  const location = await getLocationById(slug, locationId);
+  if (!location) throw new Error("Sede non valida per la gallery.");
+  const valid = files.filter((f) => f && f.size > 0);
+  if (!valid.length) throw new Error("Seleziona almeno una foto da caricare.");
+  const table = await tenantTable(slug, "location_gallery_images");
+  for (const file of valid) {
+    if (file.size > 5 * 1024 * 1024) throw new Error("Foto troppo grande (max 5 MB)");
+    const ext = galleryMimeToExt[file.type];
+    if (!ext) throw new Error("Formato non valido: carica JPG, PNG o WEBP");
+    const stamp = new Date();
+    const p = (n: number) => String(n).padStart(2, "0");
+    const ymdhis = `${stamp.getFullYear()}${p(stamp.getMonth() + 1)}${p(stamp.getDate())}${p(stamp.getHours())}${p(stamp.getMinutes())}${p(stamp.getSeconds())}`;
+    const rand = Math.random().toString(16).slice(2, 10).padEnd(8, "0");
+    const publicPath = `/uploads/tenants/${safeSlug(slug)}/branding/locations/${locationId}/gallery/location_gallery_${ymdhis}_${rand}.${ext}`;
+    const absPath = path.join(process.cwd(), "public", ...publicPath.split("/").filter(Boolean));
+    await mkdir(path.dirname(absPath), { recursive: true });
+    await writeFile(absPath, Buffer.from(await file.arrayBuffer()));
+    const sortRows = await tenantSelect<RowDataPacket>({ slug, table: "location_gallery_images", columns: "COALESCE(MAX(sort_order), 0) AS m", where: "location_id = ?", params: [locationId] }).catch(() => [] as RowDataPacket[]);
+    await tenantInsert(table, { location_id: locationId, path: publicPath, sort_order: Number(sortRows[0]?.m ?? 0) + 10, is_active: 1 });
+  }
+  await syncMarketplaceProfile(slug, publicOrigin);
+  return getBusinessSettingsContext(slug, publicOrigin);
+}
+
+export async function deleteLocationGalleryImage(slug: string, locationId: number, imageId: number, publicOrigin = "") {
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "location_gallery_images", columns: "id, path", where: "id = ? AND location_id = ?", params: [imageId, locationId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  if (!rows[0]) throw new Error("Foto gallery non trovata per questa sede");
+  await deletePublicUpload(String(rows[0].path ?? ""));
+  await tenantDelete({ slug, table: "location_gallery_images", id: imageId });
+  // Ricompatta il sort_order a passo 10 (normalize_location_gallery_sort_order).
+  const remaining = await tenantSelect<RowDataPacket>({ slug, table: "location_gallery_images", columns: "id", where: "location_id = ?", params: [locationId], orderBy: "sort_order ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
+  for (let i = 0; i < remaining.length; i += 1) {
+    await tenantUpdate({ slug, table: "location_gallery_images", id: Number(remaining[i].id), values: { sort_order: (i + 1) * 10 } }).catch(() => 0);
+  }
+  await syncMarketplaceProfile(slug, publicOrigin);
+  return getBusinessSettingsContext(slug, publicOrigin);
+}
+
+export async function moveLocationGalleryImage(slug: string, locationId: number, imageId: number, direction: "up" | "down", publicOrigin = "") {
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "location_gallery_images", columns: "id, sort_order", where: "location_id = ?", params: [locationId], orderBy: "sort_order ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
+  const index = rows.findIndex((r) => Number(r.id) === imageId);
+  if (index < 0) throw new Error("Foto gallery non trovata per questa sede");
+  const targetIndex = direction === "up" ? index - 1 : index + 1;
+  if (targetIndex >= 0 && targetIndex < rows.length) {
+    await tenantUpdate({ slug, table: "location_gallery_images", id: Number(rows[index].id), values: { sort_order: Number(rows[targetIndex].sort_order ?? 0) } });
+    await tenantUpdate({ slug, table: "location_gallery_images", id: Number(rows[targetIndex].id), values: { sort_order: Number(rows[index].sort_order ?? 0) } });
+  }
+  return getBusinessSettingsContext(slug, publicOrigin);
+}
+
 export async function previewLocationDelete(slug: string, locationId: number) {
   const location = await getLocationById(slug, locationId);
   if (!location) {
@@ -419,6 +478,29 @@ export async function deleteBusinessLocation(slug: string, locationId: number, c
     await deleteRowsWithLocation(slug, table, locationId);
   }
   await deleteLocationActivityCategories(slug, locationId);
+  // RIASSEGNAZIONE CLIENTI (LocationDeletion::reassignSharedClientLocations
+  // ~698-720, forma semplificata): i clienti della sede eliminata passano alla
+  // prima sede residua per sort_order (il ranking per attività del legacy è
+  // parte del multi-sede completo, P11). Mai lasciare location_id orfani.
+  try {
+    const residual = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "locations",
+      columns: "id",
+      where: "id <> ?",
+      params: [locationId],
+      orderBy: "COALESCE(sort_order,999999) ASC, id ASC",
+      limit: 1,
+    });
+    const fallbackId = Number(residual[0]?.id ?? 0) || null;
+    const clientsTable = await tenantTable(slug, "clients");
+    if (await columnExists(clientsTable.name, "location_id")) {
+      await dbQuery(
+        `UPDATE ${quoteIdentifier(clientsTable.name)} SET location_id = ${fallbackId === null ? "NULL" : fallbackId} WHERE tenant_id = ? AND location_id = ?`,
+        [clientsTable.tenantId ?? 0, locationId],
+      );
+    }
+  } catch { /* best-effort */ }
   await tenantDelete({ slug, table: "locations", id: locationId });
   await normalizeLocationOrder(slug);
   await syncMarketplaceProfile(slug, publicOrigin);

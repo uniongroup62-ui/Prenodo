@@ -497,6 +497,9 @@ export default async function TenantPage({
 
 // Resolve the FAITHFUL_MODULES key for a page/tab combination.
 function faithfulKey(page: string, tab?: string): string {
+  // Retro-compat legacy (settings.php è uno shim di 3 righe): la vecchia
+  // pagina "Impostazioni" è ora "Sedi" (require locations.php).
+  if (page === "settings") return "locations";
   if (page === "services" && tab === "categories") return "service_categories";
   if (page === "services" && tab === "recommended") return "service_recommendations";
   if (page === "services") return "services";

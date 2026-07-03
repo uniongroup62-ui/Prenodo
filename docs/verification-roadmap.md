@@ -1648,3 +1648,43 @@ e sono stati riscritti in lib/manage-dashboard.ts con le query legacy:
   anche il filtro sede permissivo (un appuntamento su altra sede resta fuori).
 Non-gap: la dashboard legacy e' read-only (nessuna azione rapida ne' cambio
 stato dalla lista); l'avviso Tessere Fidelity legacy NON filtra per sede.
+
+## V2 SETTINGS/SEDI — CHIUSA (2026-07-03, 18 test PASS)
+SCOPERTA CHIAVE (agente sul legacy): settings.php e' uno SHIM di 3 righe
+("Backward-compat: old Impostazioni page is now Sede" -> require
+locations.php). Non esiste una pagina impostazioni a tab: le voci del gruppo
+"Impostazioni" del menu (View.php:726-750) sono PAGINE separate gia' portate
+(business_profile, consent_modules, accessibility, roles, automation,
+reports, booking) — la pagina da verificare era SEDI (locations.php).
+STATO TROVATO: il backend Next era GIA' completo e fedele
+(manage-business-settings.ts: location_save con le validazioni/messaggi
+esatti di sede_location_validation_error, move, marketplace con categorie
+attivita' centrali, preview/delete con blocchi legacy) ma la UI era una
+LISTA display-only coi bottoni verso il fallback Tailwind. PORTATO:
+- Router: shim page=settings -> LocationsContent (come il PHP).
+- UI locations-content riscritta fedele: header "Impostazioni / Sedi" con
+  bottoni Orari e Booking; tabella Sede|Contatti|Booking|Marketplace|
+  Categorie attive|Ordine|Azioni; modale sede (nome/indirizzo/regione/
+  provincia/citta'/CAP/telefono/email/whatsapp/facebook/instagram/tiktok/
+  booking con gate di piano); modale Marketplace sede (switch + categorie con
+  principale + GALLERY); modale eliminazione con anteprima e conferma
+  ELIMINA.
+- GALLERY SEDE (nuova, Helpers.php ~11642-11903): upload multiplo JPG/PNG/
+  WEBP max 5MB ("Foto troppo grande (max 5 MB)", "Formato non valido: carica
+  JPG, PNG o WEBP") in /uploads/tenants/<slug>/branding/locations/<id>/
+  gallery, righe location_gallery_images con sort_order a passo 10, delete
+  con rimozione file + ricompattazione, move a scambio; messaggi legacy
+  ("Foto gallery sede caricate/rimossa", "Ordine gallery sede aggiornato").
+  Divergenza documentata: il resize GD 1600x1200/JPEG q84 non e' replicato
+  (si salvano i byte originali, lo stesso fallback del PHP senza GD).
+- DELETE: aggiunta la RIASSEGNAZIONE CLIENTI della sede eliminata alla prima
+  sede residua (forma semplificata di reassignSharedClientLocations — il
+  ranking per attivita' e la gestione exclusive/shared masters del legacy
+  LocationDeletion sono parte del multi-sede completo P11, documentato).
+- TEST (18 PASS, cleanup CLEAN): validazioni (nome/email/duplicato
+  case-insensitive), creazione con tutti i campi incl. sede legale,
+  ordinamento up/down, marketplace (rifiuto senza categorie + salvataggio con
+  categoria principale, 16 categorie seed presenti), gallery upload/move/
+  delete end-to-end, preview eliminabile vs bloccata da storico (messaggio
+  legacy), conferma ELIMINA case-sensitive, eliminazione con riassegnazione
+  cliente verificata, shim /settings e /locations 200.

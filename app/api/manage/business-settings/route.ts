@@ -2,8 +2,10 @@ import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import {
   deleteBusinessBrandingImage,
   deleteBusinessLocation,
+  deleteLocationGalleryImage,
   getBusinessSettingsContext,
   moveBusinessLocation,
+  moveLocationGalleryImage,
   previewLocationDelete,
   saveBusinessBrandingPosition,
   saveBusinessLocation,
@@ -12,6 +14,7 @@ import {
   saveBusinessProfile,
   saveLocationMarketplace,
   uploadBusinessBrandingImage,
+  uploadLocationGalleryImages,
 } from "@/lib/manage-business-settings";
 import { currentManageSession } from "@/lib/manage-auth";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -53,6 +56,16 @@ export async function POST(request: Request) {
     if (contentType.includes("multipart/form-data")) {
       const form = await request.formData();
       const action = String(form.get("action") ?? "");
+
+      // Gallery sede (locations.php location_gallery_upload): upload multiplo
+      // JPG/PNG/WEBP max 5MB — permesso Sedi come tutta la pagina.
+      if (action === "location_gallery_upload") {
+        if (!can(session.user.perms, "settings.location")) return jsonError("Permesso Sedi richiesto.", 403);
+        const locationId = parseInteger(String(form.get("location_id") ?? "0"), 0);
+        const files = form.getAll("location_gallery_images").filter((f): f is File => f instanceof File);
+        return Response.json(await uploadLocationGalleryImages(tenantSlug, locationId, files, publicOrigin(request)));
+      }
+
       const kind = normalizeBrandingKind(String(form.get("kind") ?? ""));
       if (!kind) return jsonError("Tipo immagine non valido.", 422);
       if (!can(session.user.perms, "settings.general")) return jsonError("Permesso Profilo attivita richiesto.", 403);
@@ -132,6 +145,14 @@ export async function POST(request: Request) {
           body.reason ?? "",
           publicOrigin(request),
         ));
+
+      case "location_gallery_delete":
+        if (!can(session.user.perms, "settings.location")) return jsonError("Permesso Sedi richiesto.", 403);
+        return Response.json(await deleteLocationGalleryImage(tenantSlug, parseInteger(body.location_id, 0), parseInteger(body.gallery_image_id ?? body.id, 0), publicOrigin(request)));
+
+      case "location_gallery_move":
+        if (!can(session.user.perms, "settings.location")) return jsonError("Permesso Sedi richiesto.", 403);
+        return Response.json(await moveLocationGalleryImage(tenantSlug, parseInteger(body.location_id, 0), parseInteger(body.gallery_image_id ?? body.id, 0), body.direction === "up" ? "up" : "down", publicOrigin(request)));
 
       case "marketplace_sync":
         if (!can(session.user.perms, "settings.general")) return jsonError("Permesso Profilo attivita richiesto.", 403);
