@@ -62,7 +62,9 @@ export function FidelityContent() {
       setConfirmImpact(null);
       setEnabled(Boolean(j.enabled));
       const stripped = Number(j.strippedAppointments ?? 0);
-      setFlash(nextEnabled ? "Fidelity attivata." : `Fidelity disattivata.${stripped > 0 ? ` Agevolazioni rimosse da ${stripped} prenotazioni.` : ""}`);
+      // Messaggio composto legacy dal server (riattivazioni promo/omaggi, campagne
+      // punti disattivate, agevolazioni rimosse); fallback al testo base.
+      setFlash(String(j.message ?? "") || (nextEnabled ? "Fidelity attivata" : `Fidelity disattivata${stripped > 0 ? `. Rimosse automaticamente le agevolazioni Fidelity da ${stripped} prenotazioni` : ""}`));
     } finally {
       setSaving(false);
     }

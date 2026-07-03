@@ -1158,7 +1158,7 @@ GAP CONFERMATI (ordine di gravita'):
   manual bloccati per non-aderenti, availablePoints=0 senza tessera; il
   fallback adhesion_mode (all/include/exclude) si applica SOLO se la
   tabella cards NON esiste. Include eligibility earn ricariche.
-- F3 TOGGLE: manca il RIPRISTINO su riattivazione (promotions/gifts
+- [CHIUSO 2026-07-03] F3 TOGGLE: mancava il RIPRISTINO su riattivazione (promotions/gifts
   auto_disabled_by_fidelity -> riattivati) + auto_disabled_by_points sulle
   campagne quando si spengono i punti + messaggi composti legacy.
 - [CHIUSO 2026-07-03] F4 LIVELLI mai promossi: clients.fidelity_level mai ricalcolato
@@ -1171,7 +1171,7 @@ GAP CONFERMATI (ordine di gravita'):
   settings senza applyMode (preserve/disable_expiry con snapshot/
   restore_existing_from_snapshot), campi restore non inviati, modal
   conferma morta, "Nessuna modifica da salvare.".
-- F6 SAVE_SETTINGS punti: mancano conferme popup legacy (rimozione sconti
+- [CHIUSO 2026-07-03] F6 SAVE_SETTINGS punti: mancavano conferme popup legacy (rimozione sconti
   da prenotazioni aperte su disattivazione, conferma cambio scadenza) +
   messaggi composti + applyExpirySettingsToOpenLots post-commit (dipende F1).
 - F7 UI MORTA in fidelity_points-content.tsx: 5 modali senza handler
@@ -1265,3 +1265,20 @@ eliminazione livello senza conferma rifiutata, con conferma cascata su
 campagna target (svuotata+disattivata) e livello cliente ricalcolato oro->
 argento. RESTA (minore): la firma-hash legacy per la conferma cambio soglie
 (qui la conferma copre le eliminazioni; il cambio soglie ricalcola e basta).
+
+### Chiusura gap FIDELITY F3+F6 (2026-07-03, 13/13 test live PASS)
+- F3 toggle_fidelity: riattivazione ripristina promozioni/omaggi
+  auto_disabled_by_fidelity (messaggi "N campagna/e Promozioni target Fidelity
+  riattivata/e" / "N campagna/e Omaggi..."); disattivazione marca le campagne
+  punti con auto_disabled_by_points=1 e compone il messaggio legacy
+  ("Fidelity disattivata. N campagna punti attiva disattivata. Rimosse
+  automaticamente le agevolazioni Fidelity da N prenotazioni"); blocco promo/
+  omaggi attivi gia' presente e riverificato.
+- F6 save_settings: conferme popup legacy come round-trip server->confirm->
+  retry con flag (disattivazione punti/redeem con prenotazioni aperte
+  impattate: 'Prima di disattivare "X" conferma dal popup...'; cambio
+  scadenza: 'Prima di modificare la scadenza punti conferma dal popup...');
+  strip confermato delle agevolazioni (punti riservati ripristinati al saldo
+  nel modello a detrazione del Next); campagne disattivate con auto flag ai
+  punti-off; messaggio composto completo. applyExpirySettingsToOpenLots
+  spostato sotto il guard expiryChanged unico.

@@ -88,25 +88,39 @@ export function FidelityPointsContent() {
     setSettingsError("");
     setSettingsFlash("");
     try {
-      const res = await fetch(`/api/manage/fidelity?slug=${encodeURIComponent(slug)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-        body: JSON.stringify({
-          action: "save_points_settings",
-          fidelity_points_enabled: pointsEnabled ? "1" : "0",
-          fidelity_expire_enabled: expireEnabled ? "1" : "0",
-          fidelity_expire_days: expireDays,
-          fidelity_expire_warn_days: expireWarnDays,
-          fidelity_redeem_enabled: redeemEnabled ? "1" : "0",
-          fidelity_redeem_euro_per_point: redeemEuroPerPoint,
-          fidelity_redeem_min_points: redeemMinPoints,
-        }),
-      });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok || j?.error) {
-        setSettingsError(String(j?.error ?? "Impossibile salvare le impostazioni."));
-      } else {
-        setSettingsFlash("Impostazioni salvate.");
+      // Le conferme legacy sono un round-trip: il server rifiuta con il testo del
+      // popup ("Prima di disattivare ..." / "Prima di modificare la scadenza ...");
+      // il confirm() dell'operatore fa ripartire il salvataggio coi flag.
+      const extraFlags: Record<string, string> = {};
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const res = await fetch(`/api/manage/fidelity?slug=${encodeURIComponent(slug)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+          body: JSON.stringify({
+            action: "save_points_settings",
+            fidelity_points_enabled: pointsEnabled ? "1" : "0",
+            fidelity_expire_enabled: expireEnabled ? "1" : "0",
+            fidelity_expire_days: expireDays,
+            fidelity_expire_warn_days: expireWarnDays,
+            fidelity_redeem_enabled: redeemEnabled ? "1" : "0",
+            fidelity_redeem_euro_per_point: redeemEuroPerPoint,
+            fidelity_redeem_min_points: redeemMinPoints,
+            ...extraFlags,
+          }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || j?.error) {
+          const err = String(j?.error ?? "Impossibile salvare le impostazioni.");
+          if (err.startsWith("Prima di disattivare") && !extraFlags.fidelity_disable_confirmed) {
+            if (window.confirm(err)) { extraFlags.fidelity_disable_confirmed = "1"; continue; }
+          } else if (err.startsWith("Prima di modificare la scadenza") && !extraFlags.fidelity_expiry_confirmed) {
+            if (window.confirm(err)) { extraFlags.fidelity_expiry_confirmed = "1"; continue; }
+          }
+          setSettingsError(err);
+        } else {
+          setSettingsFlash(String(j?.settings?.message ?? "") || "Impostazioni Fidelity salvate");
+        }
+        break;
       }
     } finally {
       setSavingSettings(false);

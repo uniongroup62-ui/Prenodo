@@ -10533,7 +10533,7 @@ export async function setFidelityEnabled(
   slug: string,
   enabled: boolean,
   confirmed: boolean,
-): Promise<{ ok: boolean; enabled: boolean; needsConfirm?: boolean; impact?: FidelityDisableImpact; strippedAppointments?: number; deactivatedCampaigns?: number }> {
+): Promise<{ ok: boolean; enabled: boolean; needsConfirm?: boolean; impact?: FidelityDisableImpact; strippedAppointments?: number; deactivatedCampaigns?: number; restoredPromotions?: number; restoredGifts?: number; message?: string }> {
   const bizRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "id, fidelity_enabled", orderBy: "id ASC", limit: 1 });
   if (!bizRows[0]) throw new Error("Business non trovato.");
   const bizId = Number(bizRows[0].id ?? 0);
@@ -10541,12 +10541,38 @@ export async function setFidelityEnabled(
 
   if (enabled) {
     await tenantUpdate({ slug, table: "businesses", id: bizId, values: { fidelity_enabled: 1 } });
-    return { ok: true, enabled: true };
+    // F3 — riattivazione (fidelity.php ~900-950): ripristina le promozioni e gli
+    // omaggi che erano stati auto-disattivati dalla disattivazione Fidelity
+    // (auto_disabled_by_fidelity=1 -> attivi, flag azzerato).
+    let restoredPromotions = 0;
+    let restoredGifts = 0;
+    if (!currentlyEnabled) {
+      const promoTable = await tenantTable(slug, "promotions").catch(() => null);
+      if (promoTable && (await columnExists(promoTable.name, "auto_disabled_by_fidelity"))) {
+        const res = await dbExecute(
+          `UPDATE ${quoteIdentifier(promoTable.name)} SET is_active = 1, auto_disabled_by_fidelity = 0 WHERE tenant_id = ? AND COALESCE(auto_disabled_by_fidelity,0) = 1`,
+          [promoTable.tenantId ?? 0],
+        ).catch(() => ({ affectedRows: 0 }));
+        restoredPromotions = Number(res.affectedRows ?? 0) || 0;
+      }
+      const giftsTable = await tenantTable(slug, "gifts").catch(() => null);
+      if (giftsTable && (await columnExists(giftsTable.name, "auto_disabled_by_fidelity"))) {
+        const res = await dbExecute(
+          `UPDATE ${quoteIdentifier(giftsTable.name)} SET active = 1, auto_disabled_by_fidelity = 0 WHERE tenant_id = ? AND COALESCE(auto_disabled_by_fidelity,0) = 1${(await columnExists(giftsTable.name, "deleted_at")) ? " AND deleted_at IS NULL" : ""}`,
+          [giftsTable.tenantId ?? 0],
+        ).catch(() => ({ affectedRows: 0 }));
+        restoredGifts = Number(res.affectedRows ?? 0) || 0;
+      }
+    }
+    let message = "Fidelity attivata";
+    if (restoredPromotions > 0) message += `. ${restoredPromotions} ${restoredPromotions === 1 ? "campagna Promozioni target Fidelity riattivata" : "campagne Promozioni target Fidelity riattivate"}`;
+    if (restoredGifts > 0) message += `. ${restoredGifts} ${restoredGifts === 1 ? "campagna Omaggi Solo clienti con Fidelity riattivata" : "campagne Omaggi Solo clienti con Fidelity riattivate"}`;
+    return { ok: true, enabled: true, restoredPromotions, restoredGifts, message };
   }
 
   if (!currentlyEnabled) {
     await tenantUpdate({ slug, table: "businesses", id: bizId, values: { fidelity_enabled: 0 } });
-    return { ok: true, enabled: false };
+    return { ok: true, enabled: false, message: "Fidelity disattivata" };
   }
 
   const impact = await fidelityDisableImpact(slug);
@@ -10584,14 +10610,22 @@ export async function setFidelityEnabled(
   if (campTable) {
     const scoped = campTable.mode === "shared" && (await columnExists(campTable.name, "tenant_id"));
     const hasDeleted = await columnExists(campTable.name, "deleted_at");
+    // auto_disabled_by_points=1 (fidelity_page_deactivate_active_campaigns):
+    // il badge UI "Disattivata da Punti" e il toggle campagna lo azzerano.
+    const hasAutoFlag = await columnExists(campTable.name, "auto_disabled_by_points");
     const res = await dbExecute(
-      `UPDATE ${quoteIdentifier(campTable.name)} SET active = 0 WHERE COALESCE(active,0) = 1${hasDeleted ? " AND deleted_at IS NULL" : ""}${scoped ? " AND tenant_id = ?" : ""}`,
+      `UPDATE ${quoteIdentifier(campTable.name)} SET active = 0${hasAutoFlag ? ", auto_disabled_by_points = 1" : ""} WHERE COALESCE(active,0) = 1${hasDeleted ? " AND deleted_at IS NULL" : ""}${scoped ? " AND tenant_id = ?" : ""}`,
       scoped ? [campTable.tenantId ?? 0] : [],
     ).catch(() => ({ affectedRows: 0, insertId: 0 }));
     deactivatedCampaigns = res.affectedRows ?? 0;
   }
 
-  return { ok: true, enabled: false, strippedAppointments: linked.length, deactivatedCampaigns };
+  // Messaggio composto legacy (fidelity.php ~881-897).
+  let message = "Fidelity disattivata";
+  if (deactivatedCampaigns > 0) message += `. ${deactivatedCampaigns} ${deactivatedCampaigns === 1 ? "campagna punti attiva disattivata" : "campagne punti attive disattivate"}`;
+  if (linked.length > 0) message += `. Rimosse automaticamente le agevolazioni Fidelity da ${linked.length} ${linked.length === 1 ? "prenotazione" : "prenotazioni"}`;
+
+  return { ok: true, enabled: false, strippedAppointments: linked.length, deactivatedCampaigns, message };
 }
 
 // ---- Fidelity POINTS settings (fidelity_points.php save_settings) ------------
@@ -10676,6 +10710,75 @@ export async function saveFidelityPointsSettings(slug: string, body: Record<stri
     throw new Error('Per abilitare la scadenza punti inserisci un valore maggiore di 0 in "Scadenza dopo".');
   }
 
+  // F6 — conferme popup legacy (fidelity_points.php ~2014-2025) + rimozione
+  // agevolazioni + disattivazione campagne quando si spengono punti/redeem.
+  const truthyConfirm = (v: unknown) => ["1", "true", "on", "yes"].includes(String(v ?? "").toLowerCase());
+  const pointsWasEnabled = Number(existing.fidelity_points_enabled ?? 0) === 1;
+  const redeemWasEnabled = Number(existing.fidelity_redeem_enabled ?? 0) === 1;
+  const disablingPoints = pointsWasEnabled && !pointsEnabled;
+  const disablingRedeem = pointsEnabled && redeemWasEnabled && !redeemEnabled;
+
+  let strippedAppointments = 0;
+  if (globalEnabled && (disablingPoints || disablingRedeem)) {
+    const impacted = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "appointments",
+      columns: "id, client_id, COALESCE(fidelity_points_used,0) AS pts, COALESCE(fidelity_gift_points_used,0) AS gpts",
+      where: "status IN ('pending','scheduled') AND (COALESCE(fidelity_points_used,0) > 0 OR COALESCE(fidelity_discount,0) > 0)",
+    }).catch(() => [] as RowDataPacket[]);
+    if (impacted.length > 0 && !truthyConfirm(body.fidelity_disable_confirmed)) {
+      const targetLabel = disablingPoints ? "Punti Fidelity" : "sconto tramite punti";
+      throw new Error(
+        `Prima di disattivare "${targetLabel}" conferma dal popup la rimozione degli sconti/scelte punti da ${impacted.length} ${impacted.length === 1 ? "prenotazione aperta" : "prenotazioni aperte"}. Saldo punti, movimenti e storico resteranno salvati.`,
+      );
+    }
+    // Strip confermato: le prenotazioni aperte perdono lo sconto punti; i punti
+    // riservati tornano al saldo (nel modello Next la riserva è una detrazione).
+    for (const appt of impacted) {
+      const clientId = Number(appt.client_id ?? 0);
+      const restore = Math.max(0, Math.round(Number(appt.pts ?? 0))) + (disablingPoints ? Math.max(0, Math.round(Number(appt.gpts ?? 0))) : 0);
+      if (restore > 0 && clientId > 0) {
+        const clientsTable = await tenantTable(slug, "clients");
+        await dbExecute(
+          `UPDATE ${quoteIdentifier(clientsTable.name)} SET points = COALESCE(points,0) + ? WHERE tenant_id = ? AND id = ?`,
+          [restore, clientsTable.tenantId ?? 0, clientId],
+        ).catch(() => undefined);
+      }
+      await tenantUpdate({
+        slug,
+        table: "appointments",
+        id: Number(appt.id),
+        values: disablingPoints
+          ? { fidelity_points_used: 0, fidelity_discount: 0, fidelity_gift_points_used: 0, fidelity_gift_idx: null, fidelity_conflict_choice: "" }
+          : { fidelity_points_used: 0, fidelity_discount: 0 },
+      }).catch(() => undefined);
+    }
+    strippedAppointments = impacted.length;
+  }
+
+  // Conferma cambio scadenza (fidelity_points.php ~2022-2025).
+  const prevExpireEnabledGuard = Number(existing.fidelity_expire_enabled ?? 0) === 1;
+  const prevExpireDaysGuard = Math.max(0, Math.round(Number(existing.fidelity_expire_days ?? 0)));
+  const expiryChanged = prevExpireEnabledGuard !== expireEnabled || (expireEnabled && prevExpireDaysGuard !== expireDays);
+  if (globalEnabled && pointsEnabled && expiryChanged && !truthyConfirm(body.fidelity_expiry_confirmed)) {
+    throw new Error("Prima di modificare la scadenza punti conferma dal popup: i punti residui aperti verranno riallineati alla nuova impostazione.");
+  }
+
+  // Punti disattivati -> campagne punti attive disattivate (auto_disabled_by_points).
+  let deactivatedCampaigns = 0;
+  if (disablingPoints) {
+    const campTable = await tenantTable(slug, "fidelity_campaigns").catch(() => null);
+    if (campTable) {
+      const hasAutoFlag = await columnExists(campTable.name, "auto_disabled_by_points");
+      const hasDeleted = await columnExists(campTable.name, "deleted_at");
+      const res = await dbExecute(
+        `UPDATE ${quoteIdentifier(campTable.name)} SET active = 0${hasAutoFlag ? ", auto_disabled_by_points = 1" : ""} WHERE tenant_id = ? AND COALESCE(active,0) = 1${hasDeleted ? " AND deleted_at IS NULL" : ""}`,
+        [campTable.tenantId ?? 0],
+      ).catch(() => ({ affectedRows: 0 }));
+      deactivatedCampaigns = Number(res.affectedRows ?? 0) || 0;
+    }
+  }
+
   const values = await filterColumns((await tenantTable(slug, "businesses")).name, {
     fidelity_points_enabled: pointsEnabled ? 1 : 0,
     fidelity_points_label: "Punti",
@@ -10697,12 +10800,20 @@ export async function saveFidelityPointsSettings(slug: string, body: Record<stri
   // Scadenza cambiata -> riallinea i lotti aperti alla nuova impostazione
   // (port of fidelity_points.php ~2135-2143: Fidelity::applyExpirySettingsToOpenLots
   // dopo il commit). Best-effort: il cron reconcile ripara eventuali code.
-  const prevExpireEnabled = Number(existing.fidelity_expire_enabled ?? 0) === 1;
-  const prevExpireDays = Math.max(0, Math.round(Number(existing.fidelity_expire_days ?? 0)));
-  if (prevExpireEnabled !== expireEnabled || (expireEnabled && prevExpireDays !== expireDays)) {
+  if (expiryChanged) {
     await applyExpirySettingsToOpenLots(slug, expireEnabled, expireDays).catch(() => null);
   }
-  return getFidelityPointsSettings(slug);
+
+  // Messaggio composto legacy (fidelity_points.php ~2145-2162).
+  let message = "Impostazioni Fidelity salvate";
+  if (expiryChanged) message += ". Scadenze punti aggiornate sui saldi residui";
+  if (disablingPoints) message += ". Punti Fidelity disattivati";
+  if (!pointsWasEnabled && pointsEnabled) message += ". Punti Fidelity attivati";
+  if (deactivatedCampaigns > 0) message += `. ${deactivatedCampaigns} ${deactivatedCampaigns === 1 ? "campagna punti attiva disattivata" : "campagne punti attive disattivate"}`;
+  if (strippedAppointments > 0) message += `. Rimosse automaticamente le agevolazioni punti da ${strippedAppointments} ${strippedAppointments === 1 ? "prenotazione" : "prenotazioni"}`;
+
+  const settings = await getFidelityPointsSettings(slug);
+  return { ...settings, message } as FidelityPointsSettings & { message: string };
 }
 
 // ---- Fidelity CAMPAIGNS (fidelity_points.php save/toggle/delete campaign) -----
