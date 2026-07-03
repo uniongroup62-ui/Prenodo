@@ -1108,3 +1108,17 @@ UNA transazione tenant-scoped. Divergenze documentate: il blocker FIFO
 "ricarica collegata a prenotazioni" non serve (il void Next ripristina il
 credito) e i movimenti Commissioni restano al reconcile compute-on-view.
 BONUS: le pulizie dei test ora sfruttano il purge automaticamente.
+
+### Migrazione CHECK sale_items APPLICATA (2026-07-03, approvata dall'utente)
+ALTER TABLE sale_items ... CHECK (item_type IN ('service','product','package'))
+eseguito su Supabase: verificato e2e che la vendita pacchetto ora scrive
+item_type='package' con item_id del template (capability-check attivo senza
+riavvii aggiuntivi). NOTA operativa: dopo un riavvio del dev server la porta
+3000 puo' restare occupata da un processo zombie che serve 404/500 — killare
+il PID su :3000 prima di riavviare (visto oggi: login 404/500 ingannevoli).
+
+AUDIT PAGAMENTI: TUTTI i gap azionabili sono chiusi (P1-P6, P8-P10 +
+migrazione). Restano solo i differiti di sottosistema: FIDELITY (P7
+point_lots/scadenze punti, label punti dinamica, paginazione fidelity_wallet,
+campagne/adesione card, fallback saldo cards.credit) e MULTI-SEDE (P11
+scoping Gestione Rate + filtri all_locations trasversali).
