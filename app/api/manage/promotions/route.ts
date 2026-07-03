@@ -57,7 +57,14 @@ export async function POST(request: Request) {
       if (!can(session.user.perms, "promotions.manage")) return jsonError("Permesso promozioni mancante.", 403);
       const active = ["1", "true", "yes", "on"].includes((body.active ?? "").toLowerCase());
       const promotion = await toggleManagePromotion(tenantSlug, id, active, session.user.id);
-      return Response.json({ ok: true, source: "promotions?action=toggle", sourceMode: "database", promotion, promotions: await listDbPromotions(tenantSlug) });
+      return Response.json({
+        ok: true,
+        source: "promotions?action=toggle",
+        sourceMode: "database",
+        message: active ? "Promozione attivata" : "Promozione disattivata. Le prenotazioni in stato In sospeso/Prenotato collegate hanno perso la promozione.",
+        promotion,
+        promotions: await listDbPromotions(tenantSlug),
+      });
     }
 
     // Evaluate active promotions against a cart (port of Promotions::evaluatePromotion,
@@ -74,7 +81,13 @@ export async function POST(request: Request) {
     if (action === "delete") {
       if (!can(session.user.perms, "promotions.manage")) return jsonError("Permesso promozioni mancante.", 403);
       const result = await deleteManagePromotion(tenantSlug, id);
-      return Response.json({ source: "promotions?action=delete", sourceMode: "database", ...result, promotions: await listDbPromotions(tenantSlug) });
+      return Response.json({
+        source: "promotions?action=delete",
+        sourceMode: "database",
+        message: "Promozione eliminata definitivamente. Le prenotazioni in stato In sospeso/Prenotato collegate hanno perso la promozione.",
+        ...result,
+        promotions: await listDbPromotions(tenantSlug),
+      });
     }
 
     // Faithful promotion editor save (port of promotions.php POST action=new|edit).
@@ -82,7 +95,15 @@ export async function POST(request: Request) {
     if (action === "save" || action === "new" || action === "edit" || action === "update") {
       if (!can(session.user.perms, "promotions.manage")) return jsonError("Permesso promozioni mancante.", 403);
       const promotion = await saveManagePromotion(tenantSlug, body, id);
-      return Response.json({ ok: true, source: "promotions?action=save", sourceMode: "database", promotion, promotions: await listDbPromotions(tenantSlug) });
+      const isClone = (parseInteger(body.replace_source_id, 0) || 0) > 0;
+      return Response.json({
+        ok: true,
+        source: "promotions?action=save",
+        sourceMode: "database",
+        message: isClone ? "Campagna clonata salvata" : id > 0 ? "Promozione aggiornata" : "Promozione salvata",
+        promotion,
+        promotions: await listDbPromotions(tenantSlug),
+      });
     }
 
     if (!canAny(session.user.perms, ["promotions.manage", "pos.manage"])) return jsonError("Permesso promozioni mancante.", 403);

@@ -2122,3 +2122,57 @@ NULL + oggetto R2 rimosso (404); gallery sede throwaway: upload multiplo
 delete con rimozione oggetti. NB parametri route: gallery_image_id (non
 image_id). Con questo NESSUN upload dipende piu' dal filesystem: il deploy
 Amplify (filesystem effimero) e' sbloccato lato storage.
+
+## PROMOZIONI — CHIUSA (2026-07-03, 38 test e2e PASS)
+Fonte legacy: app/lib/Promotions.php (5436 righe) + promotions.php (2271) +
+consumer pos.php/api_appointments.php/booking.php. Batteria: e2e-promotions.mjs
+(tenant a 0 promozioni: campo libero; cleanup completo).
+STATO DI PARTENZA (molto meglio del previsto): motore di eleggibilita' e
+sconto gia' portato e fedele (percent per-unit, fixed pro-rata con
+largest-remainder, min_qty di gruppo, blackout, fasce orarie 1=Lun..7=Dom,
+esclusi, target new/inactive/birthday/fidelity coi reason verbatim,
+stackable bitmask 4/8), applicazione cablata su drawer/POS/booking pubblico
+con redemption. NON-GAP confermati dal sorgente legacy: total_limit,
+per_day_limit, min_subtotal, max_discount, discounted_qty, priority,
+show_in_booking sono COLONNE MORTE anche nel PHP (sempre NULL/forzate);
+il ranking legacy e' max-sconto (niente priority); coupon_code promo senza
+editor anche nel legacy; discount_mode 'price' legacy-data-only.
+GAP FIXATI:
+1. PER_CUSTOMER_LIMIT (unico limite che il legacy applica) NON era
+   enforced: portato promotionUsageCount (conteggio DEDUPLICATO su chiavi
+   appt:/sale:/red: con set annullati appuntamenti E vendite
+   +void/storno/rimborso, fail-open) + enforcement in
+   evaluatePromotionsForCart con reason "Limite utilizzi cliente raggiunto."
+   e EXCLUDE-SELF threading (evalBestPromotionForAppointment
+   excludeAppointmentId <- updateDbAppointment) cosi' la modifica di una
+   prenotazione non si auto-blocca (U3 verificato).
+2. clearPendingAppointmentsForPromotion era PARZIALE: ora come il legacy
+   (1381-1494) ripristina appointment_services.price = list_price + azzera
+   discount_badge, rimuove le righe "Promozione:" dalle note, stacca
+   promotion_id/conditions sul set pending legacy (sinonimi IT/EN) ed
+   elimina le redemption degli appuntamenti (quelle vendite restano:
+   storico). Verificato in T2 (90 -> 100, badge/redemption rimossi).
+3. Guardie di riattivazione mancanti: "Campagna completata: non può essere
+   riattivata." (ends_at passata), gate Fidelity ('Attiva prima la
+   Fidelity...'), fix etichetta elemento eliminato nel messaggio contenuti.
+4. LOCK STRUTTURALE: una promo con utilizzi collegati non e' modificabile
+   nella regola (confronto per firma JSON di date/sconti/scope/target/
+   fasce/sedi/mappings) — messaggio legacy verbatim; consentiti solo
+   titolo/descrizione/condizioni/esclusioni/stato (K1/K1b).
+5. GUARDIA ANTI-DUPLICATO (validateNoDuplicateScope): validita'
+   sovrapposta + stesso target(+finestra numerica) + stesse fasce/date
+   escluse + sedi sovrapposte + scope sovrapposto -> i 6 messaggi legacy
+   verbatim (all-vs-all, selected-vs-all, selected∩selected x
+   servizi/prodotti).
+6. CLONA-E-SOSTITUISCI: replace_source_id ritira la sorgente (is_active=0
+   SENZA staccare i pending: storico conservato, C1 verificato) +
+   messaggio "Campagna clonata salvata".
+7. Validazioni save allineate al legacy: sede obbligatoria, messaggi
+   "Se hai scelto...", per-item sconto>0 / percent<=100, prodotti globali,
+   fasce orarie ('Completa sia "Da" sia "A"...' / '"A" deve essere
+   successivo'), date escluse (con parse reale: 2026-13-45 rifiutata),
+   condizioni senza testo, selezionati disattivati/mancanti, gate Fidelity
+   sul target; messaggi route toggle/delete/save legacy.
+VERIFICA NUMERICA: 10% su 100+50 -> 15; fixed 30 pro-rata -> 20+10;
+min_qty gate; badge "-10%" e prezzi 100->90 sia in preview drawer sia
+sulle righe appointment_services dell'appuntamento reale (U1b).
