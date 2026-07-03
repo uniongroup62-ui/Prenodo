@@ -311,7 +311,8 @@ export function GiftInstanceContent({ slug: slugProp }: { slug?: string } = {}) 
                   </div>
                 </div>
 
-                <table className="table table-sm mt-3 mb-2">
+                <div className="text-muted small text-uppercase fw-semibold mt-3">Stato e date</div>
+                <table className="table table-sm mt-2 mb-2">
                   <tbody>
                     <tr><td className="text-muted">Creato</td><td className="text-end">{fmtDt(detail.createdAt)}</td></tr>
                     {detail.locationName ? <tr><td className="text-muted">Sede</td><td className="text-end">{detail.locationName}</td></tr> : null}
@@ -339,6 +340,9 @@ export function GiftInstanceContent({ slug: slugProp }: { slug?: string } = {}) 
                   <div className="text-muted small mt-2">Omaggio annullato{detail.cancelledAt ? ` il ${fmtDt(detail.cancelledAt)}` : ""}.</div>
                 ) : null}
                 {detail.state === "scaduto" ? <div className="text-muted small mt-2">Omaggio scaduto: non è più riscattabile.</div> : null}
+                {detail.state === "disponibile" ? (
+                  <div className="text-muted small mt-2">Questo gift è disponibile. Puoi registrare riscatti parziali dalla box Operazioni oppure annullarlo.</div>
+                ) : null}
               </div>
             </div>
 
@@ -370,7 +374,8 @@ export function GiftInstanceContent({ slug: slugProp }: { slug?: string } = {}) 
             {/* Operazioni: riscatto parziale */}
             <div className="card mb-3">
               <div className="card-body">
-                <h3 className="h6">Riscatta gift (anche parziale)</h3>
+                <h3 className="h6">Operazioni</h3>
+                <div className="text-muted small text-uppercase fw-semibold mb-2">Riscatta gift (anche parziale)</div>
                 {detail.pendingTotal > 0 ? (
                   <div className="alert alert-warning py-2">
                     Le quantità disponibili escludono {detail.pendingTotal} elemento/i già collegati a prenotazioni in attesa o prenotate.

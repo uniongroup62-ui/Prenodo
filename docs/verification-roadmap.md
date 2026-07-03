@@ -2293,3 +2293,48 @@ col-lg-7); il Next aveva le Campagne punti SOPRA a tutto e a tutta larghezza
 "Punti Fidelity attivi, ma nessuna campagna..." nel PHP live e' GIALLO
 (alert-warning), non alert-info -> ripristinato alert-warning (la conferma
 visiva dello screenshot batte la classificazione dell'audit sorgente).
+
+## OMAGGI (gifts / gift_instance) — PARITA GRAFICA + FUNZIONALE (2026-07-03)
+Legacy gifts.php ha DUE viste mutuamente esclusive; il Next mostrava una
+pagina unica divergente -> riscritta gifts-content.tsx:
+1. VISTA DEFAULT "Omaggi assegnati ai clienti": card con sottotitolo "Lista
+   di tutte le istanze generate (accumulo / disponibile / riscattato /
+   scaduto / annullato)." + meta "25 risultati per pagina"; filtri
+   Cliente/gift/Stato con "Filtra"/"Reset" condizionale; tabella
+   Data|Cliente(+badge Manuale)|gift|Sede|Stato|Scadenza|Dettagli(occhio ->
+   gift_instance?id=); paginazione "Pagina X di Y • Totale: N" con
+   "« Prev"/"Next »". Header: [Assegna gift outline-success][Campagne gift
+   outline-primary].
+2. VISTA ?action=campaigns "Campagne gift": header [<- Omaggi assegnati]
+   [Nuova campagna]; tabella Nome|Uso|Sede|Premio|Stato|Azioni con kebab
+   dropdown (Riepilogo/Modifica/Clona campagna/Disattiva-Attiva/Elimina con
+   confirm legacy "Eliminare questa campagna e tutti i movimenti
+   associati?"); badge stato Attiva/Completata/Sospesa/Disattivata/
+   Programmata come statusMeta legacy. Router: carve-out esplicito in
+   page.tsx per gifts&action=campaigns (FaithfulContent copre solo !action).
+3. MODALE "Assegna gift manualmente" (#assignGiftModal, prima form inline):
+   intro verbatim "Crea un'istanza in stato Disponibile...", Cliente
+   (datalist), gift filtrato sugli attivi + help "Sono visibili solo gli
+   omaggi attivi...", "Scadenza (giorni) (opzionale)" + help "Se vuoto, usa
+   la scadenza configurata sull'omaggio.", footer Annulla + "Assegna"
+   btn-success; round-trip force_ineligible conservato.
+4. MODALE "Riepilogo" campagna (mancava del tutto): card Configurazione
+   (Stato/Validita/Uso/Sedi abilitate/Premio/Descrizione) + card Statistiche
+   (Clienti coinvolti/Istanze totali/Accumulo/Disponibile/Riscattato/
+   Scaduto/Annullato/Ultimo sblocco/Ultimo riscatto/Ultimo annullamento/
+   Ultima attivita) con "Calcolo impatto in corso..." — nuova API GET
+   action=campaign_summary (giftCampaignSummaryStats, COUNT FILTER per
+   stato su gift_instances).
+5. gift_instance-content: card "Operazioni" con sotto-titolo "Riscatta gift
+   (anche parziale)", intestazione "Stato e date" sopra la tabella date,
+   testo contestuale stato disponibile ("Questo gift è disponibile. Puoi
+   registrare riscatti parziali dalla box Operazioni oppure annullarlo.").
+Verifica: 32/32 marker verbatim nel bundle (entrambe le viste + istanza);
+battery e2e 20/20 (save campagna -> lista -> summary a zero ->
+assign_manual_check -> assign_manual con scadenza 5gg -> istanza
+disponibile+Manuale -> summary 1/1/1 + lastUnlock -> cancel (annullato=1,
+lastCancel) -> delete_instance -> toggle off/on -> delete campagna, cleanup
+CLEAN; la cascata delete campagna rimuove istanze/transazioni/regole).
+DIVERGENZE DOCUMENTATE: modali ricchi cancel/delete della pagina istanza
+restano window.confirm con testo server; il modale Riepilogo non include
+l'editing inline Condizioni/esclusioni (coperto dall'editor).

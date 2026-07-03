@@ -1,6 +1,6 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
 import { deleteManageGift, getManageGift, giftFormCatalog, issueDbGift, listDbGifts, listManageGifts, redeemDbGift, saveManageGift, toggleManageGift } from "@/lib/db-repositories";
-import { assignGiftManual, cancelGiftInstance, checkGiftManualAssignmentEligibility, deleteClosedGiftInstance, getGiftInstanceDetail, listGiftInstances, redeemGiftInstanceItems, sendGiftVoucherEmailManage, updateGiftInstanceInternalNote, updateGiftInstanceNote } from "@/lib/gifts-instances";
+import { assignGiftManual, cancelGiftInstance, checkGiftManualAssignmentEligibility, deleteClosedGiftInstance, getGiftInstanceDetail, giftCampaignSummaryStats, listGiftInstances, redeemGiftInstanceItems, sendGiftVoucherEmailManage, updateGiftInstanceInternalNote, updateGiftInstanceNote } from "@/lib/gifts-instances";
 import { currentManageSession } from "@/lib/manage-auth";
 import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -44,6 +44,15 @@ export async function GET(request: Request) {
     if (action === "campaigns") {
       if (!can(session.user.perms, "gifts.manage")) return jsonError("Permesso omaggi mancante.", 403);
       return Response.json({ ok: true, sourceMode: "database", campaigns: await listManageGifts(tenantSlug) });
+    }
+
+    // Statistiche campagna per il modale "Riepilogo" legacy (gifts.php
+    // #giftSummaryModal, card "Statistiche"): conteggi per stato + clienti
+    // coinvolti + ultime attivita' dell'istanza.
+    if (action === "campaign_summary") {
+      if (!can(session.user.perms, "gifts.manage")) return jsonError("Permesso omaggi mancante.", 403);
+      const stats = await giftCampaignSummaryStats(tenantSlug, parseInteger(url.searchParams.get("id"), 0));
+      return Response.json({ ok: true, sourceMode: "database", stats });
     }
 
     // Istanze assegnate (gifts.php ~1155-1591): filtri inst_client_id /

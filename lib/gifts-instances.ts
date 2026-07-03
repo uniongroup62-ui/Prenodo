@@ -1163,3 +1163,64 @@ export async function getGiftVoucherByToken(slug: string, tokenRaw: string): Pro
     },
   };
 }
+
+// Statistiche campagna per il modale "Riepilogo" legacy (gifts.php card
+// "Statistiche"): clienti coinvolti, istanze totali e per stato, ultime
+// attivita' (sblocco/riscatto/annullamento/ultima attivita').
+export type GiftCampaignSummaryStats = {
+  clients: number;
+  total: number;
+  accumulo: number;
+  disponibile: number;
+  riscattato: number;
+  scaduto: number;
+  annullato: number;
+  lastUnlock: string;
+  lastRedeem: string;
+  lastCancel: string;
+  lastActivity: string;
+};
+
+export async function giftCampaignSummaryStats(slug: string, giftId: number): Promise<GiftCampaignSummaryStats> {
+  const empty: GiftCampaignSummaryStats = { clients: 0, total: 0, accumulo: 0, disponibile: 0, riscattato: 0, scaduto: 0, annullato: 0, lastUnlock: "", lastRedeem: "", lastCancel: "", lastActivity: "" };
+  if (giftId <= 0) return empty;
+  try {
+    const table = await tenantTable(slug, "gift_instances");
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT COUNT(*) total,
+              COUNT(DISTINCT client_id) clients,
+              COUNT(*) FILTER (WHERE LOWER(COALESCE(state,'')) = 'accumulo') accumulo,
+              COUNT(*) FILTER (WHERE LOWER(COALESCE(state,'')) = 'disponibile') disponibile,
+              COUNT(*) FILTER (WHERE LOWER(COALESCE(state,'')) = 'riscattato') riscattato,
+              COUNT(*) FILTER (WHERE LOWER(COALESCE(state,'')) = 'scaduto') scaduto,
+              COUNT(*) FILTER (WHERE LOWER(COALESCE(state,'')) = 'annullato') annullato,
+              MAX(unlocked_at) last_unlock,
+              MAX(redeemed_at) last_redeem,
+              MAX(cancelled_at) last_cancel,
+              GREATEST(COALESCE(MAX(created_at), '1970-01-01'), COALESCE(MAX(updated_at), '1970-01-01')) last_activity
+         FROM ${quoteIdentifier(table.name)}
+        WHERE tenant_id = ? AND gift_id = ?`,
+      [table.tenantId ?? 0, giftId],
+    );
+    const r = rows[0] ?? {};
+    const dt = (v: unknown): string => {
+      const s = v ? String(v instanceof Date ? v.toISOString() : v) : "";
+      return s && !s.startsWith("1970-") ? s.slice(0, 16).replace("T", " ") : "";
+    };
+    return {
+      clients: Number(r.clients ?? 0),
+      total: Number(r.total ?? 0),
+      accumulo: Number(r.accumulo ?? 0),
+      disponibile: Number(r.disponibile ?? 0),
+      riscattato: Number(r.riscattato ?? 0),
+      scaduto: Number(r.scaduto ?? 0),
+      annullato: Number(r.annullato ?? 0),
+      lastUnlock: dt(r.last_unlock),
+      lastRedeem: dt(r.last_redeem),
+      lastCancel: dt(r.last_cancel),
+      lastActivity: dt(r.last_activity),
+    };
+  } catch {
+    return empty;
+  }
+}

@@ -93,16 +93,27 @@ export function GiftsContent({ slug: slugProp }: { slug?: string } = {}) {
   const [assignClient, setAssignClient] = useState("");
   const [assignDays, setAssignDays] = useState("");
   const [clients, setClients] = useState<Array<{ id: number; name: string }>>([]);
+  // Vista legacy: default = lista istanze (Omaggi assegnati); ?action=campaigns = Campagne gift.
+  const [view] = useState<"list" | "campaigns">(() => {
+    if (typeof window === "undefined") return "list";
+    return new URLSearchParams(window.location.search).get("action") === "campaigns" ? "campaigns" : "list";
+  });
+  const [instGiftId, setInstGiftId] = useState(0);
+  const [locations, setLocations] = useState<Array<{ id: number; name: string }>>([]);
+  const [openMenuId, setOpenMenuId] = useState(0);
+  const [summaryFor, setSummaryFor] = useState<Campaign | null>(null);
+  const [summaryStats, setSummaryStats] = useState<Record<string, unknown> | null>(null);
 
   const loadInstances = useCallback(() => {
     const params = new URLSearchParams({ slug, action: "instances", inst_p: String(instPage) });
     if (instState) params.set("inst_state", instState);
     if (instClientId > 0) params.set("inst_client_id", String(instClientId));
+    if (instGiftId > 0) params.set("inst_gift_id", String(instGiftId));
     return fetch(`/api/manage/gifts?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
       .then((j) => setInstances((j.instances ?? null) as InstancesPage | null))
       .catch(() => setInstances(null));
-  }, [slug, instPage, instState, instClientId]);
+  }, [slug, instPage, instState, instClientId, instGiftId]);
 
   useEffect(() => { loadInstances(); }, [loadInstances]);
 
@@ -115,7 +126,23 @@ export function GiftsContent({ slug: slugProp }: { slug?: string } = {}) {
         setClients(list.map((c: { id: number; full_name?: string; name?: string }) => ({ id: Number(c.id), name: String(c.full_name ?? c.name ?? `#${c.id}`) })));
       })
       .catch(() => setClients([]));
-  }, [assignOpen, clients.length, slug]);
+  }, [clients.length, slug]);
+
+  useEffect(() => {
+    fetch(`/api/manage/locations?slug=${encodeURIComponent(slug)}`, { headers: { "x-tenant-slug": slug } })
+      .then((r) => r.json())
+      .then((j) => setLocations(Array.isArray(j.locations) ? j.locations.map((l: { id: number; name?: string }) => ({ id: Number(l.id), name: String(l.name ?? `Sede #${l.id}`) })) : []))
+      .catch(() => setLocations([]));
+  }, [slug]);
+
+  // Stats per il modale Riepilogo.
+  useEffect(() => {
+    if (!summaryFor) { setSummaryStats(null); return; }
+    fetch(`/api/manage/gifts?slug=${encodeURIComponent(slug)}&action=campaign_summary&id=${summaryFor.id}`, { headers: { "x-tenant-slug": slug } })
+      .then((r) => r.json())
+      .then((j) => setSummaryStats(j.stats ?? null))
+      .catch(() => setSummaryStats(null));
+  }, [summaryFor, slug]);
 
   const load = useCallback(() => {
     return fetch(`/api/manage/gifts?slug=${encodeURIComponent(slug)}&action=campaigns`, { headers: { "x-tenant-slug": slug } })
@@ -171,7 +198,7 @@ export function GiftsContent({ slug: slugProp }: { slug?: string } = {}) {
   }
 
   async function remove(c: Campaign) {
-    if (!window.confirm(`Eliminare la campagna omaggio "${c.name}"? Le istanze accumulate e i premi collegati verranno rimossi.`)) return;
+    if (!window.confirm(`Eliminare questa campagna e tutti i movimenti associati?`)) return;
     const j = await post({ action: "delete", id: String(c.id) });
     if (j) setMsg("Campagna eliminata.");
   }
@@ -221,6 +248,25 @@ export function GiftsContent({ slug: slugProp }: { slug?: string } = {}) {
     }
   }
 
+
+  // Badge stato campagna legacy (campaignStatusMeta): Sospesa (auto-off da
+  // Fidelity), Disattivata, Completata (finestra chiusa), Programmata (futura),
+  // Attiva.
+  function campaignStatusMeta(c: Campaign): { label: string; badge: string } {
+    const today = new Date().toISOString().slice(0, 10);
+    if (c.autoDisabled) return { label: "Sospesa", badge: "warning text-dark" };
+    if (!c.active) return { label: "Disattivata", badge: "secondary" };
+    if (c.validTo && c.validTo.slice(0, 10) < today) return { label: "Completata", badge: "dark" };
+    if (c.validFrom && c.validFrom.slice(0, 10) > today) return { label: "Programmata", badge: "info" };
+    return { label: "Attiva", badge: "success" };
+  }
+  const locationNames = (ids: number[]): string => {
+    if (!ids.length) return "Tutte le sedi";
+    return ids.map((id) => locations.find((l) => l.id === id)?.name ?? `Sede #${id}`).join(", ");
+  };
+
+  const emptyState = !loading && campaigns.length === 0 && (instances?.total ?? 0) === 0;
+
   return (
     <div className="container-fluid">
       <link rel="stylesheet" href="/assets/css/pages/gifts.css" />
@@ -228,15 +274,36 @@ export function GiftsContent({ slug: slugProp }: { slug?: string } = {}) {
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Fidelity</div>
-          <h1 className="bs-page-title">Fidelity / Omaggi</h1>
-          <div className="bs-page-subtitle">Omaggi avanzati con regole e tracking automatico.</div>
+          <h1 className="bs-page-title">{view === "campaigns" ? "Fidelity / Campagne gift" : "Fidelity / Omaggi"}</h1>
+          <div className="bs-page-subtitle">
+            {view === "campaigns" ? "Gestisci campagne, premi, sedi e stati." : "Omaggi avanzati con regole e tracking automatico."}
+          </div>
         </div>
         <div className="bs-page-actions">
           <div className="d-flex gap-2">
-            <a className="btn btn-primary" href={href("&action=new")}>
-              <i className="bi bi-plus-lg me-1" />
-              Nuova campagna
-            </a>
+            {view === "campaigns" ? (
+              <>
+                <a className="btn btn-outline-secondary" href={href("")}>
+                  <i className="bi bi-arrow-left me-1" />
+                  Omaggi assegnati
+                </a>
+                {!emptyState ? (
+                  <a className="btn btn-primary" href={href("&action=new")}>
+                    Nuova campagna
+                  </a>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <button className="btn btn-outline-success" type="button" disabled={campaigns.length === 0} onClick={() => setAssignOpen(true)}>
+                  <i className="bi bi-person-plus me-1" />
+                  Assegna gift
+                </button>
+                <a className="btn btn-outline-primary" href={href("&action=campaigns")}>
+                  Campagne gift
+                </a>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -244,7 +311,7 @@ export function GiftsContent({ slug: slugProp }: { slug?: string } = {}) {
       {msg ? <div className="alert alert-success">{msg}</div> : null}
       {err ? <div className="alert alert-danger">{err}</div> : null}
 
-      {!loading && campaigns.length === 0 ? (
+      {emptyState ? (
         <div className="card border-0 shadow-sm gifts-empty-card">
           <div className="gifts-empty-state">
             <div className="gifts-empty-icon" aria-hidden="true">
@@ -260,203 +327,330 @@ export function GiftsContent({ slug: slugProp }: { slug?: string } = {}) {
             </div>
           </div>
         </div>
-      ) : (
-        <>
-          <div className="card p-3 mb-3">
-            <form className="row g-2 align-items-end" onSubmit={(e) => e.preventDefault()}>
-              <div className="col-lg-6">
-                <label className="form-label">Cerca</label>
-                <input className="form-control" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Nome, premio o descrizione" />
-              </div>
-              <div className="col-lg-3">
-                <label className="form-label">Stato</label>
-                <select className="form-select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-                  <option value="">Tutte</option>
-                  <option value="active">Attive</option>
-                  <option value="inactive">Disattivate</option>
-                </select>
-              </div>
-            </form>
+      ) : view === "campaigns" ? (
+        /* ===== VISTA CAMPAGNE (gifts.php action=campaigns) ===== */
+        <div className="card">
+          <div className="card-header d-flex justify-content-between align-items-center">
+            <span className="fw-semibold">Campagne gift</span>
+            <span className="text-muted small">{filtered.length} campagne</span>
           </div>
-
-          <div className="card">
-            <div className="table-responsive">
-              <table className="table mb-0 align-middle">
-                <thead>
-                  <tr>
-                    <th>Campagna</th>
-                    <th>Premio</th>
-                    <th>Validità</th>
-                    <th>Stato</th>
-                    <th className="text-end">Istanze</th>
-                    <th className="text-end">Azioni</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filtered.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="text-muted p-3">
-                        {loading ? "Caricamento…" : "Nessuna campagna trovata."}
-                      </td>
-                    </tr>
-                  ) : (
-                    filtered.map((c) => (
+          <div className="table-responsive gifts-campaigns-table-wrap">
+            <table className="table align-middle mb-0">
+              <thead>
+                <tr>
+                  <th>Nome</th>
+                  <th>Uso</th>
+                  <th>Sede</th>
+                  <th>Premio</th>
+                  <th className="text-center">Stato</th>
+                  <th className="text-end gifts-campaign-actions-col">Azioni</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr><td colSpan={6} className="text-muted p-3">Caricamento…</td></tr>
+                ) : filtered.length === 0 ? (
+                  <tr><td colSpan={6} className="text-muted p-3">Nessun omaggio configurato.</td></tr>
+                ) : (
+                  filtered.map((c) => {
+                    const meta = campaignStatusMeta(c);
+                    return (
                       <tr key={c.id}>
                         <td>
                           <div className="fw-semibold">{c.name}</div>
                           {c.description ? <div className="text-muted small">{c.description}</div> : null}
-                          {c.fidelityOnly ? <span className="badge bg-info text-dark mt-1">Solo Fidelity</span> : null}
                         </td>
-                        <td>{c.rewardSummary}</td>
-                        <td>{c.validFrom || c.validTo ? `${fmtDate(c.validFrom) || "…"} – ${fmtDate(c.validTo) || "…"}` : <span className="text-muted">Sempre</span>}</td>
-                        <td>
-                          {c.active ? <span className="badge bg-success">Attiva</span> : <span className="badge bg-secondary">Disattivata</span>}
-                          {c.active && c.isCurrentlyActive ? <span className="badge bg-primary ms-1">In corso</span> : null}
-                          {c.autoDisabled ? <span className="badge bg-warning text-dark ms-1">Auto-off</span> : null}
+                        <td className="text-muted small">{c.fidelityOnly ? "Solo clienti con Fidelity" : "Tutti i clienti"}</td>
+                        <td className="text-muted small">{locationNames(c.locationIds)}</td>
+                        <td className="text-muted small">{c.rewardSummary || "—"}</td>
+                        <td className="text-center">
+                          <span className={`badge text-bg-${meta.badge}`}>{meta.label}</span>
                         </td>
-                        <td className="text-end">{c.instancesCount}</td>
-                        <td className="text-end">
-                          <a className="btn btn-sm btn-outline-primary me-1" href={href(`&action=edit&id=${c.id}`)}>
-                            <i className="bi bi-pencil" /> Modifica
-                          </a>
-                          <a className="btn btn-sm btn-outline-secondary me-1" href={href(`&action=clone&id=${c.id}`)} title="Clona campagna">
-                            <i className="bi bi-files" /> Clona
-                          </a>
-                          <button className="btn btn-sm btn-outline-secondary me-1" type="button" onClick={() => toggle(c)} disabled={busy}>
-                            {c.active ? "Disattiva" : "Attiva"}
-                          </button>
-                          <button className="btn btn-sm btn-outline-danger" type="button" onClick={() => remove(c)} disabled={busy}>
-                            <i className="bi bi-trash" /> Elimina
-                          </button>
+                        <td className="text-end gifts-campaign-actions">
+                          <div className={`dropdown ${openMenuId === c.id ? "show" : ""}`}>
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-outline-secondary gifts-campaign-actions__trigger"
+                              aria-label={`Azioni campagna ${c.name}`}
+                              onClick={() => setOpenMenuId(openMenuId === c.id ? 0 : c.id)}
+                            >
+                              <i className="bi bi-three-dots-vertical" />
+                            </button>
+                            <ul className={`dropdown-menu dropdown-menu-end ${openMenuId === c.id ? "show" : ""}`}>
+                              <li>
+                                <button className="dropdown-item" type="button" onClick={() => { setOpenMenuId(0); setSummaryFor(c); }}>
+                                  <i className="bi bi-card-list me-2" />
+                                  Riepilogo
+                                </button>
+                              </li>
+                              <li>
+                                <a className="dropdown-item" href={href(`&action=edit&id=${c.id}`)}>
+                                  <i className="bi bi-pencil me-2" />
+                                  Modifica
+                                </a>
+                              </li>
+                              <li>
+                                <a className="dropdown-item" href={href(`&action=clone&id=${c.id}`)}>
+                                  <i className="bi bi-files me-2" />
+                                  Clona campagna
+                                </a>
+                              </li>
+                              <li><hr className="dropdown-divider" /></li>
+                              <li>
+                                <button className="dropdown-item" type="button" disabled={busy} onClick={() => { setOpenMenuId(0); void toggle(c); }}>
+                                  <i className={`bi ${c.active ? "bi-pause-circle" : "bi-play-circle"} me-2`} />
+                                  {c.active ? "Disattiva" : "Attiva"}
+                                </button>
+                              </li>
+                              <li><hr className="dropdown-divider" /></li>
+                              <li>
+                                <button className="dropdown-item text-danger" type="button" disabled={busy} onClick={() => { setOpenMenuId(0); void remove(c); }}>
+                                  <i className="bi bi-trash me-2" />
+                                  Elimina
+                                </button>
+                              </li>
+                            </ul>
+                          </div>
                         </td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
           </div>
-
-          {/* OMAGGI ASSEGNATI (gifts.php vista istanze ~1155-1591) */}
-          <div className="card mt-3">
-            <div className="card-body pb-0">
-              <div className="d-flex justify-content-between align-items-end flex-wrap gap-2 mb-2">
-                <div>
-                  <h2 className="h6 mb-1">Omaggi assegnati</h2>
-                  <div className="text-muted small">Istanze accumulate, disponibili e riscattate dei clienti.</div>
-                </div>
-                <div className="d-flex gap-2 align-items-end flex-wrap">
-                  <div>
-                    <label className="form-label small mb-1">Stato</label>
-                    <select className="form-select form-select-sm" value={instState} onChange={(e) => { setInstState(e.target.value); setInstPage(1); }}>
-                      <option value="">Tutti</option>
-                      <option value="accumulo">Accumulo</option>
-                      <option value="disponibile">Disponibile</option>
-                      <option value="riscattato">Riscattato</option>
-                      <option value="scaduto">Scaduto</option>
-                      <option value="annullato">Annullato</option>
-                    </select>
-                  </div>
-                  {instClientId > 0 ? (
-                    <button className="btn btn-sm btn-outline-secondary" type="button" onClick={() => { setInstClientId(0); setInstPage(1); }}>
-                      Cliente #{instClientId} ✕
-                    </button>
-                  ) : null}
-                  <button className="btn btn-sm btn-success" type="button" onClick={() => setAssignOpen((v) => !v)}>
-                    <i className="bi bi-check2 me-1" />
-                    Assegna gift manualmente
+        </div>
+      ) : (
+        /* ===== VISTA LISTA ISTANZE (gifts.php default: "Omaggi assegnati ai clienti") ===== */
+        <div className="card">
+          <div className="card-header d-flex justify-content-between align-items-center">
+            <div>
+              <span className="fw-semibold">Omaggi assegnati ai clienti</span>
+              <div className="text-muted small">Lista di tutte le istanze generate (accumulo / disponibile / riscattato / scaduto / annullato).</div>
+            </div>
+            <span className="text-muted small">25 risultati per pagina</span>
+          </div>
+          <div className="card-body pb-0">
+            <form className="row g-2 align-items-end" onSubmit={(e) => { e.preventDefault(); setInstPage(1); void loadInstances(); }}>
+              <div className="col-lg-3">
+                <label className="form-label small">Cliente</label>
+                <select className="form-select form-select-sm" value={String(instClientId)} onChange={(e) => { setInstClientId(Number(e.target.value) || 0); setInstPage(1); }}>
+                  <option value="0">Tutti</option>
+                  {clients.map((c) => (
+                    <option value={c.id} key={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="col-lg-3">
+                <label className="form-label small">gift</label>
+                <select className="form-select form-select-sm" value={String(instGiftId)} onChange={(e) => { setInstGiftId(Number(e.target.value) || 0); setInstPage(1); }}>
+                  <option value="0">Tutti</option>
+                  {campaigns.map((c) => (
+                    <option value={c.id} key={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="col-lg-2">
+                <label className="form-label small">Stato</label>
+                <select className="form-select form-select-sm" value={instState} onChange={(e) => { setInstState(e.target.value); setInstPage(1); }}>
+                  <option value="">Tutti</option>
+                  <option value="accumulo">Accumulo</option>
+                  <option value="disponibile">Disponibile</option>
+                  <option value="riscattato">Riscattato</option>
+                  <option value="scaduto">Scaduto</option>
+                  <option value="annullato">Annullato</option>
+                </select>
+              </div>
+              <div className="col-lg-4 d-flex gap-2">
+                <button className="btn btn-sm btn-outline-primary" type="submit">
+                  <i className="bi bi-search me-1" />
+                  Filtra
+                </button>
+                {instClientId > 0 || instGiftId > 0 || instState !== "" ? (
+                  <button className="btn btn-sm btn-outline-secondary" type="button" onClick={() => { setInstClientId(0); setInstGiftId(0); setInstState(""); setInstPage(1); }}>
+                    Reset
                   </button>
-                </div>
+                ) : null}
               </div>
-
-              {assignOpen ? (
-                <form className="border rounded p-3 mb-3" onSubmit={submitAssign}>
-                  <div className="row g-2 align-items-end">
-                    <div className="col-lg-4">
-                      <label className="form-label small">Campagna</label>
-                      <select className="form-select form-select-sm" value={assignGiftId} onChange={(e) => setAssignGiftId(e.target.value)} required>
-                        <option value="">Seleziona campagna…</option>
-                        {campaigns.filter((c) => c.active).map((c) => (
-                          <option key={c.id} value={String(c.id)}>{c.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="col-lg-4">
-                      <label className="form-label small">Cliente</label>
-                      <input className="form-control form-control-sm" list="giftAssignClients" value={assignClient} onChange={(e) => setAssignClient(e.target.value)} placeholder="Cerca cliente…" required />
-                      <datalist id="giftAssignClients">
-                        {clients.map((c) => (
-                          <option key={c.id} value={`${c.name} #${c.id}`} />
-                        ))}
-                      </datalist>
-                    </div>
-                    <div className="col-lg-2">
-                      <label className="form-label small">Scadenza (giorni)</label>
-                      <input className="form-control form-control-sm" type="number" min={1} value={assignDays} onChange={(e) => setAssignDays(e.target.value)} placeholder="Predefinita" />
-                    </div>
-                    <div className="col-lg-2">
-                      <button className="btn btn-sm btn-success w-100" type="submit" disabled={busy}>Assegna</button>
-                    </div>
-                  </div>
-                  <div className="form-text mt-1">
-                    Crea un&apos;istanza in stato <strong>Disponibile</strong> per il cliente, anche se non ha ancora completato le regole. Se vuoto, usa la scadenza configurata sull&apos;omaggio.
-                  </div>
-                </form>
-              ) : null}
-            </div>
-            <div className="table-responsive">
-              <table className="table mb-0 align-middle">
-                <thead>
-                  <tr>
-                    <th>Data</th>
-                    <th>Cliente</th>
-                    <th>Gift</th>
-                    <th>Sede</th>
-                    <th>Stato</th>
-                    <th>Scadenza</th>
-                    <th className="text-end">Dettagli</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {!instances || instances.rows.length === 0 ? (
-                    <tr>
-                      <td colSpan={7} className="text-muted p-3">Nessun omaggio assegnato trovato.</td>
-                    </tr>
-                  ) : (
-                    instances.rows.map((r) => (
-                      <tr key={r.id}>
-                        <td>{fmtDtShort(r.createdAt)}</td>
-                        <td>
-                          {r.clientName}
-                          {r.manual ? <span className="badge text-bg-info ms-1">Manuale</span> : null}
-                        </td>
-                        <td>{r.giftName}</td>
-                        <td>{r.locationName || "—"}</td>
-                        <td><span className={`badge ${instStateBadge(r.state)} text-uppercase`}>{r.state}</span></td>
-                        <td>{r.expiresAt ? fmtDtShort(r.expiresAt) : "—"}</td>
-                        <td className="text-end">
-                          <a className="btn btn-sm btn-outline-primary" href={`/${encodeURIComponent(slug)}/gift_instance?id=${r.id}`} title="Apri dettagli">
-                            <i className="bi bi-eye" />
-                          </a>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-            {instances && instances.totalPages > 1 ? (
-              <div className="d-flex justify-content-between align-items-center p-2 border-top">
-                <span className="text-muted small">Pagina {instances.page} di {instances.totalPages} • {instances.total} istanze</span>
-                <div className="btn-group">
-                  <button className="btn btn-sm btn-outline-secondary" type="button" disabled={instances.page <= 1} onClick={() => setInstPage((p) => Math.max(1, p - 1))}>‹</button>
-                  <button className="btn btn-sm btn-outline-secondary" type="button" disabled={instances.page >= instances.totalPages} onClick={() => setInstPage((p) => p + 1)}>›</button>
-                </div>
-              </div>
-            ) : null}
+            </form>
           </div>
-        </>
+          <div className="table-responsive">
+            <table className="table align-middle mb-0">
+              <thead>
+                <tr>
+                  <th>Data</th>
+                  <th>Cliente</th>
+                  <th>gift</th>
+                  <th>Sede</th>
+                  <th className="text-center">Stato</th>
+                  <th className="text-muted">Scadenza</th>
+                  <th className="text-end">Dettagli</th>
+                </tr>
+              </thead>
+              <tbody>
+                {!instances || instances.rows.length === 0 ? (
+                  <tr><td colSpan={7} className="text-muted p-3">Nessun omaggio assegnato trovato.</td></tr>
+                ) : (
+                  instances.rows.map((r) => (
+                    <tr key={r.id}>
+                      <td className="text-muted small">{fmtDtShort(r.createdAt)}</td>
+                      <td>
+                        {r.clientName}
+                        {r.manual ? <span className="badge text-bg-info ms-2">Manuale</span> : null}
+                      </td>
+                      <td>{r.giftName}</td>
+                      <td className="text-muted small">{r.locationName || "—"}</td>
+                      <td className="text-center">
+                        <span className={`badge ${instStateBadge(r.state)} text-uppercase`}>{r.state}</span>
+                      </td>
+                      <td className="text-muted small">{r.expiresAt ? fmtDtShort(r.expiresAt) : "—"}</td>
+                      <td className="text-end">
+                        <a className="btn btn-sm btn-outline-secondary" title="Apri dettagli" href={`/${encodeURIComponent(slug)}/gift_instance?id=${r.id}`}>
+                          <i className="bi bi-eye" />
+                        </a>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+          {instances && instances.totalPages > 1 ? (
+            <div className="card-footer d-flex justify-content-between align-items-center">
+              <span className="text-muted small">Pagina {instances.page} di {instances.totalPages} • Totale: {instances.total}</span>
+              <div className="d-flex gap-2">
+                <button className="btn btn-sm btn-outline-secondary" type="button" disabled={instances.page <= 1} onClick={() => setInstPage(instances.page - 1)}>
+                  « Prev
+                </button>
+                <button className="btn btn-sm btn-outline-secondary" type="button" disabled={instances.page >= instances.totalPages} onClick={() => setInstPage(instances.page + 1)}>
+                  Next »
+                </button>
+              </div>
+            </div>
+          ) : instances ? (
+            <div className="card-footer text-muted small">Totale: {instances.total}</div>
+          ) : null}
+        </div>
       )}
+
+      {/* MODALE "Assegna gift manualmente" (#assignGiftModal). */}
+      {assignOpen ? (
+        <div className="modal fade show d-block" id="assignGiftModal" tabIndex={-1} style={{ background: "rgba(0,0,0,.5)" }}>
+          <div className="modal-dialog modal-lg modal-dialog-centered">
+            <form className="modal-content" onSubmit={submitAssign}>
+              <div className="modal-header">
+                <h5 className="modal-title fw-bold m-0">Assegna gift manualmente</h5>
+                <button type="button" className="btn-close" aria-label="Chiudi" onClick={() => setAssignOpen(false)} />
+              </div>
+              <div className="modal-body">
+                <div className="text-muted small mb-3">
+                  Crea un&apos;istanza in stato Disponibile per il cliente, anche se non ha ancora completato le regole. Se il cliente non è idoneo all&apos;omaggio, prima del salvataggio verrà chiesto se vuoi assegnarlo comunque.
+                </div>
+                <div className="row g-3">
+                  <div className="col-md-6">
+                    <label className="form-label">Cliente</label>
+                    <input className="form-control" list="giftAssignClients" placeholder="— seleziona —" value={assignClient} onChange={(e) => setAssignClient(e.target.value)} />
+                    <datalist id="giftAssignClients">
+                      {clients.map((c) => (
+                        <option value={`${c.name} #${c.id}`} key={c.id} />
+                      ))}
+                    </datalist>
+                  </div>
+                  <div className="col-md-6">
+                    <label className="form-label">gift</label>
+                    <select className="form-select" value={assignGiftId} onChange={(e) => setAssignGiftId(e.target.value)}>
+                      <option value="">— seleziona —</option>
+                      {campaigns.filter((c) => c.isCurrentlyActive || c.active).map((c) => (
+                        <option value={c.id} key={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                    <div className="form-text">Sono visibili solo gli omaggi attivi, nel periodo di validità e validi per la sede corrente.</div>
+                  </div>
+                  <div className="col-md-4">
+                    <label className="form-label">Scadenza (giorni) (opzionale)</label>
+                    <input className="form-control" type="number" min="1" placeholder="—" value={assignDays} onChange={(e) => setAssignDays(e.target.value)} />
+                    <div className="form-text">Se vuoto, usa la scadenza configurata sull&apos;omaggio.</div>
+                  </div>
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button className="btn btn-outline-secondary" type="button" onClick={() => setAssignOpen(false)}>
+                  Annulla
+                </button>
+                <button className="btn btn-success" type="submit" disabled={busy}>
+                  <i className="bi bi-check2 me-1" />
+                  Assegna
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+
+      {/* MODALE "Riepilogo" campagna (#giftSummaryModal): Configurazione + Statistiche. */}
+      {summaryFor ? (
+        <div className="modal fade show d-block" tabIndex={-1} style={{ background: "rgba(0,0,0,.5)" }}>
+          <div className="modal-dialog modal-xl modal-dialog-scrollable">
+            <div className="modal-content">
+              <div className="modal-header">
+                <div>
+                  <h5 className="modal-title fw-bold m-0">{summaryFor.name}</h5>
+                  <div className="text-muted small">Riepilogo campagna omaggio</div>
+                </div>
+                <button type="button" className="btn-close" aria-label="Chiudi" onClick={() => setSummaryFor(null)} />
+              </div>
+              <div className="modal-body">
+                <div className="row g-3">
+                  <div className="col-lg-6">
+                    <div className="card p-3 h-100">
+                      <div className="text-muted small text-uppercase fw-semibold mb-2">Configurazione</div>
+                      <table className="table table-sm mb-0">
+                        <tbody>
+                          <tr><th className="text-muted">Stato</th><td><span className={`badge text-bg-${campaignStatusMeta(summaryFor).badge}`}>{campaignStatusMeta(summaryFor).label}</span></td></tr>
+                          <tr><th className="text-muted">Validità</th><td>{summaryFor.validFrom ? fmtDate(summaryFor.validFrom.slice(0, 10)) : "—"} – {summaryFor.validTo ? fmtDate(summaryFor.validTo.slice(0, 10)) : "—"}</td></tr>
+                          <tr><th className="text-muted">Uso</th><td>{summaryFor.fidelityOnly ? "Solo clienti con Fidelity" : "Tutti i clienti"}</td></tr>
+                          <tr><th className="text-muted">Sedi abilitate</th><td>{locationNames(summaryFor.locationIds)}</td></tr>
+                          <tr><th className="text-muted">Premio</th><td>{summaryFor.rewardSummary || "—"}</td></tr>
+                          {summaryFor.description ? <tr><th className="text-muted">Descrizione</th><td>{summaryFor.description}</td></tr> : null}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                  <div className="col-lg-6">
+                    <div className="card p-3 h-100">
+                      <div className="text-muted small text-uppercase fw-semibold mb-2">Statistiche</div>
+                      {!summaryStats ? (
+                        <div className="text-muted small">Calcolo impatto in corso...</div>
+                      ) : (
+                        <table className="table table-sm mb-0">
+                          <tbody>
+                            <tr><th className="text-muted">Clienti coinvolti</th><td className="text-end">{String(summaryStats.clients ?? 0)}</td></tr>
+                            <tr><th className="text-muted">Istanze totali</th><td className="text-end">{String(summaryStats.total ?? 0)}</td></tr>
+                            <tr><th className="text-muted">Accumulo</th><td className="text-end">{String(summaryStats.accumulo ?? 0)}</td></tr>
+                            <tr><th className="text-muted">Disponibile</th><td className="text-end">{String(summaryStats.disponibile ?? 0)}</td></tr>
+                            <tr><th className="text-muted">Riscattato</th><td className="text-end">{String(summaryStats.riscattato ?? 0)}</td></tr>
+                            <tr><th className="text-muted">Scaduto</th><td className="text-end">{String(summaryStats.scaduto ?? 0)}</td></tr>
+                            <tr><th className="text-muted">Annullato</th><td className="text-end">{String(summaryStats.annullato ?? 0)}</td></tr>
+                            <tr><th className="text-muted">Ultimo sblocco</th><td className="text-end">{String(summaryStats.lastUnlock || "—")}</td></tr>
+                            <tr><th className="text-muted">Ultimo riscatto</th><td className="text-end">{String(summaryStats.lastRedeem || "—")}</td></tr>
+                            <tr><th className="text-muted">Ultimo annullamento</th><td className="text-end">{String(summaryStats.lastCancel || "—")}</td></tr>
+                            <tr><th className="text-muted">Ultima attività</th><td className="text-end">{String(summaryStats.lastActivity || "—")}</td></tr>
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button className="btn btn-outline-secondary" type="button" onClick={() => setSummaryFor(null)}>
+                  Chiudi
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

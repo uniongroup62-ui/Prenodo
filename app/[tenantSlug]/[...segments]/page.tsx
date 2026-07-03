@@ -395,7 +395,17 @@ export default async function TenantPage({
   if (page === "gifts" && (query.action === "new" || query.action === "edit" || query.action === "clone")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
-        <GiftFormContent />
+        <GiftFormContent slug={tenantSlug} />
+      </ManageShell>
+    );
+  }
+
+  // Vista "Campagne gift" legacy (gifts.php action=campaigns): stessa
+  // GiftsContent, che legge ?action=campaigns e mostra SOLO le campagne.
+  if (page === "gifts" && query.action === "campaigns") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <GiftsContent slug={tenantSlug} />
       </ManageShell>
     );
   }
