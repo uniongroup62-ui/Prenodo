@@ -80,8 +80,10 @@ function emptyForm(): ClientForm {
   };
 }
 
-export function ClientFormContent() {
-  const slug = tenantSlug();
+export function ClientFormContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [action, setAction] = useState<"new" | "edit">("new");
   const [form, setForm] = useState<ClientForm>(emptyForm());
   const [locations, setLocations] = useState<LocationRow[]>([]);

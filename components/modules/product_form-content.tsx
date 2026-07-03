@@ -86,8 +86,10 @@ function resolveAction(): "new" | "edit" {
   return new URLSearchParams(window.location.search).get("action") === "edit" ? "edit" : "new";
 }
 
-export function ProductFormContent() {
-  const slug = tenantSlug();
+export function ProductFormContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [action] = useState<"new" | "edit">(resolveAction);
   const [form, setForm] = useState<ProductForm>(emptyForm());
   const [ctx, setCtx] = useState<ProductContext>({});

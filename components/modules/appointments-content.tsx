@@ -109,8 +109,10 @@ function statusBadge(status: string): { className: string; label: string } {
   return { className: "appointments-status-badge--scheduled", label: status };
 }
 
-export function AppointmentsContent() {
-  const slug = tenantSlug();
+export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const defaults = useMemo(() => monthRange(), []);
 
   const [appointments, setAppointments] = useState<Appointment[]>([]);

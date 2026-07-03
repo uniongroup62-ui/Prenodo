@@ -63,8 +63,10 @@ function txLabel(t: string): string {
   return t || "—";
 }
 
-export function GiftCardDetailContent() {
-  const slug = tenantSlug();
+export function GiftCardDetailContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [id, setId] = useState(0);
   const [data, setData] = useState<Detail | null>(null);
   const [loading, setLoading] = useState(true);

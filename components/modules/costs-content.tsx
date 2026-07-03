@@ -94,8 +94,10 @@ function lastOfMonth(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-export function CostsContent() {
-  const slug = tenantSlug();
+export function CostsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [costs, setCosts] = useState<CostRow[]>([]);
   const [categories, setCategories] = useState<CostCategory[]>([]);
   const [locations, setLocations] = useState<CostLocation[]>([]);

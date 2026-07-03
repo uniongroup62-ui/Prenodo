@@ -49,8 +49,10 @@ function avatarLetter(name: string): string {
   return trimmed ? trimmed.charAt(0).toUpperCase() : "O";
 }
 
-export function StaffContent() {
-  const slug = tenantSlug();
+export function StaffContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [loading, setLoading] = useState(true);
 

@@ -51,8 +51,10 @@ function fmtDateTime(iso: string): string {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-export function FidelityWalletContent() {
-  const slug = tenantSlug();
+export function FidelityWalletContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [selectedId, setSelectedId] = useState(0);
@@ -226,7 +228,7 @@ export function FidelityWalletContent() {
                         <div className="h5 m-0">{detail.pointsBalance}</div>
                       </div>
                       <div>
-                        <div className="text-muted small">Prenotati</div>
+                        <div className="text-muted small">Prenotati (lock)</div>
                         <div className="h5 m-0">{detail.reserved}</div>
                       </div>
                       <div>
@@ -235,7 +237,7 @@ export function FidelityWalletContent() {
                       </div>
                       {detail.expireEnabled ? (
                         <div>
-                          <div className="text-muted small">In scadenza ({detail.expireWarnDays} gg)</div>
+                          <div className="text-muted small">In scadenza entro {detail.expireWarnDays} giorni</div>
                           <div className={`h5 m-0 ${detail.expiringSoon > 0 ? "text-warning" : ""}`}>{detail.expiringSoon}</div>
                         </div>
                       ) : null}
@@ -343,8 +345,8 @@ export function FidelityWalletContent() {
                         <tr>
                           <th>Data</th>
                           <th>Tipo</th>
+                          <th className="text-end">Δ</th>
                           <th>Nota</th>
-                          <th className="text-end">Punti</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -359,11 +361,11 @@ export function FidelityWalletContent() {
                             <tr key={mvt.id}>
                               <td>{fmtDateTime(mvt.createdAt)}</td>
                               <td>{KIND_LABELS[mvt.kind] ?? mvt.kind}</td>
-                              <td className="text-muted">{mvt.note || "—"}</td>
                               <td className={`text-end fw-semibold ${mvt.deltaPoints < 0 ? "text-danger" : "text-success"}`}>
                                 {mvt.deltaPoints > 0 ? "+" : ""}
                                 {mvt.deltaPoints}
                               </td>
+                              <td className="text-muted">{mvt.note || "—"}</td>
                             </tr>
                           ))
                         )}

@@ -56,8 +56,10 @@ const BADGES: Record<MovementKind, { cls: string; label: string }> = {
   manual_credit: { cls: "bg-info text-dark", label: "rettifica manuale" },
 };
 
-export function CreditMovementsContent() {
-  const slug = tenantSlug();
+export function CreditMovementsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   const [data, setData] = useState<CreditData | null>(null);
   const [selectedClientId, setSelectedClientId] = useState(0);

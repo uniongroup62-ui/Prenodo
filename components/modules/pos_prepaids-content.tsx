@@ -66,8 +66,10 @@ const STATUS_BADGE: Record<string, string> = {
   cancelled: "text-bg-danger",
 };
 
-export function PosPrepaidsContent() {
-  const slug = tenantSlug();
+export function PosPrepaidsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   const [prepaids, setPrepaids] = useState<Prepaid[]>([]);
   const [locations, setLocations] = useState<LocationOption[]>([]);

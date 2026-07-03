@@ -151,8 +151,10 @@ function FieldGrid({ fields }: { fields: FieldRow[] }) {
   );
 }
 
-export function ClientDetailContent() {
-  const slug = tenantSlug();
+export function ClientDetailContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   // clientId is read from the URL POST-MOUNT (see the effect below), not during
   // render, so the server and the first client paint render the same loading
   // shell — otherwise the server (no window) and client (real id) diverge and

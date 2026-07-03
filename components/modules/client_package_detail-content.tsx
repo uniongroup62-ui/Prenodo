@@ -52,8 +52,10 @@ function fmtDateTime(v: string): string {
   return s !== "" ? s.slice(0, 16).replace("T", " ") : "—";
 }
 
-export function ClientPackageDetailContent() {
-  const slug = tenantSlug();
+export function ClientPackageDetailContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [cpId, setCpId] = useState(0);
   const [data, setData] = useState<Detail | null>(null);
   const [loading, setLoading] = useState(true);

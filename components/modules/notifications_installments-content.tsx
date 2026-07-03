@@ -80,8 +80,10 @@ function fmtEur(value: number): string {
   );
 }
 
-export function NotificationsInstallmentsContent() {
-  const slug = tenantSlug();
+export function NotificationsInstallmentsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [plans, setPlans] = useState<ApiInstallmentPlan[]>([]);
   const [loading, setLoading] = useState(true);
   // The alert window is PERSISTED (automation_settings.installment_alert_days) — seeded from the API

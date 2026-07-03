@@ -82,8 +82,10 @@ function trimTime(value: string): string {
   return String(value || "").slice(0, 5);
 }
 
-export function HoursContent() {
-  const slug = tenantSlug();
+export function HoursContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [locationId, setLocationId] = useState<number>(0);
   const [tab, setTab] = useState<"hours" | "closures" | "exceptions">("hours");
   const [hours, setHours] = useState<BusinessHourRow[]>([]);

@@ -41,8 +41,10 @@ function normalizeUnit(value: unknown): ExpiryUnit {
   return "days";
 }
 
-export function PosSettingsContent() {
-  const slug = tenantSlug();
+export function PosSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   const [settings, setSettings] = useState<PosSettingsState>(DEFAULT_SETTINGS);
   const [feedback, setFeedback] = useState<{ type: "success" | "danger"; text: string } | null>(null);

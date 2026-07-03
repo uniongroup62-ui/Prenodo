@@ -55,8 +55,10 @@ function fmtDateTime(iso?: string): string {
   return `${pad(dt.getDate())}/${pad(dt.getMonth() + 1)}/${dt.getFullYear()} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
 }
 
-export function ConsentModulesContent() {
-  const slug = tenantSlug();
+export function ConsentModulesContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [records, setRecords] = useState<ConsentRecord[]>([]);
   const [loading, setLoading] = useState(true);
 

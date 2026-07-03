@@ -45,8 +45,10 @@ function fmtDateTime(iso?: string): string {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-export function AccessibilityContent() {
-  const slug = tenantSlug();
+export function AccessibilityContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   const [user, setUser] = useState<AccUser | null>(null);
   const [pending, setPending] = useState<PendingVerification | null>(null);

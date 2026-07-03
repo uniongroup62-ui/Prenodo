@@ -36,8 +36,10 @@ function tenantSlug(): string {
   return window.location.pathname.split("/")[1] || "";
 }
 
-export function CostCategoriesContent() {
-  const slug = tenantSlug();
+export function CostCategoriesContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   const [categories, setCategories] = useState<CostCategory[]>([]);
   const [loading, setLoading] = useState(true);

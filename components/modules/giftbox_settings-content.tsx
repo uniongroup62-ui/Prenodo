@@ -36,8 +36,10 @@ Ad ogni utilizzo verranno scalati i singoli servizi/prodotti (riscatto parziale)
 Non convertibile in denaro e non rimborsabile.
 Presentare il codice (QR) o il codice alfanumerico in cassa per il riscatto.`;
 
-export function GiftboxSettingsContent() {
-  const slug = tenantSlug();
+export function GiftboxSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   const [validityValue, setValidityValue] = useState("0");
   const [validityUnit, setValidityUnit] = useState("days");

@@ -37,8 +37,10 @@ function lineTotal(r: Row): number {
   return Math.round((sub - disc) * 100) / 100;
 }
 
-export function PackagesCatalogFormContent() {
-  const slug = tenantSlug();
+export function PackagesCatalogFormContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [action] = useState<"new" | "edit">(resolveAction);
   const [ctx, setCtx] = useState<Ctx>({ services: [], products: [], locations: [] });
   const [id, setId] = useState(0);

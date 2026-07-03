@@ -71,8 +71,10 @@ function seedRows(staff: CommissionStaffSetting[]): Record<number, RowState> {
   return map;
 }
 
-export function CommissionsSettingsContent() {
-  const slug = tenantSlug();
+export function CommissionsSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   const [settings, setSettings] = useState<CommissionSettings>({ moduleEnabled: false, configuredRates: 0, staff: [] });
   const [rows, setRows] = useState<Record<number, RowState>>({});

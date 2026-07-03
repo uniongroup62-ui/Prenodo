@@ -48,8 +48,12 @@ function toRows(apiLevels: ApiLevel[]): Level[] {
   }));
 }
 
-export function FidelityLevelsContent() {
-  const slug = tenantSlug();
+export function FidelityLevelsContent({ slug: slugProp, embedded = false }: { slug?: string; embedded?: boolean } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  // embedded: renderizza SOLO il card Livelli Card (usato inline nella pagina
+  // Punti come nel legacy, dove l'editor vive dentro fidelity_points.php).
+  const slug = slugProp || tenantSlug();
 
   const [levels, setLevels] = useState<Level[]>(DEFAULT_LEVELS);
   const [saving, setSaving] = useState(false);
@@ -144,21 +148,25 @@ export function FidelityLevelsContent() {
   }
 
   return (
-    <div className="container-fluid">
-      <link rel="stylesheet" href="/assets/css/pages/fidelity_points.css" />
+    <div className={embedded ? "" : "container-fluid"}>
+      {!embedded ? (
+        <>
+          <link rel="stylesheet" href="/assets/css/pages/fidelity_points.css" />
 
-      <div className="bs-page-header">
-        <div className="bs-page-heading">
-          <div className="bs-page-kicker">Fidelity</div>
-          <h1 className="bs-page-title">Livelli Card</h1>
-          <div className="bs-page-subtitle">Definisci i livelli usati dalle campagne punti e dai vantaggi Fidelity.</div>
-        </div>
-        <div className="bs-page-actions">
-          <a className="btn btn-light" href={`${pageHref("fidelity_points")}#livelli-card`}>
-            <i className="bi bi-arrow-left" /> Punti
-          </a>
-        </div>
-      </div>
+          <div className="bs-page-header">
+            <div className="bs-page-heading">
+              <div className="bs-page-kicker">Fidelity</div>
+              <h1 className="bs-page-title">Livelli Card</h1>
+              <div className="bs-page-subtitle">Definisci i livelli usati dalle campagne punti e dai vantaggi Fidelity.</div>
+            </div>
+            <div className="bs-page-actions">
+              <a className="btn btn-light" href={`${pageHref("fidelity_points")}#livelli-card`}>
+                <i className="bi bi-arrow-left" /> Punti
+              </a>
+            </div>
+          </div>
+        </>
+      ) : null}
 
       <div className="card p-4 mt-3 fidCampaignsCard " id="livelli-card" data-levels-card="1">
         <form method="post" className="row g-3" id="fidLevelsInlineForm" onSubmit={handleSubmit}>

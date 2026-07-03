@@ -37,8 +37,10 @@ function tenantSlug(): string {
   return window.location.pathname.split("/")[1] || "";
 }
 
-export function BusinessProfileContent() {
-  const slug = tenantSlug();
+export function BusinessProfileContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   const [business, setBusiness] = useState<Business | null>(null);
   const [branding, setBranding] = useState<Branding | null>(null);

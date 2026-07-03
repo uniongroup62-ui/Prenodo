@@ -51,8 +51,10 @@ function statusBadge(status: string): { label: string; cls: string } {
   return STATUS_BADGES[status] ?? { label: status || "—", cls: "text-bg-secondary" };
 }
 
-export function GiftcardContent() {
-  const slug = tenantSlug();
+export function GiftcardContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [giftCards, setGiftCards] = useState<GiftCard[]>([]);
   const [loading, setLoading] = useState(true);
 

@@ -146,8 +146,10 @@ function buildGroupTrees(group: PermGroup): TreeNode[][] {
   return trees;
 }
 
-export function RolesContent() {
-  const slug = tenantSlug();
+export function RolesContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   const [data, setData] = useState<RolePermissions | null>(null);
   const [loading, setLoading] = useState(true);

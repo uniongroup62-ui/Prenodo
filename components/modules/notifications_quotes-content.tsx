@@ -49,8 +49,10 @@ function fmtEuro(n: number): string {
 const ACCEPTED = new Set(["accepted", "paid", "converted"]);
 const REJECTED = new Set(["rejected", "canceled"]);
 
-export function NotificationsQuotesContent() {
-  const slug = tenantSlug();
+export function NotificationsQuotesContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [locationName, setLocationName] = useState<string>("");
   const [loading, setLoading] = useState(true);

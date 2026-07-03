@@ -76,8 +76,10 @@ function statusBadge(status: string): { label: string; cls: string } {
   return STATUS_BADGES[status] ?? { label: status || "—", cls: "text-bg-secondary" };
 }
 
-export function QuotesContent() {
-  const slug = tenantSlug();
+export function QuotesContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(0);

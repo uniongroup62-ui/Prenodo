@@ -40,8 +40,10 @@ function recordByTitle(records: ConfigRecord[], title: string): ConfigRecord | u
   return records.find((r) => r.title === title);
 }
 
-export function QuoteSettingsContent() {
-  const slug = tenantSlug();
+export function QuoteSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   // Anagrafica / intestazione documenti (pre-filled where the API exposes the value).
   const [companyName, setCompanyName] = useState("");

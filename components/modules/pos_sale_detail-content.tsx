@@ -275,8 +275,10 @@ function groupSaleItems(items: PosSaleItem[]): GroupedItem[] {
   });
 }
 
-export function PosSaleDetailContent() {
-  const slug = tenantSlug();
+export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [saleId] = useState<number>(() => saleIdFromUrl());
   const [detail, setDetail] = useState<SaleDetail | null>(null);
   const [business, setBusiness] = useState<BusinessHeader | null>(null);

@@ -30,8 +30,10 @@ function tenantSlug(): string {
   return window.location.pathname.split("/")[1] || "";
 }
 
-export function PackageSettingsContent() {
-  const slug = tenantSlug();
+export function PackageSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   const [validityValue, setValidityValue] = useState("0");
   const [validityUnit, setValidityUnit] = useState("days");

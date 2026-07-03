@@ -19,8 +19,10 @@ function currentTab(): string {
   return new URLSearchParams(window.location.search).get("tab") ?? "";
 }
 
-export function GiftboxContent() {
-  const slug = tenantSlug();
+export function GiftboxContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [tab] = useState<string>(currentTab);
   const [items, setItems] = useState<Row[]>([]);
   const [templates, setTemplates] = useState<Template[]>([]);

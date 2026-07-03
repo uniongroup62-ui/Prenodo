@@ -21,8 +21,10 @@ type Impact = {
   linkedAppointmentCount?: number;
 };
 
-export function FidelityContent() {
-  const slug = tenantSlug();
+export function FidelityContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [enabled, setEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");

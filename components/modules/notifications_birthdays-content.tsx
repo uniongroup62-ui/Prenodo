@@ -38,8 +38,10 @@ function daysUntilBirthday(birthday: string | undefined, today: Date): number | 
   return Math.round((next.getTime() - base.getTime()) / 86400000);
 }
 
-export function NotificationsBirthdaysContent() {
-  const slug = tenantSlug();
+export function NotificationsBirthdaysContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   const [clients, setClients] = useState<Client[]>([]);
   const [alertDays, setAlertDays] = useState<number>(DEFAULT_ALERT_DAYS);

@@ -30,8 +30,10 @@ function fmtMoney(n: number): string {
   return Number(n || 0).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-export function PackagesCatalogContent() {
-  const slug = tenantSlug();
+export function PackagesCatalogContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [rows, setRows] = useState<CatalogRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(0);

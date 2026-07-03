@@ -134,8 +134,10 @@ function Combobox({
   );
 }
 
-export function StockMovesContent() {
-  const slug = tenantSlug();
+export function StockMovesContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [ctx, setCtx] = useState<ProductsContext | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(0);

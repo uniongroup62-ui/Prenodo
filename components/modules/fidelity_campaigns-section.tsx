@@ -179,7 +179,7 @@ export function FidelityCampaignsSection({ slug }: { slug: string }) {
       <div className="d-flex align-items-center justify-content-between mb-2">
         <div>
           <div className="h5 fw-bold mb-1">Campagne punti</div>
-          <div className="text-muted small">Regole di accredito punti per periodo. Solo una campagna attiva per periodo.</div>
+          <div className="text-muted small">Crea campagne temporanee o sempre attive. Una sola campagna puo essere attiva nello stesso periodo.</div>
         </div>
         {!draft ? (
           <button className="btn btn-primary btn-pill" type="button" onClick={startNew}>
@@ -293,13 +293,25 @@ export function FidelityCampaignsSection({ slug }: { slug: string }) {
         </form>
       ) : null}
 
+      {/* Riga legacy "Campagna attiva oggi:" + badge (fidelity_points.php). */}
+      <div className="text-muted small mb-2">
+        Campagna attiva oggi:{" "}
+        {(() => {
+          const today = new Date().toISOString().slice(0, 10);
+          const activeToday = campaigns.find((c) => c.active && (!c.startsAt || c.startsAt.slice(0, 10) <= today) && (!c.endsAt || c.endsAt.slice(0, 10) >= today));
+          return activeToday
+            ? <span className="badge text-bg-success">{activeToday.name}</span>
+            : <span className="badge text-bg-secondary">Nessuna</span>;
+        })()}
+      </div>
+
       <div className="table-responsive">
         <table className="table mb-0 align-middle">
           <thead>
             <tr>
-              <th>Campagna</th>
-              <th>Accredito</th>
+              <th>Nome</th>
               <th>Periodo</th>
+              <th>Accredito</th>
               <th>Stato</th>
               <th className="text-end">Azioni</th>
             </tr>
@@ -308,7 +320,7 @@ export function FidelityCampaignsSection({ slug }: { slug: string }) {
             {campaigns.length === 0 ? (
               <tr>
                 <td colSpan={5} className="text-muted p-3">
-                  Nessuna campagna punti.
+                  Nessuna campagna punti configurata.
                 </td>
               </tr>
             ) : (
@@ -316,11 +328,11 @@ export function FidelityCampaignsSection({ slug }: { slug: string }) {
                 <tr key={c.id}>
                   <td className="fw-semibold">{c.name}</td>
                   <td className="text-muted small">
-                    {c.earnMode === "tiers" ? `${c.tiers.length} scaglioni` : `1 punto ogni ${fmtEuro(c.earnStepEuro)}`}
-                    {c.minSpend > 0 ? ` · min ${fmtEuro(c.minSpend)}` : ""}
+                    {c.startsAt ? fmtDate(c.startsAt) : "Subito"} → {c.endsAt ? fmtDate(c.endsAt) : "Mai"}
                   </td>
                   <td className="text-muted small">
-                    {fmtDate(c.startsAt)} → {c.endsAt ? fmtDate(c.endsAt) : "∞"}
+                    {c.earnMode === "tiers" ? `Scaglioni (${c.tiers.length})` : `Fisso: 1 punto ogni ${fmtEuro(c.earnStepEuro)}`}
+                    {c.minSpend > 0 ? ` · min ${fmtEuro(c.minSpend)}` : ""}
                   </td>
                   <td>
                     <span className={`badge ${c.active ? "text-bg-success" : "text-bg-secondary"}`}>{c.active ? "Attiva" : "Disattiva"}</span>

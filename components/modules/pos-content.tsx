@@ -433,8 +433,10 @@ function buildInstallmentSchedule(
   });
 }
 
-export function PosContent() {
-  const slug = tenantSlug();
+export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const today = todayYMD();
 
   const [ctx, setCtx] = useState<PosContext | null>(null);

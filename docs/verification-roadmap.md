@@ -2215,3 +2215,44 @@ slug dal server (`slug={tenantSlug}` gia' passata dalla pagina) con fallback
 window; PromotionFormContent riceve la prop anche dal ramo action=new|edit.
 Verificato in SSR: href corretto /centroesteticoelite/promotions?action=new,
 nessun link protocol-relative residuo nella pagina.
+
+## PUNTI (cluster Fidelity) — PASSATA GRAFICA+FUNZIONALE (2026-07-03)
+Fonte: fidelity_points.php (3846 righe) + fidelity_levels.php (handler POST,
+redirige a fidelity_points su GET) + fidelity_wallet.php; confronto ANCHE
+con l'istanza PHP LIVE (markup e KPI estratti dalla sessione autenticata).
+Il core funzionale era gia' chiuso (F1-F8); questa passata allinea la GRAFICA
+e completa il cablaggio dati:
+1. KPI colonna destra: erano hardcoded a 0 nonostante l'API esponesse gia'
+   `stats` (il componente non li leggeva!) — ora Punti emessi/usati/scaduti/
+   Campagne attive sono live (verificato: 49/9/0/0 sui dati reali del tenant;
+   il PHP live mostra 0 perche' il suo MySQL non ha transazioni punti — le
+   formule coincidono).
+2. Banner "nessuna campagna punti attiva": era SEMPRE visibile; ora
+   condizionale come il legacy (punti attivi + nessuna campagna attiva oggi,
+   alert-info) usando stats.activeCampaignToday.
+3. Caption "Statistiche operative sede:": era hardcoded "Sede1" — ora nome
+   sede corrente da /api/manage/locations (fallback "tutte le sedi").
+4. Top clienti: azione "Apri"->scheda cliente sostituita con la legacy
+   "Dettagli" -> fidelity_wallet&client_id.
+5. LIVELLI CARD INLINE: il legacy ha l'editor DENTRO la pagina Punti
+   (#livelli-card; fidelity_levels.php e' solo un handler POST che redirige)
+   — il Next mostrava solo un bottone verso pagina separata. Ora
+   FidelityLevelsContent accetta `embedded` e l'editor completo (righe
+   dinamiche, livello base bloccato, Aggiungi/Salva livelli) e' incorporato
+   nella pagina Punti; la pagina dedicata resta per l'URL legacy.
+6. Campagne punti: sottotitolo legacy ("Crea campagne temporanee o sempre
+   attive..."), riga "Campagna attiva oggi:" + badge (nome/"Nessuna"),
+   colonne in ordine legacy Nome|Periodo|Accredito|Stato|Azioni, Periodo
+   "Subito"/"Mai", Accredito "Fisso: 1 punto ogni X" / "Scaglioni (N)",
+   empty state "Nessuna campagna punti configurata.".
+7. Portafoglio (fidelity_wallet): etichette KPI legacy "Prenotati (lock)" /
+   "In scadenza entro N giorni", colonne movimenti in ordine legacy
+   Data|Tipo|Δ|Nota.
+VERIFICA: marker legacy tutti presenti nel bundle della pagina Punti,
+"Gestisci Livelli Card" (bottone non-legacy) rimosso, stats API corrette.
+RESIDUI MINORI (documentati): i confirm di impatto usano window.confirm coi
+testi legacy invece dei modali Bootstrap (Riepilogo impatto); il form
+campagna e' inline invece che in modale; wallet filtro "Filtra/Reset" GET vs
+ricerca live; colonne calendario scadenze piu' ricche del legacy.
+BONUS: completato lo sweep slug-SSR sui file CRLF che il primo giro aveva
+saltato (74 componenti) — stessa classe del bug //promotions.

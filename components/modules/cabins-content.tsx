@@ -56,8 +56,10 @@ function clampCount(value: number): number {
   return n;
 }
 
-export function CabinsContent() {
-  const slug = tenantSlug();
+export function CabinsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [locations, setLocations] = useState<Location[]>([]);
   const [activeLocationId, setActiveLocationId] = useState<number>(0);
   const [initialCabins, setInitialCabins] = useState<Cabin[]>([]);

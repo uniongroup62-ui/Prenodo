@@ -72,8 +72,10 @@ function resolveAction(): "new" | "edit" {
   return new URLSearchParams(window.location.search).get("action") === "edit" ? "edit" : "new";
 }
 
-export function GiftBoxFormContent() {
-  const slug = tenantSlug();
+export function GiftBoxFormContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [action] = useState<"new" | "edit">(resolveAction);
   const [form, setForm] = useState<GiftBoxForm>(emptyForm());
   const [services, setServices] = useState<CatalogItem[]>([]);

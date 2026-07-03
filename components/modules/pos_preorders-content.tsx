@@ -71,8 +71,10 @@ function statusBadge(p: Preorder): { cls: string; label: string } {
   return { cls: "text-bg-danger", label: "Stock insufficiente" };
 }
 
-export function PosPreordersContent() {
-  const slug = tenantSlug();
+export function PosPreordersContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   const [preorders, setPreorders] = useState<Preorder[]>([]);
   const [locations, setLocations] = useState<LocationItem[]>([]);

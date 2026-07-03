@@ -113,8 +113,10 @@ const PAYMENT_TYPE_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "bank", label: "Bonifico" },
 ];
 
-export function InstallmentsManageContent() {
-  const slug = tenantSlug();
+export function InstallmentsManageContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   const [filters, setFilters] = useState<Filters>({ status: "open", clientId: "", dueFrom: "", dueTo: "", q: "" });
   const [plans, setPlans] = useState<InstallmentPlan[]>([]);

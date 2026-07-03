@@ -51,8 +51,10 @@ function fmtDate(v: string): string {
   return d && m && y ? `${d}/${m}/${y}` : "—";
 }
 
-export function GiftBoxInstanceDetailContent() {
-  const slug = tenantSlug();
+export function GiftBoxInstanceDetailContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [id, setId] = useState(0);
   const [data, setData] = useState<Detail | null>(null);
   const [loading, setLoading] = useState(true);

@@ -46,8 +46,10 @@ function todayDisplay(): string {
   return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
 }
 
-export function StockMoveFormContent() {
-  const slug = tenantSlug();
+export function StockMoveFormContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [products, setProducts] = useState<ProductLite[]>([]);
   const [activeLocationId, setActiveLocationId] = useState(0);
   const [operatorName, setOperatorName] = useState("Operatore");

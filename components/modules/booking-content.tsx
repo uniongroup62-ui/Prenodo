@@ -24,8 +24,10 @@ type ConfigRecord = {
   active: boolean;
 };
 
-export function BookingSettingsContent() {
-  const slug = tenantSlug();
+export function BookingSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   // Settings form state (pre-filled on mount from the API where available).
   const [chooseStaffEnabled, setChooseStaffEnabled] = useState(false);

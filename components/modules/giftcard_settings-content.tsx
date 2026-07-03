@@ -52,8 +52,10 @@ function parseValidityDetail(detail: string): { value: string; unit: string } {
   return { value, unit };
 }
 
-export function GiftcardSettingsContent() {
-  const slug = tenantSlug();
+export function GiftcardSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   const [validityValue, setValidityValue] = useState("0");
   const [validityUnit, setValidityUnit] = useState("days");

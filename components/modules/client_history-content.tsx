@@ -123,8 +123,10 @@ function ApptTable({ title, rows }: { title: string; rows: Appt[] }) {
   );
 }
 
-export function ClientHistoryContent() {
-  const slug = tenantSlug();
+export function ClientHistoryContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [clientId, setClientId] = useState(0);
   const [data, setData] = useState<HistoryPayload | null>(null);
   const [loading, setLoading] = useState(true);

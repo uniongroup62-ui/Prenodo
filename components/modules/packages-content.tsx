@@ -45,8 +45,10 @@ function fmtDate(iso?: string): string {
   return day && m && y ? `${day}/${m}/${y}` : "—";
 }
 
-export function PackagesContent() {
-  const slug = tenantSlug();
+export function PackagesContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [clientPackages, setClientPackages] = useState<ClientPackage[]>([]);
   const [loading, setLoading] = useState(true);
 

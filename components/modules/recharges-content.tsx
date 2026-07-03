@@ -69,8 +69,10 @@ function emptyModalForm(fidelityEnabled: boolean): ModalForm {
   };
 }
 
-export function RechargesContent() {
-  const slug = tenantSlug();
+export function RechargesContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [templates, setTemplates] = useState<RechargeTemplate[]>([]);
   const [fidelityEnabled, setFidelityEnabled] = useState(true);
   const [activeCampaignName, setActiveCampaignName] = useState("");

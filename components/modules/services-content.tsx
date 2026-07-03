@@ -60,8 +60,10 @@ type Group = {
   items: Service[];
 };
 
-export function ServicesContent() {
-  const slug = tenantSlug();
+export function ServicesContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [data, setData] = useState<ServicesData>({});
   const [loading, setLoading] = useState(true);
   const [filterId, setFilterId] = useState("");

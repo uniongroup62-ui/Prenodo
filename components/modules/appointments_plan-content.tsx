@@ -115,8 +115,10 @@ function staffName(s: Staff): string {
   return String(s.fullName ?? s.name ?? "");
 }
 
-export function AppointmentsPlanContent() {
-  const slug = tenantSlug();
+export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   const [services, setServices] = useState<Service[]>([]);
   const [staff, setStaff] = useState<Staff[]>([]);

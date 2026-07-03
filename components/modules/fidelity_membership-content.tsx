@@ -67,8 +67,10 @@ function computeExpiry(validity: CardValidity, issuedAt: string): string {
   return dt.toISOString().slice(0, 10);
 }
 
-export function FidelityMembershipContent() {
-  const slug = tenantSlug();
+export function FidelityMembershipContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const today = todayYmd();
 
   const [membership, setMembership] = useState<Membership | null>(null);

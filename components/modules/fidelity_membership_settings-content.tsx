@@ -40,8 +40,10 @@ function unit(value: unknown, fallback: string): "days" | "months" | "years" {
   return v === "days" || v === "months" || v === "years" ? v : (fallback as "days" | "months" | "years");
 }
 
-export function FidelityMembershipSettingsContent() {
-  const slug = tenantSlug();
+export function FidelityMembershipSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [settings, setSettings] = useState<InitialSettings>(DEFAULT_INITIAL_SETTINGS);
   // Remount key for the uncontrolled form so a successful save re-seeds the
   // defaultChecked/defaultValue inputs from the freshly loaded settings.

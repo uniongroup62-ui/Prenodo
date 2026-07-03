@@ -68,8 +68,10 @@ function roundMoney(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
-export function QuoteFormContent() {
-  const slug = tenantSlug();
+export function QuoteFormContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [action] = useState<"new" | "edit">(resolveAction);
   const [quoteId, setQuoteId] = useState(0);
   const [clients, setClients] = useState<ClientLite[]>([]);

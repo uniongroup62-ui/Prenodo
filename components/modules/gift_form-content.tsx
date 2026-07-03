@@ -103,8 +103,10 @@ function resolveAction(): "new" | "edit" | "clone" {
   return a === "edit" || a === "clone" ? a : "new";
 }
 
-export function GiftFormContent() {
-  const slug = tenantSlug();
+export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [action] = useState<"new" | "edit" | "clone">(resolveAction);
   const [form, setForm] = useState<GiftForm>(emptyForm());
   const [services, setServices] = useState<CatalogItem[]>([]);

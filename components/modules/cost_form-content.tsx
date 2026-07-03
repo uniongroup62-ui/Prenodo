@@ -93,8 +93,10 @@ function fmtMoney(n: number): string {
   return (Number.isFinite(n) ? n : 0).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-export function CostFormContent() {
-  const slug = tenantSlug();
+export function CostFormContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [action] = useState<"new" | "edit">(resolveAction);
   const [form, setForm] = useState<CostForm>(emptyForm());
   const [categories, setCategories] = useState<CostCategory[]>([]);

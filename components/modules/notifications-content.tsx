@@ -29,8 +29,10 @@ function tenantSlug(): string {
   return window.location.pathname.split("/")[1] || "";
 }
 
-export function NotificationsContent() {
-  const slug = tenantSlug();
+export function NotificationsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   const [pending, setPending] = useState<NotificationItem[]>([]);
   const [prefs, setPrefs] = useState<Record<string, boolean>>({});

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { FidelityCampaignsSection } from "@/components/modules/fidelity_campaigns-section";
+import { FidelityLevelsContent } from "@/components/modules/fidelity_levels-content";
 
 // Faithful port of the PHP Fidelity Points page (app/pages/fidelity_points.php).
 // Fed by the existing DB-backed /api/manage/fidelity route, which exposes the
@@ -31,8 +32,10 @@ function tenantSlug(): string {
   return window.location.pathname.split("/")[1] || "";
 }
 
-export function FidelityPointsContent() {
-  const slug = tenantSlug();
+export function FidelityPointsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
 
   const [clients, setClients] = useState<FidelityClient[]>([]);
   const [loading, setLoading] = useState(true);
@@ -49,6 +52,7 @@ export function FidelityPointsContent() {
   const [savingSettings, setSavingSettings] = useState(false);
   // Statistiche reali (emessi/usati/scaduti/campagne + campagna attiva oggi).
   const [stats, setStats] = useState<{ emitted: number; used: number; expired: number; activeCampaigns: number; activeCampaignToday: string } | null>(null);
+  const [locationName, setLocationName] = useState("tutte le sedi");
   const [settingsError, setSettingsError] = useState("");
   const [settingsFlash, setSettingsFlash] = useState("");
 
@@ -79,6 +83,17 @@ export function FidelityPointsContent() {
         setRedeemEnabled(Boolean(s.redeemEnabled));
         setRedeemEuroPerPoint(String(s.redeemEuroPerPoint ?? 0.1));
         setRedeemMinPoints(String(s.redeemMinPoints ?? 0));
+        // KPI legacy della colonna destra (emessi/usati/scaduti/campagne attive).
+        if (j?.stats) setStats(j.stats);
+      })
+      .catch(() => {});
+    // Nome sede corrente per la caption "Statistiche operative sede: ...".
+    fetch(`/api/manage/locations?slug=${encodeURIComponent(slug)}`, { headers: { "x-tenant-slug": slug } })
+      .then((r) => r.json())
+      .then((j) => {
+        const list = Array.isArray(j.locations) ? j.locations : [];
+        const current = list.find((l: { id: number }) => Number(l.id) === Number(j.currentLocationId));
+        setLocationName(String(current?.name ?? "") || "tutte le sedi");
       })
       .catch(() => {});
   }, [slug]);
@@ -156,15 +171,19 @@ export function FidelityPointsContent() {
     <div className="container-fluid">
       <link rel="stylesheet" href="/assets/css/pages/fidelity_points.css" />
 
-      <div className="alert alert-warning d-flex align-items-start gap-2">
-        <div>
-          <i className="bi bi-info-circle" />
+      {/* Banner legacy: SOLO quando i punti sono attivi ma nessuna campagna è
+          attiva oggi (fidelity_points.php:3019). */}
+      {pointsEnabled && stats && !stats.activeCampaignToday ? (
+        <div className="alert alert-info d-flex align-items-start gap-2">
+          <div>
+            <i className="bi bi-info-circle" />
+          </div>
+          <div>
+            Punti Fidelity attivi, ma nessuna campagna punti attiva: i clienti non matureranno punti finche non riattivi o
+            crei una campagna.
+          </div>
         </div>
-        <div>
-          Punti Fidelity attivi, ma nessuna campagna punti attiva: i clienti non matureranno punti finche non riattivi o
-          crei una campagna.
-        </div>
-      </div>
+      ) : null}
 
       <div className="bs-page-header">
         <div className="bs-page-heading">
@@ -345,44 +364,33 @@ export function FidelityPointsContent() {
             </form>
           </div>
 
-          <div className="card p-4 mt-3" id="livelli-card">
-            <div className="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
-              <div>
-                <div className="h5 fw-bold m-0">Livelli Card</div>
-                <div className="text-muted small">
-                  Definisci i livelli usati dalle campagne punti e dai vantaggi Fidelity.
-                </div>
-              </div>
-              <a className="btn btn-outline-primary btn-sm" href={pageHref("fidelity_levels")}>
-                <i className="bi bi-layers me-1" />
-                Gestisci Livelli Card
-              </a>
-            </div>
-          </div>
+          {/* Editor Livelli Card INLINE come il legacy (fidelity_points.php
+              #livelli-card): stesso componente della pagina dedicata, embedded. */}
+          <FidelityLevelsContent slug={slug} embedded />
         </div>
 
         <div className="col-lg-5 ">
           <div className="text-muted small mb-2">
-            Statistiche operative sede: <strong>Sede1</strong>
+            Statistiche operative sede: <strong>{locationName}</strong>
           </div>
           <div className="row g-3">
             <div className="col-6">
               <div className="card p-3">
                 <div className="text-muted small">Punti emessi</div>
-                <div className="h4 fw-bold m-0">0</div>
+                <div className="h4 fw-bold m-0">{stats?.emitted ?? 0}</div>
               </div>
             </div>
             <div className="col-6">
               <div className="card p-3">
                 <div className="text-muted small">Punti usati</div>
-                <div className="h4 fw-bold m-0">0</div>
+                <div className="h4 fw-bold m-0">{stats?.used ?? 0}</div>
               </div>
             </div>
 
             <div className="col-6">
               <div className="card p-3">
                 <div className="text-muted small">Punti scaduti</div>
-                <div className="h4 fw-bold m-0">0</div>
+                <div className="h4 fw-bold m-0">{stats?.expired ?? 0}</div>
               </div>
             </div>
             <div className="col-6">
@@ -395,7 +403,7 @@ export function FidelityPointsContent() {
             <div className="col-6">
               <div className="card p-3">
                 <div className="text-muted small">Campagne attive</div>
-                <div className="h4 fw-bold m-0">0</div>
+                <div className="h4 fw-bold m-0">{stats?.activeCampaigns ?? 0}</div>
               </div>
             </div>
             <div className="col-6">
@@ -430,8 +438,8 @@ export function FidelityPointsContent() {
                         <td>{c.name}</td>
                         <td className="text-end">{c.points}</td>
                         <td className="text-end">
-                          <a className="btn btn-sm btn-outline-secondary" href={pageHref("clients", `&action=view&id=${c.id}`)}>
-                            Apri
+                          <a className="btn btn-sm btn-outline-secondary" href={pageHref("fidelity_wallet", `&client_id=${c.id}`)}>
+                            Dettagli
                           </a>
                         </td>
                       </tr>

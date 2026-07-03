@@ -50,8 +50,10 @@ function fmtEuro(n: number): string {
   })}`;
 }
 
-export function ProductsContent() {
-  const slug = tenantSlug();
+export function ProductsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);

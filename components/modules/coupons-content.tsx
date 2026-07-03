@@ -50,8 +50,10 @@ function statusInfo(coupon: Coupon): { label: string; badge: string } {
   return { label: "Attiva", badge: "bg-success" };
 }
 
-export function CouponsContent() {
-  const slug = tenantSlug();
+export function CouponsContent({ slug: slugProp }: { slug?: string } = {}) {
+  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
+  // e i link assoluti diventano protocol-relative rotti (//pagina).
+  const slug = slugProp || tenantSlug();
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [allLocations, setAllLocations] = useState(false);
   const [loading, setLoading] = useState(true);
