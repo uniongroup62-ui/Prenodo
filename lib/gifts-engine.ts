@@ -637,6 +637,96 @@ export async function giftExpireDueInstancesBatch(slug: string, limit = 500): Pr
   return { expired, canceledAppointments: canceled };
 }
 
+// ---------------------------------------------------------------------------
+// ROLLBACK SELEZIONE APPUNTAMENTO — rollbackAppointmentSelection (~11698-11888)
+// ---------------------------------------------------------------------------
+
+// Ripristina i collegamenti omaggio di un appuntamento (annullo, no-show,
+// cancel-done, rimozione/eliminazione): per ogni riga appointment_gift_items
+// scrive la transazione di storno ('cancel' se il riscatto era avvenuto o se
+// e' un rollback da annullamento, 'unlink' per un semplice scollegamento di
+// una riga ancora in sospeso), cancella le righe, riapre a 'disponibile' le
+// istanze chiuse DA QUESTO appuntamento (redeemed_source_type='appointment' e
+// redeemed_source_id = appointmentId) e ricalcola il cliente con forceRecheck.
+export async function giftRollbackAppointmentSelection(
+  slug: string,
+  appointmentId: number,
+  createdBy: number | null,
+  opts: { cancelHistory?: boolean; note?: string } = {},
+): Promise<{ rolledBack: number }> {
+  if (appointmentId <= 0) return { rolledBack: 0 };
+  const linkTable = await tenantTable(slug, "appointment_gift_items").catch(() => null);
+  if (!linkTable) return { rolledBack: 0 };
+  const rows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "appointment_gift_items",
+    where: "appointment_id = ?",
+    params: [appointmentId],
+  }).catch(() => [] as RowDataPacket[]);
+  if (!rows.length) return { rolledBack: 0 };
+
+  // Un rollback "da annullamento" scrive sempre 'cancel' (legacy ~11737-11782:
+  // cancel_history esplicito, status canceled/no_show o nota di annullamento).
+  let isCancelRollback = !!opts.cancelHistory;
+  if (!isCancelRollback) {
+    const apptRows = await tenantSelect<RowDataPacket>({ slug, table: "appointments", columns: "status", where: "id = ?", params: [appointmentId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    const status = clean(apptRows[0]?.status).toLowerCase();
+    isCancelRollback = ["canceled", "cancelled", "no_show"].includes(status);
+  }
+
+  const now = new Date();
+  const txTable = await tenantTable(slug, "gift_transactions").catch(() => null);
+  const instanceIds = new Set<number>();
+  const clientIds = new Set<number>();
+  for (const row of rows) {
+    const instanceId = Number(row.instance_id ?? 0);
+    if (instanceId <= 0) continue;
+    instanceIds.add(instanceId);
+    const wasRedeemed = !!row.redeemed_at;
+    const txType = isCancelRollback || wasRedeemed ? "cancel" : "unlink";
+    const note = clean(opts.note) || (txType === "cancel" ? `Annullato su prenotazione #${appointmentId}` : `Rimosso da prenotazione #${appointmentId}`);
+    if (txTable) {
+      await tenantInsert(txTable, {
+        instance_id: instanceId,
+        appointment_id: appointmentId,
+        reward_item_index: Number(row.reward_item_index ?? 0),
+        service_id: Number(row.service_id ?? 0) > 0 ? Number(row.service_id) : null,
+        type: txType,
+        qty: Math.max(1, Number(row.qty ?? 1) || 1),
+        note: note.slice(0, 255),
+        created_by: createdBy && createdBy > 0 ? createdBy : null,
+        created_at: now,
+      }).catch(() => 0);
+    }
+  }
+
+  await dbExecute(
+    `DELETE FROM ${quoteIdentifier(linkTable.name)} WHERE tenant_id = ? AND appointment_id = ?`,
+    [linkTable.tenantId ?? 0, appointmentId],
+  ).catch(() => ({ affectedRows: 0 }));
+
+  // Riapertura delle istanze chiuse da questo appuntamento (~11851-11856).
+  const instTable = await tenantTable(slug, "gift_instances").catch(() => null);
+  for (const instanceId of instanceIds) {
+    if (instTable) {
+      await dbExecute(
+        `UPDATE ${quoteIdentifier(instTable.name)}
+            SET state = 'disponibile', is_active = 1, redeemed_at = NULL, redeemed_source_type = NULL,
+                redeemed_source_id = NULL, points_spent = 0, updated_at = ?
+          WHERE tenant_id = ? AND id = ? AND redeemed_source_type = 'appointment' AND redeemed_source_id = ?`,
+        [toSql(now), instTable.tenantId ?? 0, instanceId, appointmentId],
+      ).catch(() => ({ affectedRows: 0 }));
+    }
+    const cRows = await tenantSelect<RowDataPacket>({ slug, table: "gift_instances", columns: "client_id", where: "id = ?", params: [instanceId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    const cid = Number(cRows[0]?.client_id ?? 0);
+    if (cid > 0) clientIds.add(cid);
+  }
+  for (const cid of clientIds) {
+    await giftRecalcClient(slug, cid, undefined, true).catch(() => undefined);
+  }
+  return { rolledBack: rows.length };
+}
+
 // Token voucher lazy (ensureInstanceVoucherPublicToken ~12044).
 export async function ensureGiftVoucherToken(slug: string, instanceId: number): Promise<string> {
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "gift_instances", columns: "voucher_public_token", where: "id = ?", params: [instanceId], limit: 1 }).catch(() => [] as RowDataPacket[]);

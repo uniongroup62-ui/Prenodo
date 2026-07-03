@@ -1435,3 +1435,47 @@ Nuovo `lib/gifts-instances.ts`:
 Restano: B3 redeem POS con gift_instance_id (assegnazione manuale ANTICIPATA
 qui), B4 editor avanzato (livelli/esclusioni/multi-set/clona/termini) +
 GiftLoyaltyAttribution + esclusione intervalli sospensione dal conteggio.
+
+### CHIUSURA F12 BLOCCO 3 — CICLO APPUNTAMENTI + POS (2026-07-03, 12 test PASS)
+NON-GAP SCOPERTO (agente sul legacy): il riscatto omaggi dal POS e' CODICE
+MORTO in pos.php — `$giftsV2Enabled = false` hard-coded (pos.php:96),
+`$gift_instance_id = 0` mai popolato dal POST (pos.php:3156), UI rimossa con
+commento esplicito ("l'assegnazione manuale degli omaggi da POS (tasto gift)
+e' stata rimossa", pos.php:2073; "azione assign_gift rimossa", 2967) e
+nessun riferimento in pos.js. Il design congelato (riga a 0 con prefisso
+[giftsO], redeemInstance sourceType 'sale') NON e' raggiungibile dal PHP di
+produzione: NON portato, per parita' 1:1. gift_transactions non ha sale_id
+(solo appointment_id) — un eventuale futuro redeem POS richiederebbe schema.
+Il flusso ATTIVO legacy e' solo quello appuntamenti, PENDING-UNTIL-DONE, e il
+Next e' stato ALLINEATO (prima consumava al salvataggio senza transazioni):
+- PRENOTAZIONE (applyAppointmentGiftRedeems, modello legacy
+  saveAppointmentSelection ~11076): la riga appointment_gift_items nasce con
+  redeemed_at NULL + transazione 'pending' ("In sospeso su prenotazione #N");
+  l'istanza NON viene chiusa; il residuo prenotabile sottrae anche le unita'
+  in sospeso su prenotazioni aperte (giftRewardPendingQty — la doppia
+  prenotazione dello stesso premio resta senza copertura, E7); il drawer
+  (quickBookClientGifts) esclude i premi gia' riservati.
+- DONE (giftRedeemAppointmentSelectionIfAny in gifts-instances, port ~11565):
+  legge le righe NULL, raggruppa per istanza e riscatta con sourceType
+  'appointment' (transazioni 'redeem' con appointment_id, nota "Riscatto su
+  prenotazione #N", chiusura istanza SOLO a residuo 0 con points_spent=0),
+  poi marca redeemed_at sulle righe. Hook: appointments route status->done
+  (PRIMA di giftRecordAppointmentDone, cosi' le righe omaggio risultano
+  residuali per il tracking) e checkout POS con appointmentId.
+- ROLLBACK (giftRollbackAppointmentSelection in gifts-engine, port ~11698):
+  per ogni riga transazione 'cancel' (riscattata o rollback da annullo,
+  "Annullato su prenotazione #N") o 'unlink' (in sospeso senza annullo,
+  "Rimosso da prenotazione #N"), DELETE appointment_gift_items, riapertura a
+  'disponibile' SOLO delle istanze chiuse da QUESTO appuntamento
+  (redeemed_source_type='appointment' AND redeemed_source_id=id, ~11851-56),
+  recalc forceRecheck. Hook: restoreAppointmentRedeems (percorso unico di
+  cancel/no_show/cancel-done/delete) — il vecchio restoreGiftInstance
+  per-riga e' stato RIMOSSO (riapriva anche istanze chiuse da altre fonti e
+  lasciava righe consumate che lo stato derivato del Blocco 2 avrebbe
+  richiuso). Il netto riscattato usa redeem - cancel: lo storno di UN
+  appuntamento non tocca i riscatti degli altri (E5c).
+- TEST (12 PASS, cleanup CLEAN): prenotazione con omaggio (pending + tx +
+  prezzo 0 badge Omaggio), dettaglio con pendingQty, done parziale (istanza
+  resta disponibile), done ultima unita' (chiusura source appointment),
+  cancel-done (riapertura + tx cancel + usati netti corretti), annullo
+  pending (tx pending->cancel), oversubscribe rifiutato.

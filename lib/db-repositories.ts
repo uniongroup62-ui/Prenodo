@@ -61,7 +61,7 @@ import {
   type PointLotScheduleRow,
 } from "@/lib/fidelity-lots";
 import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
-import { giftRecalcClient } from "@/lib/gifts-engine";
+import { giftRecalcClient, giftRollbackAppointmentSelection } from "@/lib/gifts-engine";
 import { assertAppointmentSlotAvailable, busyCabinRangesForDate, busyRangesForDate, staffTimeoffReasonForRange, type AppointmentSlotSegment, type CabinBusyRange } from "@/lib/public-booking-db";
 
 export async function listDbLocations(slug: string): Promise<Location[]> {
@@ -3458,11 +3458,12 @@ export async function restoreAppointmentRedeems(slug: string, appointmentId: num
       await restoreGiftboxRedemption(slug, giftboxInstanceId, id);
       clearCols.giftbox_instance_id = null;
     }
-    // GIFT: reactivate the instance (the appointment_gift_items rows stay on a cancel;
-    // restoreGiftInstance only re-activates a 'riscattato' instance, so re-running is safe).
+    // GIFT: il rollback vero (transazioni 'cancel'/'unlink' + DELETE righe +
+    // riapertura istanza) avviene UNA volta a livello appuntamento dopo questo
+    // loop (giftRollbackAppointmentSelection, port di Gifts::rollback...);
+    // qui si azzera solo il link sulla riga servizio.
     const giftInstanceId = Number(row.gift_instance_id ?? 0);
     if (giftInstanceId > 0) {
-      await restoreGiftInstance(slug, giftInstanceId);
       clearCols.gift_instance_id = null;
     }
     if (rowServiceId > 0 && Object.keys(clearCols).length > 0) {
@@ -3474,6 +3475,12 @@ export async function restoreAppointmentRedeems(slug: string, appointmentId: num
       ).catch(() => undefined);
     }
   }
+
+  // GIFT (omaggio) rollback a livello appuntamento (Gifts::rollbackAppointmentSelection):
+  // transazioni 'cancel' (riscattate o rollback da annullo) / 'unlink' (in sospeso),
+  // DELETE appointment_gift_items, riapertura a 'disponibile' delle istanze chiuse da
+  // QUESTO appuntamento + ricalcolo forceRecheck. Idempotente: senza righe è un no-op.
+  await giftRollbackAppointmentSelection(slug, id, null, { cancelHistory: true }).catch(() => undefined);
 
   // Restore the appointment-level GIFTCARD redeem (refund the used amount), then ZERO
   // giftcard_used so a re-run cannot double-refund (cancel -> delete runs this twice).
@@ -4061,35 +4068,6 @@ async function restoreGiftboxRedemption(slug: string, instanceId: number, appoin
         table: "giftbox_instances",
         id: instanceId,
         values: { status: "issued", redeemed_at: null, redeemed_source_type: null, redeemed_source_id: null },
-      });
-    }
-  } catch {
-    // best-effort
-  }
-}
-
-// Inverse of the GIFT redeem record (applyAppointmentGiftRedeems step 7): reactivate
-// the gift instance to state='disponibile' when the redeem had flipped it to
-// 'riscattato' (the appointment_gift_items redeem rows are deleted by the caller).
-// Best-effort + columnExists-guarded.
-async function restoreGiftInstance(slug: string, instanceId: number): Promise<void> {
-  try {
-    const rows = await tenantSelect<RowDataPacket>({
-      slug,
-      table: "gift_instances",
-      columns: "id, state",
-      where: "id = ?",
-      params: [instanceId],
-      limit: 1,
-    });
-    const inst = rows[0];
-    if (!inst) return;
-    if (String(inst.state ?? "") === "riscattato") {
-      await tenantUpdate({
-        slug,
-        table: "gift_instances",
-        id: instanceId,
-        values: { state: "disponibile", redeemed_at: null, redeemed_source_type: null, redeemed_source_id: null },
       });
     }
   } catch {
@@ -6855,17 +6833,20 @@ export async function applyAppointmentGiftRedeems({
         continue;
       }
 
-      // 5) Residual: reward qty - already-redeemed (by index + service) must be > 0. Reading
-      //    appointment_gift_items means a unit recorded earlier in THIS save (an earlier
-      //    redeem of the same reward) is already counted, so we never over-redeem.
+      // 5) Residual: reward qty - already-redeemed - already-PENDING must be > 0. Il
+      //    modello legacy è pending-until-done (Gifts::saveAppointmentSelection ~11270):
+      //    le righe in sospeso su prenotazioni aperte riservano l'unità e la doppia
+      //    prenotazione dello stesso premio viene rifiutata qui.
       const redeemedQty = await giftRewardRedeemedQty(slug, instanceId, rewardItemIndex, serviceId);
-      if (reward.qty - redeemedQty <= 0) {
+      const pendingQty = await giftRewardPendingQty(slug, instanceId, rewardItemIndex, serviceId);
+      if (reward.qty - redeemedQty - pendingQty <= 0) {
         warnings.push("Omaggio esaurito per la ricompensa selezionata.");
         continue;
       }
 
-      // 6) RECORD the redemption: an appointment_gift_items row with redeemed_at set (qty 1).
-      //    This is the consume — it makes giftRewardRedeemedQty reflect the unit immediately.
+      // 6) RECORD the reservation: an appointment_gift_items row with redeemed_at NULL
+      //    (PENDING — legacy parity: il riscatto vero avviene al 'done' via
+      //    giftRedeemAppointmentSelectionIfAny) + una transazione 'pending' nel ledger.
       const insertId = await tenantInsert(await tenantTable(slug, "appointment_gift_items"), {
         appointment_id: appointmentId,
         instance_id: instanceId,
@@ -6873,37 +6854,25 @@ export async function applyAppointmentGiftRedeems({
         reward_item_index: rewardItemIndex,
         service_id: serviceId,
         qty: 1,
-        redeemed_at: new Date(),
+        redeemed_at: null,
       });
       if (insertId <= 0) {
         warnings.push("Omaggio: impossibile registrare il riscatto.");
         continue;
       }
+      await tenantInsert(await tenantTable(slug, "gift_transactions"), {
+        instance_id: instanceId,
+        appointment_id: appointmentId,
+        reward_item_index: rewardItemIndex,
+        service_id: serviceId,
+        type: "pending",
+        qty: 1,
+        note: `In sospeso su prenotazione #${appointmentId}`,
+        created_at: new Date(),
+      }).catch(() => 0);
 
-      // 7) If this reward was the instance's LAST residual SERVICE reward, flip the instance
-      //    to state='riscattato' (parity with the legacy auto-close on service rewards).
-      try {
-        let anyRemaining = false;
-        for (let index = 0; index < rewardItems.length; index += 1) {
-          const it = rewardItems[index];
-          if (it.type !== "service" || it.serviceId <= 0) continue;
-          const used = await giftRewardRedeemedQty(slug, instanceId, index, it.serviceId);
-          if (it.qty - used > 0) {
-            anyRemaining = true;
-            break;
-          }
-        }
-        if (!anyRemaining) {
-          await tenantUpdate({
-            slug,
-            table: "gift_instances",
-            id: instanceId,
-            values: { state: "riscattato", redeemed_at: new Date(), redeemed_source_type: "appointment", redeemed_source_id: appointmentId },
-          });
-        }
-      } catch {
-        // best-effort: a state-flip failure must not fail the booking (unit is recorded).
-      }
+      // 7) NIENTE chiusura istanza qui: nel legacy l'istanza passa a 'riscattato'
+      //    solo al 'done' (redeemInstanceItems, residuo 0) — il pending non chiude.
 
       // 8) Link the appointment_services row + zero its charge (keep list_price).
       if (hasLinkColumns && servicesTable) {
@@ -15988,6 +15957,35 @@ async function giftRewardRedeemedQty(
   }
 }
 
+// Unità PENDING per un reward (modello legacy pending-until-done): righe
+// appointment_gift_items con redeemed_at NULL collegate a prenotazioni ancora
+// aperte (In attesa/Prenotata). Riservano l'unità: una nuova prenotazione dello
+// stesso premio oltre il residuo va rifiutata (Gifts ~11270-11279).
+async function giftRewardPendingQty(
+  slug: string,
+  instanceId: number,
+  rewardItemIndex: number,
+  serviceId: number,
+): Promise<number> {
+  if (instanceId <= 0) return 0;
+  try {
+    const linkTable = await tenantTable(slug, "appointment_gift_items");
+    const apptTable = await tenantTable(slug, "appointments");
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT COALESCE(SUM(agi.qty), 0) AS c
+         FROM ${quoteIdentifier(linkTable.name)} agi
+         JOIN ${quoteIdentifier(apptTable.name)} a ON a.id = agi.appointment_id AND a.tenant_id = agi.tenant_id
+        WHERE agi.tenant_id = ? AND agi.instance_id = ? AND agi.reward_item_index = ? AND agi.service_id = ?
+          AND agi.redeemed_at IS NULL
+          AND LOWER(COALESCE(a.status, '')) IN ('pending', 'scheduled')`,
+      [linkTable.tenantId ?? 0, instanceId, rewardItemIndex, serviceId],
+    );
+    return Math.max(0, Number(rows[0]?.c ?? 0) || 0);
+  } catch {
+    return 0;
+  }
+}
+
 // Available (redeemable) GIFT (omaggio) SERVICE REWARDS for a client — drives the drawer's
 // per-service "Usa Omaggio" control. A gift INSTANCE holds REWARD ITEMS (the reward set
 // lives in gifts.reward_items_json, joined from the instance's gift_id); a SERVICE reward
@@ -16054,8 +16052,11 @@ async function quickBookClientGifts(slug: string, clientId: number): Promise<Qui
       for (let index = 0; index < rewardItems.length; index += 1) {
         const item = rewardItems[index];
         if (item.type !== "service" || item.serviceId <= 0) continue; // only service rewards cover a service
+        // Residuo offribile = qty - riscattate - IN SOSPESO su prenotazioni aperte
+        // (modello pending-until-done: una prenotazione aperta riserva l'unità).
         const redeemed = await giftRewardRedeemedQty(slug, instanceId, index, item.serviceId);
-        if (item.qty - redeemed <= 0) continue; // exhausted -> not offerable
+        const pending = await giftRewardPendingQty(slug, instanceId, index, item.serviceId);
+        if (item.qty - redeemed - pending <= 0) continue; // exhausted -> not offerable
         const name = await serviceNameById(slug, item.serviceId, "Servizio");
         out.push({ instance_id: instanceId, reward_item_index: index, service_id: item.serviceId, name });
       }

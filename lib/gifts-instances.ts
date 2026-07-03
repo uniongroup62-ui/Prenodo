@@ -1050,6 +1050,70 @@ export async function assignGiftManual(
 }
 
 // ---------------------------------------------------------------------------
+// RISCATTO AL 'DONE' — redeemAppointmentSelectionIfAny (~11565-11696)
+// ---------------------------------------------------------------------------
+
+// Al passaggio a 'eseguito' riscatta la selezione omaggi IN SOSPESO della
+// prenotazione: legge le righe appointment_gift_items con redeemed_at NULL,
+// raggruppa per istanza (qty per reward_item_index) e chiama il riscatto con
+// sourceType 'appointment' (transazioni 'redeem' con appointment_id, nota
+// "Riscatto su prenotazione #N", chiusura istanza solo a residuo 0). Su
+// successo marca redeemed_at sulle righe collegate. Best-effort per istanza:
+// un'istanza non piu' riscattabile genera solo warning, mai un blocco del done.
+export async function giftRedeemAppointmentSelectionIfAny(
+  slug: string,
+  appointmentId: number,
+  by: number | null,
+): Promise<{ redeemedInstances: number; warnings: string[] }> {
+  const warnings: string[] = [];
+  if (appointmentId <= 0) return { redeemedInstances: 0, warnings };
+  const rows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "appointment_gift_items",
+    where: "appointment_id = ? AND redeemed_at IS NULL",
+    params: [appointmentId],
+  }).catch(() => [] as RowDataPacket[]);
+  if (!rows.length) return { redeemedInstances: 0, warnings };
+
+  // Raggruppa per istanza: { reward_item_index: qty }.
+  const byInstance = new Map<number, Record<number, number>>();
+  for (const row of rows) {
+    const instanceId = Number(row.instance_id ?? 0);
+    const idx = Math.max(0, Number(row.reward_item_index ?? 0));
+    const qty = Math.max(1, Number(row.qty ?? 1) || 1);
+    if (instanceId <= 0) continue;
+    const m = byInstance.get(instanceId) ?? {};
+    m[idx] = (m[idx] ?? 0) + qty;
+    byInstance.set(instanceId, m);
+  }
+
+  const now = new Date();
+  let redeemedInstances = 0;
+  const linkTable = await tenantTable(slug, "appointment_gift_items").catch(() => null);
+  for (const [instanceId, qtyByItem] of byInstance) {
+    try {
+      await redeemGiftInstanceItems(slug, {
+        instanceId,
+        qtyByItem,
+        by,
+        sourceType: "appointment",
+        sourceId: appointmentId,
+      });
+      redeemedInstances += 1;
+      if (linkTable) {
+        await dbQuery(
+          `UPDATE ${quoteIdentifier(linkTable.name)} SET redeemed_at = ?, updated_at = ? WHERE tenant_id = ? AND appointment_id = ? AND instance_id = ? AND redeemed_at IS NULL`,
+          [now, now, linkTable.tenantId ?? 0, appointmentId, instanceId],
+        ).catch(() => []);
+      }
+    } catch (error) {
+      warnings.push(`Omaggi: ${error instanceof Error ? error.message : "riscatto non riuscito"} (istanza #${instanceId}).`);
+    }
+  }
+  return { redeemedInstances, warnings };
+}
+
+// ---------------------------------------------------------------------------
 // VOUCHER PUBBLICO — gift_voucher.php + instanceDetailsByVoucherPublicToken
 // ---------------------------------------------------------------------------
 

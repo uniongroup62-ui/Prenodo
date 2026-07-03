@@ -31,6 +31,7 @@ import {
 import { lifecycleKindForStatusChange, sendAppointmentLifecycleEmail } from "@/lib/appointment-lifecycle-email";
 import { awardAppointmentFidelityOnDone } from "@/lib/manage-pos";
 import { giftInvalidateSource, giftRecordAppointmentDone } from "@/lib/gifts-engine";
+import { giftRedeemAppointmentSelectionIfAny } from "@/lib/gifts-instances";
 import { currentManageSession } from "@/lib/manage-auth";
 import { resolveManageLocationId } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -534,8 +535,12 @@ export async function POST(request: Request) {
       // storno is the dedicated cancel-done flow (a later step), not this call.
       if (newPhpStatus === "done" && oldPhpStatus !== "done") {
         await awardAppointmentFidelityOnDone(tenantSlug, id, session.user.id).catch(() => undefined);
-        // OMAGGI (F12): l'esecuzione registra gli eventi appointment_done (righe non
-        // residuali) e ricalcola la maturazione (Gifts::recordAppointmentDone).
+        // OMAGGI (F12): al 'done' PRIMA si riscatta la selezione in sospeso
+        // (Gifts::redeemAppointmentSelectionIfAny — transazioni 'redeem' +
+        // redeemed_at sulle righe, chiusura istanza a residuo 0), POI si
+        // registrano gli eventi di maturazione (le righe riscattate da omaggio
+        // sono residuali e vengono escluse dal tracking).
+        await giftRedeemAppointmentSelectionIfAny(tenantSlug, id, session.user.id).catch(() => undefined);
         await giftRecordAppointmentDone(tenantSlug, id).catch(() => undefined);
       }
       // Port of automation_send_email('approved'|'rejected', id): fire AFTER the

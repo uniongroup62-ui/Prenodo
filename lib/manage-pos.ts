@@ -34,6 +34,7 @@ import {
 } from "@/lib/db-repositories";
 import { expireClientLots, fidelityLotsSettings } from "@/lib/fidelity-lots";
 import { giftInvalidateSource, giftRecordSale } from "@/lib/gifts-engine";
+import { giftRedeemAppointmentSelectionIfAny } from "@/lib/gifts-instances";
 import { getManageLocationContext } from "@/lib/manage-locations";
 import {
   columnExists,
@@ -749,6 +750,9 @@ export async function checkoutManageSale(
 
   if (input.appointmentId && input.appointmentId > 0) {
     await tenantUpdate({ slug, table: "appointments", id: input.appointmentId, values: { status: "done" } }).catch(() => 0);
+    // OMAGGI (F12): il done da cassa riscatta la selezione omaggi in sospeso
+    // della prenotazione (come il cambio stato dal calendario).
+    await giftRedeemAppointmentSelectionIfAny(slug, input.appointmentId, operator.id).catch(() => undefined);
   }
 
   // OMAGGI (F12): eventi service_sold/product_sold + ricalcolo maturazione del cliente
