@@ -3363,3 +3363,27 @@ Residuo minore: i link "Dettaglio vendita" legacy preservano anche i filtri
 correnti nella query di ritorno (il Next torna alla pagina base).
 Verifica: 16/18 marker (2 falsi negativi da template-concat "Torna a X",
 componenti presenti come literal separati) + typecheck.
+
+## RIMOSSA la vecchia app Tailwind di fallback (2026-07-04)
+Segnalazione utente: /{slug}/giftbox_voucher?id=6&embed=1 mostrava il vecchio
+"Gestionale Tenant" (prototipo Tailwind). Causa: il router rendeva
+ManagementApp per (a) ogni pagina NON in FAITHFUL_MODULES e (b) ogni pagina
+registrata con ?action= non special-cased (es. appointments?action=view aperto
+in nuova scheda). Interventi:
+1. VOUCHER variante MANAGE (?id=N[&embed=1] — i link "Voucher" di Movimenti e
+   dei dettagli istanza): giftbox_voucher/giftcard_voucher/gift_voucher ora
+   risolvono il token pubblico dall'istanza (nuovi helper
+   giftboxVoucherTokenById/giftcardVoucherTokenById/giftVoucherTokenById sul
+   backfill lazy ensureVoucherToken) e riusano lo stesso viewer fedele della
+   variante pubblica, dietro login come il legacy.
+2. Il gate dei moduli fedeli non esclude più ?action=: i moduli leggono
+   l'action dall'URL client-side (appointments apre il drawer; un'action ignota
+   rende la lista, come il legacy). Le action con pagina dedicata restano negli
+   special-case.
+3. Pagina sconosciuta -> 404 legacy (index.php ~517-521): card "Pagina non
+   trovata" nel layout.
+4. ELIMINATO components/management-app.tsx (7003 righe, importava solo lib
+   condivise: nessun orfano) + legacyPageToSection.
+Verifica live 7/7: pagina inesistente -> "Pagina non trovata" senza vecchia
+app; giftbox_voucher?id=6&embed=1 -> viewer voucher; appointments?action=view
+-> modulo fedele. Typecheck pulito.

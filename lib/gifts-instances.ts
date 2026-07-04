@@ -448,7 +448,15 @@ async function loadLinkedAppointments(slug: string, instanceId: number): Promise
 }
 
 // Token voucher lazy (ensureInstanceVoucherPublicToken ~12044).
-async function ensureVoucherToken(slug: string, instanceId: number, current: unknown): Promise<string> {
+// Token voucher per la variante MANAGE del viewer omaggi (?id=N — legacy
+// gift_voucher.php con login): legge l'istanza e riusa il backfill lazy.
+export async function giftVoucherTokenById(slug: string, instanceId: number): Promise<string> {
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "gift_instances", columns: "id, voucher_public_token", where: "id = ?", params: [instanceId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  if (!rows[0]) return "";
+  return ensureVoucherToken(slug, instanceId, rows[0].voucher_public_token);
+}
+
+export async function ensureVoucherToken(slug: string, instanceId: number, current: unknown): Promise<string> {
   const existing = clean(current);
   if (/^[a-f0-9]{64}$/i.test(existing)) return existing.toLowerCase();
   const token = randomBytes(32).toString("hex");

@@ -69,7 +69,21 @@ async function userLabel(slug: string, id: number): Promise<string> {
 
 // Token voucher pubblico: backfill lazy quando manca (le istanze emesse da
 // vecchi flussi possono non averlo — il bottone Voucher deve sempre funzionare).
-async function ensureVoucherToken(slug: string, table: "giftcards" | "giftbox_instances", id: number, current: string): Promise<string> {
+// Token voucher per la variante MANAGE dei viewer (?id=N — i link "Voucher" di
+// Movimenti/dettagli; legacy giftbox_voucher.php / giftcard_voucher.php con
+// login): legge l'istanza tenant-scoped e riusa il backfill lazy del token.
+export async function giftboxVoucherTokenById(slug: string, id: number): Promise<string> {
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "giftbox_instances", columns: "id, voucher_public_token", where: "id = ?", params: [id], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  if (!rows[0]) return "";
+  return ensureVoucherToken(slug, "giftbox_instances", id, String(rows[0].voucher_public_token ?? ""));
+}
+export async function giftcardVoucherTokenById(slug: string, id: number): Promise<string> {
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "giftcards", columns: "id, voucher_public_token", where: "id = ?", params: [id], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  if (!rows[0]) return "";
+  return ensureVoucherToken(slug, "giftcards", id, String(rows[0].voucher_public_token ?? ""));
+}
+
+export async function ensureVoucherToken(slug: string, table: "giftcards" | "giftbox_instances", id: number, current: string): Promise<string> {
   const token = clean(current);
   if (/^[0-9a-fA-F]{64}$/.test(token)) return token;
   const fresh = randomBytes(32).toString("hex");
