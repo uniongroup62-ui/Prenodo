@@ -168,8 +168,6 @@ type SaleDetail = {
   preorderTracking: PreorderTracking[];
 };
 
-type BusinessHeader = { name: string; legalVatNumber: string; address: string; logoPath: string };
-
 function tenantSlug(): string {
   if (typeof window === "undefined") return "";
   return window.location.pathname.split("/")[1] || "";
@@ -281,7 +279,6 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
   const slug = slugProp || tenantSlug();
   const [saleId] = useState<number>(() => saleIdFromUrl());
   const [detail, setDetail] = useState<SaleDetail | null>(null);
-  const [business, setBusiness] = useState<BusinessHeader | null>(null);
   // Start loading only when there is a valid id to fetch; an invalid id renders the error
   // branch immediately (no effect setState needed, keeping the load effect side-effect-free).
   const [loading, setLoading] = useState(() => saleIdFromUrl() > 0);
@@ -301,9 +298,6 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
   // Delete modal state (hard-delete of an already-cancelled sale).
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleted, setDeleted] = useState(false);
-
-  // Receipt overlay.
-  const [receiptOpen, setReceiptOpen] = useState(false);
 
   // Per-line qty selections for the "Cronologia" cards: collect qty (product pickup) and
   // execute qty (prepaid manual execution), keyed by sale_item_id / prepaid_id.
@@ -340,22 +334,6 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
       active = false;
     };
   }, [slug, saleId, reloadKey]);
-
-  // Business header for the printable receipt (reused from the main POS context).
-  useEffect(() => {
-    let active = true;
-    fetch(`/api/manage/pos?slug=${encodeURIComponent(slug)}`, { headers: { "x-tenant-slug": slug } })
-      .then((r) => r.json())
-      .then((j: { business?: BusinessHeader }) => {
-        if (active) setBusiness(j?.business ?? null);
-      })
-      .catch(() => {
-        if (active) setBusiness(null);
-      });
-    return () => {
-      active = false;
-    };
-  }, [slug]);
 
   const sale = detail?.sale ?? null;
   const summary = detail?.cancelSummary ?? null;
@@ -526,14 +504,6 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
     }
   }
 
-  function printReceipt() {
-    try {
-      window.print();
-    } catch {
-      // window.print can be unavailable in embedded contexts — no-op.
-    }
-  }
-
   return (
     <div className="container-fluid py-3">
       <link rel="stylesheet" href="/assets/css/pages/pos_history.css" />
@@ -603,9 +573,6 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
                 <a className="btn btn-sm btn-outline-primary" href={backUrl}>
                   <i className="bi bi-x-lg me-1"></i>Chiudi
                 </a>
-                <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => setReceiptOpen(true)}>
-                  <i className="bi bi-printer me-1"></i>Stampa scontrino
-                </button>
                 {!isCancelled ? (
                   <button
                     type="button"
@@ -1255,109 +1222,6 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
             </div>
           ) : null}
 
-          {/* Printable receipt (scontrino): reuses the pos-content approach — a scoped @media
-              print rule isolates the receipt so only it prints. */}
-          {receiptOpen ? (
-            <div className="pos-receipt-overlay" role="dialog" aria-modal="true" aria-label="Ricevuta vendita">
-              <style>{`
-                .pos-receipt-overlay { position: fixed; inset: 0; z-index: 1080; display: flex; align-items: flex-start; justify-content: center; overflow: auto; padding: 1.5rem; background: rgba(15,23,42,.55); }
-                .pos-receipt { width: 100%; max-width: 460px; margin: auto; background: #fff; border-radius: .5rem; }
-                @media print {
-                  body * { visibility: hidden !important; }
-                  .pos-receipt-overlay, .pos-receipt-overlay * { visibility: visible !important; }
-                  .pos-receipt-overlay { position: absolute !important; inset: 0 !important; background: #fff !important; padding: 0 !important; overflow: visible !important; }
-                  .pos-receipt { box-shadow: none !important; border: 0 !important; max-width: none !important; margin: 0 !important; }
-                  .pos-receipt-actions { display: none !important; }
-                }
-              `}</style>
-              <div className="pos-receipt card p-4">
-                <div className="text-center mb-3">
-                  {business?.logoPath ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={business.logoPath} alt="" className="mb-2" style={{ maxHeight: 64, maxWidth: 180, objectFit: "contain" }} />
-                  ) : null}
-                  <div className="h5 mb-0 fw-bold">{business?.name || "—"}</div>
-                  {business?.legalVatNumber ? <div className="small text-muted">P.IVA {business.legalVatNumber}</div> : null}
-                  {business?.address ? <div className="small text-muted">{business.address}</div> : null}
-                </div>
-                <hr />
-                <div className="d-flex justify-content-between align-items-start mb-2">
-                  <div>
-                    <div className="fw-semibold">{sale.code || `#${sale.id}`}</div>
-                    <div className="text-muted small">{fmtDateTime(sale.createdAt)}</div>
-                  </div>
-                  <div className="text-end small">
-                    <div className="text-muted">Cliente</div>
-                    <div className="fw-semibold">{clientLabel}</div>
-                  </div>
-                </div>
-                <div className="table-responsive mt-2">
-                  <table className="table table-sm align-middle mb-0">
-                    <thead>
-                      <tr>
-                        <th>Elemento</th>
-                        <th className="text-end">Q.tà</th>
-                        <th className="text-end">Prezzo</th>
-                        <th className="text-end">Totale</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {groupedItems.map((it, idx) => (
-                        <tr key={`r-${idx}`}>
-                          <td>{it.name || "Elemento"}</td>
-                          <td className="text-end">{it.quantity}</td>
-                          <td className="text-end">€ {fmtMoney(it.unitPrice)}</td>
-                          <td className="text-end fw-semibold">€ {fmtMoney(it.total)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <hr />
-                <div className="d-flex justify-content-between">
-                  <span className="text-muted">Subtotale</span>
-                  <span>€ {fmtMoney(sale.subtotal)}</span>
-                </div>
-                {reductionLines.length > 0 ? (
-                  reductionLines.map((red, i) => (
-                    <div className="d-flex justify-content-between text-muted small mt-1" key={`rr-${i}`}>
-                      <span>{red.label || "Riduzione"}</span>
-                      <span className="text-danger">{red.amount !== null ? `- € ${fmtMoney(red.amount)}` : "—"}</span>
-                    </div>
-                  ))
-                ) : sale.discount > 0.00001 ? (
-                  <div className="d-flex justify-content-between text-muted small mt-1">
-                    <span>Riduzioni</span>
-                    <span className="text-danger">- € {fmtMoney(sale.discount)}</span>
-                  </div>
-                ) : null}
-                <hr />
-                <div className="d-flex justify-content-between">
-                  <span className="fw-semibold">Totale</span>
-                  <span className="fw-semibold">€ {fmtMoney(sale.total)}</span>
-                </div>
-                <div className="mt-3">
-                  <div className="fw-semibold mb-1">Pagamento</div>
-                  {sale.payments
-                    .filter((p) => Number(p.amount ?? 0) > 0)
-                    .map((p, idx) => (
-                      <div className="d-flex justify-content-between small" key={`rp-${idx}`}>
-                        <span className="text-muted">{paymentLabel(p.method)}</span>
-                        <span>€ {fmtMoney(p.amount)}</span>
-                      </div>
-                    ))}
-                </div>
-                <div className="pos-receipt-actions d-flex gap-2 justify-content-end mt-4">
-                  <button type="button" className="btn btn-outline-secondary" onClick={() => setReceiptOpen(false)}>
-                    Chiudi
-                  </button>
-                  <button type="button" className="btn btn-primary" onClick={printReceipt}>
-                    <i className="bi bi-printer me-1"></i>Stampa scontrino
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : null}
         </>
       )}
     </div>

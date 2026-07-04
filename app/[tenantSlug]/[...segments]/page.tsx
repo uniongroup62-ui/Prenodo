@@ -48,6 +48,7 @@ import { ConsentModuleFormContent } from "@/components/modules/consent_module_fo
 import { FidelityContent } from "@/components/modules/fidelity-content";
 import { PosHistoryContent } from "@/components/modules/pos_history-content";
 import { PosSaleDetailContent } from "@/components/modules/pos_sale_detail-content";
+import { PosSuccessContent } from "@/components/modules/pos_success-content";
 import { ReportsContent } from "@/components/modules/reports-content";
 import { StockMovesContent } from "@/components/modules/stock_moves-content";
 import { StockMoveFormContent } from "@/components/modules/stock_move_form-content";
@@ -135,6 +136,7 @@ const FAITHFUL_MODULES: Record<string, React.ComponentType<{ slug?: string }>> =
   stock_moves: StockMovesContent,
   pos_history: PosHistoryContent,
   pos_sale_detail: PosSaleDetailContent,
+  pos_success: PosSuccessContent,
   fidelity: FidelityContent,
   booking: BookingSettingsContent,
   business_profile: BusinessProfileContent,

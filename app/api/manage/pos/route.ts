@@ -2,7 +2,7 @@ import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/ap
 import { currentManageSession } from "@/lib/manage-auth";
 import { resolveManageLocationId } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
-import { cancelManageSale, checkoutManageSale, deleteCancelledSale, getManagePosAppointmentCart, getManagePosContext, getManagePosQuoteCart, getManagePosResiduals, getManageRechargePointsPreview, getManageSaleDetail, markManageSaleItemCollected, markPrepaidManualExecution, undoManageSaleItemCollected, undoPrepaidManualExecution } from "@/lib/manage-pos";
+import { cancelManageSale, checkoutManageSale, deleteCancelledSale, getManagePosAppointmentCart, getManagePosContext, getManagePosQuoteCart, getManagePosResiduals, getManagePosSuccess, getManageRechargePointsPreview, getManageSaleDetail, markManageSaleItemCollected, markPrepaidManualExecution, undoManageSaleItemCollected, undoPrepaidManualExecution } from "@/lib/manage-pos";
 import type { PointsStornoMode } from "@/lib/manage-pos";
 import { evaluateCatalogTilePromos } from "@/lib/db-repositories";
 import { can, canAny } from "@/lib/role-permissions";
@@ -65,6 +65,18 @@ export async function GET(request: Request) {
   // POS "Dettaglio vendita" (pos_sale_detail.php): the full single sale (header + items +
   // payments + totals) plus the cancel summary + blockers. Read-gated by the POS permission
   // already checked above; the cancel/pickup ACTIONS below carry the stronger movements gate.
+  // Pagina "Vendita completata" (port di pos_success.php): dati vendita + voucher
+  // emessi + pacchetti/ricariche + Fidelity, ricostruiti dal DB per sale_id.
+  if (url.searchParams.get("action") === "sale_success") {
+    const saleId = parseInteger(url.searchParams.get("id") ?? url.searchParams.get("sale_id"), 0);
+    if (saleId <= 0) return jsonError("Vendita non valida.");
+    try {
+      return Response.json(await getManagePosSuccess(tenantSlug, saleId));
+    } catch (error) {
+      return jsonError(error instanceof Error ? error.message : "Errore dettaglio vendita.");
+    }
+  }
+
   if (url.searchParams.get("action") === "sale_detail") {
     const saleId = parseInteger(url.searchParams.get("id") ?? url.searchParams.get("sale_id"), 0);
     if (saleId <= 0) return jsonError("ID vendita mancante.");

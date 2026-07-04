@@ -1621,6 +1621,253 @@ export async function getManageSaleDetail(slug: string, id: number): Promise<Pos
   };
 }
 
+// ---------------------------------------------------------------------------
+// POS SUCCESS — port di pos_success.php: la pagina dedicata "Vendita completata"
+// raggiunta dal redirect post-Concludi (legacy: redirect('index.php?page=pos_success&id=N')).
+// Tutti i dati sono ricostruiti dal DB per sale_id (il legacy usa anche il flash di
+// sessione, ma con fallback DB completi: codici GiftCard/GiftBox dai nomi riga,
+// pacchetti da "CP#n" e ricariche da "R#n" nelle note).
+export type PosSuccessData = {
+  ok: true;
+  saleId: number;
+  saleDate: string; // ISO — formattata dd/mm/yyyy HH:mm lato client
+  clientId: number;
+  clientName: string;
+  clientEmail: string;
+  clientPhone: string;
+  items: PosSale["items"];
+  notesClean: string;
+  subtotal: number;
+  total: number;
+  totals: {
+    hasDiscountRow: boolean;
+    discountTotal: number;
+    showBaseDiscountLine: boolean;
+    baseDiscountLabel: string;
+    baseDiscountResidual: number;
+    discountDetails: Array<{ label: string; amount: number | null }>;
+    fidUsed: number;
+    fidEarn: number;
+    fidDisc: number;
+    giftcardUsed: number | null;
+    giftcardCode: string;
+    creditUsed: number | null;
+  };
+  giftcards: Array<{ id: number; code: string; recipientEmail: string; scheduledSendOn: string }>;
+  giftbox: { id: number; code: string; recipientEmail: string; scheduledSendOn: string } | null;
+  clientPackages: Array<{ id: number; name: string; status: string; sessionsTotal: number; sessionsRemaining: number }>;
+  hasRecharge: boolean;
+};
+
+export async function getManagePosSuccess(slug: string, saleId: number): Promise<PosSuccessData> {
+  const id = Math.max(0, Number(saleId) || 0);
+  if (id <= 0) throw new Error("Vendita non valida.");
+  const row = await getSaleRow(slug, id);
+  // Guardia sede per-vendita (pos_success.php _pos_succ_sale_location_access_error).
+  await assertSaleLocationAccess(slug, Number(row.location_id ?? 0) || 0);
+  const sale = await mapSale(slug, row);
+
+  // Cliente: nome + email/telefono (LEFT JOIN clients del legacy).
+  const clientId = Math.max(0, Number(row.client_id ?? 0) || 0);
+  let clientName = sale.clientName || "—";
+  let clientEmail = "";
+  let clientPhone = "";
+  if (clientId > 0) {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "full_name, email, phone", where: "id=?", params: [clientId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    if (rows[0]) {
+      clientName = clean(rows[0].full_name, 190) || clientName;
+      clientEmail = clean(rows[0].email, 190);
+      clientPhone = clean(rows[0].phone, 60);
+    }
+  }
+
+  const notesRaw = String(row.notes ?? "");
+  const parsed = extractDiscountsFromNotes(notesRaw);
+
+  // ---- decomposizione Totali (pos_success.php 557-663) ----
+  const subtotal = roundMoney(Number(row.subtotal ?? 0) || 0);
+  const total = roundMoney(Number(row.total ?? 0) || 0);
+  const discountRaw = roundMoney(Number(row.discount ?? 0) || 0);
+  const fidUsed = normalizePoints(Number(row.fidelity_points_used ?? 0) || 0);
+  let fidEarn = normalizePoints(Number(row.fidelity_points_earned ?? 0) || 0);
+  const fidDisc = roundMoney(Number(row.fidelity_discount ?? 0) || 0);
+
+  let discountTotal = discountRaw;
+  let baseDiscount: number;
+  if (discountRaw + 0.00001 >= fidDisc) {
+    baseDiscount = roundMoney(Math.max(0, discountRaw - fidDisc));
+  } else {
+    baseDiscount = roundMoney(Math.max(0, discountRaw));
+    discountTotal = roundMoney(discountRaw + fidDisc);
+  }
+  if (discountTotal < 0) discountTotal = 0;
+
+  // Dettagli sconto (note) + promo/coupon dalle colonne strutturate quando le note non li hanno.
+  const discountDetails = [...parsed.discounts];
+  const couponCode = clean(row.coupon_code, 40).toUpperCase();
+  const promoName = clean(row.promotion_applied_name, 190);
+  const promoAmount = roundMoney(Number(row.promotion_applied_discount ?? 0) || 0);
+  if (promoName && !discountDetails.some((dd) => dd.kind === "promotion")) {
+    discountDetails.push({ kind: "promotion", label: `Promozione: ${promoName}`, amount: promoAmount > 0.00001 ? promoAmount : null });
+  }
+  if (couponCode && !discountDetails.some((dd) => dd.kind === "coupon")) {
+    discountDetails.push({ kind: "coupon", label: `Coupon: ${couponCode}`, amount: null });
+  }
+  const discountDetailsKnownTotal = roundMoney(
+    discountDetails.reduce((sum, dd) => sum + (dd.amount === null ? 0 : Math.max(0, roundMoney(dd.amount))), 0),
+  );
+  let baseDiscountResidual = baseDiscount;
+  if (baseDiscountResidual > 0.00001 && discountDetailsKnownTotal > 0.00001) {
+    baseDiscountResidual = roundMoney(Math.max(0, baseDiscountResidual - Math.min(baseDiscountResidual, discountDetailsKnownTotal)));
+  }
+  let showBaseDiscountLine = false;
+  let baseDiscountLabel = "Buoni / promozioni / sconti";
+  if (baseDiscount > 0.00001) {
+    if (discountDetails.length) {
+      if (baseDiscountResidual > 0.00001) {
+        showBaseDiscountLine = true;
+        baseDiscountLabel = "Altri sconti / promozioni";
+      }
+    } else {
+      showBaseDiscountLine = true;
+    }
+  }
+  const hasDiscountRow = discountTotal > 0.00001 || fidDisc > 0.00001 || discountDetails.length > 0 || showBaseDiscountLine;
+
+  // GiftCard/credito usati (colonne strutturate, fallback note).
+  let giftcardUsed: number | null = null;
+  const giftcardUsedCol = roundMoney(Number(row.giftcard_used ?? 0) || 0);
+  if (giftcardUsedCol > 0.00001) giftcardUsed = giftcardUsedCol;
+  else if (parsed.giftcardUsed !== null && parsed.giftcardUsed > 0.00001) giftcardUsed = roundMoney(parsed.giftcardUsed);
+  let giftcardCode = parsed.giftcardCode;
+  const giftcardPayId = Math.max(0, Number(row.giftcard_id ?? 0) || 0);
+  if (giftcardPayId > 0) {
+    const cardRows = await tenantSelect<RowDataPacket>({ slug, table: "giftcards", columns: "code", where: "id=?", params: [giftcardPayId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    const codeDb = clean(cardRows[0]?.code, 40);
+    if (codeDb) giftcardCode = codeDb;
+  }
+  let creditUsed: number | null = null;
+  const creditUsedCol = roundMoney(Number(row.credit_used ?? 0) || 0);
+  if (creditUsedCol > 0.00001) creditUsed = creditUsedCol;
+  else if (parsed.creditUsed !== null && parsed.creditUsed > 0.00001) creditUsed = roundMoney(parsed.creditUsed);
+
+  // ---- GiftCard EMESSE dai nomi riga ("GiftCard • GC-XXXX-XXXX-XXXX") ----
+  const giftcards: PosSuccessData["giftcards"] = [];
+  {
+    const codes = new Set<string>();
+    for (const it of sale.items) {
+      const nm = String(it.name ?? "");
+      if (!/giftcard/i.test(nm)) continue;
+      for (const m of nm.matchAll(/\b(GC-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4})\b/g)) codes.add(m[1].toUpperCase());
+    }
+    for (const code of codes) {
+      const rows = await tenantSelect<RowDataPacket>({ slug, table: "giftcards", columns: "id, code, recipient_email, scheduled_send_on", where: "code=?", params: [code], limit: 1 }).catch(() => [] as RowDataPacket[]);
+      const r = rows[0];
+      if (r && Number(r.id ?? 0) > 0) {
+        giftcards.push({ id: Number(r.id), code: clean(r.code, 40) || code, recipientEmail: clean(r.recipient_email, 190), scheduledSendOn: r.scheduled_send_on ? String(r.scheduled_send_on).slice(0, 10) : "" });
+      }
+    }
+  }
+
+  // ---- GiftBox EMESSA dal nome riga ("GiftBox • GBX-XXXXXX") ----
+  let giftbox: PosSuccessData["giftbox"] = null;
+  {
+    let code = "";
+    for (const it of sale.items) {
+      const nm = String(it.name ?? "");
+      if (!/giftbox/i.test(nm)) continue;
+      const m = nm.match(/\b(GBX-[A-Z0-9]{4,16})\b/i) ?? nm.match(/\b([A-Z]{3}-[A-Z0-9]{4,})\b/);
+      if (m) { code = m[1].toUpperCase(); break; }
+    }
+    if (code) {
+      const rows = await tenantSelect<RowDataPacket>({ slug, table: "giftbox_instances", columns: "id, code, recipient_email, scheduled_send_on", where: "code=?", params: [code], limit: 1 }).catch(() => [] as RowDataPacket[]);
+      const r = rows[0];
+      if (r && Number(r.id ?? 0) > 0) {
+        giftbox = { id: Number(r.id), code: clean(r.code, 40) || code, recipientEmail: clean(r.recipient_email, 190), scheduledSendOn: r.scheduled_send_on ? String(r.scheduled_send_on).slice(0, 10) : "" };
+      }
+    }
+  }
+
+  // ---- Pacchetti cliente dalle note ("Pacchetti: CP#12, CP#13") ----
+  const clientPackages: PosSuccessData["clientPackages"] = [];
+  {
+    const ids = new Set<number>();
+    for (const m of notesRaw.matchAll(/\bCP#(\d+)\b/g)) {
+      const cpId = Number(m[1]);
+      if (cpId > 0) ids.add(cpId);
+    }
+    const sorted = [...ids].sort((a, b) => a - b);
+    if (sorted.length) {
+      const inList = sorted.map(() => "?").join(",");
+      const rows = await tenantSelect<RowDataPacket>({ slug, table: "client_packages", columns: "id, package_name, status, sessions_total, sessions_remaining", where: `id IN (${inList})`, params: sorted }).catch(() => [] as RowDataPacket[]);
+      const byId = new Map(rows.map((r) => [Number(r.id), r]));
+      for (const cpId of sorted) {
+        const r = byId.get(cpId);
+        if (!r) continue;
+        clientPackages.push({ id: cpId, name: clean(r.package_name, 190), status: clean(r.status, 40), sessionsTotal: Math.max(0, Number(r.sessions_total ?? 0) || 0), sessionsRemaining: Math.max(0, Number(r.sessions_remaining ?? 0) || 0) });
+      }
+    }
+  }
+
+  // ---- Ricariche dalle note ("Ricariche: R#5") + punti ricarica in Fidelity ----
+  const rechargeIds: number[] = [];
+  for (const m of notesRaw.matchAll(/\bR#(\d+)\b/g)) {
+    const rid = Number(m[1]);
+    if (rid > 0 && !rechargeIds.includes(rid)) rechargeIds.push(rid);
+  }
+  let hasRecharge = rechargeIds.length > 0;
+  if (!hasRecharge) hasRecharge = sale.items.some((it) => /ricarica/i.test(String(it.name ?? "")));
+  if (rechargeIds.length) {
+    // Le ricariche registrano i punti su transactions (source_type credit_recharge),
+    // non su sales.fidelity_points_earned: sommiamo il contributo (pos_success.php 577-584).
+    const inList = rechargeIds.map(() => "?").join(",");
+    const rows = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "transactions",
+      columns: "ROUND(COALESCE(SUM(delta_points), 0), 2) AS s",
+      where: `source_id IN (${inList}) AND source_type IN ('credit_recharge', 'credit_recharge_void')`,
+      params: rechargeIds,
+    }).catch(() => [] as RowDataPacket[]);
+    const extra = Math.max(0, roundMoney(Number(rows[0]?.s ?? 0) || 0));
+    if (extra > 0.00001) fidEarn = roundMoney(fidEarn + extra);
+  }
+
+  const saleDateRaw = row.sale_date ?? row.created_at ?? null;
+  const saleDate = saleDateRaw ? new Date(saleDateRaw as string | Date).toISOString() : "";
+
+  return {
+    ok: true,
+    saleId: id,
+    saleDate,
+    clientId,
+    clientName,
+    clientEmail,
+    clientPhone,
+    items: sale.items,
+    notesClean: parsed.notesClean,
+    subtotal,
+    total,
+    totals: {
+      hasDiscountRow,
+      discountTotal,
+      showBaseDiscountLine,
+      baseDiscountLabel,
+      baseDiscountResidual,
+      discountDetails: discountDetails.map((dd) => ({ label: dd.label, amount: dd.amount })),
+      fidUsed,
+      fidEarn,
+      fidDisc,
+      giftcardUsed,
+      giftcardCode,
+      creditUsed,
+    },
+    giftcards,
+    giftbox,
+    clientPackages,
+    hasRecharge,
+  };
+}
+
 // Per-sale location access guard — faithful to _pos_hist_sale_location_access_error /
 // _pos_hist_assert_sale_location_access (pos_sale_detail.php ~51-77). A sale with no
 // location (locationId <= 0) is always allowed (the legacy returns "" when location_id<=0);

@@ -2832,3 +2832,42 @@ Verifica: batteria audit2 14/14 (scelta obbligatoria verbatim, catalog_promos
 con promo non cumulabile + sconto promo applicato, note legacy Promozione/
 Sconto manuale/Tipo pagamento, preview ricarica) + regressione batteria piano
 rate 16/16 + 18/18 marker bundle nuovi + typecheck.
+
+## Pagamenti — pos_success come PAGINA DEDICATA (2026-07-04, su segnalazione utente)
+
+Il legacy al Concludi REINDIRIZZA a index.php?page=pos_success&id=N (pagina
+dedicata "Vendita completata"); il Next mostrava invece uno scontrino in
+OVERLAY dentro la cassa con "Stampa scontrino" — flusso inventato (la
+divergenza "pos_success inlined" era documentata; l'utente l'ha rifiutata).
+
+1. NUOVA PAGINA /{slug}/pos_success?id=N (pos_success-content.tsx +
+   getManagePosSuccess + GET action=sale_success), port 1:1 di pos_success.php:
+   header "Vendita completata" / kicker "Pagamenti" / "ID vendita #N - data"
+   con azioni contestuali (Nuova vendita, Apri in Movimenti, Apri Pacchetto
+   (n), Apri GiftCard (n), Apri GiftBox, Ricariche cliente, Stampa
+   window.print — il bottone Stampa QUI esiste anche nel legacy, righe
+   705/742); alert flash "Operazione completata con successo. / Vendita
+   registrata (ID N) • GiftBox emessa (code) • GiftCard emessa (codes) •
+   Email programmata per .../Email destinatario: ..." solo arrivando dalla
+   cassa (?flash=1, l'equivalente del flash di sessione legacy); Riepilogo
+   articoli (badge stato riga, sub "tipo • ID n", "Nessun dettaglio righe
+   disponibile.") + Note ripulite dalle righe tecniche; Totali con breakdown
+   ("Sconti", "Buoni / promozioni / sconti"/"Altri sconti / promozioni",
+   dettagli Promozione/Coupon/Sconto manuale, "Punti Fidelity (n)", "GiftCard
+   utilizzata (code)", "Credito utilizzato", blocco Fidelity Punti usati/
+   guadagnati con i punti delle ricariche sommati da transactions); card
+   Cliente (nome/ID/Email/Telefono/Apri scheda cliente); stato "Vendita non
+   trovata" con "Non riesco a caricare i dettagli della vendita." + Torna a
+   Pagamenti/Apri Movimenti; pos_success.css legacy. Tutti i dati ricostruiti
+   dal DB per sale_id (voucher dai nomi riga GC-/GBX-, pacchetti da CP#n,
+   ricariche da R#n nelle note — gli stessi fallback del legacy).
+2. CASSA: al successo il Concludi REINDIRIZZA a pos_success?id=N&flash=1
+   (redirect legacy pos.php 5904). RIMOSSO l'overlay scontrino inventato
+   (ReceiptData/lastSale/printReceipt/successMsg, ~300 righe).
+3. DETTAGLIO VENDITA (Movimenti): rimosso il bottone "Stampa scontrino" +
+   overlay ricevuta — pos_sale_detail.php NON ha alcuna funzione di stampa
+   (verificato: nessun print/Stampa in pagina né in pos_sale_detail.js).
+Verifica: battery pos_success 12/12 (dati pagina, breakdown Sconto manuale,
+note ripulite, GiftCard emessa rilevata con id+code, vendita inesistente) +
+regressioni 16/16 e 14/14 + 30/30 marker (inclusa l'ASSENZA di "Stampa
+scontrino"/overlay nei bundle della cassa e del dettaglio) + typecheck.

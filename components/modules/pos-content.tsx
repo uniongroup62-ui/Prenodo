@@ -132,81 +132,6 @@ type PosBusinessHeader = {
   logoPath?: string;
 };
 
-// One completed sale ITEM line as returned by the checkout response (PosSale.items). Carries
-// the resolved name (incl. the GiftCard/GiftBox/Pacchetto/Ricarica labels), qty, unit + line
-// total, type + status — everything the receipt row renders.
-type SaleResponseItem = {
-  id?: number;
-  type?: string;
-  refId?: number;
-  name?: string;
-  quantity?: number;
-  unitPrice?: number;
-  total?: number;
-  status?: string;
-};
-
-// One completed sale PAYMENT (PosSale.payments): the method + amount (+ giftcardId for a
-// giftcard residui tender). The receipt prints the method label + amount.
-type SaleResponsePayment = {
-  method?: string;
-  amount?: number;
-  giftcardId?: number;
-};
-
-// A voucher ISSUED by the sale (checkout response `issuedVouchers`): the generated GiftCard
-// (GC-XXXX-XXXX-XXXX) or GiftBox (GBX-XXXXXX) CODE + recipient + amount. Rendered in the
-// receipt's "Buoni emessi" section so staff can hand the code to the customer — port of
-// pos_success.php's "GiftCard/GiftBox emessa (CODE)" presentation.
-type IssuedVoucher = {
-  type?: string;
-  code?: string;
-  recipientName?: string;
-  amount?: number;
-};
-
-// The completed `sale` the checkout response returns (a subset of PosSale) — the authoritative
-// sale the receipt is built from.
-type SaleResponse = {
-  id?: number;
-  code?: string;
-  clientId?: number;
-  clientName?: string;
-  items?: SaleResponseItem[];
-  payments?: SaleResponsePayment[];
-  subtotal?: number;
-  discount?: number;
-  total?: number;
-  createdAt?: string;
-};
-
-// The captured RECEIPT (scontrino) shown after a successful checkout. Composes the server's
-// authoritative `sale` (id/code/items/totals/payments/date/client) with the client-side
-// breakdown snapshot the server does NOT decompose on PosSale (manual discount, coupon,
-// fidelity points discount, residui credito/giftcard applied) + the business header +
-// operator, so the receipt prints every reduction line faithfully (like pos_success.php).
-type ReceiptData = {
-  sale: SaleResponse;
-  business: PosBusinessHeader;
-  operatorName: string;
-  // Reduction breakdown (snapshotted from the cart at checkout time — these equal what the
-  // backend charged, since the UI mirrors the backend math). Each is € (>= 0).
-  manualDiscount: number;
-  couponCode: string;
-  couponDiscount: number;
-  pointsUsed: number;
-  fidelityDiscount: number;
-  creditUse: number;
-  giftcardUse: number;
-  giftcardCode: string;
-  baseMethodLabel: string;
-  baseAmount: number;
-  // GiftCard/GiftBox codes this sale ISSUED (from the checkout response `issuedVouchers`),
-  // shown in the "Buoni emessi" receipt section so staff can give the code to the customer.
-  issuedVouchers: IssuedVoucher[];
-  // Punti Fidelity maturati (pos_success.php blocco "Fidelity": Punti usati/guadagnati).
-  pointsEarned: number;
-};
 
 type PosContext = {
   activeLocationId?: number;
@@ -701,15 +626,10 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   const [rechargePointsLoading, setRechargePointsLoading] = useState(false);
   const rechargePointsReqRef = useRef(0);
 
-  // Checkout state.
+  // Checkout state. Al successo la cassa REINDIRIZZA alla pagina dedicata
+  // pos_success (come il redirect legacy) — nessuna ricevuta inline.
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
-  const [successMsg, setSuccessMsg] = useState("");
-  // The printable RECEIPT (scontrino) captured on a successful checkout (port of the legacy
-  // pos_success.php view). Holds the server's completed `sale` + the breakdown snapshot + the
-  // business header; null hides the receipt. The cart is reset alongside (the existing post-
-  // checkout reset), so the receipt is shown IN ADDITION to a fresh, ready-for-next-sale cart.
-  const [lastSale, setLastSale] = useState<ReceiptData | null>(null);
 
   // "Vendita da appuntamento": when the POS is opened with ?appointment=<id> the cart is
   // pre-loaded from that appointment's CLIENT + SERVICES (action=appointment_cart). The id
@@ -733,8 +653,6 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   const quoteLockActive = quoteSaleId > 0;
   const quotePreloadRef = useRef(false);
 
-  const successTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const load = useCallback(() => {
     setLoading(true);
     fetch(`/api/manage/pos?slug=${encodeURIComponent(slug)}`, { headers: { "x-tenant-slug": slug } })
@@ -746,9 +664,6 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
 
   useEffect(() => {
     load();
-    return () => {
-      if (successTimer.current) clearTimeout(successTimer.current);
-    };
   }, [load]);
 
   // "Vendita da appuntamento" pre-load (mount-once): when the POS URL carries
@@ -908,7 +823,6 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
     // Runs once on mount; slug is stable for the page lifetime.
   }, [slug]);
 
-  const business = useMemo<PosBusinessHeader>(() => ctx?.business ?? {}, [ctx]);
   const clients = useMemo(() => ctx?.catalog?.clients ?? [], [ctx]);
   const services = useMemo(() => ctx?.catalog?.services ?? [], [ctx]);
   const products = useMemo(() => ctx?.catalog?.products ?? [], [ctx]);
@@ -2269,7 +2183,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   async function handleCheckout(event: React.FormEvent) {
     event.preventDefault();
     setErrorMsg("");
-    setSuccessMsg("");
+
     // syncConcludeState legacy: qualunque motivo di blocco (carrello vuoto, mittente
     // GiftBox/GiftCard, cliente richiesto, scelta/piano rate) ferma il submit.
     if (concludeBlockReason) {
@@ -2487,92 +2401,18 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
         setErrorMsg(String(json?.error || "Errore durante la conclusione della vendita."));
         return;
       }
-      // Success: capture the printable RECEIPT (scontrino) from the server's completed `sale`
-      // + the breakdown snapshot taken NOW (before the reset clears the cart state). The shown
-      // reductions equal what the backend charged, since the UI mirrors the backend math. The
-      // business header rides on the same response (json.business, from getPosBusinessHeader).
-      const saleResponse: SaleResponse = (json?.sale ?? {}) as SaleResponse;
-      const receiptBusiness: PosBusinessHeader = (json?.business ?? business ?? {}) as PosBusinessHeader;
-      // GiftCard/GiftBox codes the backend issued for this sale (only present when a giftcard/
-      // giftbox line was actually issued). Captured for the receipt's "Buoni emessi" section.
-      const issuedVouchers: IssuedVoucher[] = Array.isArray(json?.issuedVouchers)
-        ? (json.issuedVouchers as IssuedVoucher[]).filter((v) => v && String(v.code ?? "").trim() !== "")
-        : [];
-      setLastSale({
-        sale: saleResponse,
-        business: receiptBusiness,
-        operatorName: "",
-        manualDiscount,
-        couponCode: couponCode.trim(),
-        couponDiscount: codeDiscount,
-        pointsUsed,
-        fidelityDiscount,
-        creditUse,
-        giftcardUse,
-        giftcardCode: selectedGiftcard?.code ?? "",
-        baseMethodLabel: PAYMENT_METHOD_LABELS[baseMethod],
-        baseAmount,
-        issuedVouchers,
-        pointsEarned: Math.max(0, Number(json?.fidelityPointsEarned ?? 0) || 0),
-      });
-      // Reset the sale state.
-      const saleCode = json?.sale?.code ? ` (${json.sale.code})` : "";
-      setCart([]);
-      setGbDraft(null);
-      resetGiftboxModal();
-      setDiscountType("none");
-      setDiscountValue("0");
-      clearCouponState();
-      setCouponInput("");
-      setCouponMsg(null);
-      setCouponOpen(false);
-      setBaseMethod("cash");
-      setNotes("");
-      // Reset rateizzazione legacy post-vendita: scelta di nuovo VUOTA (obbligatoria alla
-      // prossima vendita con totale > 0), piano e notice azzerati, bozza ai default.
-      setInstallmentChoice("");
-      setInstallmentPlan(null);
-      setInstallmentNotice("");
-      setInstallmentDownInput("0");
-      setInstallmentCountInput("3");
-      setInstallmentIntervalValueInput("1");
-      setInstallmentIntervalUnit("month");
-      setInstallmentFirstDue("");
-      setInstallmentNote("");
-      clearClient();
-      // The sale is no longer "da appuntamento": clear the link + banner (the appointment is
-      // now marked 'done' server-side). A fresh ?appointment= visit re-seeds on a new mount.
-      setAppointmentSaleId(0);
-      setAppointmentSaleCode("");
-      // The sale is no longer "da preventivo": clear the link + banner (the quote is now
-      // 'converted' server-side). A fresh ?quote= visit re-seeds on a new mount.
-      setQuoteSaleId(0);
-      setQuoteSaleCode("");
-      setSuccessMsg(`Vendita conclusa${saleCode}.`);
-      if (successTimer.current) clearTimeout(successTimer.current);
-      successTimer.current = setTimeout(() => setSuccessMsg(""), 6000);
+      // Success LEGACY (pos.php 5904): la cassa NON mostra nulla inline — reindirizza
+      // alla pagina dedicata "Vendita completata" (pos_success), con flash=1 per
+      // l'alert "Operazione completata con successo." (l'equivalente del flash di
+      // sessione legacy). Lo stato della cassa si azzera con la navigazione.
+      const saleId = Math.max(0, Number(json?.sale?.id ?? 0) || 0);
+      window.location.href = `/${encodeURIComponent(slug)}/pos_success?id=${saleId}&flash=1`;
+      return;
     } catch {
       setErrorMsg("Errore di rete durante la conclusione della vendita.");
     } finally {
       setSubmitting(false);
     }
-  }
-
-  // "Stampa scontrino": port of pos_success.js (window.print()). The scoped @media print rule
-  // on the receipt isolates it (hides the app chrome), so only the scontrino prints.
-  function printReceipt() {
-    try {
-      window.print();
-    } catch {
-      // window.print can be unavailable in some embedded contexts — no-op (matches the legacy
-      // try/catch in pos_success.js).
-    }
-  }
-
-  // "Chiudi" / "Nuova vendita": dismiss the receipt. The cart was already reset on success, so
-  // closing the receipt simply hides it and leaves the POS ready for the next sale.
-  function closeReceipt() {
-    setLastSale(null);
   }
 
   return (
@@ -3552,7 +3392,6 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
               <div className={`small text-danger mt-2${errorMsg || concludeBlockReason ? "" : " d-none"}`} id="posConcludeHelp">
                 {errorMsg || concludeBlockReason}
               </div>
-              {successMsg ? <div className="small text-success mt-2">{successMsg}</div> : null}
 
               {/* Blocco info Fidelity legacy (pos.php 6399-6411), visibile col riscatto
                   punti attivo: stato campagna punti + valore punto. */}
@@ -4730,240 +4569,6 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
         </div>
       </div>
 
-      {/* ===================== RICEVUTA / SCONTRINO (pos_success) ===================== */}
-      {/* Printable RECEIPT shown after a successful checkout — faithful port of the legacy
-          pos_success.php view (business header, sale code + date, client, item lines incl. the
-          GiftCard/GiftBox/Pacchetto/Ricarica labels, subtotal, discount/coupon/punti reductions,
-          residui credito/giftcard applied, TOTAL, payment method(s)). A "Stampa scontrino"
-          button calls window.print() (pos_success.js); "Nuova vendita" dismisses it. The scoped
-          @media print rule below isolates the receipt (hides the app chrome) so ONLY the
-          scontrino prints — faithful to how the legacy print view isolates the receipt. */}
-      {lastSale ? (
-        <div className="pos-receipt-overlay" id="posReceiptModal" role="dialog" aria-modal="true" aria-label="Ricevuta vendita">
-          <style>{`
-            .pos-success-qty-col { width: 90px; }
-            .pos-success-money-col { width: 140px; }
-            .pos-receipt-overlay {
-              position: fixed; inset: 0; z-index: 1080; display: flex;
-              align-items: flex-start; justify-content: center; overflow: auto;
-              padding: 1.5rem; background: rgba(15, 23, 42, .55);
-            }
-            .pos-receipt { width: 100%; max-width: 460px; margin: auto; background: #fff; border-radius: .5rem; }
-            .pos-receipt-logo { display: inline-block; }
-            @media print {
-              body * { visibility: hidden !important; }
-              .pos-receipt-overlay, .pos-receipt-overlay * { visibility: visible !important; }
-              .pos-receipt-overlay {
-                position: absolute !important; inset: 0 !important;
-                background: #fff !important; padding: 0 !important; overflow: visible !important;
-              }
-              .pos-receipt { box-shadow: none !important; border: 0 !important; max-width: none !important; margin: 0 !important; }
-              .pos-receipt-actions { display: none !important; }
-            }
-          `}</style>
-          <div className="pos-receipt card p-4" id="posReceipt">
-            {/* BUSINESS header: name + P.IVA + address + logo (from getPosBusinessHeader). */}
-            <div className="pos-receipt-business text-center mb-3">
-              {lastSale.business.logoPath ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={lastSale.business.logoPath} alt="" className="pos-receipt-logo mb-2" style={{ maxHeight: 64, maxWidth: 180, objectFit: "contain" }} />
-              ) : null}
-              <div className="h5 mb-0 fw-bold">{lastSale.business.name || "—"}</div>
-              {lastSale.business.legalVatNumber ? (
-                <div className="small text-muted">P.IVA {lastSale.business.legalVatNumber}</div>
-              ) : null}
-              {lastSale.business.address ? (
-                <div className="small text-muted">{lastSale.business.address}</div>
-              ) : null}
-            </div>
-
-            <hr />
-
-            {/* Sale code + date + client. */}
-            <div className="d-flex justify-content-between align-items-start mb-2">
-              <div>
-                <div className="fw-semibold">
-                  <i className="bi bi-check-circle-fill text-success me-1"></i>Vendita completata
-                </div>
-                <div className="text-muted small">
-                  {lastSale.sale.code ? lastSale.sale.code : `#${lastSale.sale.id ?? ""}`}
-                  {formatReceiptDateTime(lastSale.sale.createdAt) ? ` • ${formatReceiptDateTime(lastSale.sale.createdAt)}` : ""}
-                </div>
-              </div>
-              <div className="text-end small">
-                <div className="text-muted">Cliente</div>
-                <div className="fw-semibold">
-                  {lastSale.sale.clientName && lastSale.sale.clientName.trim() && lastSale.sale.clientName.trim() !== "Cliente banco"
-                    ? lastSale.sale.clientName
-                    : "Cliente occasionale"}
-                </div>
-              </div>
-            </div>
-
-            {/* Item lines: name (+ status), qty, unit price, line total. */}
-            <div className="table-responsive mt-2">
-              <table className="table table-sm align-middle mb-0">
-                <thead>
-                  <tr>
-                    <th>Elemento</th>
-                    <th className="text-end pos-success-qty-col">Q.tà</th>
-                    <th className="text-end pos-success-money-col">Prezzo</th>
-                    <th className="text-end pos-success-money-col">Totale</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(lastSale.sale.items ?? []).length === 0 ? (
-                    <tr>
-                      <td colSpan={4} className="text-muted">Nessun dettaglio righe disponibile.</td>
-                    </tr>
-                  ) : (
-                    (lastSale.sale.items ?? []).map((item, idx) => (
-                      <tr key={item.id ?? idx}>
-                        <td>
-                          <div className="fw-semibold">{item.name || "Elemento"}</div>
-                          <div className="text-muted small">{item.type ?? ""}</div>
-                        </td>
-                        <td className="text-end">{item.quantity ?? 1}</td>
-                        <td className="text-end">{fmtEUR(Number(item.unitPrice ?? 0))}</td>
-                        <td className="text-end fw-semibold">{fmtEUR(Number(item.total ?? 0))}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            <hr />
-
-            {/* Totals: subtotal, manual discount, coupon, fidelity-points discount, residui
-                (giftcard/credito) applied, then the TOTAL. */}
-            <div className="d-flex justify-content-between">
-              <span className="text-muted">Subtotale</span>
-              <span>{fmtEUR(Number(lastSale.sale.subtotal ?? 0))}</span>
-            </div>
-            {lastSale.manualDiscount > 0.00001 ? (
-              <div className="d-flex justify-content-between text-muted small mt-1">
-                <span>Sconto manuale</span>
-                <span className="text-danger">- {fmtEUR(lastSale.manualDiscount)}</span>
-              </div>
-            ) : null}
-            {lastSale.couponDiscount > 0.00001 ? (
-              <div className="d-flex justify-content-between text-muted small mt-1">
-                <span>Coupon{lastSale.couponCode ? ` (${lastSale.couponCode})` : ""}</span>
-                <span className="text-danger">- {fmtEUR(lastSale.couponDiscount)}</span>
-              </div>
-            ) : null}
-            {lastSale.fidelityDiscount > 0.00001 ? (
-              <div className="d-flex justify-content-between text-muted small mt-1">
-                <span>Punti Fidelity{lastSale.pointsUsed > 0 ? ` (${lastSale.pointsUsed} pt)` : ""}</span>
-                <span className="text-danger">- {fmtEUR(lastSale.fidelityDiscount)}</span>
-              </div>
-            ) : null}
-            {lastSale.giftcardUse > 0.00001 ? (
-              <div className="d-flex justify-content-between text-muted small mt-1">
-                <span>GiftCard utilizzata{lastSale.giftcardCode ? ` (${lastSale.giftcardCode})` : ""}</span>
-                <span className="text-danger">- {fmtEUR(lastSale.giftcardUse)}</span>
-              </div>
-            ) : null}
-            {lastSale.creditUse > 0.00001 ? (
-              <div className="d-flex justify-content-between text-muted small mt-1">
-                <span>Credito utilizzato</span>
-                <span className="text-danger">- {fmtEUR(lastSale.creditUse)}</span>
-              </div>
-            ) : null}
-
-            <hr />
-
-            <div className="d-flex justify-content-between">
-              <span className="fw-semibold">Totale</span>
-              <span className="fw-semibold">{fmtEUR(Number(lastSale.sale.total ?? 0))}</span>
-            </div>
-
-            {/* Fidelity (pos_success.php card "Totali" blocco "Fidelity"):
-                Punti usati / Punti guadagnati sulla vendita. */}
-            {lastSale.pointsUsed > 0 || lastSale.pointsEarned > 0 ? (
-              <>
-                <hr />
-                <div className="mt-1">
-                  <div className="fw-semibold mb-1">Fidelity</div>
-                  {lastSale.pointsUsed > 0 ? (
-                    <div className="d-flex justify-content-between small">
-                      <span className="text-muted">Punti usati</span>
-                      <span>{lastSale.pointsUsed}</span>
-                    </div>
-                  ) : null}
-                  {lastSale.pointsEarned > 0 ? (
-                    <div className="d-flex justify-content-between small">
-                      <span className="text-muted">Punti guadagnati</span>
-                      <span>{lastSale.pointsEarned}</span>
-                    </div>
-                  ) : null}
-                </div>
-              </>
-            ) : null}
-
-            {/* Buoni emessi: the GiftCard/GiftBox codes this sale ISSUED (from the checkout
-                response), so staff can hand the code to the customer. Port of pos_success.php's
-                "GiftCard/GiftBox emessa (CODE)" — each row shows the type label, the generated
-                code (the load-bearing value), the recipient, and the amount. */}
-            {lastSale.issuedVouchers.length > 0 ? (
-              <>
-                <hr />
-                <div className="mt-1">
-                  <div className="fw-semibold mb-1">Buoni emessi</div>
-                  <ul className="list-unstyled mb-0 small">
-                    {lastSale.issuedVouchers.map((voucher, idx) => (
-                      <li className="d-flex justify-content-between gap-3 mt-1" key={`${voucher.code ?? ""}-${idx}`}>
-                        <span>
-                          {issuedVoucherTypeLabel(voucher.type)}{" "}
-                          <span className="fw-semibold font-monospace">{voucher.code}</span>
-                          {voucher.recipientName && voucher.recipientName.trim() ? (
-                            <span className="text-muted"> — {voucher.recipientName}</span>
-                          ) : null}
-                        </span>
-                        {Number(voucher.amount ?? 0) > 0.00001 ? (
-                          <span className="text-nowrap">{fmtEUR(Number(voucher.amount ?? 0))}</span>
-                        ) : null}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </>
-            ) : null}
-
-            {/* Payment method(s) + amounts. Falls back to the captured base method when the
-                server response carries no payments array. */}
-            <div className="mt-3">
-              <div className="fw-semibold mb-1">Pagamento</div>
-              {((lastSale.sale.payments ?? []).filter((p) => Number(p.amount ?? 0) > 0)).length > 0 ? (
-                (lastSale.sale.payments ?? [])
-                  .filter((p) => Number(p.amount ?? 0) > 0)
-                  .map((p, idx) => (
-                    <div className="d-flex justify-content-between small" key={idx}>
-                      <span className="text-muted">{salePaymentMethodLabel(p.method)}</span>
-                      <span>{fmtEUR(Number(p.amount ?? 0))}</span>
-                    </div>
-                  ))
-              ) : (
-                <div className="d-flex justify-content-between small">
-                  <span className="text-muted">{lastSale.baseMethodLabel}</span>
-                  <span>{fmtEUR(Number(lastSale.sale.total ?? 0))}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Actions (not printed). */}
-            <div className="pos-receipt-actions d-flex gap-2 justify-content-end mt-4">
-              <button type="button" className="btn btn-outline-secondary" onClick={closeReceipt}>
-                <i className="bi bi-plus-lg me-1"></i>Nuova vendita
-              </button>
-              <button type="button" className="btn btn-primary" data-pos-success-print onClick={printReceipt}>
-                <i className="bi bi-printer me-1"></i>Stampa scontrino
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }
