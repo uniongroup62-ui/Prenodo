@@ -1,9 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // Faithful port of the PHP "Scadenziario e Costi" page (app/pages/costs.php,
 // scadenziario tab), fed by the existing DB-backed /api/manage/costs.
+// Le azioni riga (Segna pagato / Elimina) e il bulk POSTano all'API e mostrano i
+// flash legacy ("Stato aggiornato", "Costo eliminato", "Voci eliminate"); i
+// filtri sono un form con submit "Filtra" (i controlli modificano un draft che
+// diventa attivo solo al submit, come il GET legacy) e la query iniziale arriva
+// dal router come prop (?from/to/status/cat/q, parità con $_GET).
 
 type CostRow = {
   id: number;
@@ -57,11 +62,23 @@ type CostsSummary = {
 
 type CostsResponse = {
   ok?: boolean;
+  error?: string;
   summary?: CostsSummary;
   costs?: CostRow[];
   categories?: CostCategory[];
   locations?: CostLocation[];
+  hasAnyCosts?: boolean;
 };
+
+export type CostsQuery = {
+  from?: string;
+  to?: string;
+  status?: string;
+  cat?: string;
+  q?: string;
+};
+
+type Filters = { cat: string; from: string; to: string; status: string; q: string };
 
 function tenantSlug(): string {
   if (typeof window === "undefined") return "";
@@ -69,11 +86,11 @@ function tenantSlug(): string {
 }
 
 function fmtMoney(n: number): string {
-  // Italian number_format($n, 2, ',', '.')
-  return (Number.isFinite(n) ? n : 0).toLocaleString("it-IT", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
+  // number_format($n, 2, ',', '.') manuale: toLocaleString('it-IT') NON raggruppa
+  // 1000-9999 (CLDR minimumGroupingDigits=2), il legacy sì ("1.234,56").
+  const value = Number.isFinite(n) ? n : 0;
+  const [int, dec] = Math.abs(value).toFixed(2).split(".");
+  return `${value < 0 ? "-" : ""}${int.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${dec}`;
 }
 
 function fmtDate(d?: string): string {
@@ -94,13 +111,38 @@ function lastOfMonth(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-export function CostsContent({ slug: slugProp }: { slug?: string } = {}) {
+// I filtri legacy dalla query GET (status whitelist open|overdue|paid|all -> open).
+function filtersFromQuery(q: CostsQuery): Filters {
+  const status = String(q.status ?? "open").trim();
+  const isDate = (v?: string) => /^\d{4}-\d{2}-\d{2}$/.test(String(v ?? ""));
+  return {
+    cat: String(Number.parseInt(String(q.cat ?? "0"), 10) || 0),
+    from: isDate(q.from) ? String(q.from) : firstOfMonth(),
+    to: isDate(q.to) ? String(q.to) : lastOfMonth(),
+    status: ["open", "overdue", "paid", "all"].includes(status) ? status : "open",
+    q: String(q.q ?? "").trim(),
+  };
+}
+
+// Accent-insensitive lowercase (norm() del combobox in assets/js/pages/costs.js).
+function comboNorm(value: string): string {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+}
+
+export function CostsContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: CostsQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
+  const [initial] = useState<Filters>(() => filtersFromQuery(initialQuery ?? {}));
+
   const [costs, setCosts] = useState<CostRow[]>([]);
   const [categories, setCategories] = useState<CostCategory[]>([]);
   const [locations, setLocations] = useState<CostLocation[]>([]);
+  const [hasAnyCosts, setHasAnyCosts] = useState(true);
   const [summary, setSummary] = useState<CostsSummary>({
     open: 0,
     overdue: 0,
@@ -113,12 +155,17 @@ export function CostsContent({ slug: slugProp }: { slug?: string } = {}) {
   const [loading, setLoading] = useState(true);
   const [loaded, setLoaded] = useState(false);
 
-  // Filters
-  const [cat, setCat] = useState("0");
-  const [from, setFrom] = useState(firstOfMonth);
-  const [to, setTo] = useState(lastOfMonth);
-  const [status, setStatus] = useState("open");
-  const [q, setQ] = useState("");
+  // Draft dei filtri (i controlli del form); i valori APPLICATI viaggiano in load().
+  const [cat, setCat] = useState(initial.cat);
+  const [from, setFrom] = useState(initial.from);
+  const [to, setTo] = useState(initial.to);
+  const [status, setStatus] = useState(initial.status);
+  const [q, setQ] = useState(initial.q);
+  const appliedRef = useRef<Filters>(initial);
+
+  // Flash legacy (?msg / ?err dopo i redirect): success sopra, danger sotto.
+  const [flash, setFlash] = useState("");
+  const [error, setError] = useState("");
 
   // Bulk selection (scadenziario): the checked cost ids for "Elimina selezionati".
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -126,9 +173,11 @@ export function CostsContent({ slug: slugProp }: { slug?: string } = {}) {
   // Per-row detail ("Riepilogo") modal (faithful to the legacy cost summary modal).
   const [detailCost, setDetailCost] = useState<CostRow | null>(null);
 
-  const load = useCallback(
-    (filters: { cat: string; from: string; to: string; status: string; q: string }) => {
-      setLoading(true);
+  // Fetch puro (i setState avvengono nei callback della Promise): usato dal
+  // mount (loading è già true di default) e da load() negli event handler.
+  const fetchData = useCallback(
+    (filters: Filters) => {
+      appliedRef.current = filters;
       const params = new URLSearchParams({
         slug,
         cat: filters.cat,
@@ -145,6 +194,7 @@ export function CostsContent({ slug: slugProp }: { slug?: string } = {}) {
           setCosts(Array.isArray(j.costs) ? j.costs : []);
           setCategories(Array.isArray(j.categories) ? j.categories : []);
           setLocations(Array.isArray(j.locations) ? j.locations : []);
+          if (typeof j.hasAnyCosts === "boolean") setHasAnyCosts(j.hasAnyCosts);
           if (j.summary) setSummary(j.summary);
         })
         .catch(() => {
@@ -158,12 +208,78 @@ export function CostsContent({ slug: slugProp }: { slug?: string } = {}) {
     [slug],
   );
 
+  const load = useCallback(
+    (filters: Filters) => {
+      setLoading(true);
+      fetchData(filters);
+    },
+    [fetchData],
+  );
+
   useEffect(() => {
-    load({ cat: "0", from: firstOfMonth(), to: lastOfMonth(), status: "open", q: "" });
-  }, [load]);
+    fetchData(initial);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchData]);
 
   function href(suffix: string): string {
     return `/${encodeURIComponent(slug)}/${`costs${suffix}`.replace("&", "?")}`;
+  }
+
+  // Applica il draft (submit "Filtra") e riscrive l'URL come il GET legacy.
+  function applyFilters() {
+    const filters: Filters = { cat, from, to, status, q };
+    load(filters);
+    if (typeof window !== "undefined") {
+      const sp = new URLSearchParams({ tab: "scadenziario", cat: filters.cat, from: filters.from, to: filters.to, status: filters.status, q: filters.q });
+      window.history.replaceState(null, "", `${window.location.pathname}?${sp.toString()}`);
+    }
+  }
+
+  async function postAction(payload: Record<string, unknown>): Promise<CostsResponse> {
+    try {
+      const res = await fetch(`/api/manage/costs?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+        body: JSON.stringify(payload),
+      });
+      const j = await res.json();
+      return { ...j, ok: res.ok && j.ok !== false };
+    } catch {
+      return { ok: false, error: "Errore di rete." };
+    }
+  }
+
+  // Segna pagato / non pagato (legacy action=toggle&kind=paid, senza conferma):
+  // flash "Stato aggiornato" e lista ricaricata con i filtri correnti.
+  async function togglePaid(id: number) {
+    setFlash("");
+    setError("");
+    const j = await postAction({ action: "toggle_paid", id: String(id) });
+    if (!j.ok) {
+      setError(String(j.error ?? "Errore: stato non aggiornato"));
+      return;
+    }
+    setFlash("Stato aggiornato");
+    load(appliedRef.current);
+  }
+
+  // Elimina voce (legacy action=delete&kind=cost): conferma + flash verbatim.
+  async function deleteCost(id: number) {
+    if (typeof window !== "undefined" && !window.confirm("Eliminare definitivamente questa voce? Questa operazione non puo essere annullata.")) return;
+    setFlash("");
+    setError("");
+    const j = await postAction({ action: "delete", id: String(id) });
+    if (!j.ok) {
+      setError(String(j.error ?? "Errore: impossibile eliminare costo"));
+      return;
+    }
+    setFlash("Costo eliminato");
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    load(appliedRef.current);
   }
 
   function toggleSelected(id: number) {
@@ -175,32 +291,37 @@ export function CostsContent({ slug: slugProp }: { slug?: string } = {}) {
     });
   }
 
-  // Bulk-delete the checked costs (POST action=bulk_delete → reload the filtered list). Clears the
-  // selection after. Guarded by a confirm; the server tolerates missing/foreign ids.
+  // Bulk-delete (legacy bulk_delete_costs, confirm del form data-confirm-submit).
   async function bulkDelete() {
     if (selected.size === 0 || bulkBusy) return;
-    if (typeof window !== "undefined" && !window.confirm(`Eliminare ${selected.size} voci selezionate?`)) return;
+    if (typeof window !== "undefined" && !window.confirm("Eliminare definitivamente le voci selezionate? Questa operazione non puo essere annullata.")) return;
     setBulkBusy(true);
+    setFlash("");
+    setError("");
     try {
-      await fetch(`/api/manage/costs?slug=${encodeURIComponent(slug)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-        body: JSON.stringify({ action: "bulk_delete", cost_ids: JSON.stringify([...selected]) }),
-      });
+      const j = await postAction({ action: "bulk_delete_costs", cost_ids: JSON.stringify([...selected]) });
+      if (!j.ok) {
+        setError(String(j.error ?? "Errore: impossibile eliminare le voci"));
+        return;
+      }
+      setFlash("Voci eliminate");
       setSelected(new Set());
-      load({ cat, from, to, status, q });
-    } catch {
-      // leave the selection on failure so the operator can retry
+      load(appliedRef.current);
     } finally {
       setBulkBusy(false);
     }
   }
 
   const allSelected = costs.length > 0 && selected.size === costs.length;
+  const masterRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (masterRef.current) masterRef.current.indeterminate = selected.size > 0 && selected.size < costs.length;
+  }, [selected, costs.length]);
 
   const showLocationCol = locations.length > 1;
-  const hasAnyCosts = costs.length > 0;
-  const empty = loaded && !hasAnyCosts && summary.open === 0 && summary.overdue === 0 && summary.paid === 0;
+  const empty = loaded && !hasAnyCosts;
+
+  const exportBase = `/api/manage/costs?slug=${encodeURIComponent(slug)}&action=export&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&status=${encodeURIComponent(status)}&cat=${encodeURIComponent(cat)}&q=${encodeURIComponent(q)}`;
 
   return (
     <div className="container-fluid">
@@ -223,6 +344,9 @@ export function CostsContent({ slug: slugProp }: { slug?: string } = {}) {
           </div>
         </div>
       </div>
+
+      {flash ? <div className="alert alert-success">{flash}</div> : null}
+      {error ? <div className="alert alert-danger">{error}</div> : null}
 
       <ul className="nav nav-tabs costs-tabs mb-3">
         <li className="nav-item">
@@ -269,19 +393,17 @@ export function CostsContent({ slug: slugProp }: { slug?: string } = {}) {
               className="row g-2 align-items-end"
               onSubmit={(e) => {
                 e.preventDefault();
-                load({ cat, from, to, status, q });
+                applyFilters();
               }}
             >
               <div className="col-xl-2 col-lg-3 col-md-6">
                 <label className="form-label">Categoria</label>
-                <select className="form-select" name="cat" value={cat} onChange={(e) => setCat(e.target.value)}>
-                  <option value="0">Tutte</option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={String(c.id)}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
+                <CategoryFilterCombobox
+                  boxId="costCategoryFilterBox"
+                  categories={categories}
+                  value={cat}
+                  onChange={setCat}
+                />
               </div>
 
               <div className="col-xl-2 col-lg-3 col-md-6">
@@ -348,35 +470,14 @@ export function CostsContent({ slug: slugProp }: { slug?: string } = {}) {
             <div className="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
               <div className="fw-semibold">Voci</div>
               <div className="d-flex gap-2">
-                <a
-                  className="btn btn-sm btn-outline-secondary"
-                  href={href(
-                    `&tab=scadenziario&action=export&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&status=${encodeURIComponent(status)}&cat=${encodeURIComponent(cat)}&q=${encodeURIComponent(q)}&format=csv`,
-                  )}
-                >
+                <a className="btn btn-sm btn-outline-secondary" href={`${exportBase}&format=csv`}>
                   <i className="bi bi-download me-1" />
                   CSV
                 </a>
-                <a
-                  className="btn btn-sm btn-outline-secondary"
-                  href={href(
-                    `&tab=scadenziario&action=export&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&status=${encodeURIComponent(status)}&cat=${encodeURIComponent(cat)}&q=${encodeURIComponent(q)}&format=pdf`,
-                  )}
-                >
+                <a className="btn btn-sm btn-outline-secondary" href={`${exportBase}&format=pdf`}>
                   <i className="bi bi-file-earmark-pdf me-1" />
                   PDF
                 </a>
-                {selected.size > 0 ? (
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-outline-danger"
-                    disabled={bulkBusy}
-                    onClick={bulkDelete}
-                  >
-                    <i className="bi bi-trash me-1" />
-                    Elimina selezionati ({selected.size})
-                  </button>
-                ) : null}
                 <a className="btn btn-sm btn-outline-primary" href={href("&tab=scadenziario&action=new")}>
                   <i className="bi bi-plus-lg me-1" />
                   Aggiungi costo
@@ -389,241 +490,240 @@ export function CostsContent({ slug: slugProp }: { slug?: string } = {}) {
                 {loading ? "Caricamento…" : "Nessuna voce trovata con i filtri selezionati."}
               </div>
             ) : (
-              <div className="table-responsive">
-                <table className="table align-middle mb-0">
-                  <thead>
-                    <tr>
-                      <th className="costs-bulk-col">
-                        <input
-                          className="form-check-input"
-                          type="checkbox"
-                          aria-label="Seleziona tutti"
-                          checked={allSelected}
-                          onChange={() => setSelected(allSelected ? new Set() : new Set(costs.map((c) => c.id)))}
-                        />
-                      </th>
-                      <th>Scadenza</th>
-                      <th>Titolo</th>
-                      <th>Categoria</th>
-                      <th>Fornitore</th>
-                      {showLocationCol ? <th>Sede</th> : null}
-                      <th className="text-end">Totale</th>
-                      <th className="text-end">Pagato</th>
-                      <th className="text-end">Residuo</th>
-                      <th>Stato</th>
-                      <th className="text-end">Azioni</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {costs.map((r) => {
-                      const overdue = r.status === "overdue";
-                      return (
-                        <tr key={r.id} className={overdue ? "table-danger" : ""}>
-                          <td>
-                            <input
-                              className="form-check-input"
-                              type="checkbox"
-                              aria-label={`Seleziona ${r.title}`}
-                              checked={selected.has(r.id)}
-                              onChange={() => toggleSelected(r.id)}
-                            />
-                          </td>
-                          <td className="costs-nowrap">
-                            <div className="fw-semibold">{fmtDate(r.dueDate)}</div>
-                            {r.isRecurring ? <div className="small text-muted">Ricorrente</div> : null}
-                          </td>
-                          <td>
-                            <div className="fw-semibold">{r.title}</div>
-                            {r.docNumber ? <div className="small text-muted">Doc: {r.docNumber}</div> : null}
-                            {r.attachmentName ? (
-                              <div className="small">
-                                {/* Download via presigned R2 (la route verifica sessione+
-                                    tenant e redirige all'URL firmato a scadenza breve). */}
-                                <a
-                                  className="text-muted"
-                                  href={`/api/manage/cost-attachment?slug=${encodeURIComponent(slug)}&id=${r.id}`}
-                                  target="_blank"
-                                  rel="noopener"
+              <div>
+                <div className="d-flex justify-content-end mb-2">
+                  <button
+                    className="btn btn-sm btn-outline-danger"
+                    type="button"
+                    disabled={selected.size === 0 || bulkBusy}
+                    onClick={bulkDelete}
+                  >
+                    <i className="bi bi-trash me-1" />
+                    Elimina selezionati
+                  </button>
+                </div>
+                <div className="table-responsive">
+                  <table className="table align-middle mb-0">
+                    <thead>
+                      <tr>
+                        <th className="costs-bulk-col">
+                          <input
+                            ref={masterRef}
+                            className="form-check-input"
+                            type="checkbox"
+                            aria-label="Seleziona tutti"
+                            checked={allSelected}
+                            onChange={() => setSelected(allSelected ? new Set() : new Set(costs.map((c) => c.id)))}
+                          />
+                        </th>
+                        <th>Scadenza</th>
+                        <th>Titolo</th>
+                        <th>Categoria</th>
+                        <th>Fornitore</th>
+                        {showLocationCol ? <th>Sede</th> : null}
+                        <th className="text-end">Totale</th>
+                        <th className="text-end">Pagato</th>
+                        <th className="text-end">Residuo</th>
+                        <th>Stato</th>
+                        <th className="text-end">Azioni</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {costs.map((r) => {
+                        const overdue = r.status === "overdue";
+                        return (
+                          <tr key={r.id} className={overdue ? "table-danger" : ""}>
+                            <td>
+                              <input
+                                className="form-check-input"
+                                type="checkbox"
+                                aria-label={`Seleziona ${r.title}`}
+                                checked={selected.has(r.id)}
+                                onChange={() => toggleSelected(r.id)}
+                              />
+                            </td>
+                            <td className="costs-nowrap">
+                              <div className="fw-semibold">{fmtDate(r.dueDate)}</div>
+                              {r.isRecurring ? <div className="small text-muted">Ricorrente</div> : null}
+                            </td>
+                            <td>
+                              <div className="fw-semibold">{r.title}</div>
+                              {r.docNumber ? <div className="small text-muted">Doc: {r.docNumber}</div> : null}
+                              {r.attachmentName ? (
+                                <div className="small">
+                                  {/* Download via presigned R2 (la route verifica sessione+
+                                      tenant e redirige all'URL firmato a scadenza breve). */}
+                                  <a
+                                    className="text-muted"
+                                    href={`/api/manage/cost-attachment?slug=${encodeURIComponent(slug)}&id=${r.id}`}
+                                    target="_blank"
+                                    rel="noopener"
+                                  >
+                                    <i className="bi bi-paperclip me-1" />
+                                    {r.attachmentName}
+                                  </a>
+                                </div>
+                              ) : null}
+                            </td>
+                            <td>
+                              {r.categoryName ? (
+                                <span
+                                  className="badge costs-color-badge"
+                                  data-cost-color={r.categoryColor || "#6c757d"}
+                                  style={{ backgroundColor: r.categoryColor || "#6c757d" }}
                                 >
-                                  <i className="bi bi-paperclip me-1" />
-                                  {r.attachmentName}
-                                </a>
-                              </div>
+                                  {r.categoryName}
+                                </span>
+                              ) : (
+                                <span className="text-muted">—</span>
+                              )}
+                            </td>
+                            <td>{r.supplierName ? r.supplierName : <span className="text-muted">—</span>}</td>
+                            {showLocationCol ? (
+                              <td>{r.locationName ? r.locationName : <span className="text-muted">—</span>}</td>
                             ) : null}
-                          </td>
-                          <td>
-                            {r.categoryName ? (
-                              <span
-                                className="badge costs-color-badge"
-                                data-cost-color={r.categoryColor || "#6c757d"}
-                                style={{ backgroundColor: r.categoryColor || "#6c757d" }}
+                            <td className="text-end">€ {fmtMoney(r.amount)}</td>
+                            <td className="text-end">€ {fmtMoney(r.paidAmount)}</td>
+                            <td className="text-end">€ {fmtMoney(r.remainingAmount)}</td>
+                            <td>
+                              {r.isPaid ? (
+                                <span className="badge text-bg-success">Pagato</span>
+                              ) : overdue ? (
+                                <span className="badge text-bg-danger">Scaduto</span>
+                              ) : (
+                                <span className="badge text-bg-warning">Da pagare</span>
+                              )}
+                            </td>
+                            <td className="text-end costs-nowrap">
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-outline-secondary js-cost-summary"
+                                title="Riepilogo"
+                                onClick={() => setDetailCost(r)}
                               >
-                                {r.categoryName}
-                              </span>
-                            ) : (
-                              <span className="text-muted">—</span>
-                            )}
-                          </td>
-                          <td>{r.supplierName ? r.supplierName : <span className="text-muted">—</span>}</td>
-                          {showLocationCol ? (
-                            <td>{r.locationName ? r.locationName : <span className="text-muted">—</span>}</td>
-                          ) : null}
-                          <td className="text-end">€ {fmtMoney(r.amount)}</td>
-                          <td className="text-end">€ {fmtMoney(r.paidAmount)}</td>
-                          <td className="text-end">€ {fmtMoney(r.remainingAmount)}</td>
-                          <td>
-                            {r.isPaid ? (
-                              <span className="badge text-bg-success">Pagato</span>
-                            ) : overdue ? (
-                              <span className="badge text-bg-danger">Scaduto</span>
-                            ) : (
-                              <span className="badge text-bg-warning">Da pagare</span>
-                            )}
-                          </td>
-                          <td className="text-end costs-nowrap">
-                            <button
-                              type="button"
-                              className="btn btn-sm btn-outline-secondary"
-                              title="Riepilogo"
-                              onClick={() => setDetailCost(r)}
-                            >
-                              <i className="bi bi-eye" />
-                            </button>{" "}
-                            <a
-                              className="btn btn-sm btn-outline-secondary"
-                              href={href(`&tab=scadenziario&action=edit&id=${r.id}`)}
-                              title="Modifica"
-                            >
-                              <i className="bi bi-pencil" />
-                            </a>{" "}
-                            <a
-                              className="btn btn-sm btn-outline-success"
-                              href={href(`&tab=scadenziario&action=toggle&kind=paid&id=${r.id}`)}
-                              title="Segna pagato / non pagato"
-                            >
-                              <i className="bi bi-check2-circle" />
-                            </a>{" "}
-                            <a
-                              className="btn btn-sm btn-outline-danger"
-                              href={href(`&tab=scadenziario&action=delete&kind=cost&id=${r.id}`)}
-                              title="Elimina"
-                            >
-                              <i className="bi bi-trash" />
-                            </a>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                                <i className="bi bi-eye" />
+                              </button>{" "}
+                              <a
+                                className="btn btn-sm btn-outline-secondary"
+                                href={href(`&tab=scadenziario&action=edit&id=${r.id}`)}
+                                title="Modifica"
+                              >
+                                <i className="bi bi-pencil" />
+                              </a>{" "}
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-outline-success"
+                                title="Segna pagato / non pagato"
+                                onClick={() => togglePaid(r.id)}
+                              >
+                                <i className="bi bi-check2-circle" />
+                              </button>{" "}
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-outline-danger"
+                                title="Elimina"
+                                onClick={() => deleteCost(r.id)}
+                              >
+                                <i className="bi bi-trash" />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
           </div>
         </>
       )}
 
-      {/* Per-row "Riepilogo" modal (faithful to the legacy cost summary modal): a read-only detail
-          of the selected cost. Controlled by React (content is the selected row). */}
+      {/* Modal "Riepilogo costo" — port del costSummaryModal legacy: modal-lg
+          scrollable, campi in row g-3 SEMPRE presenti con "-" per i vuoti,
+          Note in box grigio, link Allegato in coda, nessun footer. */}
       {detailCost ? (
         <>
-          <div className="modal fade show costs-detail-modal" style={{ display: "block" }} tabIndex={-1} role="dialog" aria-modal="true">
-            <div className="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+          <div className="modal fade show" id="costSummaryModal" style={{ display: "block" }} tabIndex={-1} role="dialog" aria-modal="true">
+            <div className="modal-dialog modal-lg modal-dialog-scrollable">
               <div className="modal-content">
                 <div className="modal-header">
                   <h5 className="modal-title">Riepilogo costo</h5>
                   <button type="button" className="btn-close" aria-label="Chiudi" onClick={() => setDetailCost(null)} />
                 </div>
                 <div className="modal-body">
-                  <dl className="row mb-0 small costs-detail-list">
-                    <dt className="col-sm-5">Titolo</dt>
-                    <dd className="col-sm-7 fw-semibold">{detailCost.title}</dd>
-                    <dt className="col-sm-5">Scadenza</dt>
-                    <dd className="col-sm-7">{fmtDate(detailCost.dueDate)}</dd>
-                    <dt className="col-sm-5">Categoria</dt>
-                    <dd className="col-sm-7">
-                      {detailCost.categoryName ? (
-                        <span className="badge" style={{ backgroundColor: detailCost.categoryColor || "#6c757d" }}>{detailCost.categoryName}</span>
-                      ) : "—"}
-                    </dd>
-                    <dt className="col-sm-5">Fornitore</dt>
-                    <dd className="col-sm-7">{detailCost.supplierName || "—"}</dd>
-                    {showLocationCol ? (
-                      <>
-                        <dt className="col-sm-5">Sede</dt>
-                        <dd className="col-sm-7">{detailCost.locationName || "Tutte le sedi"}</dd>
-                      </>
-                    ) : null}
-                    <dt className="col-sm-5">Totale</dt>
-                    <dd className="col-sm-7">€ {fmtMoney(detailCost.amount)}</dd>
-                    <dt className="col-sm-5">Pagato</dt>
-                    <dd className="col-sm-7">€ {fmtMoney(detailCost.paidAmount)}</dd>
-                    <dt className="col-sm-5">Residuo</dt>
-                    <dd className="col-sm-7">€ {fmtMoney(detailCost.remainingAmount)}</dd>
-                    {detailCost.vatPercent != null ? (
-                      <>
-                        <dt className="col-sm-5">IVA</dt>
-                        <dd className="col-sm-7">{detailCost.vatPercent}%</dd>
-                      </>
-                    ) : null}
-                    <dt className="col-sm-5">Stato</dt>
-                    <dd className="col-sm-7">
-                      {detailCost.isPaid ? (
-                        <span className="badge text-bg-success">Pagato</span>
-                      ) : detailCost.status === "overdue" ? (
-                        <span className="badge text-bg-danger">Scaduto</span>
-                      ) : (
-                        <span className="badge text-bg-warning">Da pagare</span>
-                      )}
-                    </dd>
-                    {detailCost.paymentMethod ? (
-                      <>
-                        <dt className="col-sm-5">Metodo pagamento</dt>
-                        <dd className="col-sm-7">{detailCost.paymentMethod}</dd>
-                      </>
-                    ) : null}
-                    {detailCost.docNumber ? (
-                      <>
-                        <dt className="col-sm-5">Documento</dt>
-                        <dd className="col-sm-7">{detailCost.docNumber}{detailCost.docDate ? ` — ${fmtDate(detailCost.docDate)}` : ""}</dd>
-                      </>
-                    ) : null}
-                    {detailCost.isPaid && detailCost.paidAt ? (
-                      <>
-                        <dt className="col-sm-5">Pagato il</dt>
-                        <dd className="col-sm-7">{fmtDate(detailCost.paidAt)}</dd>
-                      </>
-                    ) : null}
-                    {detailCost.isRecurring ? (
-                      <>
-                        <dt className="col-sm-5">Ricorrenza</dt>
-                        <dd className="col-sm-7">
-                          Ogni {detailCost.recurrenceInterval || 1} {recurrenceUnitLabel(detailCost.recurrenceUnit, detailCost.recurrenceInterval || 1)}
-                          {detailCost.recurrenceEndDate ? ` — fino al ${fmtDate(detailCost.recurrenceEndDate)}` : " — senza fine"}
-                        </dd>
-                      </>
-                    ) : null}
-                    {detailCost.notes ? (
-                      <>
-                        <dt className="col-sm-5">Note</dt>
-                        <dd className="col-sm-7" style={{ whiteSpace: "pre-line" }}>{detailCost.notes}</dd>
-                      </>
-                    ) : null}
+                  <div className="row g-3">
+                    <div className="col-md-6">
+                      <div className="small text-muted">Titolo</div>
+                      <div className="fw-semibold">{detailCost.title || "-"}</div>
+                    </div>
+                    <div className="col-md-3">
+                      <div className="small text-muted">Scadenza</div>
+                      <div className="fw-semibold">{fmtDate(detailCost.dueDate) || "-"}</div>
+                    </div>
+                    <div className="col-md-3">
+                      <div className="small text-muted">Stato</div>
+                      <div className="fw-semibold">
+                        {detailCost.isPaid ? "Pagato" : detailCost.status === "overdue" ? "Scaduto" : "Da pagare"}
+                      </div>
+                    </div>
+                    <div className="col-md-4">
+                      <div className="small text-muted">Sede</div>
+                      <div>{detailCost.locationName || "-"}</div>
+                    </div>
+                    <div className="col-md-4">
+                      <div className="small text-muted">Categoria</div>
+                      <div>{detailCost.categoryName || "-"}</div>
+                    </div>
+                    <div className="col-md-4">
+                      <div className="small text-muted">Fornitore</div>
+                      <div>{detailCost.supplierName || "-"}</div>
+                    </div>
+                    <div className="col-md-4">
+                      <div className="small text-muted">Ricorrente</div>
+                      <div>{detailCost.isRecurring ? "Si" : "No"}</div>
+                    </div>
+                    <div className="col-md-4">
+                      <div className="small text-muted">Totale</div>
+                      <div className="fw-semibold">€ {fmtMoney(detailCost.amount)}</div>
+                    </div>
+                    <div className="col-md-4">
+                      <div className="small text-muted">Pagato</div>
+                      <div>€ {fmtMoney(detailCost.paidAmount)}</div>
+                    </div>
+                    <div className="col-md-4">
+                      <div className="small text-muted">Residuo</div>
+                      <div>€ {fmtMoney(detailCost.remainingAmount)}</div>
+                    </div>
+                    <div className="col-md-4">
+                      <div className="small text-muted">Metodo pagamento</div>
+                      <div>{detailCost.paymentMethod || "-"}</div>
+                    </div>
+                    <div className="col-md-4">
+                      <div className="small text-muted">Numero documento</div>
+                      <div>{detailCost.docNumber || "-"}</div>
+                    </div>
+                    <div className="col-md-4">
+                      <div className="small text-muted">Data documento</div>
+                      <div>{fmtDate(detailCost.docDate) || "-"}</div>
+                    </div>
+                    <div className="col-12">
+                      <div className="small text-muted">Note</div>
+                      <div className="border rounded p-2 bg-light" style={{ whiteSpace: "pre-line" }}>{detailCost.notes || "-"}</div>
+                    </div>
                     {detailCost.attachmentName ? (
-                      <>
-                        <dt className="col-sm-5">Allegato</dt>
-                        <dd className="col-sm-7">{detailCost.attachmentName}</dd>
-                      </>
+                      <div className="col-12">
+                        <a
+                          href={`/api/manage/cost-attachment?slug=${encodeURIComponent(slug)}&id=${detailCost.id}`}
+                          target="_blank"
+                          rel="noopener"
+                        >
+                          <i className="bi bi-paperclip me-1" />
+                          <span>{detailCost.attachmentName || "Allegato"}</span>
+                        </a>
+                      </div>
                     ) : null}
-                  </dl>
-                </div>
-                <div className="modal-footer">
-                  <a className="btn btn-outline-primary" href={href(`&tab=scadenziario&action=edit&id=${detailCost.id}`)}>
-                    <i className="bi bi-pencil me-1" />
-                    Modifica
-                  </a>
-                  <button type="button" className="btn btn-secondary" onClick={() => setDetailCost(null)}>
-                    Chiudi
-                  </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -635,17 +735,91 @@ export function CostsContent({ slug: slugProp }: { slug?: string } = {}) {
   );
 }
 
-// "giorno/i", "settimana/e", "mese/i", "anno/i" for a recurrence unit + count (faithful labels).
-function recurrenceUnitLabel(unit: string, count: number): string {
-  const plural = count !== 1;
-  switch (unit) {
-    case "day":
-      return plural ? "giorni" : "giorno";
-    case "week":
-      return plural ? "settimane" : "settimana";
-    case "year":
-      return plural ? "anni" : "anno";
-    default:
-      return plural ? "mesi" : "mese";
-  }
+// Combobox categoria — port dell'.app-combobox della pagina costi (initCombobox in
+// assets/js/pages/costs.js): toggle form-control con placeholder "Tutte", ricerca
+// "Cerca..." accent-insensitive (Enter = primo risultato), item "Tutte" che azzera,
+// label con suffisso " (disattiva)" per le categorie non attive.
+function CategoryFilterCombobox(props: {
+  boxId: string;
+  categories: CostCategory[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const { boxId, categories, value, onChange } = props;
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    searchRef.current?.focus();
+    const onDocClick = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  const data = useMemo(
+    () => [
+      { id: "0", label: "Tutte", search: "Tutte" },
+      ...categories.map((c) => ({ id: String(c.id), label: c.isActive ? c.name : `${c.name} (disattiva)`, search: c.name })),
+    ],
+    [categories],
+  );
+  const qn = comboNorm(search);
+  const visible = qn ? data.filter((item) => comboNorm(item.search).includes(qn) || comboNorm(item.label).includes(qn)) : data;
+  const selected = value && value !== "0" ? data.find((item) => item.id === value) : undefined;
+
+  const pick = (id: string) => {
+    onChange(id);
+    setOpen(false);
+  };
+
+  return (
+    <div className={`app-combobox dropdown${open ? " show" : ""}`} id={boxId} ref={boxRef}>
+      <button
+        className="form-control text-start app-combobox-toggle dropdown-toggle"
+        type="button"
+        aria-expanded={open}
+        onClick={() => {
+          if (!open) setSearch("");
+          setOpen(!open);
+        }}
+      >
+        <span className={`app-combobox-text${selected ? "" : " d-none"}`}>{selected?.label ?? ""}</span>
+        <span className={`text-muted app-combobox-placeholder${selected ? " d-none" : ""}`}>Tutte</span>
+      </button>
+      <div className={`dropdown-menu p-2 w-100${open ? " show" : ""}`}>
+        <input
+          ref={searchRef}
+          type="text"
+          className="form-control form-control-sm app-combobox-search"
+          placeholder="Cerca..."
+          autoComplete="off"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              if (visible[0]) pick(visible[0].id);
+            }
+          }}
+        />
+        <div className="app-combobox-list mt-2">
+          {visible.length === 0 ? (
+            <div className="text-muted small px-2 py-1">Nessun risultato</div>
+          ) : (
+            visible.map((item) => (
+              <button key={item.id} type="button" className="dropdown-item" onClick={() => pick(item.id)}>
+                {item.label}
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+      <input type="hidden" name="cat" value={value || "0"} readOnly />
+    </div>
+  );
 }

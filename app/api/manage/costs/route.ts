@@ -1,7 +1,10 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
+import { renderCostsPdf } from "@/lib/cost-pdf";
 import { currentManageSession } from "@/lib/manage-auth";
 import {
+  deactivateCostCategoriesBulk,
   deleteCost,
+  deleteCostCategoriesBulk,
   deleteCostCategory,
   deleteCostsBulk,
   getManageCost,
@@ -60,17 +63,123 @@ export async function GET(request: Request) {
       raw: url.searchParams.get("location_id"),
       fallbackCurrent: true,
     });
-    return Response.json(await getManageCostsContext(tenantSlug, {
+    const context = await getManageCostsContext(tenantSlug, {
       from: url.searchParams.get("from") ?? undefined,
       to: url.searchParams.get("to") ?? undefined,
       status: url.searchParams.get("status") ?? undefined,
       query: url.searchParams.get("q") ?? "",
       categoryId: parseInteger(url.searchParams.get("category_id") ?? url.searchParams.get("cat"), 0),
       locationId,
-    }));
+    });
+
+    // EXPORT CSV/PDF — port di costs.php action=export (tab scadenziario): stessi
+    // filtri della lista, filename scadenziario_costi_<Ymd_His>.<ext>.
+    if (url.searchParams.get("action") === "export") {
+      if (!canAny(session.user.perms, workPerms)) return jsonError("Permesso Scadenziario richiesto.", 403);
+      const format = String(url.searchParams.get("format") ?? "csv").toLowerCase() === "pdf" ? "pdf" : "csv";
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+      const fileBase = "scadenziario_costi";
+      const showLocation = context.locations.length > 0;
+      const locationLabel = context.activeLocationId > 0
+        ? context.locations.find((l) => l.id === context.activeLocationId)?.name ?? `Sede #${context.activeLocationId}`
+        : "Tutte le sedi";
+
+      if (format === "csv") {
+        const csv = buildCostsCsv(context, showLocation);
+        return new Response(csv, {
+          headers: {
+            "Content-Type": "text/csv; charset=utf-8",
+            "Content-Disposition": `attachment; filename="${fileBase}_${stamp}.csv"`,
+            Pragma: "no-cache",
+            Expires: "0",
+          },
+        });
+      }
+
+      const pdf = await renderCostsPdf({
+        rows: context.costs,
+        summary: context.summary,
+        filters: context.filters,
+        locationLabel: showLocation ? locationLabel : "",
+        showLocationColumn: showLocation,
+        generatedAt: now,
+      });
+      return new Response(new Uint8Array(pdf), {
+        headers: {
+          "Content-Type": "application/pdf",
+          "Content-Disposition": `attachment; filename="${fileBase}_${stamp}.pdf"`,
+          "Content-Length": String(pdf.length),
+        },
+      });
+    }
+
+    return Response.json(context);
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Scadenziario non caricato.");
   }
+}
+
+// CSV legacy: BOM UTF-8 per Excel, delimitatore ';', header fisso, importi
+// "1.234,56", date d/m/Y, "Pagato il" d/m/Y H:i, Ricorrente Si/No, poi riga
+// vuota + righe Totali/Scaduti/In scadenza/Pagati sulle colonne Residuo/Pagato.
+function buildCostsCsv(context: Awaited<ReturnType<typeof getManageCostsContext>>, showLocation: boolean): string {
+  // number_format($n, 2, ',', '.') — manuale: il toLocaleString server-side può
+  // omettere il raggruppamento migliaia a seconda dell'ICU disponibile.
+  const money = (n: number) => {
+    const value = Number.isFinite(n) ? n : 0;
+    const [int, dec] = Math.abs(value).toFixed(2).split(".");
+    return `${value < 0 ? "-" : ""}${int.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${dec}`;
+  };
+  const dmy = (d: string) => {
+    const m = String(d ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[3]}/${m[2]}/${m[1]}` : "";
+  };
+  const dmyhi = (d: string) => {
+    const m = String(d ?? "").match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+    return m ? `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}` : "";
+  };
+  const esc = (v: string) => (/[";\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+  const line = (cells: string[]) => cells.map(esc).join(";");
+
+  const header = ["Scadenza", "Titolo"];
+  if (showLocation) header.push("Sede");
+  header.push("Categoria", "Fornitore", "Totale", "Pagato", "Residuo", "IVA %", "Stato", "Pagato il", "Metodo", "Doc n.", "Data doc", "Ricorrente", "Note");
+
+  const lines = [line(header)];
+  for (const r of context.costs) {
+    const statusTxt = r.isPaid ? "Pagato" : r.status === "overdue" ? "Scaduto" : "Da pagare";
+    const row = [dmy(r.dueDate), r.title];
+    if (showLocation) row.push(r.locationName || "");
+    row.push(
+      r.categoryName || "",
+      r.supplierName || "",
+      money(r.amount),
+      money(r.paidAmount),
+      money(r.remainingAmount),
+      r.vatPercent === null ? "" : String(r.vatPercent).replace(".", ","),
+      statusTxt,
+      r.isPaid ? dmyhi(r.paidAt) : "",
+      r.paymentMethod || "",
+      r.docNumber || "",
+      dmy(r.docDate),
+      r.isRecurring ? "Si" : "No",
+      r.notes || "",
+    );
+    lines.push(line(row));
+  }
+
+  const blank = header.map(() => "");
+  const residueIdx = header.indexOf("Residuo");
+  const paidIdx = header.indexOf("Pagato");
+  const totalRow = [...blank]; totalRow[0] = "Totali";
+  const overdueRow = [...blank]; overdueRow[0] = "Scaduti"; if (residueIdx >= 0) overdueRow[residueIdx] = money(context.summary.overdueAmount);
+  const dueRow = [...blank]; dueRow[0] = "In scadenza"; if (residueIdx >= 0) dueRow[residueIdx] = money(context.summary.dueAmount);
+  const paidRow = [...blank]; paidRow[0] = "Pagati"; if (paidIdx >= 0) paidRow[paidIdx] = money(context.summary.paidAmount);
+  lines.push(line([]), line(totalRow), line(overdueRow), line(dueRow), line(paidRow));
+
+  return "\uFEFF" + lines.join("\n") + "\n";
 }
 
 export async function POST(request: Request) {
@@ -128,6 +237,14 @@ export async function POST(request: Request) {
       case "category_toggle":
         if (!can(session.user.perms, "costs.categories")) return jsonError("Permesso Categorie costi richiesto.", 403);
         return Response.json(await toggleCostCategory(tenantSlug, parseInteger(body.id ?? body.category_id, 0)));
+
+      case "bulk_deactivate_categories":
+        if (!can(session.user.perms, "costs.categories")) return jsonError("Permesso Categorie costi richiesto.", 403);
+        return Response.json(await deactivateCostCategoriesBulk(tenantSlug, parseCostIds(body.category_ids ?? body.ids)));
+
+      case "bulk_delete_categories":
+        if (!can(session.user.perms, "costs.categories")) return jsonError("Permesso Categorie costi richiesto.", 403);
+        return Response.json(await deleteCostCategoriesBulk(tenantSlug, parseCostIds(body.category_ids ?? body.ids)));
 
       default:
         return jsonError("Azione costi non supportata.", 400);

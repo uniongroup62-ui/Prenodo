@@ -3454,3 +3454,83 @@ annullata, filtro cancelled/open, delete, cleanup CLEAN) + 49/49 marker bundle
 (incluse negative: niente "Nota (facoltativa)", niente "Cerca" libero, niente
 "è" nell'empty-state, niente "Annulla piano") + typecheck/lint puliti (warning
 pre-esistenti invariati).
+
+## Scadenziario e Costi (costs) — audit dedicato (2026-07-04)
+Diff su costs.php (2829 righe: tab scadenziario+categories, POST save_cost/
+save_category/bulk, GET delete/toggle/edit/export CSV+PDF), cost_attachment.php,
+assets/js/pages/costs.js e i 3 moduli Next + /api/manage/costs + cost-attachment.
+PROBLEMI GROSSI TROVATI E RISOLTI:
+1. Le azioni riga "Segna pagato"/"Elimina" e i bottoni CSV/PDF erano ANCHOR a
+   URL ?action=... che il router ignorava: NON FACEVANO NULLA. Ora: toggle/
+   delete POSTano all'API con conferme e flash verbatim ("Stato aggiornato",
+   "Costo eliminato", "Voci eliminate"; confirm "Eliminare definitivamente
+   questa voce? Questa operazione non puo essere annullata."), CSV/PDF puntano
+   all'export API reale.
+2. EXPORT mancante: implementato action=export nella route — CSV fedele (BOM
+   UTF-8, delimitatore ';', header Scadenza;Titolo;Sede;...;Ricorrente;Note,
+   date d/m/Y, "Pagato il" d/m/Y H:i, Si/No, riga vuota + Totali/Scaduti/
+   In scadenza/Pagati su colonne Residuo/Pagato, filename
+   scadenziario_costi_<Ymd_His>.csv) e PDF via nuovo lib/cost-pdf.ts (pdfkit,
+   port del layout MiniPdf: titolo, "Generato il", riga filtri
+   "Periodo ... | Sede ... | Stato ...", tabella a colonne fisse con wrap
+   legacy, sfondo rosa scaduti, re-header per pagina, blocco Totali).
+3. Formattazione importi: toLocaleString('it-IT') NON raggruppa 1000-9999
+   (CLDR minimumGroupingDigits=2) mentre number_format PHP dà "1.234,56" —
+   fmtMoney manuale nei moduli costi, nel CSV e nel PDF. NB: gli ALTRI moduli
+   fedeli usano ancora toLocaleString (residuo GLOBALE da campagna dedicata).
+4. Tab categorie riscritta fedele: filtri legacy (Cerca per nome / combobox
+   Categoria / Stato Tutte-Attive-Disattive + Filtra/Reset, filtro client-side
+   come l'array_filter PHP), toolbar "N selezionato/i" + bulk "Disattiva
+   selezionate"/"Elimina selezionate" (nuove action API
+   bulk_deactivate_categories/bulk_delete_categories con guardie verbatim
+   "Seleziona almeno una categoria" / "Una o piu categorie sono associate a N
+   costi e non possono essere eliminate. ..."), badge stato custom
+   .costs-category-status-badge is-active/is-inactive, azioni con conferme
+   VERBATIM senza accenti ("Non sara piu selezionabile...", "Questa categoria
+   non e associata ad alcun costo. Eliminazione definitiva. Continuare?",
+   alert "...e non puo essere eliminata. Puoi disattivarla..."), bottone header
+   "Nuova categoria" -> MODAL legacy (costCategoryCreateModal, ?action=cat_new
+   lo apre) e pagina inline per ?action=cat_edit&id; PRIMA c'era un form inline
+   sempre visibile + conferme inventate con nome categoria e accenti.
+5. Scadenziario: combobox categoria .app-combobox (port initCombobox, "Cerca..."
+   a TRE PUNTI, "Tutte", items con " (disattiva)"), bulk "Elimina selezionati"
+   sempre visibile disabled (riga sopra tabella come il legacy, non nel toolbar
+   Voci con count), modal "Riepilogo costo" riscritto fedele (modal-lg
+   scrollable, row g-3 con TUTTI i campi a "-", Ricorrente Si/No, Note in box
+   grigio, link allegato, SENZA footer — prima: dl centrato con campi
+   condizionali, IVA e "Ogni N mesi — senza fine" inventati, footer
+   Modifica/Chiudi), gate empty-state/bottone header su hasAnyCosts (COUNT in
+   scope, prima usava la lista filtrata), query GET legacy come prop dal router
+   (?from/to/status/cat/q con whitelist status) + replaceState su Filtra.
+6. Form costo: header di pagina IDENTICO alla lista + tab nav (prima titolo
+   pagina cambiato e bottone back inventato), label allegato verbatim "Carica
+   documento (PDF o JPG, max 5MB)" + "Il file verrà salvato e compresso (JPG
+   sempre, PDF best-effort)." + "Documento attuale: <link>", RIMOSSO il
+   checkbox "Rimuovi allegato" (il legacy consente solo la sostituzione),
+   select Sede visibile anche con UNA sede, preview "Residuo: €" live
+   (paid_remaining_preview), "Pagato"+tracking riempie Già pagato col totale,
+   wrap data fine ricorrenza NASCOSTO con "Mai" (non solo disabled), "Salva"
+   fisso, validazioni client senza punto.
+7. Lib manage-costs: TUTTI i messaggi allineati verbatim SENZA punto finale
+   ("Titolo obbligatorio", "Totale non valido", "IVA non valida", "Importo gia
+   pagato non valido", "Categoria disattivata: non puo essere usata su nuovi
+   costi", "Fornitore disattivato per Scadenziario e Costi", "Costo non
+   trovato", "Nessuna voce autorizzata da eliminare", ...; delete categoria
+   linkata: "Categoria associata a N costi: non puo essere eliminata.
+   Disattivala per non usarla nei nuovi costi."), parseMoney/parsePercent con
+   le regex legacy (errori contestuali Totale/Importo gia pagato), mapCost
+   senza default inventati ("Generale"/#0f766e -> vuoto, isPaid SOLO da
+   is_paid), summary legacy (In scadenza ESCLUDE gli scaduti; Pagati somma il
+   TOTALE), ricerca solo titolo+doc_number (prima anche fornitore), toggle
+   pagato conserva paid_at preesistente (COALESCE), delete/bulk eliminano
+   anche l'oggetto R2 dell'allegato, hasAnyCosts nel context.
+RESIDUI DELIBERATI: compressione allegati server-side non portata (testo
+verbatim mantenuto); allegati legacy /uploads non migrati rispondono con
+messaggio dedicato; multi-sede (colonna Sede lista/CSV con >1 sedi e checkbox
+"Tutte le sedi") non esercitabile sul tenant single-sede.
+Verifica: battery e2e 52/52 (validazioni verbatim, parziali con residuo,
+filtri+summary, toggle con generazione ricorrenza +1 mese e DEDUP su
+ri-pagamento, export CSV con BOM/header/totali e PDF %PDF, delete/bulk costi e
+categorie con guardie, cleanup CLEAN) + 82/82 marker bundle su lista+form+
+categorie (incluse negative sulle invenzioni rimosse) + typecheck/lint puliti
+(4 warning no-css-tags pre-esistenti).

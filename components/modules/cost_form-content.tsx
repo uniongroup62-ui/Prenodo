@@ -90,7 +90,11 @@ function resolveAction(): "new" | "edit" {
 
 // Italian number_format($n, 2, ',', '.') — mirrors the legacy value formatting.
 function fmtMoney(n: number): string {
-  return (Number.isFinite(n) ? n : 0).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // number_format($n, 2, ',', '.') manuale: toLocaleString('it-IT') NON raggruppa
+  // 1000-9999 (CLDR minimumGroupingDigits=2), il legacy sì ("1.234,56").
+  const value = Number.isFinite(n) ? n : 0;
+  const [int, dec] = Math.abs(value).toFixed(2).split(".");
+  return `${value < 0 ? "-" : ""}${int.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${dec}`;
 }
 
 export function CostFormContent({ slug: slugProp }: { slug?: string } = {}) {
@@ -105,6 +109,11 @@ export function CostFormContent({ slug: slugProp }: { slug?: string } = {}) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+
+  // Allegato (PDF/JPG max 5MB): file scelto + nome corrente. Come il legacy,
+  // il documento si può solo SOSTITUIRE caricando un nuovo file (niente rimozione).
+  const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
+  const [currentAttachmentName, setCurrentAttachmentName] = useState("");
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -190,16 +199,35 @@ export function CostFormContent({ slug: slugProp }: { slug?: string } = {}) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
-  // Allegato (PDF/JPG max 5MB): file scelto + flag rimozione + nome corrente.
-  const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
-  const [removeAttachment, setRemoveAttachment] = useState(false);
-  const [currentAttachmentName, setCurrentAttachmentName] = useState("");
-
   function backToList() {
     window.location.href = `/${encodeURIComponent(slug)}/costs?tab=scadenziario`;
   }
 
-  const showLocation = locations.length > 1;
+  // Legacy: il select Sede compare quando la colonna location esiste, anche con
+  // UNA sola sede (mostra la singola opzione).
+  const showLocation = locations.length >= 1;
+
+  // Port del preview "Residuo: €" di costs.js (updatePreview + fmtEUR Intl).
+  const paidPreview = (() => {
+    if (!form.track_payments) return "";
+    const parse = (v: string) => {
+      let s = String(v || "").trim().replace(/\s+/g, "");
+      if (!s) return 0;
+      const hasComma = s.includes(",");
+      const hasDot = s.includes(".");
+      if (hasComma && hasDot) s = s.replace(/\./g, "").replace(",", ".");
+      else if (hasComma) s = s.replace(",", ".");
+      else if ((s.match(/\./g) ?? []).length > 1) s = s.replace(/\./g, "");
+      const n = Number.parseFloat(s);
+      return Number.isFinite(n) ? n : 0;
+    };
+    const r = Math.max(parse(form.amount) - parse(form.paid_amount), 0);
+    try {
+      return `Residuo: ${new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(r)}`;
+    } catch {
+      return `Residuo: € ${r.toFixed(2).replace(".", ",")}`;
+    }
+  })();
 
   // Active categories + the currently-selected one (faithful: a disattiva
   // category stays selectable when it's the one already attached to the cost).
@@ -211,13 +239,13 @@ export function CostFormContent({ slug: slugProp }: { slug?: string } = {}) {
     event.preventDefault();
     setError("");
 
-    // Validation faithful to costs.php POST: title required, due_date valid.
+    // Validation faithful to costs.php POST (messaggi ?err= senza punto finale).
     if (form.title.trim() === "") {
-      setError("Titolo obbligatorio.");
+      setError("Titolo obbligatorio");
       return;
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(form.due_date)) {
-      setError("Data scadenza non valida.");
+      setError("Data scadenza non valida");
       return;
     }
 
@@ -264,7 +292,7 @@ export function CostFormContent({ slug: slugProp }: { slug?: string } = {}) {
       // ALLEGATO: dopo il save (serve l'id anche in creazione — risolto dalla
       // lista restituita: match titolo+scadenza, id più alto). Il costo è GIÀ
       // salvato: un errore allegato resta sul form con il messaggio.
-      if (attachmentFile || removeAttachment) {
+      if (attachmentFile) {
         let costId = form.id;
         if (costId <= 0) {
           type SavedCost = { id: number; title: string; dueDate: string };
@@ -276,8 +304,7 @@ export function CostFormContent({ slug: slugProp }: { slug?: string } = {}) {
         if (costId > 0) {
           const fd = new FormData();
           fd.set("cost_id", String(costId));
-          if (attachmentFile) fd.set("attachment", attachmentFile);
-          else fd.set("remove_attachment", "1");
+          fd.set("attachment", attachmentFile);
           const attachRes = await fetch(`/api/manage/cost-attachment?slug=${encodeURIComponent(slug)}`, {
             method: "POST",
             headers: { "x-tenant-slug": slug },
@@ -309,21 +336,35 @@ export function CostFormContent({ slug: slugProp }: { slug?: string } = {}) {
     <div className="container-fluid">
       <link rel="stylesheet" href="/assets/css/pages/costs.css" />
 
+      {/* Header IDENTICO alla lista: il legacy in edit non cambia titolo pagina
+          né aggiunge azioni (le header actions restano vuote con $editCost). */}
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Amministrazione</div>
-          <h1 className="bs-page-title">{title}</h1>
+          <h1 className="bs-page-title">Scadenziario e Costi</h1>
           <div className="bs-page-subtitle">Gestisci scadenze, costi e categorie operative.</div>
         </div>
         <div className="bs-page-actions">
-          <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/costs?tab=scadenziario`}>
-            <i className="bi bi-arrow-left me-1" />
-            Scadenziario
-          </a>
+          <div className="d-flex gap-2" />
         </div>
       </div>
 
       {error ? <div className="alert alert-danger">{error}</div> : null}
+
+      <ul className="nav nav-tabs costs-tabs mb-3">
+        <li className="nav-item">
+          <a className="nav-link active" href={`/${encodeURIComponent(slug)}/costs?tab=scadenziario`}>
+            <i className="bi bi-calendar2-check me-1" />
+            Scadenziario
+          </a>
+        </li>
+        <li className="nav-item">
+          <a className="nav-link " href={`/${encodeURIComponent(slug)}/costs?tab=categories`}>
+            <i className="bi bi-tags me-1" />
+            Categorie
+          </a>
+        </li>
+      </ul>
 
       {loading ? (
         <div className="card p-3 text-muted small">Caricamento…</div>
@@ -372,6 +413,7 @@ export function CostFormContent({ slug: slugProp }: { slug?: string } = {}) {
                   placeholder="es. 50,00"
                 />
                 <div className="form-text">Inserisci quanto hai già pagato (utile per pagamenti parziali o a rate).</div>
+                <div className="small text-muted" id="paid_remaining_preview">{paidPreview}</div>
               </div>
 
               {showLocation ? (
@@ -442,22 +484,11 @@ export function CostFormContent({ slug: slugProp }: { slug?: string } = {}) {
               </div>
 
               {/* Allegato documento (port del campo attachment di costs.php):
-                  PDF o JPG max 5MB su R2 privato; download presigned dalla lista. */}
-              <div className="col-12">
-                <label className="form-label">Allegato (opz.)</label>
-                {currentAttachmentName && !attachmentFile && !removeAttachment ? (
-                  <div className="small mb-1">
-                    <a
-                      className="text-muted"
-                      href={`/api/manage/cost-attachment?slug=${encodeURIComponent(slug)}&id=${form.id}`}
-                      target="_blank"
-                      rel="noopener"
-                    >
-                      <i className="bi bi-paperclip me-1" />
-                      {currentAttachmentName}
-                    </a>
-                  </div>
-                ) : null}
+                  PDF o JPG max 5MB su R2 privato; download presigned. Testi
+                  VERBATIM legacy (la compressione server-side non è portata —
+                  divergenza documentata — ma il testo resta identico). */}
+              <div className="col-md-12">
+                <label className="form-label">Carica documento (PDF o JPG, max 5MB)</label>
                 <input
                   className="form-control"
                   type="file"
@@ -473,22 +504,20 @@ export function CostFormContent({ slug: slugProp }: { slug?: string } = {}) {
                     }
                     setError("");
                     setAttachmentFile(file);
-                    if (file) setRemoveAttachment(false);
                   }}
                 />
-                <div className="form-text">Solo PDF o JPG, massimo 5 MB.</div>
-                {currentAttachmentName && !attachmentFile ? (
-                  <div className="form-check mt-1">
-                    <input
-                      className="form-check-input"
-                      type="checkbox"
-                      id="costRemoveAttachment"
-                      checked={removeAttachment}
-                      onChange={(e) => setRemoveAttachment(e.target.checked)}
-                    />
-                    <label className="form-check-label" htmlFor="costRemoveAttachment">
-                      Rimuovi allegato
-                    </label>
+                <div className="form-text">Il file verrà salvato e compresso (JPG sempre, PDF best-effort).</div>
+                {currentAttachmentName && form.id > 0 ? (
+                  <div className="small mt-1">
+                    Documento attuale:{" "}
+                    <a
+                      href={`/api/manage/cost-attachment?slug=${encodeURIComponent(slug)}&id=${form.id}`}
+                      target="_blank"
+                      rel="noopener"
+                    >
+                      <i className="bi bi-paperclip me-1" />
+                      {currentAttachmentName}
+                    </a>
                   </div>
                 ) : null}
               </div>
@@ -496,7 +525,23 @@ export function CostFormContent({ slug: slugProp }: { slug?: string } = {}) {
               <div className="col-md-3">
                 <label className="form-label">Pagato</label>
                 <div className="form-check mt-2">
-                  <input className="form-check-input" type="checkbox" name="is_paid" id="is_paid" checked={form.is_paid} onChange={(e) => set("is_paid", e.target.checked)} />
+                  <input
+                    className="form-check-input"
+                    type="checkbox"
+                    name="is_paid"
+                    id="is_paid"
+                    checked={form.is_paid}
+                    onChange={(e) => {
+                      // costs.js: spuntando Pagato con il tracking attivo, il
+                      // campo "Già pagato" viene riempito col totale.
+                      const checked = e.target.checked;
+                      setForm((prev) => ({
+                        ...prev,
+                        is_paid: checked,
+                        paid_amount: checked && prev.track_payments ? prev.amount : prev.paid_amount,
+                      }));
+                    }}
+                  />
                   <label className="form-check-label" htmlFor="is_paid">Segna come pagato</label>
                 </div>
               </div>
@@ -548,7 +593,9 @@ export function CostFormContent({ slug: slugProp }: { slug?: string } = {}) {
                       <option value="never">Mai</option>
                       <option value="date">Data specifica</option>
                     </select>
-                    <div id="recurrence_end_date_wrap">
+                    {/* costs.js syncEndMode: con "Mai" il wrap della data è NASCOSTO
+                        (display:none), non solo disabilitato. */}
+                    <div id="recurrence_end_date_wrap" style={form.recurrence_end_mode === "never" ? { display: "none" } : undefined}>
                       <input
                         className="form-control"
                         type="date"
@@ -569,11 +616,11 @@ export function CostFormContent({ slug: slugProp }: { slug?: string } = {}) {
             <div className="d-flex gap-2">
               <button className="btn btn-primary" type="submit" disabled={saving}>
                 <i className="bi bi-check2-circle me-1" />
-                {saving ? "Salvataggio…" : "Salva"}
+                Salva
               </button>
-              <button className="btn btn-outline-secondary" type="button" onClick={backToList}>
+              <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/costs?tab=scadenziario`}>
                 Annulla
-              </button>
+              </a>
             </div>
           </form>
         </div>

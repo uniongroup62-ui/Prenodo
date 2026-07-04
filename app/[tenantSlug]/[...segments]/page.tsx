@@ -181,7 +181,7 @@ export default async function TenantPage({
   searchParams,
 }: {
   params: Promise<{ tenantSlug: string; segments?: string[] }>;
-  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string }>;
+  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string; from?: string; to?: string; q?: string; cat?: string; cat_q?: string; cat_status?: string; category_filter_id?: string }>;
 }) {
   const { tenantSlug, segments } = await params;
   const query = await searchParams;
@@ -308,6 +308,41 @@ export default async function TenantPage({
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
         <CostFormContent />
+      </ManageShell>
+    );
+  }
+
+  // Scadenziario e Costi: i filtri legacy viaggiano nella query GET — inoltrati
+  // come prop server-side (parità con il parsing $_GET di costs.php).
+  if (page === "costs" && tab === "categories") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <CostCategoriesContent
+          slug={tenantSlug}
+          initialQuery={{
+            action: query.action,
+            id: query.id,
+            cat_q: query.cat_q,
+            category_filter_id: query.category_filter_id,
+            cat_status: query.cat_status,
+          }}
+        />
+      </ManageShell>
+    );
+  }
+  if (page === "costs") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <CostsContent
+          slug={tenantSlug}
+          initialQuery={{
+            from: query.from,
+            to: query.to,
+            status: query.status,
+            cat: query.cat,
+            q: query.q,
+          }}
+        />
       </ManageShell>
     );
   }

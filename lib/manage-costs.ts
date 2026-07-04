@@ -43,6 +43,9 @@ export type ManageCostsContext = {
   categories: CostCategoryRow[];
   suppliers: CostSupplierRow[];
   locations: CostLocationRow[];
+  // COUNT dei costi nello scope sede, INDIPENDENTE dai filtri — è il gate legacy
+  // $hasAnyCostsInScope per l'empty-state e per il bottone "Nuovo costo" in header.
+  hasAnyCosts: boolean;
 };
 
 export type CostRow = {
@@ -114,10 +117,11 @@ export async function getManageCostsContext(
   const locations = await listCostLocations(slug);
   const activeLocationId = normalizeLocationId(options.locationId ?? 0, locations);
   const filters = normalizeCostFilters(options);
-  const [costs, categories, suppliers] = await Promise.all([
+  const [costs, categories, suppliers, hasAnyCosts] = await Promise.all([
     listCosts(slug, { ...filters, locationId: activeLocationId, locations }),
     listCostCategories(slug),
     listCostSuppliers(slug),
+    hasAnyCostsInScope(slug, activeLocationId, locations),
   ]);
 
   return {
@@ -130,7 +134,30 @@ export async function getManageCostsContext(
     categories,
     suppliers,
     locations,
+    hasAnyCosts,
   };
+}
+
+// Port di $hasAnyCostsInScope (costs.php ~1393-1405): COUNT nello scope sede,
+// senza filtri di periodo/stato.
+async function hasAnyCostsInScope(slug: string, locationId: number, locations: CostLocationRow[]): Promise<boolean> {
+  try {
+    const table = await tenantTable(slug, "costs");
+    const clauses: string[] = ["1=1"];
+    const params: unknown[] = [];
+    if (await columnExists(table.name, "location_id")) {
+      const scope = buildLocationScope("location_id", locationId, locations);
+      if (scope.sql) {
+        clauses.push(scope.sql);
+        params.push(...scope.params);
+      }
+    }
+    const scoped = await tenantScope(table, clauses, params);
+    const rows = await dbQuery<RowDataPacket[]>(`SELECT COUNT(*) AS count FROM ${quoteIdentifier(table.name)}${scoped.where}`, scoped.params);
+    return Number(rows[0]?.count ?? 0) > 0;
+  } catch {
+    return true;
+  }
 }
 
 // Edit-form prefill: return ONE cost's editable fields for one id. Port of
@@ -179,29 +206,41 @@ export async function saveCost(slug: string, body: Record<string, string>): Prom
 }
 
 export async function deleteCost(slug: string, costId: number, locationId = 0): Promise<ManageCostsContext> {
-  if (costId <= 0) throw new Error("Costo non valido.");
-  await getCostById(slug, costId);
+  // Messaggio pagina legacy (redirect ?err=Costo non trovato) per id invalido o mancante.
+  if (costId <= 0) throw new Error("Costo non trovato");
+  const row = await getCostById(slug, costId);
   await tenantDelete({ slug, table: "costs", id: costId });
+  await deleteCostAttachmentObject(row).catch(() => undefined);
   return getManageCostsContext(slug, { locationId, status: "open" });
 }
 
 // Bulk-delete costs (faithful to costs.php bulk_delete_costs ~686-715): delete every selected cost
 // that exists + is accessible; missing/foreign ids are silently skipped (the legacy tolerance), and
-// if NONE are deletable it errors like the legacy "Nessuna voce autorizzata da eliminare". Attachment
-// FILE cleanup is a no-op (the attachment subsystem is deferred). Returns the refreshed context.
+// if NONE are deletable it errors like the legacy "Nessuna voce autorizzata da eliminare". Like the
+// legacy file cleanup, each deleted cost's R2 attachment object is removed best-effort.
 export async function deleteCostsBulk(slug: string, costIds: number[], locationId = 0): Promise<ManageCostsContext> {
   const ids = [...new Set(costIds.filter((id) => Number.isInteger(id) && id > 0))];
-  if (ids.length === 0) throw new Error("Seleziona almeno una voce.");
+  if (ids.length === 0) throw new Error("Seleziona almeno una voce");
   let deleted = 0;
   for (const id of ids) {
-    const accessible = await getCostById(slug, id).then(() => true).catch(() => false);
-    if (accessible) {
+    const row = await getCostById(slug, id).catch(() => null);
+    if (row) {
       await tenantDelete({ slug, table: "costs", id }).catch(() => 0);
+      await deleteCostAttachmentObject(row).catch(() => undefined);
       deleted += 1;
     }
   }
-  if (deleted === 0) throw new Error("Nessuna voce autorizzata da eliminare.");
+  if (deleted === 0) throw new Error("Nessuna voce autorizzata da eliminare");
   return getManageCostsContext(slug, { locationId, status: "open" });
+}
+
+// Best-effort cleanup of the R2 private object referenced by a deleted cost
+// (legacy $deleteCostAttachments unlink). Legacy /uploads paths are skipped.
+async function deleteCostAttachmentObject(row: RowDataPacket): Promise<void> {
+  const path = String(row.attachment_path ?? "").trim();
+  if (!/^t\d+\//.test(path)) return;
+  const { deletePrivateObject } = await import("@/lib/storage");
+  await deletePrivateObject(path);
 }
 
 export async function toggleCostPaid(slug: string, costId: number, locationId = 0): Promise<ManageCostsContext> {
@@ -214,10 +253,37 @@ export async function toggleCostPaid(slug: string, costId: number, locationId = 
   }
 
   const amount = roundMoney(Number(row.amount ?? 0) || 0);
-  await tenantUpdate({ slug, table: "costs", id: costId, values: { is_paid: 1, paid_amount: amount, paid_at: new Date() } });
+  // Legacy: paid_at=COALESCE(paid_at, NOW()) — un paid_at preesistente viene conservato.
+  await tenantUpdate({ slug, table: "costs", id: costId, values: { is_paid: 1, paid_amount: amount, paid_at: row.paid_at ?? new Date() } });
   if (Number(row.is_recurring ?? 0) === 1) await createNextRecurringCost(slug, row);
 
   return getManageCostsContext(slug, { locationId: locationId || Number(row.location_id ?? 0), status: "open" });
+}
+
+// Bulk categorie (costs.php bulk_deactivate_categories / bulk_delete_categories).
+export async function deactivateCostCategoriesBulk(slug: string, categoryIds: number[]): Promise<ManageCostsContext> {
+  const ids = [...new Set(categoryIds.filter((id) => Number.isInteger(id) && id > 0))];
+  if (ids.length === 0) throw new Error("Seleziona almeno una categoria");
+  for (const id of ids) {
+    await tenantUpdate({ slug, table: "cost_categories", id, values: { is_active: 0 } }).catch(() => 0);
+  }
+  return getManageCostsContext(slug, { status: "open" });
+}
+
+export async function deleteCostCategoriesBulk(slug: string, categoryIds: number[]): Promise<ManageCostsContext> {
+  const ids = [...new Set(categoryIds.filter((id) => Number.isInteger(id) && id > 0))];
+  if (ids.length === 0) throw new Error("Seleziona almeno una categoria");
+  let blockedTotal = 0;
+  for (const id of ids) {
+    blockedTotal += await countRowsByColumn(slug, "costs", "category_id", id);
+  }
+  if (blockedTotal > 0) {
+    throw new Error(`Una o piu categorie sono associate a ${blockedTotal} costi e non possono essere eliminate. Disattivale per non usarle nei nuovi costi.`);
+  }
+  for (const id of ids) {
+    await tenantDelete({ slug, table: "cost_categories", id }).catch(() => 0);
+  }
+  return getManageCostsContext(slug, { status: "open" });
 }
 
 export async function saveCostCategory(slug: string, body: Record<string, string>): Promise<ManageCostsContext> {
@@ -225,8 +291,8 @@ export async function saveCostCategory(slug: string, body: Record<string, string
   const id = parseInteger(body.id ?? body.category_id, 0);
   const name = clean(body.name, 80);
   const color = clean(body.color, 20);
-  if (!name) throw new Error("Nome categoria obbligatorio.");
-  if (color && !/^#[0-9A-Fa-f]{6}$/.test(color)) throw new Error("Colore categoria non valido.");
+  if (!name) throw new Error("Nome categoria obbligatorio");
+  if (color && !/^#[0-9A-Fa-f]{6}$/.test(color)) throw new Error("Colore categoria non valido");
   await ensureCostCategoryNameAvailable(slug, name, id);
 
   const values = await filterColumns(table.name, {
@@ -243,15 +309,16 @@ export async function saveCostCategory(slug: string, body: Record<string, string
 }
 
 export async function deleteCostCategory(slug: string, categoryId: number): Promise<ManageCostsContext> {
-  if (categoryId <= 0) throw new Error("Categoria non valida.");
+  if (categoryId <= 0) throw new Error("Categoria non trovata");
   const linked = await countRowsByColumn(slug, "costs", "category_id", categoryId);
-  if (linked > 0) throw new Error(`Categoria associata a ${linked} costi: disattivala per non usarla nei nuovi costi.`);
+  // Verbatim legacy (costs.php ~1026).
+  if (linked > 0) throw new Error(`Categoria associata a ${linked} costi: non puo essere eliminata. Disattivala per non usarla nei nuovi costi.`);
   await tenantDelete({ slug, table: "cost_categories", id: categoryId });
   return getManageCostsContext(slug, { status: "open" });
 }
 
 export async function toggleCostCategory(slug: string, categoryId: number): Promise<ManageCostsContext> {
-  if (categoryId <= 0) throw new Error("Categoria non valida.");
+  if (categoryId <= 0) throw new Error("Categoria non trovata");
   const row = await getCostCategoryById(slug, categoryId);
   await tenantUpdate({ slug, table: "cost_categories", id: categoryId, values: { is_active: Number(row.is_active ?? 1) === 1 ? 0 : 1 } });
   return getManageCostsContext(slug, { status: "open" });
@@ -301,9 +368,10 @@ async function listCosts(
     params.push(options.categoryId);
   }
 
+  // Legacy: la ricerca copre SOLO titolo e numero documento (non il fornitore).
   if (options.query) {
-    clauses.push("(LOWER(c.title) LIKE ? OR LOWER(COALESCE(c.doc_number,'')) LIKE ? OR LOWER(COALESCE(s.name,'')) LIKE ?)");
-    params.push(`%${options.query}%`, `%${options.query}%`, `%${options.query}%`);
+    clauses.push("(LOWER(c.title) LIKE ? OR LOWER(COALESCE(c.doc_number,'')) LIKE ?)");
+    params.push(`%${options.query}%`, `%${options.query}%`);
   }
 
   if (hasLocation) {
@@ -374,17 +442,19 @@ async function listCostLocations(slug: string): Promise<CostLocationRow[]> {
 
 function mapCost(row: RowDataPacket): CostRow {
   const amount = roundMoney(Number(row.amount ?? 0) || 0);
-  const paidAmount = Math.min(amount, roundMoney(Number(row.paid_amount ?? (Number(row.is_paid ?? 0) === 1 ? amount : 0)) || 0));
+  const paidAmount = roundMoney(Number(row.paid_amount ?? (Number(row.is_paid ?? 0) === 1 ? amount : 0)) || 0);
   const dueDate = dateString(row.due_date) || todayIso();
-  const isPaid = Number(row.is_paid ?? 0) === 1 || paidAmount >= amount;
-  const remainingAmount = isPaid ? 0 : roundMoney(Math.max(0, amount - paidAmount));
+  // Legacy: lo stato dipende SOLO da is_paid (un totale 0 non-pagato resta "Da pagare").
+  const isPaid = Number(row.is_paid ?? 0) === 1;
+  const remainingAmount = roundMoney(Math.max(0, amount - paidAmount));
   const status: CostStatus = isPaid ? "paid" : dueDate < todayIso() ? "overdue" : "open";
   return {
     id: Number(row.id ?? 0),
-    title: String(row.title ?? "Costo"),
+    title: String(row.title ?? ""),
     categoryId: nullableNumber(row.category_id),
-    categoryName: String(row.category_name ?? "Generale"),
-    categoryColor: String(row.category_color ?? "#0f766e"),
+    // Vuote come il legacy (la cella rende "—"): NIENTE default inventati.
+    categoryName: String(row.category_name ?? ""),
+    categoryColor: String(row.category_color ?? ""),
     supplierId: nullableNumber(row.supplier_id),
     supplierName: String(row.supplier_name ?? ""),
     amount,
@@ -413,16 +483,19 @@ function mapCost(row: RowDataPacket): CostRow {
 }
 
 async function normalizeCostInput(slug: string, body: Record<string, string>, existing: RowDataPacket | null) {
+  // Messaggi VERBATIM legacy (querystring ?err=..., senza punto finale).
   const title = clean(body.title, 190);
-  if (!title) throw new Error("Titolo obbligatorio.");
-  const amount = parseMoney(body.amount);
-  if (amount < 0) throw new Error("Totale non valido.");
-  const vatPercent = clean(body.vat_percent, 20) ? parsePercent(body.vat_percent) : null;
-  if (vatPercent !== null && (vatPercent < 0 || vatPercent > 100)) throw new Error("IVA non valida.");
+  if (!title) throw new Error("Titolo obbligatorio");
+  const amount = parseMoneyOrNull(body.amount);
+  if (amount === null || amount < 0) throw new Error("Totale non valido");
+  const vatRaw = clean(body.vat_percent, 20);
+  const vatPercent = vatRaw ? parsePercent(vatRaw) : null;
+  if (vatRaw && vatPercent === null) throw new Error("IVA non valida");
+  if (vatPercent !== null && (vatPercent < 0 || vatPercent > 100)) throw new Error("IVA non valida");
   const dueDate = normalizeDate(body.due_date);
-  if (!dueDate) throw new Error("Data scadenza non valida.");
+  if (!dueDate) throw new Error("Data scadenza non valida");
   const docDate = normalizeDate(body.doc_date);
-  if (body.doc_date && !docDate) throw new Error("Data documento non valida.");
+  if (body.doc_date && !docDate) throw new Error("Data documento non valida");
   const locationId = await normalizeCostLocationId(slug, body.location_id);
   const categoryId = parseInteger(body.category_id, 0) || null;
   if (categoryId) await ensureCostCategoryUsable(slug, categoryId, existing);
@@ -430,10 +503,12 @@ async function normalizeCostInput(slug: string, body: Record<string, string>, ex
   if (supplierId) await ensureSupplierUsable(slug, supplierId, locationId, existing);
 
   const trackPayments = truthy(body.track_payments);
-  const rawPaid = trackPayments ? parseMoney(body.paid_amount, true) : 0;
-  let paidAmount = Math.min(amount, Math.max(0, rawPaid));
+  let paidAmount = 0;
   let isPaid = truthy(body.is_paid);
   if (trackPayments) {
+    const rawPaid = parseMoneyOrNull(body.paid_amount, true);
+    if (rawPaid === null || rawPaid < 0) throw new Error("Importo gia pagato non valido");
+    paidAmount = Math.min(amount, rawPaid);
     isPaid = paidAmount + 0.00001 >= amount;
     if (isPaid) paidAmount = amount;
   } else {
@@ -444,8 +519,8 @@ async function normalizeCostInput(slug: string, body: Record<string, string>, ex
   const recurrenceInterval = Math.max(1, parseInteger(body.recurrence_interval, 1));
   const recurrenceUnit = normalizeRecurrenceUnit(body.recurrence_unit);
   const recurrenceEndDate = truthy(body.recurrence_end_never) ? null : normalizeDate(body.recurrence_end_date);
-  if (body.recurrence_end_date && !recurrenceEndDate && !truthy(body.recurrence_end_never)) throw new Error("Fine ricorrenza non valida.");
-  if (recurrenceEndDate && recurrenceEndDate < dueDate) throw new Error("Fine ricorrenza precedente alla scadenza.");
+  if (body.recurrence_end_date && !recurrenceEndDate && !truthy(body.recurrence_end_never)) throw new Error("Fine ricorrenza non valida");
+  if (recurrenceEndDate && recurrenceEndDate < dueDate) throw new Error("Fine ricorrenza precedente alla scadenza");
 
   return {
     title,
@@ -471,42 +546,44 @@ async function normalizeCostInput(slug: string, body: Record<string, string>, ex
 async function normalizeCostLocationId(slug: string, value: unknown): Promise<number> {
   const locations = await listCostLocations(slug);
   const id = parseInteger(value, 0) || normalizeLocationId(0, locations);
-  if (id <= 0 || !locations.some((location) => location.id === id)) throw new Error("Sede non valida o non autorizzata.");
+  if (id <= 0 || !locations.some((location) => location.id === id)) throw new Error("Sede non valida o non autorizzata");
   return id;
 }
 
 async function ensureCostCategoryUsable(slug: string, categoryId: number, existing: RowDataPacket | null): Promise<void> {
-  const row = await getCostCategoryById(slug, categoryId);
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "cost_categories", where: "id=?", params: [categoryId], limit: 1 }).catch(() => []);
+  // Verbatim pagina legacy: categoria inesistente sul salvataggio costo.
+  if (!rows[0]) throw new Error("Categoria non valida");
   const keepsExisting = existing && Number(existing.category_id ?? 0) === categoryId;
-  if (Number(row.is_active ?? 1) !== 1 && !keepsExisting) {
-    throw new Error("Categoria disattivata: non puo essere usata su nuovi costi.");
+  if (Number(rows[0].is_active ?? 1) !== 1 && !keepsExisting) {
+    throw new Error("Categoria disattivata: non puo essere usata su nuovi costi");
   }
 }
 
 async function ensureSupplierUsable(slug: string, supplierId: number, locationId: number, existing: RowDataPacket | null): Promise<void> {
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "suppliers", where: "id=?", params: [supplierId], limit: 1 }).catch(() => []);
   const supplier = rows[0];
-  if (!supplier) throw new Error("Fornitore non valido.");
+  if (!supplier) throw new Error("Fornitore non valido");
   const keepsExisting = existing && Number(existing.supplier_id ?? 0) === supplierId && Number(existing.location_id ?? 0) === locationId;
   if (!keepsExisting && Number(supplier.is_active_costs ?? supplier.is_active ?? 1) !== 1) {
-    throw new Error("Fornitore disattivato per Scadenziario e Costi.");
+    throw new Error("Fornitore disattivato per Scadenziario e Costi");
   }
   const maps = await supplierCostLocationMaps(slug, [supplierId]);
   const allowed = maps.get(supplierId) ?? [];
   if (!keepsExisting && allowed.length && locationId > 0 && !allowed.includes(locationId)) {
-    throw new Error("Fornitore non abilitato per questa sede.");
+    throw new Error("Fornitore non abilitato per questa sede");
   }
 }
 
 async function getCostById(slug: string, id: number): Promise<RowDataPacket> {
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "costs", where: "id=?", params: [id], limit: 1 });
-  if (!rows[0]) throw new Error("Costo non trovato.");
+  if (!rows[0]) throw new Error("Costo non trovato");
   return rows[0];
 }
 
 async function getCostCategoryById(slug: string, id: number): Promise<RowDataPacket> {
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "cost_categories", where: "id=?", params: [id], limit: 1 });
-  if (!rows[0]) throw new Error("Categoria non trovata.");
+  if (!rows[0]) throw new Error("Categoria non trovata");
   return rows[0];
 }
 
@@ -682,10 +759,12 @@ function summarizeCosts(costs: CostRow[]): ManageCostsContext["summary"] {
     open: costs.filter((cost) => cost.status === "open").length,
     overdue: costs.filter((cost) => cost.status === "overdue").length,
     paid: costs.filter((cost) => cost.status === "paid").length,
-    dueAmount: roundMoney(costs.filter((cost) => cost.status !== "paid").reduce((sum, cost) => sum + cost.remainingAmount, 0)),
+    // Legacy $summary: 'due' è il residuo dei NON pagati NON scaduti (gli scaduti
+    // stanno solo in 'overdue'); 'paid' somma il TOTALE dei pagati.
+    dueAmount: roundMoney(costs.filter((cost) => cost.status === "open").reduce((sum, cost) => sum + cost.remainingAmount, 0)),
     overdueAmount: roundMoney(costs.filter((cost) => cost.status === "overdue").reduce((sum, cost) => sum + cost.remainingAmount, 0)),
     paidAmount: roundMoney(costs.filter((cost) => cost.status === "paid").reduce((sum, cost) => sum + cost.amount, 0)),
-    remainingAmount: roundMoney(costs.reduce((sum, cost) => sum + cost.remainingAmount, 0)),
+    remainingAmount: roundMoney(costs.filter((cost) => cost.status !== "paid").reduce((sum, cost) => sum + cost.remainingAmount, 0)),
   };
 }
 
@@ -739,27 +818,35 @@ function todayIso(): string {
   return dateString(new Date());
 }
 
-function parseMoney(value: unknown, allowBlank = false): number {
-  let raw = String(value ?? "").trim().replace(/\s/g, "");
-  if (!raw) {
-    if (allowBlank) return 0;
-    throw new Error("Importo non valido.");
-  }
+// Port di $parseMoney (costs.php ~47-98): accetta SOLO cifre e separatori
+// ("1.234,56" IT o "1,234.56" EN); null per formato invalido — il chiamante
+// decide il messaggio contestuale (Totale / Importo gia pagato).
+function parseMoneyOrNull(value: unknown, allowBlank = false): number | null {
+  let raw = String(value ?? "").trim().replace(/[ \s]/g, "");
+  if (!raw) return allowBlank ? 0 : null;
+  if (!/^[+-]?[0-9.,]+$/.test(raw)) return null;
   const comma = raw.lastIndexOf(",");
   const dot = raw.lastIndexOf(".");
   if (comma >= 0 && dot >= 0) {
     raw = comma > dot ? raw.replace(/\./g, "").replace(",", ".") : raw.replace(/,/g, "");
   } else if (comma >= 0) {
     raw = raw.replace(",", ".");
+  } else if ((raw.match(/\./g) ?? []).length > 1) {
+    raw = raw.replace(/\./g, "");
   }
   const parsed = Number.parseFloat(raw);
-  if (!Number.isFinite(parsed)) throw new Error("Importo non valido.");
+  if (!Number.isFinite(parsed)) return null;
   return roundMoney(parsed);
 }
 
-function parsePercent(value: unknown): number {
-  const parsed = Number.parseFloat(String(value ?? "").replace(",", "."));
-  if (!Number.isFinite(parsed)) throw new Error("IVA non valida.");
+// Port di $parsePercent (costs.php ~103-110): regex stretta, virgola o punto,
+// max 2 decimali; null per input invalido (il chiamante mostra "IVA non valida").
+function parsePercent(value: unknown): number | null {
+  const raw = String(value ?? "").trim().replace(/[ \s]/g, "");
+  if (!raw) return null;
+  if (!/^[+]?\d+(?:[,.]\d{1,2})?$/.test(raw)) return null;
+  const parsed = Number.parseFloat(raw.replace(",", "."));
+  if (!Number.isFinite(parsed)) return null;
   return Math.round(parsed * 100) / 100;
 }
 
