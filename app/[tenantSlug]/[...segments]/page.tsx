@@ -181,7 +181,7 @@ export default async function TenantPage({
   searchParams,
 }: {
   params: Promise<{ tenantSlug: string; segments?: string[] }>;
-  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string }>;
+  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string }>;
 }) {
   const { tenantSlug, segments } = await params;
   const query = await searchParams;
@@ -507,6 +507,27 @@ export default async function TenantPage({
   if (page === "gift_voucher" && query.id) {
     const token = await giftVoucherTokenById(tenantSlug, Number.parseInt(String(query.id), 10) || 0);
     return <GiftVoucherFaithful slug={tenantSlug} token={token} embed={query.embed === "1"} />;
+  }
+
+  // Gestione Rate: i filtri legacy viaggiano nella query GET (status/client_id/
+  // sale_id/due_from/due_to/plan_id) — inoltrati come prop server-side, come il
+  // parsing $_GET della pagina PHP.
+  if (page === "installments_manage") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <InstallmentsManageContent
+          slug={tenantSlug}
+          initialQuery={{
+            status: query.status,
+            client_id: query.client_id,
+            sale_id: query.sale_id,
+            due_from: query.due_from,
+            due_to: query.due_to,
+            plan_id: query.plan_id,
+          }}
+        />
+      </ManageShell>
+    );
   }
 
   // Modulo fedele: anche CON ?action= residue (i moduli leggono l'action dall'URL

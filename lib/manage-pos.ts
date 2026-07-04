@@ -1180,7 +1180,7 @@ export async function cancelManageSale(
     reason,
     note: cancelNote(input.saleId, input.userName, reason, stockMode, productItems),
   });
-  await cancelLinkedSaleResidues(slug, input.saleId, reason, saleRow, input.userId, pointsModes);
+  await cancelLinkedSaleResidues(slug, input.saleId, reason, saleRow, input.userId, pointsModes, input.userName);
 
   // OMAGGI (F12): lo storno invalida gli eventi di tracking della vendita e ricalcola
   // la maturazione (un "disponibile" non più coperto regredisce ad accumulo).
@@ -4458,11 +4458,31 @@ async function cancelLinkedSaleResidues(
   saleRow?: RowDataPacket,
   voidedBy: number | null = null,
   pointsModes: { pointsStornoMode: PointsStornoMode; rechargePointsModes: Record<number, PointsStornoMode> } = { pointsStornoMode: "normal", rechargePointsModes: {} },
+  userName = "",
 ): Promise<void> {
-  await updateBySaleId(slug, "client_prepaid_services", saleId, { status: "cancelled", canceled_at: new Date(), cancel_note: reason });
+  // Nota standard di annullo (_pos_hist_sale_cancel_standard_note): è QUESTA — non il motivo
+  // nudo — che il legacy passa a ClientPrepaidServices::cancelBySale (cancel_note) e a
+  // SaleInstallments::cancelPlanBySaleId (cancelled_reason, troncata a 255).
+  const standardNote = `Vendita #${saleId} annullata dall'operatore ${userName || "Operatore"}.\nMotivo: ${reason}.`;
+  await updateBySaleId(slug, "client_prepaid_services", saleId, { status: "cancelled", canceled_at: new Date(), cancel_note: standardNote.slice(0, 255) });
   await updateBySaleId(slug, "client_packages", saleId, { status: "canceled", updated_at: new Date() });
-  await updateBySaleId(slug, "sale_installment_plans", saleId, { status: "cancelled", cancelled_at: new Date(), cancelled_reason: reason });
-  await updateBySaleId(slug, "sale_installments", saleId, { status: "cancelled", note: reason });
+  await updateBySaleId(slug, "sale_installment_plans", saleId, { status: "cancelled", cancelled_at: new Date(), cancelled_reason: standardNote.slice(0, 255) });
+  // Sulle rate il legacy APPENDE "[ANNULLATA <ts>] <nota standard>" alla nota esistente
+  // (i dati di incasso di una rata già pagata restano nello storico).
+  {
+    const ts = new Date().toISOString().slice(0, 19).replace("T", " ");
+    const installmentNote = `[ANNULLATA ${ts}] ${standardNote}`;
+    const rateRows = await tenantSelect<RowDataPacket>({ slug, table: "sale_installments", columns: "id, note", where: "sale_id=?", params: [saleId] }).catch(() => [] as RowDataPacket[]);
+    for (const row of rateRows) {
+      const existing = String(row.note ?? "").trim();
+      await tenantUpdate({
+        slug,
+        table: "sale_installments",
+        id: Number(row.id ?? 0),
+        values: { status: "cancelled", note: existing ? `${existing}\n${installmentNote}` : installmentNote },
+      }).catch(() => 0);
+    }
+  }
 
   // CANCEL the GiftCard this sale ISSUED (the SELL path): flip the card to 'cancelled' +
   // write a reversal ledger row. Found by the issue transaction's sale marker, NOT by

@@ -3387,3 +3387,70 @@ in nuova scheda). Interventi:
 Verifica live 7/7: pagina inesistente -> "Pagina non trovata" senza vecchia
 app; giftbox_voucher?id=6&embed=1 -> viewer voucher; appointments?action=view
 -> modulo fedele. Typecheck pulito.
+
+## Gestione Rate (installments_manage) — audit dedicato (2026-07-04)
+Diff diretto su cattura live (php-installments_manage.html) + sorgente
+app/pages/installments_manage.php (496 righe) e SaleInstallments.php.
+GIÀ A PARITÀ: KPI (Piani aperti/Rate scadute/Incassato/Residuo attivo su lista
+FILTRATA, skip cancelled sul residuo), header actions (Movimenti sempre, Nuova
+vendita se piani in scope), empty-state card, lista piani (celle Cliente+badge/
+Vendita #id+data/Scadenza+importo/Residuo+N rate, "N risultati"), dettaglio
+(KPI 8 voci, Note piano, alert "Piano annullato il ...", tabella Rata/Scadenza/
+Importo/Stato/Incasso, riga pending Tipo/Importo readonly/Data/Incassa,
+riga paid "€ X • tipo"+Riapri), flash "Rata registrata"/"Rata riaperta"/
+"Operazione non completata.", label rata Pagata/Annullata/Scaduta/Da incassare
+e piano Attivo/Scaduto/Completato/Annullato (server-side).
+FIX PORTATI:
+1. URL legacy: ?status/client_id/sale_id/due_from/due_to/plan_id ora inoltrati
+   dal router come prop server-side (come $_GET del PHP; special-case in
+   page.tsx) — il deep-link "Apri Gestione Rate" da pos_sale_detail (?plan_id)
+   ora seleziona il piano; catena selezione legacy plan_id -> risultato unico
+   -> sale_id (loadPlanBySaleId); whitelist status (invalido -> open); click
+   riga aggiorna l'URL (replaceState) come i data-href legacy + aria-label
+   "Apri piano rateale X" + classe js-plan-row.
+2. Form filtri legacy: draft applicato SOLO con submit "Filtra" (btn
+   outline-primary + bi-search, classi installments-filter-submit
+   app-filter-submit) + "Reset" come anchor alla pagina base; RIMOSSO il campo
+   "Cerca" libero (il legacy non ha q: il "Cerca…" sta DENTRO il combobox
+   cliente); Filtra azzera plan_id/sale_id come il form GET legacy.
+3. Combobox cliente .app-combobox (port di initCombobox): toggle
+   outline-secondary con placeholder "Tutti", ricerca accent-insensitive,
+   Enter=primo risultato, "Nessun risultato", item "Tutti"; la GET
+   /api/manage/installments ora restituisce clients = lista clienti COMPLETA
+   (ORDER BY full_name ASC, id ASC come la query legacy), non solo i clienti
+   con piani.
+4. Sottotitolo " Sede: X" (label sede corrente da /api/manage/locations,
+   "Tutte" se scope globale).
+5. Label pagamento display: paymentTypeLabel legacy con card="Carta di
+   Credito" (il select resta "Carta") su KPI Pagamento, riga Acconto e riga
+   paid "€ X • tipo" (separatore sempre presente); riga "Acconto iniziale"
+   SEMPRE renderizzata (senza sottotesto inventato); select pending
+   preseleziona tipo rata -> tipo piano -> cash.
+6. Riga annullata: aggiunta la riga legacy "Incassata il <dt> • € X" sotto
+   "Rata annullata" quando paid_at presente.
+7. RIMOSSA invenzione input "Nota (facoltativa)" nel form incasso (il legacy
+   non ce l'ha; note='' -> NULL come la lib legacy).
+8. Route: RIMOSSA guardia inventata "Rata gia pagata." (il re-incasso legacy è
+   idempotente e aggiorna paid_at/tipo); messaggi id invalido/rata mancante
+   allineati a "Rata non trovata o non aggiornata."; empty-state "La gestione
+   rate e ancora vuota." SENZA accento (verbatim legacy).
+9. Annullo vendita: cancelled_reason del piano e cancel_note dei prepagati ora
+   ricevono la NOTA STANDARD legacy ("Vendita #N annullata dall'operatore X.\n
+   Motivo: r.", troncata 255) e ogni rata riceve in APPEND
+   "[ANNULLATA <ts>] <nota standard>" conservando paid_at/paid_amount nello
+   storico (SaleInstallments::cancelPlanBySaleId con allowPaid=true, come
+   pos_history cancel_sale).
+RESIDUI DELIBERATI: scoping per sede dei piani (all_locations checkbox se >1
+sedi, location_id nei POST con guardia "Sede non autorizzata per questa
+operazione.") non portato — l'API scopa per tenant (residuo già tracciato);
+timestamp [ANNULLATA] in UTC (convenzione cancelNote esistente) vs ora locale
+PHP.
+Verifica: battery e2e 43/43 (piano da checkout rateizzato 12€/acconto 4/2 rate,
+financed/count DB, GET filtri status/client_id/sale_id/due_from + clients
+full-list, 4 guardie mark_paid verbatim senza accenti, incasso con nota NULL,
+RE-incasso idempotente, Completato/riapertura/Attivo, annullo vendita ->
+cancelled con nota standard + [ANNULLATA] + paid_at conservato, 2 guardie su
+annullata, filtro cancelled/open, delete, cleanup CLEAN) + 49/49 marker bundle
+(incluse negative: niente "Nota (facoltativa)", niente "Cerca" libero, niente
+"è" nell'empty-state, niente "Annulla piano") + typecheck/lint puliti (warning
+pre-esistenti invariati).

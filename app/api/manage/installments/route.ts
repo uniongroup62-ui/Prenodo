@@ -30,10 +30,23 @@ export async function GET(request: Request) {
   };
 
   try {
+    // Full client list for the page filter combobox — faithful to the legacy page, which
+    // SELECTs every client (ORDER BY full_name ASC, id ASC) for $clientFilterItems.
+    const clientRows = await tenantSelect<RowDataPacket>({
+      slug: tenantSlug,
+      table: "clients",
+      columns: "id, full_name",
+      orderBy: "full_name ASC, id ASC",
+    }).catch(() => [] as RowDataPacket[]);
+    const clients = clientRows
+      .map((row) => ({ id: Number(row.id ?? 0), label: String(row.full_name ?? "").trim() || `Cliente #${Number(row.id ?? 0)}` }))
+      .filter((c) => c.id > 0);
+
     return Response.json({
       ok: true,
       sourceMode: "database",
       plans: await searchDbInstallmentPlans(tenantSlug, filters),
+      clients,
       // The persisted due-alert window (automation_settings.installment_alert_days) — drives the
       // notifications_installments page default + the "Impostazioni avviso rate" modal.
       alertDays: await automationAlertDays(tenantSlug, "installment_alert_days"),
@@ -111,7 +124,8 @@ async function markInstallmentPaid(
   options: { installmentId: number; paidAmount?: string; paidAt?: string; paymentType?: string; note?: string; userId: number },
 ): Promise<InstallmentPlan> {
   const row = await installmentRow(slug, options.installmentId);
-  if (String(row.status ?? "") === "paid") throw new Error("Rata gia pagata.");
+  // NB parità legacy: NESSUNA guardia "già pagata" — markInstallmentPaid ri-esegue
+  // l'UPDATE anche su una rata paid (aggiorna paid_at/tipo, idempotente).
   // Rata o piano annullati non incassabili (SaleInstallments::markInstallmentPaid ~554-557).
   if (String(row.status ?? "") === "cancelled" || (await planStatus(slug, Number(row.plan_id ?? 0))) === "cancelled") {
     throw new Error("Non puoi incassare una rata annullata.");
@@ -153,7 +167,9 @@ async function markInstallmentPaid(
       paid_at: paidAt,
       paid_amount: paidAmount,
       payment_type: paymentType,
-      note: clean(options.note, 1000) || undefined,
+      // Legacy: la pagina posta sempre note (vuota) e la lib scrive NULL quando è vuota —
+      // il valore precedente viene sovrascritto, non conservato.
+      note: clean(options.note, 1000) || null,
       updated_by: options.userId,
     },
   });
@@ -190,7 +206,9 @@ async function markInstallmentPending(slug: string, installmentId: number, userI
 }
 
 async function installmentRow(slug: string, installmentId: number): Promise<RowDataPacket> {
-  if (installmentId <= 0) throw new Error("Rata non valida.");
+  // Il legacy ritorna null dalla lib (id non valido O rata inesistente) e la pagina
+  // presenta lo stesso messaggio per entrambi i casi.
+  if (installmentId <= 0) throw new Error("Rata non trovata o non aggiornata.");
   const rows = await tenantSelect<RowDataPacket>({
     slug,
     table: "sale_installments",
@@ -198,7 +216,7 @@ async function installmentRow(slug: string, installmentId: number): Promise<RowD
     params: [installmentId],
     limit: 1,
   });
-  if (!rows[0]) throw new Error("Rata non trovata.");
+  if (!rows[0]) throw new Error("Rata non trovata o non aggiornata.");
   return rows[0];
 }
 

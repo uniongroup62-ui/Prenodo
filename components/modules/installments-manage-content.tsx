@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 // Faithful port of the PHP installments page (app/pages/installments_manage.php).
 // Backed by the DB-backed /api/manage/installments route:
-//   GET  ?status=&client_id=&q=&due_from=&due_to=  -> { ok, plans: InstallmentPlan[] }
+//   GET  ?status=&client_id=&sale_id=&due_from=&due_to=  -> { ok, plans, clients }
 //        (status accepts the synthetic values open|overdue|paid|active|completed|cancelled|all)
 //   POST action=mark_paid    { installment_id, paid_amount?, paid_at?, payment_type?, note? }
 //   POST action=mark_pending { installment_id }
@@ -62,8 +62,41 @@ type Filters = {
   clientId: string;
   dueFrom: string;
   dueTo: string;
-  q: string;
+  // Legacy ?sale_id=N: participates in searchPlans AND is the last selection fallback
+  // (loadPlanBySaleId). Set only from the URL — the filter form does not carry it, so
+  // pressing Filtra drops it exactly like the legacy GET form.
+  saleId: number;
 };
+
+// The values the legacy page accepts for ?status= (anything else falls back to "open").
+const STATUS_WHITELIST = ["all", "open", "overdue", "paid", "active", "completed", "cancelled"];
+
+// The legacy GET params (status/client_id/sale_id/due_from/due_to/plan_id), parsed from the
+// server-provided query prop — the page router forwards searchParams exactly like the PHP
+// page reads $_GET, so first render already has the right filters (no client URL sniffing).
+export type InstallmentsQuery = {
+  status?: string;
+  client_id?: string;
+  sale_id?: string;
+  due_from?: string;
+  due_to?: string;
+  plan_id?: string;
+};
+
+function filtersFromQuery(q: InstallmentsQuery): { filters: Filters; planId: number } {
+  const status = String(q.status ?? "open").trim();
+  const clientId = Number.parseInt(String(q.client_id ?? "0"), 10) || 0;
+  return {
+    filters: {
+      status: STATUS_WHITELIST.includes(status) ? status : "open",
+      clientId: clientId > 0 ? String(clientId) : "",
+      dueFrom: String(q.due_from ?? "").trim(),
+      dueTo: String(q.due_to ?? "").trim(),
+      saleId: Number.parseInt(String(q.sale_id ?? "0"), 10) || 0,
+    },
+    planId: Number.parseInt(String(q.plan_id ?? "0"), 10) || 0,
+  };
+}
 
 function tenantSlug(): string {
   if (typeof window === "undefined") return "";
@@ -113,18 +146,49 @@ const PAYMENT_TYPE_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "bank", label: "Bonifico" },
 ];
 
-export function InstallmentsManageContent({ slug: slugProp }: { slug?: string } = {}) {
+// SaleInstallments::paymentTypeLabel — the DISPLAY label ("card" reads "Carta di
+// Credito" here, while the select option above says "Carta", like the legacy page).
+function payLabel(type?: string): string {
+  const v = String(type ?? "").trim().toLowerCase();
+  if (v === "cash") return "Contanti";
+  if (v === "card") return "Carta di Credito";
+  if (v === "check") return "Assegno";
+  if (v === "bank") return "Bonifico";
+  return "";
+}
+
+// Accent-insensitive lowercase compare used by the legacy combobox search (norm() in
+// assets/js/pages/installments_manage.js).
+function comboNorm(value: string): string {
+  return String(value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+}
+
+export function InstallmentsManageContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: InstallmentsQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
+  // Parsed once from the server query prop (deterministic on server and client).
+  const [initial] = useState(() => filtersFromQuery(initialQuery ?? {}));
 
-  const [filters, setFilters] = useState<Filters>({ status: "open", clientId: "", dueFrom: "", dueTo: "", q: "" });
+  // Applied filters (drive the fetch) vs draft filters (the form controls). Like the legacy
+  // GET form, changing a control does nothing until "Filtra" submits the draft.
+  const [filters, setFilters] = useState<Filters>(initial.filters);
+  const [draft, setDraft] = useState<{ status: string; clientId: string; dueFrom: string; dueTo: string }>({
+    status: initial.filters.status,
+    clientId: initial.filters.clientId,
+    dueFrom: initial.filters.dueFrom,
+    dueTo: initial.filters.dueTo,
+  });
   const [plans, setPlans] = useState<InstallmentPlan[]>([]);
   // Whether the tenant has ANY installment plan at all (unfiltered). Drives the empty-state card.
   const [hasAnyPlans, setHasAnyPlans] = useState(true);
   // Distinct clients derived from every plan ever seen (for the client filter select).
   const [clientOptions, setClientOptions] = useState<Array<{ id: number; name: string }>>([]);
-  const [selectedPlanId, setSelectedPlanId] = useState<number>(0);
+  const [selectedPlanId, setSelectedPlanId] = useState<number>(initial.planId);
 
   const [flash, setFlash] = useState("");
   const [error, setError] = useState("");
@@ -135,9 +199,10 @@ export function InstallmentsManageContent({ slug: slugProp }: { slug?: string } 
   // Per-pending-row inline form state (payment type + paid_at), keyed by installment id.
   const [payType, setPayType] = useState<Record<number, string>>({});
   const [payAt, setPayAt] = useState<Record<number, string>>({});
-  const [payNote, setPayNote] = useState<Record<number, string>>({});
 
-  // Cancel-plan state: pending force-confirm when the server refuses a plan with paid installments.
+  // " Sede: X" subtitle suffix — legacy appends it whenever the tenant has locations
+  // (current location label, or "Tutte" with the all-locations filter).
+  const [sedeLabel, setSedeLabel] = useState("");
 
 
   // Load the filtered plan list. Faithful to searchPlans($filters): the status synthetic values are
@@ -146,7 +211,7 @@ export function InstallmentsManageContent({ slug: slugProp }: { slug?: string } 
     const params = new URLSearchParams({ slug });
     if (filters.status) params.set("status", filters.status);
     if (filters.clientId) params.set("client_id", filters.clientId);
-    if (filters.q.trim()) params.set("q", filters.q.trim());
+    if (filters.saleId > 0) params.set("sale_id", String(filters.saleId));
     if (filters.dueFrom) params.set("due_from", filters.dueFrom);
     if (filters.dueTo) params.set("due_to", filters.dueTo);
 
@@ -166,21 +231,46 @@ export function InstallmentsManageContent({ slug: slugProp }: { slug?: string } 
     };
   }, [slug, filters, reloadKey]);
 
-  // Probe the UNFILTERED list once (status=all) to decide the empty-state and to seed the client
-  // filter options — faithful to the legacy $hasAnyInstallmentPlansInScope + $clientFilterItems.
+  // Location context for the subtitle (app_current_location_id + label; 0 -> "Tutte").
+  useEffect(() => {
+    let active = true;
+    fetch(`/api/manage/locations?slug=${encodeURIComponent(slug)}`, { headers: { "x-tenant-slug": slug } })
+      .then((r) => r.json())
+      .then((j: { locations?: Array<{ id: number; name?: string }>; currentLocationId?: number }) => {
+        if (!active) return;
+        const locations = Array.isArray(j?.locations) ? j.locations : [];
+        const currentId = Number(j?.currentLocationId ?? 0);
+        if (currentId > 0 || locations.length > 0) {
+          const current = locations.find((l) => Number(l.id) === currentId);
+          setSedeLabel(currentId > 0 ? String(current?.name ?? `#${currentId}`) : "Tutte");
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [slug]);
+
+  // Probe the UNFILTERED list once (status=all) to decide the empty-state, and take the FULL
+  // client list for the filter combobox — faithful to the legacy page, which SELECTs every
+  // client (ORDER BY full_name) for $clientFilterItems, not just the ones with a plan.
   useEffect(() => {
     let active = true;
     fetch(`/api/manage/installments?slug=${encodeURIComponent(slug)}&status=all`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
-      .then((j: { plans?: InstallmentPlan[] }) => {
+      .then((j: { plans?: InstallmentPlan[]; clients?: Array<{ id: number; label?: string }> }) => {
         if (!active) return;
         const list = Array.isArray(j?.plans) ? j.plans : [];
         setHasAnyPlans(list.length > 0);
-        const seen = new Map<number, string>();
-        for (const p of list) {
-          if (p.clientId > 0 && !seen.has(p.clientId)) seen.set(p.clientId, p.clientName || `Cliente #${p.clientId}`);
+        if (Array.isArray(j?.clients) && j.clients.length > 0) {
+          setClientOptions(j.clients.map((c) => ({ id: Number(c.id), name: String(c.label ?? `Cliente #${c.id}`) })).filter((c) => c.id > 0));
+        } else {
+          const seen = new Map<number, string>();
+          for (const p of list) {
+            if (p.clientId > 0 && !seen.has(p.clientId)) seen.set(p.clientId, p.clientName || `Cliente #${p.clientId}`);
+          }
+          setClientOptions([...seen.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, "it")));
         }
-        setClientOptions([...seen.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, "it")));
       })
       .catch(() => {
         if (active) setHasAnyPlans(true);
@@ -190,15 +280,48 @@ export function InstallmentsManageContent({ slug: slugProp }: { slug?: string } 
     };
   }, [slug, reloadKey]);
 
-  // The selected plan: the explicitly-clicked one, else auto-select when the list has exactly one.
+  // The selected plan, with the legacy fallback chain: explicit ?plan_id / click, else the
+  // single result, else the plan of ?sale_id (loadPlanBySaleId).
   const selectedPlan = useMemo<InstallmentPlan | null>(() => {
     if (selectedPlanId > 0) {
       const found = plans.find((p) => p.id === selectedPlanId);
       if (found) return found;
     }
     if (plans.length === 1) return plans[0];
+    if (filters.saleId > 0) {
+      const bySale = plans.find((p) => p.saleId === filters.saleId);
+      if (bySale) return bySale;
+    }
     return null;
-  }, [plans, selectedPlanId]);
+  }, [plans, selectedPlanId, filters.saleId]);
+
+  // Mirror the legacy plan-row hrefs: selecting a plan (or filtering) rewrites the URL with
+  // plan_id + the public filters, so the page stays deep-linkable like the server-rendered one.
+  function syncUrl(planId: number, f: Filters) {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams();
+    if (planId > 0) sp.set("plan_id", String(planId));
+    sp.set("status", f.status);
+    sp.set("client_id", f.clientId || "0");
+    sp.set("sale_id", String(f.saleId || 0));
+    if (f.dueFrom) sp.set("due_from", f.dueFrom);
+    if (f.dueTo) sp.set("due_to", f.dueTo);
+    window.history.replaceState(null, "", `${window.location.pathname}?${sp.toString()}`);
+  }
+
+  function selectPlan(planId: number) {
+    setSelectedPlanId(planId);
+    syncUrl(planId, filters);
+  }
+
+  // "Filtra": apply the draft. Like the legacy GET form, plan_id and sale_id are not part of
+  // the form, so both are dropped when submitting.
+  function applyDraft() {
+    const next: Filters = { ...draft, saleId: 0 };
+    setFilters(next);
+    setSelectedPlanId(0);
+    syncUrl(0, next);
+  }
 
   // KPI stats, computed over the (filtered) list — faithful to the legacy $stats loop:
   //  Piani aperti  = plans whose effective status is active OR overdue
@@ -237,7 +360,7 @@ export function InstallmentsManageContent({ slug: slugProp }: { slug?: string } 
     setReloadKey((k) => k + 1);
   }
 
-  async function incassa(inst: Installment, planId: number) {
+  async function incassa(inst: Installment, planId: number, planPaymentType: string) {
     setBusy(true);
     setError("");
     setFlash("");
@@ -247,8 +370,10 @@ export function InstallmentsManageContent({ slug: slugProp }: { slug?: string } 
         installment_id: String(inst.id),
         paid_amount: inst.amount.toFixed(2),
         paid_at: payAt[inst.id] || nowLocalInput(),
-        payment_type: payType[inst.id] || inst.paymentType || "cash",
-        note: payNote[inst.id] || "",
+        // The legacy select preselects the rata type, else the plan type, else the first
+        // option (cash). The page posts note="" (there is no note input).
+        payment_type: payType[inst.id] || inst.paymentType || planPaymentType || "cash",
+        note: "",
       });
       if (json?.error) setError(json.error);
       else {
@@ -292,7 +417,10 @@ export function InstallmentsManageContent({ slug: slugProp }: { slug?: string } 
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Pagamenti</div>
           <h1 className="bs-page-title">Gestione Rate</h1>
-          <div className="bs-page-subtitle">Monitoraggio piani rateali, scadenze e incassi cliente.</div>
+          <div className="bs-page-subtitle">
+            Monitoraggio piani rateali, scadenze e incassi cliente.
+            {sedeLabel ? ` Sede: ${sedeLabel}` : ""}
+          </div>
         </div>
         <div className="bs-page-actions">
           <div className="d-flex gap-2">
@@ -320,7 +448,8 @@ export function InstallmentsManageContent({ slug: slugProp }: { slug?: string } 
               <i className="bi bi-cash-stack" />
             </div>
             <h2>Nessun piano rateale presente</h2>
-            <p>La gestione rate &egrave; ancora vuota. Crea una vendita con pagamento rateizzato per iniziare.</p>
+            {/* Verbatim legacy: "e" senza accento. */}
+            <p>La gestione rate e ancora vuota. Crea una vendita con pagamento rateizzato per iniziare.</p>
             <div className="d-flex justify-content-center gap-2 flex-wrap">
               <a className="btn btn-primary" href={posUrl}>
                 <i className="bi bi-credit-card me-1" />
@@ -359,30 +488,31 @@ export function InstallmentsManageContent({ slug: slugProp }: { slug?: string } 
             </div>
           </div>
 
-          {/* Filter card. Changing any control re-queries via the load effect. */}
+          {/* Filter card. Like the legacy GET form, the controls edit a draft that is applied
+              only by the "Filtra" submit; "Reset" navigates back to the bare page. */}
           <div className="card installments-filter-card p-3 mb-3">
-            <div className="row g-2 align-items-end installments-filter-form">
+            <form
+              className="row g-2 align-items-end installments-filter-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                applyDraft();
+              }}
+            >
               <div className="col-12 col-lg-3">
                 <label className="form-label small text-muted mb-1">Cliente</label>
-                <select
-                  className="form-select"
-                  value={filters.clientId}
-                  onChange={(e) => setFilters((f) => ({ ...f, clientId: e.target.value }))}
-                >
-                  <option value="">Tutti</option>
-                  {clientOptions.map((c) => (
-                    <option key={c.id} value={String(c.id)}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
+                <ClientFilterCombobox
+                  items={clientOptions}
+                  value={draft.clientId}
+                  onChange={(id) => setDraft((f) => ({ ...f, clientId: id }))}
+                />
               </div>
               <div className="col-12 col-md-4 col-lg-2">
                 <label className="form-label small text-muted mb-1">Stato</label>
                 <select
                   className="form-select"
-                  value={filters.status}
-                  onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value }))}
+                  name="status"
+                  value={draft.status}
+                  onChange={(e) => setDraft((f) => ({ ...f, status: e.target.value }))}
                 >
                   {STATUS_OPTIONS.map((o) => (
                     <option key={o.value} value={o.value}>
@@ -396,8 +526,9 @@ export function InstallmentsManageContent({ slug: slugProp }: { slug?: string } 
                 <input
                   type="date"
                   className="form-control"
-                  value={filters.dueFrom}
-                  onChange={(e) => setFilters((f) => ({ ...f, dueFrom: e.target.value }))}
+                  name="due_from"
+                  value={draft.dueFrom}
+                  onChange={(e) => setDraft((f) => ({ ...f, dueFrom: e.target.value }))}
                 />
               </div>
               <div className="col-6 col-md-4 col-lg-2">
@@ -405,21 +536,21 @@ export function InstallmentsManageContent({ slug: slugProp }: { slug?: string } 
                 <input
                   type="date"
                   className="form-control"
-                  value={filters.dueTo}
-                  onChange={(e) => setFilters((f) => ({ ...f, dueTo: e.target.value }))}
+                  name="due_to"
+                  value={draft.dueTo}
+                  onChange={(e) => setDraft((f) => ({ ...f, dueTo: e.target.value }))}
                 />
               </div>
-              <div className="col-12 col-lg-3">
-                <label className="form-label small text-muted mb-1">Cerca</label>
-                <input
-                  type="search"
-                  className="form-control"
-                  placeholder="Cliente, vendita&hellip;"
-                  value={filters.q}
-                  onChange={(e) => setFilters((f) => ({ ...f, q: e.target.value }))}
-                />
+              <div className="col-12 col-lg-3 d-flex mt-2 mt-lg-0 flex-wrap installments-filter-actions">
+                <button type="submit" className="btn btn-outline-primary installments-filter-submit app-filter-submit">
+                  <i className="bi bi-search me-1" />
+                  Filtra
+                </button>
+                <a className="btn btn-outline-secondary installments-filter-reset app-filter-reset" href={`/${encodeURIComponent(slug)}/installments_manage`}>
+                  Reset
+                </a>
               </div>
-            </div>
+            </form>
           </div>
 
           {/* Two-panel body: plan list (left) + selected plan detail (right). */}
@@ -446,18 +577,21 @@ export function InstallmentsManageContent({ slug: slugProp }: { slug?: string } 
                       <tbody>
                         {plans.map((plan) => {
                           const active = selectedPlan?.id === plan.id;
+                          const clientLabel = plan.clientName || `Cliente #${plan.clientId}`;
                           return (
                             <tr
                               key={plan.id}
-                              className={`installments-plan-row${active ? " table-primary" : ""}`}
-                              role="button"
+                              className={`installments-plan-row js-plan-row${active ? " table-primary" : ""}`}
+                              data-href={`/${encodeURIComponent(slug)}/installments_manage?plan_id=${plan.id}&status=${encodeURIComponent(filters.status)}&client_id=${filters.clientId || "0"}&sale_id=${filters.saleId || 0}`}
+                              role="link"
                               tabIndex={0}
+                              aria-label={`Apri piano rateale ${clientLabel}`}
                               style={{ cursor: "pointer" }}
-                              onClick={() => setSelectedPlanId(plan.id)}
+                              onClick={() => selectPlan(plan.id)}
                               onKeyDown={(e) => {
                                 if (e.key === "Enter" || e.key === " ") {
                                   e.preventDefault();
-                                  setSelectedPlanId(plan.id);
+                                  selectPlan(plan.id);
                                 }
                               }}
                             >
@@ -520,10 +654,8 @@ export function InstallmentsManageContent({ slug: slugProp }: { slug?: string } 
                     plan={selectedPlan}
                     busy={busy}                    payType={payType}
                     payAt={payAt}
-                    payNote={payNote}
                     setPayType={setPayType}
                     setPayAt={setPayAt}
-                    setPayNote={setPayNote}
                     onIncassa={incassa}
                     onRiapri={riapri}                  />
                 )}
@@ -542,13 +674,11 @@ function PlanDetail(props: {
   plan: InstallmentPlan;
   busy: boolean;  payType: Record<number, string>;
   payAt: Record<number, string>;
-  payNote: Record<number, string>;
   setPayType: React.Dispatch<React.SetStateAction<Record<number, string>>>;
   setPayAt: React.Dispatch<React.SetStateAction<Record<number, string>>>;
-  setPayNote: React.Dispatch<React.SetStateAction<Record<number, string>>>;
-  onIncassa: (inst: Installment, planId: number) => void;
+  onIncassa: (inst: Installment, planId: number, planPaymentType: string) => void;
   onRiapri: (inst: Installment, planId: number) => void;}) {
-  const { plan, busy, payType, payAt, payNote, setPayType, setPayAt, setPayNote, onIncassa, onRiapri } = props;
+  const { plan, busy, payType, payAt, setPayType, setPayAt, onIncassa, onRiapri } = props;
   return (
     <>
       <div className="installments-kpi mb-3">
@@ -564,7 +694,7 @@ function PlanDetail(props: {
         </div>
         <div className="item">
           <div className="text-muted small">Pagamento</div>
-          <div className="fw-semibold">{plan.paymentType || "—"}</div>
+          <div className="fw-semibold">{payLabel(plan.paymentType)}</div>
         </div>
         <div className="item">
           <div className="text-muted small">Vendita</div>
@@ -620,25 +750,22 @@ function PlanDetail(props: {
             </tr>
           </thead>
           <tbody>
-            {/* Down-payment informational line (the Next model has no separate down-payment ROW). */}
-            {plan.downPayment > 0 ? (
-              <tr className="table-light">
-                <td>
-                  <strong>Acconto iniziale</strong>
-                  <div className="small text-muted">incassato in vendita</div>
-                </td>
-                <td>{fmtDate(plan.saleDate)}</td>
-                <td className="text-end">
-                  <strong>&euro; {fmtMoney(plan.downPayment)}</strong>
-                </td>
-                <td>
-                  <span className="badge text-bg-success">Incassato in vendita</span>
-                </td>
-                <td>
-                  <span className="text-muted small">{plan.paymentType}</span>
-                </td>
-              </tr>
-            ) : null}
+            {/* Down-payment first line — always rendered, like the legacy schedule. */}
+            <tr className="table-light">
+              <td>
+                <strong>Acconto iniziale</strong>
+              </td>
+              <td>{fmtDate(plan.saleDate || new Date().toISOString().slice(0, 10))}</td>
+              <td className="text-end">
+                <strong>&euro; {fmtMoney(plan.downPayment)}</strong>
+              </td>
+              <td>
+                <span className="badge text-bg-success">Incassato in vendita</span>
+              </td>
+              <td>
+                <span className="text-muted small">{payLabel(plan.paymentType)}</span>
+              </td>
+            </tr>
 
             {plan.installments.map((inst) => {
               const isPaid = inst.status === "paid";
@@ -661,12 +788,18 @@ function PlanDetail(props: {
                   </td>
                   <td>
                     {isCancelledRow ? (
-                      <span className="text-muted small">Rata annullata</span>
+                      <>
+                        <span className="text-muted small">Rata annullata</span>
+                        {inst.paidAt ? (
+                          <div className="small text-muted mt-1">
+                            Incassata il {fmtDateTime(inst.paidAt)} &bull; &euro; {fmtMoney(inst.paidAmount ?? inst.amount)}
+                          </div>
+                        ) : null}
+                      </>
                     ) : isPaid ? (
                       <div className="d-flex gap-2 flex-wrap align-items-center installments-inline-form">
                         <div className="small text-muted">
-                          &euro; {fmtMoney(inst.paidAmount ?? inst.amount)}
-                          {inst.paymentType ? ` • ${inst.paymentType}` : plan.paymentType ? ` • ${plan.paymentType}` : ""}
+                          &euro; {fmtMoney(inst.paidAmount ?? inst.amount)}{` • ${payLabel(inst.paymentType || plan.paymentType)}`}
                         </div>
                         <button type="button" className="btn btn-outline-secondary btn-sm" disabled={busy} onClick={() => onRiapri(inst, plan.id)}>
                           Riapri
@@ -678,7 +811,7 @@ function PlanDetail(props: {
                           <label className="form-label small text-muted mb-1">Tipo</label>
                           <select
                             className="form-select form-select-sm"
-                            value={payType[inst.id] ?? inst.paymentType ?? "cash"}
+                            value={payType[inst.id] ?? (inst.paymentType || plan.paymentType || "cash")}
                             disabled={busy}
                             onChange={(e) => setPayType((m) => ({ ...m, [inst.id]: e.target.value }))}
                           >
@@ -691,7 +824,7 @@ function PlanDetail(props: {
                         </div>
                         <div className="col-6 col-md-3">
                           <label className="form-label small text-muted mb-1">Importo</label>
-                          <input type="number" step="0.01" min="0" className="form-control form-control-sm" value={inst.amount.toFixed(2)} readOnly />
+                          <input type="number" step="0.01" min="0" max={inst.amount.toFixed(2)} className="form-control form-control-sm" value={inst.amount.toFixed(2)} readOnly />
                         </div>
                         <div className="col-6 col-md-3">
                           <label className="form-label small text-muted mb-1">Data</label>
@@ -704,19 +837,9 @@ function PlanDetail(props: {
                           />
                         </div>
                         <div className="col-12 col-md-2 d-grid">
-                          <button type="button" className="btn btn-success btn-sm" disabled={busy} onClick={() => onIncassa(inst, plan.id)}>
+                          <button type="button" className="btn btn-success btn-sm" disabled={busy} onClick={() => onIncassa(inst, plan.id, plan.paymentType)}>
                             Incassa
                           </button>
-                        </div>
-                        <div className="col-12">
-                          <input
-                            type="text"
-                            className="form-control form-control-sm"
-                            placeholder="Nota (facoltativa)"
-                            value={payNote[inst.id] ?? ""}
-                            disabled={busy}
-                            onChange={(e) => setPayNote((m) => ({ ...m, [inst.id]: e.target.value }))}
-                          />
                         </div>
                       </div>
                     )}
@@ -728,5 +851,90 @@ function PlanDetail(props: {
         </table>
       </div>
     </>
+  );
+}
+
+// Client filter combobox — port of the legacy .app-combobox (initCombobox in
+// assets/js/pages/installments_manage.js): outline-secondary toggle with the "Tutti"
+// placeholder, search box ("Cerca…", accent-insensitive, Enter picks the first hit),
+// "Nessun risultato" empty row, and a "Tutti" first item that clears the selection.
+function ClientFilterCombobox(props: {
+  items: Array<{ id: number; name: string }>;
+  value: string;
+  onChange: (clientId: string) => void;
+}) {
+  const { items, value, onChange } = props;
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    searchRef.current?.focus();
+    const onDocClick = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  const data = useMemo(
+    () => [{ id: "0", label: "Tutti" }, ...items.map((c) => ({ id: String(c.id), label: c.name }))],
+    [items],
+  );
+  const q = comboNorm(search);
+  const visible = q ? data.filter((item) => comboNorm(item.label).includes(q)) : data;
+  const selected = value ? data.find((item) => item.id === value) : undefined;
+
+  const pick = (id: string) => {
+    onChange(id === "0" ? "" : id);
+    setOpen(false);
+  };
+
+  return (
+    <div className={`app-combobox dropdown${open ? " show" : ""}`} id="installmentsClientFilterBox" ref={boxRef}>
+      <button
+        className="btn btn-outline-secondary dropdown-toggle w-100 app-combobox-toggle"
+        type="button"
+        aria-expanded={open}
+        onClick={() => {
+          if (!open) setSearch("");
+          setOpen(!open);
+        }}
+      >
+        <span className={`app-combobox-text${selected ? "" : " d-none"}`}>{selected?.label ?? ""}</span>
+        <span className={`text-muted app-combobox-placeholder${selected ? " d-none" : ""}`}>Tutti</span>
+      </button>
+      <div className={`dropdown-menu p-2 w-100${open ? " show" : ""}`}>
+        <input
+          ref={searchRef}
+          type="text"
+          className="form-control form-control-sm app-combobox-search"
+          placeholder="Cerca…"
+          autoComplete="off"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              if (visible[0]) pick(visible[0].id);
+            }
+          }}
+        />
+        <div className="app-combobox-list mt-2">
+          {visible.length === 0 ? (
+            <div className="text-muted small px-2 py-1">Nessun risultato</div>
+          ) : (
+            visible.map((item) => (
+              <button key={item.id} type="button" className="dropdown-item" onClick={() => pick(item.id)}>
+                {item.label}
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+      <input type="hidden" name="client_id" value={value || "0"} readOnly />
+    </div>
   );
 }
