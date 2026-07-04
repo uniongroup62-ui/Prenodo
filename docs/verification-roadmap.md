@@ -3220,3 +3220,58 @@ RESTA (passata 2B, NON deliberato): selezione redeem DENTRO la modale Residui
 GiftBox/Pacchetti/Omaggi/Prepagati che AGGIUNGONO il servizio) al posto dei box
 inline inventati; picker multi-servizio ancora con eleggibilità client-side
 (manca staff_for_services multi).
+
+## Quick booking — PASSATA 2B (2026-07-04): MODALE RESIDUI INTERATTIVA
+Chiusa l'ultima divergenza del drawer (spec estratta dal JS legacy con agent
+dedicato: qbRenderClientResiduals app.js:983-1350 + handler change 2845-3236 +
+credito 4294-4336/9068-9100 + giftcard 2348-2422 + qb_residui_check 5879-5906):
+1. RIMOSSI i 5 box redeem INLINE inventati dal form (Pacchetti/Prepagati/
+   GiftBox/Omaggi/GiftCard) e il box Credito inline: come nel legacy il form ha
+   SOLO gli hidden input; verifica negativa sul bundle (i 5 testi descrittivi
+   inventati sono ASSENTI). Restano le pill collegate (badge + dettagli) e le
+   righe riepilogo Coupon/GiftCard/Credito/Fidelity/Totale.
+2. La modale #qbClientResidualsModal è ora INTERATTIVA con l'ordine legacy:
+   riga "Cliente: <nome>", empty state "Nessun residuo disponibile per il
+   cliente selezionato.", card CREDITO (toggle "Disponibile: €", "Importo da
+   usare" con clamp [0, min(saldo, dovuto)], "Usa max", hint "Saldo tessera: € X
+   • Max utilizzabile: € Y[ • Aggiungi prima i servizi per usare il credito.]" /
+   "Credito non disponibile."), poi Servizi → Omaggi → GiftBox → GiftCard →
+   Pacchetti con gli hint verbatim "Seleziona o deseleziona i servizi
+   acquistati/omaggio/…: verranno aggiunti o rimossi automaticamente dalla
+   prenotazione.", badge residuo/N, "Acquistato[ con vendita #n] • Scade:",
+   "Servizi residui:"/"Sedute residue:", vuoti "Nessun servizio residuo
+   selezionabile."/"Nessuna seduta residua selezionabile.".
+3. SPUNTE = COLLEGAMENTO (port dell'handler change): il check verifica i
+   conflitti (nuova action qb_residui_check), AGGIUNGE il servizio al
+   multiselect (o warning verbatim "Il servizio non è disponibile nel listino e
+   non può essere aggiunto: X"), scrive la mappa redeem del tipo garantendo UN
+   residuo per servizio, e notifica "Seduta pacchetto collegata/Servizio
+   aggiunto dal pacchetto: X" (e varianti prepagato/GiftBox/omaggio a seconda
+   che il servizio fosse già in prenotazione); l'uncheck rimuove servizio+mappe
+   con "Servizio rimosso dalla prenotazione: X". Lock del checkbox durante la
+   verifica; errori "Errore durante la verifica dei/degli …" come toast danger.
+4. GIFTCARD single-select con radio ("Saldo non disponibile" se 0), "Importo da
+   usare" precompilato al max, "Usa max", "Applica" con le guardie verbatim
+   ("Seleziona una GiftCard.", "Non c'è importo da applicare: il totale
+   prenotazione è 0. Aggiungi prima i servizi.", "Inserisci un importo
+   valido."), toast "GiftCard applicata alla prenotazione."; "Rimuovi GiftCard
+   applicata" -> "GiftCard rimossa dalla prenotazione.". Stato sincronizzato con
+   la riga GiftCard del form (stessi stati giftcardPick/importo).
+5. Nuova action POST qb_residui_check (qbResiduiConflictsLite, port LITE del
+   collector legacy): omaggi con regola stretta (stessa reward su altra
+   prenotazione ATTIVA pending/scheduled -> blocco, con exclude dell'appuntamento
+   corrente in edit), pacchetti/prepagati bloccati a pool esaurito (nei nostri
+   flussi il consumo avviene al save, quindi il pool è già al netto delle
+   prenotazioni attive), giftbox demandata all'apply del save. Messaggi default
+   verbatim; i messaggi ricchi con refs ("disponibili solo N quantità libere; già
+   presente nella prenotazione #…") NON portati (residuo documentato).
+INCIDENTE RIENTRATO: un primo tentativo di rimozione dei setter orfani con
+markers line-based ha corrotto il file (rimossa la prima riga "use client" per
+CRLF); recuperato con git checkout del file e ri-applicazione completa con
+script paren-balanced + sanity check. Lint finale = identico a HEAD (6 errori/2
+warning preesistenti), typecheck pulito.
+Verifica: battery qb_residui_check 8/8 (pacchetto ok/esaurito verbatim, omaggio
+su prenotazione attiva + exclude in edit, cleanup CLEAN) + re-run redeem-edit
+28/28 + 38/38 marker modale + 5/5 verifiche NEGATIVE (testi inline spariti).
+Nota infra: DNS flaky del router sul pooler Supabase aggirato nei test con
+connection string a IP diretto (ssl rejectUnauthorized:false).

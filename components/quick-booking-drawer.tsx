@@ -262,6 +262,39 @@ function qbRefetchCalendar(): void {
   window.dispatchEvent(new CustomEvent("qb:appointments-changed"));
 }
 
+// ---- MODALE RESIDUI interattiva: costanti messaggi legacy (app.js 2845-3236) ----
+type ResidualKind = "package" | "prepaid" | "giftbox" | "gift";
+const RESIDUAL_CHECK_FIELD: Record<ResidualKind, string> = {
+  package: "package_redeem",
+  prepaid: "prepaid_service_redeem",
+  giftbox: "giftbox_redeem",
+  gift: "gift_redeem",
+};
+const RESIDUAL_CHECK_COLLECTION: Record<ResidualKind, string> = {
+  package: "packages",
+  prepaid: "services",
+  giftbox: "giftboxes",
+  gift: "gifts",
+};
+const RESIDUAL_CONFLICT_DEFAULT: Record<ResidualKind, string> = {
+  package: "Questa seduta del pacchetto è già presente in un'altra prenotazione.",
+  prepaid: "Questo servizio prepagato è già presente in un'altra prenotazione.",
+  giftbox: "Questo residuo GiftBox è già presente in un'altra prenotazione.",
+  gift: "Questo servizio omaggio è già presente in un'altra prenotazione.",
+};
+const RESIDUAL_CHECK_ERROR: Record<ResidualKind, string> = {
+  package: "Errore durante la verifica dei residui del pacchetto.",
+  prepaid: "Errore durante la verifica dei servizi prepagati.",
+  giftbox: "Errore durante la verifica dei residui GiftBox.",
+  gift: "Errore durante la verifica degli omaggi.",
+};
+const RESIDUAL_TOAST: Record<ResidualKind, { linked: string; added: string }> = {
+  package: { linked: "Seduta pacchetto collegata: ", added: "Servizio aggiunto dal pacchetto: " },
+  prepaid: { linked: "Servizio prepagato collegato: ", added: "Servizio aggiunto dai residui: " },
+  giftbox: { linked: "Residuo GiftBox collegato: ", added: "Servizio aggiunto dalla GiftBox: " },
+  gift: { linked: "omaggio collegato: ", added: "Servizio aggiunto da omaggio: " },
+};
+
 // Fonde le istanze "booster" (i residui consumati dalla prenotazione in EDIT,
 // assenti dalle liste residui correnti del cliente) nelle liste opzioni, senza
 // duplicare le voci già presenti.
@@ -1488,28 +1521,6 @@ export function QuickBookingDrawer() {
     return arr.length ? JSON.stringify(arr) : "";
   }, [effectivePackageRedeems]);
 
-  // Apply / clear a package on a service. Selecting records {client_package_id,
-  // service_id, client_package_service_id}; clearing removes the entry. Changing
-  // services never invalidates a hold (the redeem doesn't move the slot).
-  const setPackageForService = useCallback(
-    (serviceId: number, pkg: QbClientPackage | null) => {
-      setPackageRedeems((prev) => {
-        const next = { ...prev };
-        if (!pkg) {
-          delete next[serviceId];
-        } else {
-          next[serviceId] = {
-            client_package_id: pkg.id,
-            service_id: serviceId,
-            client_package_service_id: pkg.serviceItemIds?.[serviceId] ?? null,
-          };
-        }
-        return next;
-      });
-    },
-    [],
-  );
-
   // ---- PREPAID-SERVICE redeem derivation (per-service "Usa prepagato") ----
   // For each SELECTED service that is NOT already covered by a package redeem, the
   // client's available prepaids that COVER it (a prepaid covers exactly its own
@@ -1553,24 +1564,6 @@ export function QuickBookingDrawer() {
     const arr = Object.values(effectivePrepaidRedeems);
     return arr.length ? JSON.stringify(arr) : "";
   }, [effectivePrepaidRedeems]);
-
-  // Apply / clear a prepaid on a service. Selecting records {client_prepaid_service_id,
-  // service_id}; clearing removes the entry. Changing services never invalidates a
-  // hold (the redeem doesn't move the slot).
-  const setPrepaidForService = useCallback(
-    (serviceId: number, prepaid: QbClientPrepaid | null) => {
-      setPrepaidRedeems((prev) => {
-        const next = { ...prev };
-        if (!prepaid) {
-          delete next[serviceId];
-        } else {
-          next[serviceId] = { client_prepaid_service_id: prepaid.id, service_id: serviceId };
-        }
-        return next;
-      });
-    },
-    [],
-  );
 
   // ---- GIFTBOX redeem derivation (per-service "Usa GiftBox") ----
   // For each SELECTED service that is NOT already covered by a package OR prepaid redeem,
@@ -1618,24 +1611,6 @@ export function QuickBookingDrawer() {
     return arr.length ? JSON.stringify(arr) : "";
   }, [effectiveGiftboxRedeems]);
 
-  // Apply / clear a giftbox item on a service. Selecting records {service_id, instance_id,
-  // giftbox_item_id}; clearing removes the entry. Changing services never invalidates a
-  // hold (the redeem doesn't move the slot).
-  const setGiftboxForService = useCallback(
-    (serviceId: number, giftbox: QbClientGiftbox | null) => {
-      setGiftboxRedeems((prev) => {
-        const next = { ...prev };
-        if (!giftbox) {
-          delete next[serviceId];
-        } else {
-          next[serviceId] = { service_id: serviceId, instance_id: giftbox.instance_id, giftbox_item_id: giftbox.giftbox_item_id };
-        }
-        return next;
-      });
-    },
-    [],
-  );
-
   // ---- GIFT (omaggio) redeem derivation (per-service "Usa Omaggio") ----
   // For each SELECTED service that is NOT already covered by a package, prepaid OR giftbox
   // redeem, the client's available gift SERVICE REWARDS that COVER it (a reward covers exactly
@@ -1681,24 +1656,6 @@ export function QuickBookingDrawer() {
     const arr = Object.values(effectiveGiftRedeems);
     return arr.length ? JSON.stringify(arr) : "";
   }, [effectiveGiftRedeems]);
-
-  // Apply / clear a gift reward on a service. Selecting records {service_id, instance_id,
-  // reward_item_index}; clearing removes the entry. Changing services never invalidates a
-  // hold (the redeem doesn't move the slot).
-  const setGiftForService = useCallback(
-    (serviceId: number, gift: QbClientGift | null) => {
-      setGiftRedeems((prev) => {
-        const next = { ...prev };
-        if (!gift) {
-          delete next[serviceId];
-        } else {
-          next[serviceId] = { service_id: serviceId, instance_id: gift.instance_id, reward_item_index: gift.reward_item_index };
-        }
-        return next;
-      });
-    },
-    [],
-  );
 
   // ---- GIFTCARD redeem derivation (appointment-level "GiftCard") ----
   // The appointment's PAYABLE TOTAL: sum of the SELECTED services' prices MINUS any
@@ -1757,15 +1714,6 @@ export function QuickBookingDrawer() {
     const entry: QbGiftcardRedeem = { giftcard_id: effectiveGiftcard.id, amount: giftcardAmount };
     return JSON.stringify([entry]);
   }, [effectiveGiftcard, giftcardAmount]);
-
-  // Apply / clear the appointment giftcard. Selecting resets the amount to the default
-  // (the full applicable max, recomputed from the chosen card + payable total);
-  // clearing drops the pick + amount. Changing the giftcard never invalidates a hold
-  // (the redeem doesn't move the slot).
-  const setGiftcardForAppointment = useCallback((giftcard: QbClientGiftcard | null) => {
-    setGiftcardPick(giftcard ? giftcard.id : null);
-    setGiftcardAmountInput(""); // empty -> the amount memo defaults to the full max
-  }, []);
 
   // ---- PER-SERVICE redeem badge map (port of qbGetPrepaidServiceBadgeMap) ----
   // serviceId -> the redeem badge shown on a zero-charged line ("gift" | "Servizio" |
@@ -2626,15 +2574,144 @@ export function QuickBookingDrawer() {
       });
   }, [slug]);
 
+  // ---- MODALE RESIDUI INTERATTIVA: stati locali (radio GiftCard + importo,
+  // lock durante la verifica conflitti) ----
+  const [gcSelId, setGcSelId] = useState<number | null>(null);
+  const [gcAmountInput, setGcAmountInput] = useState<string>("");
+  const [residualBusyKey, setResidualBusyKey] = useState<string>("");
+
   const openResidualsDetail = useCallback(() => {
     const id = String(clientId || "").trim();
     if (!id) return;
+    // Sincronizza i controlli GiftCard della modale con lo stato applicato
+    // (come il render legacy che rilegge #qb_giftcard_redeem all'apertura).
+    setGcSelId(giftcardPick);
+    setGcAmountInput(giftcardPick && giftcardAmount > 0 ? String(giftcardAmount) : "");
     // Show the modal immediately with a loading state (like the legacy).
     const el = document.getElementById("qbClientResidualsModal");
     const api = bootstrap()?.Modal;
     if (el && api) api.getOrCreateInstance(el).show();
     fetchResidualsDetail(id);
-  }, [clientId, fetchResidualsDetail]);
+  }, [clientId, fetchResidualsDetail, giftcardPick, giftcardAmount, setGcSelId, setGcAmountInput]);
+
+  // Dovuto PRIMA dei pagamenti (port di qbLastDueBeforePayments): base del clamp
+  // GiftCard nella modale Residui. Il clamp credito riusa il memo creditMaxUsable
+  // già definito sopra (min(saldo, dovuto dopo la GiftCard), come il recompute).
+  const dueBeforePayments = Math.max(0, Math.round((priceDetails.subtotal - priceDetails.discount - priceDetails.coupon - priceDetails.fidelity) * 100) / 100);
+  const currentCreditUse = priceDetails.credito;
+
+  // Collega il servizio del residuo alla prenotazione (port di
+  // qbEnsureServiceSelectedFromResidualCheckbox): se non è a listino, warning.
+  const ensureServiceForResidual = useCallback((serviceId: number, label: string): boolean => {
+    if (selectedServiceIds.includes(serviceId)) return true;
+    if (!services.some((s) => s.id === serviceId)) {
+      qbNotify(`Il servizio non è disponibile nel listino e non può essere aggiunto: ${label}`, "warning");
+      return false;
+    }
+    toggleService(serviceId);
+    return true;
+  }, [selectedServiceIds, services, toggleService]);
+
+  // Un servizio = UN solo residuo (port di qbResidualsRemoveServiceFromMaps +
+  // qbResidualsUncheckOthersForService): pulisce le 4 mappe per quel servizio.
+  const clearResidualMapsForService = useCallback((serviceId: number) => {
+    setPackageRedeems((prev) => { const n = { ...prev }; delete n[serviceId]; return n; });
+    setPrepaidRedeems((prev) => { const n = { ...prev }; delete n[serviceId]; return n; });
+    setGiftboxRedeems((prev) => { const n = { ...prev }; delete n[serviceId]; return n; });
+    setGiftRedeems((prev) => { const n = { ...prev }; delete n[serviceId]; return n; });
+  }, [setPackageRedeems, setPrepaidRedeems, setGiftboxRedeems, setGiftRedeems]);
+
+  // Handler unico spunte residui (port dell'handler change app.js:2845-3236):
+  // check -> verifica conflitti (qb_residui_check) -> aggiunge il servizio ->
+  // scrive la mappa del tipo (togliendo gli altri) -> toast success
+  // "collegato/aggiunto"; uncheck -> rimuove servizio+mappe -> toast info.
+  const onResidualToggle = useCallback(async (opts: {
+    kind: ResidualKind;
+    busyKey: string;
+    serviceId: number;
+    label: string;
+    checked: boolean;
+    checkItem: Record<string, unknown>;
+    apply: () => void;
+  }) => {
+    const { kind, busyKey, serviceId, label, checked } = opts;
+    if (!checked) {
+      clearResidualMapsForService(serviceId);
+      if (selectedServiceIds.includes(serviceId)) toggleService(serviceId);
+      qbNotify(`Servizio rimosso dalla prenotazione: ${label}`, "info");
+      return;
+    }
+    setResidualBusyKey(busyKey);
+    try {
+      try {
+        const res = await fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+          body: JSON.stringify({
+            action: "qb_residui_check",
+            appointment_id: Number(apptId) || 0,
+            [RESIDUAL_CHECK_FIELD[kind]]: JSON.stringify([opts.checkItem]),
+          }),
+        });
+        const chk: { ok?: boolean; error?: string; messages?: string[] } & Record<string, unknown> = await res.json().catch(() => ({}));
+        if (!chk || chk.ok === false) {
+          qbNotify(String(chk?.error || RESIDUAL_CHECK_ERROR[kind]), "danger");
+          return;
+        }
+        const conflicts = chk[RESIDUAL_CHECK_COLLECTION[kind]];
+        if (Array.isArray(conflicts) && conflicts.length > 0) {
+          const msgs = Array.isArray(chk.messages) ? chk.messages.filter(Boolean) : [];
+          qbNotify(msgs.length ? msgs.join(" | ") : RESIDUAL_CONFLICT_DEFAULT[kind], "warning");
+          return;
+        }
+      } catch {
+        qbNotify(RESIDUAL_CHECK_ERROR[kind], "danger");
+        return;
+      }
+      const wasSelected = selectedServiceIds.includes(serviceId);
+      if (!ensureServiceForResidual(serviceId, label)) return;
+      clearResidualMapsForService(serviceId);
+      opts.apply();
+      qbNotify(`${wasSelected ? RESIDUAL_TOAST[kind].linked : RESIDUAL_TOAST[kind].added}${label}`, "success");
+    } finally {
+      setResidualBusyKey("");
+    }
+  }, [slug, apptId, selectedServiceIds, ensureServiceForResidual, clearResidualMapsForService, toggleService, setResidualBusyKey]);
+
+  // GiftCard in modale (port dei bottoni .qb-gc-apply / .qb-gc-remove / .qb-gc-max,
+  // app.js:2348-2422): single-select + importo, con i toast verbatim.
+  const applyModalGiftcard = useCallback(() => {
+    if (!gcSelId) {
+      qbNotify("Seleziona una GiftCard.", "warning");
+      return;
+    }
+    const card = clientGiftcards.find((g) => g.id === gcSelId)
+      ?? (residualsDetail?.giftcards ?? []).find((g) => g.id === gcSelId)
+      ?? null;
+    const bal = Math.max(0, Number(card?.balance ?? 0));
+    if (!(dueBeforePayments > 0)) {
+      qbNotify("Non c'è importo da applicare: il totale prenotazione è 0. Aggiungi prima i servizi.", "warning");
+      return;
+    }
+    const maxUse = Math.min(bal, dueBeforePayments);
+    const raw = Number(String(gcAmountInput).replace(",", "."));
+    const amt = Math.min(Math.max(gcAmountInput.trim() !== "" && Number.isFinite(raw) ? raw : maxUse, 0), maxUse);
+    if (!(amt > 0)) {
+      qbNotify("Inserisci un importo valido.", "warning");
+      return;
+    }
+    setGiftcardPick(gcSelId);
+    setGiftcardAmountInput(String(Math.round(amt * 100) / 100));
+    qbNotify("GiftCard applicata alla prenotazione.", "success");
+  }, [gcSelId, gcAmountInput, clientGiftcards, residualsDetail, dueBeforePayments, setGiftcardPick, setGiftcardAmountInput]);
+
+  const removeModalGiftcard = useCallback(() => {
+    setGiftcardPick(null);
+    setGiftcardAmountInput("");
+    setGcSelId(null);
+    setGcAmountInput("");
+    qbNotify("GiftCard rimossa dalla prenotazione.", "info");
+  }, [setGiftcardPick, setGiftcardAmountInput, setGcSelId, setGcAmountInput]);
 
   // ---- Per-item residual INFO modals (port of #qbPackageInfoModal /
   // #qbPrepaidServiceInfoModal / #qbGiftboxInfoModal / #qbGiftInfoModal /
@@ -3715,368 +3792,10 @@ export function QuickBookingDrawer() {
               <div className="form-text">Seleziona i servizi dal menu: puoi cercare, scegliere più servizi e la durata verrà calcolata automaticamente.</div>
             </div>
 
-            {/* PACKAGE redeem (Pacchetti) — per-service "Usa pacchetto" control.
-                Faithful to the legacy intent (assets/js/app.js residuals package
-                block: a per-service selection that writes {client_package_id,
-                service_id, client_package_service_id} into #qb_package_redeem). Only
-                shown for SELECTED services the client has an available covering
-                package for; a covered service reads "Incluso nel pacchetto" with no
-                charge. Selecting consumes a session on save (validated server-side). */}
-            {Object.keys(packageOptionsByService).length > 0 ? (
-              <div className="card p-2 mb-3" id="qbPackageRedeemBox">
-                <div className="fw-bold mb-1">Pacchetti</div>
-                <div className="text-muted small mb-2">
-                  Applica un pacchetto del cliente a un servizio: la seduta verrà scalata dal pacchetto e il servizio non sarà addebitato.
-                </div>
-                {selectedServiceIds.map((serviceId) => {
-                  const options = packageOptionsByService[serviceId];
-                  if (!options || options.length === 0) return null;
-                  const svc = services.find((s) => s.id === serviceId);
-                  const serviceName = svc?.name ?? `Servizio #${serviceId}`;
-                  const redeem = effectivePackageRedeems[serviceId];
-                  const selectedPkg = redeem ? options.find((pkg) => pkg.id === redeem.client_package_id) ?? null : null;
-                  return (
-                    <div className="border-top pt-2 mt-2 qb-cp-package" key={serviceId} data-service-id={serviceId}>
-                      <div className="d-flex justify-content-between align-items-center">
-                        <div className="fw-semibold">{serviceName}</div>
-                        {selectedPkg ? (
-                          <span className="badge badge-soft text-success">Incluso nel pacchetto</span>
-                        ) : null}
-                      </div>
-                      <div className="d-flex align-items-center gap-2 mt-1">
-                        <select
-                          className="form-select form-select-sm qb-cp-svc-select"
-                          data-service-id={serviceId}
-                          aria-label={`Usa pacchetto per ${serviceName}`}
-                          value={selectedPkg ? String(selectedPkg.id) : ""}
-                          onChange={(e) => {
-                            const id = Number.parseInt(e.target.value, 10);
-                            const pkg = options.find((p) => p.id === id) ?? null;
-                            setPackageForService(serviceId, pkg);
-                          }}
-                        >
-                          <option value="">Non usare pacchetto</option>
-                          {options.map((pkg) => (
-                            <option value={pkg.id} key={pkg.id}>
-                              Usa pacchetto: {pkg.name} ({pkg.sessions_remaining} residue)
-                            </option>
-                          ))}
-                        </select>
-                        {selectedPkg ? (
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-link text-danger p-0 qb-cp-remove"
-                            onClick={() => setPackageForService(serviceId, null)}
-                            title="Rimuovi pacchetto"
-                          >
-                            Rimuovi
-                          </button>
-                        ) : null}
-                      </div>
-                      {selectedPkg ? (
-                        <div className="small text-success mt-1">
-                          Incluso nel pacchetto {selectedPkg.name} — nessun addebito.
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : null}
-
-            {/* PREPAID-SERVICE redeem (Prepagati) — per-service "Usa prepagato" control.
-                Faithful to the legacy intent (assets/js/app.js #qb_prepaid_service_redeem:
-                a per-service selection that writes {service_id, client_prepaid_service_id}
-                into #qb_prepaid_service_redeem). Only shown for SELECTED services the
-                client has an available prepaid for AND that a package isn't already
-                covering; a covered service reads "Coperto dal prepagato" with no charge.
-                Selecting consumes one unit on save (validated + deduped server-side). */}
-            {Object.keys(prepaidOptionsByService).length > 0 ? (
-              <div className="card p-2 mb-3" id="qbPrepaidRedeemBox">
-                <div className="fw-bold mb-1">Prepagati</div>
-                <div className="text-muted small mb-2">
-                  Applica un prepagato del cliente a un servizio: un&apos;unità verrà scalata dal prepagato e il servizio non sarà addebitato.
-                </div>
-                {selectedServiceIds.map((serviceId) => {
-                  const options = prepaidOptionsByService[serviceId];
-                  if (!options || options.length === 0) return null;
-                  const svc = services.find((s) => s.id === serviceId);
-                  const serviceName = svc?.name ?? `Servizio #${serviceId}`;
-                  const redeem = effectivePrepaidRedeems[serviceId];
-                  const selectedPrepaid = redeem ? options.find((prepaid) => prepaid.id === redeem.client_prepaid_service_id) ?? null : null;
-                  return (
-                    <div className="border-top pt-2 mt-2 qb-cp-prepaid" key={serviceId} data-service-id={serviceId}>
-                      <div className="d-flex justify-content-between align-items-center">
-                        <div className="fw-semibold">{serviceName}</div>
-                        {selectedPrepaid ? (
-                          <span className="badge badge-soft text-success">Coperto dal prepagato</span>
-                        ) : null}
-                      </div>
-                      <div className="d-flex align-items-center gap-2 mt-1">
-                        <select
-                          className="form-select form-select-sm qb-cp-prepaid-select"
-                          data-service-id={serviceId}
-                          aria-label={`Usa prepagato per ${serviceName}`}
-                          value={selectedPrepaid ? String(selectedPrepaid.id) : ""}
-                          onChange={(e) => {
-                            const id = Number.parseInt(e.target.value, 10);
-                            const prepaid = options.find((p) => p.id === id) ?? null;
-                            setPrepaidForService(serviceId, prepaid);
-                          }}
-                        >
-                          <option value="">Non usare prepagato</option>
-                          {options.map((prepaid) => (
-                            <option value={prepaid.id} key={prepaid.id}>
-                              Usa prepagato: {prepaid.name} ({prepaid.remaining_qty} residue)
-                            </option>
-                          ))}
-                        </select>
-                        {selectedPrepaid ? (
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-link text-danger p-0 qb-cp-prepaid-remove"
-                            onClick={() => setPrepaidForService(serviceId, null)}
-                            title="Rimuovi prepagato"
-                          >
-                            Rimuovi
-                          </button>
-                        ) : null}
-                      </div>
-                      {selectedPrepaid ? (
-                        <div className="small text-success mt-1">
-                          Coperto dal prepagato {selectedPrepaid.name} — nessun addebito.
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : null}
-
-            {/* GIFTBOX redeem (GiftBox) — per-service "Usa GiftBox" control. Faithful to
-                the legacy intent (assets/js/app.js #qb_giftbox_redeem: a per-service
-                selection that writes {service_id, instance_id, giftbox_item_id} into
-                #qb_giftbox_redeem). GiftBox is per-service + ITEM-based (like a package):
-                one item covers one service. Only shown for SELECTED services the client
-                has an available giftbox item for AND that a package/prepaid isn't already
-                covering; a covered service reads "Coperto dalla GiftBox" with no charge.
-                Selecting consumes one item on save (validated + deduped server-side). */}
-            {Object.keys(giftboxOptionsByService).length > 0 ? (
-              <div className="card p-2 mb-3" id="qbGiftboxRedeemBox">
-                <div className="fw-bold mb-1">GiftBox</div>
-                <div className="text-muted small mb-2">
-                  Applica una GiftBox del cliente a un servizio: un elemento verrà scalato dalla GiftBox e il servizio non sarà addebitato.
-                </div>
-                {selectedServiceIds.map((serviceId) => {
-                  const options = giftboxOptionsByService[serviceId];
-                  if (!options || options.length === 0) return null;
-                  const svc = services.find((s) => s.id === serviceId);
-                  const serviceName = svc?.name ?? `Servizio #${serviceId}`;
-                  const redeem = effectiveGiftboxRedeems[serviceId];
-                  const selectedGiftbox = redeem
-                    ? options.find((gb) => gb.instance_id === redeem.instance_id && gb.giftbox_item_id === redeem.giftbox_item_id) ?? null
-                    : null;
-                  return (
-                    <div className="border-top pt-2 mt-2 qb-cp-giftbox" key={serviceId} data-service-id={serviceId}>
-                      <div className="d-flex justify-content-between align-items-center">
-                        <div className="fw-semibold">{serviceName}</div>
-                        {selectedGiftbox ? (
-                          <span className="badge badge-soft text-success">Coperto dalla GiftBox</span>
-                        ) : null}
-                      </div>
-                      <div className="d-flex align-items-center gap-2 mt-1">
-                        <select
-                          className="form-select form-select-sm qb-cp-giftbox-select"
-                          data-service-id={serviceId}
-                          aria-label={`Usa GiftBox per ${serviceName}`}
-                          value={selectedGiftbox ? `${selectedGiftbox.instance_id}:${selectedGiftbox.giftbox_item_id}` : ""}
-                          onChange={(e) => {
-                            const [instStr, itemStr] = String(e.target.value).split(":");
-                            const inst = Number.parseInt(instStr, 10);
-                            const item = Number.parseInt(itemStr, 10);
-                            const giftbox = options.find((gb) => gb.instance_id === inst && gb.giftbox_item_id === item) ?? null;
-                            setGiftboxForService(serviceId, giftbox);
-                          }}
-                        >
-                          <option value="">Non usare GiftBox</option>
-                          {options.map((gb) => (
-                            <option value={`${gb.instance_id}:${gb.giftbox_item_id}`} key={`${gb.instance_id}:${gb.giftbox_item_id}`}>
-                              Usa GiftBox: {gb.name}
-                            </option>
-                          ))}
-                        </select>
-                        {selectedGiftbox ? (
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-link text-danger p-0 qb-cp-giftbox-remove"
-                            onClick={() => setGiftboxForService(serviceId, null)}
-                            title="Rimuovi GiftBox"
-                          >
-                            Rimuovi
-                          </button>
-                        ) : null}
-                      </div>
-                      {selectedGiftbox ? (
-                        <div className="small text-success mt-1">
-                          Coperto dalla GiftBox {selectedGiftbox.name} — nessun addebito.
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : null}
-
-            {/* GIFT (omaggio) redeem (Omaggi) — per-service "Usa Omaggio" control. Faithful to
-                the legacy intent (assets/js/app.js #qb_gift_redeem: a per-service selection
-                that writes {service_id, instance_id, reward_item_index} into #qb_gift_redeem).
-                A gift is per-service + REWARD-based (like a giftbox item): one reward (a free
-                service) covers one service. Only shown for SELECTED services the client has an
-                available gift reward for AND that a package/prepaid/giftbox isn't already
-                covering; a covered service reads "Coperto dall'Omaggio" with no charge.
-                Selecting consumes one reward on save (validated + deduped server-side). */}
-            {Object.keys(giftOptionsByService).length > 0 ? (
-              <div className="card p-2 mb-3" id="qbGiftRedeemBox">
-                <div className="fw-bold mb-1">Omaggi</div>
-                <div className="text-muted small mb-2">
-                  Applica un Omaggio del cliente a un servizio: una ricompensa verrà scalata dall&apos;omaggio e il servizio non sarà addebitato.
-                </div>
-                {selectedServiceIds.map((serviceId) => {
-                  const options = giftOptionsByService[serviceId];
-                  if (!options || options.length === 0) return null;
-                  const svc = services.find((s) => s.id === serviceId);
-                  const serviceName = svc?.name ?? `Servizio #${serviceId}`;
-                  const redeem = effectiveGiftRedeems[serviceId];
-                  const selectedGift = redeem
-                    ? options.find((g) => g.instance_id === redeem.instance_id && g.reward_item_index === redeem.reward_item_index) ?? null
-                    : null;
-                  return (
-                    <div className="border-top pt-2 mt-2 qb-cp-gift" key={serviceId} data-service-id={serviceId}>
-                      <div className="d-flex justify-content-between align-items-center">
-                        <div className="fw-semibold">{serviceName}</div>
-                        {selectedGift ? (
-                          <span className="badge badge-soft text-success">Coperto dall&apos;Omaggio</span>
-                        ) : null}
-                      </div>
-                      <div className="d-flex align-items-center gap-2 mt-1">
-                        <select
-                          className="form-select form-select-sm qb-cp-gift-select"
-                          data-service-id={serviceId}
-                          aria-label={`Usa Omaggio per ${serviceName}`}
-                          value={selectedGift ? `${selectedGift.instance_id}:${selectedGift.reward_item_index}` : ""}
-                          onChange={(e) => {
-                            const [instStr, idxStr] = String(e.target.value).split(":");
-                            const inst = Number.parseInt(instStr, 10);
-                            const idx = Number.parseInt(idxStr, 10);
-                            const gift = options.find((g) => g.instance_id === inst && g.reward_item_index === idx) ?? null;
-                            setGiftForService(serviceId, gift);
-                          }}
-                        >
-                          <option value="">Non usare Omaggio</option>
-                          {options.map((g) => (
-                            <option value={`${g.instance_id}:${g.reward_item_index}`} key={`${g.instance_id}:${g.reward_item_index}`}>
-                              Usa Omaggio: {g.name}
-                            </option>
-                          ))}
-                        </select>
-                        {selectedGift ? (
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-link text-danger p-0 qb-cp-gift-remove"
-                            onClick={() => setGiftForService(serviceId, null)}
-                            title="Rimuovi Omaggio"
-                          >
-                            Rimuovi
-                          </button>
-                        ) : null}
-                      </div>
-                      {selectedGift ? (
-                        <div className="small text-success mt-1">
-                          Coperto dall&apos;Omaggio {selectedGift.name} — nessun addebito.
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : null}
-
-            {/* GIFTCARD redeem (GiftCard) — APPOINTMENT-LEVEL "Usa GiftCard" control.
-                Faithful to the legacy intent (assets/js/app.js #qb_giftcard_redeem:
-                ONE giftcard + an AMOUNT written as [{giftcard_id, amount}]). Unlike
-                Pacchetti/Prepagati this is NOT per-service: a giftcard is MONETARY and
-                applies to the WHOLE appointment. Only shown when the client has an
-                available giftcard. The amount DEFAULTS to min(balance, payable total)
-                and can be lowered; it is clamped to [0, max] and re-clamped + the
-                giftcard decremented server-side on save. */}
-            {clientGiftcards.length > 0 ? (
-              <div className="card p-2 mb-3" id="qbGiftcardRedeemBox">
-                <div className="fw-bold mb-1">GiftCard</div>
-                <div className="text-muted small mb-2">
-                  Applica il saldo di una GiftCard del cliente all&apos;appuntamento: l&apos;importo verrà scalato dalla GiftCard e dedotto dal totale.
-                </div>
-                <div className="d-flex align-items-center gap-2">
-                  <select
-                    className="form-select form-select-sm qb-giftcard-select"
-                    aria-label="Usa GiftCard per l'appuntamento"
-                    value={effectiveGiftcard ? String(effectiveGiftcard.id) : ""}
-                    onChange={(e) => {
-                      const id = Number.parseInt(e.target.value, 10);
-                      const gc = clientGiftcards.find((g) => g.id === id) ?? null;
-                      setGiftcardForAppointment(gc);
-                    }}
-                  >
-                    <option value="">Non usare GiftCard</option>
-                    {clientGiftcards.map((gc) => (
-                      <option value={gc.id} key={gc.id}>
-                        Usa GiftCard: {gc.code || `#${gc.id}`} (saldo {fmtEUR(gc.balance)})
-                      </option>
-                    ))}
-                  </select>
-                  {effectiveGiftcard ? (
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-link text-danger p-0 qb-giftcard-remove"
-                      onClick={() => setGiftcardForAppointment(null)}
-                      title="Rimuovi GiftCard"
-                    >
-                      Rimuovi
-                    </button>
-                  ) : null}
-                </div>
-                {effectiveGiftcard ? (
-                  <div className="mt-2">
-                    {giftcardMaxAmount > 0 ? (
-                      <>
-                        <label className="form-label small mb-1" htmlFor="qbGiftcardAmountInput2">Importo da applicare</label>
-                        <div className="input-group input-group-sm" style={{ maxWidth: 220 }}>
-                          <span className="input-group-text">€</span>
-                          <input
-                            id="qbGiftcardAmountInput2"
-                            className="form-control qb-giftcard-amount"
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            max={giftcardMaxAmount}
-                            inputMode="decimal"
-                            placeholder={giftcardMaxAmount.toFixed(2)}
-                            value={giftcardAmountInput}
-                            onChange={(e) => setGiftcardAmountInput(e.target.value)}
-                          />
-                        </div>
-                        <div className="small text-success mt-1">
-                          Applicato: {fmtEUR(giftcardAmount)} — massimo {fmtEUR(giftcardMaxAmount)} (saldo {fmtEUR(effectiveGiftcard.balance)}).
-                        </div>
-                      </>
-                    ) : (
-                      <div className="small text-muted mt-1">
-                        Nessun importo da coprire con la GiftCard (totale dell&apos;appuntamento già azzerato).
-                      </div>
-                    )}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
+            {/* I controlli di selezione RESIDUI (Pacchetti/Prepagati/GiftBox/Omaggi/
+                GiftCard) vivono DENTRO la modale Residui (#qbClientResidualsModal),
+                come nel legacy: il form ha solo gli hidden input (View.php:1128-1132).
+                Le pill dei servizi collegati mostrano il badge e aprono i dettagli. */}
 
             <div className="row g-2">
               <div className="col-12">
@@ -4517,41 +4236,8 @@ export function QuickBookingDrawer() {
                 <input type="hidden" name="credit_use" id="qb_credit_use" value={String(priceDetails.credito || 0)} readOnly />
                 <input type="hidden" name="credit_use_from_booking" id="qb_credit_use_from_booking" value="0" readOnly />
 
-                {/* CREDITO use (Block 4) — a MINIMAL inline "Usa credito" input, shown only when
-                    the selected client has a spendable credit balance. The staff types an amount;
-                    the recompute clamps it to [0, min(clientCredit, running total)] and reveals the
-                    Credito row below. TODO(credito-residuals): the legacy credit selection lived in
-                    the full residuals modal ("Apri scheda" deep port) with per-movement detail; that
-                    modal is out of scope here — this is the minimal amount input. */}
-                {clientCredit > 0 ? (
-                  <div className="card border-0 bg-light p-2 mt-2" id="qbCreditBox">
-                    <div className="d-flex justify-content-between align-items-center">
-                      <div className="fw-semibold"><i className="bi bi-wallet2 me-1" /> Credito cliente</div>
-                      <div className="small text-muted" id="qbCreditAvail">Disponibile: {fmtEUR(clientCredit)}</div>
-                    </div>
-                    <div className="mt-2 d-flex align-items-center gap-2">
-                      <div className="input-group input-group-sm" style={{ maxWidth: 220 }}>
-                        <span className="input-group-text">€</span>
-                        <input
-                          className="form-control"
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          inputMode="decimal"
-                          id="qbCreditAmountInput"
-                          placeholder="0"
-                          value={creditInput}
-                          onChange={(e) => setCreditInput(e.target.value)}
-                        />
-                      </div>
-                      <button type="button" className="btn btn-sm btn-outline-secondary" id="qbCreditMaxBtn" onClick={() => setCreditInput(String(creditMaxUsable))}>Max</button>
-                      {creditInput.trim() !== "" ? (
-                        <button type="button" className="btn btn-sm btn-link text-danger p-0" id="qbCreditClearBtn" onClick={() => setCreditInput("")} title="Rimuovi credito"><i className="bi bi-x-circle" /></button>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
-
+                {/* Il CREDITO si gestisce dalla modale Residui (card #qbResidualCreditCard),
+                    come nel legacy: qui resta solo la riga riepilogo qbCreditRow. */}
                 {/* Credito row — reveals when a customer credit amount > 0 is applied. */}
                 <div className={`d-flex justify-content-between align-items-center mt-2 pt-2 border-top${priceDetails.credito > 0 ? "" : " d-none"}`} id="qbCreditRow" style={{ color: "#047857" }}>
                   <div className="small fw-semibold">Credito</div>
@@ -5597,77 +5283,171 @@ export function QuickBookingDrawer() {
                 </div>
               ) : residualsDetailError ? (
                 <div className="text-danger small p-2">{residualsDetailError}</div>
-              ) : !residualsDetailHasAny ? (
-                <div className="alert alert-light border small" id="qbClientResidualsEmptyState">
-                  Nessun residuo disponibile.
-                </div>
               ) : (
-                <div id="qbClientResidualsBody" className="p-1">
-                  {/* Credito */}
-                  {residualsDetail && residualsDetail.credit.count > 0 ? (
-                    <div className="card p-3 mb-3">
-                      <div className="fw-bold mb-1">Credito</div>
-                      <div className="d-flex justify-content-between align-items-center">
-                        <div className="text-muted small">Credito disponibile del cliente.</div>
-                        <div className="fw-semibold">{fmtEUR(residualsDetail.credit.available)}</div>
+                <>
+                  {/* Empty state verbatim (View.php:1706). Visibile solo senza credito e senza liste. */}
+                  {!residualsDetailHasAny && !(clientCredit > 0 || currentCreditUse > 0) ? (
+                    <div className="alert alert-light border small" id="qbClientResidualsEmptyState">
+                      Nessun residuo disponibile per il cliente selezionato.
+                    </div>
+                  ) : null}
+
+                  {/* CREDITO (card statica legacy #qbResidualCreditCard, View.php:1710-1727):
+                      toggle "Disponibile", importo con clamp [0, min(saldo, dovuto)], Usa max,
+                      hint "Saldo tessera • Max utilizzabile" / "Credito non disponibile.". */}
+                  {clientCredit > 0 || currentCreditUse > 0 ? (
+                    <div className="card p-3 mb-3" id="qbResidualCreditCard">
+                      <div className="fw-semibold mb-1">Credito</div>
+                      <div className="small text-muted mb-3">Utilizza il credito disponibile del cliente per questa prenotazione.</div>
+                      <div className="form-check form-switch mb-2">
+                        <input
+                          className="form-check-input"
+                          type="checkbox"
+                          id="qbResidualCreditToggle"
+                          checked={currentCreditUse > 0}
+                          disabled={!(clientCredit > 0)}
+                          onChange={(e) => {
+                            if (!e.target.checked) {
+                              setCreditInput("");
+                            } else {
+                              const next = currentCreditUse > 0 ? Math.min(currentCreditUse, creditMaxUsable) : creditMaxUsable;
+                              setCreditInput(next > 0 ? String(Math.round(next * 100) / 100) : "");
+                            }
+                          }}
+                        />
+                        <label className="form-check-label" htmlFor="qbResidualCreditToggle">
+                          Disponibile: <strong id="qbResidualCreditAvail">{fmtEUR(clientCredit)}</strong>
+                        </label>
+                      </div>
+                      <label className="form-label small text-muted mb-1">Importo da usare</label>
+                      <div className="input-group input-group-sm" style={{ maxWidth: 260 }}>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="form-control"
+                          id="qbResidualCreditAmount"
+                          value={currentCreditUse > 0 ? creditInput : "0"}
+                          disabled={!(currentCreditUse > 0)}
+                          onChange={(e) => {
+                            const raw = Number(String(e.target.value).replace(",", "."));
+                            const val = Math.min(Math.max(Number.isFinite(raw) ? raw : 0, 0), creditMaxUsable);
+                            setCreditInput(val > 0 ? String(Math.round(val * 100) / 100) : "");
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-outline-secondary"
+                          id="qbResidualCreditMaxBtn"
+                          disabled={!(clientCredit > 0) || !(creditMaxUsable > 0)}
+                          onClick={() => setCreditInput(creditMaxUsable > 0 ? String(Math.round(creditMaxUsable * 100) / 100) : "")}
+                        >
+                          Usa max
+                        </button>
+                      </div>
+                      <div className="form-text" id="qbResidualCreditHint">
+                        {clientCredit > 0
+                          ? `Saldo tessera: ${fmtEUR(clientCredit)} • Max utilizzabile: ${fmtEUR(creditMaxUsable)}${creditMaxUsable <= 0 ? " • Aggiungi prima i servizi per usare il credito." : ""}`
+                          : "Credito non disponibile."}
                       </div>
                     </div>
                   ) : null}
 
-                  {/* Servizi (prepagati) */}
+                  <div id="qbClientResidualsBody" className="p-1">
+                  {/* SERVIZI (prepagati) — spunte che collegano il residuo (app.js:1004-1063). */}
                   {residualsDetail && residualsDetail.services.length > 0 ? (
                     <div className="card p-3 mb-3">
                       <div className="fw-bold mb-2">Servizi</div>
-                      {residualsDetail.services.map((s, i) => (
-                        <div className="border-top pt-2 mt-2" key={`svc-${i}`}>
-                          <div className="d-flex justify-content-between align-items-start">
-                            <div className="me-3">
-                              <div className="fw-semibold">
-                                {s.service_name}
-                                {s.remaining_qty > 0 ? (
-                                  <span className="badge text-bg-secondary ms-2">{s.remaining_qty}</span>
-                                ) : null}
-                                {s.purchased_qty > 0 ? (
-                                  <span className="text-muted small ms-1">/{s.purchased_qty}</span>
-                                ) : null}
+                      <div className="text-muted small mb-2">Seleziona o deseleziona i servizi acquistati: verranno aggiunti o rimossi automaticamente dalla prenotazione.</div>
+                      {residualsDetail.services.map((s, i) => {
+                        const busyKey = `ps-${s.id}-${s.service_id}`;
+                        const isChecked = prepaidRedeems[s.service_id]?.client_prepaid_service_id === s.id;
+                        return (
+                          <div className="border-top pt-2 mt-2" key={`svc-${i}`}>
+                            <div className="d-flex justify-content-between align-items-start">
+                              <div className="me-3 form-check">
+                                <input
+                                  className="form-check-input qb-ps-svc-check"
+                                  type="checkbox"
+                                  id={`qb_ps_${s.id}_${s.service_id}`}
+                                  checked={Boolean(isChecked)}
+                                  disabled={residualBusyKey === busyKey}
+                                  onChange={(e) => void onResidualToggle({
+                                    kind: "prepaid",
+                                    busyKey,
+                                    serviceId: s.service_id,
+                                    label: s.service_name,
+                                    checked: e.target.checked,
+                                    checkItem: { client_prepaid_service_id: s.id, prepaid_service_id: s.id, service_id: s.service_id, qty: 1 },
+                                    apply: () => setPrepaidRedeems((prev) => ({ ...prev, [s.service_id]: { client_prepaid_service_id: s.id, service_id: s.service_id } })),
+                                  })}
+                                />
+                                <label className="form-check-label" htmlFor={`qb_ps_${s.id}_${s.service_id}`}>
+                                  <span className="fw-semibold">{s.service_name}</span>
+                                  {s.remaining_qty > 0 ? <span className="badge text-bg-secondary ms-2">{s.remaining_qty}</span> : null}
+                                  {s.purchased_qty > 0 ? <span className="text-muted small ms-1">/{s.purchased_qty}</span> : null}
+                                </label>
+                                <div className="text-muted small">
+                                  Acquistato{s.sale_id ? ` con vendita #${s.sale_id}` : ""} • Scade: {fmtYMD(s.expires_at)}
+                                </div>
                               </div>
-                              <div className="text-muted small">
-                                Acquistato{s.sale_id ? ` con vendita #${s.sale_id}` : ""} • Scade: {fmtYMD(s.expires_at)}
+                              <div className="text-end">
+                                <div className="fw-semibold">{fmtEUR(s.unit_price)}</div>
                               </div>
-                            </div>
-                            <div className="text-end">
-                              <div className="fw-semibold">{fmtEUR(s.unit_price)}</div>
                             </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   ) : null}
 
-                  {/* Omaggi */}
+                  {/* OMAGGI (app.js:1066-1135). */}
                   {residualsDetail && residualsDetail.gifts.length > 0 ? (
                     <div className="card p-3 mb-3">
                       <div className="fw-bold mb-2">Omaggi</div>
-                      {residualsDetail.gifts.map((g, i) => (
-                        <div className="border-top pt-2 mt-2" key={`gift-${i}`}>
-                          <div className="small text-muted mb-1">{g.gift_name}</div>
-                          <div className="fw-semibold">
-                            {g.service_name}
-                            {g.qty_remaining > 0 ? (
-                              <span className="badge text-bg-secondary ms-2">{g.qty_remaining}</span>
-                            ) : null}
-                            {g.qty_total > 0 ? <span className="text-muted small ms-1">/{g.qty_total}</span> : null}
+                      <div className="text-muted small mb-2">Seleziona o deseleziona i servizi omaggio: verranno aggiunti o rimossi automaticamente dalla prenotazione.</div>
+                      {residualsDetail.gifts.map((g, i) => {
+                        const busyKey = `og-${g.instance_id}-${g.reward_item_index}-${g.service_id}`;
+                        const pick = giftRedeems[g.service_id];
+                        const isChecked = Boolean(pick && pick.instance_id === g.instance_id && pick.reward_item_index === g.reward_item_index);
+                        return (
+                          <div className="border-top pt-2 mt-2" key={`gift-${i}`}>
+                            <div className="small text-muted mb-1">{g.gift_name}</div>
+                            <div className="form-check">
+                              <input
+                                className="form-check-input qb-og-svc-check"
+                                type="checkbox"
+                                id={`qb_og_${g.instance_id}_${g.reward_item_index}_${g.service_id}`}
+                                checked={isChecked}
+                                disabled={residualBusyKey === busyKey}
+                                onChange={(e) => void onResidualToggle({
+                                  kind: "gift",
+                                  busyKey,
+                                  serviceId: g.service_id,
+                                  label: g.service_name,
+                                  checked: e.target.checked,
+                                  checkItem: { instance_id: g.instance_id, reward_item_index: g.reward_item_index, service_id: g.service_id, qty: 1 },
+                                  apply: () => setGiftRedeems((prev) => ({ ...prev, [g.service_id]: { service_id: g.service_id, instance_id: g.instance_id, reward_item_index: g.reward_item_index } })),
+                                })}
+                              />
+                              <label className="form-check-label" htmlFor={`qb_og_${g.instance_id}_${g.reward_item_index}_${g.service_id}`}>
+                                <span className="fw-semibold">{g.service_name}</span>
+                                {g.qty_remaining > 0 ? <span className="badge text-bg-secondary ms-2">{g.qty_remaining}</span> : null}
+                                {g.qty_total > 0 ? <span className="text-muted small ms-1">/{g.qty_total}</span> : null}
+                              </label>
+                              <div className="text-muted small">Scade: {fmtYMD(g.expires_at)}</div>
+                            </div>
                           </div>
-                          <div className="text-muted small">Scade: {fmtYMD(g.expires_at)}</div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   ) : null}
 
-                  {/* GiftBox */}
+                  {/* GIFTBOX (app.js:1137-1208). */}
                   {residualsDetail && residualsDetail.giftboxes.length > 0 ? (
                     <div className="card p-3 mb-3">
                       <div className="fw-bold mb-2">GiftBox</div>
+                      <div className="text-muted small mb-2">Seleziona o deseleziona i servizi: verranno aggiunti o rimossi automaticamente dalla prenotazione.</div>
                       {residualsDetail.giftboxes.map((gb, i) => (
                         <div className="border-top pt-2 mt-2" key={`gb-${i}`}>
                           <div className="fw-semibold">
@@ -5682,51 +5462,134 @@ export function QuickBookingDrawer() {
                             Residuo: {gb.remaining_qty}
                             {gb.total_qty ? ` / ${gb.total_qty}` : ""} • Scade: {fmtYMD(gb.expires_at)}
                           </div>
-                          {gb.items.length > 0 ? (
-                            <div className="mt-2">
-                              <div className="small text-muted mb-1">Servizi residui:</div>
-                              {gb.items.map((it, j) => (
-                                <div className="small" key={`gb-${i}-it-${j}`}>
-                                  {it.service_name}
-                                  {it.qty_remaining > 0 ? (
-                                    <span className="badge text-bg-secondary ms-2">{it.qty_remaining}</span>
-                                  ) : null}
-                                  {it.qty_total ? <span className="text-muted small ms-1">/{it.qty_total}</span> : null}
+                          <div className="mt-2">
+                            <div className="small text-muted mb-1">Servizi residui:</div>
+                            {gb.items.length > 0 ? gb.items.map((it, j) => {
+                              const busyKey = `gb-${gb.instance_id}-${it.giftbox_item_id}`;
+                              const pick = giftboxRedeems[it.service_id];
+                              const isChecked = Boolean(pick && pick.instance_id === gb.instance_id && pick.giftbox_item_id === it.giftbox_item_id);
+                              return (
+                                <div className="form-check" key={`gb-${i}-it-${j}`}>
+                                  <input
+                                    className="form-check-input qb-gb-svc-check"
+                                    type="checkbox"
+                                    id={`qb_gb_${gb.instance_id}_${it.giftbox_item_id}`}
+                                    checked={isChecked}
+                                    disabled={residualBusyKey === busyKey}
+                                    onChange={(e) => void onResidualToggle({
+                                      kind: "giftbox",
+                                      busyKey,
+                                      serviceId: it.service_id,
+                                      label: it.service_name,
+                                      checked: e.target.checked,
+                                      checkItem: { instance_id: gb.instance_id, giftbox_item_id: it.giftbox_item_id, service_id: it.service_id, qty: 1 },
+                                      apply: () => setGiftboxRedeems((prev) => ({ ...prev, [it.service_id]: { instance_id: gb.instance_id, giftbox_item_id: it.giftbox_item_id, service_id: it.service_id } })),
+                                    })}
+                                  />
+                                  <label className="form-check-label small" htmlFor={`qb_gb_${gb.instance_id}_${it.giftbox_item_id}`}>
+                                    {it.service_name}
+                                    {it.qty_remaining > 0 ? <span className="badge text-bg-secondary ms-2">{it.qty_remaining}</span> : null}
+                                    {it.qty_total ? <span className="text-muted small ms-1">/{it.qty_total}</span> : null}
+                                  </label>
                                 </div>
-                              ))}
-                            </div>
-                          ) : null}
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  {/* GiftCard */}
-                  {residualsDetail && residualsDetail.giftcards.length > 0 ? (
-                    <div className="card p-3 mb-3">
-                      <div className="fw-bold mb-2">GiftCard</div>
-                      {residualsDetail.giftcards.map((gc, i) => (
-                        <div className="border-top pt-2 mt-2" key={`gc-${i}`}>
-                          <div className="d-flex justify-content-between align-items-start">
-                            <div className="me-3">
-                              <div className="fw-semibold">
-                                <code>{gc.code}</code>
-                              </div>
-                              <div className="text-muted small">Scade: {fmtYMD(gc.expires_at)}</div>
-                            </div>
-                            <div className="text-end">
-                              <div className="fw-semibold">{fmtEUR(gc.balance)}</div>
-                            </div>
+                              );
+                            }) : (
+                              <div className="text-muted small">Nessun servizio residuo selezionabile.</div>
+                            )}
                           </div>
                         </div>
                       ))}
                     </div>
                   ) : null}
 
-                  {/* Pacchetti */}
+                  {/* GIFTCARD single-select + importo + Applica/Rimuovi (app.js:1209-1269 + 2348-2422). */}
+                  {residualsDetail && residualsDetail.giftcards.length > 0 ? (
+                    <div className="card p-3 mb-3">
+                      <div className="fw-bold mb-2">GiftCard</div>
+                      <div className="text-muted small mb-2">
+                        Seleziona una GiftCard, scegli l&apos;importo e premi <span className="fw-semibold">Applica</span>.
+                      </div>
+                      {residualsDetail.giftcards.map((gc, i) => {
+                        const isDisabled = !(Number(gc.balance) > 0.0000001);
+                        const isSel = gcSelId === gc.id;
+                        return (
+                          <div className="border-top pt-2 mt-2" key={`gc-${i}`}>
+                            <div className="d-flex justify-content-between align-items-start">
+                              <div className="me-3 form-check">
+                                <input
+                                  className="form-check-input qb-gc-radio"
+                                  type="radio"
+                                  name="qb_gc_sel"
+                                  id={`qb_gc_${gc.id}`}
+                                  checked={isSel}
+                                  disabled={isDisabled}
+                                  onChange={() => {
+                                    setGcSelId(gc.id);
+                                    if (!gcAmountInput.trim()) {
+                                      const maxUse = dueBeforePayments > 0 ? Math.min(gc.balance, dueBeforePayments) : gc.balance;
+                                      setGcAmountInput(maxUse > 0 ? String(Math.round(maxUse * 100) / 100) : "");
+                                    }
+                                  }}
+                                />
+                                <label className="form-check-label" htmlFor={`qb_gc_${gc.id}`}>
+                                  <span className="fw-semibold"><code>{gc.code}</code></span>
+                                </label>
+                                <div className="text-muted small">Scade: {fmtYMD(gc.expires_at)}</div>
+                              </div>
+                              <div className="text-end">
+                                <div className="fw-semibold">{fmtEUR(gc.balance)}</div>
+                                {isDisabled ? <div className="text-muted small">Saldo non disponibile</div> : null}
+                              </div>
+                            </div>
+                            <div className={`mt-2 qb-gc-controls${isSel ? "" : " d-none"}`}>
+                              <label className="form-label small text-muted mb-1">Importo da usare</label>
+                              <div className="input-group input-group-sm" style={{ maxWidth: 300 }}>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  max={gc.balance}
+                                  className="form-control qb-gc-amount"
+                                  placeholder="0,00"
+                                  value={isSel ? gcAmountInput : ""}
+                                  disabled={isDisabled}
+                                  onChange={(e) => setGcAmountInput(e.target.value)}
+                                />
+                                <button
+                                  type="button"
+                                  className="btn btn-outline-secondary qb-gc-max"
+                                  disabled={isDisabled}
+                                  onClick={() => {
+                                    const maxUse = dueBeforePayments > 0 ? Math.min(gc.balance, dueBeforePayments) : gc.balance;
+                                    setGcAmountInput(maxUse > 0 ? String(Math.round(maxUse * 100) / 100) : "");
+                                  }}
+                                >
+                                  Usa max
+                                </button>
+                                <button type="button" className="btn btn-outline-success qb-gc-apply" disabled={isDisabled} onClick={applyModalGiftcard}>
+                                  Applica
+                                </button>
+                              </div>
+                              <div className="form-text">Max: {fmtEUR(gc.balance)}</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {giftcardPick && priceDetails.giftcardMonetary > 0 ? (
+                        <div className="mt-3">
+                          <button type="button" className="btn btn-sm btn-outline-danger qb-gc-remove" onClick={removeModalGiftcard}>
+                            Rimuovi GiftCard applicata
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {/* PACCHETTI (app.js:1271-1346). */}
                   {residualsDetail && residualsDetail.packages.length > 0 ? (
                     <div className="card p-3 mb-3">
                       <div className="fw-bold mb-2">Pacchetti</div>
+                      <div className="text-muted small mb-2">Seleziona o deseleziona le sedute: verranno aggiunte o rimosse automaticamente dalla prenotazione.</div>
                       {residualsDetail.packages.map((p, i) => (
                         <div className="border-top pt-2 mt-2" key={`pkg-${i}`}>
                           <div className="fw-semibold">{p.package_name}</div>
@@ -5735,29 +5598,48 @@ export function QuickBookingDrawer() {
                             {p.sessions_total ? ` / ${p.sessions_total}` : ""} • Scade: {fmtYMD(p.expires_at)}
                             {p.sale_id ? ` • Vendita #${p.sale_id}` : ""}
                           </div>
-                          {p.items.length > 0 ? (
-                            <div className="mt-2">
-                              <div className="small text-muted mb-1">Sedute residue:</div>
-                              {p.items.map((it, j) => (
-                                <div className="small" key={`pkg-${i}-it-${j}`}>
-                                  {it.service_name}
-                                  {it.sessions_remaining > 0 ? (
-                                    <span className="badge text-bg-secondary ms-2">{it.sessions_remaining}</span>
-                                  ) : null}
-                                  {it.sessions_total ? (
-                                    <span className="text-muted small ms-1">/{it.sessions_total}</span>
-                                  ) : null}
+                          <div className="mt-2">
+                            <div className="small text-muted mb-1">Sedute residue:</div>
+                            {p.items.length > 0 ? p.items.map((it, j) => {
+                              const busyKey = `cp-${p.id}-${it.service_id}`;
+                              const isChecked = packageRedeems[it.service_id]?.client_package_id === p.id;
+                              return (
+                                <div className="form-check" key={`pkg-${i}-it-${j}`}>
+                                  <input
+                                    className="form-check-input qb-cp-svc-check"
+                                    type="checkbox"
+                                    id={`qb_cp_${p.id}_${it.service_id}`}
+                                    checked={Boolean(isChecked)}
+                                    disabled={residualBusyKey === busyKey}
+                                    onChange={(e) => void onResidualToggle({
+                                      kind: "package",
+                                      busyKey,
+                                      serviceId: it.service_id,
+                                      label: it.service_name,
+                                      checked: e.target.checked,
+                                      checkItem: { client_package_id: p.id, client_package_service_id: null, service_id: it.service_id, qty: 1 },
+                                      apply: () => setPackageRedeems((prev) => ({ ...prev, [it.service_id]: { client_package_id: p.id, service_id: it.service_id, client_package_service_id: null } })),
+                                    })}
+                                  />
+                                  <label className="form-check-label small" htmlFor={`qb_cp_${p.id}_${it.service_id}`}>
+                                    {it.service_name}
+                                    {it.sessions_remaining > 0 ? <span className="badge text-bg-secondary ms-2">{it.sessions_remaining}</span> : null}
+                                    {it.sessions_total ? <span className="text-muted small ms-1">/{it.sessions_total}</span> : null}
+                                  </label>
                                 </div>
-                              ))}
-                            </div>
-                          ) : p.breakdown ? (
-                            <div className="mt-2 text-muted small">{p.breakdown}</div>
-                          ) : null}
+                              );
+                            }) : p.breakdown ? (
+                              <div className="text-muted small">{p.breakdown}</div>
+                            ) : (
+                              <div className="text-muted small">Nessuna seduta residua selezionabile.</div>
+                            )}
+                          </div>
                         </div>
                       ))}
                     </div>
                   ) : null}
-                </div>
+                  </div>
+                </>
               )}
             </div>
           </div>

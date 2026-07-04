@@ -18,6 +18,7 @@ import {
   appointmentListDecorations,
   listDbAppointments,
   moveDbAppointmentCalendar,
+  qbResiduiConflictsLite,
   staffForServiceManage,
   swapDbAppointmentSegment,
   updateDbAppointment,
@@ -674,6 +675,34 @@ export async function POST(request: Request) {
         // Validation errors (not done / not found / bad target) -> 200 { ok:false }
         // so the UI surfaces the message inline, matching the action=status path.
         return Response.json({ ok: false, error: error instanceof Error ? error.message : "Errore annullamento." });
+      }
+    }
+
+    // Verifica conflitti residui allo spunta nella modale Residui (port di
+    // action=qb_residui_check, api_appointments.php:5879-5906): risponde nella
+    // shape legacy {ok, packages, giftboxes, services, gifts, messages}.
+    if (action === "qb_residui_check") {
+      try {
+        const parseSel = (raw: unknown): Array<Record<string, unknown>> => {
+          const text = String(raw ?? "").trim();
+          if (!text) return [];
+          try {
+            const arr = JSON.parse(text);
+            return Array.isArray(arr) ? arr.filter((x) => x && typeof x === "object") : [];
+          } catch {
+            return [];
+          }
+        };
+        const appointmentId = Number.parseInt(String(body.appointment_id ?? "0"), 10) || 0;
+        const result = await qbResiduiConflictsLite(tenantSlug, appointmentId, {
+          packages: parseSel(body.package_redeem),
+          services: parseSel(body.prepaid_service_redeem),
+          giftboxes: parseSel(body.giftbox_redeem),
+          gifts: parseSel(body.gift_redeem),
+        });
+        return Response.json({ ok: true, sourceMode: "database", ...result });
+      } catch (error) {
+        return Response.json({ ok: false, error: error instanceof Error ? error.message : "Errore durante la verifica dei residui." });
       }
     }
 

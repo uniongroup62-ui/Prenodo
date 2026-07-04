@@ -2803,6 +2803,77 @@ export async function getDbAppointmentCustomerVisibleSnapshot(slug: string, id: 
   return { date: dateIsoLocal(startsAt), time: timeLocal(startsAt), serviceNames };
 }
 
+// Conflitti residui (port LITE di qb_collect_qb_residui_conflicts,
+// api_appointments.php:1870-2113): chiamato dalla modale Residui allo SPUNTA di
+// un residuo, PRIMA di collegarlo. Regole:
+//   • OMAGGI (regola stretta legacy): la stessa reward (instance+reward_item_index)
+//     collegata a un'ALTRA prenotazione ATTIVA (pending/scheduled) blocca.
+//   • PACCHETTI/PREPAGATI: blocco quando il pool non ha più unità libere
+//     (sessions_remaining/remaining_qty <= 0 — nei nostri flussi il consumo
+//     avviene al save, quindi il pool è già al netto delle prenotazioni attive).
+//   • GIFTBOX: nessun blocco lato check (la quantità per item è validata al save
+//     dall'apply, e il render lista solo item con qty residua) — LITE deliberato.
+// Risposta nella shape legacy {packages, giftboxes, services, gifts, messages}.
+export async function qbResiduiConflictsLite(
+  slug: string,
+  appointmentId: number,
+  sel: {
+    packages: Array<{ client_package_id?: number; service_id?: number }>;
+    services: Array<{ client_prepaid_service_id?: number; service_id?: number }>;
+    giftboxes: Array<{ instance_id?: number; giftbox_item_id?: number; service_id?: number }>;
+    gifts: Array<{ instance_id?: number; reward_item_index?: number; service_id?: number }>;
+  },
+): Promise<{ packages: unknown[]; giftboxes: unknown[]; services: unknown[]; gifts: unknown[]; messages: string[] }> {
+  const out: { packages: unknown[]; giftboxes: unknown[]; services: unknown[]; gifts: unknown[]; messages: string[] } = {
+    packages: [], giftboxes: [], services: [], gifts: [], messages: [],
+  };
+
+  for (const item of sel.packages) {
+    const pkgId = Number(item.client_package_id ?? 0) || 0;
+    if (pkgId <= 0) continue;
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "client_packages", columns: "id, package_name, sessions_remaining", where: "id = ?", params: [pkgId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    const remaining = Number(rows[0]?.sessions_remaining ?? 0) || 0;
+    if (!rows[0] || remaining <= 0) {
+      out.packages.push({ client_package_id: pkgId, service_id: Number(item.service_id ?? 0) || 0, reserved_qty: 0, available_qty: remaining });
+      out.messages.push("Questa seduta del pacchetto è già presente in un'altra prenotazione.");
+    }
+  }
+
+  for (const item of sel.services) {
+    const prepaidId = Number(item.client_prepaid_service_id ?? 0) || 0;
+    if (prepaidId <= 0) continue;
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "client_prepaid_services", columns: "id, service_name, remaining_qty", where: "id = ?", params: [prepaidId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    const remaining = Number(rows[0]?.remaining_qty ?? 0) || 0;
+    if (!rows[0] || remaining <= 0) {
+      out.services.push({ client_prepaid_service_id: prepaidId, service_id: Number(item.service_id ?? 0) || 0, reserved_qty: 0, available_qty: remaining });
+      out.messages.push("Questo servizio prepagato è già presente in un'altra prenotazione.");
+    }
+  }
+
+  for (const item of sel.gifts) {
+    const instanceId = Number(item.instance_id ?? 0) || 0;
+    const rewardIdx = Math.max(0, Number(item.reward_item_index ?? 0) || 0);
+    if (instanceId <= 0) continue;
+    try {
+      const asTable = await tenantTable(slug, "appointment_services");
+      const apptTable = await tenantTable(slug, "appointments");
+      const rows = await dbQuery<RowDataPacket[]>(
+        `SELECT COUNT(*) c FROM ${quoteIdentifier(asTable.name)} s JOIN ${quoteIdentifier(apptTable.name)} a ON a.id = s.appointment_id AND a.tenant_id = s.tenant_id WHERE s.tenant_id = ? AND s.gift_instance_id = ? AND COALESCE(s.reward_item_index, 0) = ? AND a.status IN ('pending','scheduled') AND a.id <> ?`,
+        [asTable.tenantId ?? 0, instanceId, rewardIdx, appointmentId > 0 ? appointmentId : 0],
+      );
+      if (Number(rows[0]?.c ?? 0) > 0) {
+        out.gifts.push({ instance_id: instanceId, reward_item_index: rewardIdx, service_id: Number(item.service_id ?? 0) || 0 });
+        out.messages.push("Questo servizio omaggio è già presente in un'altra prenotazione.");
+      }
+    } catch {
+      // best-effort: senza colonne di linkage il check non blocca (valida il save).
+    }
+  }
+
+  out.messages = [...new Set(out.messages)];
+  return out;
+}
+
 // Operatori ELEGGIBILI per un servizio + disponibilità sulla finestra (port di
 // api_appointments.php action=staff_for_service, ~5909): staff attivi (no 'SSO'),
 // filtrati dall'allow-list staff_services quando esiste (vuota = tutti); con una
