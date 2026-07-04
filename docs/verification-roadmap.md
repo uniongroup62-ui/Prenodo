@@ -3170,3 +3170,53 @@ D. minori: credit_use_from_booking sempre 0; allocazione staff/cabina dall'hold
    la cabina libera dopo lo slot).
 Verifica passata 1: 24/24 marker bundle + test live search bloccati (cleanup
 CLEAN) + typecheck pulito.
+
+## Quick booking — PASSATA 2A+2C (2026-07-04)
+A. REDEEM IN EDIT — CHIUSO (era il TODO(redeem-on-edit)):
+   • getDbAppointmentForEdit ora restituisce i redeem collegati (packageRedeem/
+     prepaidServiceRedeem/giftboxRedeem/giftRedeem/giftcardRedeem, forme identiche
+     a quelle che il drawer serializza al save — la linkage vive su
+     appointment_services.{client_package_id,client_package_service_id,
+     client_prepaid_service_id,giftbox_instance_id+giftbox_item_id,
+     gift_instance_id+reward_item_index} + appointments.giftcard_id/giftcard_used)
+     e un redeemBoost con le istanze consumate da QUESTA prenotazione (nome/
+     etichetta; giftcard con balance = saldo attuale + quota usata) che il drawer
+     fonde nelle liste residui del cliente (le liste correnti non elencano più le
+     unità già scalate).
+   • Il drawer prefilla le selezioni per-servizio + la GiftCard (pick + importo)
+     in openEditAppointment; il booster viene fuso sia subito sia quando arriva
+     il contesto cliente (qbMergeBoost, dedup per chiave), disarmato al reset.
+   • updateDbAppointment su prenotazione VIVA (pending/scheduled): PRIMA degli
+     insert chiama restoreAppointmentRedeems in modalità redeemLinksOnly (nuova
+     opzione: ridà le unità ai pool e rimborsa la GiftCard SENZA toccare credito
+     né fidelity), poi ri-applica i redeem del payload con la stessa catena/
+     dedupe del create (pacchetto->prepagato->giftbox->omaggio->giftcard) e i
+     warning best-effort nel response. Un re-save con gli stessi redeem è NEUTRO;
+     togliere un redeem in edit RESTITUISCE l'unità; su DONE i redeem sono
+     settled e non vengono riprocessati. NB: questo chiude anche un LEAK dati:
+     prima l'edit re-inseriva appointment_services SENZA linkage, rendendo le
+     unità consumate non più ripristinabili da delete/annullo.
+   Battery 28/28: create con pacchetto (2->1 + linkage), get prefill+boost, edit
+   neutro (resta 1, linkage intatto), edit senza redeem (torna 2, linkage NULL),
+   ri-aggiunta (1), ciclo giftcard 10->5->0 (saldo 40/45/50, used 10/5/0, boost
+   balance 50 = 40+10), guard done (sessioni invariate). Nota schema: la
+   ownership giftcard fa fede su recipient_client_id quando la colonna esiste.
+C. STAFF_FOR_SERVICE — CHIUSO: nuova action GET staff_for_service (port di
+   api_appointments.php ~5909 via staffForServiceManage): eleggibili = staff
+   attivi no-SSO filtrati dall'allow-list staff_services (vuota = tutti); con
+   finestra (l'EDIT passa date/start/end/exclude_id) ogni operatore è marcato
+   available/unavailable_reason (time-off verbatim es. "Ferie", altrimenti
+   "Occupato"). La select SINGOLA del drawer ora carica gli eleggibili dal
+   server con gli stati legacy: "Verifico operatori disponibili..." durante il
+   fetch, "Nessun operatore disponibile" + hint "Nessun operatore disponibile
+   per il servizio selezionato." a 0, auto-selezione+disabled con 1, opzioni
+   occupate disabilitate "nome — motivo", fallback errore "Impossibile caricare
+   operatori" + hint "Impossibile caricare gli operatori disponibili.", opzione
+   "Operatore assegnato (ID n)" per lo staff salvato fuori lista. Battery 6/6
+   (eleggibile, timeoff 'Ferie', conflitto 'Occupato', exclude_id) + 5/6 marker
+   (" — Occupato" composito è concat compile-time, literal presente).
+RESTA (passata 2B, NON deliberato): selezione redeem DENTRO la modale Residui
+(credito toggle/importo/Usa max, GiftCard applica/rimuovi con toast, spunte
+GiftBox/Pacchetti/Omaggi/Prepagati che AGGIUNGONO il servizio) al posto dei box
+inline inventati; picker multi-servizio ancora con eleggibilità client-side
+(manca staff_for_services multi).

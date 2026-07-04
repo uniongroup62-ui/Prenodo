@@ -2443,6 +2443,16 @@ export async function updateDbAppointment({
   creditUsed,
   couponCode,
   couponDiscount,
+  packageRedeems = [],
+  packageWarnings,
+  prepaidRedeems = [],
+  prepaidWarnings,
+  giftcardRedeems = [],
+  giftcardWarnings,
+  giftboxRedeems = [],
+  giftboxWarnings,
+  giftRedeems = [],
+  giftWarnings,
 }: {
   slug: string;
   id: number;
@@ -2486,6 +2496,15 @@ export async function updateDbAppointment({
   // Legacy promo gate (appt_promotion_update_allowed_for_old_status): a re-save
   // re-applies the automatic promotion unless the appointment is already done.
   const promoUpdateAllowed = originalPhpStatus !== "done";
+  // REDEEM su EDIT (chiusura del TODO redeem-on-edit): come il save legacy, un
+  // edit di una prenotazione VIVA (pending/scheduled) ripristina i redeem
+  // consumati (solo pool/link — credito e fidelity non si toccano qui) e li
+  // ri-applica dal payload inviato dal drawer, così cambiare/togliere un
+  // pacchetto/prepagato/GiftBox/omaggio/GiftCard in modifica funziona e un
+  // re-save con gli stessi redeem è neutro (restore +1, apply -1). Su una
+  // prenotazione DONE i redeem sono SETTLED e restano intoccati (parità legacy:
+  // il get li mostra per tracciabilità ma il save non li riprocessa).
+  const redeemEditAllowed = originalPhpStatus !== "done";
   // Old per-segment cabins by position ("mantieni la cabina del segmento" candidate).
   const currentSegmentRows = await tenantSelect<RowDataPacket>({
     slug,
@@ -2629,6 +2648,14 @@ export async function updateDbAppointment({
     values: updateValues,
   });
 
+  // REDEEM restore (edit): PRIMA di cancellare le righe appointment_services —
+  // il restore legge la linkage snapshot da lì. Ridà le unità ai pool
+  // (pacchetto/prepagato/GiftBox/omaggio) e rimborsa la GiftCard usata,
+  // azzerando i link; il re-apply dal payload avviene dopo gli insert.
+  if (redeemEditAllowed) {
+    await restoreAppointmentRedeems(slug, id, { redeemLinksOnly: true });
+  }
+
   // Replace the snapshot child rows so the edit reflects the new
   // service/staff/location/segment rather than stacking on the originals.
   await deleteAppointmentChildren(slug, "appointment_services", id);
@@ -2667,14 +2694,71 @@ export async function updateDbAppointment({
   for (const [position, seg] of plan.segments.entries()) {
     await insertAppointmentSegment(slug, id, seg.service, seg.staffId, seg.startsAt, seg.endsAt, seg.durationMinutes, position, seg.cabinId);
   }
-  // PACKAGE redeem is intentionally NOT applied on edit: this update DELETES and
-  // re-inserts appointment_services on every save, so re-applying a redeem here
-  // would consume the package session AGAIN on each edit (over-consumption). The
-  // quick-booking drawer only ever CREATES appointments (it never sends
-  // package_redeem with an edit id), so `packageRedeems` is accepted for signature
-  // parity but ignored here. TODO(edit redeem): port the legacy
-  // reserve-on-save/consume-on-done + redeemed_at idempotency before consuming on
-  // edit, so re-saves don't double-decrement.
+  // RE-APPLY dei redeem dal payload (edit di prenotazione viva): stessa catena e
+  // stesso dedupe del create (pacchetto -> prepagato -> giftbox -> omaggio ->
+  // giftcard), DOPO gli insert perché il link/azzeramento punta alle nuove righe
+  // appointment_services. Il restore prima degli insert ha già ridato le unità,
+  // quindi un re-save con gli stessi redeem è neutro. Warning best-effort come
+  // nel create (la prenotazione non fallisce mai per un redeem saltato).
+  if (redeemEditAllowed) {
+    const packageCoveredServiceIds = new Set<number>();
+    if (packageRedeems.length > 0) {
+      const { applied, warnings } = await applyAppointmentPackageRedeems({
+        slug,
+        appointmentId: id,
+        clientId: client.id,
+        serviceIds: plan.services.map((service) => Number(service.id ?? 0)),
+        redeems: packageRedeems,
+      });
+      for (const entry of applied) packageCoveredServiceIds.add(Number(entry.serviceId ?? 0));
+      if (packageWarnings) packageWarnings.push(...warnings);
+    }
+    const redeemCoveredServiceIds = new Set<number>(packageCoveredServiceIds);
+    if (prepaidRedeems.length > 0) {
+      const { applied, warnings } = await applyAppointmentPrepaidRedeems({
+        slug,
+        appointmentId: id,
+        clientId: client.id,
+        serviceIds: plan.services.map((service) => Number(service.id ?? 0)),
+        redeems: prepaidRedeems,
+        coveredServiceIds: packageCoveredServiceIds,
+      });
+      for (const entry of applied) redeemCoveredServiceIds.add(Number(entry.serviceId ?? 0));
+      if (prepaidWarnings) prepaidWarnings.push(...warnings);
+    }
+    if (giftboxRedeems.length > 0) {
+      const { applied, warnings } = await applyAppointmentGiftboxRedeems({
+        slug,
+        appointmentId: id,
+        clientId: client.id,
+        serviceIds: plan.services.map((service) => Number(service.id ?? 0)),
+        redeems: giftboxRedeems,
+        coveredServiceIds: redeemCoveredServiceIds,
+      });
+      for (const entry of applied) redeemCoveredServiceIds.add(Number(entry.serviceId ?? 0));
+      if (giftboxWarnings) giftboxWarnings.push(...warnings);
+    }
+    if (giftRedeems.length > 0) {
+      const { warnings } = await applyAppointmentGiftRedeems({
+        slug,
+        appointmentId: id,
+        clientId: client.id,
+        serviceIds: plan.services.map((service) => Number(service.id ?? 0)),
+        redeems: giftRedeems,
+        coveredServiceIds: redeemCoveredServiceIds,
+      });
+      if (giftWarnings) giftWarnings.push(...warnings);
+    }
+    if (giftcardRedeems.length > 0) {
+      const { warnings } = await applyAppointmentGiftcardRedeem({
+        slug,
+        appointmentId: id,
+        clientId: client.id,
+        redeems: giftcardRedeems,
+      });
+      if (giftcardWarnings) giftcardWarnings.push(...warnings);
+    }
+  }
   if (token) await markDbAppointmentHoldConverted(slug, token, "manage", id);
 
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "appointments", where: "id = ?", params: [id], limit: 1 });
@@ -2717,6 +2801,65 @@ export async function getDbAppointmentCustomerVisibleSnapshot(slug: string, id: 
     // the comparison still works (only date/time changes will trigger the email).
   }
   return { date: dateIsoLocal(startsAt), time: timeLocal(startsAt), serviceNames };
+}
+
+// Operatori ELEGGIBILI per un servizio + disponibilità sulla finestra (port di
+// api_appointments.php action=staff_for_service, ~5909): staff attivi (no 'SSO'),
+// filtrati dall'allow-list staff_services quando esiste (vuota = tutti); con una
+// finestra oraria (l'EDIT del drawer la passa) ogni operatore è marcato
+// available/unavailable_reason — time-off HARD (motivo verbatim, es. "Ferie")
+// oppure doppia prenotazione ("Occupato") — così la select disabilita gli
+// occupati con l'etichetta legacy "nome — motivo".
+export async function staffForServiceManage(
+  slug: string,
+  serviceId: number,
+  window?: { date: string; startMin: number; endMin: number; excludeAppointmentId?: number; locationId?: number | null },
+): Promise<Array<{ id: number; name: string; available: boolean; unavailable_reason: string }>> {
+  if (serviceId <= 0) return [];
+  const staffTable = await tenantTable(slug, "staff");
+  const staffRows = await dbQuery<RowDataPacket[]>(
+    `SELECT id, full_name FROM ${quoteIdentifier(staffTable.name)} WHERE tenant_id = ? AND COALESCE(is_active,1) = 1 AND full_name <> 'SSO' ORDER BY full_name ASC`,
+    [staffTable.tenantId ?? 0],
+  ).catch(() => [] as RowDataPacket[]);
+
+  // Allow-list esplicita: righe staff_services con staff ATTIVO; vuota -> tutti.
+  let allowed: Set<number> | null = null;
+  try {
+    const ss = await tenantTable(slug, "staff_services");
+    const mapped = await dbQuery<RowDataPacket[]>(
+      `SELECT ss.staff_id FROM ${quoteIdentifier(ss.name)} ss JOIN ${quoteIdentifier(staffTable.name)} st ON st.id = ss.staff_id AND st.tenant_id = ss.tenant_id WHERE ss.tenant_id = ? AND ss.service_id = ? AND COALESCE(st.is_active,1) = 1 AND st.full_name <> 'SSO'`,
+      [ss.tenantId ?? 0, serviceId],
+    );
+    const ids = mapped.map((r) => Number(r.staff_id ?? 0)).filter((n) => n > 0);
+    if (ids.length > 0) allowed = new Set(ids);
+  } catch {
+    allowed = null;
+  }
+
+  const eligible = staffRows
+    .map((r) => ({ id: Number(r.id ?? 0), name: String(r.full_name ?? "").trim() }))
+    .filter((s) => s.id > 0 && (!allowed || allowed.has(s.id)));
+
+  if (!window || !window.date || !Number.isFinite(window.startMin) || !Number.isFinite(window.endMin) || window.endMin <= window.startMin) {
+    return eligible.map((s) => ({ ...s, available: true, unavailable_reason: "" }));
+  }
+
+  const busy = await busyRangesForDate(slug, window.date, { excludeAppointmentId: window.excludeAppointmentId ?? null }).catch(() => []);
+  const out: Array<{ id: number; name: string; available: boolean; unavailable_reason: string }> = [];
+  for (const s of eligible) {
+    const reason = await staffTimeoffReasonForRange(slug, s.id, window.date, window.startMin, window.endMin).catch(() => null);
+    if (reason) {
+      out.push({ ...s, available: false, unavailable_reason: reason });
+      continue;
+    }
+    const conflict = busy.some((range) =>
+      (range.staffIds.length === 0 || range.staffIds.includes(s.id))
+      && (range.locationId === null || window.locationId === null || window.locationId === undefined || range.locationId === window.locationId)
+      && range.end > window.startMin && range.start < window.endMin,
+    );
+    out.push({ ...s, available: !conflict, unavailable_reason: conflict ? "Occupato" : "" });
+  }
+  return out;
 }
 
 // Swap two ADJACENT segments of a multi-servizio booking (port of the legacy
@@ -3295,6 +3438,27 @@ export type AppointmentEditPayload = {
   // canceled row). "" when absent — the alert only renders on canceled/no_show.
   cancelledAt: string;
   cancelledReason: string;
+  // REDEEM esistenti (port del get legacy 8987-9082, che restituisce
+  // giftbox/package/prepaid/gift/giftcard_redeem): le selezioni collegate alla
+  // prenotazione, nelle stesse forme che il drawer serializza al save, così
+  // l'edit le prefilla (pills collegate + righe "Incluso nel pacchetto...").
+  packageRedeem: Array<{ client_package_id: number; service_id: number; client_package_service_id: number | null }>;
+  prepaidServiceRedeem: Array<{ client_prepaid_service_id: number; service_id: number }>;
+  giftboxRedeem: Array<{ instance_id: number; giftbox_item_id: number; service_id: number }>;
+  giftRedeem: Array<{ service_id: number; instance_id: number; reward_item_index: number }>;
+  giftcardRedeem: Array<{ giftcard_id: number; amount: number }>;
+  // BOOSTER opzioni: le istanze consumate da QUESTA prenotazione non compaiono
+  // più nei residui del cliente (unità già scalate) — il drawer le fonde nelle
+  // liste opzioni così i select mostrano il residuo collegato. remaining/qty a 1
+  // per superare i filtri "disponibile" (il consumo reale è già avvenuto; il
+  // re-save fa restore+reapply, quindi il conteggio resta corretto).
+  redeemBoost: {
+    packages: Array<{ id: number; name: string; sessions_remaining: number; service_ids: number[]; serviceItemIds?: Record<number, number> }>;
+    prepaids: Array<{ id: number; service_id: number; name: string; remaining_qty: number }>;
+    giftboxes: Array<{ instance_id: number; giftbox_item_id: number; service_id: number; name: string }>;
+    gifts: Array<{ instance_id: number; reward_item_index: number; service_id: number; name: string }>;
+    giftcards: Array<{ id: number; code: string; balance: number }>;
+  };
 };
 
 // Compute the expired-linked warning for an appointment being edited (Item 3, port of
@@ -3503,6 +3667,80 @@ export async function getDbAppointmentForEdit(slug: string, id: number): Promise
       ? `${dateIsoLocal(cancelledAtDate)} ${timeLocal(cancelledAtDate)}:00`
       : "";
 
+  // REDEEM esistenti + booster opzioni (port del get legacy 8987-9082): la
+  // linkage vive sulle righe appointment_services (client_package_id/
+  // client_package_service_id/client_prepaid_service_id/giftbox_instance_id+
+  // giftbox_item_id/gift_instance_id+reward_item_index) + i campi giftcard
+  // sull'appuntamento. I booster portano nome/etichetta delle istanze consumate
+  // da QUESTA prenotazione, che i residui correnti del cliente non elencano più.
+  const packageRedeem: AppointmentEditPayload["packageRedeem"] = [];
+  const prepaidServiceRedeem: AppointmentEditPayload["prepaidServiceRedeem"] = [];
+  const giftboxRedeem: AppointmentEditPayload["giftboxRedeem"] = [];
+  const giftRedeem: AppointmentEditPayload["giftRedeem"] = [];
+  const giftcardRedeem: AppointmentEditPayload["giftcardRedeem"] = [];
+  const redeemBoost: AppointmentEditPayload["redeemBoost"] = { packages: [], prepaids: [], giftboxes: [], gifts: [], giftcards: [] };
+  try {
+    const linkRows = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "appointment_services",
+      columns: "service_id, service_name, client_package_id, client_package_service_id, client_prepaid_service_id, giftbox_instance_id, giftbox_item_id, gift_instance_id, reward_item_index",
+      where: "appointment_id = ?",
+      params: [id],
+    });
+    for (const link of linkRows) {
+      const serviceId = Number(link.service_id ?? 0);
+      if (serviceId <= 0) continue;
+      const serviceName = String(link.service_name ?? "Servizio");
+      const packageId = Number(link.client_package_id ?? 0) || 0;
+      if (packageId > 0) {
+        const cpsId = Number(link.client_package_service_id ?? 0) || 0;
+        packageRedeem.push({ client_package_id: packageId, service_id: serviceId, client_package_service_id: cpsId > 0 ? cpsId : null });
+        const pkgRows = await tenantSelect<RowDataPacket>({ slug, table: "client_packages", columns: "id, package_name", where: "id = ?", params: [packageId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+        redeemBoost.packages.push({
+          id: packageId,
+          name: String(pkgRows[0]?.package_name ?? "Pacchetto"),
+          sessions_remaining: 1,
+          service_ids: [serviceId],
+          ...(cpsId > 0 ? { serviceItemIds: { [serviceId]: cpsId } } : {}),
+        });
+      }
+      const prepaidId = Number(link.client_prepaid_service_id ?? 0) || 0;
+      if (prepaidId > 0 && packageId <= 0) {
+        prepaidServiceRedeem.push({ client_prepaid_service_id: prepaidId, service_id: serviceId });
+        const preRows = await tenantSelect<RowDataPacket>({ slug, table: "client_prepaid_services", columns: "id, service_name", where: "id = ?", params: [prepaidId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+        redeemBoost.prepaids.push({ id: prepaidId, service_id: serviceId, name: String(preRows[0]?.service_name ?? "Prepagato"), remaining_qty: 1 });
+      }
+      const giftboxInstanceId = Number(link.giftbox_instance_id ?? 0) || 0;
+      const giftboxItemId = Number(link.giftbox_item_id ?? 0) || 0;
+      if (giftboxInstanceId > 0 && giftboxItemId > 0) {
+        giftboxRedeem.push({ instance_id: giftboxInstanceId, giftbox_item_id: giftboxItemId, service_id: serviceId });
+        redeemBoost.giftboxes.push({ instance_id: giftboxInstanceId, giftbox_item_id: giftboxItemId, service_id: serviceId, name: serviceName });
+      }
+      const giftInstanceId = Number(link.gift_instance_id ?? 0) || 0;
+      if (giftInstanceId > 0) {
+        const rewardIdx = Math.max(0, Number(link.reward_item_index ?? 0) || 0);
+        giftRedeem.push({ service_id: serviceId, instance_id: giftInstanceId, reward_item_index: rewardIdx });
+        redeemBoost.gifts.push({ instance_id: giftInstanceId, reward_item_index: rewardIdx, service_id: serviceId, name: serviceName });
+      }
+    }
+  } catch {
+    // best-effort: installazioni senza le colonne di linkage -> nessun prefill.
+  }
+  // GiftCard a livello appuntamento (giftcard_id + giftcard_used). Il balance del
+  // booster = saldo attuale + quota usata da QUESTO appuntamento, così in edit il
+  // massimo applicabile non scende sotto l'uso corrente.
+  const usedGiftcardId = Number(row.giftcard_id ?? 0) || 0;
+  const usedGiftcardAmount = roundMoney(Math.max(0, parseMoney(row.giftcard_used, 0)));
+  if (usedGiftcardId > 0 && usedGiftcardAmount > 0) {
+    giftcardRedeem.push({ giftcard_id: usedGiftcardId, amount: usedGiftcardAmount });
+    const cardRows = await tenantSelect<RowDataPacket>({ slug, table: "giftcards", columns: "id, code, balance", where: "id = ?", params: [usedGiftcardId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    redeemBoost.giftcards.push({
+      id: usedGiftcardId,
+      code: String(cardRows[0]?.code ?? ""),
+      balance: roundMoney(Math.max(0, Number(cardRows[0]?.balance ?? 0)) + usedGiftcardAmount),
+    });
+  }
+
   return {
     id: Number(row.id ?? id),
     publicCode:
@@ -3539,6 +3777,12 @@ export async function getDbAppointmentForEdit(slug: string, id: number): Promise
     expiredLinkWarning,
     cancelledAt,
     cancelledReason,
+    packageRedeem,
+    prepaidServiceRedeem,
+    giftboxRedeem,
+    giftRedeem,
+    giftcardRedeem,
+    redeemBoost,
   };
 }
 
@@ -3604,7 +3848,17 @@ export async function getDbAppointmentPhpStatus(slug: string, id: number): Promi
 // therefore only invoke it on the FIRST transition into a canceled/no_show state.
 // It does NOT delete any rows — the appointment + its child snapshot rows survive
 // (legacy keeps canceled appointments); only deleteDbAppointment removes them after.
-export async function restoreAppointmentRedeems(slug: string, appointmentId: number): Promise<void> {
+export async function restoreAppointmentRedeems(
+  slug: string,
+  appointmentId: number,
+  options: {
+    // redeemLinksOnly: ripristina SOLO i redeem (pacchetti/prepagati/giftbox/
+    // omaggi/giftcard) senza toccare credito né fidelity — usato dall'EDIT del
+    // quick booking (restore -> re-apply dal payload), dove il credito non viene
+    // ri-addebitato e la prenotazione resta viva.
+    redeemLinksOnly?: boolean;
+  } = {},
+): Promise<void> {
   const id = Number(appointmentId);
   if (!Number.isFinite(id) || id <= 0) return;
 
@@ -3699,6 +3953,10 @@ export async function restoreAppointmentRedeems(slug: string, appointmentId: num
     await restoreGiftcardBalance(slug, giftcardId, giftcardUsed);
     await tenantUpdate({ slug, table: "appointments", id, values: { giftcard_used: 0 } }).catch(() => 0);
   }
+
+  // EDIT quick booking (redeemLinksOnly): credito e fidelity restano intatti —
+  // la prenotazione non viene annullata, i redeem vengono ri-applicati dopo.
+  if (options.redeemLinksOnly) return;
 
   // Block 4 CREDIT restore: the drawer DEBITED the client wallet at create (credit_used>0),
   // so a cancel/no_show (pending/scheduled -> canceled, this path) or the cancel-done flow

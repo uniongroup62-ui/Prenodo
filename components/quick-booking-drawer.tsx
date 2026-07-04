@@ -121,6 +121,22 @@ type AppointmentEditPayload = {
   // cancelled_at datetime + the operator's reason (with the notes fallback server-side).
   cancelledAt?: string;
   cancelledReason?: string;
+  // REDEEM esistenti della prenotazione (port del get legacy che restituisce
+  // giftbox/package/prepaid/gift/giftcard_redeem) — il drawer li prefilla in edit.
+  packageRedeem?: Array<{ client_package_id: number; service_id: number; client_package_service_id: number | null }>;
+  prepaidServiceRedeem?: Array<{ client_prepaid_service_id: number; service_id: number }>;
+  giftboxRedeem?: Array<{ instance_id: number; giftbox_item_id: number; service_id: number }>;
+  giftRedeem?: Array<{ service_id: number; instance_id: number; reward_item_index: number }>;
+  giftcardRedeem?: Array<{ giftcard_id: number; amount: number }>;
+  // Booster opzioni: le istanze consumate da QUESTA prenotazione (assenti dai
+  // residui correnti del cliente) da fondere nelle liste opzioni.
+  redeemBoost?: {
+    packages?: QbClientPackage[];
+    prepaids?: QbClientPrepaid[];
+    giftboxes?: QbClientGiftbox[];
+    gifts?: QbClientGift[];
+    giftcards?: QbClientGiftcard[];
+  };
 };
 
 // Minimal Bootstrap offcanvas/modal surface used here (the bundle is loaded by
@@ -244,6 +260,23 @@ function qbNotify(message: string, variant: "success" | "danger" | "warning" | "
 function qbRefetchCalendar(): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent("qb:appointments-changed"));
+}
+
+// Fonde le istanze "booster" (i residui consumati dalla prenotazione in EDIT,
+// assenti dalle liste residui correnti del cliente) nelle liste opzioni, senza
+// duplicare le voci già presenti.
+function qbMergeBoost<T>(base: T[], extra: T[] | undefined | null, key: (item: T) => string): T[] {
+  if (!extra || extra.length === 0) return base;
+  const seen = new Set(base.map(key));
+  const out = [...base];
+  for (const item of extra) {
+    const k = key(item);
+    if (!seen.has(k)) {
+      seen.add(k);
+      out.push(item);
+    }
+  }
+  return out;
 }
 
 // SQL date/datetime -> "dd/mm/yyyy hh:mm" (it-IT), port of app.js
@@ -814,6 +847,10 @@ export function QuickBookingDrawer() {
   // always release the CURRENT hold without re-binding, and dropAndReleaseHold can read it
   // without threading the token through every setter.
   const holdTokenRef = useRef<string>("");
+  // Booster redeem per l'EDIT: le istanze residuo consumate dalla prenotazione in
+  // modifica (dal payload action=get), fuse nelle liste opzioni del cliente quando
+  // il contesto arriva — le liste correnti non elencano più le unità già scalate.
+  const redeemBoostRef = useRef<NonNullable<AppointmentEditPayload["redeemBoost"]> | null>(null);
   useEffect(() => {
     holdTokenRef.current = holdToken;
   }, [holdToken]);
@@ -880,6 +917,7 @@ export function QuickBookingDrawer() {
   // Reset the whole form to "new appointment" defaults (port of qbResetForm).
   const resetForm = useCallback(() => {
     pendingCalendarSlotRef.current = false; // disarm any calendar-slot auto-hold (Item B)
+    redeemBoostRef.current = null; // disarma il booster redeem dell'edit precedente
     setClient(null);
     // Hide + reset the client history/residuals boxes and drop any in-flight
     // context fetch (port: the boxes only show for a selected client).
@@ -1178,6 +1216,66 @@ export function QuickBookingDrawer() {
   // The date/availability/operator controls (and now the cabin select) stay
   // gated until at least one service is selected (port of the start gate).
   const startGateDisabled = selectedServiceIds.length === 0;
+
+  // ---- Operatori per il servizio (port di refreshStaffForService ->
+  // action=staff_for_service, app.js:8510-8619): la select SINGOLA carica gli
+  // ELEGGIBILI dal server; in EDIT passa la finestra oraria + exclude_id così gli
+  // occupati arrivano marcati e l'opzione è disabilitata con l'etichetta legacy
+  // "nome — motivo" ("Occupato" fallback). Stati: "Verifico operatori
+  // disponibili..." durante il fetch, "Nessun operatore disponibile" (+hint) a 0
+  // eleggibili, auto-selezione+disabled con 1 solo, "(qualsiasi)" con 2+.
+  const [staffSvcList, setStaffSvcList] = useState<Array<{ id: number; name: string; available: boolean; unavailable_reason: string }> | null>(null);
+  const [staffChecking, setStaffChecking] = useState(false);
+  const [staffLoadFailed, setStaffLoadFailed] = useState(false);
+  const staffSvcReqRef = useRef(0);
+  useEffect(() => {
+    const single = selectedServiceIds.length === 1 ? selectedServiceIds[0] : 0;
+    if (!single || !slug) {
+      staffSvcReqRef.current++;
+      setStaffSvcList(null);
+      setStaffChecking(false);
+      setStaffLoadFailed(false);
+      return;
+    }
+    const myReq = ++staffSvcReqRef.current;
+    setStaffChecking(true);
+    setStaffLoadFailed(false);
+    const params = new URLSearchParams({ slug, action: "staff_for_service", service_id: String(single) });
+    if (apptId && date && startTime && endTime) {
+      params.set("date", date);
+      params.set("start_time", startTime);
+      params.set("end_time", endTime);
+      params.set("exclude_id", apptId);
+    }
+    if (locationId) params.set("location_id", locationId);
+    fetch(`/api/manage/appointments?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
+      .then((r) => r.json())
+      .then((j: { ok?: boolean; staff?: Array<{ id: number; name: string; available: boolean; unavailable_reason: string }> }) => {
+        if (myReq !== staffSvcReqRef.current) return;
+        if (!j || j.ok === false || !Array.isArray(j.staff)) {
+          setStaffSvcList(null);
+          setStaffLoadFailed(true);
+          return;
+        }
+        setStaffSvcList(j.staff);
+      })
+      .catch(() => {
+        if (myReq !== staffSvcReqRef.current) return;
+        setStaffSvcList(null);
+        setStaffLoadFailed(true);
+      })
+      .finally(() => {
+        if (myReq === staffSvcReqRef.current) setStaffChecking(false);
+      });
+  }, [selectedServiceIds, apptId, date, startTime, endTime, locationId, slug]);
+  // 1 solo eleggibile -> auto-selezionato con select disabled (legacy 8590-8599).
+  useEffect(() => {
+    if (isMultiService || staffChecking) return;
+    const list = staffSvcList;
+    if (list && list.length === 1 && String(list[0].id) !== staffId) {
+      setStaffId(String(list[0].id));
+    }
+  }, [staffSvcList, staffChecking, isMultiService, staffId]);
 
   // ---- Cabin: cabins available at the selected location (#qb_cabin_id list) ----
   // Location fallback list (cabins with no locationId are always allowed; no
@@ -2120,11 +2218,14 @@ export function QuickBookingDrawer() {
           }
           setHistorySummary(data.summary ?? {});
           setResidualsSummary(data.residuals ?? {});
-          setClientPackages(Array.isArray(data.packages) ? data.packages : []);
-          setClientPrepaids(Array.isArray(data.prepaids) ? data.prepaids : []);
-          setClientGiftcards(Array.isArray(data.giftcards) ? data.giftcards : []);
-          setClientGiftboxes(Array.isArray(data.giftboxes) ? data.giftboxes : []);
-          setClientGifts(Array.isArray(data.gifts) ? data.gifts : []);
+          // EDIT: fondi il booster (istanze consumate dalla prenotazione in
+          // modifica) nelle liste — i residui correnti non le elencano più.
+          const boost = redeemBoostRef.current;
+          setClientPackages(qbMergeBoost(Array.isArray(data.packages) ? data.packages : [], boost?.packages, (p) => String(p.id)));
+          setClientPrepaids(qbMergeBoost(Array.isArray(data.prepaids) ? data.prepaids : [], boost?.prepaids, (p) => String(p.id)));
+          setClientGiftcards(qbMergeBoost(Array.isArray(data.giftcards) ? data.giftcards : [], boost?.giftcards, (g) => String(g.id)));
+          setClientGiftboxes(qbMergeBoost(Array.isArray(data.giftboxes) ? data.giftboxes : [], boost?.giftboxes, (g) => `${g.instance_id}:${g.giftbox_item_id}:${g.service_id}`));
+          setClientGifts(qbMergeBoost(Array.isArray(data.gifts) ? data.gifts : [], boost?.gifts, (g) => `${g.instance_id}:${g.reward_item_index}:${g.service_id}`));
           // Block 4: fidelity redeem settings + available points, and the spendable credit.
           const fid = data.fidelity ?? {};
           setFidelityRedeemEnabled(Boolean(fid.redeemEnabled));
@@ -2334,6 +2435,52 @@ export function QuickBookingDrawer() {
           }
           // An existing slot is already booked: no hold needed (the update reuses it).
           setHoldToken("");
+          // REDEEM esistenti (port del prefill legacy app.js:9310-9396): arma il
+          // booster PRIMA che il contesto cliente arrivi (il loader lo fonde nelle
+          // liste opzioni) e fondilo subito nelle liste correnti, poi prefilla le
+          // selezioni per-servizio + la GiftCard a livello appuntamento.
+          redeemBoostRef.current = a.redeemBoost ?? null;
+          if (a.redeemBoost) {
+            const boost = a.redeemBoost;
+            setClientPackages((prev) => qbMergeBoost(prev, boost.packages, (p) => String(p.id)));
+            setClientPrepaids((prev) => qbMergeBoost(prev, boost.prepaids, (p) => String(p.id)));
+            setClientGiftcards((prev) => qbMergeBoost(prev, boost.giftcards, (g) => String(g.id)));
+            setClientGiftboxes((prev) => qbMergeBoost(prev, boost.giftboxes, (g) => `${g.instance_id}:${g.giftbox_item_id}:${g.service_id}`));
+            setClientGifts((prev) => qbMergeBoost(prev, boost.gifts, (g) => `${g.instance_id}:${g.reward_item_index}:${g.service_id}`));
+          }
+          const pkgPrefill: Record<number, QbPackageRedeem> = {};
+          for (const r of a.packageRedeem ?? []) {
+            if (r.client_package_id > 0 && r.service_id > 0) {
+              pkgPrefill[r.service_id] = { client_package_id: r.client_package_id, service_id: r.service_id, client_package_service_id: r.client_package_service_id ?? null };
+            }
+          }
+          setPackageRedeems(pkgPrefill);
+          const prePrefill: Record<number, QbPrepaidRedeem> = {};
+          for (const r of a.prepaidServiceRedeem ?? []) {
+            if (r.client_prepaid_service_id > 0 && r.service_id > 0) {
+              prePrefill[r.service_id] = { client_prepaid_service_id: r.client_prepaid_service_id, service_id: r.service_id };
+            }
+          }
+          setPrepaidRedeems(prePrefill);
+          const gbPrefill: Record<number, QbGiftboxRedeem> = {};
+          for (const r of a.giftboxRedeem ?? []) {
+            if (r.instance_id > 0 && r.service_id > 0) {
+              gbPrefill[r.service_id] = { instance_id: r.instance_id, giftbox_item_id: r.giftbox_item_id, service_id: r.service_id };
+            }
+          }
+          setGiftboxRedeems(gbPrefill);
+          const gPrefill: Record<number, QbGiftRedeem> = {};
+          for (const r of a.giftRedeem ?? []) {
+            if (r.instance_id > 0 && r.service_id > 0) {
+              gPrefill[r.service_id] = { service_id: r.service_id, instance_id: r.instance_id, reward_item_index: r.reward_item_index };
+            }
+          }
+          setGiftRedeems(gPrefill);
+          const gcPrefill = (a.giftcardRedeem ?? [])[0];
+          if (gcPrefill && gcPrefill.giftcard_id > 0 && gcPrefill.amount > 0) {
+            setGiftcardPick(gcPrefill.giftcard_id);
+            setGiftcardAmountInput(String(gcPrefill.amount));
+          }
           // Item 3: surface the expired-linked-residual warning in #qbExpiredLinkedAlert
           // (port of qbSetExpiredLinkedAlert(a.expired_link_warning)). "" hides it.
           setExpiredLinkWarning(String(a.expiredLinkWarning ?? "").trim());
@@ -4012,34 +4159,67 @@ export function QuickBookingDrawer() {
                       ))
                     : null}
                 </div>
-                <select
-                  className="form-select"
-                  name="staff_id"
-                  value={staffId}
-                  onChange={(e) => {
-                    // Cambio operatore singolo in CREATE (port di app.js:9010-9020):
-                    // slot invalidato — azzera orari, rilascia hold, toast legacy.
-                    const next = e.target.value;
-                    const prev = staffId.trim();
-                    dropAndReleaseHold();
-                    if (!apptId && startTime) {
-                      setStartTime("");
-                      setPrefillEndTime("");
-                      if (prev && next.trim() && prev !== next.trim()) {
-                        qbNotify("Hai cambiato operatore: seleziona di nuovo una disponibilità", "warning");
-                      }
-                    }
-                    setStaffId(next);
-                  }}
-                  disabled={startGateDisabled || isMultiService}
-                  style={isMultiService ? { display: "none" } : undefined}
-                >
-                  <option value="">{startGateDisabled ? "Seleziona prima un servizio" : "(qualsiasi)"}</option>
-                  {staff.map((st) => (
-                    <option value={st.id} key={st.id}>{st.name}</option>
-                  ))}
-                </select>
-                <div id="qb_staff_hint" className="form-text" style={{ display: "none" }} />
+                {(() => {
+                  // Stati select legacy (refreshStaffForService): fetch / 0 eleggibili /
+                  // 1 auto / 2+ "(qualsiasi)"; occupati disabilitati "nome — motivo";
+                  // in edit l'operatore salvato fuori lista resta come opzione dedicata.
+                  const zeroEligible = !staffChecking && !staffLoadFailed && staffSvcList !== null && staffSvcList.length === 0;
+                  const singleEligible = !staffChecking && staffSvcList !== null && staffSvcList.length === 1;
+                  const opts = staffSvcList ?? staff.map((st) => ({ id: st.id, name: st.name, available: true, unavailable_reason: "" }));
+                  const savedMissing = Boolean(staffId) && !opts.some((o) => String(o.id) === staffId);
+                  const hint = zeroEligible
+                    ? "Nessun operatore disponibile per il servizio selezionato."
+                    : staffLoadFailed
+                      ? "Impossibile caricare gli operatori disponibili."
+                      : "";
+                  return (
+                    <>
+                      <select
+                        className="form-select"
+                        name="staff_id"
+                        value={staffId}
+                        onChange={(e) => {
+                          // Cambio operatore singolo in CREATE (port di app.js:9010-9020):
+                          // slot invalidato — azzera orari, rilascia hold, toast legacy.
+                          const next = e.target.value;
+                          const prev = staffId.trim();
+                          dropAndReleaseHold();
+                          if (!apptId && startTime) {
+                            setStartTime("");
+                            setPrefillEndTime("");
+                            if (prev && next.trim() && prev !== next.trim()) {
+                              qbNotify("Hai cambiato operatore: seleziona di nuovo una disponibilità", "warning");
+                            }
+                          }
+                          setStaffId(next);
+                        }}
+                        disabled={startGateDisabled || isMultiService || staffChecking || staffLoadFailed || zeroEligible || singleEligible}
+                        style={isMultiService ? { display: "none" } : undefined}
+                      >
+                        {staffChecking ? (
+                          <option value="">Verifico operatori disponibili...</option>
+                        ) : staffLoadFailed ? (
+                          <option value="">Impossibile caricare operatori</option>
+                        ) : zeroEligible ? (
+                          <option value="">Nessun operatore disponibile</option>
+                        ) : (
+                          <option value="">{startGateDisabled ? "Seleziona prima un servizio" : "(qualsiasi)"}</option>
+                        )}
+                        {!staffChecking && savedMissing ? (
+                          <option value={staffId}>{`Operatore assegnato (ID ${staffId})`}</option>
+                        ) : null}
+                        {!staffChecking && !staffLoadFailed && !zeroEligible
+                          ? opts.map((st) => (
+                              <option value={st.id} key={st.id} disabled={!st.available}>
+                                {st.available ? st.name : `${st.name} — ${st.unavailable_reason || "Occupato"}`}
+                              </option>
+                            ))
+                          : null}
+                      </select>
+                      <div id="qb_staff_hint" className="form-text" style={hint && !isMultiService ? undefined : { display: "none" }}>{hint}</div>
+                    </>
+                  );
+                })()}
               </div>
             </div>
 

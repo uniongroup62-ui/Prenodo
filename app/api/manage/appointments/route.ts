@@ -18,6 +18,7 @@ import {
   appointmentListDecorations,
   listDbAppointments,
   moveDbAppointmentCalendar,
+  staffForServiceManage,
   swapDbAppointmentSegment,
   updateDbAppointment,
   updateDbAppointmentStatus,
@@ -135,6 +136,41 @@ export async function GET(request: Request) {
       return Response.json({ ok: preview.ok, error: preview.error, preview });
     } catch (error) {
       return jsonError(error instanceof Error ? error.message : "Errore anteprima annullamento.");
+    }
+  }
+
+  // Operatori eleggibili per un servizio + disponibilità (port del legacy
+  // action=staff_for_service, api_appointments.php ~5909): la select operatore
+  // del drawer li carica da qui; con starts/ends (edit) gli occupati arrivano
+  // marcati available=false + unavailable_reason ("Occupato" o il motivo
+  // time-off verbatim) così l'opzione è disabilitata con "nome — motivo".
+  if (action === "staff_for_service") {
+    try {
+      const serviceId = Number.parseInt(String(url.searchParams.get("service_id") ?? "0"), 10) || 0;
+      const date = String(url.searchParams.get("date") ?? "").trim();
+      const start = String(url.searchParams.get("start_time") ?? "").trim();
+      const end = String(url.searchParams.get("end_time") ?? "").trim();
+      const excludeId = Number.parseInt(String(url.searchParams.get("exclude_id") ?? "0"), 10) || 0;
+      const toMin = (t: string) => {
+        const m = /^(\d{1,2}):(\d{2})/.exec(t);
+        return m ? Number(m[1]) * 60 + Number(m[2]) : NaN;
+      };
+      const startMin = toMin(start);
+      const endMin = toMin(end);
+      const locationId = await resolveManageLocationId({
+        slug: tenantSlug,
+        raw: url.searchParams.get("location_id"),
+        fallbackCurrent: true,
+      }) || null;
+      const hasWindow = /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(startMin) && Number.isFinite(endMin) && endMin > startMin;
+      const staff = await staffForServiceManage(
+        tenantSlug,
+        serviceId,
+        hasWindow ? { date, startMin, endMin, excludeAppointmentId: excludeId > 0 ? excludeId : undefined, locationId } : undefined,
+      );
+      return Response.json({ ok: true, sourceMode: "database", staff });
+    } catch (error) {
+      return Response.json({ ok: false, error: error instanceof Error ? error.message : "Errore operatori." });
     }
   }
 
