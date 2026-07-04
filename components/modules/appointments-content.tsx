@@ -187,6 +187,19 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
   useEffect(() => {
     if (typeof window === "undefined") return;
     const sp = new URLSearchParams(window.location.search);
+    // Alert da redirect legacy (?msg/?err — es. l'arrivo dal planner con
+    // "Pianificazione completata: creati N appuntamenti").
+    const urlMsg = String(sp.get("msg") ?? "").trim();
+    const urlErr = String(sp.get("err") ?? "").trim();
+    if (urlMsg) setMsg(urlMsg);
+    if (urlErr) setErr(urlErr);
+    // Filtri dal redirect legacy (?from/?to/?q, es. range ±1 giorno del planner).
+    const urlFrom = String(sp.get("from") ?? "");
+    const urlTo = String(sp.get("to") ?? "");
+    const urlQ = String(sp.get("q") ?? "");
+    if (/^\d{4}-\d{2}-\d{2}$/.test(urlFrom)) setFrom(urlFrom);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(urlTo)) setTo(urlTo);
+    if (urlQ) setQ(urlQ);
     const created = String(sp.get("created") ?? "")
       .split(/[^0-9]+/)
       .map((v) => Number.parseInt(v, 10))

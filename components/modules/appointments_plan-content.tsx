@@ -65,12 +65,9 @@ type PreviewData = {
   services: Array<{ id: number; name: string; durationMin: number; price: number }>;
   countOk: number;
   countSkip: number;
-};
-
-type CreateData = {
-  created: number;
-  skipped: number;
-  details: Array<{ date: string; ok: boolean; appointmentId?: number; reason?: string }>;
+  // Cabine libere sullo slot di riferimento (legacy cabin_avail_by_service).
+  cabinsEnabled: boolean;
+  cabinAvail: Record<number, Array<{ id: number; name: string }>>;
 };
 
 function fmtDateIt(iso: string): string {
@@ -92,6 +89,43 @@ function todayIso(): string {
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// ISO YYYY-MM-DD ± giorni (range redirect legacy: min-1 / max+1).
+function shiftIsoDay(iso: string, days: number): string {
+  const [y, mo, d] = iso.split("-").map(Number);
+  const date = new Date(y, (mo || 1) - 1, (d || 1) + days);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+// "HH:MM" + minuti, clamp a 23:59 (recomputeEndTime legacy).
+function addMinutesToTime(hhmm: string, minutes: number): string {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm ?? "").trim());
+  if (!m) return hhmm;
+  const total = Math.min(23 * 60 + 59, Number(m[1]) * 60 + Number(m[2]) + Math.max(0, minutes));
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(Math.floor(total / 60))}:${pad(total % 60)}`;
+}
+
+// Prossima occorrenza del giorno-settimana `dow` (0=Dom..6=Sab) STRETTAMENTE dopo
+// oggi, partendo dalla data base (mai retroattiva) — normalizeStartDate legacy
+// (guard 370 iterazioni).
+function nextWeekdayOccurrence(baseIso: string, dow: number): string {
+  const today = todayIso();
+  let iso = baseIso && baseIso > today ? baseIso : today;
+  const parse = (s: string) => {
+    const [y, mo, d] = s.split("-").map(Number);
+    return new Date(y, (mo || 1) - 1, d || 1);
+  };
+  const d = parse(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  for (let i = 0; i < 370; i++) {
+    iso = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    if (d.getDay() === dow && iso > today) return iso;
+    d.setDate(d.getDate() + 1);
+  }
+  return iso;
 }
 
 const WEEKDAYS: Array<{ value: number; label: string }> = [
@@ -131,20 +165,26 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
   // Staff-per-service selection.
   const [staffPerService, setStaffPerService] = useState<Record<number, number>>({});
 
-  // Form state.
+  // Cabine (legacy appointments_plan.js 441-548): select per servizio GATED fino
+  // all'Anteprima ("(Premi Anteprima)"); dopo, le opzioni sono le cabine LIBERE
+  // sullo slot di riferimento. cabinsEnabled è noto dal probe cabins_for_services.
+  const [cabinsEnabled, setCabinsEnabled] = useState(false);
+  const [cabinPerService, setCabinPerService] = useState<Record<number, number>>({});
+
+  // Form state. Default legacy: time_to = time_from = 09:00 (orario FISSO finché
+  // l'auto-calcolo non lo sposta a from + durata servizi — recomputeEndTime legacy).
   const [startDate, setStartDate] = useState(todayIso());
   const [repeat, setRepeat] = useState("1");
   const [recurrence, setRecurrence] = useState("weekly");
   const [weekdays, setWeekdays] = useState<number[]>([]);
   const [timeFrom, setTimeFrom] = useState("09:00");
-  const [timeTo, setTimeTo] = useState("18:00");
+  const [timeTo, setTimeTo] = useState("09:00");
 
   // Preview / create state.
   const [preview, setPreview] = useState<PreviewData | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [creating, setCreating] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
-  const [createResult, setCreateResult] = useState<CreateData | null>(null);
 
   // Client section state.
   const [clientId, setClientId] = useState("");
@@ -237,6 +277,64 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedServiceIds, staff]);
 
+  // Probe cabine (legacy CABINS_ENABLED, server-rendered nel config PHP): al primo
+  // servizio selezionato una chiamata a cabins_for_services rivela se il tenant ha
+  // cabine attive — da lì in poi la select "Cabina" gated compare sotto l'operatore.
+  const cabinProbeRef = useRef(false);
+  useEffect(() => {
+    if (cabinProbeRef.current || selectedServiceIds.length === 0) return;
+    cabinProbeRef.current = true;
+    const startsAt = `${todayIso()} 09:00:00`;
+    fetch(
+      `/api/manage/appointments?slug=${encodeURIComponent(slug)}&action=cabins_for_services&service_ids=${selectedServiceIds.join(",")}&starts_at=${encodeURIComponent(startsAt)}`,
+      { headers: { "x-tenant-slug": slug } },
+    )
+      .then((r) => r.json())
+      .then((j) => setCabinsEnabled(Array.isArray(j?.cabins) && j.cabins.length > 0))
+      .catch(() => setCabinsEnabled(false));
+  }, [selectedServiceIds, slug]);
+
+  // Riconciliazione scelte cabina all'arrivo dell'anteprima (legacy 523-544):
+  // scelta precedente mantenuta se ancora libera, altrimenti la PRIMA cabina;
+  // con una sola libera auto-selezionata; con zero la scelta cade.
+  useEffect(() => {
+    if (!preview?.cabinsEnabled) return;
+    setCabinPerService((prev) => {
+      const next: Record<number, number> = {};
+      for (const sid of selectedServiceIds) {
+        const free = preview.cabinAvail[sid] ?? [];
+        if (free.length === 0) continue;
+        const keep = prev[sid] && free.some((c) => c.id === prev[sid]) ? prev[sid] : free[0].id;
+        next[sid] = keep;
+      }
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preview]);
+
+  // ---- Dinamiche legacy (appointments_plan.js) ----
+  // recomputeEndTime (618-697): "Alle ore" = "Dalle ore" + durata totale servizi
+  // (clamp 23:59); il valore non può scendere sotto quel minimo.
+  const totalDurationMin = useMemo(
+    () => selectedServices.reduce((sum, svc) => sum + Math.max(0, Number(svc.durationMin ?? 0) || 0), 0),
+    [selectedServices],
+  );
+  const minTimeTo = useMemo(() => addMinutesToTime(timeFrom, totalDurationMin), [timeFrom, totalDurationMin]);
+  useEffect(() => {
+    setTimeTo(minTimeTo);
+  }, [minTimeTo]);
+
+  // normalizeStartDate (699-788): con giorni selezionati, "Dal giorno" è ancorato al
+  // PRIMO giorno selezionato (ordine Lun→Dom) alla prossima occorrenza DOPO oggi;
+  // mai retroattivo. Idempotente: se la data rispetta già il vincolo non cambia.
+  useEffect(() => {
+    if (!weekdays.length) return;
+    const order = [1, 2, 3, 4, 5, 6, 0];
+    const first = order.find((d) => weekdays.includes(d));
+    if (first === undefined) return;
+    setStartDate((prev) => nextWeekdayOccurrence(prev, first));
+  }, [weekdays, startDate]);
+
   // Client search inside the modal.
   useEffect(() => {
     if (!findOpen) return;
@@ -282,6 +380,10 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
     for (const [sid, stid] of Object.entries(staffPerService)) {
       if (Number(stid) > 0) staffMap[Number(sid)] = Number(stid);
     }
+    const cabinMap: Record<number, number> = {};
+    for (const [sid, cid] of Object.entries(cabinPerService)) {
+      if (Number(cid) > 0) cabinMap[Number(sid)] = Number(cid);
+    }
     return {
       client_id: clientId || "0",
       new_full_name: newFullName,
@@ -291,6 +393,7 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
       repeat,
       staff_id: "0",
       staff_map: JSON.stringify(staffMap),
+      cabin_map: JSON.stringify(cabinMap),
       recurrence,
       weekdays: weekdays.join(","),
       start_date: startDate,
@@ -305,6 +408,7 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
     selectedServiceIds,
     repeat,
     staffPerService,
+    cabinPerService,
     recurrence,
     weekdays,
     startDate,
@@ -315,7 +419,6 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
   async function submitPreview(e: React.FormEvent) {
     e.preventDefault();
     setPlanError(null);
-    setCreateResult(null);
     setPreviewing(true);
     try {
       const res = await fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}`, {
@@ -336,7 +439,10 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
         services: Array.isArray(j.services) ? j.services : [],
         countOk: Number(j.countOk ?? 0),
         countSkip: Number(j.countSkip ?? 0),
+        cabinsEnabled: j.cabinsEnabled === true,
+        cabinAvail: (j.cabinAvail && typeof j.cabinAvail === "object" ? j.cabinAvail : {}) as PreviewData["cabinAvail"],
       });
+      if (j.cabinsEnabled === true) setCabinsEnabled(true);
     } catch {
       setPreview(null);
       setPlanError("Errore di rete durante l'anteprima.");
@@ -359,13 +465,24 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
         setPlanError(String(j.error ?? "Errore creazione."));
         return;
       }
-      setCreateResult({
-        created: Number(j.created ?? 0),
-        skipped: Number(j.skipped ?? 0),
-        details: Array.isArray(j.details) ? j.details : [],
-      });
-      // Clear the preview so the OK rows can't be created twice from the same panel.
-      setPreview(null);
+      // Redirect LEGACY (appointments_plan.php 2013-2023): torna alla Lista
+      // appuntamenti con range date allargato ±1 giorno, ?created=<id,id> (gli
+      // appuntamenti appena creati restano visibili anche fuori range) e il
+      // messaggio verbatim "Pianificazione completata: creati N appuntamenti".
+      const created = Number(j.created ?? 0);
+      const details = (Array.isArray(j.details) ? j.details : []) as Array<{ date?: string; ok?: boolean; appointmentId?: number }>;
+      const okRows = details.filter((d) => d.ok);
+      const createdIds = okRows.map((d) => Number(d.appointmentId ?? 0)).filter((n) => n > 0);
+      const okDates = okRows.map((d) => String(d.date ?? "")).filter(Boolean).sort();
+      const params = new URLSearchParams();
+      if (okDates.length) {
+        params.set("from", shiftIsoDay(okDates[0], -1));
+        params.set("to", shiftIsoDay(okDates[okDates.length - 1], 1));
+      }
+      if (createdIds.length) params.set("created", createdIds.join(","));
+      params.set("msg", `Pianificazione completata: creati ${created} appuntamenti`);
+      window.location.href = `/${encodeURIComponent(slug)}/appointments?${params.toString()}`;
+      return;
     } catch {
       setPlanError("Errore di rete durante la creazione.");
     } finally {
@@ -597,22 +714,71 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
                   ) : (
                     selectedServices.map((svc) => {
                       const eligible = staffForService(svc);
+                      // Stati legacy (appointments_plan.js 385-425): 0 eligibili ->
+                      // select disabled "Nessun operatore"; 1 -> auto-assegnato e
+                      // select disabled col nome; >1 -> placeholder "(seleziona)".
+                      // Cabine legacy (appointments_plan.js 441-548): gated finché non
+                      // c'è l'anteprima; poi 0 libere -> "Nessuna cabina" disabled,
+                      // 1 -> auto-selezionata disabled, >1 -> select (niente "(Auto)").
+                      const freeCabins = preview?.cabinsEnabled ? preview.cabinAvail[svc.id] ?? [] : [];
                       return (
                         <div className="mb-2" key={svc.id}>
                           <label className="form-label small mb-1">{svc.name}</label>
-                          <select
-                            className="form-select form-select-sm"
-                            name={`staff_by_service[${svc.id}]`}
-                            value={staffPerService[svc.id] ?? ""}
-                            onChange={(e) =>
-                              setStaffPerService((prev) => ({ ...prev, [svc.id]: Number(e.target.value) }))
-                            }
-                          >
-                            <option value="">Seleziona operatore…</option>
-                            {eligible.map((s) => (
-                              <option value={s.id} key={s.id}>{staffName(s)}</option>
-                            ))}
-                          </select>
+                          {eligible.length === 0 ? (
+                            <select className="form-select form-select-sm" disabled>
+                              <option>Nessun operatore</option>
+                            </select>
+                          ) : eligible.length === 1 ? (
+                            <select className="form-select form-select-sm" value={eligible[0].id} disabled onChange={() => undefined}>
+                              <option value={eligible[0].id}>{staffName(eligible[0])}</option>
+                            </select>
+                          ) : (
+                            <select
+                              className="form-select form-select-sm"
+                              name={`staff_map[${svc.id}]`}
+                              value={staffPerService[svc.id] ?? ""}
+                              onChange={(e) =>
+                                setStaffPerService((prev) => ({ ...prev, [svc.id]: Number(e.target.value) }))
+                              }
+                            >
+                              <option value="">(seleziona)</option>
+                              {eligible.map((s) => (
+                                <option value={s.id} key={s.id}>{staffName(s)}</option>
+                              ))}
+                            </select>
+                          )}
+                          {cabinsEnabled ? (
+                            <div className="d-flex align-items-center gap-2 mt-1">
+                              <div className="small text-muted">Cabina</div>
+                              {!preview ? (
+                                <select className="form-select form-select-sm" style={{ maxWidth: 220 }} disabled>
+                                  <option value="0">(Premi Anteprima)</option>
+                                </select>
+                              ) : freeCabins.length === 0 ? (
+                                <select className="form-select form-select-sm" style={{ maxWidth: 220 }} disabled>
+                                  <option value="">Nessuna cabina</option>
+                                </select>
+                              ) : freeCabins.length === 1 ? (
+                                <select className="form-select form-select-sm" style={{ maxWidth: 220 }} value={freeCabins[0].id} disabled onChange={() => undefined}>
+                                  <option value={freeCabins[0].id}>{freeCabins[0].name || `ID ${freeCabins[0].id}`}</option>
+                                </select>
+                              ) : (
+                                <select
+                                  className="form-select form-select-sm"
+                                  style={{ maxWidth: 220 }}
+                                  name={`cabin_map[${svc.id}]`}
+                                  value={cabinPerService[svc.id] ?? freeCabins[0].id}
+                                  onChange={(e) =>
+                                    setCabinPerService((prev) => ({ ...prev, [svc.id]: Number(e.target.value) }))
+                                  }
+                                >
+                                  {freeCabins.map((cb) => (
+                                    <option value={cb.id} key={cb.id}>{cb.name || `ID ${cb.id}`}</option>
+                                  ))}
+                                </select>
+                              )}
+                            </div>
+                          ) : null}
                         </div>
                       );
                     })
@@ -666,12 +832,15 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
 
               <div className="col-6">
                 <label className="form-label">Dal giorno</label>
+                {/* normalizeStartDate legacy: mai retroattivo (min oggi); con giorni
+                    selezionati l'effect ancora la data al primo giorno (Lun→Dom). */}
                 <input
                   type="date"
                   className="form-control"
                   id="plannerStartDate"
                   name="start_date"
                   value={startDate}
+                  min={todayIso()}
                   onChange={(e) => setStartDate(e.target.value)}
                   required
                 />
@@ -692,13 +861,16 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
 
               <div className="col-3">
                 <label className="form-label">Alle ore</label>
+                {/* recomputeEndTime legacy: min = "Dalle ore" + durata servizi; i valori
+                    inferiori vengono bloccati (clamp al minimo). */}
                 <input
                   type="time"
                   className="form-control"
                   id="plannerTimeTo"
                   name="time_to"
                   value={timeTo}
-                  onChange={(e) => setTimeTo(e.target.value)}
+                  min={minTimeTo}
+                  onChange={(e) => setTimeTo(e.target.value < minTimeTo ? minTimeTo : e.target.value)}
                   required
                 />
               </div>
@@ -721,14 +893,7 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
 
             {planError ? <div className="alert alert-danger">{planError}</div> : null}
 
-            {createResult ? (
-              <div className="alert alert-success">
-                Pianificazione completata: creati <strong>{createResult.created}</strong> appuntamenti
-                {createResult.skipped > 0 ? <> (saltati {createResult.skipped})</> : null}.
-              </div>
-            ) : null}
-
-            {!preview && !createResult && !planError ? (
+            {!preview && !planError ? (
               <div className="alert alert-light border">Compila il form e clicca <strong>Anteprima</strong>.</div>
             ) : null}
 
@@ -848,21 +1013,26 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
                 </button>
               </div>
               <div className="text-muted small mb-2">Cerca per nome, cognome, email o telefono.</div>
+              {/* Render legacy (appointments_plan.js planRenderClients): nome in
+                  text-primary + righe "Email:"/"Telefono:" ("—" se vuoti); stato
+                  vuoto "Nessun risultato.". */}
               <div className="list-group" id="planClientFindResults">
-                {findResults.map((c) => (
-                  <button
-                    type="button"
-                    className="list-group-item list-group-item-action"
-                    key={c.id}
-                    onClick={() => pickClient(c)}
-                  >
-                    <div className="fw-semibold">{c.name}</div>
-                    <div className="small text-muted">
-                      {c.phone ? <>{c.phone} · </> : null}
-                      {c.email}
-                    </div>
-                  </button>
-                ))}
+                {findResults.length === 0 ? (
+                  <div className="text-muted small p-2">Nessun risultato.</div>
+                ) : (
+                  findResults.map((c) => (
+                    <button
+                      type="button"
+                      className="list-group-item list-group-item-action"
+                      key={c.id}
+                      onClick={() => pickClient(c)}
+                    >
+                      <div className="fw-semibold text-primary">{c.name}</div>
+                      <div className="small text-muted">Email: {c.email || "—"}</div>
+                      <div className="small text-muted">Telefono: {c.phone || "—"}</div>
+                    </button>
+                  ))
+                )}
               </div>
             </div>
           </div>

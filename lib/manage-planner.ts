@@ -20,7 +20,15 @@
 //    appointment_segments) — we do not rebuild that.
 //  * createDbClient / getDbClient handle the optional new-client creation.
 
-import { createDbAppointment, createDbClient, getDbClient } from "@/lib/db-repositories";
+import {
+  allowedCabinIdsForServices,
+  assertClientNotBlockedForSave,
+  cabinsForServicesContext,
+  createDbAppointment,
+  createDbClient,
+  getDbClient,
+  tenantCabinsEnabled,
+} from "@/lib/db-repositories";
 import {
   assertAppointmentSlotAvailable,
   publicBookingContext,
@@ -73,6 +81,12 @@ export type PlannerPreview = {
   services: Array<{ id: number; name: string; durationMin: number; price: number }>;
   countOk: number;
   countSkip: number;
+  // Cabine per la UI (legacy cabin_avail_by_service, appointments_plan.php
+  // 1906-1950): calcolate sullo SLOT DI RIFERIMENTO (la PRIMA riga OK), per
+  // servizio sul proprio sotto-intervallo consecutivo. La select "Cabina" della
+  // UI è gated finché non esiste una preview.
+  cabinsEnabled: boolean;
+  cabinAvail: Record<number, Array<{ id: number; name: string }>>;
 };
 
 export type PlannerCreateResult = {
@@ -246,6 +260,9 @@ function resolveServices(form: PlannerForm, context: PublicBookingContext): Reso
   let totalDuration = 0;
   let totalPrice = 0;
 
+  // PASSO 1 — risoluzione servizi (durate/prezzi). Ordine di precedenza legacy
+  // (appointments_plan.php 1628-1651): prima gli errori servizio, POI il check
+  // finestra-vs-durata, e solo dopo la scelta operatori.
   for (const sid of form.serviceIds) {
     const svc = context.services.find((s) => s.id === sid);
     if (!svc) throw new Error(`Servizio non valido: ${sid}`);
@@ -253,7 +270,20 @@ function resolveServices(form: PlannerForm, context: PublicBookingContext): Reso
     ordered.push({ id: svc.id, name: svc.name, durationMin: svc.duration, price: svc.price });
     totalDuration += svc.duration;
     totalPrice += svc.price;
+  }
 
+  // La finestra oraria non può essere più corta della durata complessiva dei
+  // servizi (legacy 1644-1651, messaggio verbatim).
+  const fromMin = parseTimeToMin(form.timeFrom);
+  const toMin = parseTimeToMin(form.timeTo);
+  if (fromMin !== null && toMin !== null && toMin < fromMin + totalDuration) {
+    throw new Error('"Alle ore" deve essere >= "Dalle ore" + durata servizi.');
+  }
+
+  // PASSO 2 — operatori per servizio.
+  for (const svcEntry of ordered) {
+    const sid = svcEntry.id;
+    const svc = context.services.find((s) => s.id === sid)!;
     // no_operator services don't need an operator.
     if (svc.noOperator) {
       staffFinal[sid] = 0;
@@ -282,6 +312,51 @@ function resolveServices(form: PlannerForm, context: PublicBookingContext): Reso
   }
 
   return { ordered, totalDuration, totalPrice, staffFinal, staffNameById };
+}
+
+// Guardie comuni preview/create (legacy appointments_plan.php 1609-1723, stesso
+// ordine): cliente bloccato, servizi non in sede, validazione/normalizzazione
+// della mappa cabine (auto-assegnazione con UNA sola cabina consentita).
+async function assertPlannerGuards(
+  slug: string,
+  form: PlannerForm,
+  context: PublicBookingContext,
+  resolved: ResolvedServices,
+  locationId: number | null,
+): Promise<{ cabinsEnabled: boolean }> {
+  // Cliente esistente bloccato (legacy 1609-1611): stessa guardia del quick booking.
+  if (form.clientId > 0) await assertClientNotBlockedForSave(slug, form.clientId);
+
+  // Servizi non disponibili nella sede corrente (legacy 1613-1621): un servizio
+  // con righe service_locations deve includere la sede; senza righe vale ovunque.
+  if (locationId && locationId > 0) {
+    for (const sid of form.serviceIds) {
+      const svc = context.services.find((s) => s.id === sid);
+      const locationIds = (svc as { locationIds?: number[] } | undefined)?.locationIds ?? [];
+      if (svc && locationIds.length > 0 && !locationIds.includes(locationId)) {
+        throw new Error("Servizio non disponibile nella sede corrente.");
+      }
+    }
+  }
+
+  // Cabine (legacy 1698-1723): con cabine attive, ogni servizio deve avere almeno
+  // una cabina consentita; una scelta esplicita deve essere consentita; con UNA
+  // sola cabina possibile viene assegnata automaticamente (0 = Auto).
+  const cabinsEnabled = await tenantCabinsEnabled(slug, locationId).catch(() => false);
+  if (cabinsEnabled) {
+    for (const svcEntry of resolved.ordered) {
+      const allowed = await allowedCabinIdsForServices(slug, [svcEntry.id], locationId).catch(() => [] as number[]);
+      if (allowed.length === 0) {
+        throw new Error(`Nessuna cabina disponibile per il servizio: ${svcEntry.name}`);
+      }
+      const chosen = Number(form.cabinMap[svcEntry.id] ?? 0);
+      if (chosen > 0 && !allowed.includes(chosen)) {
+        throw new Error(`Seleziona una cabina valida per il servizio: ${svcEntry.name}`);
+      }
+      if (allowed.length === 1) form.cabinMap[svcEntry.id] = allowed[0];
+    }
+  }
+  return { cabinsEnabled };
 }
 
 // Build the sequential per-service segments for a candidate start (mirrors how
@@ -350,7 +425,7 @@ async function findSlotForDate(
   // Candidate starts inside the window whose END also fits the window (unless the
   // window is a fixed single instant). Prefer publicBookingSlots' own `available`
   // flag, then confirm with the per-segment guard.
-  let lastReason = "Nessuno slot disponibile nella fascia oraria";
+  let lastReason = "Nessuno slot disponibile nella finestra scelta";
   let sawWindowCandidate = false;
   for (const slot of slots) {
     const startMin = parseTimeToMin(slot.time);
@@ -401,7 +476,7 @@ async function findSlotForDate(
 
   return {
     ok: false,
-    reason: sawWindowCandidate ? lastReason : "Nessuno slot disponibile nella fascia oraria",
+    reason: sawWindowCandidate ? lastReason : "Nessuno slot disponibile nella finestra scelta",
   };
 }
 
@@ -428,6 +503,7 @@ export async function planPreview(
 
   const context = await publicBookingContext(slug);
   const resolved = resolveServices(form, context);
+  const { cabinsEnabled } = await assertPlannerGuards(slug, form, context, resolved, locationId);
 
   const dates = generatePlannerDates(form);
   if (dates.length === 0) throw new Error("Nessuna data generata.");
@@ -463,6 +539,36 @@ export async function planPreview(
   }
 
   const countOk = rows.filter((r) => r.ok).length;
+
+  // Cabine disponibili per la UI (legacy cabin_avail_by_service, 1906-1950):
+  // calcolate SOLO sulla PRIMA riga OK (slot di riferimento), per ogni servizio
+  // sul proprio sotto-intervallo consecutivo dentro lo slot.
+  const cabinAvail: PlannerPreview["cabinAvail"] = {};
+  if (cabinsEnabled) {
+    const firstOk = rows.find((r) => r.ok && r.start);
+    if (firstOk && firstOk.start) {
+      const baseMin = parseTimeToMin(firstOk.start);
+      if (baseMin !== null) {
+        let offset = 0;
+        const order = firstOk.serviceOrder.length ? firstOk.serviceOrder : form.serviceIds;
+        for (const sid of order) {
+          const svc = resolved.ordered.find((s) => s.id === sid);
+          if (!svc || svc.durationMin <= 0) continue;
+          const segStart = baseMin + offset;
+          const startsAt = `${firstOk.date} ${minToHHMM(segStart)}:00`;
+          const endsAt = `${firstOk.date} ${minToHHMM(segStart + svc.durationMin)}:00`;
+          try {
+            const cabinCtx = await cabinsForServicesContext({ slug, serviceIds: [sid], startsAt, endsAt, locationId });
+            cabinAvail[sid] = cabinCtx.cabins.filter((cabin) => !cabin.occupied).map((cabin) => ({ id: cabin.id, name: cabin.name }));
+          } catch {
+            cabinAvail[sid] = [];
+          }
+          offset += svc.durationMin;
+        }
+      }
+    }
+  }
+
   return {
     ok: true,
     dates: rows,
@@ -472,6 +578,8 @@ export async function planPreview(
     services: resolved.ordered.map((s) => ({ id: s.id, name: s.name, durationMin: s.durationMin, price: roundMoney(s.price) })),
     countOk,
     countSkip: rows.length - countOk,
+    cabinsEnabled,
+    cabinAvail,
   };
 }
 
@@ -491,6 +599,7 @@ export async function planCreate(
 
   const context = await publicBookingContext(slug);
   const resolved = resolveServices(form, context);
+  await assertPlannerGuards(slug, form, context, resolved, locationId);
 
   // Resolve the client. An existing client_id wins; otherwise create the new client
   // now (port of appointments_plan.php:1581-1605). createDbAppointment resolves the
@@ -505,15 +614,22 @@ export async function planCreate(
   } else {
     if (form.newFullName === "") throw new Error("Seleziona un cliente o inserisci un nuovo cliente.");
     if (form.newEmail !== "" && !isValidEmail(form.newEmail)) throw new Error("Email nuovo cliente non valida.");
-    const created = await createDbClient(
-      {
-        name: form.newFullName,
-        phone: form.newPhone || undefined,
-        email: form.newEmail || undefined,
-        locationId: locationId ?? 0,
-      },
-      slug,
-    );
+    let created;
+    try {
+      created = await createDbClient(
+        {
+          name: form.newFullName,
+          phone: form.newPhone || undefined,
+          email: form.newEmail || undefined,
+          locationId: locationId ?? 0,
+        },
+        slug,
+      );
+    } catch {
+      // Verbatim legacy (appointments_plan.php 1603).
+      throw new Error("Impossibile creare il nuovo cliente.");
+    }
+    if (!created || created.id <= 0) throw new Error("Impossibile creare il nuovo cliente.");
     clientId = created.id;
     newClientId = created.id;
     clientName = created.name;

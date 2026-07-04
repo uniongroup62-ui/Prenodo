@@ -1616,6 +1616,12 @@ function minutesOfDayFromSqlDate(sqlDate: string): number {
 // Active cabin ids usable at a location, in the legacy pick order: cabins bound
 // to the location first, then location-less ones, by position then id
 // (fetch_active_cabins + order_cabin_ids_by_position).
+// Feature-gate cabine per il planner (legacy $cabinsSupported): il tenant ha
+// almeno una cabina attiva per la sede.
+export async function tenantCabinsEnabled(slug: string, locationId: number | null): Promise<boolean> {
+  return (await activeCabinIdsForLocation(slug, locationId)).length > 0;
+}
+
 async function activeCabinIdsForLocation(slug: string, locationId: number | null): Promise<number[]> {
   const hasLocation = typeof locationId === "number" && locationId > 0;
   const rows = await tenantSelect<RowDataPacket>({
@@ -1635,7 +1641,7 @@ async function activeCabinIdsForLocation(slug: string, locationId: number | null
 // table), else the service's own services.cabin_id, else ALL active cabins; the
 // result is the INTERSECTION across services, restricted to active cabins at the
 // location and returned in the active-cabin pick order.
-async function allowedCabinIdsForServices(slug: string, serviceIds: number[], locationId: number | null): Promise<number[]> {
+export async function allowedCabinIdsForServices(slug: string, serviceIds: number[], locationId: number | null): Promise<number[]> {
   const ids = Array.from(new Set(serviceIds.map((id) => Number(id) || 0).filter((id) => id > 0)));
   if (ids.length === 0) return [];
   const activeIds = await activeCabinIdsForLocation(slug, locationId);
@@ -1947,7 +1953,7 @@ async function assertFidelityPointsBalanceForSave(slug: string, clientId: number
 // appointment that ALREADY belongs to that blocked client can still be edited —
 // only assigning a blocked client anew is refused ($sameExistingBlockedClient).
 // Throws the exact legacy operational message (client_block_operational_message).
-async function assertClientNotBlockedForSave(slug: string, clientId: number, currentAppointmentClientId: number | null = null): Promise<void> {
+export async function assertClientNotBlockedForSave(slug: string, clientId: number, currentAppointmentClientId: number | null = null): Promise<void> {
   if (!clientId || clientId <= 0) return;
   if (currentAppointmentClientId && currentAppointmentClientId === clientId) return;
   const rows = await tenantSelect<RowDataPacket>({

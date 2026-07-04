@@ -2947,3 +2947,63 @@ Verifica: battery 13/13 (statusCode/endTime/publicCode/decorazioni in list,
 guardia verbatim su delete non-annullato, bulk misto deleted=1+blocked=1,
 delete su annullato ok, cleanup CLEAN) + 27/27 marker bundle (inclusa
 l'ASSENZA del vecchio "Incassa") + typecheck.
+
+## Pianifica (appointments_plan) — AUDIT COMPLETO legacy vs Next (2026-07-04)
+
+Doppio inventario agent (appointments_plan.php 2383 righe + appointments_plan.js
+789 righe vs appointments_plan-content/manage-planner/route) + cattura live del
+markup PHP + WORKFLOW di verifica adversariale sui gap incerti (5/5 confermati
++ 2 deep-dive cabine). GAP chiusi:
+
+1. REDIRECT POST-CREAZIONE legacy (2013-2023): il "Crea appuntamenti" ora
+   REINDIRIZZA alla Lista appuntamenti con ?from=<min-1g>&to=<max+1g>&
+   created=<id,id>&msg="Pianificazione completata: creati N appuntamenti"
+   (rimosso l'alert inline non-legacy); la lista legge ?msg/?err/?from/?to/?q
+   dall'URL (alert + filtri seedati come il GET legacy).
+2. CABINE NEL PLANNER (erano del tutto assenti nella UI Next): select "Cabina"
+   per servizio GATED fino all'Anteprima ("(Premi Anteprima)"), poi cabine
+   LIBERE sullo slot di riferimento (prima riga OK, per-segmento come il legacy
+   1906-1950): 0 -> "Nessuna cabina" disabled, 1 -> auto-selezionata disabled,
+   >1 -> select senza "(Auto)" (scelta precedente mantenuta se ancora libera,
+   altrimenti la prima); cabin_map inviata a preview/create; planPreview
+   ritorna cabinsEnabled + cabinAvail (riuso cabinsForServicesContext);
+   validazioni server verbatim "Nessuna cabina disponibile per il servizio: X"
+   / "Seleziona una cabina valida per il servizio: X" + auto-assegnazione con
+   una sola consentita (legacy 1698-1723). Il create scrive cabin_id sui
+   segmenti (resolvePlanCabins già esistente).
+3. VALIDAZIONI SERVER mancanti (verdetti workflow CONFERMATI): finestra vs
+   durata '"Alle ore" deve essere >= "Dalle ore" + durata servizi.' (legacy
+   1644-1651, con precedenza legacy servizi->finestra->operatori); servizi
+   fuori sede "Servizio non disponibile nella sede corrente." (legacy
+   1613-1621, semantica service_locations); cliente BLOCCATO in preview E
+   create (guardia riusata assertClientNotBlockedForSave, legacy 1609-1611);
+   "Impossibile creare il nuovo cliente." (legacy 1603).
+4. REASON VERBATIM: "Nessuno slot disponibile nella finestra scelta" (era
+   "nella fascia oraria").
+5. DINAMICHE CLIENT legacy (appointments_plan.js): auto-calcolo "Alle ore" =
+   "Dalle ore" + durata servizi (min + clamp 23:59, valori inferiori bloccati);
+   "Dal giorno" ancorato al primo giorno selezionato (Lun→Dom) alla prossima
+   occorrenza dopo oggi, mai retroattivo (min oggi); default time_to 09:00.
+6. SELECT OPERATORE stati legacy: 0 eligibili -> "Nessun operatore" disabled;
+   1 -> auto-assegnato select disabled col nome; >1 -> placeholder
+   "(seleziona)" (era "Seleziona operatore…"); name legacy staff_map[id].
+7. MODAL TROVA CLIENTE: righe legacy "Email: x"/"Telefono: y" ("—" se vuoti),
+   nome text-primary, stato vuoto "Nessun risultato.".
+PARITÀ CONFERMATE (nessuna azione): header/kicker/subtitle/azioni Lista+
+Calendario, form Impostazioni completo (Cliente Nuovo/Trova/annulla, multiselect
+servizi con gruppi e "• N min", Ripeti per 1-200, giorni Lun.-Dom., ricorrenza
+weekly/2/3/monthly, testi help verbatim), anteprima (badge durata/prezzo,
+Servizi selezionati:, tabella Data/Ora/Operatore/Esito con OK/Saltato),
+generazione date (ancoraggio lunedì, monthly 1 data/ciclo, non retroattivo,
+clamp repeat 200), niente reminders alla creazione (ANCHE il legacy non li
+crea), nuovo cliente creato solo allo step create, public_code 5 cifre.
+RESIDUI DELIBERATI: slot finder = primo slot disponibile nella finestra via
+publicBookingSlots+guard (il DFS permutazioni legacy non è portato — semantica
+documentata nel modulo); reason "Risorsa non disponibile/esaurita" del legacy
+non distinta (lo slot con risorse esaurite è comunque scartato, etichettato
+"Operatore occupato"); probe cabinsEnabled via cabins_for_services al primo
+servizio selezionato (il legacy lo server-renderizza nel config).
+Verifica: battery 14/14 (preview con cabinAvail nominato, finestra corta
+verbatim, cliente bloccato, fuori orario -> reason verbatim, create con
+public_code 5 cifre + segmenti con cabina auto e staff, details con
+appointmentId per ?created=, cleanup CLEAN) + 18/18 marker bundle + typecheck.
