@@ -277,12 +277,14 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
-  const [saleId] = useState<number>(() => saleIdFromUrl());
+  // L'id si legge dall'URL SOLO dopo il mount: in SSR window non esiste e un
+  // inizializzatore window-dipendente renderizzerebbe l'HTML iniziale nello stato
+  // d'errore ("Vendita non valida.") che flasha finché il client non si idrata.
+  // Lato server la pagina resta in "Caricamento…" (stesso pattern degli altri dettagli).
+  const [saleId, setSaleId] = useState(0);
   const [detail, setDetail] = useState<SaleDetail | null>(null);
-  // Start loading only when there is a valid id to fetch; an invalid id renders the error
-  // branch immediately (no effect setState needed, keeping the load effect side-effect-free).
-  const [loading, setLoading] = useState(() => saleIdFromUrl() > 0);
-  const [error, setError] = useState(() => (saleIdFromUrl() > 0 ? "" : "Vendita non valida."));
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [flash, setFlash] = useState("");
 
   // Cancel modal state.
@@ -308,6 +310,18 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
   // setState synchronously inside the effect, the fetch + all setState live in the effect).
   const [reloadKey, setReloadKey] = useState(0);
   const load = useCallback(() => setReloadKey((k) => k + 1), []);
+
+  // Mount-only: risolve l'id dall'URL (client-side). Id assente/invalido -> stato
+  // errore; altrimenti saleId>0 fa partire il fetch dell'effect sotto.
+  useEffect(() => {
+    const id = saleIdFromUrl();
+    if (id <= 0) {
+      setError("Vendita non valida.");
+      setLoading(false);
+      return;
+    }
+    setSaleId(id);
+  }, []);
 
   useEffect(() => {
     if (!saleId) return;

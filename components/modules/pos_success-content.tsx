@@ -124,11 +124,25 @@ function itemDbType(item: PosSuccessItem): string {
 export function PosSuccessContent({ slug: slugProp }: { slug?: string } = {}) {
   const slug = slugProp || tenantSlug();
   const base = `/${encodeURIComponent(slug)}`;
-  const [saleId] = useState<number>(() => saleIdFromUrl());
-  const [flash] = useState<boolean>(() => flashFromUrl());
+  // L'id e il flash si leggono dall'URL SOLO dopo il mount: in SSR window non esiste
+  // e un inizializzatore window-dipendente renderizzerebbe l'HTML iniziale nello stato
+  // d'errore ("Vendita non valida.") che flasha finché il client non si idrata.
+  const [saleId, setSaleId] = useState(0);
+  const [flash, setFlash] = useState(false);
   const [data, setData] = useState<PosSuccessData | null>(null);
-  const [loading, setLoading] = useState(() => saleIdFromUrl() > 0);
-  const [error, setError] = useState(() => (saleIdFromUrl() > 0 ? "" : "Vendita non valida."));
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const id = saleIdFromUrl();
+    setFlash(flashFromUrl());
+    if (id <= 0) {
+      setError("Vendita non valida.");
+      setLoading(false);
+      return;
+    }
+    setSaleId(id);
+  }, []);
 
   useEffect(() => {
     if (saleId <= 0) return;

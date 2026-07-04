@@ -2871,3 +2871,18 @@ Verifica: battery pos_success 12/12 (dati pagina, breakdown Sconto manuale,
 note ripulite, GiftCard emessa rilevata con id+code, vendita inesistente) +
 regressioni 16/16 e 14/14 + 30/30 marker (inclusa l'ASSENZA di "Stampa
 scontrino"/overlay nei bundle della cassa e del dettaglio) + typecheck.
+
+## Fix flash errore SSR sulle pagine dettaglio (2026-07-04, su segnalazione utente)
+
+Sintomo: aprendo pos_success/pos_sale_detail/client_detail si vedeva PRIMA lo
+stato d'errore ("Vendita non valida." / "Cliente non valido.") e poi la pagina
+corretta. Causa: l'HTML server-renderizzato (dove window non esiste) veniva
+prodotto con id=0 -> ramo errore, visibile finché il client non si idrata e
+rilegge l'URL. Fix:
+1. pos_success + pos_sale_detail: id/flash letti SOLO dopo il mount (effect),
+   loading=true iniziale -> l'SSR mostra "Caricamento…" (pattern già usato
+   dagli altri dettagli).
+2. client_detail: il ramo `if (!clientId)` ("Cliente non valido.") veniva
+   PRIMA del ramo loading -> riordinato (loading first).
+Verifica: scansione SSR su 14 pagine (dettagli POS/clienti/pacchetti/giftcard/
+giftbox/preventivi/omaggi + liste): nessun testo d'errore nell'HTML iniziale.

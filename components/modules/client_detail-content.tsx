@@ -424,21 +424,24 @@ export function ClientDetailContent({ slug: slugProp }: { slug?: string } = {}) 
     </div>
   );
 
-  if (!clientId) {
-    return (
-      <div className="container-fluid">
-        <link rel="stylesheet" href="/assets/css/pages/clients.css" />
-        <div className="alert alert-danger">Cliente non valido.</div>
-      </div>
-    );
-  }
-
+  // Il ramo loading DEVE precedere i rami d'errore: in SSR clientId è 0 (l'URL si
+  // legge solo dopo il mount) e mettere "Cliente non valido." per primo lo farebbe
+  // flashare nell'HTML iniziale finché il client non si idrata.
   if (loading) {
     return (
       <div className="container-fluid">
         <link rel="stylesheet" href="/assets/css/pages/clients.css" />
         {Header}
         <div className="card p-3 text-muted small">Caricamento…</div>
+      </div>
+    );
+  }
+
+  if (!clientId) {
+    return (
+      <div className="container-fluid">
+        <link rel="stylesheet" href="/assets/css/pages/clients.css" />
+        <div className="alert alert-danger">Cliente non valido.</div>
       </div>
     );
   }
