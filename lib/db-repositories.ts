@@ -15520,10 +15520,133 @@ async function mapAppointment(slug: string, row: RowDataPacket): Promise<Appoint
       ? null
       : String(row.public_code).trim(),
     // Ordered service lines for the multi-service grouping (parent + child rows).
-    services: serviceLines.map((line) => ({ serviceId: line.serviceId, name: line.name, price: `${roundMoney(line.price)} euro`, segmentId: line.segmentId ?? null })),
+    // time/endTime/staffName/staffColor: dati per-segmento delle righe figlie legacy
+    // ("↳ HH:MM → HH:MM" + operatore col pallino colore).
+    services: serviceLines.map((line) => ({ serviceId: line.serviceId, name: line.name, price: `${roundMoney(line.price)} euro`, segmentId: line.segmentId ?? null, time: line.time, endTime: line.endTime, staffName: line.staffName, staffColor: line.staffColor })),
     // Per-operator segments for the Day calendar (only when >1 distinct operator).
     segments: await appointmentSegmentsForCalendar(slug, appointmentId),
   };
+}
+
+// Decorazioni della lista appuntamenti legacy (appointments.php 915-941 + 558-565):
+// • packageSummary: "Pacchetto: NOME" / "Pacchetti: A, B" dalle righe
+//   appointment_package_items (includeRedeemed=true) — nome da client_packages,
+//   fallback "Pacchetto #id"/"Pacchetto" (ClientPackages::appointmentPackageSummaryMap);
+// • prepaidSummary: "Prepagato" quando esistono righe appointment_prepaid_service_items
+//   (ClientPrepaidServices::appointmentPrepaidSummaryMap);
+// • staffColor: colore #RRGGBB dell'operatore (primo appointment_staff) per il
+//   pallino .op-color-dot. Best-effort: mappa vuota su errori.
+export async function appointmentListDecorations(
+  slug: string,
+  appointmentIds: number[],
+): Promise<Map<number, { packageSummary: string; prepaidSummary: string; staffColor: string }>> {
+  const out = new Map<number, { packageSummary: string; prepaidSummary: string; staffColor: string }>();
+  const ids = [...new Set(appointmentIds.filter((id) => Number(id) > 0))];
+  if (!ids.length) return out;
+  const entry = (id: number) => {
+    if (!out.has(id)) out.set(id, { packageSummary: "", prepaidSummary: "", staffColor: "" });
+    return out.get(id)!;
+  };
+  const inList = ids.map(() => "?").join(",");
+
+  // Pacchetti collegati.
+  try {
+    const linkRows = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "appointment_package_items",
+      columns: "appointment_id, client_package_id",
+      where: `appointment_id IN (${inList})`,
+      params: ids,
+      orderBy: "appointment_id ASC, id ASC",
+    });
+    const cpIds = [...new Set(linkRows.map((r) => Number(r.client_package_id ?? 0)).filter((n) => n > 0))];
+    const nameById = new Map<number, string>();
+    if (cpIds.length) {
+      const cpRows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "client_packages",
+        columns: "id, package_name",
+        where: `id IN (${cpIds.map(() => "?").join(",")})`,
+        params: cpIds,
+      }).catch(() => [] as RowDataPacket[]);
+      for (const r of cpRows) nameById.set(Number(r.id), String(r.package_name ?? "").trim());
+    }
+    const namesByAppointment = new Map<number, Set<string>>();
+    for (const r of linkRows) {
+      const aid = Number(r.appointment_id ?? 0);
+      if (aid <= 0) continue;
+      const cpId = Number(r.client_package_id ?? 0);
+      let name = cpId > 0 ? nameById.get(cpId) ?? "" : "";
+      if (!name) name = cpId > 0 ? `Pacchetto #${cpId}` : "Pacchetto";
+      if (!namesByAppointment.has(aid)) namesByAppointment.set(aid, new Set());
+      namesByAppointment.get(aid)!.add(name);
+    }
+    for (const [aid, set] of namesByAppointment) {
+      const names = [...set];
+      if (!names.length) continue;
+      entry(aid).packageSummary = (names.length > 1 ? "Pacchetti: " : "Pacchetto: ") + names.join(", ");
+    }
+  } catch {
+    // best-effort
+  }
+
+  // Prepagati collegati.
+  try {
+    const rows = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "appointment_prepaid_service_items",
+      columns: "DISTINCT appointment_id",
+      where: `appointment_id IN (${inList})`,
+      params: ids,
+    });
+    for (const r of rows) {
+      const aid = Number(r.appointment_id ?? 0);
+      if (aid > 0) entry(aid).prepaidSummary = "Prepagato";
+    }
+  } catch {
+    // best-effort
+  }
+
+  // Colore operatore (primo appointment_staff per appuntamento).
+  try {
+    const staffLinks = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "appointment_staff",
+      columns: "appointment_id, staff_id",
+      where: `appointment_id IN (${inList})`,
+      params: ids,
+      orderBy: "appointment_id ASC, staff_id ASC",
+    });
+    const firstStaff = new Map<number, number>();
+    for (const r of staffLinks) {
+      const aid = Number(r.appointment_id ?? 0);
+      const sid = Number(r.staff_id ?? 0);
+      if (aid > 0 && sid > 0 && !firstStaff.has(aid)) firstStaff.set(aid, sid);
+    }
+    const staffIds = [...new Set(firstStaff.values())];
+    if (staffIds.length) {
+      const staffRows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "staff",
+        columns: "id, calendar_color",
+        where: `id IN (${staffIds.map(() => "?").join(",")})`,
+        params: staffIds,
+      }).catch(() => [] as RowDataPacket[]);
+      const colorById = new Map<number, string>();
+      for (const r of staffRows) {
+        const color = String(r.calendar_color ?? "").trim();
+        if (/^#[0-9a-fA-F]{6}$/.test(color)) colorById.set(Number(r.id), color);
+      }
+      for (const [aid, sid] of firstStaff) {
+        const color = colorById.get(sid);
+        if (color) entry(aid).staffColor = color;
+      }
+    }
+  } catch {
+    // best-effort
+  }
+
+  return out;
 }
 
 // Per-service segments (appointment_segments) with resolved staff names, exposed on
@@ -15574,7 +15697,7 @@ async function appointmentSegmentsForCalendar(
 async function appointmentServiceLines(
   slug: string,
   appointment: RowDataPacket,
-): Promise<Array<{ serviceId: number; name: string; price: number; segmentId?: number | null }>> {
+): Promise<Array<{ serviceId: number; name: string; price: number; segmentId?: number | null; time?: string; endTime?: string; staffName?: string; staffColor?: string }>> {
   const appointmentId = Number(appointment.id ?? 0);
   try {
     const serviceRows = await tenantSelect<RowDataPacket>({
@@ -15587,28 +15710,59 @@ async function appointmentServiceLines(
     });
     if (serviceRows.length > 0) {
       // Segment ids + POSITION order (the legacy child rows follow the segment
-      // sequence and carry data-seg for the ↑/↓ reorder buttons).
+      // sequence and carry data-seg for the ↑/↓ reorder buttons) + gli orari e
+      // l'operatore per segmento (le righe figlie legacy mostrano "↳ HH:MM → HH:MM"
+      // e il nome operatore col pallino colore).
       const segRows = await tenantSelect<RowDataPacket>({
         slug,
         table: "appointment_segments",
-        columns: "id, service_id, position",
+        columns: "id, service_id, position, starts_at, ends_at, staff_id",
         where: "appointment_id = ?",
         params: [appointmentId],
         orderBy: "position ASC, id ASC",
       }).catch(() => [] as RowDataPacket[]);
-      const segByService = new Map<number, { id: number; position: number }>();
+      const segByService = new Map<number, { id: number; position: number; time: string; endTime: string; staffId: number }>();
       for (const seg of segRows) {
         const sid = Number(seg.service_id ?? 0);
-        if (sid > 0 && !segByService.has(sid)) segByService.set(sid, { id: Number(seg.id ?? 0), position: Number(seg.position ?? 0) });
+        if (sid > 0 && !segByService.has(sid)) {
+          segByService.set(sid, {
+            id: Number(seg.id ?? 0),
+            position: Number(seg.position ?? 0),
+            time: seg.starts_at ? timeLocal(toDate(seg.starts_at)) : "",
+            endTime: seg.ends_at ? timeLocal(toDate(seg.ends_at)) : "",
+            staffId: Number(seg.staff_id ?? 0),
+          });
+        }
+      }
+      // Nomi + colori operatore dei segmenti (batch): pallino colore legacy.
+      const segStaffIds = [...new Set([...segByService.values()].map((s) => s.staffId).filter((n) => n > 0))];
+      const segStaffById = new Map<number, { name: string; color: string }>();
+      if (segStaffIds.length) {
+        const staffRows = await tenantSelect<RowDataPacket>({
+          slug,
+          table: "staff",
+          columns: "id, full_name, calendar_color",
+          where: `id IN (${segStaffIds.map(() => "?").join(",")})`,
+          params: segStaffIds,
+        }).catch(() => [] as RowDataPacket[]);
+        for (const r of staffRows) {
+          const color = String(r.calendar_color ?? "").trim();
+          segStaffById.set(Number(r.id), { name: String(r.full_name ?? ""), color: /^#[0-9a-fA-F]{6}$/.test(color) ? color : "" });
+        }
       }
       const lines = serviceRows.map((row) => {
         const serviceId = Number(row.service_id ?? 0);
         const seg = segByService.get(serviceId);
+        const staff = seg && seg.staffId > 0 ? segStaffById.get(seg.staffId) : undefined;
         return {
           serviceId,
           name: String(row.service_name ?? "Servizio"),
           price: Number(row.price ?? 0),
           segmentId: seg ? seg.id : null,
+          time: seg?.time || undefined,
+          endTime: seg?.endTime || undefined,
+          staffName: staff?.name || undefined,
+          staffColor: staff?.color || undefined,
           _position: seg ? seg.position : Number.MAX_SAFE_INTEGER,
         };
       });

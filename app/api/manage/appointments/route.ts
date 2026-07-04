@@ -17,6 +17,7 @@ import {
   getDbAppointmentMoveSnapshot,
   getDbAppointmentPhpStatus,
   getDbAppointmentSegmentCount,
+  appointmentListDecorations,
   listDbAppointments,
   resizeDbAppointmentEnd,
   swapDbAppointmentSegment,
@@ -278,12 +279,25 @@ export async function GET(request: Request) {
     // clause. `date` (single day) still takes priority when present (Day view).
     const from = url.searchParams.get("from") ?? undefined;
     const to = url.searchParams.get("to") ?? undefined;
+    const appointments = await listDbAppointments(
+      date ? { slug: tenantSlug, date } : { slug: tenantSlug, start: from, end: to },
+    );
+    // Decorazioni della lista legacy (appointments.php): riepilogo pacchetti/
+    // prepagati sotto il servizio + colore operatore per il pallino. Best-effort.
+    const decorations = await appointmentListDecorations(tenantSlug, appointments.map((a) => a.id)).catch(
+      () => new Map<number, { packageSummary: string; prepaidSummary: string; staffColor: string }>(),
+    );
+    for (const appt of appointments) {
+      const extra = decorations.get(appt.id);
+      if (!extra) continue;
+      if (extra.packageSummary) appt.packageSummary = extra.packageSummary;
+      if (extra.prepaidSummary) appt.prepaidSummary = extra.prepaidSummary;
+      if (extra.staffColor) appt.staffColor = extra.staffColor;
+    }
     return Response.json({
       ok: true,
       sourceMode: "database",
-      appointments: await listDbAppointments(
-        date ? { slug: tenantSlug, date } : { slug: tenantSlug, start: from, end: to },
-      ),
+      appointments,
       holds: [],
     });
   } catch (error) {
@@ -453,6 +467,12 @@ export async function POST(request: Request) {
       // api_appointments.php action=delete); the bulk skips those rows and reports.
       let deleted = 0;
       let guardError = "";
+      // Contatori legacy (appointments.php bulk_delete): righe saltate perché NON
+      // in stato Annullato (guard) vs non disponibili/inesistenti — la UI compone
+      // i messaggi verbatim "N prenotazioni non annullate non eliminate: annullale
+      // prima." / "N prenotazioni non eliminate perche non disponibili...".
+      let blockedNotCanceled = 0;
+      let blockedUnavailable = 0;
       for (const id of ids) {
         try {
           if (await deleteDbAppointment(tenantSlug, id)) {
@@ -460,19 +480,24 @@ export async function POST(request: Request) {
             // Pulizia righe promemoria pending orfane (il cron le ignorerebbe
             // ma resterebbero pending per sempre).
             await automationClearPendingReminders(tenantSlug, id);
+          } else {
+            blockedUnavailable += 1;
           }
         } catch (error) {
           guardError = error instanceof Error ? error.message : "Eliminazione non consentita.";
+          blockedNotCanceled += 1;
           if (action === "delete") return jsonError(guardError);
         }
       }
 
-      if (deleted === 0 && guardError) return jsonError(guardError);
+      if (deleted === 0 && guardError && blockedUnavailable === 0) return jsonError(guardError);
       return Response.json({
         ok: true,
         sourceMode: "database",
         deleted,
         skipped: ids.length - deleted,
+        blockedNotCanceled,
+        blockedUnavailable,
         appointments: await listDbAppointments({ slug: tenantSlug }),
       });
     }

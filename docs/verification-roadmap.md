@@ -2886,3 +2886,64 @@ rilegge l'URL. Fix:
    PRIMA del ramo loading -> riordinato (loading first).
 Verifica: scansione SSR su 14 pagine (dettagli POS/clienti/pacchetti/giftcard/
 giftbox/preventivi/omaggi + liste): nessun testo d'errore nell'HTML iniziale.
+
+## Lista appuntamenti — AUDIT COMPLETO legacy vs Next (2026-07-04)
+
+Doppio inventario (agent su appointments.php 1211 righe + appointments.js 205
+righe vs appointments-content/route/db-repositories) + cattura live del markup
+PHP con sessione. GAP chiusi:
+
+1. "INCASSA" RIMOSSO: non esiste in appointments.php (confermato: nessun
+   collegamento alla cassa dalla lista) — le azioni riga legacy sono SOLO
+   Modifica (drawer quick-booking via data-qb-edit) ed Elimina.
+2. ELIMINAZIONE SOLO PER ANNULLATI (deleteLocked legacy): il bottone Elimina
+   per riga appare solo con stato Annullato; le checkbox delle altre righe
+   sono disabled col title verbatim "La prenotazione deve essere in stato
+   Annullato. Annullala prima per poterla eliminare."; il seleziona-tutti
+   opera solo sulle selezionabili. La guardia server già esisteva.
+3. DATA "dd/mm/yyyy HH:MM → HH:MM" (fine solo ora) sulla riga padre; righe
+   figlie multi-servizio "↳ HH:MM → HH:MM" (orari per segmento ora esposti da
+   appointmentServiceLines: starts/ends/staff del segmento).
+4. CODICE PRENOTAZIONE: <code>#CODICE</code> non cliccabile, "—" quando
+   assente (prima: codice senza # o fallback #id).
+5. STATI VERBATIM legacy: In attesa / Prenotato / Eseguito / Annullato /
+   No show (+ --other per stati sconosciuti) mappati da statusCode — prima la
+   lista mostrava le etichette uiStatus "Confermato"/"Completato".
+6. MULTI-SERVIZIO legacy: riga padre "Multi-servizio (N)" + badge arancione
+   "Multi-servizio" + elenco servizi small + pallini colore operatori (max 6)
+   + nomi; figli con orario segmento, operatore (pallino+nome), badge stato,
+   riordino Sposta prima/Sposta dopo e toast "Ordine multi-servizio
+   aggiornato." (prima: toggle "N servizi" e prezzo nella colonna Operatore).
+7. RIEPILOGHI "Pacchetto: X"/"Pacchetti: X, Y" e "Prepagato" sotto il servizio
+   (small text-primary con icone) + PALLINO COLORE operatore: nuova
+   appointmentListDecorations (appointment_package_items/client_packages,
+   appointment_prepaid_service_items, appointment_staff/staff.calendar_color)
+   agganciata a GET action=list.
+8. ESITI ELIMINAZIONE come alert in testa (View::alert legacy): "Appuntamento
+   eliminato", "1 appuntamento eliminato."/"N appuntamenti eliminati.",
+   "N prenotazioni non annullate non eliminate: annullale prima.",
+   "N prenotazioni non eliminate perche non disponibili nella sede corrente.",
+   "Nessuna prenotazione eliminata." — la route bulk_delete ora ritorna i
+   contatori blockedNotCanceled/blockedUnavailable. Conferma bulk col testo
+   FISSO legacy "Eliminare gli appuntamenti selezionati?" (prima "Eliminare N
+   appuntamenti selezionati?").
+9. STATI VUOTI legacy: card globale "Nessuna prenotazione presente" (icona
+   calendar-plus, testo verbatim, bottoni "Nuova prenotazione" data-qb-new e
+   "Apri calendario") quando non esistono prenotazioni in sede — il bottone
+   header "Calendario" appare solo quando la lista non è globalmente vuota;
+   vuoto filtro: "Nessun appuntamento nel periodo." (prima "Nessun
+   appuntamento.").
+10. DEEP-LINK legacy: ?created=<id,id> forza l'inclusione fuori range (cap
+    300); ?action=edit&id= / ?action=new aprono il drawer quick-booking
+    (openEditId/openNew di appointmentsPageConfig, via click sintetico sui
+    delegati data-qb-edit/data-qb-new del drawer globale).
+PARITÀ CONFERMATE (nessuna azione): header/kicker/subtitle, filtri Dal/Al/
+Cerca con default mese corrente e placeholder verbatim, Filtra/Reset,
+"N selezionati", conferma singola "Eliminare questo appuntamento?", nessuna
+paginazione (ordinamento starts_at ASC), CSS identico. RESIDUO DELIBERATO:
+filtri applicati client-side sulla lista fetchata (stesso risultato del GET
+server legacy; ricerca su cliente+codice come il LIKE legacy).
+Verifica: battery 13/13 (statusCode/endTime/publicCode/decorazioni in list,
+guardia verbatim su delete non-annullato, bulk misto deleted=1+blocked=1,
+delete su annullato ok, cleanup CLEAN) + 27/27 marker bundle (inclusa
+l'ASSENZA del vecchio "Incassa") + typecheck.

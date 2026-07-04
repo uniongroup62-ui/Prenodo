@@ -2,46 +2,40 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 
-// Pixel-faithful port of the PHP appointments list page (?page=appointments),
-// fed by the existing DB-backed /api/manage/appointments?action=list.
+// Port fedele della pagina "Lista appuntamenti" legacy (appointments.php), alimentata
+// dal /api/manage/appointments?action=list DB-backed.
 //
-// Faithful to the legacy markup: original Bootstrap classes + `bi bi-*` icons,
-// the `appointments-page` wrapper, `appointments-filter-bar` filter form, the
-// `appointments-list-card` toolbar (bulk-delete) + `appointments-table`, the
-// status badges and the per-row Modifica/Elimina actions. Styling comes from
-// /assets/css/pages/appointments.css (linked below, present under
-// prenodo/public/assets/css/pages/).
+// Comportamenti legacy portati 1:1:
+// • Azioni per riga: SOLO "Modifica" (drawer quick-booking globale via data-qb-edit) ed
+//   "Elimina" — quest'ultimo VISIBILE SOLO per prenotazioni in stato Annullato
+//   (deleteLocked legacy). NON esiste alcun bottone "Incassa" (verificato su
+//   appointments.php: nessun collegamento alla cassa da questa lista).
+// • Checkbox di riga selezionabile SOLO per prenotazioni Annullate; sulle altre è
+//   disabled col title verbatim "La prenotazione deve essere in stato Annullato...".
+//   Il "seleziona tutti" opera solo sulle righe selezionabili visibili.
+// • Data "dd/mm/yyyy HH:MM → HH:MM" (inizio con data completa, fine solo ora); righe
+//   figlie multi-servizio "↳ HH:MM → HH:MM".
+// • Codice prenotazione: <code>#CODICE</code> non cliccabile, "—" quando assente.
+// • Stati verbatim: In attesa / Prenotato / Eseguito / Annullato / No show (+ --other).
+// • Multi-servizio: riga padre "Multi-servizio (N)" + badge "Multi-servizio" + elenco
+//   servizi small + pallini colore operatori (max 6) + nomi; figli con orari segmento,
+//   operatore (pallino+nome), badge stato e riordino ↑/↓ (Sposta prima/Sposta dopo).
+// • Riepiloghi "Pacchetto: X"/"Pacchetti: X, Y" e "Prepagato" sotto il servizio
+//   (small text-primary con icone box/carta).
+// • Esiti eliminazione come alert in testa (View::alert legacy): "Appuntamento
+//   eliminato", "N appuntamenti eliminati.", "N prenotazioni non annullate non
+//   eliminate: annullale prima.", "Nessuna prenotazione eliminata.", ecc.
+// • Stato vuoto GLOBALE (nessuna prenotazione in sede): card "Nessuna prenotazione
+//   presente" con bottoni "Nuova prenotazione" (drawer) e "Apri calendario"; il
+//   bottone header "Calendario" appare solo quando la lista non è globalmente vuota.
+//   Stato vuoto del filtro: "Nessun appuntamento nel periodo."
+// • Deep-link legacy: ?created=<id,id> include gli appuntamenti appena creati anche
+//   fuori dal range date; ?action=edit&id=<id> / ?action=new aprono il drawer.
+// • Conferme verbatim: "Eliminare questo appuntamento?", "Eliminare gli appuntamenti
+//   selezionati?". Toast successo riordino: "Ordine multi-servizio aggiornato."
 //
-// WIRED (live): the appointments table + status badges + the Dal/Al/Cerca
-// filters (applied client-side over the fetched list). Slug is read from the
-// pathname. Action links point at the legacy /{slug}/index.php?page=... routes.
-//
-// WIRED (live): the per-row "Modifica" action drives the GLOBAL quick-booking
-// drawer in EDIT MODE. The button carries data-qb-edit="<id>"; the global drawer
-// (quick-booking-drawer.tsx, mounted in the manage shell on every page) has a
-// delegated [data-qb-edit] handler that loads the appointment via GET action=get
-// and PREFILLS the full drawer (client, services, per-service operator/cabin,
-// date/time, status, notes). SAVE re-submits action=save WITH that id, which the
-// route routes to updateDbAppointment (faithful to the legacy
-// window.qbOpenEditAppointment). The previous minimal local edit drawer was removed.
-//
-// WIRED (live): DELETE — the per-row "Elimina" POSTs action=delete (JSON, confirm)
-// and the header "select all" + per-row checkboxes drive the selection that the
-// "Elimina selezionati" button POSTs as action=bulk_delete (confirm). The route
-// restores the redeems the appointment consumed (deleteDbAppointment) and returns the
-// refreshed list; the component re-fetches after each delete. Legacy `_csrf` hidden
-// inputs are dropped; the per-row href stays as the legacy ?action=delete URL but is
-// intercepted (preventDefault) so it never navigates.
-//
-// FAITHFUL-BUT-STATIC: the new-appointment quick-booking flow is reproduced as inert
-// markup (no submit/JS handlers) — handled by the global "Nuova prenotazione" drawer.
-//
-// DATA NOTE: the Next API returns { id, date, locationId, time, client, service,
-// operator, room, price, status, publicCode, services[] }. The "Codice prenotazione"
-// column shows the real appointments.public_code when present (fallback `#{id}`), and
-// a multi-service appointment renders as a parent row + collapsible per-service child
-// rows (legacy ms-parent / ms-children). The date cell still shows the start time only
-// (the API does not return an end time).
+// I filtri Dal/Al/Cerca sono applicati client-side sulla lista fetchata (il form GET è
+// intercettato) — stesso risultato del GET legacy (LIKE su cliente/codice, range date).
 
 type AppointmentServiceLine = {
   serviceId: number;
@@ -49,6 +43,11 @@ type AppointmentServiceLine = {
   price: string;
   // Segment id (multi-service): drives the ↑/↓ reorder (action=swap_segment).
   segmentId?: number | null;
+  // Orari/operatore del segmento (righe figlie legacy "↳ HH:MM → HH:MM" + pallino).
+  time?: string;
+  endTime?: string;
+  staffName?: string;
+  staffColor?: string;
 };
 
 type Appointment = {
@@ -56,17 +55,22 @@ type Appointment = {
   date?: string;
   locationId?: number | null;
   time: string;
+  endTime?: string;
   client: string;
   service: string;
   operator: string;
   room: string;
   price: string;
   status: string;
-  // Real booking code (appointments.public_code); null -> fall back to #id.
+  // Codice stato PHP reale (pending|scheduled|done|canceled|no_show).
+  statusCode?: string;
+  // Real booking code (appointments.public_code); null -> "—" come il legacy.
   publicCode?: string | null;
-  // Ordered service list for the multi-service parent/child rendering. A single-service
-  // appointment carries one entry; absent/empty -> render the single `service` string.
   services?: AppointmentServiceLine[];
+  // Decorazioni legacy (route action=list): riepiloghi + colore operatore.
+  packageSummary?: string;
+  prepaidSummary?: string;
+  staffColor?: string;
 };
 
 function tenantSlug(): string {
@@ -90,23 +94,43 @@ function fmtDate(iso?: string): string {
   return d && m && y ? `${d}/${m}/${y}` : iso;
 }
 
-// Map the UI status label returned by the API to the legacy badge variant.
-function statusBadge(status: string): { className: string; label: string } {
-  const key = status.trim().toLowerCase();
-  if (key === "completato" || key === "done" || key === "completed") {
-    return { className: "appointments-status-badge--done", label: status };
-  }
-  if (key === "in attesa" || key === "pending" || key === "waiting") {
-    return { className: "appointments-status-badge--pending", label: status };
-  }
-  if (key === "annullato" || key === "canceled" || key === "cancelled") {
-    return { className: "appointments-status-badge--canceled", label: status };
-  }
-  if (key === "no_show" || key === "no show") {
-    return { className: "appointments-status-badge--no-show", label: status };
-  }
-  // Confermato / scheduled / anything else.
-  return { className: "appointments-status-badge--scheduled", label: status };
+// Codice stato normalizzato (appointment_status_normalize_code legacy).
+function normStatusCode(appt: Appointment): string {
+  const raw = String(appt.statusCode ?? appt.status ?? "").trim().toLowerCase();
+  if (raw === "cancelled" || raw === "annullato") return "canceled";
+  if (raw === "no show" || raw === "no-show") return "no_show";
+  if (raw === "in attesa") return "pending";
+  if (raw === "prenotato" || raw === "confermato") return "scheduled";
+  if (raw === "eseguito" || raw === "completato" || raw === "completed") return "done";
+  return raw;
+}
+
+// Badge stato legacy (appointments.php 1041-1050): etichette + classi verbatim.
+const STATUS_LABELS: Record<string, string> = {
+  pending: "In attesa",
+  scheduled: "Prenotato",
+  done: "Eseguito",
+  canceled: "Annullato",
+  no_show: "No show",
+};
+function statusBadge(appt: Appointment): { className: string; label: string } {
+  const st = normStatusCode(appt);
+  const label = STATUS_LABELS[st] ?? (appt.statusCode || appt.status);
+  if (st === "pending") return { className: "appointments-status-badge--pending", label };
+  if (st === "scheduled") return { className: "appointments-status-badge--scheduled", label };
+  if (st === "done") return { className: "appointments-status-badge--done", label };
+  if (st === "canceled") return { className: "appointments-status-badge--canceled", label };
+  if (st === "no_show") return { className: "appointments-status-badge--no-show", label };
+  return { className: "appointments-status-badge--other", label };
+}
+
+// Title verbatim del lock eliminazione (appointments.php $deleteLockTitle).
+const DELETE_LOCK_TITLE = "La prenotazione deve essere in stato Annullato. Annullala prima per poterla eliminare.";
+
+// Pallino colore operatore legacy (.op-color-dot data-appointment-color).
+function OpColorDot({ color }: { color?: string }) {
+  if (!color || !/^#[0-9a-fA-F]{6}$/.test(color)) return null;
+  return <span className="op-color-dot" data-appointment-color={color} title="Colore operatore" style={{ backgroundColor: color }}></span>;
 }
 
 export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) {
@@ -123,15 +147,20 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
   const [to, setTo] = useState(defaults.to);
   const [q, setQ] = useState("");
 
-  // Bulk-delete state: the set of selected appointment ids (drives the per-row +
-  // "select all" checkboxes and the "Elimina selezionati" button), and a deleting
-  // flag that disables the delete controls while a request is in flight.
+  // Esiti operazioni (View::alert legacy: msg success / err danger in testa pagina).
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+
+  // Deep-link legacy ?created=<id,id,...>: gli appuntamenti appena creati dal planner
+  // restano in lista anche fuori dal range date.
+  const [createdIds, setCreatedIds] = useState<number[]>([]);
+
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [deleting, setDeleting] = useState(false);
 
-  // Multi-service grouping: the set of appointment ids whose child service rows are
-  // expanded (legacy ms-children Bootstrap collapse, driven inline since the Bootstrap
-  // JS bundle is not loaded here).
+  // Toast riordino segmenti (legacy appointments.js toast()).
+  const [toastText, setToastText] = useState("");
+
   const [expandedRows, setExpandedRows] = useState<number[]>([]);
   const toggleExpanded = useCallback((id: number) => {
     setExpandedRows((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -152,9 +181,39 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
     load();
   }, [load]);
 
-  // ↑/↓ segment reorder (legacy handleSegmentMove -> action=swap_segment): swap
-  // the adjacent segments' position + time windows, then reload from the server
-  // (the legacy reloads the page; we re-fetch). Errors surface via alert.
+  // Deep-link legacy (mount-only): ?created= inclusione forzata; ?action=edit&id= /
+  // ?action=new aprono il drawer quick-booking globale (openEditId/openNew di
+  // appointmentsPageConfig) — simulato con un click delegato data-qb-edit/new.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    const created = String(sp.get("created") ?? "")
+      .split(/[^0-9]+/)
+      .map((v) => Number.parseInt(v, 10))
+      .filter((n) => Number.isFinite(n) && n > 0)
+      .slice(0, 300);
+    if (created.length) setCreatedIds(created);
+    const action = String(sp.get("action") ?? "");
+    const editId = Number.parseInt(String(sp.get("id") ?? "0"), 10) || 0;
+    if ((action === "edit" && editId > 0) || action === "new") {
+      // Il drawer globale ascolta i click deleghi su [data-qb-edit]/[data-qb-new]:
+      // un click sintetico dopo il mount riproduce qbOpenEditAppointment/qbOpenNew.
+      const timer = setTimeout(() => {
+        const a = document.createElement("a");
+        a.href = "#";
+        if (action === "edit") a.setAttribute("data-qb-edit", String(editId));
+        else a.setAttribute("data-qb-new", "1");
+        a.style.display = "none";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }, 450);
+      return () => clearTimeout(timer);
+    }
+  }, []);
+
+  // ↑/↓ segment reorder (legacy handleSegmentMove -> action=swap_segment): swap +
+  // toast successo verbatim + reload (il legacy ricarica la pagina; noi rifetchiamo).
   const [swapBusy, setSwapBusy] = useState(false);
   const swapSegment = useCallback(async (appointmentId: number, segmentId: number, direction: "up" | "down") => {
     if (swapBusy) return;
@@ -167,45 +226,81 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
       });
       const data = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null;
       if (!res.ok || !data?.ok) {
-        if (typeof window !== "undefined") window.alert(String(data?.error || "Operazione non riuscita"));
+        setToastText(String(data?.error || "Operazione non riuscita"));
         return;
       }
+      setToastText("Ordine multi-servizio aggiornato.");
       load();
     } catch {
-      if (typeof window !== "undefined") window.alert("Errore di rete durante l'aggiornamento.");
+      setToastText("Errore di rete durante l'aggiornamento.");
     } finally {
       setSwapBusy(false);
     }
   }, [slug, swapBusy, load]);
 
-  // POST a delete (single id) / bulk_delete (CSV ids) to the manage route, then
-  // refresh the list. The route restores the consumed redeems server-side
-  // (deleteDbAppointment) and returns the refreshed list; we re-fetch via load() so
-  // the table + selection reflect the server truth.
+  // Auto-dismiss del toast (il legacy usa un toast Bootstrap con autohide).
+  useEffect(() => {
+    if (!toastText) return;
+    const timer = setTimeout(() => setToastText(""), 3500);
+    return () => clearTimeout(timer);
+  }, [toastText]);
+
+  // POST delete (singolo) / bulk_delete (CSV) e composizione degli esiti verbatim
+  // legacy (appointments.php 499-520) mostrati come alert in testa.
   const runDelete = useCallback(
-    async (ids: number[]) => {
+    async (ids: number[], bulk: boolean) => {
       if (!ids.length || deleting) return;
       setDeleting(true);
+      setMsg("");
+      setErr("");
       try {
         const res = await fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
           body: JSON.stringify(
-            ids.length === 1
-              ? { action: "delete", id: ids[0] }
-              : { action: "bulk_delete", ids: ids.join(",") },
+            bulk ? { action: "bulk_delete", ids: ids.join(",") } : { action: "delete", id: ids[0] },
           ),
         });
-        const json = await res.json().catch(() => ({}));
+        const json = await res.json().catch(() => ({})) as {
+          ok?: boolean;
+          error?: string;
+          deleted?: number;
+          blockedNotCanceled?: number;
+          blockedUnavailable?: number;
+        };
         if (!res.ok || json?.ok === false || json?.error) {
-          window.alert(String(json?.error || "Errore durante l'eliminazione dell'appuntamento."));
+          setErr(String(json?.error || "Errore eliminazione"));
           return;
         }
-        // Drop the deleted ids from the selection, then reload from the server.
+        const deleted = Math.max(0, Number(json?.deleted ?? 0));
+        const blockedNotCanceled = Math.max(0, Number(json?.blockedNotCanceled ?? 0));
+        const blockedUnavailable = Math.max(0, Number(json?.blockedUnavailable ?? 0));
+        if (!bulk) {
+          setMsg("Appuntamento eliminato");
+        } else {
+          if (deleted > 0) setMsg(deleted === 1 ? "1 appuntamento eliminato." : `${deleted} appuntamenti eliminati.`);
+          const errParts: string[] = [];
+          if (blockedUnavailable > 0) {
+            errParts.push(
+              blockedUnavailable === 1
+                ? "1 prenotazione non eliminata perche non disponibile nella sede corrente."
+                : `${blockedUnavailable} prenotazioni non eliminate perche non disponibili nella sede corrente.`,
+            );
+          }
+          if (blockedNotCanceled > 0) {
+            errParts.push(
+              blockedNotCanceled === 1
+                ? "1 prenotazione non annullata non eliminata: annullala prima."
+                : `${blockedNotCanceled} prenotazioni non annullate non eliminate: annullale prima.`,
+            );
+          }
+          if (errParts.length) setErr(errParts.join(" "));
+          if (deleted === 0 && !errParts.length) setErr("Nessuna prenotazione eliminata.");
+        }
         setSelectedIds((prev) => prev.filter((id) => !ids.includes(id)));
         load();
       } catch {
-        window.alert("Errore di rete durante l'eliminazione.");
+        setErr("Errore eliminazione");
       } finally {
         setDeleting(false);
       }
@@ -213,23 +308,22 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
     [deleting, load, slug],
   );
 
-  // Per-row "Elimina": confirm then delete the single appointment.
+  // Per-row "Elimina" (solo Annullati): conferma verbatim poi delete singolo.
   const deleteOne = useCallback(
     (id: number) => {
       if (!window.confirm("Eliminare questo appuntamento?")) return;
-      void runDelete([id]);
+      void runDelete([id], false);
     },
     [runDelete],
   );
 
-  // "Elimina selezionati": confirm then bulk-delete the selected appointments.
+  // "Elimina selezionati": conferma verbatim legacy (testo FISSO, data-confirm-submit).
   const deleteSelected = useCallback(() => {
     if (!selectedIds.length) return;
-    if (!window.confirm(`Eliminare ${selectedIds.length} appuntamenti selezionati?`)) return;
-    void runDelete(selectedIds);
+    if (!window.confirm("Eliminare gli appuntamenti selezionati?")) return;
+    void runDelete(selectedIds, true);
   }, [runDelete, selectedIds]);
 
-  // Toggle one row's checkbox in the selection set.
   const toggleSelected = useCallback((id: number, checked: boolean) => {
     setSelectedIds((prev) => (checked ? (prev.includes(id) ? prev : [...prev, id]) : prev.filter((x) => x !== id)));
   }, []);
@@ -237,29 +331,37 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
   const filtered = useMemo(() => {
     const term = q.trim().toLowerCase();
     return appointments.filter((appt) => {
+      // ?created=: gli appuntamenti appena creati restano visibili anche fuori range.
+      const forced = createdIds.includes(appt.id);
       const day = appt.date ?? "";
-      if (from && day && day < from) return false;
-      if (to && day && day > to) return false;
+      if (!forced) {
+        if (from && day && day < from) return false;
+        if (to && day && day > to) return false;
+      }
       if (term) {
-        const code = appt.publicCode ? String(appt.publicCode) : `#${appt.id}`;
-        const haystack = `${appt.client} ${code} #${appt.id}`.toLowerCase();
+        const code = appt.publicCode ? String(appt.publicCode) : "";
+        const haystack = `${appt.client} ${code} #${code}`.toLowerCase();
         if (!haystack.includes(term)) return false;
       }
       return true;
     });
-  }, [appointments, from, to, q]);
+  }, [appointments, from, to, q, createdIds]);
 
-  // Selection helpers over the CURRENTLY VISIBLE (filtered) rows: the "select all"
-  // header checkbox checks/clears these ids, and reflects "all visible selected".
-  const visibleIds = useMemo(() => filtered.map((appt) => appt.id), [filtered]);
-  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.includes(id));
+  // Selezione: SOLO le righe eliminabili (stato Annullato) sono selezionabili — le
+  // altre checkbox sono disabled (deleteLocked legacy). Il select-all opera sulle
+  // selezionabili visibili.
+  const selectableIds = useMemo(
+    () => filtered.filter((appt) => normStatusCode(appt) === "canceled").map((appt) => appt.id),
+    [filtered],
+  );
+  const allSelectableSelected = selectableIds.length > 0 && selectableIds.every((id) => selectedIds.includes(id));
   const toggleSelectAll = useCallback(
     (checked: boolean) => {
       setSelectedIds((prev) =>
-        checked ? Array.from(new Set([...prev, ...visibleIds])) : prev.filter((id) => !visibleIds.includes(id)),
+        checked ? Array.from(new Set([...prev, ...selectableIds])) : prev.filter((id) => !selectableIds.includes(id)),
       );
     },
-    [visibleIds],
+    [selectableIds],
   );
 
   function pageHref(suffix: string): string {
@@ -267,10 +369,16 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
   }
 
   const resetHref = pageHref("");
+  // Stato vuoto GLOBALE legacy ($hasAnyAppointmentsInScope): nessuna prenotazione in
+  // sede a prescindere dal filtro (la lista è fetchata senza date).
+  const hasAny = appointments.length > 0;
 
   return (
     <div className="container-fluid">
       <link rel="stylesheet" href="/assets/css/pages/appointments.css" />
+
+      {msg ? <div className="alert alert-success">{msg}</div> : null}
+      {err ? <div className="alert alert-danger">{err}</div> : null}
 
       <div className="bs-page-header appointments-page-header">
         <div className="bs-page-heading">
@@ -279,285 +387,357 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
           <div className="bs-page-subtitle">Gestisci prenotazioni, stati e passaggio rapido al calendario.</div>
         </div>
         <div className="bs-page-actions">
-          <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/calendar`}>
-            <i className="bi bi-calendar3 me-1"></i>Calendario
-          </a>
+          {/* Legacy: il bottone Calendario appare solo quando esistono prenotazioni. */}
+          {hasAny || loading ? (
+            <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/calendar`}>
+              <i className="bi bi-calendar3 me-1"></i>Calendario
+            </a>
+          ) : null}
         </div>
       </div>
 
       <div className="appointments-page">
-        <div className="appointments-filter-bar">
-          <form
-            className="appointments-filter-form"
-            method="get"
-            onSubmit={(e) => {
-              e.preventDefault();
-              load();
-            }}
-          >
-            <input type="hidden" name="page" value="appointments" />
-            <div className="appointments-filter-field">
-              <label className="form-label">Dal</label>
-              <input
-                className="form-control"
-                type="date"
-                name="from"
-                value={from}
-                onChange={(e) => setFrom(e.target.value)}
-              />
+        {!loading && !hasAny ? (
+          // Stato vuoto globale legacy (appointments.php 957-976).
+          <div className="card border-0 shadow-sm appointments-empty-card">
+            <div className="appointments-empty-state">
+              <div className="appointments-empty-icon" aria-hidden="true">
+                <i className="bi bi-calendar-plus"></i>
+              </div>
+              <h2>Nessuna prenotazione presente</h2>
+              <p>
+                La lista appuntamenti e ancora vuota. Crea la prima prenotazione oppure passa al calendario per
+                controllare disponibilita, operatori e cabine nella sede selezionata.
+              </p>
+              <div className="d-flex justify-content-center gap-2 flex-wrap">
+                <a className="btn btn-primary" href="#" data-qb-new="1">
+                  <i className="bi bi-plus-lg me-1"></i>Nuova prenotazione
+                </a>
+                <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/calendar`}>
+                  <i className="bi bi-grid-3x3-gap me-1"></i>Apri calendario
+                </a>
+              </div>
             </div>
-            <div className="appointments-filter-field">
-              <label className="form-label">Al</label>
-              <input
-                className="form-control"
-                type="date"
-                name="to"
-                value={to}
-                onChange={(e) => setTo(e.target.value)}
-              />
-            </div>
-            <div className="appointments-filter-field appointments-filter-field--search">
-              <label className="form-label">Cerca</label>
-              <input
-                className="form-control"
-                type="text"
-                name="q"
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="Cliente o codice prenotazione"
-              />
-            </div>
-            <div className="appointments-filter-actions">
-              <button className="btn btn-outline-primary appointments-filter-submit app-filter-submit" type="submit">
-                <i className="bi bi-search me-1"></i>Filtra
-              </button>
-              <a
-                className="btn btn-outline-secondary appointments-filter-reset app-filter-reset"
-                href={resetHref}
-                onClick={(e) => {
+          </div>
+        ) : (
+          <>
+            <div className="appointments-filter-bar">
+              <form
+                className="appointments-filter-form"
+                method="get"
+                onSubmit={(e) => {
                   e.preventDefault();
-                  setFrom(defaults.from);
-                  setTo(defaults.to);
-                  setQ("");
+                  load();
                 }}
               >
-                Reset
-              </a>
+                <input type="hidden" name="page" value="appointments" />
+                <div className="appointments-filter-field">
+                  <label className="form-label">Dal</label>
+                  <input
+                    className="form-control"
+                    type="date"
+                    name="from"
+                    value={from}
+                    onChange={(e) => setFrom(e.target.value)}
+                  />
+                </div>
+                <div className="appointments-filter-field">
+                  <label className="form-label">Al</label>
+                  <input
+                    className="form-control"
+                    type="date"
+                    name="to"
+                    value={to}
+                    onChange={(e) => setTo(e.target.value)}
+                  />
+                </div>
+                <div className="appointments-filter-field appointments-filter-field--search">
+                  <label className="form-label">Cerca</label>
+                  <input
+                    className="form-control"
+                    type="text"
+                    name="q"
+                    value={q}
+                    onChange={(e) => setQ(e.target.value)}
+                    placeholder="Cliente o codice prenotazione"
+                  />
+                </div>
+                <div className="appointments-filter-actions">
+                  <button className="btn btn-outline-primary appointments-filter-submit app-filter-submit" type="submit">
+                    <i className="bi bi-search me-1"></i>Filtra
+                  </button>
+                  <a
+                    className="btn btn-outline-secondary appointments-filter-reset app-filter-reset"
+                    href={resetHref}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setFrom(defaults.from);
+                      setTo(defaults.to);
+                      setQ("");
+                    }}
+                  >
+                    Reset
+                  </a>
+                </div>
+              </form>
             </div>
-          </form>
-        </div>
 
-        <div className="appointments-list-card">
-          <div className="appointments-list-toolbar">
-            <div className="appointments-selection-info" id="bulkSelInfo">
-              {selectedIds.length} selezionati
-            </div>
-            {/* Bulk-delete: the selected ids drive #bulkDeleteIds (kept for markup
-                parity); the button POSTs action=bulk_delete (confirm) via deleteSelected. */}
-            <form
-              method="post"
-              action={pageHref("&action=bulk_delete")}
-              className="appointments-bulk-actions"
-              onSubmit={(e) => {
-                e.preventDefault();
-                deleteSelected();
-              }}
-            >
-              <input type="hidden" name="ids" id="bulkDeleteIds" value={selectedIds.join(",")} />
-              <button
-                className="btn btn-outline-danger appointments-bulk-delete"
-                type="submit"
-                id="bulkDeleteBtn"
-                disabled={selectedIds.length === 0 || deleting}
-              >
-                <i className="bi bi-trash me-1"></i>Elimina selezionati
-              </button>
-            </form>
-          </div>
-          <div className="table-responsive appointments-table-wrap">
-            <table className="table appointments-table mb-0" id="appointmentsTable">
-              <thead>
-                <tr>
-                  <th className="appointments-select-col">
-                    <input
-                      className="form-check-input"
-                      type="checkbox"
-                      id="apptSelectAll"
-                      aria-label="Seleziona tutti"
-                      checked={allVisibleSelected}
-                      onChange={(e) => toggleSelectAll(e.target.checked)}
-                    />
-                  </th>
-                  <th>Data</th>
-                  <th>Cliente</th>
-                  <th>Codice prenotazione</th>
-                  <th>Servizio</th>
-                  <th>Operatore</th>
-                  <th>Stato</th>
-                  <th className="text-end">Azioni</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="text-muted small p-3">
-                      {loading ? "Caricamento…" : "Nessun appuntamento."}
-                    </td>
-                  </tr>
-                ) : (
-                  filtered.map((appt) => {
-                    const badge = statusBadge(appt.status);
-                    // Real booking code when present, else the synthesized #id.
-                    const code = appt.publicCode ? String(appt.publicCode) : `#${appt.id}`;
-                    // MULTI-SERVICE: a parent row + one collapsible child row per service
-                    // (legacy ms-parent / ms-children). Only group when there is >1 service.
-                    const lines = appt.services && appt.services.length > 0 ? appt.services : [{ serviceId: 0, name: appt.service, price: appt.price }];
-                    const isMulti = lines.length > 1;
-                    const collapseId = `apptMs${appt.id}`;
-                    const expanded = expandedRows.includes(appt.id);
-                    return (
-                      <Fragment key={appt.id}>
-                        <tr className={isMulti ? "ms-parent" : undefined}>
-                          <td>
-                            <input
-                              className="form-check-input appt-select"
-                              type="checkbox"
-                              value={appt.id}
-                              aria-label="Seleziona appuntamento"
-                              title=""
-                              checked={selectedIds.includes(appt.id)}
-                              onChange={(e) => toggleSelected(appt.id, e.target.checked)}
-                            />
-                          </td>
-                          <td>
-                            {fmtDate(appt.date)} {appt.time}
-                          </td>
-                          <td className="fw-semibold">{appt.client}</td>
-                          <td className="text-muted">
-                            <code>{code}</code>
-                          </td>
-                          <td className="text-muted">
-                            {isMulti ? (
-                              // Parent service cell: a collapse toggle showing the count.
-                              // data-bs-* kept for legacy fidelity; the inline expandedRows
-                              // state actually drives the child rows (no Bootstrap JS here).
-                              <a
-                                className="appointments-ms-toggle"
-                                href={`#${collapseId}`}
-                                role="button"
-                                data-bs-toggle="collapse"
-                                data-bs-target={`#${collapseId}`}
-                                aria-expanded={expanded}
-                                aria-controls={collapseId}
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  toggleExpanded(appt.id);
-                                }}
-                              >
-                                <i className={`bi ${expanded ? "bi-chevron-down" : "bi-chevron-right"} me-1`}></i>
-                                {lines.length} servizi
-                              </a>
-                            ) : (
-                              lines[0]?.name ?? appt.service
-                            )}
-                          </td>
-                          <td className="text-muted">{appt.operator}</td>
-                          <td>
-                            <span className={`appointments-status-badge ${badge.className}`}>{badge.label}</span>
-                          </td>
-                          <td className="text-end">
-                            {/* "Vendita da appuntamento" (Incassa): open the POS pre-loaded
-                                with this appointment's client + services. The POS reads the
-                                ?appointment=<id> query param, fetches action=appointment_cart
-                                and seeds the cart; concluding the sale marks the appointment
-                                'done' (appointment_id threaded to checkoutManageSale). */}
-                            <a
-                              className="btn btn-sm btn-outline-primary"
-                              href={`/${encodeURIComponent(slug)}/pos?appointment=${appt.id}`}
-                              title="Incassa l'appuntamento in cassa"
-                            >
-                              <i className="bi bi-cash-coin me-1"></i>Incassa
-                            </a>{" "}
-                            {/* Edit: drives the GLOBAL quick-booking drawer in EDIT MODE.
-                                The drawer (mounted in the manage shell on every page)
-                                has a delegated [data-qb-edit] handler that loads the
-                                appointment via GET action=get and prefills the FULL
-                                drawer (client, services, per-service operator/cabin,
-                                date/time, status, notes); SAVE re-submits action=save
-                                WITH this id -> updateDbAppointment. No local handler. */}
-                            <a
-                              className="btn btn-sm btn-outline-secondary"
-                              href="#"
-                              data-qb-edit={appt.id}
-                            >
-                              Modifica
-                            </a>{" "}
-                            {/* Per-row delete: confirm + POST action=delete, then refresh. */}
-                            <a
-                              className="btn btn-sm btn-outline-danger"
-                              href={pageHref(`&action=delete&id=${appt.id}`)}
-                              data-confirm="Eliminare questo appuntamento?"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                deleteOne(appt.id);
-                              }}
-                            >
-                              Elimina
-                            </a>
-                          </td>
-                        </tr>
-                        {isMulti &&
-                          lines.map((line, index) => (
-                            <tr
-                              key={`${appt.id}-svc-${line.serviceId || index}`}
-                              id={collapseId}
-                              className={`ms-children collapse${expanded ? " show" : ""}`}
-                              style={expanded ? undefined : { display: "none" }}
-                            >
-                              <td></td>
-                              <td></td>
-                              <td></td>
-                              <td></td>
-                              <td className="text-muted ps-4">{line.name}</td>
-                              <td className="text-muted">{line.price}</td>
+            <div className="appointments-list-card">
+              <div className="appointments-list-toolbar">
+                <div className="appointments-selection-info" id="bulkSelInfo">
+                  {selectedIds.length} selezionati
+                </div>
+                <form
+                  method="post"
+                  action={pageHref("&action=bulk_delete")}
+                  className="appointments-bulk-actions"
+                  data-confirm-submit="Eliminare gli appuntamenti selezionati?"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    deleteSelected();
+                  }}
+                >
+                  <input type="hidden" name="ids" id="bulkDeleteIds" value={selectedIds.join(",")} />
+                  <button
+                    className="btn btn-outline-danger appointments-bulk-delete"
+                    type="submit"
+                    id="bulkDeleteBtn"
+                    disabled={selectedIds.length === 0 || deleting}
+                  >
+                    <i className="bi bi-trash me-1"></i>Elimina selezionati
+                  </button>
+                </form>
+              </div>
+              <div className="table-responsive appointments-table-wrap">
+                <table className="table appointments-table mb-0" id="appointmentsTable">
+                  <thead>
+                    <tr>
+                      <th className="appointments-select-col">
+                        <input
+                          className="form-check-input"
+                          type="checkbox"
+                          id="apptSelectAll"
+                          aria-label="Seleziona tutti"
+                          checked={allSelectableSelected}
+                          onChange={(e) => toggleSelectAll(e.target.checked)}
+                        />
+                      </th>
+                      <th>Data</th>
+                      <th>Cliente</th>
+                      <th>Codice prenotazione</th>
+                      <th>Servizio</th>
+                      <th>Operatore</th>
+                      <th>Stato</th>
+                      <th className="text-end">Azioni</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="text-muted p-3">
+                          {loading ? "Caricamento…" : "Nessun appuntamento nel periodo."}
+                        </td>
+                      </tr>
+                    ) : (
+                      filtered.map((appt) => {
+                        const badge = statusBadge(appt);
+                        const deleteLocked = normStatusCode(appt) !== "canceled";
+                        const lines = appt.services && appt.services.length > 0 ? appt.services : [{ serviceId: 0, name: appt.service, price: appt.price } as AppointmentServiceLine];
+                        const isMulti = lines.length > 1;
+                        const collapseId = `apptMs${appt.id}`;
+                        const expanded = expandedRows.includes(appt.id);
+                        // Data legacy: "dd/mm/yyyy HH:MM → HH:MM".
+                        const dateCell = `${fmtDate(appt.date)} ${appt.time}${appt.endTime ? ` → ${appt.endTime}` : ""}`;
+                        // Pallini colore operatori (multi: distinti, max 6 come il legacy).
+                        const dotColors = isMulti
+                          ? [...new Set(lines.map((l) => l.staffColor).filter(Boolean))].slice(0, 6) as string[]
+                          : appt.staffColor
+                            ? [appt.staffColor]
+                            : [];
+                        const summaries = (
+                          <>
+                            {appt.packageSummary ? (
+                              <div className="small text-primary fw-semibold mt-1">
+                                <i className="bi bi-box-seam me-1"></i>
+                                {appt.packageSummary}
+                              </div>
+                            ) : null}
+                            {appt.prepaidSummary ? (
+                              <div className="small text-primary fw-semibold mt-1">
+                                <i className="bi bi-credit-card-2-front me-1"></i>
+                                {appt.prepaidSummary}
+                              </div>
+                            ) : null}
+                          </>
+                        );
+                        return (
+                          <Fragment key={appt.id}>
+                            <tr className={isMulti ? "ms-parent" : undefined} data-ms-group={isMulti ? appt.id : undefined}>
                               <td>
-                                {/* ↑/↓ segment reorder (legacy .ms-seg-move -> action=swap_segment):
-                                    swaps position + time windows, staff/cabin re-validated. */}
-                                {line.segmentId ? (
-                                  <div className="btn-group btn-group-sm" role="group" aria-label="Riordina servizio">
+                                <div className={isMulti ? "d-flex align-items-center gap-2" : undefined}>
+                                  {/* deleteLocked legacy: selezionabile solo se Annullato. */}
+                                  <input
+                                    className="form-check-input appt-select"
+                                    type="checkbox"
+                                    value={appt.id}
+                                    aria-label="Seleziona appuntamento"
+                                    disabled={deleteLocked}
+                                    title={deleteLocked ? DELETE_LOCK_TITLE : ""}
+                                    checked={selectedIds.includes(appt.id)}
+                                    onChange={(e) => toggleSelected(appt.id, e.target.checked)}
+                                  />
+                                  {isMulti ? (
                                     <button
+                                      className="btn btn-sm btn-link p-0 ms-toggle"
                                       type="button"
-                                      className="btn btn-outline-secondary ms-seg-move"
-                                      title="Sposta prima"
-                                      disabled={swapBusy || index === 0}
-                                      onClick={() => void swapSegment(appt.id, line.segmentId as number, "up")}
+                                      data-bs-toggle="collapse"
+                                      data-bs-target={`.ms-children-${appt.id}`}
+                                      aria-expanded={expanded}
+                                      aria-label="Mostra/Nascondi dettagli multi-servizio"
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        toggleExpanded(appt.id);
+                                      }}
                                     >
-                                      <i className="bi bi-arrow-up" />
+                                      <i className={`bi ${expanded ? "bi-chevron-down" : "bi-chevron-right"}`}></i>
                                     </button>
-                                    <button
-                                      type="button"
-                                      className="btn btn-outline-secondary ms-seg-move"
-                                      title="Sposta dopo"
-                                      disabled={swapBusy || index === lines.length - 1}
-                                      onClick={() => void swapSegment(appt.id, line.segmentId as number, "down")}
+                                  ) : null}
+                                </div>
+                              </td>
+                              <td>{dateCell}</td>
+                              <td className="fw-semibold">{appt.client}</td>
+                              <td className="text-muted">{appt.publicCode ? <code>#{appt.publicCode}</code> : "—"}</td>
+                              <td className="text-muted">
+                                {isMulti ? (
+                                  <>
+                                    <span className="fw-semibold">Multi-servizio ({lines.length})</span>
+                                    <span className="appointments-ms-badge ms-2">Multi-servizio</span>
+                                    <div className="small text-muted mt-1">
+                                      {[...new Set(lines.map((l) => l.name).filter(Boolean))].join(", ")}
+                                    </div>
+                                    {summaries}
+                                  </>
+                                ) : (
+                                  <>
+                                    {lines[0]?.name ?? appt.service}
+                                    {summaries}
+                                  </>
+                                )}
+                              </td>
+                              <td className="text-muted">
+                                {dotColors.map((color, index) => (
+                                  <OpColorDot color={color} key={`${appt.id}-dot-${index}`} />
+                                ))}
+                                {appt.operator || "—"}
+                              </td>
+                              <td>
+                                <span className={`appointments-status-badge ${badge.className}`}>{badge.label}</span>
+                              </td>
+                              <td className="text-end">
+                                {/* Azioni legacy: SOLO Modifica (drawer quick-booking via
+                                    data-qb-edit) + Elimina per le prenotazioni Annullate.
+                                    "Incassa" NON esiste nel legacy. */}
+                                <a className="btn btn-sm btn-outline-secondary" href="#" data-qb-edit={appt.id}>
+                                  Modifica
+                                </a>
+                                {!deleteLocked ? (
+                                  <>
+                                    {" "}
+                                    <a
+                                      className="btn btn-sm btn-outline-danger"
+                                      href={pageHref(`&action=delete&id=${appt.id}`)}
+                                      data-confirm="Eliminare questo appuntamento?"
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        deleteOne(appt.id);
+                                      }}
                                     >
-                                      <i className="bi bi-arrow-down" />
-                                    </button>
-                                  </div>
+                                      Elimina
+                                    </a>
+                                  </>
                                 ) : null}
                               </td>
-                              <td></td>
                             </tr>
-                          ))}
-                      </Fragment>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
+                            {isMulti &&
+                              lines.map((line, index) => (
+                                <tr
+                                  key={`${appt.id}-svc-${line.serviceId || index}`}
+                                  id={index === 0 ? collapseId : undefined}
+                                  className={`collapse ms-child ms-children-${appt.id}${expanded ? " show" : ""}`}
+                                  data-ms-child={appt.id}
+                                  style={expanded ? undefined : { display: "none" }}
+                                >
+                                  <td></td>
+                                  <td className="text-muted">
+                                    <span className="ms-indent">↳</span> {line.time ?? ""}
+                                    {line.endTime ? ` → ${line.endTime}` : ""}
+                                  </td>
+                                  <td></td>
+                                  <td></td>
+                                  <td className="text-muted">{line.name || "—"}</td>
+                                  <td className="text-muted">
+                                    <OpColorDot color={line.staffColor} />
+                                    {line.staffName || "—"}
+                                  </td>
+                                  <td>
+                                    <span className={`appointments-status-badge ${badge.className}`}>{badge.label}</span>
+                                  </td>
+                                  <td className="text-end">
+                                    {line.segmentId ? (
+                                      <div className="btn-group" role="group" aria-label="Riordina multi-servizio">
+                                        <button
+                                          type="button"
+                                          className="btn btn-sm btn-outline-secondary ms-seg-move"
+                                          title="Sposta prima"
+                                          data-ms-move="up"
+                                          disabled={swapBusy || index === 0}
+                                          onClick={() => void swapSegment(appt.id, line.segmentId as number, "up")}
+                                        >
+                                          <i className="bi bi-arrow-up"></i>
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="btn btn-sm btn-outline-secondary ms-seg-move"
+                                          title="Sposta dopo"
+                                          data-ms-move="down"
+                                          disabled={swapBusy || index === lines.length - 1}
+                                          onClick={() => void swapSegment(appt.id, line.segmentId as number, "down")}
+                                        >
+                                          <i className="bi bi-arrow-down"></i>
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <span className="text-muted small">—</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                          </Fragment>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Toast riordino legacy (appointments.js toast, autohide). */}
+      {toastText ? (
+        <div
+          className="toast show position-fixed bottom-0 end-0 m-3"
+          role="status"
+          aria-live="polite"
+          style={{ zIndex: 1090 }}
+        >
+          <div className="d-flex">
+            <div className="toast-body">{toastText}</div>
+            <button type="button" className="btn-close me-2 m-auto" aria-label="Chiudi" onClick={() => setToastText("")}></button>
           </div>
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }

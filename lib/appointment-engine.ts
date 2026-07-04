@@ -48,6 +48,12 @@ export type AppointmentWithMeta = Appointment & {
   // second operator's column would look free while they are busy on their segment.
   // Present only when the appointment spans more than one operator.
   segments?: Array<{ serviceId: number; serviceName: string; staffId: number; staffName: string; time: string; endTime: string }>;
+  // Decorazioni della lista appuntamenti legacy (appointments.php):
+  // "Pacchetto: X"/"Pacchetti: X, Y" sotto il servizio, "Prepagato", e il colore
+  // dell'operatore per il pallino .op-color-dot. Opzionali (solo action=list).
+  packageSummary?: string;
+  prepaidSummary?: string;
+  staffColor?: string;
 };
 
 // One service line on an appointment (from appointment_services), used for the
@@ -59,6 +65,12 @@ export type AppointmentServiceLine = {
   // Segment id (multi-service): drives the ↑/↓ reorder in the appointments
   // list (action=swap_segment, legacy data-seg).
   segmentId?: number | null;
+  // Orari e operatore del segmento (righe figlie legacy della lista appuntamenti:
+  // "↳ HH:MM → HH:MM" + nome operatore col pallino colore).
+  time?: string;
+  endTime?: string;
+  staffName?: string;
+  staffColor?: string;
 };
 
 export type AppointmentHold = {
