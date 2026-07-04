@@ -20,8 +20,17 @@ type Supplier = {
   isActiveCosts: boolean;
   warehouseLocationIds: number[];
   costLocationIds: number[];
+  hasLocationRows: boolean;
   productCount: number;
   costCount: number;
+};
+
+export type SuppliersQuery = {
+  q?: string;
+  scope?: string;
+  status?: string;
+  msg?: string;
+  err?: string;
 };
 
 type LocationRow = { id: number; name: string; isActive: boolean };
@@ -31,22 +40,38 @@ function tenantSlug(): string {
   return window.location.pathname.split("/")[1] || "";
 }
 
-export function SuppliersContent({ slug: slugProp }: { slug?: string } = {}) {
+type SupplierScope = "all" | "warehouse" | "costs";
+type SupplierStatus = "all" | "warehouse_active" | "warehouse_inactive" | "costs_active" | "costs_inactive";
+
+function filtersFromQuery(query: SuppliersQuery): { q: string; scope: SupplierScope; status: SupplierStatus } {
+  const scope = ["all", "warehouse", "costs"].includes(String(query.scope ?? "")) ? (String(query.scope) as SupplierScope) : "all";
+  const status = ["all", "warehouse_active", "warehouse_inactive", "costs_active", "costs_inactive"].includes(String(query.status ?? ""))
+    ? (String(query.status) as SupplierStatus)
+    : "all";
+  return { q: String(query.q ?? "").trim(), scope, status };
+}
+
+export function SuppliersContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: SuppliersQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
+  const [initial] = useState(() => filtersFromQuery(initialQuery ?? {}));
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [locations, setLocations] = useState<LocationRow[]>([]);
-  const [q, setQ] = useState("");
-  const [scope, setScope] = useState<"all" | "warehouse" | "costs">("all");
-  const [status, setStatus] = useState<
-    "all" | "warehouse_active" | "warehouse_inactive" | "costs_active" | "costs_inactive"
-  >("all");
+  const [activeLocationId, setActiveLocationId] = useState(0);
+  // Draft (form GET legacy) + applicati con "Filtra".
+  const [q, setQ] = useState(initial.q);
+  const [scope, setScope] = useState<SupplierScope>(initial.scope);
+  const [status, setStatus] = useState<SupplierStatus>(initial.status);
+  const [applied, setApplied] = useState(initial);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(0);
+  // Flash legacy (?msg/?err): dal redirect del form o dalle azioni.
+  const [flash, setFlash] = useState(String(initialQuery?.msg ?? ""));
+  const [error, setError] = useState(String(initialQuery?.err ?? ""));
 
-  const load = useCallback(() => {
-    setLoading(true);
+  // Fetch puro (setState nei callback della Promise; loading gia' true di default).
+  const fetchData = useCallback(() => {
     fetch(`/api/manage/products?slug=${encodeURIComponent(slug)}`, {
       headers: { "x-tenant-slug": slug },
     })
@@ -54,6 +79,7 @@ export function SuppliersContent({ slug: slugProp }: { slug?: string } = {}) {
       .then((j) => {
         setSuppliers(Array.isArray(j.suppliers) ? j.suppliers : []);
         setLocations(Array.isArray(j.locations) ? j.locations : []);
+        setActiveLocationId(Number(j.activeLocationId ?? 0) || 0);
       })
       .catch(() => {
         setSuppliers([]);
@@ -62,9 +88,14 @@ export function SuppliersContent({ slug: slugProp }: { slug?: string } = {}) {
       .finally(() => setLoading(false));
   }, [slug]);
 
+  const load = useCallback(() => {
+    setLoading(true);
+    fetchData();
+  }, [fetchData]);
+
   useEffect(() => {
-    load();
-  }, [load]);
+    fetchData();
+  }, [fetchData]);
 
   function href(suffix: string): string {
     return `/${encodeURIComponent(slug)}/${`suppliers${suffix}`.replace("&", "?")}`;
@@ -76,6 +107,8 @@ export function SuppliersContent({ slug: slugProp }: { slug?: string } = {}) {
     if (busyId) return;
     if (s.productCount + s.costCount > 0) return;
     if (typeof window !== "undefined" && !window.confirm("Eliminare definitivamente questo fornitore?")) return;
+    setFlash("");
+    setError("");
     setBusyId(s.id);
     try {
       const res = await fetch(`/api/manage/products?slug=${encodeURIComponent(slug)}`, {
@@ -85,12 +118,26 @@ export function SuppliersContent({ slug: slugProp }: { slug?: string } = {}) {
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j?.error) {
-        if (typeof window !== "undefined") window.alert(j?.error || "Impossibile eliminare il fornitore.");
+        setError(String(j?.error ?? "Errore: salvataggio fornitore non riuscito (controlla nome duplicato o schema DB)"));
       } else {
+        setFlash("Fornitore eliminato");
         load();
       }
     } finally {
       setBusyId(0);
+    }
+  }
+
+  // Applica il draft (submit "Filtra") e riscrive l'URL come il GET legacy.
+  function applyFilters() {
+    const next = { q: q.trim(), scope, status };
+    setApplied(next);
+    if (typeof window !== "undefined") {
+      const sp = new URLSearchParams();
+      if (next.q) sp.set("q", next.q);
+      sp.set("scope", next.scope);
+      sp.set("status", next.status);
+      window.history.replaceState(null, "", `${window.location.pathname}?${sp.toString()}`);
     }
   }
 
@@ -100,7 +147,10 @@ export function SuppliersContent({ slug: slugProp }: { slug?: string } = {}) {
     return map;
   }, [locations]);
 
-  function locationLabel(ids: number[]): string {
+  // Label sedi legacy: NESSUNA riga supplier_locations -> 'Tutte'; righe presenti
+  // ma nessuna abilitata -> 'Nessuna'.
+  function locationLabel(supplier: Supplier, ids: number[]): string {
+    if (!supplier.hasLocationRows) return "Tutte";
     if (!ids || ids.length === 0) return "Nessuna";
     const names = ids.map((lid) => locationNames[lid] ?? `Sede #${lid}`);
     return names.length ? names.join(", ") : "Nessuna";
@@ -108,7 +158,10 @@ export function SuppliersContent({ slug: slugProp }: { slug?: string } = {}) {
 
   // Client-side filtering mirrors the PHP list filter (q / scope / status).
   const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase();
+    const needle = applied.q.toLowerCase();
+    // app_supplier_location_allowed: senza righe supplier_locations il fornitore
+    // e' abilitato ovunque; altrimenti serve la sede corrente nell'ambito.
+    const allowed = (s: Supplier, ids: number[]) => !s.hasLocationRows || ids.includes(activeLocationId);
     return suppliers.filter((s) => {
       if (needle !== "") {
         const hay = [s.name, s.businessName, s.city, s.province, s.phone, s.email]
@@ -118,15 +171,20 @@ export function SuppliersContent({ slug: slugProp }: { slug?: string } = {}) {
       }
       const warehouseActive = s.isActive;
       const costsActive = s.isActiveCosts;
-      if (status === "warehouse_active" && !warehouseActive) return false;
-      if (status === "warehouse_inactive" && warehouseActive) return false;
-      if (status === "costs_active" && !costsActive) return false;
-      if (status === "costs_inactive" && costsActive) return false;
-      if (scope === "warehouse" && s.warehouseLocationIds.length === 0) return false;
-      if (scope === "costs" && s.costLocationIds.length === 0) return false;
+      if (applied.status === "warehouse_active" && !warehouseActive) return false;
+      if (applied.status === "warehouse_inactive" && warehouseActive) return false;
+      if (applied.status === "costs_active" && !costsActive) return false;
+      if (applied.status === "costs_inactive" && costsActive) return false;
+      if (activeLocationId > 0) {
+        const warehouseAllowed = allowed(s, s.warehouseLocationIds);
+        const costsAllowed = allowed(s, s.costLocationIds);
+        if (applied.scope === "warehouse" && !warehouseAllowed) return false;
+        if (applied.scope === "costs" && !costsAllowed) return false;
+        if (applied.scope === "all" && !warehouseAllowed && !costsAllowed) return false;
+      }
       return true;
     });
-  }, [suppliers, q, scope, status]);
+  }, [suppliers, applied, activeLocationId]);
 
   const hasAnySuppliers = suppliers.length > 0;
   const showEmptyState = !loading && !hasAnySuppliers;
@@ -151,6 +209,9 @@ export function SuppliersContent({ slug: slugProp }: { slug?: string } = {}) {
           ) : null}
         </div>
       </div>
+
+      {flash ? <div className="alert alert-success">{flash}</div> : null}
+      {error ? <div className="alert alert-danger">{error}</div> : null}
 
       {showEmptyState ? (
         <div className="card border-0 shadow-sm suppliers-empty-card">
@@ -178,6 +239,7 @@ export function SuppliersContent({ slug: slugProp }: { slug?: string } = {}) {
               className="row g-2 align-items-end"
               onSubmit={(e) => {
                 e.preventDefault();
+                applyFilters();
               }}
             >
               <div className="col-lg-4 col-md-6">
@@ -292,11 +354,11 @@ export function SuppliersContent({ slug: slugProp }: { slug?: string } = {}) {
                           <td className="text-muted small">
                             <div>
                               <span className="fw-semibold">Magazzino:</span>{" "}
-                              {locationLabel(s.warehouseLocationIds)}
+                              {locationLabel(s, s.warehouseLocationIds)}
                             </div>
                             <div>
                               <span className="fw-semibold">Costi:</span>{" "}
-                              {locationLabel(s.costLocationIds)}
+                              {locationLabel(s, s.costLocationIds)}
                             </div>
                           </td>
                           <td className="text-muted small">
@@ -315,7 +377,7 @@ export function SuppliersContent({ slug: slugProp }: { slug?: string } = {}) {
                                 type="button"
                                 className="btn btn-sm btn-outline-danger"
                                 disabled
-                                title="Fornitore usato in prodotti o costi: non puo essere eliminato."
+                                title="Fornitore usato: disattivalo invece di eliminarlo"
                               >
                                 Elimina
                               </button>

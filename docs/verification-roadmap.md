@@ -3673,3 +3673,48 @@ verbatim, carico 10+incoming, scarico, oltre-giacenza, guardia sede, export
 CSV header/righe legacy, delete con blockers, storno scarico/carico con
 ricalcolo incoming, cleanup CLEAN) + 84/84 marker bundle su 5 viste +
 typecheck/lint puliti (7 warning no-css-tags pre-esistenti).
+
+## Fornitori (suppliers) — audit dedicato (2026-07-05)
+Diff su suppliers.php (865 righe, lista+form in un file) vs suppliers-content +
+supplier_form-content + /api/manage/products (supplier_save/supplier_delete/
+get&type=supplier) + manage-products.ts.
+GIÀ A PARITÀ: header/kicker/empty-state, filtri (Cerca/Ambito/Stato/Filtra),
+tabella (Fornitore/Contatti/Località "City (PR)"/Stato 2 badge/Sedi abilitate/
+Uso Prodotti-Costi/Azioni), form a card (Fornitore con Nome+2 switch Stato,
+Sedi abilitate con tabella checkbox per ambito, Intestazione, Informazioni
+fiscali, Contatti) con placeholder verbatim, rename fornitore -> prodotti
+aggiornati, guardie sedi per ambito attivo.
+FIX PORTATI:
+1. SEMANTICA SEDI legacy (app_supplier_location_map/allowed): un fornitore
+   SENZA righe supplier_locations è abilitato per TUTTE le sedi — nuovo campo
+   hasLocationRows su record e lista; la colonna "Sedi abilitate" ora mostra
+   'Tutte' (prima 'Nessuna': INVERTITO!), il filtro Ambito filtra per la SEDE
+   CORRENTE con il default-tutte (prima guardava solo se la lista sedi era
+   vuota), e il form in EDIT di un fornitore senza righe pre-seleziona TUTTE
+   le sedi (prima partiva vuoto e il salvataggio con stato attivo si bloccava
+   con "Seleziona almeno una sede...").
+2. NEW: tutte le sedi attive partono selezionate in entrambi gli ambiti
+   (legacy formWarehouseLocationMap/formCostsLocationMap) — prima vuote.
+3. Filtri draft applicati solo con "Filtra" + query GET dal router
+   (?q/scope/status) + replaceState; flash ?msg/?err dal redirect del form.
+4. Flash/errori in pagina (niente window.alert): "Fornitore eliminato",
+   "Fornitore creato"/"Fornitore aggiornato" (redirect con ?msg= come il
+   legacy), errori delete verbatim.
+5. Messaggi verbatim: "Nome fornitore obbligatorio" (senza punto), "Fornitore
+   non trovato" (senza punto), delete usato "Fornitore usato in prodotti o
+   costi: non puo essere eliminato, disattivalo dai moduli." (prima
+   accorciato), title bottone disabled "Fornitore usato: disattivalo invece
+   di eliminarlo" (prima inventato).
+6. Form: sottotitolo pagina verbatim "Gestisci dati, sedi abilitate e contatti
+   del fornitore." (prima quello della lista), "Aggiunto il: d/m/Y" in coda
+   (createdAt, mancava), "Salva" fisso, Annulla come anchor.
+RESIDUI DELIBERATI: checkbox "Tutte le sedi" nei filtri (solo multi-sede);
+gating permessi granulare legacy (canSupplierWarehouse/canSupplierCosts
+disabilitano singoli switch/checkbox per ruoli senza permessi modulo) — la
+route richiede suppliers.manage, la distinzione per-campo multi-ruolo è
+tracciata con Ruoli.
+Verifica: battery e2e 21/21 (validazioni verbatim, creazione con anagrafica
+completa + supplier_locations, dup, hasLocationRows true/false, productCount,
+delete bloccata verbatim, rename -> prodotti aggiornati, delete + pulizia
+supplier_locations, cleanup CLEAN) + 49/49 marker bundle + typecheck/lint
+puliti (warning no-css-tags pre-esistenti).

@@ -88,6 +88,7 @@ export type SupplierRow = {
   isActiveCosts: boolean;
   warehouseLocationIds: number[];
   costLocationIds: number[];
+  hasLocationRows: boolean;
   // Usage counts — products linked by supplier_name, costs by supplier_id (the legacy "Uso" column
   // + the delete-when-unused gate). productCount+costCount>0 blocks deletion.
   productCount: number;
@@ -120,6 +121,9 @@ export type ManageSupplierRecord = {
   isActiveCosts: boolean;
   warehouseLocationIds: number[];
   costLocationIds: number[];
+  // false = nessuna riga supplier_locations: il legacy tratta il fornitore come
+  // abilitato per TUTTE le sedi ('Tutte' in lista, tutte checked nel form).
+  hasLocationRows: boolean;
   createdAt: string;
 };
 
@@ -211,7 +215,7 @@ export async function getManageSupplier(slug: string, id: number): Promise<Manag
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "suppliers", where: "id=?", params: [id], limit: 1 }).catch(() => []);
   const row = rows[0];
   if (!row) return null;
-  const maps = (await supplierLocationMaps(slug, [id])).get(id) ?? { warehouse: [], costs: [] };
+  const maps = (await supplierLocationMaps(slug, [id])).get(id) ?? { warehouse: [], costs: [], hasRows: false };
   return {
     id,
     name: String(row.name ?? ""),
@@ -236,6 +240,7 @@ export async function getManageSupplier(slug: string, id: number): Promise<Manag
     isActiveCosts: Number(row.is_active_costs ?? 1) === 1,
     warehouseLocationIds: maps.warehouse,
     costLocationIds: maps.costs,
+    hasLocationRows: maps.hasRows,
     createdAt: row.created_at ? String(row.created_at) : "",
   };
 }
@@ -319,7 +324,7 @@ export async function saveSupplier(slug: string, body: Record<string, string>): 
   const table = await tenantTable(slug, "suppliers");
   const id = parseInteger(body.id ?? body.supplier_id, 0);
   const name = clean(body.name, 190);
-  if (!name) throw new Error("Nome fornitore obbligatorio.");
+  if (!name) throw new Error("Nome fornitore obbligatorio");
   await ensureSupplierNameAvailable(slug, name, id);
   const warehouseLocationIds = parseIdList(body.warehouse_location_ids ?? body.location_ids);
   const costLocationIds = parseIdList(body.cost_location_ids);
@@ -374,7 +379,7 @@ export async function deleteSupplier(slug: string, supplierId: number): Promise<
   const supplier = await getSupplierById(slug, supplierId);
   const productCount = await countRowsByColumn(slug, "products", "supplier_name", String(supplier.name ?? "")).catch(() => 0);
   const costCount = await countRowsByColumn(slug, "costs", "supplier_id", supplierId).catch(() => 0);
-  if (productCount + costCount > 0) throw new Error("Fornitore usato in prodotti o costi: disattivalo dai moduli.");
+  if (productCount + costCount > 0) throw new Error("Fornitore usato in prodotti o costi: non puo essere eliminato, disattivalo dai moduli.");
   await deleteByOwner(slug, "supplier_locations", "supplier_id", supplierId);
   await tenantDelete({ slug, table: "suppliers", id: supplierId });
   return getManageProductsContext(slug, { includeInactive: true });
@@ -621,7 +626,7 @@ async function listSuppliers(slug: string): Promise<SupplierRow[]> {
   return rows.map((row) => {
     const id = Number(row.id ?? 0);
     const name = String(row.name ?? "");
-    const maps = locationMaps.get(id) ?? { warehouse: [], costs: [] };
+    const maps = locationMaps.get(id) ?? { warehouse: [], costs: [], hasRows: false };
     return {
       id,
       name,
@@ -635,6 +640,7 @@ async function listSuppliers(slug: string): Promise<SupplierRow[]> {
       isActive: Number(row.is_active ?? 1) === 1,
       isActiveCosts: Number(row.is_active_costs ?? 1) === 1,
       warehouseLocationIds: maps.warehouse,
+      hasLocationRows: maps.hasRows,
       costLocationIds: maps.costs,
       productCount: productCountByName.get(name.trim()) ?? 0,
       costCount: costCountBySupplierId.get(id) ?? 0,
@@ -1017,9 +1023,9 @@ async function productLocationMap(slug: string, productIds: number[]): Promise<M
   return map;
 }
 
-async function supplierLocationMaps(slug: string, supplierIds: number[]): Promise<Map<number, { warehouse: number[]; costs: number[] }>> {
+async function supplierLocationMaps(slug: string, supplierIds: number[]): Promise<Map<number, { warehouse: number[]; costs: number[]; hasRows: boolean }>> {
   const ids = uniquePositive(supplierIds);
-  const map = new Map<number, { warehouse: number[]; costs: number[] }>();
+  const map = new Map<number, { warehouse: number[]; costs: number[]; hasRows: boolean }>();
   if (!ids.length || !await tableExistsForTenant(slug, "supplier_locations")) return map;
   const rows = await tenantSelect<RowDataPacket>({
     slug,
@@ -1032,7 +1038,8 @@ async function supplierLocationMaps(slug: string, supplierIds: number[]): Promis
     const supplierId = Number(row.supplier_id ?? 0);
     const locationId = Number(row.location_id ?? 0);
     if (supplierId <= 0 || locationId <= 0) continue;
-    const current = map.get(supplierId) ?? { warehouse: [], costs: [] };
+    const current = map.get(supplierId) ?? { warehouse: [], costs: [], hasRows: false };
+    current.hasRows = true;
     if (Number(row.warehouse_enabled ?? 1) === 1) current.warehouse.push(locationId);
     if (Number(row.costs_enabled ?? 1) === 1) current.costs.push(locationId);
     map.set(supplierId, current);
@@ -1089,7 +1096,7 @@ async function getProductById(slug: string, id: number): Promise<RowDataPacket> 
 
 async function getSupplierById(slug: string, id: number): Promise<RowDataPacket> {
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "suppliers", where: "id=?", params: [id], limit: 1 });
-  if (!rows[0]) throw new Error("Fornitore non trovato.");
+  if (!rows[0]) throw new Error("Fornitore non trovato");
   return rows[0];
 }
 

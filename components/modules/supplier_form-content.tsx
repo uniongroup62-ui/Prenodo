@@ -95,6 +95,7 @@ export function SupplierFormContent({ slug: slugProp }: { slug?: string } = {}) 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [createdAt, setCreatedAt] = useState("");
 
   // Load the locations context, then prefill on edit (action=get&type=supplier).
   useEffect(() => {
@@ -107,9 +108,14 @@ export function SupplierFormContent({ slug: slugProp }: { slug?: string } = {}) 
     })
       .then((r) => r.json())
       .then((j) => {
-        setLocations(Array.isArray(j.locations) ? j.locations : []);
+        const locs: LocationRow[] = Array.isArray(j.locations) ? j.locations : [];
+        setLocations(locs);
+        allActiveLocationIds = locs.filter((l) => l.isActive !== false).map((l) => Number(l.id)).filter((n) => n > 0);
+        return locs;
       })
       .catch(() => setLocations([]));
+
+    let allActiveLocationIds: number[] = [];
 
     if (act === "edit" && Number.isFinite(id) && id > 0) {
       Promise.all([
@@ -146,14 +152,30 @@ export function SupplierFormContent({ slug: slugProp }: { slug?: string } = {}) 
             email: String(s.email ?? ""),
             pec: String(s.pec ?? ""),
             website: String(s.website ?? ""),
-            warehouse_location_ids: (s.warehouseLocationIds ?? []).map(Number).filter((n: number) => n > 0),
-            cost_location_ids: (s.costLocationIds ?? []).map(Number).filter((n: number) => n > 0),
+            // Legacy: nessuna riga supplier_locations -> il form mostra TUTTE le
+            // sedi attive selezionate in entrambi gli ambiti.
+            warehouse_location_ids: s.hasLocationRows
+              ? (s.warehouseLocationIds ?? []).map(Number).filter((n: number) => n > 0)
+              : allActiveLocationIds,
+            cost_location_ids: s.hasLocationRows
+              ? (s.costLocationIds ?? []).map(Number).filter((n: number) => n > 0)
+              : allActiveLocationIds,
           });
+          setCreatedAt(String(s.createdAt ?? ""));
         })
         .catch(() => setError("Errore nel caricamento del fornitore."))
         .finally(() => setLoading(false));
     } else {
-      ctxPromise.finally(() => setLoading(false));
+      // NEW legacy: tutte le sedi attive partono selezionate in entrambi gli ambiti.
+      ctxPromise
+        .then(() => {
+          setForm((prev) => ({
+            ...prev,
+            warehouse_location_ids: allActiveLocationIds,
+            cost_location_ids: allActiveLocationIds,
+          }));
+        })
+        .finally(() => setLoading(false));
     }
   }, [slug]);
 
@@ -170,10 +192,6 @@ export function SupplierFormContent({ slug: slugProp }: { slug?: string } = {}) 
     });
   }
 
-  function backToList() {
-    window.location.href = `/${encodeURIComponent(slug)}/suppliers`;
-  }
-
   const activeLocations = useMemo(() => locations.filter((l) => l.isActive !== false), [locations]);
 
   async function onSubmit(event: React.FormEvent) {
@@ -183,7 +201,7 @@ export function SupplierFormContent({ slug: slugProp }: { slug?: string } = {}) 
     // Validation faithful to suppliers.php saveSupplier: name is required, and when
     // the tenant has active sedi, an active context needs at least one sede selected.
     if (form.name.trim() === "") {
-      setError("Nome fornitore obbligatorio.");
+      setError("Nome fornitore obbligatorio");
       return;
     }
     if (activeLocations.length > 0 && form.is_active && form.warehouse_location_ids.length === 0) {
@@ -234,7 +252,7 @@ export function SupplierFormContent({ slug: slugProp }: { slug?: string } = {}) 
         setSaving(false);
         return;
       }
-      backToList();
+      window.location.href = `/${encodeURIComponent(slug)}/suppliers?msg=${encodeURIComponent(form.id > 0 ? "Fornitore aggiornato" : "Fornitore creato")}`;
     } catch {
       setError("Errore nel salvataggio del fornitore.");
       setSaving(false);
@@ -251,7 +269,7 @@ export function SupplierFormContent({ slug: slugProp }: { slug?: string } = {}) 
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Magazzino</div>
           <h1 className="bs-page-title">{title}</h1>
-          <div className="bs-page-subtitle">Gestisci fornitori collegati a prodotti, magazzino e scadenze.</div>
+          <div className="bs-page-subtitle">Gestisci dati, sedi abilitate e contatti del fornitore.</div>
         </div>
         <div className="bs-page-actions">
           <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/suppliers`}>
@@ -585,12 +603,21 @@ export function SupplierFormContent({ slug: slugProp }: { slug?: string } = {}) 
           <div className="d-flex flex-wrap gap-2 pt-1">
             <button className="btn btn-primary" type="submit" disabled={saving}>
               <i className="bi bi-check2-circle me-1" />
-              {saving ? "Salvataggio…" : "Salva"}
+              Salva
             </button>
-            <button className="btn btn-outline-secondary" type="button" onClick={backToList}>
+            <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/suppliers`}>
               Annulla
-            </button>
+            </a>
           </div>
+
+          {createdAt ? (
+            <div className="text-end text-muted small mt-2">
+              Aggiunto il: {(() => {
+                const m = createdAt.match(/^(\d{4})-(\d{2})-(\d{2})/);
+                return m ? `${m[3]}/${m[2]}/${m[1]}` : createdAt;
+              })()}
+            </div>
+          ) : null}
         </form>
       )}
     </div>
