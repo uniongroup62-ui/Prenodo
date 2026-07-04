@@ -3534,3 +3534,66 @@ ri-pagamento, export CSV con BOM/header/totali e PDF %PDF, delete/bulk costi e
 categorie con guardie, cleanup CLEAN) + 82/82 marker bundle su lista+form+
 categorie (incluse negative sulle invenzioni rimosse) + typecheck/lint puliti
 (4 warning no-css-tags pre-esistenti).
+
+## Commissioni (commissions) — audit dedicato (2026-07-05)
+Diff su commissions.php (741 righe, tab overview+settings) + Commissions.php
+(2890 righe: settings/moduleSettings/saveSettings/buildDashboard/
+setEntryPaidStatus/cancel+deleteSaleCommissionMovements) vs i 2 moduli Next +
+/api/manage/commissions + manage-commissions.ts (engine accrual già portato).
+GIÀ A PARITÀ: header/badge stato modulo, tab, 3 empty-state (testi), alert
+disattivata inline, card KPI (Base commissionabile/Commissioni calcolate con
+Pagate/Da pagare/Annullate, Appuntamenti, Pagamenti), "Come funziona", warning
+percentuali, Riepilogo per operatore (colonne+righe+Annullate N • €), dettaglio
+Movimenti operatore (KPI 4 voci + tabella Data/Origine/Cliente/Voce/Riferimento/
+Base/%/Commissione/Stato con badge+timestamp/Azione Pagato-Da pagare/Nota),
+settings (switch Funzione Commissioni, card Configurazione, tabella operatori
+con Attiva/Calcolo %/4 percentuali/Note, guardia "La commissione annullata non
+può essere modificata.", engine POS prodotto/servizio + Appuntamento).
+FIX PORTATI:
+1. ANNULLO VENDITA: il legacy marca SUBITO gli snapshot commissione della
+   vendita come 'cancelled' (Commissions::cancelSaleCommissionMovements con la
+   nota standard) — il Next li lasciava 'active' fino al primo rebuild della
+   dashboard (mai, a modulo spento). Ora cancelLinkedSaleResidues aggiorna
+   entry_status/cancelled_at/cancelled_by/cancellation_reason/note.
+2. DELETE DEFINITIVO vendita: eliminazione degli snapshot commissione
+   (Commissions::deleteSaleCommissionMovements) dentro la transazione di
+   deleteCancelledSale — prima restavano orfani.
+3. Empty-state gate legacy: aggiunte le probe hasStoredHistory (COUNT snapshot
+   nel periodo/filtri) e hasSourceInScope (appuntamenti done / vendite non
+   annullate nel periodo) — prima il "Nessun movimento commissionabile
+   presente" appariva anche con dati sorgente presenti; ora le 3 condizioni
+   sono quelle di commissions.php ~250-253. Aggiunto il bottone "Nuova
+   prenotazione" (data-qb-new, gated dal permesso Quick Booking via
+   canQuickBook nella response).
+4. Select Operatore: lista COMPLETA degli staff (staffOptions dalla dashboard,
+   ordine legacy is_active DESC + filtro tecnico "SSO" normalizzato) — prima
+   solo gli operatori con movimenti.
+5. Filtri come il form GET legacy: draft applicato solo con "Aggiorna" (prima
+   ogni change rifetchava), swap from>to, Reset come anchor alla pagina base,
+   query iniziale da prop del router (?from/to/staff_id/source/detail_staff_id
+   con la regola detail=staff se in conflitto) + replaceState su Aggiorna/
+   Movimenti/Chiudi ("Movimenti" APRE senza toggle, come il link legacy).
+6. Flash verbatim spostati sopra i tab (posizione View::alert): toggle ->
+   "Commissione segnata come pagata"/"Commissione riportata da pagare";
+   settings -> "Impostazioni commissioni salvate" e "Funzione Commissioni
+   attivata"/"Funzione Commissioni disattivata" (prima flash inventati).
+7. Settings: option del Calcolo % verbatim "Importo pagato"/"Prezzo di
+   listino" (erano "Sul pagato"/"Su listino"), bottone "Salva impostazioni"
+   (era "Salva percentuali"), "Ricarica" come anchor, niente "Salvataggio…".
+8. markCommissionEntryPaid: messaggio not-found allineato alla pagina legacy
+   "Movimento commissione non trovato nel filtro selezionato."; fmtMoney
+   manuale (trap toLocaleString it-IT) nel modulo overview.
+RESIDUI DELIBERATI: colonna "Sede" nel dettaglio e checkbox "Tutte le sedi"
+(solo multi-sede, non esercitabili sul tenant) come le altre aree; l'annullo
+APPUNTAMENTO non marca subito gli snapshot (lo fa il primo rebuild della
+dashboard — il flusso legacy cancelAppointmentCommissionMovements da QB/
+calendario è tracciato per l'area appuntamenti); blocco "unassigned"
+(movimenti senza operatore) non reso — nemmeno la pagina legacy lo mostra.
+Verifica: battery e2e 32/32 (settings con clamp 150->100 e mode whitelist,
+accrual da vendita reale con operator_name staff -> entry 'POS servizio' 20%
+su 12€ = 2,40€, staffOptions/probe/canQuickBook, filtro source, toggle pagato
+con DB+guardie verbatim, annullo -> snapshot SUBITO cancelled con nota
+standard, toggle su annullata -> guardia, delete -> snapshot eliminati,
+ripristino stato modulo/settings originale, cleanup CLEAN) + 63/63 marker
+bundle (incluse negative sulle invenzioni) + typecheck/lint puliti (3 warning
+no-css-tags pre-esistenti).

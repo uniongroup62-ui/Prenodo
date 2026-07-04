@@ -91,8 +91,8 @@ export function CommissionsSettingsContent({ slug: slugProp }: { slug?: string }
     setRows(seedRows(s.staff));
   }, []);
 
+  // Fetch puro (setState nei callback della Promise; loading è già true di default).
   const load = useCallback(() => {
-    setLoading(true);
     fetch(`/api/manage/commissions?slug=${encodeURIComponent(slug)}&action=settings`, {
       headers: { "x-tenant-slug": slug },
     })
@@ -136,14 +136,16 @@ export function CommissionsSettingsContent({ slug: slugProp }: { slug?: string }
     setError("");
     setSuccess("");
     setSavingModule(true);
-    const j = await postAction({ action: "save_module_settings", module_enabled: settings.moduleEnabled ? "1" : "0" });
+    const enabled = settings.moduleEnabled;
+    const j = await postAction({ action: "save_module_settings", module_enabled: enabled ? "1" : "0" });
     setSavingModule(false);
     if (!j.ok || !j.settings) {
       setError(String(j.error ?? "Errore nel salvataggio dello stato del modulo."));
       return;
     }
     applySettings(j.settings);
-    setSuccess("Stato della funzione Commissioni aggiornato.");
+    // Flash verbatim legacy (redirect ?msg=..., dipende dallo stato salvato).
+    setSuccess(enabled ? "Funzione Commissioni attivata" : "Funzione Commissioni disattivata");
   }
 
   async function onSaveRates() {
@@ -185,7 +187,8 @@ export function CommissionsSettingsContent({ slug: slugProp }: { slug?: string }
       return;
     }
     applySettings(j.settings);
-    setSuccess("Impostazioni operatori salvate.");
+    // Flash verbatim legacy (redirect ?msg=...).
+    setSuccess("Impostazioni commissioni salvate");
   }
 
   function updateRow(staffId: number, patch: Partial<RowState>) {
@@ -215,6 +218,10 @@ export function CommissionsSettingsContent({ slug: slugProp }: { slug?: string }
         </div>
       </div>
 
+      {/* Flash legacy (?msg/?err): subito dopo l'header, PRIMA dei tab. */}
+      {success ? <div className="alert alert-success">{success}</div> : null}
+      {error ? <div className="alert alert-danger">{error}</div> : null}
+
       <ul className="nav nav-tabs commissions-tabs mb-3">
         <li className="nav-item">
           <a className="nav-link " href={href("&tab=overview")}>
@@ -229,9 +236,6 @@ export function CommissionsSettingsContent({ slug: slugProp }: { slug?: string }
           </a>
         </li>
       </ul>
-
-      {error ? <div className="alert alert-danger">{error}</div> : null}
-      {success ? <div className="alert alert-success">{success}</div> : null}
 
       <div className="card mb-3">
         <div className="card-body d-flex justify-content-between align-items-center gap-3 flex-wrap">
@@ -259,7 +263,7 @@ export function CommissionsSettingsContent({ slug: slugProp }: { slug?: string }
             </div>
             <button className="btn btn-primary" type="button" disabled={savingModule} onClick={onSaveModule}>
               <i className="bi bi-check2-circle me-1" />
-              {savingModule ? "Salvataggio…" : "Salva stato"}
+              Salva stato
             </button>
           </div>
         </div>
@@ -332,8 +336,8 @@ export function CommissionsSettingsContent({ slug: slugProp }: { slug?: string }
                           value={r.calculationMode}
                           onChange={(e) => updateRow(s.staffId, { calculationMode: e.target.value as CommissionCalculationMode })}
                         >
-                          <option value="paid_amount">Sul pagato</option>
-                          <option value="list_price">Su listino</option>
+                          <option value="paid_amount">Importo pagato</option>
+                          <option value="list_price">Prezzo di listino</option>
                         </select>
                       </td>
                       <td className="text-end commissions-settings-percent-cell">
@@ -412,11 +416,12 @@ export function CommissionsSettingsContent({ slug: slugProp }: { slug?: string }
         <div className="card-body d-flex gap-2 flex-wrap">
           <button className="btn btn-primary" type="button" disabled={savingRates || !hasStaff} onClick={onSaveRates}>
             <i className="bi bi-check2-circle me-1" />
-            {savingRates ? "Salvataggio…" : "Salva percentuali"}
+            Salva impostazioni
           </button>
-          <button className="btn btn-outline-secondary" type="button" disabled={loading} onClick={load}>
+          {/* Ricarica legacy: anchor alla pagina settings (ricarica pulita). */}
+          <a className="btn btn-outline-secondary" href={href("&tab=settings")}>
             Ricarica
-          </button>
+          </a>
         </div>
       </div>
     </div>

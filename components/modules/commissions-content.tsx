@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // Faithful port of the PHP commissions page (app/pages/commissions.php), the OVERVIEW
 // ("Riepilogo") tab — the commission report. Fed by the DB-backed
@@ -55,12 +55,24 @@ type CommissionDashboard = {
   entries: CommissionEntry[];
   operatorSummary: CommissionOperatorSummary[];
   summary: Omit<CommissionOperatorSummary, "staffId" | "operatorName">;
+  staffOptions: Array<{ id: number; name: string; isActive: boolean }>;
+  hasStoredHistory: boolean;
+  hasSourceInScope: boolean;
 };
 
 type DashboardResponse = {
   ok?: boolean;
   error?: string;
   dashboard?: CommissionDashboard;
+  canQuickBook?: boolean;
+};
+
+export type CommissionsQuery = {
+  from?: string;
+  to?: string;
+  staff_id?: string;
+  source?: string;
+  detail_staff_id?: string;
 };
 
 type CommissionSource = "all" | "appointments" | "pos";
@@ -87,6 +99,9 @@ const EMPTY_DASHBOARD: CommissionDashboard = {
   entries: [],
   operatorSummary: [],
   summary: EMPTY_SUMMARY,
+  staffOptions: [],
+  hasStoredHistory: false,
+  hasSourceInScope: false,
 };
 
 function tenantSlug(): string {
@@ -94,12 +109,12 @@ function tenantSlug(): string {
   return window.location.pathname.split("/")[1] || "";
 }
 
-// € 1.234,56 (it-IT, always 2 decimals) — matches fmt_money in the PHP.
+// number_format($n, 2, ',', '.') manuale: toLocaleString('it-IT') NON raggruppa
+// 1000-9999 (CLDR minimumGroupingDigits=2), il legacy sì ("1.234,56").
 function fmtMoney(n: number): string {
-  return (Number.isFinite(n) ? n : 0).toLocaleString("it-IT", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
+  const value = Number.isFinite(n) ? n : 0;
+  const [int, dec] = Math.abs(value).toFixed(2).split(".");
+  return `${value < 0 ? "-" : ""}${int.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${dec}`;
 }
 
 // dd/mm/yyyy HH:mm from an ISO-ish datetime string; &mdash; when empty/unparseable.
@@ -124,65 +139,128 @@ function currentMonthRange(): { from: string; to: string } {
   return { from: fmt(first), to: fmt(last) };
 }
 
-export function CommissionsContent({ slug: slugProp }: { slug?: string } = {}) {
+// I filtri legacy dalla query GET (from/to valide con swap, source whitelist,
+// detail agganciato allo staff filtrato come nel PHP).
+function filtersFromQuery(q: CommissionsQuery): { from: string; to: string; staffId: number; source: CommissionSource; detailStaffId: number } {
+  const range = currentMonthRange();
+  const isDate = (v?: string) => /^\d{4}-\d{2}-\d{2}$/.test(String(v ?? ""));
+  let from = isDate(q.from) ? String(q.from) : range.from;
+  let to = isDate(q.to) ? String(q.to) : range.to;
+  if (from > to) [from, to] = [to, from];
+  const source = (["all", "appointments", "pos"].includes(String(q.source ?? "")) ? String(q.source) : "all") as CommissionSource;
+  const staffId = Number.parseInt(String(q.staff_id ?? "0"), 10) || 0;
+  let detailStaffId = Number.parseInt(String(q.detail_staff_id ?? "0"), 10) || 0;
+  if (staffId > 0 && detailStaffId > 0 && detailStaffId !== staffId) detailStaffId = staffId;
+  return { from, to, staffId: Math.max(0, staffId), source, detailStaffId: Math.max(0, detailStaffId) };
+}
+
+type AppliedFilters = { from: string; to: string; staffId: number; source: CommissionSource };
+
+export function CommissionsContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: CommissionsQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
-  const initialRange = useMemo(() => currentMonthRange(), []);
+  const [initial] = useState(() => filtersFromQuery(initialQuery ?? {}));
 
   const [dashboard, setDashboard] = useState<CommissionDashboard>(EMPTY_DASHBOARD);
+  const [canQuickBook, setCanQuickBook] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
 
-  // Filter state — changing any of these refetches.
-  const [from, setFrom] = useState(initialRange.from);
-  const [to, setTo] = useState(initialRange.to);
-  const [staffId, setStaffId] = useState(0);
-  const [source, setSource] = useState<CommissionSource>("all");
+  // Draft dei filtri (i controlli del form GET); applicati solo con "Aggiorna".
+  const [from, setFrom] = useState(initial.from);
+  const [to, setTo] = useState(initial.to);
+  const [staffId, setStaffId] = useState(initial.staffId);
+  const [source, setSource] = useState<CommissionSource>(initial.source);
+  const appliedRef = useRef<AppliedFilters>({ from: initial.from, to: initial.to, staffId: initial.staffId, source: initial.source });
 
   // The operator whose detail entries are shown below (client-side filter of entries).
-  const [selectedStaffId, setSelectedStaffId] = useState(0);
-  const [toggleError, setToggleError] = useState("");
+  const [selectedStaffId, setSelectedStaffId] = useState(initial.detailStaffId);
+
+  // Flash legacy (?msg / ?err dopo i redirect del toggle), sopra i tab.
+  const [flash, setFlash] = useState("");
+  const [error, setError] = useState("");
 
   function href(suffix: string): string {
     return `/${encodeURIComponent(slug)}/${`commissions${suffix}`.replace("&", "?")}`;
   }
 
-  // GET the dashboard for the current filters.
-  const load = useCallback(() => {
-    setLoading(true);
-    const qs = new URLSearchParams({
-      slug,
-      from,
-      to,
-      staff_id: String(staffId),
-      source,
-    });
-    fetch(`/api/manage/commissions?${qs.toString()}`, { headers: { "x-tenant-slug": slug } })
-      .then((r) => r.json())
-      .then((j: DashboardResponse) => {
-        if (j.dashboard) setDashboard(j.dashboard);
-        else setDashboard(EMPTY_DASHBOARD);
-      })
-      .catch(() => setDashboard(EMPTY_DASHBOARD))
-      .finally(() => setLoading(false));
-  }, [slug, from, to, staffId, source]);
+  // URL legacy (overviewUrlFor): from/to/staff_id/source + detail_staff_id se aperto.
+  const syncUrl = useCallback((filters: AppliedFilters, detailStaffId: number) => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams({ tab: "overview", from: filters.from, to: filters.to, staff_id: String(filters.staffId), source: filters.source });
+    if (detailStaffId > 0) sp.set("detail_staff_id", String(detailStaffId));
+    window.history.replaceState(null, "", `${window.location.pathname}?${sp.toString()}`);
+  }, []);
+
+  // Fetch puro (setState nei callback della Promise): mount + load() dagli handler.
+  const fetchData = useCallback(
+    (filters: AppliedFilters) => {
+      appliedRef.current = filters;
+      const qs = new URLSearchParams({
+        slug,
+        from: filters.from,
+        to: filters.to,
+        staff_id: String(filters.staffId),
+        source: filters.source,
+      });
+      fetch(`/api/manage/commissions?${qs.toString()}`, { headers: { "x-tenant-slug": slug } })
+        .then((r) => r.json())
+        .then((j: DashboardResponse) => {
+          if (j.dashboard) setDashboard(j.dashboard);
+          else setDashboard(EMPTY_DASHBOARD);
+          if (typeof j.canQuickBook === "boolean") setCanQuickBook(j.canQuickBook);
+        })
+        .catch(() => setDashboard(EMPTY_DASHBOARD))
+        .finally(() => {
+          setLoading(false);
+          setLoaded(true);
+        });
+    },
+    [slug],
+  );
+
+  const load = useCallback(
+    (filters: AppliedFilters) => {
+      setLoading(true);
+      fetchData(filters);
+    },
+    [fetchData],
+  );
 
   useEffect(() => {
-    load();
-  }, [load]);
+    fetchData({ from: initial.from, to: initial.to, staffId: initial.staffId, source: initial.source });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchData]);
 
-  function onReset() {
-    setToggleError("");
-    setSelectedStaffId(0);
-    setStaffId(0);
-    setSource("all");
-    setFrom(initialRange.from);
-    setTo(initialRange.to);
+  // Submit "Aggiorna" — applica il draft (con lo swap date del legacy) e riscrive l'URL.
+  function applyFilters() {
+    let f = from;
+    let t = to;
+    if (f && t && f > t) [f, t] = [t, f];
+    setFrom(f);
+    setTo(t);
+    // Regola legacy: il dettaglio aperto resta solo se compatibile col filtro operatore.
+    const nextDetail = staffId > 0 && selectedStaffId > 0 && selectedStaffId !== staffId ? staffId : selectedStaffId;
+    setSelectedStaffId(nextDetail);
+    const filters: AppliedFilters = { from: f, to: t, staffId, source };
+    load(filters);
+    syncUrl(filters, nextDetail);
+  }
+
+  function openDetail(detailStaffId: number) {
+    setError("");
+    setFlash("");
+    setSelectedStaffId(detailStaffId);
+    syncUrl(appliedRef.current, detailStaffId);
   }
 
   // POST toggle_commission_paid with the current filters; refresh from the returned dashboard.
   async function onToggle(entry: CommissionEntry) {
-    setToggleError("");
+    setError("");
+    setFlash("");
+    const applied = appliedRef.current;
+    const markPaid = !entry.isPaid;
     try {
       const res = await fetch(`/api/manage/commissions?slug=${encodeURIComponent(slug)}`, {
         method: "POST",
@@ -190,46 +268,42 @@ export function CommissionsContent({ slug: slugProp }: { slug?: string } = {}) {
         body: JSON.stringify({
           action: "toggle_commission_paid",
           entry_key: entry.entryKey,
-          mark_paid: entry.isPaid ? "0" : "1",
-          from,
-          to,
-          staff_id: String(staffId),
-          source,
+          mark_paid: markPaid ? "1" : "0",
+          from: applied.from,
+          to: applied.to,
+          staff_id: String(applied.staffId),
+          source: applied.source,
         }),
       });
       const j: DashboardResponse = await res.json();
       if (!res.ok || j.ok === false || !j.dashboard) {
-        setToggleError(String(j.error ?? "Impossibile aggiornare lo stato della commissione."));
+        setError(String(j.error ?? "Impossibile aggiornare lo stato della commissione."));
         return;
       }
       setDashboard(j.dashboard);
+      // Flash verbatim legacy (redirect ?msg=...).
+      setFlash(markPaid ? "Commissione segnata come pagata" : "Commissione riportata da pagare");
     } catch {
-      setToggleError("Errore di rete.");
+      setError("Errore di rete.");
     }
   }
 
-  const { moduleEnabled, configuredRates, entries, operatorSummary, summary } = dashboard;
-  const hasEntries = entries.length > 0;
+  const { moduleEnabled, configuredRates, entries, operatorSummary, summary, staffOptions, hasStoredHistory, hasSourceInScope } = dashboard;
 
-  // The 3 empty states (only meaningful once loaded).
-  const showDisabled = !moduleEnabled && !hasEntries;
-  const showConfigure = moduleEnabled && configuredRates === 0 && !hasEntries;
-  const showNoMovements = moduleEnabled && configuredRates > 0 && !hasEntries;
-  const showEmpty = !loading && (showDisabled || showConfigure || showNoMovements);
+  // Gate legacy dei 3 empty-state (commissions.php ~250-253): storico nel periodo
+  // (righe correnti O snapshot salvati) e presenza di dati sorgente.
+  const hasHistory = entries.length > 0 || hasStoredHistory;
+  const showDisabled = !moduleEnabled && !hasHistory;
+  const showConfigure = moduleEnabled && configuredRates <= 0 && !hasHistory;
+  const showNoMovements = moduleEnabled && configuredRates > 0 && !hasHistory && !hasSourceInScope;
+  const showEmpty = loaded && (showDisabled || showConfigure || showNoMovements);
 
-  // Operator options for the filter select — prefer the summary, fall back to distinct entry operators.
-  const operatorOptions = useMemo(() => {
-    const map = new Map<number, string>();
-    for (const row of operatorSummary) {
-      if (row.staffId > 0) map.set(row.staffId, row.operatorName);
-    }
-    if (map.size === 0) {
-      for (const e of entries) {
-        if (e.staffId > 0 && !map.has(e.staffId)) map.set(e.staffId, e.operatorName);
-      }
-    }
-    return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
-  }, [operatorSummary, entries]);
+  // Select Operatore: la lista COMPLETA degli staff (legacy $staffRows), non solo
+  // quelli con movimenti.
+  const operatorOptions = useMemo(
+    () => staffOptions.filter((s) => s.id > 0).map((s) => ({ id: s.id, name: s.name })),
+    [staffOptions],
+  );
 
   // The selected operator's detail rows + its summary card row.
   const detailEntries = useMemo(
@@ -264,6 +338,10 @@ export function CommissionsContent({ slug: slugProp }: { slug?: string } = {}) {
           )}
         </div>
       </div>
+
+      {/* Flash legacy (?msg/?err): subito dopo l'header, PRIMA dei tab. */}
+      {flash ? <div className="alert alert-success">{flash}</div> : null}
+      {error ? <div className="alert alert-danger">{error}</div> : null}
 
       <ul className="nav nav-tabs commissions-tabs mb-3">
         <li className="nav-item">
@@ -326,6 +404,14 @@ export function CommissionsContent({ slug: slugProp }: { slug?: string } = {}) {
                     <i className="bi bi-credit-card me-1" />
                     Apri Pagamenti
                   </a>
+                  {canQuickBook ? (
+                    // La shell delega i click su [data-qb-new] al Quick Booking drawer,
+                    // come il bottone legacy data-qb-new="1".
+                    <a className="btn btn-outline-primary" href="#" data-qb-new="1">
+                      <i className="bi bi-plus-lg me-1" />
+                      Nuova prenotazione
+                    </a>
+                  ) : null}
                   <a className="btn btn-outline-secondary" href={href("&tab=settings")}>
                     <i className="bi bi-sliders me-1" />
                     Impostazioni
@@ -345,19 +431,26 @@ export function CommissionsContent({ slug: slugProp }: { slug?: string } = {}) {
           ) : null}
 
           <div className="card p-3 mb-3">
-            <div className="row g-2 align-items-end">
+            <form
+              className="row g-2 align-items-end"
+              onSubmit={(e) => {
+                e.preventDefault();
+                applyFilters();
+              }}
+            >
               <div className="col-xl-2 col-md-6">
                 <label className="form-label small text-muted">Dal</label>
-                <input className="form-control" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+                <input className="form-control" type="date" name="from" value={from} onChange={(e) => setFrom(e.target.value)} />
               </div>
               <div className="col-xl-2 col-md-6">
                 <label className="form-label small text-muted">Al</label>
-                <input className="form-control" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+                <input className="form-control" type="date" name="to" value={to} onChange={(e) => setTo(e.target.value)} />
               </div>
               <div className="col-xl-3 col-md-6">
                 <label className="form-label small text-muted">Operatore</label>
                 <select
                   className="form-select"
+                  name="staff_id"
                   value={String(staffId)}
                   onChange={(e) => setStaffId(Number(e.target.value) || 0)}
                 >
@@ -373,6 +466,7 @@ export function CommissionsContent({ slug: slugProp }: { slug?: string } = {}) {
                 <label className="form-label small text-muted">Origine</label>
                 <select
                   className="form-select"
+                  name="source"
                   value={source}
                   onChange={(e) => setSource(e.target.value as CommissionSource)}
                 >
@@ -382,14 +476,15 @@ export function CommissionsContent({ slug: slugProp }: { slug?: string } = {}) {
                 </select>
               </div>
               <div className="col-12 d-flex gap-2 flex-wrap">
-                <button className="btn btn-outline-primary" type="button" disabled={loading} onClick={load}>
+                <button className="btn btn-outline-primary" type="submit" disabled={loading}>
                   Aggiorna
                 </button>
-                <button className="btn btn-outline-secondary" type="button" onClick={onReset}>
+                {/* Reset legacy: anchor alla pagina base (ricarica con i default). */}
+                <a className="btn btn-outline-secondary" href={href("&tab=overview")}>
                   Reset
-                </button>
+                </a>
               </div>
-            </div>
+            </form>
             <div className="small text-muted mt-3">
               <strong>Come funziona:</strong> le commissioni su appuntamenti leggono automaticamente le prestazioni concluse da
               Quick Booking e Booking pubblico. Le commissioni POS leggono l&rsquo;operatore che ha registrato la vendita in
@@ -406,7 +501,6 @@ export function CommissionsContent({ slug: slugProp }: { slug?: string } = {}) {
             </div>
           ) : null}
 
-          {toggleError ? <div className="alert alert-danger">{toggleError}</div> : null}
 
           <div className="row g-3 mb-3">
             <div className="col-md-3">
@@ -488,13 +582,11 @@ export function CommissionsContent({ slug: slugProp }: { slug?: string } = {}) {
                         <td className="text-end">&euro; {fmtMoney(row.unpaidCommission)}</td>
                         <td className="text-end fw-bold">&euro; {fmtMoney(row.totalCommission)}</td>
                         <td className="text-end">
+                          {/* Legacy: il link apre (o mantiene aperto) il dettaglio; si chiude solo con "Chiudi". */}
                           <button
                             type="button"
                             className={`btn btn-sm ${selectedStaffId === row.staffId ? "btn-primary" : "btn-outline-primary"}`}
-                            onClick={() => {
-                              setToggleError("");
-                              setSelectedStaffId(selectedStaffId === row.staffId ? 0 : row.staffId);
-                            }}
+                            onClick={() => openDetail(row.staffId)}
                           >
                             Movimenti
                           </button>
@@ -519,10 +611,7 @@ export function CommissionsContent({ slug: slugProp }: { slug?: string } = {}) {
                 <button
                   type="button"
                   className="btn btn-sm btn-outline-secondary"
-                  onClick={() => {
-                    setToggleError("");
-                    setSelectedStaffId(0);
-                  }}
+                  onClick={() => openDetail(0)}
                 >
                   Chiudi
                 </button>

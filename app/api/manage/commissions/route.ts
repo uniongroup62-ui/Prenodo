@@ -55,6 +55,9 @@ export async function GET(request: Request) {
       ok: true,
       sourceMode: "database",
       dashboard,
+      // Il bottone "Nuova prenotazione" dell'empty-state legacy è gated dal permesso
+      // Quick Booking (commissions.php $commissionCanQuickBook).
+      canQuickBook: can(session.user.perms, "appointments.quick_booking"),
       // Keep the legacy keys so the pre-existing consumers don't break until the
       // report block adapts to `dashboard`.
       summary: await commissionDbSummary(tenantSlug),

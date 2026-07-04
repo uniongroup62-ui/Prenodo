@@ -1318,6 +1318,7 @@ export async function deleteCancelledSale(
   const prepaidUsagesTable = await resolve("client_prepaid_service_usages");
   const prepaidsTable = await resolve("client_prepaid_services");
   const rechargesTable = await resolve("recharges");
+  const commissionSnapshotsTable = await resolve("staff_commission_payments");
 
   await withTenantTransaction(slug, async (q) => {
     const del = async (table: TenantTarget | null, clauses: string[], params: unknown[]) => {
@@ -1366,6 +1367,10 @@ export async function deleteCancelledSale(
     for (const rech of linkedRecharges) {
       await del(rechargesTable, ["id=?"], [rech.id]);
     }
+
+    // Movimenti commissione della vendita: eliminati SOLO con l'eliminazione
+    // definitiva (Commissions::deleteSaleCommissionMovements).
+    await del(commissionSnapshotsTable, ["source_group='pos'", "source_id=?"], [input.saleId]);
 
     // Installments first (children of the plan), then the plan, then the rest.
     await del(installmentsTable, ["sale_id=?"], [input.saleId]);
@@ -4467,6 +4472,32 @@ async function cancelLinkedSaleResidues(
   await updateBySaleId(slug, "client_prepaid_services", saleId, { status: "cancelled", canceled_at: new Date(), cancel_note: standardNote.slice(0, 255) });
   await updateBySaleId(slug, "client_packages", saleId, { status: "canceled", updated_at: new Date() });
   await updateBySaleId(slug, "sale_installment_plans", saleId, { status: "cancelled", cancelled_at: new Date(), cancelled_reason: standardNote.slice(0, 255) });
+  // Movimenti commissione POS: l'annullo vendita li marca SUBITO 'cancelled'
+  // (Commissions::cancelSaleCommissionMovements — il movimento resta nello storico
+  // come Annullato; l'eliminazione avviene solo col delete definitivo). Best-effort.
+  try {
+    const table = await tenantTable(slug, "staff_commission_payments");
+    const clauses = ["source_group='pos'", "source_id=?"];
+    const params: unknown[] = [saleId];
+    if (table.mode === "shared" && (await columnExists(table.name, "tenant_id"))) {
+      clauses.unshift("tenant_id=?");
+      params.unshift(table.tenantId ?? 0);
+    }
+    const reasonNote = standardNote.slice(0, 255);
+    await dbExecute(
+      `UPDATE ${quoteIdentifier(table.name)}
+          SET entry_status='cancelled',
+              cancelled_at=COALESCE(cancelled_at, NOW()),
+              cancelled_by=COALESCE(cancelled_by, ?),
+              cancellation_reason=CASE WHEN COALESCE(cancellation_reason,'')='' THEN ? ELSE cancellation_reason END,
+              note=?
+        WHERE ${clauses.join(" AND ")}`,
+      [voidedBy, reasonNote, reasonNote, ...params],
+    );
+  } catch {
+    // schema commissioni assente: come il legacy paymentSchemaAvailable(false)
+  }
+
   // Sulle rate il legacy APPENDE "[ANNULLATA <ts>] <nota standard>" alla nota esistente
   // (i dati di incasso di una rata già pagata restano nello storico).
   {

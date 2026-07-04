@@ -181,7 +181,7 @@ export default async function TenantPage({
   searchParams,
 }: {
   params: Promise<{ tenantSlug: string; segments?: string[] }>;
-  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string; from?: string; to?: string; q?: string; cat?: string; cat_q?: string; cat_status?: string; category_filter_id?: string }>;
+  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string; staff_id?: string; source?: string; detail_staff_id?: string; from?: string; to?: string; q?: string; cat?: string; cat_q?: string; cat_status?: string; category_filter_id?: string }>;
 }) {
   const { tenantSlug, segments } = await params;
   const query = await searchParams;
@@ -542,6 +542,25 @@ export default async function TenantPage({
   if (page === "gift_voucher" && query.id) {
     const token = await giftVoucherTokenById(tenantSlug, Number.parseInt(String(query.id), 10) || 0);
     return <GiftVoucherFaithful slug={tenantSlug} token={token} embed={query.embed === "1"} />;
+  }
+
+  // Commissioni (Riepilogo): i filtri legacy viaggiano nella query GET
+  // (from/to/staff_id/source/detail_staff_id) — inoltrati come prop server-side.
+  if (page === "commissions" && tab !== "settings") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <CommissionsContent
+          slug={tenantSlug}
+          initialQuery={{
+            from: query.from,
+            to: query.to,
+            staff_id: query.staff_id,
+            source: query.source,
+            detail_staff_id: query.detail_staff_id,
+          }}
+        />
+      </ManageShell>
+    );
   }
 
   // Gestione Rate: i filtri legacy viaggiano nella query GET (status/client_id/

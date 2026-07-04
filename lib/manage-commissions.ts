@@ -65,10 +65,12 @@ async function listCommissionStaff(slug: string): Promise<Array<{ id: number; na
     slug,
     table: "staff",
     columns: "id, full_name, email, is_active",
-    orderBy: "full_name ASC, id ASC",
+    // Ordine legacy allStaff: prima gli attivi, poi alfabetico.
+    orderBy: "is_active DESC, full_name ASC, id ASC",
   }).catch(() => [] as RowDataPacket[]);
   return rows
-    .filter((r) => String(r.full_name ?? "").trim().toUpperCase() !== "SSO")
+    // isTechnicalStaffRow: nome normalizzato (solo A-Z0-9) uguale a "SSO".
+    .filter((r) => String(r.full_name ?? "").toUpperCase().replace(/[^A-Z0-9]+/g, "") !== "SSO")
     .map((r) => ({
       id: Math.max(0, Number(r.id ?? 0) || 0),
       name: String(r.full_name ?? "").trim(),
@@ -257,6 +259,13 @@ export type CommissionDashboard = {
   entries: CommissionEntry[];
   operatorSummary: CommissionOperatorSummary[];
   summary: CommissionSummary;
+  // Lista COMPLETA operatori per il select filtro (legacy $staffRows: tutti gli
+  // staff non tecnici, anche senza movimenti).
+  staffOptions: Array<{ id: number; name: string; isActive: boolean }>;
+  // Probe legacy per i 3 empty-state (commissions.php ~198-253): storico snapshot
+  // nel periodo/filtri e dati sorgente (appuntamenti done / vendite) nel periodo.
+  hasStoredHistory: boolean;
+  hasSourceInScope: boolean;
 };
 
 export type CommissionDashboardParams = {
@@ -1195,13 +1204,96 @@ export async function buildCommissionDashboard(slug: string, rawParams: Commissi
   summary.totalBase = roundMoney(summary.appointmentsBase + summary.posBase);
   summary.totalCommission = roundMoney(summary.appointmentsCommission + summary.posCommission);
 
+  const [hasStoredHistory, hasSourceInScope] = await Promise.all([
+    probeStoredHistory(slug, { from, to, source, locationId }).catch(() => entries.length > 0),
+    probeSourceInScope(slug, { from, to, source, locationId }).catch(() => false),
+  ]);
+
   return {
     moduleEnabled: settings.moduleEnabled,
     configuredRates: settings.configuredRates,
     entries,
     operatorSummary,
     summary,
+    staffOptions: settings.staff.map((s) => ({ id: s.staffId, name: s.name || (s.email || `Operatore #${s.staffId}`), isActive: s.isActive })),
+    hasStoredHistory,
+    hasSourceInScope,
   };
+}
+
+// Port di $commissionHasStoredHistoryInScope (commissions.php ~198-214): COUNT su
+// staff_commission_payments per DATE(COALESCE(movement_datetime, created_at)) nel range,
+// con filtro source_group e sede (location_id=? OR NULL).
+async function probeStoredHistory(slug: string, params: { from: string; to: string; source: string; locationId: number }): Promise<boolean> {
+  const table = await tenantTable(slug, "staff_commission_payments");
+  const clauses = ["DATE(COALESCE(movement_datetime, created_at)) BETWEEN ? AND ?"];
+  const values: unknown[] = [params.from, params.to];
+  if (table.mode === "shared" && (await columnExists(table.name, "tenant_id"))) {
+    clauses.unshift("tenant_id=?");
+    values.unshift(table.tenantId ?? 0);
+  }
+  if (params.source === "appointments" || params.source === "pos") {
+    clauses.push("source_group=?");
+    values.push(params.source);
+  }
+  if (params.locationId > 0 && (await columnExists(table.name, "location_id"))) {
+    clauses.push("(location_id=? OR location_id IS NULL)");
+    values.push(params.locationId);
+  }
+  const rows = await dbQuery<RowDataPacket[]>(`SELECT COUNT(*) AS count FROM ${quoteIdentifier(table.name)} WHERE ${clauses.join(" AND ")}`, values);
+  return Number(rows[0]?.count ?? 0) > 0;
+}
+
+// Port di $commissionHasSourceInScope (commissions.php ~216-248): appuntamenti DONE
+// per starts_at nel range, poi (se 0) vendite non annullate per sale_date nel range.
+async function probeSourceInScope(slug: string, params: { from: string; to: string; source: string; locationId: number }): Promise<boolean> {
+  if (params.source === "all" || params.source === "appointments") {
+    try {
+      const table = await tenantTable(slug, "appointments");
+      const clauses = ["a.status='done'", "DATE(a.starts_at) BETWEEN ? AND ?"];
+      const values: unknown[] = [params.from, params.to];
+      if (table.mode === "shared" && (await columnExists(table.name, "tenant_id"))) {
+        clauses.unshift("a.tenant_id=?");
+        values.unshift(table.tenantId ?? 0);
+      }
+      if (params.locationId > 0 && (await columnExists(table.name, "location_id"))) {
+        clauses.push("(a.location_id=? OR a.location_id IS NULL)");
+        values.push(params.locationId);
+      }
+      const rows = await dbQuery<RowDataPacket[]>(`SELECT COUNT(*) AS count FROM ${quoteIdentifier(table.name)} a WHERE ${clauses.join(" AND ")}`, values);
+      if (Number(rows[0]?.count ?? 0) > 0) return true;
+    } catch {
+      // best-effort, come il legacy
+    }
+  }
+  if (params.source === "all" || params.source === "pos") {
+    try {
+      const salesTable = await tenantTable(slug, "sales");
+      const itemsTable = await tenantTable(slug, "sale_items");
+      const clauses = ["DATE(s.sale_date) BETWEEN ? AND ?"];
+      const values: unknown[] = [params.from, params.to];
+      if (salesTable.mode === "shared" && (await columnExists(salesTable.name, "tenant_id"))) {
+        clauses.unshift("s.tenant_id=?");
+        values.unshift(salesTable.tenantId ?? 0);
+      }
+      if (await columnExists(salesTable.name, "status")) {
+        clauses.push("(s.status IS NULL OR s.status NOT IN ('cancelled','canceled'))");
+      }
+      if (params.locationId > 0 && (await columnExists(salesTable.name, "location_id"))) {
+        clauses.push("(s.location_id=? OR s.location_id IS NULL)");
+        values.push(params.locationId);
+      }
+      const join = itemsTable.mode === "shared" && (await columnExists(itemsTable.name, "tenant_id")) ? " AND si.tenant_id=s.tenant_id" : "";
+      const rows = await dbQuery<RowDataPacket[]>(
+        `SELECT COUNT(DISTINCT s.id) AS count FROM ${quoteIdentifier(salesTable.name)} s JOIN ${quoteIdentifier(itemsTable.name)} si ON si.sale_id=s.id${join} WHERE ${clauses.join(" AND ")}`,
+        values,
+      );
+      if (Number(rows[0]?.count ?? 0) > 0) return true;
+    } catch {
+      // best-effort
+    }
+  }
+  return false;
 }
 
 // markCommissionEntryPaid — set is_paid/paid_at/paid_by by entry_key. THROWS if the
@@ -1226,7 +1318,8 @@ export async function markCommissionEntryPaid(
     limit: 1,
   });
   const row = rows[0];
-  if (!row) throw new Error("Movimento commissione non trovato.");
+  // Messaggio pagina legacy: l'entry viene cercata nel dataset del filtro POSTato.
+  if (!row) throw new Error("Movimento commissione non trovato nel filtro selezionato.");
   if (String(row.entry_status ?? "active").trim() === "cancelled") {
     throw new Error("La commissione annullata non può essere modificata.");
   }
