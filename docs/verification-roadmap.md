@@ -3088,3 +3088,85 @@ time-off col nome operatore, clear/riassegna operatore, segments[] con soglia
 fallback delta senza segment_id, staff_id ignorato sul multi, cleanup CLEAN) +
 48/48 marker bundle (palette soft completa, alert verbatim, note, chiusure,
 hover inline) + typecheck pulito (lint: soli rilievi preesistenti a HEAD).
+
+## Quick booking — audit di parità, PASSATA 1 (2026-07-04)
+Metodo: doppio inventario agent (legacy View.php 1019-1974 + app.js SERVITO da
+public/ 11462 righe + api_appointments/api_clients; port Next quick-booking-
+drawer.tsx 5539 righe) + estrazione live del drawer (php-qb-drawer.html 18KB) +
+payload action=get live (php-qb-get.json).
+NOTA CHIAVE: esistono DUE copie divergenti di app.js; fa fede quella SERVITA
+(public/assets/js/app.js). In quella build il countdown hold è "tecnico
+invisibile" (solo auto-renew) e le radio Cb/scelta-sconto sono INERTI (id non
+presenti nel markup) → i TODO Next "countdown non wired" e "fidelity choice non
+portata" sono in realtà GIÀ PARITÀ.
+GAP CHIUSI (passata 1):
+1. ESITI VIA TOAST (window.notify) + NIENTE RELOAD: il legacy dopo save/delete/
+   annullo NON ricarica la pagina — chiude il drawer, toast success
+   ("Appuntamento salvato"/"Appuntamento eliminato"/"Prenotazione annullata"/
+   "Prenotazione marcata No show"/"Cliente creato"), warnings[] come toast
+   warning, e refetch del SOLO calendario. Port: qbNotify + evento
+   qb:appointments-changed ascoltato da calendar-content (loadContext in place).
+   Prima: window.location.reload() che uccideva ogni feedback.
+2. ROUTING ANNULLAMENTO PRIMA DEL SAVE (app.js:11340): la richiesta canceled/
+   no_show da pending/scheduled/done apre il popup dedicato SENZA salvare gli
+   altri campi (prima: save + transizione dopo, e messaggio inventato
+   "Annullamento non confermato..."). Popup chiuso = nessuna azione.
+3. VALIDAZIONI SUBMIT legacy: toast warning "Seleziona o crea un cliente" /
+   "Inserisci data e orario" (senza punto), lock "La prenotazione annullata non
+   è modificabile." warning; il check servizi è SOLO server. Errori save =
+   toast danger (fallback "Errore salvataggio" senza punto); recovery hold
+   scaduto SOLO con hold attivo → pulizia token/orari/cabina + IL MESSAGGIO DEL
+   SERVER come toast warning (prima: testo inventato "Disponibilità scaduta...").
+4. DELETE legacy: guardia client-side stato Annullato (toast verbatim), confirm
+   "Eliminare questo appuntamento?" (era testo inventato), esiti toast, niente
+   reload.
+5. BOTTONE SUBMIT edit: "Modifica prenotazione" (app.js:5562; era "Salva
+   modifiche"); i testi locked "Prenotazione annullata"/"Prenotazione No show"
+   ora keyed sullo stato TERMINALE caricato (app.js:5084), non sulla select.
+6. TROVA CLIENTE: righe risultato legacy "Email: x"/"Telefono: y" con "—"
+   (era "email • phone"), vuoto "Nessun risultato." (era "Nessun cliente
+   trovato."); confermata parità exclude_blocked (listDbClients nasconde i
+   bloccati — test live con cliente ZZ bloccato).
+7. OPERATORE: placeholder singolo "(qualsiasi)" (era "Operatore automatico");
+   cambio operatore in CREATE (singolo e per-servizio) invalida lo slot come il
+   legacy: azzera orari + release hold + toast "Hai cambiato operatore:
+   seleziona di nuovo una disponibilità" (solo se c'era uno slot e il cambio è
+   tra due operatori pieni, app.js:8806-8817).
+8. FIDELITY hint verbatim (app.js:7504-7511): "Max utilizzabili: N Punti
+   (- € X). Minimo: N Punti." (era formato inventato "1 punto = ... • Usabili").
+9. PRE-CHECK "Disponibilità" come toast warning (eran alert inline).
+10. Pill servizi: toast rimozione "Servizio rimosso dalla prenotazione: X";
+    "Cliente creato" success dopo create-quick; loading NEW "Preparo nuova
+    prenotazione..." (app.js:9910) durante il primo caricamento master data.
+PARITÀ CONFERMATE (nessuna azione): markup drawer 1:1 (verificato sul live:
+header/kicker/codice, multiselect pills+search+gruppi, gating data/disponibilità,
+cabina hint, stato/note, Dettaglio prezzi con Coupon/Sconto/GiftCard/Credito/
+Punti Fidelity/Totale, Crea prenotazione/Elimina appuntamento); modale
+Disponibilità (Orari disponibili, viste Giorno/Settimana/Mese default week,
+tooltip stati slot); hold TTL 300s + renew 60s/retry 30s + release keepalive;
+coupon (messaggi identici); promo auto senza riga dedicata (prezzi barrati +
+badge); popup annullamento eseguito (preview/blockers/motivazione 255);
+permessi; storico/residui box con "Apri scheda".
+RESIDUI DA CHIUDERE (PASSATA 2 — NON deliberati):
+A. REDEEM IN EDIT: il get legacy restituisce giftbox/package/prepaid/gift/
+   giftcard_redeem esistenti e il drawer li prefilla (pills collegate, righe
+   "Incluso nel pacchetto..."); il save in edit li ri-applica/aggiorna. Nel Next
+   getDbAppointmentForEdit non li restituisce e updateDbAppointment li IGNORA
+   (TODO(redeem-on-edit)).
+B. SELEZIONE REDEEM NELLA MODALE RESIDUI: nel legacy i controlli interattivi
+   (credito toggle+importo+Usa max, GiftCard select+importo+applica/rimuovi con
+   toast "GiftCard applicata alla prenotazione."/"GiftCard rimossa...", check
+   servizi da GiftBox/Pacchetti/Omaggi/Prepagati che AGGIUNGONO il servizio
+   alla prenotazione con toast "Servizi aggiunti alla prenotazione: ..."/
+   "Seduta pacchetto collegata: ..." ecc. + qb_residui_check) vivono DENTRO
+   #qbClientResidualsModal; il form NON ha i box inline che il Next ha
+   inventato (il markup live del drawer ha solo gli hidden input).
+C. staff_for_service: stati select con verifica server ("Verifico operatori
+   disponibili...", opzioni occupate disabilitate "nome — Occupato" in edit,
+   fallback "Operatore assegnato (ID n)"); il Next filtra client-side senza
+   disponibilità.
+D. minori: credit_use_from_booking sempre 0; allocazione staff/cabina dall'hold
+   non consumata (equivalente di fatto: l'effect cabins_for_services riseleziona
+   la cabina libera dopo lo slot).
+Verifica passata 1: 24/24 marker bundle + test live search bloccati (cleanup
+CLEAN) + typecheck pulito.

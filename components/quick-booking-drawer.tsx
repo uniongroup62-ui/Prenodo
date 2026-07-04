@@ -228,6 +228,24 @@ function fmtEUR(value: number): string {
   }
 }
 
+// Toast globale: window.notify è il port fedele del notify() legacy (montato da
+// manage-shell su #appToastContainer). Il legacy usa i toast per TUTTI gli esiti
+// del quick booking (validazioni warning, errori danger, esiti success) — non
+// alert inline. No-op silenzioso se il portale non è ancora montato.
+function qbNotify(message: string, variant: "success" | "danger" | "warning" | "info" = "info"): void {
+  if (typeof window === "undefined") return;
+  const w = window as unknown as { notify?: (m: string, v?: string) => void };
+  if (typeof w.notify === "function") w.notify(message, variant);
+}
+
+// Refresh in-place dopo save/delete (port di window.calendar.refetchEvents(): il
+// legacy NON ricarica la pagina). Il calendario ascolta questo evento e ricarica
+// i propri dati; sulle altre pagine — come nel legacy — non succede nulla.
+function qbRefetchCalendar(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent("qb:appointments-changed"));
+}
+
 // SQL date/datetime -> "dd/mm/yyyy hh:mm" (it-IT), port of app.js
 // fmtDateTimeFromSql (local-time parse to avoid timezone shifts).
 function fmtDateTimeFromSql(value: string): string {
@@ -745,10 +763,15 @@ export function QuickBookingDrawer() {
   const cabins = useMemo(() => ctx.cabins ?? [], [ctx.cabins]);
 
   // Load the quick-booking context once (lazily, the first time the drawer is
-  // opened) from the manage GET. Tenant-scoped via slug query + header.
+  // opened) from the manage GET. Tenant-scoped via slug query + header. While the
+  // FIRST load is in flight on a NEW booking, the drawer shows the legacy loading
+  // panel with "Preparo nuova prenotazione..." (app.js:9910) — masterLoading
+  // drives that state (nome distinto dal contextLoading dello storico cliente).
+  const [masterLoading, setMasterLoading] = useState(false);
   const loadContext = useCallback(() => {
     if (ctxLoadedRef.current || !slug) return;
     ctxLoadedRef.current = true;
+    setMasterLoading(true);
     const params = new URLSearchParams({ slug, action: "context" });
     fetch(`/api/manage/appointments?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
@@ -759,7 +782,8 @@ export function QuickBookingDrawer() {
       .catch(() => {
         ctxLoadedRef.current = false; // allow a retry on next open
         setCtx({});
-      });
+      })
+      .finally(() => setMasterLoading(false));
   }, [slug]);
 
   // Item 1: release an availability hold on the server (port of qbReleaseAvailabilityHold,
@@ -1133,11 +1157,23 @@ export function QuickBookingDrawer() {
   }, [isMultiService, staffPickerRows, staffMap]);
 
   const setStaffForService = useCallback((serviceId: number, value: string) => {
-    // Changing any operator invalidates a previously held slot: drop it locally AND release
-    // it on the server (port of qbReleaseAvailabilityHold on a staff change).
+    // Cambio operatore in CREATE (port di app.js:8806-8817): lo slot selezionato
+    // non vale più — azzera gli orari, rilascia l'hold e avvisa col toast legacy
+    // (solo se c'era davvero uno slot e l'operatore è cambiato tra due valori pieni).
     dropAndReleaseHold();
+    if (!apptId) {
+      const prevStaff = String(staffPicks[serviceId] ?? "").trim();
+      const hadSlot = Boolean(startTime);
+      if (hadSlot) {
+        setStartTime("");
+        setPrefillEndTime("");
+      }
+      if (hadSlot && prevStaff && value.trim() && prevStaff !== value.trim()) {
+        qbNotify("Hai cambiato operatore: seleziona di nuovo una disponibilità", "warning");
+      }
+    }
     setStaffPicks((prev) => ({ ...prev, [serviceId]: value }));
-  }, [dropAndReleaseHold]);
+  }, [dropAndReleaseHold, apptId, staffPicks, startTime]);
 
   // The date/availability/operator controls (and now the cabin select) stay
   // gated until at least one service is selected (port of the start gate).
@@ -2553,6 +2589,7 @@ export function QuickBookingDrawer() {
           email: data.client.email ?? String(fd.get("email") ?? ""),
           phone: data.client.phone ?? String(fd.get("phone") ?? ""),
         });
+        qbNotify("Cliente creato", "success");
         const el = document.getElementById("qbClientCreateModal");
         const api = bootstrap()?.Modal;
         if (el && api) api.getOrCreateInstance(el).hide();
@@ -2725,19 +2762,20 @@ export function QuickBookingDrawer() {
     }
   }, [slug, selectedServiceIds, staffId, locationId, apptId]);
 
-  // Open (port of openAvailability): same pre-checks as the legacy, then week view.
+  // Open (port of openAvailability, app.js:11088-11103): pre-check legacy come
+  // TOAST warning (non alert inline), poi apertura in vista settimana.
   const openAvailabilityModal = useCallback(() => {
     setFormError("");
     if (!date) {
-      setFormError("Seleziona una data di inizio");
+      qbNotify("Seleziona una data di inizio", "warning");
       return;
     }
     if (!selectedServiceIds.length) {
-      setFormError("Seleziona almeno un servizio");
+      qbNotify("Seleziona almeno un servizio", "warning");
       return;
     }
     if (!operatorSelectionComplete) {
-      setFormError(isMultiService ? "Seleziona gli operatori per i servizi" : "Nessun operatore disponibile per il servizio selezionato");
+      qbNotify(isMultiService ? "Seleziona gli operatori per i servizi" : "Nessun operatore disponibile per il servizio selezionato", "warning");
       return;
     }
     setAvailModalOpen(true);
@@ -2902,22 +2940,59 @@ export function QuickBookingDrawer() {
       e.preventDefault();
       setFormError("");
       // Locked-appointment guard (port of the legacy submit check on
-      // qbIsCanceledLockedMode): a canceled/no_show appointment cannot be re-saved.
+      // qbIsCanceledLockedMode, app.js:11337): toast warning, non alert inline.
       if (apptId && (originalStatus === "canceled" || originalStatus === "no_show")) {
-        setFormError("La prenotazione annullata non è modificabile.");
+        qbNotify("La prenotazione annullata non è modificabile.", "warning");
+        return;
+      }
+      // ROUTING ANNULLAMENTO (port di app.js ~11340): il submit che chiede
+      // canceled/no_show da pending/scheduled/done NON salva — apre il popup
+      // dedicato; alla conferma è cancel_done ad applicare lo stato (gli altri
+      // campi del form NON vengono persistiti, come nel legacy). Popup chiuso
+      // senza conferma = nessuna azione e nessun messaggio.
+      const requestedStatus = status.trim();
+      if (
+        apptId
+        && (originalStatus === "pending" || originalStatus === "scheduled" || originalStatus === "done")
+        && (requestedStatus === "canceled" || requestedStatus === "no_show")
+      ) {
+        const decision = await openDoneCancelModal(apptId, requestedStatus === "no_show" ? "no_show" : "canceled");
+        if (!decision) return;
+        setSubmitting(true);
+        try {
+          const res = await fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+            body: JSON.stringify({ action: "cancel_done", id: apptId, status: requestedStatus, reason: decision.reason }),
+          });
+          const data: { ok?: boolean; error?: string; warnings?: string[] } = await res.json().catch(() => ({}));
+          if (!res.ok || data.ok === false || data.error) {
+            qbNotify(String(data.error || "Errore annullamento"), "danger");
+            return;
+          }
+          qbNotify(requestedStatus === "no_show" ? "Prenotazione marcata No show" : "Prenotazione annullata", "success");
+          for (const w of Array.isArray(data.warnings) ? data.warnings : []) {
+            if (w) qbNotify(String(w), "warning");
+          }
+          closeOffcanvas();
+          qbRefetchCalendar();
+        } catch {
+          qbNotify("Errore annullamento", "danger");
+        } finally {
+          setSubmitting(false);
+        }
         return;
       }
       const names = selectedServiceNames();
+      // Validazioni client-side legacy (app.js:11374-11378): SOLO cliente e
+      // data/orario, come toast warning senza punto finale. Il controllo servizi
+      // è lato server ("Seleziona almeno un servizio.", mostrato come toast danger).
       if (!client) {
-        setFormError("Seleziona o crea un cliente.");
-        return;
-      }
-      if (!names.length) {
-        setFormError("Seleziona almeno un servizio.");
+        qbNotify("Seleziona o crea un cliente", "warning");
         return;
       }
       if (!date || !startTime) {
-        setFormError("Inserisci data e orario.");
+        qbNotify("Inserisci data e orario", "warning");
         return;
       }
       setSubmitting(true);
@@ -3011,120 +3086,66 @@ export function QuickBookingDrawer() {
             appointment_hold_token: holdToken,
           }),
         });
-        const data: { ok?: boolean; error?: string; packageWarnings?: string[]; prepaidWarnings?: string[]; giftcardWarnings?: string[]; giftboxWarnings?: string[]; giftWarnings?: string[] } = await res.json().catch(() => ({}));
+        const data: { ok?: boolean; error?: string; warnings?: string[]; packageWarnings?: string[]; prepaidWarnings?: string[]; giftcardWarnings?: string[]; giftboxWarnings?: string[]; giftWarnings?: string[] } = await res.json().catch(() => ({}));
         if (!res.ok || data.ok === false || data.error) {
-          const msg = String(data.error || "Errore salvataggio.");
-          // Item 2: EXPIRED-HOLD recovery (port of qbHandleHoldExpired, app.js ~3374-3393).
-          // When the server rejects the save because the held slot went stale, the stale
-          // hold token + time + cabin are still in the form: a naive retry would re-send the
-          // SAME dead token and fail again. So on a match we CLEAR the hold token, the
-          // start/end time and the cabin selection, and prompt the operator to re-run
-          // "Disponibilità" instead of leaving the dead selection in place.
-          // The regex matches BOTH the legacy family (riserva/disponibilit/orario/cabina)
-          // AND the Next server's own hold-rejection messages, which read "Hold appuntamento
-          // scaduto o non valido." / "Hold non coerente con orario|servizio|operatore|sede
-          // selezionata." (assertDbAppointmentHold, db-repositories.ts ~7660) — hence the
-          // added "hold"/"coerente"/"scadut" alternatives so the recovery actually fires.
-          if (/riserva|disponibilit|orario non piu disponibile|orario non più disponibile|cabina|\bhold\b|coerente|scadut/i.test(msg)) {
+          const msg = String(data.error || "Errore salvataggio");
+          // EXPIRED-HOLD recovery (port fedele di app.js:11386-11392 +
+          // qbHandleHoldExpired ~3374-3393): SOLO con un hold attivo, se l'errore
+          // matcha la famiglia riserva/disponibilità/orario/cabina si puliscono
+          // token, orari e cabina e si mostra il messaggio del server come toast
+          // WARNING. La regex include anche i messaggi hold del server Next
+          // ("Hold appuntamento scaduto o non valido." / "Hold non coerente con
+          // ...") così il recovery scatta pure su quelli. Ogni altro errore è un
+          // toast DANGER (il legacy non ha alert inline sul submit).
+          if (holdTokenRef.current && /riserva|disponibilit|orario non piu disponibile|orario non più disponibile|cabina|\bhold\b|coerente|scadut/i.test(msg)) {
             setHoldToken("");
             holdTokenRef.current = "";
             setStartTime("");
             setPrefillEndTime("");
-            // Clear the cabin selection (single + per-service picks), like the legacy resets
-            // #qb_cabin_id + #qb_cabin_map on an expired hold.
             setCabinId("");
             setCabinPicks({});
-            setFormError("Disponibilità scaduta: riseleziona data/ora.");
+            qbNotify(msg, "warning");
             return;
           }
-          setFormError(msg);
+          qbNotify(msg, "danger");
           return;
         }
-        // Per-redeem skips don't fail the booking, but surface them before the
-        // reload so the staff knows a package wasn't applied (legacy notify parity).
-        if (Array.isArray(data.packageWarnings) && data.packageWarnings.length > 0) {
-          if (typeof window !== "undefined") window.alert("Pacchetti:\n" + data.packageWarnings.join("\n"));
-        }
-        // Same for prepaid-service redeem skips (not covering / exhausted / already
-        // covered by a package): surface before the reload.
-        if (Array.isArray(data.prepaidWarnings) && data.prepaidWarnings.length > 0) {
-          if (typeof window !== "undefined") window.alert("Prepagati:\n" + data.prepaidWarnings.join("\n"));
-        }
-        // Same for giftcard redeem skips (not the client's / expired / no balance /
-        // nothing payable): surface before the reload.
-        if (Array.isArray(data.giftcardWarnings) && data.giftcardWarnings.length > 0) {
-          if (typeof window !== "undefined") window.alert("GiftCard:\n" + data.giftcardWarnings.join("\n"));
-        }
-        // Same for giftbox redeem skips (not the client's / expired / item not covering /
-        // exhausted / already covered by a package or prepaid): surface before the reload.
-        if (Array.isArray(data.giftboxWarnings) && data.giftboxWarnings.length > 0) {
-          if (typeof window !== "undefined") window.alert("GiftBox:\n" + data.giftboxWarnings.join("\n"));
-        }
-        // Same for gift (omaggio) redeem skips (not the client's / not available / expired /
-        // reward not covering / exhausted / already covered by a package/prepaid/giftbox).
-        if (Array.isArray(data.giftWarnings) && data.giftWarnings.length > 0) {
-          if (typeof window !== "undefined") window.alert("Omaggi:\n" + data.giftWarnings.join("\n"));
-        }
-
-        // STATUS TRANSITION (edit mode only). action=save persists every other field
-        // but NOT the status (updateDbAppointment ignores it — status edits go through
-        // a dedicated action). So when editing an existing appointment whose status the
-        // user changed, fire the transition AFTER the save succeeds:
-        //   - DONE -> canceled/no_show : the dedicated CANCEL-DONE flow. action=status
-        //     BLOCKS this ("usa il popup dedicato di annullamento") because settling a
-        //     done booking consumed redeems + awarded fidelity points; cancel_done
-        //     restores all of that, then flips the status. Gated behind a confirm()
-        //     since it stornos points + restores credit/redeem.
-        //   - any other transition : the normal action=status path (unchanged).
-        // A failed transition surfaces inline (we DON'T reload) so the staff can retry.
+        // STATUS TRANSITION non-cancel (solo edit): action=save non persiste lo
+        // status (updateDbAppointment lo ignora); il legacy lo persiste nel save,
+        // qui la transizione equivalente passa da action=status DOPO il save.
+        // (Gli annullamenti sono già stati instradati sul popup PRIMA del save.)
         const newStatus = status.trim();
         if (apptId && originalStatus && newStatus && newStatus !== originalStatus) {
-          // ANY cancel goes through the dedicated popup, like the legacy submit routing
-          // (app.js ~11340: pending/scheduled/done -> canceled/no_show opens
-          // qbOpenDoneCancelPreview). 'reserved' mode (pending/scheduled) unlocks the
-          // holds; 'executed' (done) reverses the settled points/credit. Both stamp
-          // cancelled_at/by/reason server-side.
-          const isCancelFlow =
-            (originalStatus === "pending" || originalStatus === "scheduled" || originalStatus === "done") &&
-            (newStatus === "canceled" || newStatus === "no_show");
-          let cancelReason = "";
-          if (isCancelFlow) {
-            // Rich preview-lock modal replacing the bare confirm(): fetch the cancel_done
-            // preview, show what will be restored/unlocked + a reason field, and AWAIT the
-            // operator's decision. A null result = abort (keep the current status, no
-            // reload); { reason } = confirmed, threaded into the cancel_done POST.
-            const decision = await openDoneCancelModal(apptId, newStatus === "no_show" ? "no_show" : "canceled");
-            if (!decision) {
-              // Staff declined: keep the current status. The save already persisted the
-              // other fields; just stop here (no reload) so the drawer stays open and
-              // the status select can be reverted.
-              setFormError("Annullamento non confermato: lo stato resta invariato.");
-              return;
-            }
-            cancelReason = decision.reason;
-          }
           const transitionRes = await fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}`, {
             method: "POST",
             headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-            body: JSON.stringify(
-              isCancelFlow
-                ? { action: "cancel_done", id: apptId, status: newStatus, reason: cancelReason }
-                : { action: "status", id: apptId, status: newStatus },
-            ),
+            body: JSON.stringify({ action: "status", id: apptId, status: newStatus }),
           });
           const transitionData: { ok?: boolean; error?: string } = await transitionRes.json().catch(() => ({}));
           if (!transitionRes.ok || transitionData.ok === false || transitionData.error) {
-            setFormError(String(transitionData.error || "Errore cambio stato."));
+            qbNotify(String(transitionData.error || "Errore cambio stato."), "danger");
             return;
           }
         }
 
+        // Esito legacy (app.js:11394-11413): chiudi, toast success, ogni warning
+        // come toast warning, refresh SOLO del calendario. Nessun reload.
         closeOffcanvas();
-        // Refresh the page so any calendar/list on screen shows the new booking,
-        // matching the legacy reload-on-save behavior.
-        if (typeof window !== "undefined") window.location.reload();
+        qbNotify("Appuntamento salvato", "success");
+        const allWarnings = [
+          ...(Array.isArray(data.warnings) ? data.warnings : []),
+          ...(Array.isArray(data.packageWarnings) ? data.packageWarnings : []),
+          ...(Array.isArray(data.prepaidWarnings) ? data.prepaidWarnings : []),
+          ...(Array.isArray(data.giftcardWarnings) ? data.giftcardWarnings : []),
+          ...(Array.isArray(data.giftboxWarnings) ? data.giftboxWarnings : []),
+          ...(Array.isArray(data.giftWarnings) ? data.giftWarnings : []),
+        ];
+        for (const w of allWarnings) {
+          if (w) qbNotify(String(w), "warning");
+        }
+        qbRefetchCalendar();
       } catch {
-        setFormError("Errore di rete durante il salvataggio.");
+        qbNotify("Errore salvataggio", "danger");
       } finally {
         setSubmitting(false);
       }
@@ -3133,12 +3154,17 @@ export function QuickBookingDrawer() {
   );
 
   // ---- Delete (#qbDeleteBtn, edit mode only -> action=delete) ----
-  // Faithful to the legacy drawer "Elimina appuntamento": confirm, POST the
-  // tenant-scoped delete (which also restores any consumed redeems), then close +
-  // reload so the calendar/list drop the row. Shown only in edit mode.
+  // Port fedele di app.js:11416-11447: guardia client-side sullo stato Annullato
+  // (toast warning), confirm nativa "Eliminare questo appuntamento?", errori come
+  // toast danger, esito "Appuntamento eliminato" + refresh del solo calendario
+  // (nessun reload di pagina).
   const deleteBooking = useCallback(async () => {
     if (!apptId) return;
-    if (typeof window !== "undefined" && !window.confirm("Eliminare definitivamente questa prenotazione? L'azione non è reversibile.")) return;
+    if (originalStatus !== "canceled") {
+      qbNotify("La prenotazione deve essere in stato Annullato. Annullala prima per poterla eliminare.", "warning");
+      return;
+    }
+    if (typeof window !== "undefined" && !window.confirm("Eliminare questo appuntamento?")) return;
     setSubmitting(true);
     setFormError("");
     try {
@@ -3149,17 +3175,18 @@ export function QuickBookingDrawer() {
       });
       const data: { ok?: boolean; error?: string } = await res.json().catch(() => ({}));
       if (!res.ok || data.ok === false || data.error) {
-        setFormError(String(data.error || "Errore eliminazione."));
+        qbNotify(String(data.error || "Errore eliminazione"), "danger");
         return;
       }
       closeOffcanvas();
-      if (typeof window !== "undefined") window.location.reload();
+      qbNotify("Appuntamento eliminato", "success");
+      qbRefetchCalendar();
     } catch {
-      setFormError("Errore di rete durante l'eliminazione.");
+      qbNotify("Errore eliminazione", "danger");
     } finally {
       setSubmitting(false);
     }
-  }, [apptId, slug, closeOffcanvas]);
+  }, [apptId, originalStatus, slug, closeOffcanvas]);
 
   const canQuickCreateClient = true; // Quick-create is always offered (legacy gates on a permission).
 
@@ -3219,11 +3246,13 @@ export function QuickBookingDrawer() {
           <button type="button" className="btn-close" data-bs-dismiss="offcanvas" aria-label="Chiudi" />
         </div>
         <div className="offcanvas-body">
-          {/* Item 4: loading state during the action=get edit-load (port of qbSetLoading);
-              hidden unless editLoading. Blocks the form (rendered but visually hidden below). */}
-          <div id="qbLoadingState" className="qb-loading-state" role="status" aria-live="polite" hidden={!editLoading}>
+          {/* Item 4: loading state (port of qbSetLoading) — durante l'edit-load
+              (action=get) mostra "Caricamento prenotazione..."; sul PRIMO open in
+              NEW, mentre carica i master data, il testo legacy è "Preparo nuova
+              prenotazione..." (app.js:9910). */}
+          <div id="qbLoadingState" className="qb-loading-state" role="status" aria-live="polite" hidden={!(editLoading || (masterLoading && !isEditMode))}>
             <div className="spinner-border text-primary" aria-hidden="true" />
-            <div className="fw-semibold mt-3" id="qbLoadingText">Caricamento prenotazione...</div>
+            <div className="fw-semibold mt-3" id="qbLoadingText">{editLoading ? "Caricamento prenotazione..." : "Preparo nuova prenotazione..."}</div>
             <div className="small text-muted mt-1">Preparo dati, orari e prezzi.</div>
           </div>
 
@@ -3249,7 +3278,7 @@ export function QuickBookingDrawer() {
           </div>
 
           {/* Item 4: hide the form while loading or on a load error (qbSetFormHydrationBlocked). */}
-          <form id="quickBookingForm" onSubmit={submitBooking} style={editLoading || editLoadError ? { display: "none" } : undefined}>
+          <form id="quickBookingForm" onSubmit={submitBooking} style={editLoading || editLoadError || (masterLoading && !isEditMode) ? { display: "none" } : undefined}>
             <div id="qbSegmentViewAlert" className="alert alert-warning small" style={{ display: "none" }} />
             {/* Cancellation alert (port of qbRenderCancellationAlert): shown only for a
                 canceled/no_show appointment — bold title, the operator's reason (or the
@@ -3463,6 +3492,8 @@ export function QuickBookingDrawer() {
                               e.preventDefault();
                               e.stopPropagation();
                               toggleService(id);
+                              // Toast legacy sulla rimozione dalla pill (app.js:3232).
+                              qbNotify(`Servizio rimosso dalla prenotazione: ${svc.name}`, "info");
                             }}
                           />
                         </span>
@@ -3985,11 +4016,25 @@ export function QuickBookingDrawer() {
                   className="form-select"
                   name="staff_id"
                   value={staffId}
-                  onChange={(e) => setStaffId(e.target.value)}
+                  onChange={(e) => {
+                    // Cambio operatore singolo in CREATE (port di app.js:9010-9020):
+                    // slot invalidato — azzera orari, rilascia hold, toast legacy.
+                    const next = e.target.value;
+                    const prev = staffId.trim();
+                    dropAndReleaseHold();
+                    if (!apptId && startTime) {
+                      setStartTime("");
+                      setPrefillEndTime("");
+                      if (prev && next.trim() && prev !== next.trim()) {
+                        qbNotify("Hai cambiato operatore: seleziona di nuovo una disponibilità", "warning");
+                      }
+                    }
+                    setStaffId(next);
+                  }}
                   disabled={startGateDisabled || isMultiService}
                   style={isMultiService ? { display: "none" } : undefined}
                 >
-                  <option value="">{startGateDisabled ? "Seleziona prima un servizio" : "Operatore automatico"}</option>
+                  <option value="">{startGateDisabled ? "Seleziona prima un servizio" : "(qualsiasi)"}</option>
                   {staff.map((st) => (
                     <option value={st.id} key={st.id}>{st.name}</option>
                   ))}
@@ -4390,8 +4435,12 @@ export function QuickBookingDrawer() {
                           </div>
 
                           <div className="small text-muted mt-2" id="qbFidelityHint">
-                            {fidelityMinPoints > 0 ? `Minimo ${fidelityMinPoints} punti • ` : ""}
-                            {`1 punto = ${fmtEUR(fidelityEuroPerPoint)} • Usabili: ${fidelityMaxUsablePoints} punti`}
+                            {/* Hint verbatim legacy (app.js:7504-7511): "Max utilizzabili: N Punti (- € X)[. Minimo: N Punti.]" */}
+                            {fidelityMaxUsablePoints > 0
+                              ? `Max utilizzabili: ${fidelityMaxUsablePoints} Punti (- ${fmtEUR(fidelityMaxUsablePoints * fidelityEuroPerPoint)})${fidelityMinPoints > 0 ? `. Minimo: ${fidelityMinPoints} Punti.` : ""}`
+                              : fidelityMinPoints > 0
+                                ? `Minimo: ${fidelityMinPoints} Punti.`
+                                : ""}
                           </div>
                         </div>
                       ) : null}
@@ -4418,18 +4467,16 @@ export function QuickBookingDrawer() {
             {formError ? <div className="alert alert-danger small mt-3 mb-0">{formError}</div> : null}
 
             {/* Locked mode: submit disabled with the terminal status as label (port of
-                qbSetLockedAppointmentMode submitBtn.disabled + submitTextEl). */}
+                qbSetLockedAppointmentMode, app.js:5084 — keyed sullo stato TERMINALE
+                caricato, non sulla select). Edit normale = "Modifica prenotazione"
+                (app.js:5562), create = "Crea prenotazione". */}
             <button className="btn btn-primary btn-pill w-100 mt-3" type="submit" id="qbSubmitBtn" disabled={submitting || formLocked}>
               <span id="qbSubmitText">
-                {submitting
-                  ? "Salvataggio..."
-                  : !isEditMode
-                    ? "Crea prenotazione"
-                    : status === "canceled"
-                      ? "Prenotazione annullata"
-                      : status === "no_show"
-                        ? "Prenotazione No show"
-                        : "Salva modifiche"}
+                {formLocked
+                  ? (originalStatus === "no_show" ? "Prenotazione No show" : "Prenotazione annullata")
+                  : isEditMode
+                    ? "Modifica prenotazione"
+                    : "Crea prenotazione"}
               </span>
             </button>
 
@@ -4718,12 +4765,14 @@ export function QuickBookingDrawer() {
                     data-phone={c.phone}
                     onClick={() => selectClient(c)}
                   >
+                    {/* Righe verbatim legacy (app.js:6047-6051): nome + "Email: x" + "Telefono: y" con "—". */}
                     <div className="fw-semibold">{c.full_name}</div>
-                    <div className="small text-muted">{[c.email, c.phone].filter(Boolean).join(" • ") || "—"}</div>
+                    <div className="small text-muted">Email: {c.email || "—"}</div>
+                    <div className="small text-muted">Telefono: {c.phone || "—"}</div>
                   </button>
                 ))}
                 {findQuery.trim() && findResults.length === 0 ? (
-                  <div className="text-muted small py-2 px-1">Nessun cliente trovato.</div>
+                  <div className="text-muted small py-2 px-1">Nessun risultato.</div>
                 ) : null}
               </div>
             </div>

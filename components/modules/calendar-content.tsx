@@ -1025,6 +1025,16 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
     loadContext(date, visibleRange);
   }, [loadContext, date, visibleRange]);
 
+  // Port di window.calendar.refetchEvents(): il quick-booking drawer NON ricarica
+  // la pagina dopo save/delete/annullo (come il legacy) — emette questo evento e
+  // il calendario, se montato, ricarica i propri dati in place.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onChanged = () => loadContext(date, visibleRange);
+    window.addEventListener("qb:appointments-changed", onChanged);
+    return () => window.removeEventListener("qb:appointments-changed", onChanged);
+  }, [loadContext, date, visibleRange]);
+
   function href(page: string): string {
     return `/${encodeURIComponent(slug)}/${`${page}`.replace("&", "?")}`;
   }
