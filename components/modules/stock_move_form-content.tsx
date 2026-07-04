@@ -163,23 +163,26 @@ export function StockMoveFormContent({ slug: slugProp }: { slug?: string } = {})
     event.preventDefault();
     setError("");
     if (cause !== "carico" && cause !== "scarico") {
-      setError("Causale non valida.");
+      setError("Causale non valida");
       return;
     }
     if (rows.length === 0) {
-      setError("Aggiungi almeno un prodotto.");
+      setError("Aggiungi almeno un prodotto");
       return;
     }
-    // Faithful row validation: qty required unless it's a carico "in arrivo"
-    // row (then incoming qty + eta are required).
+    // Validazioni riga verbatim legacy (querystring ?err=...).
     for (const r of rows) {
       const incoming = !isScarico && r.incomingFlag;
-      if (incoming && (r.incomingQty <= 0 || !r.incomingEta)) {
-        setError("Inserisci quantità e data stimata di arrivo per i prodotti in arrivo.");
+      if (r.qty <= 0 && !incoming) {
+        setError("Inserisci la quantita per tutte le righe");
         return;
       }
-      if (r.qty <= 0 && !incoming) {
-        setError("Inserisci la quantità per tutte le righe.");
+      if (incoming && r.incomingQty <= 0) {
+        setError("Inserisci la quantita in arrivo per tutte le righe se spuntato");
+        return;
+      }
+      if (incoming && !r.incomingEta) {
+        setError("Inserisci la data stimata di arrivo per tutte le righe se spuntato");
         return;
       }
     }
@@ -234,7 +237,12 @@ export function StockMoveFormContent({ slug: slugProp }: { slug?: string } = {})
           return;
         }
       }
-      backToList();
+      // Legacy: redirect a ?action=view&id=<doc>&msg=Movimento salvato.
+      if (stockDocId > 0) {
+        window.location.href = `/${encodeURIComponent(slug)}/stock_moves?action=view&id=${stockDocId}&msg=${encodeURIComponent("Movimento salvato")}`;
+      } else {
+        backToList();
+      }
     } catch {
       setError("Errore nel salvataggio del movimento.");
       setSaving(false);
@@ -242,8 +250,7 @@ export function StockMoveFormContent({ slug: slugProp }: { slug?: string } = {})
   }
 
   return (
-    <main className="app-content">
-      <div className="container-fluid">
+    <div className="container-fluid">
         <link rel="stylesheet" href="/assets/css/pages/stock_moves.css" />
 
         <div className="bs-page-header">
@@ -253,9 +260,14 @@ export function StockMoveFormContent({ slug: slugProp }: { slug?: string } = {})
             <div className="bs-page-subtitle">Registra movimenti di magazzino e rettifiche prodotto.</div>
           </div>
           <div className="bs-page-actions">
-            <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/stock_moves`}>
-              Torna alla lista
-            </a>
+            <div className="d-flex gap-2">
+              <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/products`}>
+                Torna al magazzino
+              </a>
+              <a className="btn btn-primary" href={`/${encodeURIComponent(slug)}/stock_moves?action=new${activeLocationId > 0 ? `&location_id=${activeLocationId}` : ""}`}>
+                Nuovo carico / scarico
+              </a>
+            </div>
           </div>
         </div>
 
@@ -314,17 +326,6 @@ export function StockMoveFormContent({ slug: slugProp }: { slug?: string } = {})
                 <div className="col-md-4">
                   <label className="form-label">Data documento</label>
                   <input className="form-control" type="date" name="document_date" value={documentDate} onChange={(e) => setDocumentDate(e.target.value)} />
-                </div>
-
-                <div className="col-12">
-                  <label className="form-label">Documento allegato (PDF o JPG, max 5 MB)</label>
-                  <input
-                    className="form-control"
-                    type="file"
-                    name="attachment"
-                    accept="application/pdf,image/jpeg"
-                    onChange={(e) => setAttachmentFile(e.target.files?.[0] ?? null)}
-                  />
                 </div>
 
                 <div className="col-12">
@@ -428,7 +429,7 @@ export function StockMoveFormContent({ slug: slugProp }: { slug?: string } = {})
                         ) : (
                           rows.map((r, index) => (
                             <tr key={r.productId}>
-                              <td className="fw-semibold">{r.name}</td>
+                              <td className="fw-semibold">{r.sku ? `${r.name} (${r.sku})` : r.name}</td>
                               <td className="text-muted">{r.sku || "—"}</td>
                               <td className="text-end stock-moves-col-qty">
                                 <input
@@ -441,21 +442,26 @@ export function StockMoveFormContent({ slug: slugProp }: { slug?: string } = {})
                               </td>
                               {!isScarico ? (
                                 <>
-                                  <td className="stock-moves-col-incoming-product text-center">
-                                    <input
-                                      className="form-check-input"
-                                      type="checkbox"
-                                      checked={r.incomingFlag}
-                                      onChange={(e) => setRow(index, { incomingFlag: e.target.checked })}
-                                    />
+                                  <td className="stock-moves-col-incoming-product">
+                                    <div className="form-check">
+                                      <input
+                                        className="form-check-input"
+                                        type="checkbox"
+                                        id={`inc_${index}`}
+                                        checked={r.incomingFlag}
+                                        onChange={(e) => setRow(index, { incomingFlag: e.target.checked })}
+                                      />
+                                      <label className="form-check-label" htmlFor={`inc_${index}`}>Prodotto in arrivo</label>
+                                    </div>
                                   </td>
                                   <td className="stock-moves-col-incoming-qty">
                                     <input
                                       className="form-control form-control-sm"
                                       type="number"
-                                      min={0}
+                                      min={1}
+                                      placeholder="Es. 24"
                                       disabled={!r.incomingFlag}
-                                      value={r.incomingQty}
+                                      value={r.incomingQty || ""}
                                       onChange={(e) => setRow(index, { incomingQty: Math.max(0, Number.parseInt(e.target.value, 10) || 0) })}
                                     />
                                   </td>
@@ -472,7 +478,7 @@ export function StockMoveFormContent({ slug: slugProp }: { slug?: string } = {})
                               ) : null}
                               <td className="text-end stock-moves-col-actions">
                                 <button className="btn btn-sm btn-outline-danger" type="button" onClick={() => removeRow(index)}>
-                                  ✕
+                                  Rimuovi
                                 </button>
                               </td>
                             </tr>
@@ -485,21 +491,32 @@ export function StockMoveFormContent({ slug: slugProp }: { slug?: string } = {})
                     Le righe gestiscono quantità e, per i carichi, anche il prodotto in arrivo.
                   </div>
                 </div>
+
+                <div className="col-md-12">
+                  <label className="form-label">Carica documento (PDF o JPG, max 5MB)</label>
+                  <input
+                    className="form-control"
+                    type="file"
+                    name="attachment"
+                    accept="application/pdf,image/jpeg"
+                    onChange={(e) => setAttachmentFile(e.target.files?.[0] ?? null)}
+                  />
+                  <div className="form-text">Il file verrà salvato e compresso (JPG sempre, PDF best-effort).</div>
+                </div>
               </div>
 
               <div className="mt-3 d-flex gap-2">
                 <button className="btn btn-primary" type="submit" disabled={saving}>
                   <i className="bi bi-check2-circle me-1" />
-                  {saving ? "Salvataggio…" : "Salva"}
+                  Salva
                 </button>
-                <button className="btn btn-outline-secondary" type="button" onClick={backToList}>
+                <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/stock_moves`}>
                   Annulla
-                </button>
+                </a>
               </div>
             </form>
           </div>
         )}
-      </div>
-    </main>
+    </div>
   );
 }

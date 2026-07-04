@@ -10,6 +10,7 @@ import {
   getManageProduct,
   getManageProductsContext,
   getManageSupplier,
+  listProductDeleteBlockers,
   saveProduct,
   saveProductCategory,
   saveStockMovement,
@@ -58,11 +59,82 @@ export async function GET(request: Request) {
       raw: url.searchParams.get("location_id"),
       fallbackCurrent: true,
     });
-    return Response.json(await getManageProductsContext(tenantSlug, {
+    const context = await getManageProductsContext(tenantSlug, {
       query: url.searchParams.get("q") ?? "",
       locationId,
       includeInactive: ["1", "true", "yes", "all"].includes((url.searchParams.get("include_inactive") ?? "1").toLowerCase()),
-    }));
+    });
+
+    // EXPORT CSV movimenti — port di stock_moves.php action=export: una riga per
+    // OGNI riga prodotto dei documenti, delimitatore ';', valori raw (date
+    // YYYY-MM-DD, SI/NO, ANNULLATO/ATTIVO), filename movimenti_magazzino_<Y-m-d_H-i>.csv.
+    if (url.searchParams.get("action") === "export") {
+      const filters = {
+        productId: parseInteger(url.searchParams.get("product_id"), 0),
+        sku: String(url.searchParams.get("sku") ?? "").trim().toLowerCase(),
+        internalCode: String(url.searchParams.get("internal_code") ?? "").trim().toLowerCase(),
+        categoryId: parseInteger(url.searchParams.get("category_id"), 0),
+        documentNumber: String(url.searchParams.get("document_number") ?? "").trim().toLowerCase(),
+        supplier: String(url.searchParams.get("supplier") ?? "").trim(),
+        date: String(url.searchParams.get("date") ?? "").trim(),
+        includeCanceled: String(url.searchParams.get("include_canceled") ?? "") === "1",
+      };
+      if (filters.supplier === "0") filters.supplier = "";
+
+      const productById = new Map(context.products.map((p) => [p.id, p]));
+      const displayName = (name: string, sku: string) => (sku ? `${name} (${sku})` : name);
+      const escCsv = (v: unknown) => {
+        const s = String(v ?? "");
+        return /[";\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const lines: string[] = [
+        ["Documento ID", "Data movimento", "Operatore", "Causale", "Tipo documento", "Numero documento", "Data documento", "Note", "Prodotto", "Codice prodotto", "Fornitore", "Quantità", "Prodotto in arrivo", "Quantità in arrivo", "Data stimata arrivo", "Stato", "Creato il"].map(escCsv).join(";"),
+      ];
+      for (const d of context.stockDocuments ?? []) {
+        if (!filters.includeCanceled && d.isCanceled) continue;
+        if (filters.date && String(d.moveDate ?? "").slice(0, 10) !== filters.date) continue;
+        if (filters.documentNumber && !String(d.documentNumber ?? "").toLowerCase().includes(filters.documentNumber)) continue;
+        for (const it of d.items) {
+          const product = productById.get(it.productId);
+          if (filters.productId && it.productId !== filters.productId) continue;
+          if (filters.sku && !String(it.productSku ?? "").toLowerCase().includes(filters.sku)) continue;
+          if (filters.internalCode && !String(product?.internalCode ?? "").toLowerCase().includes(filters.internalCode)) continue;
+          if (filters.categoryId && Number(product?.categoryId ?? 0) !== filters.categoryId) continue;
+          if (filters.supplier && String(product?.supplierName ?? "") !== filters.supplier) continue;
+          lines.push([
+            d.id,
+            String(d.moveDate ?? "").slice(0, 10),
+            d.operatorName ?? "",
+            d.cause ?? "",
+            d.documentType ?? "",
+            d.documentNumber ?? "",
+            String(d.documentDate ?? "").slice(0, 10),
+            d.notes ?? "",
+            displayName(String(it.productName ?? ""), String(it.productSku ?? "")),
+            it.productSku ?? "",
+            product?.supplierName ?? "",
+            it.qty ?? 0,
+            it.incomingFlag ? "SI" : "NO",
+            it.incomingQty ?? 0,
+            it.incomingEta ? String(it.incomingEta).slice(0, 10) : "",
+            d.isCanceled ? "ANNULLATO" : "ATTIVO",
+            d.createdAt ? String(d.createdAt).replace("T", " ").slice(0, 19) : "",
+          ].map(escCsv).join(";"));
+        }
+      }
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}`;
+      return new Response(lines.join("\n") + "\n", {
+        headers: {
+          "Content-Type": "text/csv; charset=utf-8",
+          "Content-Disposition": `attachment; filename="movimenti_magazzino_${stamp}.csv"`,
+        },
+      });
+    }
+
+    // operatorName: il form Carico/Scarico mostra l'operatore corrente (legacy $operatorName).
+    return Response.json({ ...context, operatorName: session.user.name });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Magazzino non caricato.");
   }
@@ -89,9 +161,21 @@ export async function POST(request: Request) {
         return Response.json(await saveProduct(tenantSlug, body));
 
       case "delete":
-      case "product_delete":
+      case "product_delete": {
         if (!can(session.user.perms, "products.manage")) return jsonError("Permesso Magazzino richiesto.", 403);
-        return Response.json(await deleteProduct(tenantSlug, parseInteger(body.id ?? body.product_id, 0)));
+        // Blockers PRIMA del delete (legacy products_delete_blockers): la lista li usa
+        // per il modal "Impossibile eliminare il prodotto" con le associazioni rilevate.
+        const productId = parseInteger(body.id ?? body.product_id, 0);
+        const blockers = productId > 0 ? await listProductDeleteBlockers(tenantSlug, productId) : [];
+        if (blockers.length) {
+          return Response.json({
+            ok: false,
+            error: "Prodotto non eliminato: associazioni attive presenti.",
+            deleteBlockers: blockers,
+          });
+        }
+        return Response.json(await deleteProduct(tenantSlug, productId));
+      }
 
       case "category_save":
       case "product_category_save":

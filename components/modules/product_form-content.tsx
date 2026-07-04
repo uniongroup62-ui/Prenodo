@@ -344,10 +344,16 @@ export function ProductFormContent({ slug: slugProp }: { slug?: string } = {}) {
           </div>
         </div>
         <div className="bs-page-actions">
+          {/* Header actions legacy: "Categorie" sempre, "Nuovo prodotto" solo in edit. */}
           <div className="d-flex gap-2">
-            <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/products`}>
-              Torna al magazzino
+            <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/products?action=categories`}>
+              Categorie
             </a>
+            {action === "edit" ? (
+              <a className="btn btn-primary" href={`/${encodeURIComponent(slug)}/products?action=new`}>
+                Nuovo prodotto
+              </a>
+            ) : null}
           </div>
         </div>
       </div>
@@ -625,10 +631,7 @@ export function ProductFormContent({ slug: slugProp }: { slug?: string } = {}) {
                 partono dopo il salvataggio. */}
             <hr className="my-3" />
             <div className="mb-3">
-              <div className="fw-semibold mb-2">
-                <i className="bi bi-images me-1" />
-                Immagini prodotto <span className="text-muted small">(max 5, la prima è la principale)</span>
-              </div>
+              <label className="form-label">Immagini prodotto (max 5, max 5MB ciascuna)</label>
               {action === "edit" && images.length > 0 ? (
                 <div className="d-flex flex-wrap gap-2 mb-2">
                   {images.map((img) => (
@@ -707,18 +710,18 @@ export function ProductFormContent({ slug: slugProp }: { slug?: string } = {}) {
                   }
                 }}
               />
-              <div className="form-text">JPG, PNG, WEBP o GIF — massimo 5 MB per immagine, 5 immagini per prodotto.</div>
+              <div className="form-text">Le immagini vengono compresse automaticamente per ottimizzare lo spazio.</div>
             </div>
 
             <hr className="my-3" />
             <div className="d-flex gap-2">
               <button className="btn btn-primary" type="submit" disabled={saving}>
                 <i className="bi bi-check2-circle me-1" />
-                {saving ? "Salvataggio…" : "Salva"}
+                Salva
               </button>
-              <button className="btn btn-outline-secondary" type="button" onClick={backToList}>
+              <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/products`}>
                 Annulla
-              </button>
+              </a>
             </div>
           </form>
         </div>

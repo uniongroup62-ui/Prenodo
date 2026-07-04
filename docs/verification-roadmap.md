@@ -3597,3 +3597,79 @@ standard, toggle su annullata -> guardia, delete -> snapshot eliminati,
 ripristino stato modulo/settings originale, cleanup CLEAN) + 63/63 marker
 bundle (incluse negative sulle invenzioni) + typecheck/lint puliti (3 warning
 no-css-tags pre-esistenti).
+
+## Magazzino (products + stock_moves) — audit dedicato (2026-07-05)
+Diff su products.php (1787 righe: lista+form+categorie+immagini+delete blockers)
+e stock_moves.php (1486 righe: lista+view+print+new+cancel+export CSV) +
+ProductPageHelpers/stock JS, vs i 5 moduli Next + /api/manage/products +
+manage-products.ts.
+PROBLEMI GROSSI RISOLTI:
+1. LISTA PRODOTTI riscritta: era una versione ridotta con filtri inventati
+   ("Cerca" libero + Categoria) e tabella a 7 colonne con colonna "Stato
+   Attivo/Non attivo" INVENTATA; delete come anchor morto. Ora: filtri legacy
+   (combobox Prodotto con display_name "Nome (SKU)", Brand, Categoria,
+   Fornitore, Codice prodotto, Codice interno, "Quasi esauriti", Filtra/Reset
+   con query GET dal router), tabella a 11 colonne (Prodotto/Categoria/Brand/
+   Codice/Prezzo/Prezzo acquisto/Fornitore/Stock/In arrivo/ETA/Azioni) con
+   evidenza low-stock (table-warning + border-danger + icona + badge "Quasi
+   esaurito" + "(min: N)"), modal "Dettagli prodotto" fedele, Elimina
+   funzionante con modal "Impossibile eliminare il prodotto" + "Associazioni
+   rilevate" (blockers strutturati dalla route) e flash verbatim.
+2. VISTA CATEGORIE PRODOTTI: NON ESISTEVA (action=categories cadeva sulla
+   lista). Nuovo modulo product_categories-content: filtro "Cerca per nome",
+   form "Modifica categoria" inline (?edit_id), modal "Nuova categoria",
+   modal-blocco con l'elenco prodotti associati (derivato client-side come il
+   productCategoryProductsMap), header "Torna al magazzino"+"Nuova categoria",
+   flash verbatim INCLUSI i quirk legacy dove "Nome categoria obbligatorio" e
+   "Errore: categoria gia esistente o non valida" sono alert VERDI (&msg=).
+3. STOCK_MOVES: vista DETTAGLIO (?action=view&id) ora pagina fedele (era un
+   modal inventato) con Stato + "Annullato il: ... • da: ...", righe con
+   colonna Fornitore, card allegato, azioni Torna alla lista/Stampa / PDF/
+   Annulla movimento (conferma verbatim "Confermi annullamento del movimento?
+   Verrà applicato lo storno sulla giacenza." — era inventata); vista STAMPA
+   (?action=print&id) NUOVA con autoprint; lista fedele (causale raw
+   text-uppercase, Documento=tipo+#numero+data, Prodotti=CONTEGGIO righe — non
+   nomi, badge text-bg-danger/success, azione SOLO "Apri", niente
+   allegato/Annulla in riga) + PAGINAZIONE 10/pagina ("Pagina X di Y • Totale:
+   N", Prev/Next) + flash "Documento annullato (con storno)"/"Documento già
+   annullato"/"Movimento salvato".
+4. EXPORT CSV movimenti: era client-side con colonne inventate; ora GET
+   action=export server-side col formato legacy ESATTO (Documento ID;Data
+   movimento;...;Stato;Creato il, date raw, SI/NO, ANNULLATO/ATTIVO, filename
+   movimenti_magazzino_<Y-m-d_H-i>.csv, senza BOM come fputcsv).
+5. FORM MOVIMENTO: header actions come la lista, allegato spostato IN FONDO
+   con label/help verbatim ("Carica documento (PDF o JPG, max 5MB)" / "Il file
+   verrà salvato e compresso..."), righe con display_name + checkbox con label
+   "Prodotto in arrivo" + placeholder "Es. 24" + bottone "Rimuovi" (era ✕),
+   errori client verbatim senza accenti/punto e SEPARATI (quantita in arrivo /
+   data stimata), dopo-save naviga alla vista dettaglio con "Movimento
+   salvato", Salva fisso.
+6. FORM PRODOTTO: header actions legacy (Categorie + Nuovo prodotto in edit,
+   era "Torna al magazzino" inventato), label immagini verbatim "(max 5, max
+   5MB ciascuna)" + "Le immagini vengono compresse automaticamente..." (era
+   "JPG, PNG, WEBP o GIF..." inventato), Salva fisso, Annulla anchor.
+7. LIB: messaggi querystring verbatim SENZA punto ("Prodotto non trovato",
+   "Documento non trovato", "Nome categoria obbligatorio", "Aggiungi almeno un
+   prodotto", "Seleziona almeno una sede per il prodotto", "Inserisci la
+   quantita per tutte le righe" — e una riga qty=0 ora ERRA invece di essere
+   scartata), guardie mancanti aggiunte ("Causale non valida", "Tipo documento
+   non valido", "Prodotto non abbinato alla sede selezionata", "Scarico
+   superiore alla giacenza attuale per un prodotto", "Impossibile annullare:
+   storno porta giacenza negativa", "Nessuna riga prodotto"), dup categoria
+   ("Errore: categoria gia esistente o non valida"), messaggi rimozione sedi
+   con i NOMI delle sedi, delete prodotto con "associazioni attive presenti."
+   + blockers strutturati.
+RESIDUI DELIBERATI: popup di CONFERMA nome/codice/prezzo del form prodotto
+(productUpdateConfirmModal/productPriceUpdateConfirmModal — gli aggiornamenti
+snapshot/prezzi collegati sono GIÀ applicati automaticamente dal lib
+updateProductSnapshots, manca solo il passaggio di conferma UI); dettaglio
+blockers legacy più ricco (gruppi giftbox/promozioni con titoli specifici —
+il Next riporta conteggi per tabella); upload immagini su R2 senza
+compressione server-side (GD) — testi verbatim mantenuti; colonna Sede lista
+prodotti multi-sede.
+Verifica: battery e2e 39/39 (categorie dup/vuoto/bloccata, prodotto con
+validazioni verbatim + product_stocks sede, movimenti con TUTTE le guardie
+verbatim, carico 10+incoming, scarico, oltre-giacenza, guardia sede, export
+CSV header/righe legacy, delete con blockers, storno scarico/carico con
+ricalcolo incoming, cleanup CLEAN) + 84/84 marker bundle su 5 viste +
+typecheck/lint puliti (7 warning no-css-tags pre-esistenti).

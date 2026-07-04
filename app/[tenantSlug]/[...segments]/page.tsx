@@ -33,6 +33,7 @@ import { GiftBoxInstanceDetailContent } from "@/components/modules/giftbox_insta
 import { HoursContent } from "@/components/modules/hours-content";
 import { ProductsContent } from "@/components/modules/products-content";
 import { ProductFormContent } from "@/components/modules/product_form-content";
+import { ProductCategoriesContent } from "@/components/modules/product_categories-content";
 import { StaffContent } from "@/components/modules/staff-content";
 import { StaffFormContent } from "@/components/modules/staff_form-content";
 import { ResourcesContent } from "@/components/modules/resources-content";
@@ -181,7 +182,7 @@ export default async function TenantPage({
   searchParams,
 }: {
   params: Promise<{ tenantSlug: string; segments?: string[] }>;
-  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string; staff_id?: string; source?: string; detail_staff_id?: string; from?: string; to?: string; q?: string; cat?: string; cat_q?: string; cat_status?: string; category_filter_id?: string }>;
+  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string; staff_id?: string; source?: string; detail_staff_id?: string; from?: string; to?: string; q?: string; cat?: string; cat_q?: string; cat_status?: string; category_filter_id?: string; low_stock?: string; supplier?: string; category?: string; code?: string; brand?: string; internal_code?: string; product_id?: string; category_search?: string; edit_id?: string; sku?: string; document_number?: string; date?: string; include_canceled?: string; p?: string; category_id?: string }>;
 }) {
   const { tenantSlug, segments } = await params;
   const query = await searchParams;
@@ -274,6 +275,63 @@ export default async function TenantPage({
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
         <ProductFormContent />
+      </ManageShell>
+    );
+  }
+
+  // Magazzino, vista CATEGORIE (products.php action=categories): filtro + form
+  // edit + modal creazione, query GET legacy come prop.
+  if (page === "products" && query.action === "categories") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <ProductCategoriesContent
+          slug={tenantSlug}
+          initialQuery={{ category_search: query.category_search, edit_id: query.edit_id }}
+        />
+      </ManageShell>
+    );
+  }
+
+  // Magazzino, LISTA prodotti: i filtri legacy viaggiano nella query GET.
+  if (page === "products") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <ProductsContent
+          slug={tenantSlug}
+          initialQuery={{
+            low_stock: query.low_stock,
+            supplier: query.supplier,
+            category: query.category,
+            code: query.code,
+            brand: query.brand,
+            internal_code: query.internal_code,
+            product_id: query.product_id,
+          }}
+        />
+      </ManageShell>
+    );
+  }
+
+  // Carico / Scarico: lista + viste view/print via query GET legacy.
+  if (page === "stock_moves" && query.action !== "new") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <StockMovesContent
+          slug={tenantSlug}
+          initialQuery={{
+            action: query.action,
+            id: query.id,
+            product_id: query.product_id,
+            sku: query.sku,
+            internal_code: query.internal_code,
+            category_id: query.category_id,
+            document_number: query.document_number,
+            supplier: query.supplier,
+            date: query.date,
+            include_canceled: query.include_canceled,
+            p: query.p,
+          }}
+        />
       </ManageShell>
     );
   }

@@ -134,6 +134,9 @@ export type StockDocumentRow = {
   notes: string;
   locationId: number | null;
   isCanceled: boolean;
+  createdAt: string;
+  canceledAt: string;
+  canceledByName: string;
   attachmentName: string;
   items: Array<{
     id: number;
@@ -282,7 +285,7 @@ export async function deleteProduct(slug: string, productId: number): Promise<Ma
   if (productId <= 0) throw new Error("Prodotto non valido.");
   await getProductById(slug, productId);
   const blockers = await productDeleteBlockers(slug, productId);
-  if (blockers.length) throw new Error(`Prodotto non eliminato: ${blockers.slice(0, 3).join("; ")}.`);
+  if (blockers.length) throw new Error("Prodotto non eliminato: associazioni attive presenti.");
   await deleteByOwner(slug, "product_images", "product_id", productId);
   await deleteByOwner(slug, "product_stocks", "product_id", productId);
   await tenantDelete({ slug, table: "products", id: productId });
@@ -293,7 +296,9 @@ export async function saveProductCategory(slug: string, body: Record<string, str
   const table = await tenantTable(slug, "product_categories");
   const id = parseInteger(body.id ?? body.cat_id ?? body.category_id, 0);
   const name = clean(body.name ?? body.cat_name, 190);
-  if (!name) throw new Error("Nome categoria obbligatorio.");
+  if (!name) throw new Error("Nome categoria obbligatorio");
+  const dup = await tenantSelect<RowDataPacket>({ slug, table: "product_categories", columns: "id", where: "LOWER(name)=LOWER(?) AND id<>?", params: [name, id], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  if (dup[0]) throw new Error("Errore: categoria gia esistente o non valida");
   if (id > 0) {
     await tenantUpdate({ slug, table: "product_categories", id, values: { name } });
   } else {
@@ -377,9 +382,13 @@ export async function deleteSupplier(slug: string, supplierId: number): Promise<
 
 export async function saveStockMovement(slug: string, body: Record<string, string>, userName = "Operatore", userId: number | null = null): Promise<ManageProductsContext> {
   const locationId = parseInteger(body.location_id, 0) || (await listProductLocations(slug))[0]?.id || 0;
+  const rawCause = String(body.cause ?? body.type ?? "").trim().toLowerCase();
+  if (rawCause && !["carico", "scarico", "rettifica"].includes(rawCause)) throw new Error("Causale non valida");
+  const rawDocType = String(body.document_type ?? "").trim();
+  if (rawDocType !== "" && !["DDT", "Fattura"].includes(rawDocType)) throw new Error("Tipo documento non valido");
   const type = normalizeStockCause(body.cause ?? body.type);
   const items = await normalizeStockItems(body);
-  if (!items.length) throw new Error("Aggiungi almeno un prodotto.");
+  if (!items.length) throw new Error("Aggiungi almeno un prodotto");
   const notes = clean(body.notes ?? body.reason, 2000);
 
   const adjustedItems: Array<{ productId: number; qty: number; cause: "carico" | "scarico"; incomingFlag: boolean; incomingQty: number; incomingEta: string | null }> = [];
@@ -394,7 +403,15 @@ export async function saveStockMovement(slug: string, body: Record<string, strin
       qty = Math.abs(delta);
       if (qty === 0) continue;
     }
-    await adjustProductStock(slug, item.productId, locationId, cause === "carico" ? qty : -qty);
+    // Guardia sede legacy: il prodotto deve essere abbinato alla sede del documento.
+    if (locationId > 0 && !(await productEnabledForLocation(slug, item.productId, locationId))) {
+      throw new Error("Prodotto non abbinato alla sede selezionata");
+    }
+    try {
+      await adjustProductStock(slug, item.productId, locationId, cause === "carico" ? qty : -qty);
+    } catch {
+      throw new Error("Scarico superiore alla giacenza attuale per un prodotto");
+    }
     adjustedItems.push({ ...item, qty, cause, incomingFlag: cause === "carico" && item.incomingFlag });
   }
   if (!adjustedItems.length) return getManageProductsContext(slug, { locationId, includeInactive: true });
@@ -460,16 +477,23 @@ async function recomputeIncoming(slug: string, productId: number, locationId: nu
 export async function cancelStockDocument(slug: string, documentId: number, userName = "Operatore", userId: number | null = null): Promise<ManageProductsContext> {
   const doc = await getStockDocumentById(slug, documentId);
   if (Number(doc.is_canceled ?? 0) === 1) return getManageProductsContext(slug, { locationId: Number(doc.location_id ?? 0), includeInactive: true });
+  const rawCancelCause = String(doc.cause ?? "").trim().toLowerCase();
+  if (!["carico", "scarico"].includes(rawCancelCause)) throw new Error("Causale non valida");
   const cause = normalizeStockCause(doc.cause);
   const locationId = Number(doc.location_id ?? 0) || 0;
   const items = await tenantSelect<RowDataPacket>({ slug, table: "stock_doc_items", where: "stock_doc_id=?", params: [documentId] }).catch(() => []);
+  if (!items.length) throw new Error("Nessuna riga prodotto");
   // Reverse the stock delta for each line.
   const touchedProducts = new Set<number>();
   for (const item of items) {
     const productId = Number(item.product_id ?? 0);
     const qty = Number(item.qty ?? 0);
     if (productId <= 0 || qty <= 0) continue;
-    await adjustProductStock(slug, productId, locationId, cause === "carico" ? -qty : qty);
+    try {
+      await adjustProductStock(slug, productId, locationId, cause === "carico" ? -qty : qty);
+    } catch {
+      throw new Error("Impossibile annullare: storno porta giacenza negativa");
+    }
     touchedProducts.add(productId);
   }
   // Mark canceled FIRST so this doc is excluded from the incoming recompute below.
@@ -647,6 +671,9 @@ async function listStockDocuments(slug: string, locationId: number): Promise<Sto
     notes: String(row.notes ?? ""),
     locationId: nullableNumber(row.location_id),
     isCanceled: Number(row.is_canceled ?? 0) === 1,
+    createdAt: row.created_at ? String(row.created_at) : "",
+    canceledAt: row.canceled_at ? String(row.canceled_at) : "",
+    canceledByName: String(row.canceled_by_name ?? ""),
     attachmentName: String(row.attachment_name ?? ""),
     items: itemMap.get(Number(row.id ?? 0)) ?? [],
   }));
@@ -702,7 +729,7 @@ async function normalizeProductInput(slug: string, body: Record<string, string>,
   if (categoryId && !await categoryExists(slug, categoryId)) throw new Error("Categoria prodotto non valida.");
   const locationIds = await normalizeProductLocationIds(slug, parseIdList(body.location_ids));
   if (await tableExistsForTenant(slug, "product_stocks") && (await listProductLocations(slug)).some((loc) => loc.isActive) && !locationIds.length) {
-    throw new Error("Seleziona almeno una sede per il prodotto.");
+    throw new Error("Seleziona almeno una sede per il prodotto");
   }
   const supplierName = clean(body.supplier_name, 190);
   if (supplierName) await ensureSupplierAllowedForProduct(slug, supplierName, locationIds, productId);
@@ -774,7 +801,7 @@ async function syncProductLocations(slug: string, productId: number, selectedLoc
     if (selected.has(locationId)) continue;
     const stock = Number(row.stock ?? 0) || 0;
     const incoming = Number(row.incoming_qty ?? 0) || 0;
-    if (stock > 0 || incoming > 0) throw new Error("Impossibile rimuovere il prodotto da sedi con giacenza o prodotti in arrivo.");
+    if (stock > 0 || incoming > 0) throw new Error(`Impossibile rimuovere il prodotto da queste sedi finche hanno giacenza o prodotti in arrivo: ${await locationNameById(slug, locationId)}`);
     await updateProductStockRow(slug, productId, locationId, { is_enabled: 0 });
   }
   await refreshProductAggregateStock(slug, productId);
@@ -784,7 +811,23 @@ async function ensureProductLocationRemovalAllowed(slug: string, productId: numb
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "product_stocks", where: "product_id=?", params: [productId] }).catch(() => []);
   const selected = new Set(selectedLocationIds);
   const blockers = rows.filter((row) => !selected.has(Number(row.location_id ?? 0)) && Number(row.is_enabled ?? 1) === 1 && ((Number(row.stock ?? 0) || 0) > 0 || (Number(row.incoming_qty ?? 0) || 0) > 0));
-  if (blockers.length) throw new Error("Impossibile rimuovere il prodotto da sedi con giacenza o prodotti in arrivo.");
+  if (blockers.length) {
+    const names = await Promise.all(blockers.map((row) => locationNameById(slug, Number(row.location_id ?? 0))));
+    throw new Error(`Impossibile rimuovere il prodotto da queste sedi finche hanno giacenza o prodotti in arrivo: ${names.join(", ")}`);
+  }
+}
+
+// Blockers STRUTTURATI per il modal legacy (group/title/detail).
+export async function listProductDeleteBlockers(slug: string, productId: number): Promise<Array<{ group: string; title: string; detail: string }>> {
+  const flat = await productDeleteBlockers(slug, productId);
+  return flat.map((entry) => {
+    const [label, count] = entry.split(": ");
+    return {
+      group: "Associazione attiva",
+      title: label ?? entry,
+      detail: count ? `${count} element${count === "1" ? "o" : "i"}` : "",
+    };
+  });
 }
 
 async function productDeleteBlockers(slug: string, productId: number): Promise<string[]> {
@@ -941,10 +984,13 @@ async function normalizeStockItems(body: Record<string, string>): Promise<Array<
       incomingEta: normalizeDate(item.incoming_eta ?? item.incomingEta),
     });
   }
-  const items = Array.from(byProduct.values()).filter((item) => item.qty > 0 || item.incomingFlag);
+  // NB parità legacy: una riga qty=0 senza "in arrivo" è un ERRORE bloccante,
+  // non viene scartata in silenzio.
+  const items = Array.from(byProduct.values());
   for (const item of items) {
-    if (item.incomingFlag && (item.incomingQty <= 0 || !item.incomingEta)) throw new Error("Inserisci quantita e data stimata per i prodotti in arrivo.");
-    if (item.qty <= 0 && !item.incomingFlag) throw new Error("Inserisci la quantita per tutte le righe.");
+    if (item.qty <= 0 && !item.incomingFlag) throw new Error("Inserisci la quantita per tutte le righe");
+    if (item.incomingFlag && item.incomingQty <= 0) throw new Error("Inserisci la quantita in arrivo per tutte le righe se spuntato");
+    if (item.incomingFlag && !item.incomingEta) throw new Error("Inserisci la data stimata di arrivo per tutte le righe se spuntato");
   }
   return items;
 }
@@ -1022,9 +1068,22 @@ async function updateProductSnapshots(slug: string, productId: number, previous:
   }
 }
 
+// Port di app_product_location_enabled: il prodotto è abbinato alla sede quando la sua
+// riga product_stocks è is_enabled=1, oppure quando non ha NESSUNA riga product_stocks.
+async function productEnabledForLocation(slug: string, productId: number, locationId: number): Promise<boolean> {
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "product_stocks", columns: "location_id, is_enabled", where: "product_id=?", params: [productId] }).catch(() => [] as RowDataPacket[]);
+  if (!rows.length) return true;
+  return rows.some((row) => Number(row.location_id ?? 0) === locationId && Number(row.is_enabled ?? 0) === 1);
+}
+
+async function locationNameById(slug: string, locationId: number): Promise<string> {
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "name", where: "id=?", params: [locationId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  return String(rows[0]?.name ?? `Sede #${locationId}`);
+}
+
 async function getProductById(slug: string, id: number): Promise<RowDataPacket> {
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "products", where: "id=?", params: [id], limit: 1 });
-  if (!rows[0]) throw new Error("Prodotto non trovato.");
+  if (!rows[0]) throw new Error("Prodotto non trovato");
   return rows[0];
 }
 
@@ -1036,7 +1095,7 @@ async function getSupplierById(slug: string, id: number): Promise<RowDataPacket>
 
 async function getStockDocumentById(slug: string, id: number): Promise<RowDataPacket> {
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "stock_docs", where: "id=?", params: [id], limit: 1 });
-  if (!rows[0]) throw new Error("Movimento non trovato.");
+  if (!rows[0]) throw new Error("Documento non trovato");
   return rows[0];
 }
 
