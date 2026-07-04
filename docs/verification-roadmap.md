@@ -3007,3 +3007,84 @@ Verifica: battery 14/14 (preview con cabinAvail nominato, finestra corta
 verbatim, cliente bloccato, fuori orario -> reason verbatim, create con
 public_code 5 cifre + segmenti con cabina auto e staff, details con
 appointmentId per ?created=, cleanup CLEAN) + 18/18 marker bundle + typecheck.
+
+## Calendario — audit di parità 2 (2026-07-04)
+Metodo: doppio inventario agent (legacy calendar.js 5204 righe + api_appointments
+move/list; port Next 3888 righe) + cattura live PHP (php-calendar.html 88KB).
+GAP CHIUSI:
+1. TEMA SOFT PER STATO sui blocchi (Day/Week/Month): port verbatim di
+   calendarAppointmentStatusTheme + applyCalendarSoftAppointmentStyle — palette
+   pending #fff7ed/#f59e0b, scheduled #eff6ff/#4e6da5, done #ecfdf5/#22c55e,
+   canceled #f1f5f9/#64748b, no_show #f9fafb/#374151, rejected #fdf2f8/#ec4899,
+   fallback other #f8fafc — classi appt-soft-<key> + CSS var --appt-soft-* (le
+   regole !important erano GIÀ in app.css ma il componente non le alimentava:
+   i blocchi avevano sfondo fisso #f4f8ff e barra col colore OPERATORE invece
+   dell'accento di STATO; il colore operatore resta solo sul pallino).
+2. MOVE PARITY COMPLETA (rotta+repo riscritti su api_appointments.php 9092-9380,
+   nuova moveDbAppointmentCalendar): contratto legacy starts_at/ends_at (durata
+   trascinata persistita AS IS — prima updateDbAppointment RICALCOLAVA la durata
+   dal servizio, perdendo i resize custom), staff_id numerico (upsert/clear
+   appointment_staff + sync segmento singolo; sentinel 0 per lo schema NOT NULL),
+   segment_id+old_starts_at/old_ends_at -> DELTA-SHIFT dell'intera prenotazione
+   (prima il drag di un segmento non-primo TELETRASPORTAVA l'appuntamento sul
+   suo orario); guardie che PRIMA MANCAVANO DEL TUTTO sul move: time-off
+   "Impossibile spostare: <nome> risulta non disponibile (<motivo>) nel periodo
+   selezionato.", conflitti "Conflitto: l'operatore ha già un altro appuntamento
+   in quell'orario." / "Conflitto: uno degli operatori ha già...", risorse
+   condivise (sharedResourcesContext), operatore-abilitato, cabine ri-risolte
+   (corrente -> appuntamento -> auto) per segmento e singole; errori 'Non
+   trovato' (era "Appuntamento non trovato.") a 200 {ok:false} come j() PHP.
+3. AZIONE RESIZE RIMOSSA (il legacy NON ce l'ha: eventResize POSTA action=move
+   con stesso inizio e nuova fine) — resizeDbAppointmentEnd eliminata; il client
+   ora fa resize via move; maniglia resize NASCOSTA sui blocchi-segmento
+   (durationEditable:false legacy) + guardia alert verbatim "Ridimensionamento
+   non supportato per prenotazioni multi-servizio (segmentate)."; guardia
+   client-side cross-colonna sui segmenti "Per cambiare operatore su
+   prenotazioni multi-servizio, modifica l'appuntamento (non tramite drag &
+   drop)." (alert PRIMA della richiesta, come calendar.js 4961).
+4. ERRORI MOVE/RESIZE via window.alert(resp.error || 'Impossibile spostare' /
+   'Impossibile ridimensionare') + revert — rimosso l'alert inline inventato.
+5. EVENTI PER SEGMENTO: soglia legacy HAVING COUNT(*)>1 sui SEGMENTI (prima il
+   Next espandeva solo con >1 OPERATORE: un 2-servizi mono-operatore mostrava
+   UN blocco solo) — appointmentSegmentsForCalendar ora restituisce segments[]
+   (con segmentId per il contratto move) per ogni prenotazione segmentata;
+   espansione anche in Week e Month.
+6. HOVER TIME INDICATOR: label HH:MM INLINE nel chunk centrale toolbar
+   (calendar-hover-time-display--inline — prima flottante accanto al cursore,
+   variante che il legacy usa solo senza toolbar), linea guida a TUTTA
+   LARGHEZZA su tutte le colonne (come la line appesa a .fc-timegrid-cols),
+   semantica riga-floor (la riga 5' sotto il cursore, non il round).
+7. MESE: nav ±1 MESE di calendario (era ±30 giorni fissi); chip = CARD complete
+   legacy (riga orario, pallino+badge+MS+cliente, "• operatore", "• servizio",
+   tema soft) e TUTTI i chip (il legacy non ha dayMaxEvents: rimosso il cap 4 +
+   "+N altri"); chip trascinabili su un'altra cella (cambio DATA, orario
+   conservato; segmenti delta-shift); click su giorno vuoto -> quick-book
+   prefillato 00:00 + operatore del filtro (port della select FullCalendar in
+   dayGridMonth — prima saltava alla vista Giorno, comportamento inventato);
+   celle chiusura con classe store-closure-date (dayCellClassNames) salvo
+   apertura straordinaria.
+8. NOTE: validazioni SEPARATE 'Seleziona un giorno valido.' / 'Scrivi il testo
+   della nota.' (era un messaggio unico inventato); esiti success 'Nota salvata
+   con successo.' + variante lunga fuori-periodo verbatim (senza accenti: "e
+   fuori", "mostrera") e 'Nota eliminata.'; fallback errori per azione 'Errore
+   nel salvataggio.' / 'Errore in eliminazione.' (era "Operazione non
+   riuscita."); dopo il salvataggio la nota resta caricata nel form (come
+   fillCalendarNoteForm); empty state "Nessuna nota PER il giorno selezionato"
+   (era "nel").
+9. Week: click/drag-select su cella vuota prefilla l'operatore del FILTRO
+   (legacy staffId = currentStaff), non "nessuno".
+RESIDUI DELIBERATI: filtro sede resta hidden non wired (parità col legacy
+mono-sessione); la variante staff-allowed del move non applica il filtro sede
+legacy ('Operatore non disponibile nella sede selezionata.') — tenant mono-sede,
+stessa semplificazione del save; hold advisory day-lock del PHP non portato;
+tema rejected irraggiungibile finché phpStatus collassa rejected->canceled (port
+verbatim comunque); appointment_segments.staff_id usa sentinel 0 (schema NOT
+NULL) dove il PHP scrive NULL.
+Verifica: battery 33/33 (move as-is + sync segmento/cabina, resize via move con
+durata custom preservata anche al move successivo, Dati mancanti/Data-ora non
+valida/Non trovato/non modificabile verbatim, conflitto singolo+multi verbatim,
+time-off col nome operatore, clear/riassegna operatore, segments[] con soglia
+>1 segmento mono-operatore + segmentId, delta-shift dal secondo segmento,
+fallback delta senza segment_id, staff_id ignorato sul multi, cleanup CLEAN) +
+48/48 marker bundle (palette soft completa, alert verbatim, note, chiusure,
+hover inline) + typecheck pulito (lint: soli rilievi preesistenti a HEAD).

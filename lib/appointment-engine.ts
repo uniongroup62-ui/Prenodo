@@ -42,12 +42,13 @@ export type AppointmentWithMeta = Appointment & {
   // scheduled to "Confermato"; statusCode preserves the true status so the calendar
   // can render the right pill/colour for canceled + no_show appointments.
   statusCode?: string;
-  // Per-service SEGMENTS (appointment_segments) when the appointment's services run
-  // under DIFFERENT operators: the Day calendar renders one block per segment in the
-  // respective staff column (like the legacy per-segment events) — otherwise the
-  // second operator's column would look free while they are busy on their segment.
-  // Present only when the appointment spans more than one operator.
-  segments?: Array<{ serviceId: number; serviceName: string; staffId: number; staffName: string; time: string; endTime: string }>;
+  // Per-service SEGMENTS (appointment_segments) when the appointment has MORE THAN
+  // ONE segment — the legacy list API emits one calendar event PER SEGMENT via
+  // HAVING COUNT(*) > 1, regardless of how many operators are involved — so the
+  // calendar renders one block per segment (placed in the matching staff column in
+  // the Day view). segmentId identifies the dragged row for the move delta contract
+  // (action=move + segment_id + old_starts_at/old_ends_at, like the legacy payload).
+  segments?: Array<{ segmentId: number; serviceId: number; serviceName: string; staffId: number; staffName: string; time: string; endTime: string }>;
   // Decorazioni della lista appuntamenti legacy (appointments.php):
   // "Pacchetto: X"/"Pacchetti: X, Y" sotto il servizio, "Prepagato", e il colore
   // dell'operatore per il pallino .op-color-dot. Opzionali (solo action=list).

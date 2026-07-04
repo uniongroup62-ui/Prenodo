@@ -14,12 +14,10 @@ import {
   fidelityGiftRedeemForAppointment,
   getDbAppointmentCustomerVisibleSnapshot,
   getDbAppointmentForEdit,
-  getDbAppointmentMoveSnapshot,
   getDbAppointmentPhpStatus,
-  getDbAppointmentSegmentCount,
   appointmentListDecorations,
   listDbAppointments,
-  resizeDbAppointmentEnd,
+  moveDbAppointmentCalendar,
   swapDbAppointmentSegment,
   updateDbAppointment,
   updateDbAppointmentStatus,
@@ -643,70 +641,41 @@ export async function POST(request: Request) {
       }
     }
 
-    // Calendar drag/move (port of api_appointments.php action='move'). A move only
-    // changes the slot — new date/time and, in the staff-columns view, optionally the
-    // operator (and location). Client/service/notes are preserved by re-feeding the
-    // existing snapshot to updateDbAppointment, which recomputes the end from the
-    // service duration (so the visible duration is preserved on a move). The legacy
-    // accepts full `starts_at`/`ends_at` datetimes; we accept the same plus the
-    // lighter `date`+`time`, deriving date/time from `starts_at` when only that is sent.
+    // Calendar drag/move + resize (port of api_appointments.php action='move',
+    // ~9092-9380 — the legacy has NO separate resize action: eventResize posts a
+    // move with the same start and the dragged end). Contract identical to the
+    // legacy eventDrop payload: full starts_at/ends_at datetimes (duration
+    // preserved AS SENT, so a custom duration survives), optional staff_id
+    // (staff-columns drag; 0/'' clears), optional segment_id + old_starts_at/
+    // old_ends_at (dragging a segment shifts the WHOLE appointment by the delta).
+    // All guards/messages live in moveDbAppointmentCalendar; failures return
+    // 200 { ok:false, error } like the legacy j() (the client alert()s them).
     if (action === "move") {
       const id = Number.parseInt(String(body.id ?? "0"), 10);
-      if (!Number.isFinite(id) || id <= 0) {
-        return Response.json({ ok: false, error: "Dati mancanti" }, { status: 400 });
+      const startsAt = String(body.starts_at ?? "").trim();
+      const endsAt = String(body.ends_at ?? "").trim();
+      if (!Number.isFinite(id) || id <= 0 || !startsAt || !endsAt) {
+        return Response.json({ ok: false, error: "Dati mancanti" });
       }
-
-      // Resolve the new slot: prefer explicit date/time, else split a MySQL/ISO
-      // `starts_at` ("YYYY-MM-DD HH:MM[:SS]" or with a 'T") into date + HH:MM.
-      const startsAt = String(body.starts_at ?? "");
-      const slot = parseStartsAt(startsAt);
-      const date = String(body.date ?? slot.date ?? "");
-      const time = String(body.time ?? slot.time ?? "");
-      if (!date || !time) {
-        return Response.json({ ok: false, error: "Data/ora non valida" }, { status: 400 });
-      }
-
-      // Tenant-scoped snapshot of the preserved fields (+ current status). A null
-      // snapshot means the row is not the tenant's / does not exist.
-      const snapshot = await getDbAppointmentMoveSnapshot(tenantSlug, id);
-      if (!snapshot) {
-        return Response.json({ ok: false, error: "Appuntamento non trovato." }, { status: 400 });
-      }
-      // Legacy guard: only pending/scheduled appointments are movable from the calendar.
-      if (snapshot.phpStatus !== "pending" && snapshot.phpStatus !== "scheduled") {
-        return Response.json({ ok: false, error: "La prenotazione non e modificabile da calendario." }, { status: 400 });
-      }
-
-      // Operator: an explicit staff_name/operator (staff-columns drag between columns)
-      // overrides; an empty string clears the assignment; omitted keeps the current one.
-      const hasStaffParam = body.staff_name !== undefined || body.operator !== undefined;
-      const operator = hasStaffParam ? String(body.staff_name ?? body.operator ?? "") : snapshot.operator;
-
-      // Legacy guard (calendar.js:4961): a multi-service (segmented) booking's operator
-      // cannot be changed via drag & drop — it must be edited from the appointment form.
-      if (hasStaffParam && operator !== snapshot.operator && (await getDbAppointmentSegmentCount(tenantSlug, id)) > 1) {
-        return Response.json({ ok: false, error: "Per cambiare operatore su prenotazioni multi-servizio, modifica l'appuntamento (non tramite drag & drop)." });
-      }
-
-      // Location: an explicit location_id resolves to the tenant location; otherwise
-      // keep the appointment's current location.
-      const locationId = body.location_id === undefined
-        ? snapshot.locationId
-        : (await resolveManageLocationId({ slug: tenantSlug, raw: String(body.location_id), fallbackCurrent: true })) || null;
+      const hasStaffParam = body.staff_id !== undefined;
+      const staffIdParam = hasStaffParam ? Number.parseInt(String(body.staff_id ?? "0"), 10) || 0 : undefined;
+      const segmentId = Number.parseInt(String(body.segment_id ?? "0"), 10) || 0;
+      const oldSegStartsAt = String(body.old_starts_at ?? "").trim();
 
       const before = await getDbAppointmentCustomerVisibleSnapshot(tenantSlug, id);
-      const appointment = await updateDbAppointment({
-        slug: tenantSlug,
-        id,
-        clientName: snapshot.clientName,
-        serviceName: snapshot.serviceName,
-        operator,
-        time,
-        date,
-        locationId,
-        staffNotes: snapshot.staffNotes,
-        customerNotes: snapshot.customerNotes,
-      });
+      try {
+        await moveDbAppointmentCalendar({
+          slug: tenantSlug,
+          id,
+          startsAt,
+          endsAt,
+          staffIdParam,
+          segmentId: segmentId > 0 ? segmentId : undefined,
+          oldSegStartsAt: oldSegStartsAt || undefined,
+        });
+      } catch (error) {
+        return Response.json({ ok: false, error: error instanceof Error ? error.message : "Impossibile spostare" });
+      }
 
       // Fire the 'modified' email only when a customer-visible field actually changed
       // (date/time will change on a move), mirroring the save edit path. Gated +
@@ -718,61 +687,13 @@ export async function POST(request: Request) {
         }
       }
 
-      // Il nuovo orario sposta anche la scheduled_at dei promemoria pending.
+      // Il nuovo orario sposta anche la scheduled_at dei promemoria pending
+      // (port di automation_handle_customer_visible_change nel move PHP).
       await automationScheduleReminder(tenantSlug, id);
 
       return Response.json({
         ok: true,
         sourceMode: "database",
-        appointment,
-        appointments: await listDbAppointments({ slug: tenantSlug }),
-      });
-    }
-
-    // RESIZE (duration change, port of the calendar bottom-edge resize). Unlike
-    // `move`/`save` — which route through updateDbAppointment and recompute ends_at
-    // from the SERVICE duration — resize persists a CUSTOM duration: it writes the
-    // dragged end time DIRECTLY (appointments.ends_at + the trailing segment's
-    // ends_at), keeping the start fixed. Tenant-scoped, pending/scheduled only, and
-    // reuses the same operator-overlap conflict check (resizeDbAppointmentEnd).
-    if (action === "resize") {
-      const id = Number.parseInt(String(body.id ?? "0"), 10);
-      if (!Number.isFinite(id) || id <= 0) {
-        return Response.json({ ok: false, error: "Dati mancanti" }, { status: 400 });
-      }
-
-      // The new end: prefer an explicit HH:MM `time`/`end_time`, else split a MySQL/
-      // ISO `ends_at` ("YYYY-MM-DD HH:MM[:SS]" or with a 'T") into its HH:MM.
-      const endsAt = String(body.ends_at ?? "");
-      const endTime = String(body.end_time ?? body.time ?? parseStartsAt(endsAt).time ?? "");
-      if (!endTime) {
-        return Response.json({ ok: false, error: "Ora di fine non valida" }, { status: 400 });
-      }
-
-      // Legacy guard (calendar.js:5016): a multi-service (segmented) booking cannot be
-      // resized from the calendar — its duration is governed by the per-service segments.
-      if ((await getDbAppointmentSegmentCount(tenantSlug, id)) > 1) {
-        return Response.json({ ok: false, error: "Ridimensionamento non supportato per prenotazioni multi-servizio (segmentate)." });
-      }
-
-      const appointment = await resizeDbAppointmentEnd(tenantSlug, id, endTime);
-      if (!appointment) {
-        return Response.json({ ok: false, error: "Appuntamento non trovato." }, { status: 400 });
-      }
-
-      // No lifecycle email on resize: the end time is NOT part of the compact
-      // customer-visible snapshot (date/time/service names), so a pure duration
-      // change is never a customer-visible change — matching the move path, which
-      // only emails when date/time actually move.
-
-      // La durata non sposta l'inizio, ma il legacy rischedula comunque a ogni
-      // edit dell'appuntamento.
-      await automationScheduleReminder(tenantSlug, id);
-
-      return Response.json({
-        ok: true,
-        sourceMode: "database",
-        appointment,
         appointments: await listDbAppointments({ slug: tenantSlug }),
       });
     }
@@ -958,15 +879,6 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-}
-
-// Split a "starts_at" datetime ("YYYY-MM-DD HH:MM[:SS]" or "...THH:MM...") into a
-// local date (YYYY-MM-DD) and HH:MM time. Used by the calendar move action so the
-// legacy `starts_at` payload still works alongside the lighter date+time payload.
-function parseStartsAt(value: string): { date: string; time: string } {
-  const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/.exec(value.trim());
-  if (!m) return { date: "", time: "" };
-  return { date: m[1], time: m[2] };
 }
 
 // Whether `body.status` is a RECOGNIZED appointment status for action=status —

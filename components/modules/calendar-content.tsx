@@ -142,10 +142,11 @@ type Appointment = {
   // Real php status code (pending|scheduled|done|canceled|no_show); the list API's
   // `status` is the collapsed 3-state UI label, so prefer statusCode for the pill.
   statusCode?: string;
-  // Per-operator segments (only when the appointment spans >1 operator): the Day
-  // view renders one block per segment in the matching staff column (legacy
-  // per-segment events), so the second operator's column shows their busy window.
-  segments?: { serviceId: number; serviceName: string; staffId: number; staffName: string; time: string; endTime: string }[];
+  // Per-segment windows (present when the appointment has >1 appointment_segments
+  // row, legacy HAVING COUNT(*) > 1): the calendar renders one block PER SEGMENT
+  // (in the matching staff column in the Day view). segmentId feeds the drag-move
+  // delta payload (move + segment_id + old_starts_at/old_ends_at).
+  segments?: { segmentId: number; serviceId: number; serviceName: string; staffId: number; staffName: string; time: string; endTime: string }[];
 };
 
 type CalendarView = "staffTimeGridDay" | "timeGridWeek" | "dayGridMonth";
@@ -392,9 +393,20 @@ function msCountOf(a: Appointment): number {
   return Math.max(a.segments?.length ?? 0, a.services?.length ?? 0, 1);
 }
 
-// One VIRTUAL block per segment (the legacy per-segment list events) — used by the
-// Week view; the Day view does the same inside apptsForStaff with the staff filter.
-function expandSegments(list: Appointment[]): Appointment[] {
+// A renderable calendar block: either a whole appointment or ONE segment of a
+// multi-servizio booking (the legacy per-segment events). Segment blocks carry
+// the segment identity + the ORIGINAL window so the drag-move can post the legacy
+// delta contract (move + segment_id + old_starts_at/old_ends_at) and the resize
+// handle can be hidden (legacy durationEditable:false on segment events).
+type CalBlock = Appointment & {
+  segmentId?: number;
+  segStaffId?: number;
+};
+
+// One VIRTUAL block per segment (the legacy per-segment list events, one event per
+// appointment_segments row when the booking has >1) — used by the Week/Month views;
+// the Day view does the same inside apptsForStaff with the staff filter.
+function expandSegments(list: Appointment[]): CalBlock[] {
   return list.flatMap((a) =>
     a.segments && a.segments.length > 1
       ? a.segments.map((seg) => ({
@@ -404,9 +416,66 @@ function expandSegments(list: Appointment[]): Appointment[] {
           service: seg.serviceName,
           services: [{ serviceId: seg.serviceId, name: seg.serviceName }],
           operator: seg.staffName,
+          segmentId: seg.segmentId,
+          segStaffId: seg.staffId,
         }))
-      : [a],
+      : [a as CalBlock],
   );
+}
+
+// === TEMA SOFT PER STATO (port fedele di calendarAppointmentStatusTheme,
+// calendar.js 3961-3979 + applyCalendarSoftAppointmentStyle 3981-4008) ===
+// Ogni blocco appuntamento riceve sfondo/bordo/testo pastello per STATO + la barra
+// accento sinistra (via box-shadow inset su .appt-soft-event in app.css, pilotata
+// da --appt-soft-accent). Il pallino operatore resta col colore dell'operatore.
+type CalendarStatusTheme = { key: string; bg: string; border: string; accent: string; text: string; muted: string };
+const CALENDAR_STATUS_THEMES: Record<string, CalendarStatusTheme> = {
+  pending: { key: "pending", bg: "#fff7ed", border: "#fed7aa", accent: "#f59e0b", text: "#7c2d12", muted: "#9a3412" },
+  scheduled: { key: "scheduled", bg: "#eff6ff", border: "#bfdbfe", accent: "#4e6da5", text: "#1e3a8a", muted: "#475569" },
+  done: { key: "done", bg: "#ecfdf5", border: "#bbf7d0", accent: "#22c55e", text: "#14532d", muted: "#166534" },
+  canceled: { key: "canceled", bg: "#f1f5f9", border: "#94a3b8", accent: "#64748b", text: "#334155", muted: "#475569" },
+  no_show: { key: "no_show", bg: "#f9fafb", border: "#d1d5db", accent: "#374151", text: "#111827", muted: "#4b5563" },
+  rejected: { key: "rejected", bg: "#fdf2f8", border: "#fbcfe8", accent: "#ec4899", text: "#831843", muted: "#9d174d" },
+};
+const CALENDAR_STATUS_THEME_OTHER: CalendarStatusTheme = { key: "other", bg: "#f8fafc", border: "#dbe4ef", accent: "#64748b", text: "#334155", muted: "#64748b" };
+function statusThemeOf(rawStatus: string): CalendarStatusTheme {
+  let st = String(rawStatus || "").toLowerCase().trim();
+  if (st === "cancelled") st = "canceled";
+  if (st === "confirmed") st = "scheduled";
+  if (st === "completed") st = "done";
+  if (st === "no show" || st === "no-show" || st === "noshow" || st === "non presentato") st = "no_show";
+  return CALENDAR_STATUS_THEMES[st] ?? CALENDAR_STATUS_THEME_OTHER;
+}
+// Stili inline del tema (le CSS var alimentano le regole !important di
+// .appt-soft-event in app.css; bg/bordo/testo replicano gli inline del legacy).
+function softEventStyle(theme: CalendarStatusTheme): React.CSSProperties {
+  return {
+    "--appt-soft-bg": theme.bg,
+    "--appt-soft-border": theme.border,
+    "--appt-soft-accent": theme.accent,
+    "--appt-soft-text": theme.text,
+    "--appt-soft-muted": theme.muted,
+    backgroundColor: theme.bg,
+    border: `1px solid ${theme.border}`,
+    color: theme.text,
+  } as React.CSSProperties;
+}
+
+// SQL datetime "YYYY-MM-DD HH:MM:00" per il contratto move legacy (starts_at/ends_at).
+function sqlAt(iso: string, time: string): string {
+  return `${iso} ${time}:00`;
+}
+// Shift di un HH:MM di delta minuti (clampato in giornata); orario invalido -> invariato.
+function shiftTime(time: string | undefined, deltaMin: number): string | undefined {
+  const m = timeToMin(time ?? "");
+  if (m === null) return time;
+  return minToTime(Math.min(Math.max(m + deltaMin, 0), 24 * 60 - 5));
+}
+// Durata (minuti) di un blocco dal suo intervallo, col default legacy di 60'.
+function blockDurationMin(b: CalBlock): number {
+  const s = timeToMin(b.time);
+  const e = timeToMin(b.endTime ?? "");
+  return s !== null && e !== null && e > s ? e - s : DEFAULT_DURATION_MIN;
 }
 
 // Bootstrap modal helpers. Bootstrap's bundle is already loaded by the manage shell
@@ -710,6 +779,9 @@ type CalendarDrag = {
   // Pointer offset (px) from the top of the dragged block to the grab point, so the
   // drop maps the block's TOP (its start time), not the cursor, to the new slot.
   grabOffsetPx: number;
+  // The dragged BLOCK (whole appointment or one segment): carries the original
+  // window + segment identity for the legacy move payload (segment_id + old_*).
+  block: CalBlock;
 };
 
 // In-flight RESIZE payload: which appointment's bottom edge is being dragged, the
@@ -842,16 +914,16 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
   const [filterService, setFilterService] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
 
-  // Drag-move state. dragRef holds the in-flight payload (the dragged appointment id
-  // and the grab offset within the block); a non-null moveError surfaces a revert.
+  // Drag-move state. dragRef holds the in-flight payload (the dragged block + the
+  // grab offset); move/resize errors are surfaced via window.alert (legacy parity).
   const dragRef = useRef<CalendarDrag | null>(null);
   // In-flight resize (bottom-edge drag). Held in a ref (no re-render per mouse move);
   // a non-null `resizePreview` mirrors the live snapped end so the block stretches.
   const resizeRef = useRef<CalendarResize | null>(null);
   const [resizePreview, setResizePreview] = useState<{ id: number; endTime: string } | null>(null);
-  const [moveError, setMoveError] = useState("");
-  // Surfaced inside #calendarNotesAlert when a note save/delete fails.
-  const [notesError, setNotesError] = useState("");
+  // Esito nel #calendarNotesAlert: errore (danger) o conferma (success), come
+  // showCalendarNotesAlert(msg, type) del legacy.
+  const [notesAlert, setNotesAlert] = useState<{ text: string; kind: "danger" | "success" } | null>(null);
 
   // === Staff-column ordering modal (#staffOrderModal) state ===
   // staffOrderRows is the working order of the OTHER operators (excludes the pinned
@@ -1200,15 +1272,16 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
     return map;
   }, [appointments, passesFilters]);
 
-  function apptsForStaff(staffName: string): Appointment[] {
+  function apptsForStaff(staffName: string): CalBlock[] {
     const target = staffName.trim().toLowerCase();
-    const out: Appointment[] = [];
+    const out: CalBlock[] = [];
     for (const a of visibleAppts) {
-      // Multi-operator appointment: one VIRTUAL block per segment in the matching
-      // column (legacy per-segment events) — otherwise the second operator's column
-      // would look free while they are busy on their own segment. The virtual block
-      // keeps the appointment id (click still opens the same edit drawer) but takes
-      // the segment's time window, service and operator.
+      // Segmented appointment (>1 segment, legacy per-segment events): one VIRTUAL
+      // block per segment in the matching column — otherwise a second operator's
+      // column would look free while they are busy on their own segment. The virtual
+      // block keeps the appointment id (click still opens the same edit drawer) but
+      // takes the segment's window/service/operator + the segment identity for the
+      // drag-move delta payload.
       if (a.segments && a.segments.length > 1) {
         for (const seg of a.segments) {
           if ((seg.staffName || "").trim().toLowerCase() !== target) continue;
@@ -1219,6 +1292,8 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
             service: seg.serviceName,
             services: [{ serviceId: seg.serviceId, name: seg.serviceName }],
             operator: seg.staffName,
+            segmentId: seg.segmentId,
+            segStaffId: seg.staffId,
           });
         }
         continue;
@@ -1307,6 +1382,16 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
     setDate((d) => addDays(d, deltaDays));
   }
 
+  // Nav Mese: FullCalendar prev/next in dayGridMonth naviga di UN MESE DI
+  // CALENDARIO (l'anchor diventa il primo del mese), non di 30 giorni fissi.
+  function goMonth(delta: number) {
+    setDate((d) => {
+      const cur = new Date(`${monthStartIso(d)}T12:00:00`);
+      cur.setMonth(cur.getMonth() + delta);
+      return `${cur.getFullYear()}-${pad(cur.getMonth() + 1)}-01`;
+    });
+  }
+
   // Map a Y offset (px, relative to the top of a column's slot body) to a snapped
   // time string, clamped to the visible business-hours window. The slot body starts
   // at minMin, ROW_HEIGHT px per SLOT_MIN_PER_ROW (PX_PER_MIN px per minute).
@@ -1379,14 +1464,14 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
         return;
       }
       const rect = body.getBoundingClientRect();
-      const minutes = snappedMinFromY(ev.clientY - rect.top, winStart, winEnd);
-      const slotStart = Math.floor(minutes / SLOT_MIN_PER_ROW) * SLOT_MIN_PER_ROW;
-      hoverPendingRef.current = {
-        col,
-        lineTop: (minutes - winStart) * PX_PER_MIN,
-        slotTop: (Math.max(slotStart, winStart) - winStart) * PX_PER_MIN,
-        label: minToTime(minutes),
-      };
+      // Semantica legacy (getCalendarHoverTimeInfoFromPoint): la RIGA da 5' in cui
+      // si trova il cursore (floor, non round) — la linea guida sta sul bordo
+      // superiore della riga, l'evidenziazione copre la riga, l'etichetta HH:MM è
+      // l'inizio riga (clampato alla fine finestra, port di __cal_actual_max_time).
+      const rowMin = winStart + Math.floor((ev.clientY - rect.top) / ROW_HEIGHT) * SLOT_MIN_PER_ROW;
+      const minutes = Math.min(Math.max(rowMin, winStart), winEnd);
+      const top = (minutes - winStart) * PX_PER_MIN;
+      hoverPendingRef.current = { col, lineTop: top, slotTop: top, label: minToTime(minutes) };
       scheduleHover();
     };
 
@@ -1432,16 +1517,14 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
     };
   }, [snappedMinFromY]);
 
-  // Render the hover indicator + live drag-select band for one column body (`col` is
-  // the column key, `winStart` the body's window start min). All three pieces are
+  // Render the hover slot-highlight + live drag-select band for one column body
+  // (`col` is the column key, `winStart` the body's window start min). Both are
   // absolutely-positioned, pointer-events:none overlays so they never block the
-  // underlying empty-cell click / drag. Reuses the legacy CSS classes so they are
-  // styled identically by app.css / calendar.css:
-  //   - .calendar-hover-time-line  (guide line at the snapped time)
-  //   - .calendar-hover-slot-highlight (subtle band for the snapped 5-min slot)
-  //   - .calendar-hover-time-display.calendar-hover-time-display--floating (HH:MM label)
-  // The drag-select band reuses .calendar-hover-slot-highlight too (a stronger,
-  // explicitly-styled variant), matching the legacy selection look.
+  // underlying empty-cell click / drag, reusing the legacy CSS classes. The hover
+  // GUIDE LINE is NOT here: like the legacy (appended to .fc-timegrid-cols) it is a
+  // single line spanning ALL the view's columns, rendered by the columns wrapper;
+  // the HH:MM label lives INLINE in the toolbar's center chunk (the legacy
+  // .calendar-hover-time-display--inline placement).
   const renderHoverOverlay = useCallback(
     (col: string, winStart: number) => {
       const showHover = hover && hover.col === col;
@@ -1454,61 +1537,22 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
       return (
         <>
           {showHover ? (
-            <>
-              {/* Subtle highlight band for the snapped 5-min slot. */}
-              <div
-                className="calendar-hover-slot-highlight is-visible"
-                aria-hidden="true"
-                style={{
-                  position: "absolute",
-                  left: 0,
-                  right: 0,
-                  top: hover.slotTop,
-                  height: ROW_HEIGHT,
-                  zIndex: 4,
-                  pointerEvents: "none",
-                  // Minimal inline fallback in case the scoped CSS does not match.
-                  background: "rgba(47,99,216,.13)",
-                  boxShadow: "inset 0 0 0 1px rgba(47,99,216,.22)",
-                }}
-              />
-              {/* Thin guide line at the snapped (5-min) time. */}
-              <div
-                className="calendar-hover-time-line is-visible"
-                aria-hidden="true"
-                style={{
-                  position: "absolute",
-                  left: 0,
-                  right: 0,
-                  top: hover.lineTop,
-                  zIndex: 5,
-                  pointerEvents: "none",
-                  borderTop: "1px dashed rgba(59,130,246,.7)",
-                }}
-              />
-              {/* HH:MM label following the pointer's snapped time. */}
-              <div
-                className="calendar-hover-time-display calendar-hover-time-display--floating is-visible"
-                aria-hidden="true"
-                style={{
-                  position: "absolute",
-                  left: 4,
-                  top: hover.lineTop,
-                  transform: "translateY(-50%)",
-                  zIndex: 8,
-                  pointerEvents: "none",
-                  fontSize: 12,
-                  fontWeight: 600,
-                  color: "#0f172a",
-                  background: "rgba(255,255,255,.85)",
-                  borderRadius: 4,
-                  padding: "0 4px",
-                  lineHeight: 1.3,
-                }}
-              >
-                {hover.label}
-              </div>
-            </>
+            <div
+              className="calendar-hover-slot-highlight is-visible"
+              aria-hidden="true"
+              style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                top: hover.slotTop,
+                height: ROW_HEIGHT,
+                zIndex: 4,
+                pointerEvents: "none",
+                // Minimal inline fallback in case the scoped CSS does not match.
+                background: "rgba(47,99,216,.13)",
+                boxShadow: "inset 0 0 0 1px rgba(47,99,216,.22)",
+              }}
+            />
           ) : null}
           {showSelect ? (
             <div
@@ -1533,153 +1577,184 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
     [hover, dragSelect],
   );
 
-  // POST action=move with optimistic update + reconcile. The list is optimistically
-  // patched (new time/operator) so the block jumps immediately; on success the server
-  // list replaces local state, on error we revert by reloading the day. Tenant-scoped
-  // via the slug query + x-tenant-slug header, like the other calendar fetches.
-  const moveAppointment = useCallback(
-    async (id: number, newTime: string, newOperator: string) => {
-      setMoveError("");
+  // Linea guida hover a TUTTA LARGHEZZA per un wrapper colonne (port della
+  // .calendar-hover-time-line appesa a .fc-timegrid-cols nel legacy: attraversa
+  // tutte le colonne della vista, non solo quella sotto il cursore). `prefix`
+  // scopa la linea alla vista attiva ("day-"/"week-"); `headerPx` è l'offset
+  // dell'intestazione colonne sopra i body.
+  const renderHoverGuideLine = useCallback(
+    (prefix: string, headerPx: number) => {
+      if (!hover || !hover.col.startsWith(prefix)) return null;
+      return (
+        <div
+          className="calendar-hover-time-line is-visible"
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            top: headerPx + hover.lineTop,
+            zIndex: 5,
+            pointerEvents: "none",
+            borderTop: "1px dashed rgba(59,130,246,.7)",
+          }}
+        />
+      );
+    },
+    [hover],
+  );
+
+  // POST action=move con il CONTRATTO LEGACY (eventDrop/eventResize -> api move):
+  // starts_at/ends_at completi [+staff_id nella vista a colonne] [+segment_id/old_*
+  // per i blocchi-segmento]. Patch ottimistico; su errore revert + window.alert
+  // (verbatim legacy: alert(resp.error || fallback) + info.revert()); su ok
+  // riconcilia con la lista autorevole del server.
+  const postMove = useCallback(
+    async (
+      payload: Record<string, unknown>,
+      patch: (list: Appointment[]) => Appointment[],
+      fallbackMsg: string,
+    ) => {
       const prev = appointments;
-      const target = prev.find((a) => a.id === id);
-      if (!target) return;
-      if (target.time === newTime && (target.operator || "").trim().toLowerCase() === newOperator.trim().toLowerCase()) {
-        return; // no-op drop on the same slot/column
-      }
-
-      // Optimistic patch.
-      setAppointments((list) => list.map((a) => (a.id === id ? { ...a, time: newTime, operator: newOperator } : a)));
-
+      setAppointments(patch);
       try {
         const res = await fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-          body: JSON.stringify({
-            action: "move",
-            id,
-            date,
-            time: newTime,
-            staff_name: newOperator,
-          }),
+          body: JSON.stringify({ action: "move", ...payload }),
         });
         const json: { ok?: boolean; error?: string; appointments?: Appointment[] } = await res.json().catch(() => ({}));
         if (!res.ok || json.ok === false || json.error) {
-          setAppointments(prev); // revert
-          setMoveError(String(json.error || "Impossibile spostare l'appuntamento."));
+          setAppointments(prev); // revert (port di info.revert())
+          window.alert(String(json.error || fallbackMsg));
           return;
         }
-        // Reconcile with the authoritative server list when provided.
         if (Array.isArray(json.appointments)) setAppointments(json.appointments);
         else loadContext(date, visibleRange);
       } catch {
-        setAppointments(prev); // revert on network error
-        setMoveError("Errore di rete durante lo spostamento.");
+        setAppointments(prev); // revert su errore di rete
+        window.alert(fallbackMsg);
       }
     },
     [appointments, date, loadContext, slug, visibleRange],
   );
 
-  // WEEK move (port of the FullCalendar eventDrop in timeGridWeek): dragging a Week
-  // block to another position changes the DATE (the target day column) AND the time,
-  // keeping the SAME operator (the Week grid isn't per-operator). Unlike the Day move
-  // — which keeps the date and changes the operator — this posts a new `date`+`time`
-  // with the appointment's current operator unchanged. The existing action=move route
-  // already accepts a target `date` (it builds starts_at from date+time and reuses the
-  // operator-overlap conflict check via assertAppointmentSlotAvailable), so no route/
-  // repo change is needed. Optimistic patch (new date+time) + revert on error, mirroring
-  // moveAppointment. The operator is sent as staff_name ONLY when non-empty, so an
-  // unassigned appointment keeps its (empty) assignment instead of the route clearing it.
-  const moveAppointmentToDate = useCallback(
-    async (id: number, newDate: string, newTime: string) => {
-      setMoveError("");
-      const prev = appointments;
-      const target = prev.find((a) => a.id === id);
-      if (!target) return;
-      if (target.date === newDate && target.time === newTime) {
-        return; // no-op drop on the same day/slot
-      }
-      const operator = (target.operator || "").trim();
-
-      // Optimistic patch: move the block to the new day + time (operator unchanged).
-      setAppointments((list) => list.map((a) => (a.id === id ? { ...a, date: newDate, time: newTime } : a)));
-
-      try {
-        const res = await fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-          body: JSON.stringify({
-            action: "move",
-            id,
-            date: newDate,
-            time: newTime,
-            // Keep the current operator. Send staff_name only when set; omitting it
-            // lets the route preserve the appointment's existing operator (an empty
-            // string would otherwise CLEAR the assignment).
-            ...(operator ? { staff_name: operator } : {}),
-          }),
-        });
-        const json: { ok?: boolean; error?: string; appointments?: Appointment[] } = await res.json().catch(() => ({}));
-        if (!res.ok || json.ok === false || json.error) {
-          setAppointments(prev); // revert
-          setMoveError(String(json.error || "Impossibile spostare l'appuntamento."));
+  // Drop nella vista GIORNO (port di eventDrop in staffTimeGridDay): cambia l'ORA
+  // e, trascinando tra colonne, l'OPERATORE (staff_id sempre inviato per i blocchi
+  // non-segmento, come payload.staff_id legacy). Un blocco-SEGMENTO su un'ALTRA
+  // colonna è bloccato client-side con l'alert legacy; nella stessa colonna sposta
+  // l'INTERA prenotazione per delta (segment_id + old_starts_at/old_ends_at).
+  const moveBlockDay = useCallback(
+    (block: CalBlock, newTime: string, targetStaffId: number, targetStaffName: string) => {
+      if (block.segmentId) {
+        const curStaffId = Number(block.segStaffId ?? 0) || 0;
+        if (targetStaffId !== curStaffId) {
+          window.alert("Per cambiare operatore su prenotazioni multi-servizio, modifica l'appuntamento (non tramite drag & drop).");
           return;
         }
-        // Reconcile with the authoritative server list, else reload the visible range.
-        if (Array.isArray(json.appointments)) setAppointments(json.appointments);
-        else loadContext(date, visibleRange);
-      } catch {
-        setAppointments(prev); // revert on network error
-        setMoveError("Errore di rete durante lo spostamento.");
+        if (block.time === newTime) return; // no-op sullo stesso slot
+        const deltaMin = (timeToMin(newTime) ?? 0) - (timeToMin(block.time) ?? 0);
+        void postMove(
+          {
+            id: block.id,
+            starts_at: sqlAt(date, newTime),
+            ends_at: sqlAt(date, shiftTime(block.endTime ?? block.time, deltaMin) ?? newTime),
+            segment_id: block.segmentId,
+            old_starts_at: sqlAt(date, block.time),
+            old_ends_at: sqlAt(date, block.endTime ?? block.time),
+          },
+          (list) => list.map((a) => (a.id === block.id
+            ? {
+                ...a,
+                time: shiftTime(a.time, deltaMin) ?? a.time,
+                endTime: shiftTime(a.endTime, deltaMin),
+                segments: a.segments?.map((seg) => ({ ...seg, time: shiftTime(seg.time, deltaMin) ?? seg.time, endTime: shiftTime(seg.endTime, deltaMin) ?? seg.endTime })),
+              }
+            : a)),
+          "Impossibile spostare",
+        );
+        return;
       }
+      const sameOperator = (block.operator || "").trim().toLowerCase() === targetStaffName.trim().toLowerCase();
+      if (block.time === newTime && sameOperator) return; // no-op sullo stesso slot/colonna
+      void postMove(
+        {
+          id: block.id,
+          starts_at: sqlAt(date, newTime),
+          ends_at: sqlAt(date, shiftTime(newTime, blockDurationMin(block)) ?? newTime),
+          staff_id: String(targetStaffId || ""),
+        },
+        (list) => list.map((a) => (a.id === block.id
+          ? { ...a, time: newTime, endTime: shiftTime(newTime, blockDurationMin(block)), operator: targetStaffName }
+          : a)),
+        "Impossibile spostare",
+      );
     },
-    [appointments, date, loadContext, slug, visibleRange],
+    [date, postMove],
   );
 
-  // POST action=resize with optimistic update + reconcile. A resize keeps the start
-  // fixed and only changes the END time (a custom duration), so the block stretches in
-  // place. The list is optimistically patched (new endTime) so the height updates
-  // immediately; on success the server list replaces local state, on error we revert.
-  // Tenant-scoped like the other calendar fetches.
+  // Drop su una colonna-giorno (Settimana) o cella (Mese): cambia DATA (+ ora nel
+  // Week; il Mese conserva l'orario del chip), operatore invariato (nessuno
+  // staff_id, come il legacy fuori dalla vista a colonne). I blocchi-segmento
+  // spostano l'intera prenotazione per delta anche cross-data.
+  const moveBlockToDate = useCallback(
+    (block: CalBlock, iso: string, newTime: string) => {
+      if (block.date === iso && block.time === newTime) return; // no-op
+      const fromIso = block.date || date;
+      const deltaMin = (timeToMin(newTime) ?? 0) - (timeToMin(block.time) ?? 0);
+      void postMove(
+        block.segmentId
+          ? {
+              id: block.id,
+              starts_at: sqlAt(iso, newTime),
+              ends_at: sqlAt(iso, shiftTime(block.endTime ?? block.time, deltaMin) ?? newTime),
+              segment_id: block.segmentId,
+              old_starts_at: sqlAt(fromIso, block.time),
+              old_ends_at: sqlAt(fromIso, block.endTime ?? block.time),
+            }
+          : {
+              id: block.id,
+              starts_at: sqlAt(iso, newTime),
+              ends_at: sqlAt(iso, shiftTime(newTime, blockDurationMin(block)) ?? newTime),
+            },
+        (list) => list.map((a) => (a.id === block.id
+          ? (block.segmentId
+              ? {
+                  ...a,
+                  date: iso,
+                  time: shiftTime(a.time, deltaMin) ?? a.time,
+                  endTime: shiftTime(a.endTime, deltaMin),
+                  segments: a.segments?.map((seg) => ({ ...seg, time: shiftTime(seg.time, deltaMin) ?? seg.time, endTime: shiftTime(seg.endTime, deltaMin) ?? seg.endTime })),
+                }
+              : { ...a, date: iso, time: newTime, endTime: shiftTime(newTime, blockDurationMin(block)) })
+          : a)),
+        "Impossibile spostare",
+      );
+    },
+    [date, postMove],
+  );
+
+  // RESIZE -> action=move con lo stesso inizio e la NUOVA fine (il legacy
+  // eventResize POSTA action='move': non esiste un'azione resize dedicata; la
+  // durata custom viene persistita così com'è). Solo blocchi non-segmento: sui
+  // segmenti la maniglia non è renderizzata (port di durationEditable:false).
   const resizeAppointment = useCallback(
     async (id: number, newEndTime: string) => {
-      setMoveError("");
-      const prev = appointments;
-      const target = prev.find((a) => a.id === id);
+      const target = appointments.find((a) => a.id === id);
       if (!target) return;
-      // No-op when the end did not actually change, or would be at/under the start.
+      // No-op quando la fine non cambia o non sarebbe oltre l'inizio.
       const startMin = timeToMin(target.time);
       const endMinVal = timeToMin(newEndTime);
       if (startMin === null || endMinVal === null || endMinVal <= startMin) return;
       if ((target.endTime || "") === newEndTime) return;
-
-      // Optimistic patch.
-      setAppointments((list) => list.map((a) => (a.id === id ? { ...a, endTime: newEndTime } : a)));
-
-      try {
-        const res = await fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-          body: JSON.stringify({
-            action: "resize",
-            id,
-            end_time: newEndTime,
-          }),
-        });
-        const json: { ok?: boolean; error?: string; appointments?: Appointment[] } = await res.json().catch(() => ({}));
-        if (!res.ok || json.ok === false || json.error) {
-          setAppointments(prev); // revert
-          setMoveError(String(json.error || "Impossibile ridimensionare l'appuntamento."));
-          return;
-        }
-        // Reconcile with the authoritative server list when provided.
-        if (Array.isArray(json.appointments)) setAppointments(json.appointments);
-        else loadContext(date, visibleRange);
-      } catch {
-        setAppointments(prev); // revert on network error
-        setMoveError("Errore di rete durante il ridimensionamento.");
-      }
+      const iso = target.date || date;
+      await postMove(
+        { id, starts_at: sqlAt(iso, target.time), ends_at: sqlAt(iso, newEndTime) },
+        (list) => list.map((a) => (a.id === id ? { ...a, endTime: newEndTime } : a)),
+        "Impossibile ridimensionare",
+      );
     },
-    [appointments, date, loadContext, slug, visibleRange],
+    [appointments, date, postMove],
   );
 
   // RESIZE drag wiring (bottom-edge handle). Mousedown on the handle records the
@@ -1689,9 +1764,16 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
   // attached only while a resize is in flight — the effect keys off whether
   // resizePreview is set, NOT its value, so it doesn't re-bind on every mouse move.
   const beginResize = useCallback(
-    (e: ReactMouseEvent, appt: Appointment) => {
+    (e: ReactMouseEvent, appt: CalBlock) => {
       e.preventDefault();
       e.stopPropagation();
+      // Guardia legacy (eventResize, calendar.js ~5015): i blocchi-segmento non si
+      // ridimensionano. La maniglia non è nemmeno renderizzata sui segmenti
+      // (durationEditable:false), quindi questa è la cintura verbatim del legacy.
+      if (appt.segmentId) {
+        window.alert("Ridimensionamento non supportato per prenotazioni multi-servizio (segmentate).");
+        return;
+      }
       const startMin = timeToMin(appt.time);
       // The column body (the positioned slot container) is the resize handle's
       // nearest .cal-col-body ancestor; its page-top anchors the cursor->time map.
@@ -1773,26 +1855,41 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
       // Map the block TOP (cursor minus the grab offset), snapped within the week window.
       const topPx = e.clientY - rect.top - drag.grabOffsetPx;
       const minutes = snappedMinFromY(topPx, weekMinMin, weekMaxMin);
-      void moveAppointmentToDate(drag.id, iso, minToTime(minutes));
+      moveBlockToDate(drag.block, iso, minToTime(minutes));
       dragRef.current = null;
     },
-    [snappedMinFromY, weekMinMin, weekMaxMin, moveAppointmentToDate],
+    [snappedMinFromY, weekMinMin, weekMaxMin, moveBlockToDate],
   );
-  // WEEK block drag START / END — extracted callbacks (lint parity with the drop
-  // handlers above). onDragStart records the grabbed appointment id + the pointer offset
-  // from the block top, so the drop maps the block's start time. onDragEnd clears the ref
-  // shortly after so the synthetic click trailing a drag doesn't open edit on the column.
-  const onWeekBlockDragStart = useCallback((id: number, e: ReactDragEvent<HTMLElement>) => {
+  // WEEK/MONTH block drag START / END — extracted callbacks (lint parity with the drop
+  // handlers above). onDragStart records the grabbed BLOCK + the pointer offset from
+  // the block top, so the drop maps the block's start time (and the segment payload).
+  // onDragEnd clears the ref shortly after so the synthetic click trailing a drag
+  // doesn't open edit on the column.
+  const onWeekBlockDragStart = useCallback((block: CalBlock, e: ReactDragEvent<HTMLElement>) => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    dragRef.current = { id, grabOffsetPx: e.clientY - rect.top };
+    dragRef.current = { id: block.id, grabOffsetPx: e.clientY - rect.top, block };
     try {
       e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", String(id));
+      e.dataTransfer.setData("text/plain", String(block.id));
     } catch { /* ignore */ }
   }, []);
   const onWeekBlockDragEnd = useCallback(() => {
     setTimeout(() => { dragRef.current = null; }, 0);
   }, []);
+  // MONTH chip drop on a day cell (port of the legacy dayGridMonth eventDrop:
+  // FullCalendar month drag keeps the chip's TIME and changes the DATE; segment
+  // chips shift the whole appointment by the date delta server-side).
+  const onMonthCellDrop = useCallback(
+    (iso: string, e: ReactDragEvent<HTMLElement>) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      e.preventDefault();
+      e.stopPropagation();
+      moveBlockToDate(drag.block, iso, drag.block.time);
+      dragRef.current = null;
+    },
+    [moveBlockToDate],
+  );
 
   // NOW-INDICATOR tick (port of installStaffNowIndicatorFix): keep nowMinutes in sync
   // with the wall clock via a 30s interval, mirroring FullCalendar's minute-based
@@ -1912,9 +2009,11 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
       }
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
       const rawMin = snappedMinFromY(e.clientY - rect.top, weekMinMin, weekMaxMin);
-      openGlobalQuickBook(minToTime(rawMin), 0, undefined, iso);
+      // Fuori dalla vista a colonne il legacy prefilla l'operatore del FILTRO
+      // (select handler: staffId = currentStaff || '').
+      openGlobalQuickBook(minToTime(rawMin), Number(filterStaff) || 0, undefined, iso);
     },
-    [snappedMinFromY, weekMinMin, weekMaxMin, openGlobalQuickBook],
+    [snappedMinFromY, weekMinMin, weekMaxMin, openGlobalQuickBook, filterStaff],
   );
 
   // QUICK-BOOK is now handled by the GLOBAL quick-booking drawer
@@ -1951,24 +2050,24 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
   }, [date]);
 
   const postNote = useCallback(
-    async (payload: Record<string, unknown>): Promise<boolean> => {
+    async (payload: Record<string, unknown>, fallbackError: string): Promise<{ ok: boolean; note?: CalendarNote | null }> => {
       try {
         const res = await fetch(`/api/manage/calendar?slug=${encodeURIComponent(slug)}`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
           body: JSON.stringify({ slug, ...payload }),
         });
-        const json: { ok?: boolean; error?: string } = await res.json().catch(() => ({}));
+        const json: { ok?: boolean; error?: string; note?: CalendarNote | null } = await res.json().catch(() => ({}));
         if (!res.ok || json.ok === false || json.error) {
-          setNotesError(String(json.error || "Operazione non riuscita."));
-          return false;
+          // Fallback legacy per azione: 'Errore nel salvataggio.' / 'Errore in eliminazione.'
+          setNotesAlert({ text: String(json.error || fallbackError), kind: "danger" });
+          return { ok: false };
         }
-        setNotesError("");
         loadContext(date, visibleRange);
-        return true;
+        return { ok: true, note: json.note ?? null };
       } catch {
-        setNotesError("Errore di rete.");
-        return false;
+        setNotesAlert({ text: fallbackError, kind: "danger" });
+        return { ok: false };
       }
     },
     [slug, date, loadContext, visibleRange],
@@ -1996,26 +2095,53 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
       e.preventDefault();
       const noteDate = String(dateEl?.value ?? "").trim();
       const noteText = String(textEl?.value ?? "").trim();
-      if (!noteDate || !noteText) {
-        setNotesError("Inserisci giorno e testo della nota.");
+      // Validazioni legacy SEPARATE (calendar.js 979-986).
+      if (!noteDate || !/^\d{4}-\d{2}-\d{2}$/.test(noteDate)) {
+        setNotesAlert({ text: "Seleziona un giorno valido.", kind: "danger" });
         return;
       }
-      const ok = await postNote({
+      if (!noteText) {
+        setNotesAlert({ text: "Scrivi il testo della nota.", kind: "danger" });
+        return;
+      }
+      // Calcolato PRIMA del salvataggio, come noteIsVisibleInCurrentRange (il periodo
+      // visibile è la finestra note della vista corrente, half-open [from, to)).
+      const noteIsVisible = noteDate >= visibleRange.from && noteDate < visibleRange.to;
+      const { ok, note } = await postNote({
         action: "note_save",
         id: Number(idEl?.value ?? 0) || 0,
         note_date: noteDate,
         title: String(titleEl?.value ?? "").trim(),
         note_text: noteText,
+      }, "Errore nel salvataggio.");
+      if (!ok) return;
+      // Legacy: la nota salvata resta caricata nel form (fillCalendarNoteForm) se il
+      // server ne restituisce l'id; altrimenti reset in modalità nuova.
+      if (note && Number(note.id ?? 0) > 0) {
+        if (idEl) idEl.value = String(note.id);
+        if (dateEl) dateEl.value = note.noteDate ?? noteDate;
+        if (titleEl) titleEl.value = note.title ?? "";
+        if (textEl) textEl.value = note.noteText ?? noteText;
+        deleteBtn?.classList.remove("d-none");
+      } else {
+        resetNotesForm();
+      }
+      setNotesAlert({
+        text: noteIsVisible
+          ? "Nota salvata con successo."
+          : "Nota salvata con successo. La data selezionata e fuori dal periodo visibile: la vedrai in elenco quando il calendario mostrera quel giorno.",
+        kind: "success",
       });
-      if (ok) resetNotesForm();
     };
 
     const onDelete = async () => {
       const id = Number(idEl?.value ?? 0) || 0;
       if (id <= 0) return;
       if (!window.confirm("Eliminare questa nota?")) return;
-      const ok = await postNote({ action: "note_delete", id });
-      if (ok) resetNotesForm();
+      const { ok } = await postNote({ action: "note_delete", id }, "Errore in eliminazione.");
+      if (!ok) return;
+      resetNotesForm();
+      setNotesAlert({ text: "Nota eliminata.", kind: "success" });
     };
 
     const onNew = () => resetNotesForm();
@@ -2044,13 +2170,13 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
       newBtn?.removeEventListener("click", onNew);
       list?.removeEventListener("click", onCardClick);
     };
-  }, [notes, postNote, resetNotesForm]);
+  }, [notes, postNote, resetNotesForm, visibleRange]);
 
   // Open the notes modal from the header button, starting in "new note" mode.
   const openNotesModal = useCallback(() => {
     setNotesFilterDate(null);
     resetNotesForm();
-    setNotesError("");
+    setNotesAlert(null);
     showNotesModal();
   }, [resetNotesForm]);
 
@@ -2059,7 +2185,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
   const openNotesModalForDate = useCallback((iso: string) => {
     setNotesFilterDate(iso);
     resetNotesForm();
-    setNotesError("");
+    setNotesAlert(null);
     showNotesModal();
   }, [resetNotesForm]);
 
@@ -2347,6 +2473,9 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
               }}
             />
           ) : null}
+          {/* HOVER guide line spanning ALL 7 day columns (legacy: the line is
+              appended to .fc-timegrid-cols, crossing the whole grid). */}
+          {renderHoverGuideLine("week-", 44)}
           {weekDays.map((iso, i) => {
             const d = new Date(`${iso}T12:00:00`);
             const isToday = iso === weekTodayIso;
@@ -2394,13 +2523,14 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                 <div
                   className="cal-col-body"
                   // Geometry the root-level hover / drag-select listeners read (see the
-                  // installer effect). data-staffid 0 = no operator in Week; data-celldate
-                  // is this column's day so the quick-book books that date.
+                  // installer effect). data-staffid: fuori dalla vista a colonne il
+                  // legacy prefilla l'operatore del FILTRO (select handler: staffId =
+                  // currentStaff); data-celldate is this column's day for quick-book.
                   data-cal-body="1"
                   data-col={`week-${iso}`}
                   data-winstart={weekMinMin}
                   data-winend={weekMaxMin}
-                  data-staffid={0}
+                  data-staffid={Number(filterStaff) || 0}
                   data-celldate={iso}
                   style={{ position: "relative", height: weekGridHeight }}
                   // Block drag-move DROP target: a Week block dropped here moves to THIS
@@ -2446,6 +2576,9 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                     const durationMin = endMinVal !== null && endMinVal > startMin ? endMinVal - startMin : DEFAULT_DURATION_MIN;
                     const height = Math.max(durationMin * PX_PER_MIN - 2, 18);
                     const st = statusKeyFromLabel(a.statusCode ?? a.status);
+                    // Tema soft per STATO (port di applyCalendarSoftAppointmentStyle);
+                    // il colore operatore resta solo sul pallino.
+                    const theme = statusThemeOf(a.statusCode ?? a.status);
                     const op = staff.find((s) => (s.name || "").trim().toLowerCase() === (a.operator || "").trim().toLowerCase());
                     const accent = op?.color || "#2f63d8";
                     // MS group meta + adaptive density (tiny <28px, compact 28-54px).
@@ -2456,7 +2589,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                       <a
                         key={`${a.id}-${a.time}`}
                         href={href(`appointments&action=view&id=${a.id}`)}
-                        className={`fc-event fc-timegrid-event appt-soft-event${density}${msAccent ? " ms-has-accent" : ""}${msAccent && msHoverGroup === a.id ? " ms-active" : ""}`}
+                        className={`fc-event fc-timegrid-event appt-soft-event appt-soft-${theme.key}${density}${msAccent ? " ms-has-accent" : ""}${msAccent && msHoverGroup === a.id ? " ms-active" : ""}`}
                         data-ms-group={msAccent ? a.id : undefined}
                         onMouseEnter={msAccent ? () => setMsHoverGroup(a.id) : undefined}
                         onMouseLeave={msAccent ? () => setMsHoverGroup(0) : undefined}
@@ -2467,7 +2600,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                         draggable
                         // A press on a block must not start the column drag-select.
                         onMouseDown={(e) => e.stopPropagation()}
-                        onDragStart={(e) => onWeekBlockDragStart(a.id, e)}
+                        onDragStart={(e) => onWeekBlockDragStart(a, e)}
                         onDragEnd={onWeekBlockDragEnd}
                         onClick={(e) => {
                           e.preventDefault();
@@ -2487,13 +2620,11 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                           padding: "3px 6px",
                           fontSize: 12,
                           textDecoration: "none",
-                          borderLeft: `3px solid ${accent}`,
-                          background: "#f4f8ff",
-                          color: "#14326f",
                           boxSizing: "border-box",
                           // Above the store-background bands (z 0) so blocks stay
                           // visible/clickable over the shading.
                           zIndex: 3,
+                          ...softEventStyle(theme),
                           ...(msAccent ? ({ "--ms-accent": msAccent } as React.CSSProperties) : null),
                         }}
                       >
@@ -2529,22 +2660,26 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                         </div>
                         {/* RESIZE handle (bottom edge): drag to change the end time (custom
                             duration), identical to the Day view, positioned in this day
-                            column. beginResize reads the body's window from its data-* attrs. */}
-                        <span
-                          className="cal-resize-handle"
-                          role="presentation"
-                          onMouseDown={(e) => beginResize(e, a)}
-                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                          onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                          style={{
-                            position: "absolute",
-                            left: 0,
-                            right: 0,
-                            bottom: 0,
-                            height: 8,
-                            cursor: "ns-resize",
-                          }}
-                        />
+                            column. NOT rendered on segment blocks (legacy
+                            durationEditable:false). beginResize reads the body's window
+                            from its data-* attrs. */}
+                        {a.segmentId ? null : (
+                          <span
+                            className="cal-resize-handle"
+                            role="presentation"
+                            onMouseDown={(e) => beginResize(e, a)}
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                            onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                            style={{
+                              position: "absolute",
+                              left: 0,
+                              right: 0,
+                              bottom: 0,
+                              height: 8,
+                              cursor: "ns-resize",
+                            }}
+                          />
+                        )}
                       </a>
                     );
                   })}
@@ -2557,26 +2692,28 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
   );
 
   // === MONTH (dayGridMonth) ===
-  // A 6x7 Monday-first grid; each cell shows the date number + that day's
-  // appointments as compact chips (client + time + first service, status/operator
-  // color), with a "+N altri" overflow link. Day numbers/cells use the FullCalendar
-  // .fc-daygrid-* classes so /assets/css/pages/calendar.css applies; days with notes
-  // get the has-calendar-notes marker. Clicking a chip opens the GLOBAL edit drawer;
-  // clicking an empty day (or the overflow link) switches to that Day view.
-  // TODO(month-chip-drag): drag a chip onto another day cell to change the DATE only
-  // (the appointment keeps its existing time; reuse moveAppointmentToDate(id, targetIso,
-  // a.time)). Deferred: the Month grid is a date-only overview (no time axis to map a
-  // drop Y to), and the day cell's onClick already jumps to that Day view for precise
-  // re-scheduling, so a chip date-move is lower value than the Day/Week drag. When
-  // added: make chips draggable writing dragRef, add onDragOver/onDrop to each
-  // .fc-daygrid-day cell (component-scope handlers so the dragRef reads stay out of
-  // this render helper), and suppress the cell's jump-to-day onClick after a drop.
-  function renderMonthView() {
-    const focusMonth = monthOf(date);
-    const todayIso = isoLocal(new Date());
-    const gridDates = monthGridDates(date);
-    const MAX_CHIPS = 4;
-    return (
+  // A 6x7 Monday-first grid; each cell shows the date number + ALL of that day's
+  // appointment cards (the legacy has NO dayMaxEvents cap, so there is no "+N"
+  // overflow link — cells grow). Cards use the SAME legacy eventContent rows as the
+  // time grids (time range, dot + status badge + [MS] + client, "• operator" —
+  // shown in Week/Month — and one "• service" row each) with the per-status soft
+  // theme; segmented bookings render one card PER SEGMENT (expandSegments).
+  // INTERACTIONS (port of the legacy dayGridMonth):
+  //   - chip click -> GLOBAL edit drawer;
+  //   - chip DRAG onto another day cell -> action=move keeping the chip's TIME and
+  //     changing the DATE (segments shift the whole appointment by the date delta);
+  //   - empty-day click -> quick-book drawer prefilled with that date + 00:00 and
+  //     the operator filter (port of the FullCalendar `select` on a month cell,
+  //     which fires with the day's 00:00 start);
+  //   - closure dates carry .store-closure-date (dayCellClassNames port) unless a
+  //     special opening overrides them.
+  // Built as a component-scope const (not a nested function) so its ref-touching
+  // drag/drop/click handlers sit in the component's OWN render scope — lint-clean,
+  // like the inline Week/Day views.
+  const monthFocus = monthOf(date);
+  const monthTodayIso = isoLocal(new Date());
+  const monthDates = monthGridDates(date);
+  const monthView = view !== "dayGridMonth" ? null : (
       <div className="fc-daygrid-body" style={{ width: "100%" }}>
         {/* Weekday header row (Mon..Dom) */}
         <div className="fc-col-header" style={{ display: "flex", borderBottom: "1px solid var(--calendar-line, #e2e8f0)" }}>
@@ -2592,19 +2729,21 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
         {/* 6 week rows */}
         {Array.from({ length: 6 }, (_, week) => (
           <div key={week} className="fc-daygrid-row" style={{ display: "flex", minHeight: 104 }}>
-            {gridDates.slice(week * 7, week * 7 + 7).map((iso) => {
+            {monthDates.slice(week * 7, week * 7 + 7).map((iso) => {
               const dnum = new Date(`${iso}T12:00:00`).getDate();
-              const inMonth = monthOf(iso) === focusMonth;
-              const isToday = iso === todayIso;
+              const inMonth = monthOf(iso) === monthFocus;
+              const isToday = iso === monthTodayIso;
               const dayAppts = rangeApptsByDate[iso] ?? [];
               const noteCount = countByDate[iso] ?? 0;
-              const shown = dayAppts.slice(0, MAX_CHIPS);
-              const overflow = dayAppts.length - shown.length;
+              // Chiusura evidenziata SOLO senza un'apertura straordinaria che la
+              // scavalca (port di dayCellClassNames + specialOpenRowForDateKey).
+              const isClosure = closures.some((c) => c.date === iso)
+                && !exceptions.some((x) => x.date === iso && !x.isClosed);
               return (
                 <div
                   key={iso}
                   data-date={iso}
-                  className={`fc-daygrid-day${inMonth ? "" : " fc-day-other"}${isToday ? " fc-day-today" : ""}${noteCount > 0 ? " has-calendar-notes" : ""}`}
+                  className={`fc-daygrid-day${inMonth ? "" : " fc-day-other"}${isToday ? " fc-day-today" : ""}${noteCount > 0 ? " has-calendar-notes" : ""}${isClosure ? " store-closure-date" : ""}`}
                   style={{
                     flex: "1 1 0",
                     minWidth: 0,
@@ -2614,11 +2753,22 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                     opacity: inMonth ? 1 : 0.45,
                     cursor: "pointer",
                   }}
+                  // Drop target del drag chip (cambio DATA, orario conservato).
+                  onDragOver={(e) => {
+                    if (dragRef.current) {
+                      e.preventDefault();
+                      try { e.dataTransfer.dropEffect = "move"; } catch { /* ignore */ }
+                    }
+                  }}
+                  onDrop={(e) => onMonthCellDrop(iso, e)}
                   onClick={(e) => {
-                    // Empty-day click -> jump to that day's Day view (chips stop propagation).
+                    // Click su giorno vuoto -> quick-book prefillato su quel giorno
+                    // alle 00:00 (port della select FullCalendar in dayGridMonth,
+                    // che parte dalla mezzanotte della cella) con l'operatore del
+                    // filtro. I chip fermano la propagazione.
                     if ((e.target as HTMLElement).closest(".fc-daygrid-event")) return;
-                    setDate(iso);
-                    setView("staffTimeGridDay");
+                    if (dragRef.current) return;
+                    openGlobalQuickBook("00:00", Number(filterStaff) || 0, undefined, iso);
                   }}
                 >
                   <div className="fc-daygrid-day-top" style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
@@ -2635,63 +2785,75 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                     ) : null}
                   </div>
                   <div className="fc-daygrid-day-events" style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 2 }}>
-                    {shown.map((a) => {
+                    {expandSegments(dayAppts).map((a) => {
                       const st = statusKeyFromLabel(a.statusCode ?? a.status);
+                      const theme = statusThemeOf(a.statusCode ?? a.status);
                       const op = staff.find((s) => (s.name || "").trim().toLowerCase() === (a.operator || "").trim().toLowerCase());
                       const accent = op?.color || "#2f63d8";
-                      // Compact multi-service hint (Month is an overview, the chip stays a
-                      // single ellipsised line): the FIRST service name plus "+N" when the
-                      // appointment has more than one. The native title lists EVERY service
-                      // (+ operator). Faithful to the legacy density (one line per chip).
-                      const svcNames = serviceNamesOf(a);
-                      const svcHint = svcNames.length === 0 ? "" : svcNames.length === 1 ? svcNames[0] : `${svcNames[0]} +${svcNames.length - 1}`;
+                      const msCount = msCountOf(a);
+                      const msAccent = msCount > 1 ? msAccentByAppt[a.id] : "";
                       return (
                         <a
-                          key={a.id}
+                          key={`${a.id}-${a.time}`}
                           href={href(`appointments&action=view&id=${a.id}`)}
-                          className="fc-event fc-daygrid-event appt-soft-event"
+                          className={`fc-event fc-daygrid-event appt-soft-event appt-soft-${theme.key}${msAccent ? " ms-has-accent" : ""}${msAccent && msHoverGroup === a.id ? " ms-active" : ""}`}
+                          data-ms-group={msAccent ? a.id : undefined}
+                          onMouseEnter={msAccent ? () => setMsHoverGroup(a.id) : undefined}
+                          onMouseLeave={msAccent ? () => setMsHoverGroup(0) : undefined}
                           title={`${a.time} ${a.client} • ${serviceTitleOf(a)}${a.operator ? ` (${a.operator})` : ""} (${st.label})`}
+                          // DRAG-MOVE: il chip è trascinabile su un'altra cella-giorno
+                          // (cambia la DATA, l'orario resta quello del chip).
+                          draggable
+                          onDragStart={(e) => onWeekBlockDragStart(a, e)}
+                          onDragEnd={onWeekBlockDragEnd}
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
+                            if (dragRef.current) return;
                             openGlobalEdit(a.id);
                           }}
                           style={{
                             display: "block",
                             overflow: "hidden",
-                            whiteSpace: "nowrap",
-                            textOverflow: "ellipsis",
                             borderRadius: 5,
                             padding: "1px 5px",
                             fontSize: 11,
                             textDecoration: "none",
-                            borderLeft: `3px solid ${accent}`,
-                            background: "#f4f8ff",
-                            color: "#14326f",
+                            ...softEventStyle(theme),
+                            ...(msAccent ? ({ "--ms-accent": msAccent } as React.CSSProperties) : null),
                           }}
                         >
-                          <span className={`appt-status-badge status-${st.key}`} style={{ marginRight: 4 }} title={`Stato: ${st.label}`} />
-                          <span style={{ fontWeight: 600 }}>{a.time}</span> {a.client}
-                          {svcHint ? <span className="appt-service" style={{ marginLeft: 4 }}>{`· ${svcHint}`}</span> : null}
+                          {/* Stesse righe card del legacy eventContent (Week/Month
+                              mostrano anche la riga "• operatore"). */}
+                          <div className="fc-event-main">
+                            <div className="appt-event">
+                              <div className="appt-time">{apptTimeLine(a.time, a.endTime)}</div>
+                              <div className="fc-event-title appt-client" style={{ lineHeight: 1.15 }}>
+                                <span className="appt-staff-dot" title="Operatore" style={{ background: accent }} />
+                                <span className={`appt-status-badge status-${st.key}`} title={`Stato: ${st.label}`}>
+                                  {st.label}
+                                </span>
+                                {msAccent ? (
+                                  <span className="ms-badge" title={`Prenotazione multi-servizio (${msCount})`}>
+                                    <span className="ms-dot" />
+                                    <span className="ms-label">MS</span>
+                                  </span>
+                                ) : null}
+                                <span className="appt-client-name">{a.client}</span>
+                              </div>
+                              {a.operator ? (
+                                <div className="text-truncate appt-staff">{`• ${a.operator}`}</div>
+                              ) : null}
+                              {serviceNamesOf(a).map((name, i) => (
+                                <div key={i} className="text-truncate appt-service">
+                                  {`• ${name}`}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
                         </a>
                       );
                     })}
-                    {overflow > 0 ? (
-                      <a
-                        className="fc-daygrid-more-link"
-                        role="button"
-                        tabIndex={0}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setDate(iso);
-                          setView("staffTimeGridDay");
-                        }}
-                        style={{ fontSize: 11, color: "#2f63d8", cursor: "pointer", fontWeight: 600 }}
-                      >
-                        +{overflow} altri
-                      </a>
-                    ) : null}
                   </div>
                 </div>
               );
@@ -2699,8 +2861,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
           </div>
         ))}
       </div>
-    );
-  }
+  );
 
   return (
     <div className="container-fluid">
@@ -2781,16 +2942,6 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
           </div>
         </div>
 
-        {/* Move/quick-book error surface — only rendered on failure (additive; the
-            static layout is unchanged when there is no error). */}
-        {moveError ? (
-          <div className="alert alert-danger alert-dismissible d-flex align-items-center gap-2 py-2 px-3" role="alert">
-            <i className="bi bi-exclamation-triangle" />
-            <span className="small">{moveError}</span>
-            <button type="button" className="btn-close ms-auto" aria-label="Chiudi" onClick={() => setMoveError("")} />
-          </div>
-        ) : null}
-
         <div className="calendar-shell calendar-shell--agenda">
           {/*
             Reproduces the FullCalendar header toolbar + timegrid. Uses .fc-* class names
@@ -2813,10 +2964,10 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                 </div>
                 <div className="fc-toolbar-chunk" ref={pickerHostRef} style={{ position: "relative" }}>
                   <div className="fc-button-group">
-                    <button type="button" className="fc-prev-button fc-button fc-button-primary" aria-label="prev" onClick={() => go(view === "timeGridWeek" ? -7 : view === "dayGridMonth" ? -30 : -1)}>
+                    <button type="button" className="fc-prev-button fc-button fc-button-primary" aria-label="prev" onClick={() => (view === "dayGridMonth" ? goMonth(-1) : go(view === "timeGridWeek" ? -7 : -1))}>
                       <span className="fc-icon fc-icon-chevron-left" />
                     </button>
-                    <button type="button" className="fc-next-button fc-button fc-button-primary" aria-label="next" onClick={() => go(view === "timeGridWeek" ? 7 : view === "dayGridMonth" ? 30 : 1)}>
+                    <button type="button" className="fc-next-button fc-button fc-button-primary" aria-label="next" onClick={() => (view === "dayGridMonth" ? goMonth(1) : go(view === "timeGridWeek" ? 7 : 1))}>
                       <span className="fc-icon fc-icon-chevron-right" />
                     </button>
                   </div>
@@ -2983,6 +3134,16 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                       </div>
                     </div>
                   ) : null}
+
+                  {/* HH:MM dell'ora sotto il cursore, INLINE nel chunk centrale della
+                      toolbar (port di ensureCalendarHoverTimeDisplay: con il centerChunk
+                      presente il legacy usa la variante --inline, non la flottante). */}
+                  <div
+                    className={`calendar-hover-time-display calendar-hover-time-display--inline${hover ? " is-visible" : ""}`}
+                    aria-hidden="true"
+                  >
+                    {hover ? hover.label : ""}
+                  </div>
                 </div>
                 <div className="fc-toolbar-chunk">
                   <div className="fc-button-group">
@@ -3072,7 +3233,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                   }
                 >
                   {view === "dayGridMonth" ? (
-                    renderMonthView()
+                    monthView
                   ) : view === "timeGridWeek" ? (
                     weekView
                   ) : (
@@ -3171,6 +3332,9 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                             }}
                           />
                         ) : null}
+                        {/* HOVER guide line spanning ALL staff columns (legacy: the
+                            line is appended to .fc-timegrid-cols, crossing the grid). */}
+                        {renderHoverGuideLine("day-", 44)}
                         {staffCols.length === 0 ? (
                           <div className="text-muted small p-4">{loading ? "Caricamento prenotazioni..." : "Nessun operatore attivo."}</div>
                         ) : (
@@ -3244,7 +3408,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                     const rect = e.currentTarget.getBoundingClientRect();
                                     // Map the block TOP (cursor - grab offset), not the cursor.
                                     const topPx = e.clientY - rect.top - drag.grabOffsetPx;
-                                    void moveAppointment(drag.id, timeFromY(topPx), s.name);
+                                    moveBlockDay(drag.block, timeFromY(topPx), s.id, s.name);
                                     dragRef.current = null;
                                   }}
                                   onClick={(e) => {
@@ -3321,6 +3485,9 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                     const durationMin = endMinVal !== null && endMinVal > startMin ? endMinVal - startMin : DEFAULT_DURATION_MIN;
                                     const height = Math.max(durationMin * PX_PER_MIN - 2, 18);
                                     const st = statusKeyFromLabel(a.statusCode ?? a.status);
+                                    // Tema soft per STATO (port di applyCalendarSoftAppointmentStyle):
+                                    // sfondo/bordo/testo pastello + barra accento via CSS var.
+                                    const theme = statusThemeOf(a.statusCode ?? a.status);
                                     // MS group meta + adaptive density (legacy
                                     // applyCalendarAppointmentDensity: tiny <28px, compact 28-54px).
                                     const msCount = msCountOf(a);
@@ -3336,7 +3503,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                         // The block itself does NOT carry data-qb-edit so its own
                                         // click can stopPropagation (to suppress the column
                                         // quick-book) without losing the edit-open path.
-                                        className={`fc-event fc-timegrid-event appt-soft-event${density}${msAccent ? " ms-has-accent" : ""}${msAccent && msHoverGroup === a.id ? " ms-active" : ""}`}
+                                        className={`fc-event fc-timegrid-event appt-soft-event appt-soft-${theme.key}${density}${msAccent ? " ms-has-accent" : ""}${msAccent && msHoverGroup === a.id ? " ms-active" : ""}`}
                                         data-ms-group={msAccent ? a.id : undefined}
                                         onMouseEnter={msAccent ? () => setMsHoverGroup(a.id) : undefined}
                                         onMouseLeave={msAccent ? () => setMsHoverGroup(0) : undefined}
@@ -3347,10 +3514,11 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                         // hover-suppress-on-block are unaffected.
                                         onMouseDown={(e) => e.stopPropagation()}
                                         onDragStart={(e) => {
-                                          // Record the grabbed appointment + the pointer offset
-                                          // from the block top, so the drop maps the block start.
+                                          // Record the grabbed BLOCK (whole appt or segment) + the
+                                          // pointer offset, so the drop maps the block start and
+                                          // can post the segment delta payload.
                                           const rect = e.currentTarget.getBoundingClientRect();
-                                          dragRef.current = { id: a.id, grabOffsetPx: e.clientY - rect.top };
+                                          dragRef.current = { id: a.id, grabOffsetPx: e.clientY - rect.top, block: a };
                                           e.dataTransfer.effectAllowed = "move";
                                           // Some browsers require data to start a drag.
                                           try { e.dataTransfer.setData("text/plain", String(a.id)); } catch { /* ignore */ }
@@ -3381,14 +3549,12 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                           padding: "3px 6px",
                                           fontSize: 12,
                                           textDecoration: "none",
-                                          borderLeft: `3px solid ${s.color}`,
-                                          background: "#f4f8ff",
-                                          color: "#14326f",
                                           boxSizing: "border-box",
                                           // Above the store-background bands (z 0, and the
                                           // -master break band at z 2) so blocks stay
                                           // visible/clickable over the shading.
                                           zIndex: 3,
+                                          ...softEventStyle(theme),
                                           ...(msAccent ? ({ "--ms-accent": msAccent } as React.CSSProperties) : null),
                                         }}
                                       >
@@ -3422,24 +3588,28 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                           </div>
                                         </div>
                                         {/* RESIZE handle (bottom edge): drag to change the end
-                                            time (a custom duration). Not draggable itself; it uses
-                                            mousedown so the block's HTML5 drag doesn't fire, and
-                                            stops the click so neither edit nor quick-book triggers. */}
-                                        <span
-                                          className="cal-resize-handle"
-                                          role="presentation"
-                                          onMouseDown={(e) => beginResize(e, a)}
-                                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                                          onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                                          style={{
-                                            position: "absolute",
-                                            left: 0,
-                                            right: 0,
-                                            bottom: 0,
-                                            height: 8,
-                                            cursor: "ns-resize",
-                                          }}
-                                        />
+                                            time (a custom duration). NOT rendered on segment
+                                            blocks (legacy durationEditable:false on per-segment
+                                            events). Not draggable itself; it uses mousedown so
+                                            the block's HTML5 drag doesn't fire, and stops the
+                                            click so neither edit nor quick-book triggers. */}
+                                        {a.segmentId ? null : (
+                                          <span
+                                            className="cal-resize-handle"
+                                            role="presentation"
+                                            onMouseDown={(e) => beginResize(e, a)}
+                                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                                            onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                                            style={{
+                                              position: "absolute",
+                                              left: 0,
+                                              right: 0,
+                                              bottom: 0,
+                                              height: 8,
+                                              cursor: "ns-resize",
+                                            }}
+                                          />
+                                        )}
                                       </a>
                                     );
                                   })}
@@ -3783,9 +3953,9 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
               <div className="row g-4">
                 <div className="col-lg-5">
                   <div id="calendarNotesAlert">
-                    {notesError ? (
-                      <div className="alert alert-danger py-2 px-3 mb-3" role="alert">
-                        {notesError}
+                    {notesAlert ? (
+                      <div className={`alert alert-${notesAlert.kind} py-2 px-3 mb-3`} role="alert">
+                        {notesAlert.text}
                       </div>
                     ) : null}
                   </div>
@@ -3837,7 +4007,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                     {displayNotes.length === 0 ? (
                       <div className="calendar-note-empty">
                         <div className="fw-semibold mb-1">
-                          {notesFilterDate ? "Nessuna nota nel giorno selezionato" : "Nessuna nota nel periodo visibile"}
+                          {notesFilterDate ? "Nessuna nota per il giorno selezionato" : "Nessuna nota nel periodo visibile"}
                         </div>
                         <div className="small">Crea una nota dal modulo a sinistra.</div>
                       </div>

@@ -62,7 +62,7 @@ import {
 } from "@/lib/fidelity-lots";
 import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
 import { giftPersistGlobalResetMarker, giftRecalcClient, giftRollbackAppointmentSelection } from "@/lib/gifts-engine";
-import { assertAppointmentSlotAvailable, busyCabinRangesForDate, busyRangesForDate, sharedResourcesContext, staffTimeoffReasonForRange, type AppointmentSlotSegment, type CabinBusyRange } from "@/lib/public-booking-db";
+import { assertAppointmentSlotAvailable, busyCabinRangesForDate, busyRangesForDate, sharedResourcesContext, staffTimeoffReasonForRange, type CabinBusyRange } from "@/lib/public-booking-db";
 
 export async function listDbLocations(slug: string): Promise<Location[]> {
   const table = await tenantTable(slug, "locations");
@@ -2719,83 +2719,6 @@ export async function getDbAppointmentCustomerVisibleSnapshot(slug: string, id: 
   return { date: dateIsoLocal(startsAt), time: timeLocal(startsAt), serviceNames };
 }
 
-// Move-snapshot: the fields a calendar drag/move needs to PRESERVE while only the
-// slot (date/time/staff/location) changes. The calendar move action does not touch
-// client/service/notes, so it re-feeds these existing values to updateDbAppointment
-// (which keeps notes and recomputes the end from the service duration). Returns null
-// when the appointment is not the tenant's / does not exist, plus the current PHP
-// status so the route can mirror the legacy guard (only pending/scheduled movable).
-export type AppointmentMoveSnapshot = {
-  clientName: string;
-  serviceName: string;
-  operator: string;
-  locationId: number | null;
-  staffNotes: string | null;
-  customerNotes: string | null;
-  phpStatus: string;
-};
-
-export async function getDbAppointmentMoveSnapshot(slug: string, id: number): Promise<AppointmentMoveSnapshot | null> {
-  // Tenant-scoped read: only returns the row when it belongs to this tenant.
-  const rows = await tenantSelect<RowDataPacket>({
-    slug,
-    table: "appointments",
-    columns: "id, client_id, service_id, location_id, status, staff_notes, customer_notes",
-    where: "id = ?",
-    params: [id],
-    limit: 1,
-  });
-  const row = rows[0];
-  if (!row) return null;
-
-  const clientName = await appointmentClientName(slug, Number(row.client_id ?? 0));
-  const service = await appointmentService(slug, row);
-  const operator = await appointmentStaffName(slug, Number(row.id ?? 0));
-
-  return {
-    clientName,
-    serviceName: service.name,
-    operator,
-    locationId: row.location_id === null || row.location_id === undefined ? null : Number(row.location_id),
-    staffNotes: row.staff_notes === null || row.staff_notes === undefined ? null : String(row.staff_notes),
-    customerNotes: row.customer_notes === null || row.customer_notes === undefined ? null : String(row.customer_notes),
-    phpStatus: phpStatus(String(row.status ?? "")),
-  };
-}
-
-// RESIZE (duration change): persist a CUSTOM appointment duration by writing the
-// dragged end time DIRECTLY, WITHOUT recomputing from the service duration (unlike
-// updateDbAppointment, which always derives ends_at from the service plan). The
-// calendar's bottom-edge resize handle sends the new end HH:MM (snapped to the grid
-// step); we keep the appointment's start fixed and only move its end forward/back.
-//
-// What is written:
-//   - appointments.ends_at -> the new end (same calendar day as starts_at).
-//   - the LAST appointment_segments row's ends_at + duration_minutes -> so the
-//     persisted segment chain ends at the same custom time (single-service: that is
-//     the only segment; multi-service: only the trailing segment is stretched, the
-//     earlier sequential segments keep their service durations).
-//
-// Guards (mirroring the move action): tenant-scoped existence, pending/scheduled
-// only, end strictly after start. The operator-overlap conflict check is REUSED
-// (assertAppointmentSlotAvailable) against the appointment's own staffed segments
-// with the trailing segment extended to the new end, excluding THIS appointment.
-// Returns null when the appointment is not the tenant's / does not exist or is not
-// resizable; throws (caught by the route) on a real overlap.
-// Number of appointment_segments rows for an appointment (tenant-scoped). >1 means a
-// multi-service (segmented) booking, which the legacy forbids operator-changing via drag or
-// resizing from the calendar (calendar.js:4961 / :5016). Best-effort: a missing table -> 0.
-export async function getDbAppointmentSegmentCount(slug: string, id: number): Promise<number> {
-  const rows = await tenantSelect<RowDataPacket>({
-    slug,
-    table: "appointment_segments",
-    columns: "id",
-    where: "appointment_id = ?",
-    params: [id],
-  }).catch(() => [] as RowDataPacket[]);
-  return rows.length;
-}
-
 // Swap two ADJACENT segments of a multi-servizio booking (port of the legacy
 // action=swap_segment, api_appointments.php:9386). Semantics:
 //  * only pending/scheduled bookings are editable;
@@ -2951,54 +2874,76 @@ export async function swapDbAppointmentSegment(slug: string, appointmentId: numb
   );
 }
 
-export async function resizeDbAppointmentEnd(slug: string, id: number, newEndTime: string): Promise<AppointmentWithMeta | null> {
-  // Tenant-scoped read: only returns the row when it belongs to this tenant.
+// MOVE dal calendario (port di api_appointments.php action='move', ~9092-9380).
+// Semantica fedele al legacy:
+//   • solo pending/scheduled sono spostabili ("La prenotazione non e modificabile
+//     da calendario."); riga assente/di altro tenant -> "Non trovato".
+//   • prenotazioni SEGMENTATE (>1 segmento): trascinare QUALSIASI segmento sposta
+//     l'INTERO appuntamento dello stesso delta (nuovo inizio segmento − vecchio
+//     inizio segmento, con fallback sull'inizio appuntamento quando il vecchio
+//     orario non è fornito). Ogni segmento è rivalidato sulla finestra spostata
+//     (time-off HARD col nome operatore, poi doppia prenotazione) e la sua cabina
+//     è ri-risolta (corrente → dell'appuntamento → auto). Poi appuntamento + tutti
+//     i segmenti slittano insieme. Lo staff_id è IGNORATO qui (come nel PHP: il
+//     cambio operatore su segmentate è bloccato client-side con l'alert dedicato).
+//   • singolo/nessun segmento: starts_at/ends_at inviati sono persistiti COSÌ COME
+//     SONO (il resize legacy passa da move e mantiene la durata custom); con
+//     staff_id (drag tra colonne operatore) l'assegnazione viene aggiornata
+//     (>0 upsert, 0 svuota) dopo le guardie operatore-abilitato / time-off /
+//     conflitto; la cabina è ri-risolta (corrente → auto) e l'eventuale segmento
+//     singolo resta sincronizzato (finestra + staff/cabina).
+//   • capacità RISORSE CONDIVISE ricontrollata sul nuovo inizio (port di
+//     ensure_shared_resources_available_for_sequence), messaggi legacy.
+export async function moveDbAppointmentCalendar({
+  slug,
+  id,
+  startsAt,
+  endsAt,
+  staffIdParam,
+  segmentId,
+  oldSegStartsAt,
+}: {
+  slug: string;
+  id: number;
+  startsAt: string;
+  endsAt: string;
+  // undefined = parametro assente (mantieni); 0/negativo = svuota; >0 = assegna.
+  staffIdParam?: number;
+  segmentId?: number;
+  oldSegStartsAt?: string;
+}): Promise<void> {
+  // Normalizza "YYYY-MM-DD HH:MM[:SS]" (anche con 'T') in SQL datetime.
+  const normSql = (raw: string): string | null => {
+    const v = String(raw ?? "").trim().replace("T", " ");
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(v)) return v;
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(v)) return `${v}:00`;
+    return null;
+  };
+  const startsSql = normSql(startsAt);
+  const endsSql = normSql(endsAt);
+  if (!startsSql || !endsSql) throw new Error("Data/ora non valida");
+
   const rows = await tenantSelect<RowDataPacket>({
     slug,
     table: "appointments",
-    columns: "id, starts_at, status, location_id, cabin_id",
+    columns: "id, service_id, starts_at, ends_at, status, location_id, cabin_id",
     where: "id = ?",
     params: [id],
     limit: 1,
   });
-  const row = rows[0];
-  if (!row) return null;
-
-  // Legacy guard: only pending/scheduled appointments are editable from the calendar.
-  const status = phpStatus(String(row.status ?? ""));
+  const appt = rows[0];
+  if (!appt) throw new Error("Non trovato");
+  const status = phpStatus(String(appt.status ?? ""));
   if (status !== "pending" && status !== "scheduled") {
     throw new Error("La prenotazione non e modificabile da calendario.");
   }
 
-  // Resolve the start (kept fixed) and build the new end on the SAME calendar day.
-  const start = toDate(row.starts_at);
-  const startDateIso = dateIsoLocal(start);
-  const endHHMM = normalizeTime(newEndTime);
-  const startMin = start.getHours() * 60 + start.getMinutes();
-  const endMin = (() => {
-    const m = /^(\d{2}):(\d{2})$/.exec(endHHMM);
-    return m ? Number(m[1]) * 60 + Number(m[2]) : NaN;
-  })();
-  if (!Number.isFinite(endMin) || endMin <= startMin) {
-    throw new Error("La fine deve essere successiva all'inizio.");
-  }
-  const endSql = `${startDateIso} ${endHHMM}:00`;
-  const locationId = row.location_id === null || row.location_id === undefined ? null : Number(row.location_id);
-  // Appointment-level cabin (single-service bookings keep the cabin on appointments,
-  // not necessarily on the segment row) — used as the trailing segment's cabin
-  // fallback so the resize cabin check still applies.
-  const appointmentCabinId = row.cabin_id === null || row.cabin_id === undefined ? 0 : Number(row.cabin_id) || 0;
-
-  // Read the appointment's segments (ordered) so we can (a) re-run the overlap
-  // check with the trailing segment stretched and (b) know which segment row to
-  // update. Best-effort: an install without the segment table degrades to checking
-  // only the appointment-level span (a single staffless range, which never blocks).
   let segments: RowDataPacket[] = [];
   try {
     segments = await tenantSelect<RowDataPacket>({
       slug,
       table: "appointment_segments",
-      columns: "id, staff_id, cabin_id, starts_at, ends_at, position",
+      columns: "id, service_id, staff_id, cabin_id, starts_at, ends_at, position",
       where: "appointment_id = ?",
       params: [id],
       orderBy: "position ASC, id ASC",
@@ -3007,54 +2952,290 @@ export async function resizeDbAppointmentEnd(slug: string, id: number, newEndTim
     segments = [];
   }
 
-  // Conflict check: re-use assertAppointmentSlotAvailable against this appointment's
-  // own staffed segments, with the LAST segment extended to the new end (the only
-  // one whose window grows). Earlier segments are unchanged. Excludes THIS appointment.
-  const checkSegments: AppointmentSlotSegment[] = segments.length
-    ? segments.map((seg, idx) => {
-        const segCabin = seg.cabin_id === null || seg.cabin_id === undefined ? 0 : Number(seg.cabin_id) || 0;
-        return {
-          staffId: seg.staff_id === null || seg.staff_id === undefined ? null : Number(seg.staff_id),
-          // Only the trailing (extended) segment can newly collide with a cabin; for
-          // it, fall back to the appointment-level cabin when the segment has none.
-          cabinId: segCabin > 0 ? segCabin : (idx === segments.length - 1 ? appointmentCabinId : 0) || null,
-          startsAt: sqlDateTimePrefix(seg.starts_at),
-          endsAt: idx === segments.length - 1 ? `${startDateIso} ${endHHMM}` : sqlDateTimePrefix(seg.ends_at),
-          locationId,
-        };
-      })
-    : [{ staffId: null, cabinId: appointmentCabinId || null, startsAt: `${startDateIso} ${normalizeTime(timeLocal(start))}`, endsAt: `${startDateIso} ${endHHMM}`, locationId }];
-  await assertAppointmentSlotAvailable({
-    slug,
-    date: startDateIso,
-    segments: checkSegments,
-    excludeAppointmentId: id,
-  });
+  const locationId = appt.location_id === null || appt.location_id === undefined ? null : Number(appt.location_id);
+  const staffName = async (staffId: number) => {
+    const nameRows = await tenantSelect<RowDataPacket>({ slug, table: "staff", columns: "full_name", where: "id = ?", params: [staffId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    return String(nameRows[0]?.full_name ?? "").trim() || "Operatore";
+  };
+  const fmtSql = (ms: number) => {
+    const d = new Date(ms);
+    return `${dateIsoLocal(d)} ${timeLocal(d)}:00`;
+  };
+  // Cache dei busy range per data (il delta può attraversare più date in Week/Month).
+  const busyCache = new Map<string, Awaited<ReturnType<typeof busyRangesForDate>>>();
+  const busyFor = async (dateIso: string) => {
+    if (!busyCache.has(dateIso)) {
+      busyCache.set(dateIso, await busyRangesForDate(slug, dateIso, { excludeAppointmentId: id }).catch(() => []));
+    }
+    return busyCache.get(dateIso)!;
+  };
+  const hasConflict = (busy: Awaited<ReturnType<typeof busyRangesForDate>>, staffId: number, startMin: number, endMin: number) =>
+    busy.some((range) =>
+      (range.staffIds.length === 0 || range.staffIds.includes(staffId))
+      && (range.locationId === null || locationId === null || range.locationId === locationId)
+      && range.end > startMin && range.start < endMin,
+    );
 
-  // Persist: appointment end first, then the trailing segment's end + duration. The
-  // segment update is best-effort (older installs without the table just skip it).
-  await tenantUpdate({ slug, table: "appointments", id, values: { ends_at: endSql } });
-  if (segments.length) {
-    const lastSegment = segments[segments.length - 1];
-    const lastSegmentId = Number(lastSegment.id ?? 0);
-    if (lastSegmentId > 0) {
-      // Recompute the trailing segment's own duration from its (unchanged) start to
-      // the new end, so duration_minutes stays consistent with its window.
-      const segStart = toDate(lastSegment.starts_at);
-      const segStartMin = segStart.getHours() * 60 + segStart.getMinutes();
-      const segDuration = Math.max(1, endMin - segStartMin);
-      await tenantUpdate({
+  const newStartTs = toDate(startsSql).getTime();
+  if (!Number.isFinite(newStartTs)) throw new Error("Data/ora non valida");
+
+  // --- Percorso SEGMENTATO (>1 segmento): shift per delta dell'intera prenotazione ---
+  if (segments.length > 1) {
+    let deltaMs = 0;
+    if (segmentId && oldSegStartsAt) {
+      const oldSql = normSql(oldSegStartsAt);
+      const oldTs = oldSql ? toDate(oldSql).getTime() : NaN;
+      if (Number.isFinite(oldTs)) deltaMs = newStartTs - oldTs;
+    }
+    const apptStartTs = toDate(appt.starts_at).getTime();
+    if (deltaMs === 0 && Number.isFinite(apptStartTs)) deltaMs = newStartTs - apptStartTs;
+
+    // Risorse condivise sulla sequenza spostata (durate dai segmenti persistiti).
+    {
+      const resServices = segments
+        .map((seg) => {
+          const s = toDate(seg.starts_at).getTime();
+          const e = toDate(seg.ends_at).getTime();
+          const dur = Number.isFinite(s) && Number.isFinite(e) && e > s ? Math.round((e - s) / 60000) : 30;
+          return { id: Number(seg.service_id ?? 0) || 0, durationMin: Math.max(5, dur) };
+        })
+        .filter((s) => s.id > 0);
+      if (resServices.length && Number.isFinite(apptStartTs)) {
+        const newApptStart = new Date(apptStartTs + deltaMs);
+        const ctx = await sharedResourcesContext(slug, resServices, locationId, dateIsoLocal(newApptStart), id)
+          .catch(() => null);
+        if (ctx) ctx.assertAvailable(newApptStart.getHours() * 60 + newApptStart.getMinutes());
+      }
+    }
+
+    // Guardie per segmento sulle finestre spostate: time-off HARD (col nome), poi conflitto.
+    for (const seg of segments) {
+      const sid = Number(seg.staff_id ?? 0) || 0;
+      if (sid <= 0) continue;
+      const s = toDate(seg.starts_at).getTime();
+      const e = toDate(seg.ends_at).getTime();
+      if (!Number.isFinite(s) || !Number.isFinite(e)) continue;
+      const ns = new Date(s + deltaMs);
+      const ne = new Date(e + deltaMs);
+      const dateIso = dateIsoLocal(ns);
+      const startMin = ns.getHours() * 60 + ns.getMinutes();
+      const endMin = ne.getHours() * 60 + ne.getMinutes();
+      const reason = await staffTimeoffReasonForRange(slug, sid, dateIso, startMin, endMin);
+      if (reason) {
+        throw new Error(`Impossibile spostare: ${await staffName(sid)} risulta non disponibile (${reason}) nel periodo selezionato.`);
+      }
+      if (hasConflict(await busyFor(dateIso), sid, startMin, endMin)) {
+        throw new Error("Conflitto: uno degli operatori ha già un altro appuntamento in quell'orario.");
+      }
+    }
+
+    // Cabine per segmento sull'intervallo spostato: mantieni -> dell'appuntamento -> auto.
+    const anyCabins = await tenantSelect<RowDataPacket>({ slug, table: "cabins", columns: "id", limit: 1 }).catch(() => [] as RowDataPacket[]);
+    const cabinUpdates = new Map<number, number>();
+    if (anyCabins.length > 0) {
+      const apptCabin = Number(appt.cabin_id ?? 0) || 0;
+      for (const seg of segments) {
+        const segRowId = Number(seg.id ?? 0);
+        const serviceId = Number(seg.service_id ?? 0);
+        if (segRowId <= 0 || serviceId <= 0) continue;
+        const s = toDate(seg.starts_at).getTime();
+        const e = toDate(seg.ends_at).getTime();
+        if (!Number.isFinite(s) || !Number.isFinite(e)) continue;
+        const currentCabin = Number(seg.cabin_id ?? 0) || 0;
+        const candidates: number[] = [];
+        if (currentCabin > 0) candidates.push(currentCabin);
+        if (apptCabin > 0 && !candidates.includes(apptCabin)) candidates.push(apptCabin);
+        candidates.push(0);
+        let lastError: unknown = null;
+        for (const candidate of candidates) {
+          try {
+            cabinUpdates.set(segRowId, await resolveCabinIdForRange({
+              slug,
+              requestedCabinId: candidate,
+              serviceIds: [serviceId],
+              startsAt: fmtSql(s + deltaMs),
+              endsAt: fmtSql(e + deltaMs),
+              locationId,
+              excludeAppointmentId: id,
+            }));
+            lastError = null;
+            break;
+          } catch (error) {
+            lastError = error;
+          }
+        }
+        if (lastError) throw lastError;
+      }
+    }
+
+    // Applica lo shift (valori calcolati in JS, un UPDATE per riga).
+    const apptEndTs = toDate(appt.ends_at).getTime();
+    if (Number.isFinite(apptStartTs) && Number.isFinite(apptEndTs)) {
+      await tenantUpdate({ slug, table: "appointments", id, values: { starts_at: fmtSql(apptStartTs + deltaMs), ends_at: fmtSql(apptEndTs + deltaMs) } });
+    }
+    const segTable = await tenantTable(slug, "appointment_segments");
+    const segName = quoteIdentifier(segTable.name);
+    const segTenantId = segTable.tenantId ?? 0;
+    for (const seg of segments) {
+      const s = toDate(seg.starts_at).getTime();
+      const e = toDate(seg.ends_at).getTime();
+      if (!Number.isFinite(s) || !Number.isFinite(e)) continue;
+      await dbExecute(
+        `UPDATE ${segName} SET starts_at = ?, ends_at = ? WHERE tenant_id = ? AND id = ? AND appointment_id = ?`,
+        [fmtSql(s + deltaMs), fmtSql(e + deltaMs), segTenantId, Number(seg.id), id],
+      );
+    }
+    for (const [segRowId, cabId] of cabinUpdates) {
+      await dbExecute(
+        `UPDATE ${segName} SET cabin_id = ? WHERE tenant_id = ? AND id = ? AND appointment_id = ?`,
+        [cabId > 0 ? cabId : null, segTenantId, segRowId, id],
+      ).catch(() => undefined);
+    }
+    // In multi-servizio appointments.cabin_id non viene toccato (cabine per segmento).
+    return;
+  }
+
+  // --- Percorso singolo/nessun segmento ---
+  if (toDate(endsSql).getTime() <= newStartTs) throw new Error("Data/ora non valida");
+  const singleSeg = segments.length === 1 ? segments[0] : null;
+
+  // Servizi dell'appuntamento (per guardie risorse + operatore-abilitato).
+  let svcIds: number[] = [];
+  try {
+    const svcRows = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "appointment_services",
+      columns: "service_id",
+      where: "appointment_id = ?",
+      params: [id],
+      orderBy: "service_id ASC",
+    });
+    svcIds = [...new Set(svcRows.map((r) => Number(r.service_id ?? 0)).filter((n) => n > 0))];
+  } catch {
+    svcIds = [];
+  }
+  if (!svcIds.length && singleSeg) {
+    const sid = Number(singleSeg.service_id ?? 0) || 0;
+    if (sid > 0) svcIds = [sid];
+  }
+  if (!svcIds.length) {
+    const sid = Number(appt.service_id ?? 0) || 0;
+    if (sid > 0) svcIds = [sid];
+  }
+  const svcRows = svcIds.length
+    ? await tenantSelect<RowDataPacket>({
         slug,
-        table: "appointment_segments",
-        id: lastSegmentId,
-        values: { ends_at: endSql, duration_minutes: segDuration },
-      });
+        table: "services",
+        where: `id IN (${svcIds.map(() => "?").join(",")})`,
+        params: svcIds,
+      }).catch(() => [] as RowDataPacket[])
+    : [];
+
+  const dStart = toDate(startsSql);
+  const dEnd = toDate(endsSql);
+  const dateIso = dateIsoLocal(dStart);
+  const startMin = dStart.getHours() * 60 + dStart.getMinutes();
+  const endMin = dEnd.getHours() * 60 + dEnd.getMinutes();
+
+  // Risorse condivise sul nuovo inizio.
+  if (svcRows.length) {
+    const resServices = svcRows.map((s) => ({ id: Number(s.id ?? 0), durationMin: Math.max(5, Number(s.duration_min ?? 30) || 30) }));
+    const ctx = await sharedResourcesContext(slug, resServices, locationId, dateIso, id).catch(() => null);
+    if (ctx) ctx.assertAvailable(startMin);
+  }
+
+  // Operatore: corrente da appointment_staff, altrimenti dal segmento singolo.
+  let currentStaffId = 0;
+  try {
+    const asRows = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "appointment_staff",
+      columns: "staff_id",
+      where: "appointment_id = ?",
+      params: [id],
+      orderBy: "staff_id ASC",
+      limit: 1,
+    });
+    currentStaffId = Number(asRows[0]?.staff_id ?? 0) || 0;
+  } catch {
+    currentStaffId = 0;
+  }
+  if (currentStaffId <= 0 && singleSeg) currentStaffId = Number(singleSeg.staff_id ?? 0) || 0;
+  const hasStaffParam = staffIdParam !== undefined;
+  const staffId = hasStaffParam ? (Number(staffIdParam) > 0 ? Number(staffIdParam) : 0) : currentStaffId;
+
+  if (staffId > 0) {
+    // Operatore abilitato per OGNI servizio (messaggio legacy esatto).
+    await assertStaffAllowedForServices(slug, svcRows.map((service) => ({ service, staffId })));
+    const reason = await staffTimeoffReasonForRange(slug, staffId, dateIso, startMin, endMin);
+    if (reason) {
+      throw new Error(`Impossibile spostare: ${await staffName(staffId)} risulta non disponibile (${reason}) nel periodo selezionato.`);
+    }
+    if (hasConflict(await busyFor(dateIso), staffId, startMin, endMin)) {
+      throw new Error("Conflitto: l'operatore ha già un altro appuntamento in quell'orario.");
     }
   }
 
-  const updated = await tenantSelect<RowDataPacket>({ slug, table: "appointments", where: "id = ?", params: [id], limit: 1 });
-  if (!updated[0]) return null;
-  return mapAppointment(slug, updated[0]);
+  // Cabina: mantieni la corrente (appuntamento, poi segmento singolo) -> auto.
+  let cabinToSet: number | null = null;
+  const anyCabins = await tenantSelect<RowDataPacket>({ slug, table: "cabins", columns: "id", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  if (anyCabins.length > 0 && svcIds.length) {
+    let currentCabin = Number(appt.cabin_id ?? 0) || 0;
+    if (currentCabin <= 0 && singleSeg) currentCabin = Number(singleSeg.cabin_id ?? 0) || 0;
+    try {
+      cabinToSet = await resolveCabinIdForRange({ slug, requestedCabinId: currentCabin > 0 ? currentCabin : 0, serviceIds: svcIds, startsAt: startsSql, endsAt: endsSql, locationId, excludeAppointmentId: id });
+    } catch {
+      // Legacy: secondo tentativo in auto-pick; il suo eventuale errore risale al chiamante.
+      cabinToSet = await resolveCabinIdForRange({ slug, requestedCabinId: 0, serviceIds: svcIds, startsAt: startsSql, endsAt: endsSql, locationId, excludeAppointmentId: id });
+    }
+  }
+
+  // Applica: la finestra inviata AS IS (il resize legacy passa da qui e mantiene
+  // la durata custom trascinata).
+  await tenantUpdate({ slug, table: "appointments", id, values: { starts_at: startsSql, ends_at: endsSql } });
+
+  // Assegnazione operatore (drag tra colonne) — solo senza segment_id, come il PHP.
+  if (hasStaffParam && !segmentId) {
+    const asTable = await tenantTable(slug, "appointment_staff");
+    const asName = quoteIdentifier(asTable.name);
+    const asTenantId = asTable.tenantId ?? 0;
+    if (staffId > 0) {
+      const cntRows = await dbQuery<RowDataPacket[]>(`SELECT COUNT(*) c FROM ${asName} WHERE tenant_id = ? AND appointment_id = ?`, [asTenantId, id]);
+      if (Number(cntRows[0]?.c ?? 0) > 0) {
+        await dbExecute(`UPDATE ${asName} SET staff_id = ? WHERE tenant_id = ? AND appointment_id = ?`, [staffId, asTenantId, id]);
+      } else {
+        await dbExecute(`INSERT INTO ${asName} (tenant_id, appointment_id, staff_id) VALUES (?, ?, ?)`, [asTenantId, id, staffId]);
+      }
+    } else {
+      await dbExecute(`DELETE FROM ${asName} WHERE tenant_id = ? AND appointment_id = ?`, [asTenantId, id]);
+    }
+  }
+
+  // Sincronizza il segmento singolo (finestra + eventuali staff/cabina) e tieni
+  // duration_minutes coerente con la finestra (anche custom, come il resize).
+  if (singleSeg && Number(singleSeg.id ?? 0) > 0) {
+    const segTable = await tenantTable(slug, "appointment_segments");
+    const segName = quoteIdentifier(segTable.name);
+    const segTenantId = segTable.tenantId ?? 0;
+    const sets = ["starts_at = ?", "ends_at = ?", "duration_minutes = ?"];
+    const params: unknown[] = [startsSql, endsSql, Math.max(1, Math.round((dEnd.getTime() - dStart.getTime()) / 60000))];
+    if (hasStaffParam) {
+      // Il PHP scrive NULL, ma nello schema Postgres appointment_segments.staff_id
+      // è NOT NULL: il sentinel "senza operatore" del resto del codice è 0.
+      sets.push("staff_id = ?");
+      params.push(staffId > 0 ? staffId : 0);
+    }
+    if (cabinToSet !== null) {
+      sets.push("cabin_id = ?");
+      params.push(cabinToSet > 0 ? cabinToSet : null);
+    }
+    params.push(segTenantId, Number(singleSeg.id), id);
+    await dbExecute(`UPDATE ${segName} SET ${sets.join(", ")} WHERE tenant_id = ? AND id = ? AND appointment_id = ?`, params);
+  }
+
+  if (cabinToSet !== null) {
+    await tenantUpdate({ slug, table: "appointments", id, values: { cabin_id: cabinToSet > 0 ? cabinToSet : null } }).catch(() => undefined);
+  }
 }
 
 // EDIT payload for the global quick-booking drawer (port of api_appointments.php
@@ -15656,9 +15837,11 @@ export async function appointmentListDecorations(
 }
 
 // Per-service segments (appointment_segments) with resolved staff names, exposed on
-// the calendar payload ONLY when the appointment spans MORE THAN ONE operator — the
-// Day view then renders one block per segment in the right staff column (legacy
-// per-segment events). Single-operator appointments return undefined (one block).
+// the calendar payload when the appointment has MORE THAN ONE segment — the legacy
+// list API builds one calendar event PER SEGMENT via HAVING COUNT(*) > 1
+// (api_appointments.php ~8063), regardless of the operator count — so a 2-service
+// single-operator booking also renders two stacked blocks. segmentId identifies the
+// dragged row for the move delta contract (move + segment_id + old_starts_at).
 async function appointmentSegmentsForCalendar(
   slug: string,
   appointmentId: number,
@@ -15667,25 +15850,27 @@ async function appointmentSegmentsForCalendar(
   const rows = await tenantSelect<RowDataPacket>({
     slug,
     table: "appointment_segments",
-    columns: "service_id, service_name, staff_id, starts_at, ends_at, position",
+    columns: "id, service_id, service_name, staff_id, starts_at, ends_at, position",
     where: "appointment_id = ?",
     params: [appointmentId],
     orderBy: "position ASC, starts_at ASC, id ASC",
   }).catch(() => [] as RowDataPacket[]);
   if (rows.length < 2) return undefined;
   const staffIds = [...new Set(rows.map((r) => Number(r.staff_id ?? 0)).filter((n) => n > 0))];
-  if (staffIds.length < 2) return undefined;
 
-  const staffRows = await tenantSelect<RowDataPacket>({
-    slug,
-    table: "staff",
-    columns: "id, full_name",
-    where: `id IN (${staffIds.map(() => "?").join(",")})`,
-    params: staffIds,
-  }).catch(() => [] as RowDataPacket[]);
+  const staffRows = staffIds.length
+    ? await tenantSelect<RowDataPacket>({
+        slug,
+        table: "staff",
+        columns: "id, full_name",
+        where: `id IN (${staffIds.map(() => "?").join(",")})`,
+        params: staffIds,
+      }).catch(() => [] as RowDataPacket[])
+    : [];
   const nameById = new Map<number, string>(staffRows.map((r) => [Number(r.id), String(r.full_name ?? "")]));
 
   return rows.map((r) => ({
+    segmentId: Number(r.id ?? 0),
     serviceId: Number(r.service_id ?? 0),
     serviceName: String(r.service_name ?? "Servizio"),
     staffId: Number(r.staff_id ?? 0),
@@ -15800,35 +15985,6 @@ async function appointmentClientName(slug: string, clientId: number): Promise<st
   } catch {
     return "Cliente";
   }
-}
-
-async function appointmentService(slug: string, appointment: RowDataPacket): Promise<{ name: string; price: number }> {
-  const appointmentId = Number(appointment.id ?? 0);
-  try {
-    const serviceRows = await tenantSelect<RowDataPacket>({
-      slug,
-      table: "appointment_services",
-      columns: "service_name,price",
-      where: "appointment_id = ?",
-      params: [appointmentId],
-      limit: 1,
-    });
-    if (serviceRows[0]) return { name: String(serviceRows[0].service_name ?? "Servizio"), price: Number(serviceRows[0].price ?? 0) };
-  } catch {
-    // fallback below
-  }
-
-  const serviceId = Number(appointment.service_id ?? 0);
-  if (serviceId > 0) {
-    try {
-      const rows = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "name,price", where: "id = ?", params: [serviceId], limit: 1 });
-      if (rows[0]) return { name: String(rows[0].name ?? "Servizio"), price: Number(rows[0].price ?? 0) };
-    } catch {
-      // fallback below
-    }
-  }
-
-  return { name: "Servizio", price: 0 };
 }
 
 async function appointmentStaffName(slug: string, appointmentId: number): Promise<string> {
