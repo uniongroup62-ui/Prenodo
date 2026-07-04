@@ -182,7 +182,7 @@ export default async function TenantPage({
   searchParams,
 }: {
   params: Promise<{ tenantSlug: string; segments?: string[] }>;
-  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string; staff_id?: string; source?: string; detail_staff_id?: string; from?: string; to?: string; q?: string; cat?: string; cat_q?: string; cat_status?: string; category_filter_id?: string; low_stock?: string; supplier?: string; category?: string; code?: string; brand?: string; internal_code?: string; product_id?: string; category_search?: string; edit_id?: string; sku?: string; document_number?: string; date?: string; include_canceled?: string; p?: string; category_id?: string; scope?: string; msg?: string; err?: string }>;
+  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string; staff_id?: string; source?: string; detail_staff_id?: string; from?: string; to?: string; q?: string; cat?: string; cat_q?: string; cat_status?: string; category_filter_id?: string; low_stock?: string; supplier?: string; category?: string; code?: string; brand?: string; internal_code?: string; product_id?: string; category_search?: string; edit_id?: string; sku?: string; document_number?: string; date?: string; include_canceled?: string; p?: string; category_id?: string; scope?: string; msg?: string; err?: string; type?: string; all_locations?: string }>;
 }) {
   const { tenantSlug, segments } = await params;
   const query = await searchParams;
@@ -466,11 +466,25 @@ export default async function TenantPage({
 
   // Faithful coupon NEW / EDIT form. The coupons list links to
   // index.php?page=coupons&action=new|edit; route those to the faithful editor
-  // (instead of the Tailwind ManagementApp fallback).
+  // (instead of the Tailwind ManagementApp fallback). initialQuery carries the
+  // legacy redirect flash (?msg=&type=).
   if (page === "coupons" && (query.action === "new" || query.action === "edit")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
-        <CouponFormContent slug={tenantSlug} />
+        <CouponFormContent slug={tenantSlug} initialQuery={{ msg: query.msg, type: query.type }} />
+      </ManageShell>
+    );
+  }
+
+  // Faithful coupons LIST: the legacy page reads the redirect flash (?msg=&type=)
+  // and the "Tutte le sedi" GET filter from the querystring.
+  if (page === "coupons") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <CouponsContent
+          slug={tenantSlug}
+          initialQuery={{ msg: query.msg, type: query.type, all_locations: query.all_locations }}
+        />
       </ManageShell>
     );
   }

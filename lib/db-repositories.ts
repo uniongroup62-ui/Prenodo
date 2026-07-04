@@ -9032,6 +9032,8 @@ export type ManageCouponRecord = CouponRule & {
   // "Storico collegato: X vendite e Y prenotazioni." nel modale disattivazione.
   salesCount: number;
   appointmentsCount: number;
+  partial: boolean;
+  residual: number | null;
   canCancel: boolean;
   serviceCategoryIds: number[];
   serviceIds: number[];
@@ -9058,25 +9060,43 @@ async function couponUserLabel(slug: string, id: number): Promise<string> {
 // description/apply_scope + audit columns directly.
 export async function getManageCoupon(slug: string, id: number): Promise<ManageCouponRecord | null> {
   if (id <= 0) return null;
-  const rows = await tenantSelect<RowDataPacket>({ slug, table: "coupons", where: "id = ? AND deleted_at IS NULL", params: [id], limit: 1 });
+  // Fetch WITHOUT the deleted filter so a soft-deleted coupon gets the legacy
+  // "Coupon gia eliminato dalla gestione" (warning) instead of "non trovato".
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "coupons", where: "id = ?", params: [id], limit: 1 });
   if (!rows[0]) return null;
+  if (rows[0].deleted_at) throw new Error("Coupon gia eliminato dalla gestione");
   const row = rows[0];
   const base = await mapCoupon(slug, row);
   const stats = await couponUsageStats(slug, base);
-  // toIso() substitutes "now" for null, so guard the nullable audit timestamps.
-  const isoOrEmpty = (v: unknown): string => (v ? toIso(v) : "");
+  // Audit timestamps are TIMESTAMP (no tz): node-pg parses them as LOCAL Dates,
+  // so render them back as local "YYYY-MM-DD HH:MM:SS" (the legacy raw format);
+  // toIso() would shift them to UTC (and substitutes "now" for null).
+  const localOrEmpty = (v: unknown): string => {
+    if (!v) return "";
+    if (v instanceof Date) {
+      const hh = String(v.getHours()).padStart(2, "0");
+      const mi = String(v.getMinutes()).padStart(2, "0");
+      const ss = String(v.getSeconds()).padStart(2, "0");
+      return `${dateIsoLocal(v)} ${hh}:${mi}:${ss}`;
+    }
+    return String(v).slice(0, 19).replace("T", " ");
+  };
   return {
     ...base,
     description: String(row.description ?? ""),
     applyScope: String(row.apply_scope ?? "all"),
-    createdAt: isoOrEmpty(row.created_at),
+    createdAt: localOrEmpty(row.created_at),
     createdByLabel: await couponUserLabel(slug, Number(row.created_by ?? 0)),
-    cancelledAt: isoOrEmpty(row.cancelled_at),
+    cancelledAt: localOrEmpty(row.cancelled_at),
     cancelledByLabel: await couponUserLabel(slug, Number(row.cancelled_by ?? 0)),
     cancelledReason: String(row.cancelled_reason ?? ""),
     activeUsedCount: stats.activeUsedCount,
     salesCount: stats.salesCount,
     appointmentsCount: stats.appointmentsCount,
+    // Modale legacy: alert "Storico collegato" mostrato solo per coupon fixed
+    // parzialmente consumato con residuo > 0.
+    partial: stats.partial,
+    residual: stats.residual,
     canCancel: Number(row.is_active ?? 0) === 1 && !row.deleted_at,
     serviceCategoryIds: decodeCouponIdsJson(row.service_category_ids_json),
     serviceIds: decodeCouponIdsJson(row.service_ids_json),
@@ -9109,17 +9129,35 @@ export type CouponFormContext = {
 };
 
 export async function getCouponFormContext(slug: string): Promise<CouponFormContext> {
-  const locRows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "id, name", where: "COALESCE(is_active,1) = 1", orderBy: "COALESCE(sort_order,999999) ASC, name ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
+  // Legacy sedi order: app_locations -> COALESCE(sort_order,999999), id (no name).
+  const locRows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "id, name", where: "COALESCE(is_active,1) = 1", orderBy: "COALESCE(sort_order,999999) ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
   const locations = locRows.map((r) => ({ id: Number(r.id ?? 0), name: String(r.name ?? `Sede #${r.id}`) })).filter((l) => l.id > 0);
 
-  const svcCatRows = await tenantSelect<RowDataPacket>({ slug, table: "service_categories", columns: "id, name", orderBy: "name ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
+  // Legacy option order: "Non categorizzato" last, then sort_order, name, id.
+  const svcCatRows = await tenantSelect<RowDataPacket>({ slug, table: "service_categories", columns: "id, name", orderBy: "CASE WHEN LOWER(name)='non categorizzato' THEN 1 ELSE 0 END ASC, COALESCE(sort_order,999999) ASC, name ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
   const svcRows = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, name, category_id", orderBy: "name ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
   const svcCatName = new Map<number, string>();
-  for (const r of svcCatRows) svcCatName.set(Number(r.id ?? 0), String(r.name ?? ""));
+  const svcCatPos = new Map<number, number>();
+  svcCatRows.forEach((r, i) => {
+    svcCatName.set(Number(r.id ?? 0), String(r.name ?? ""));
+    svcCatPos.set(Number(r.id ?? 0), i);
+  });
   const svcCatUsed = new Set<number>();
   for (const r of svcRows) { const cid = Number(r.category_id ?? 0); if (cid > 0) svcCatUsed.add(cid); }
   const serviceCategories = svcCatRows.map((r) => ({ id: Number(r.id ?? 0), name: String(r.name ?? "") })).filter((c) => c.id > 0 && svcCatUsed.has(c.id));
-  const services = svcRows.map((r) => ({ id: Number(r.id ?? 0), name: String(r.name ?? ""), categoryName: svcCatName.get(Number(r.category_id ?? 0)) ?? "" })).filter((s) => s.id > 0);
+  // Legacy service order: grouped by category (non-categorizzato last, then
+  // sort_order/name), then service name. Uncategorized services (NULL category:
+  // CASE 0 + sort 999999) fall after the regular categories but before the
+  // "non categorizzato" group — approximated by category position.
+  const uncatPos = svcCatRows.filter((r) => String(r.name ?? "").trim().toLowerCase() !== "non categorizzato").length;
+  const services = svcRows
+    .map((r) => {
+      const cid = Number(r.category_id ?? 0);
+      return { id: Number(r.id ?? 0), name: String(r.name ?? ""), categoryName: svcCatName.get(cid) ?? "", _pos: svcCatPos.get(cid) ?? uncatPos - 0.5 };
+    })
+    .filter((s) => s.id > 0)
+    .sort((a, b) => (a._pos - b._pos) || a.name.localeCompare(b.name) || (a.id - b.id))
+    .map((s) => ({ id: s.id, name: s.name, categoryName: s.categoryName }));
 
   const prodCatRows = await tenantSelect<RowDataPacket>({ slug, table: "product_categories", columns: "id, name", orderBy: "name ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
   const prodRows = await tenantSelect<RowDataPacket>({ slug, table: "products", columns: "id, name, sku, category_id", orderBy: "name ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
@@ -9181,11 +9219,17 @@ async function activeLocationIds(slug: string): Promise<number[]> {
 }
 
 // Replace a coupon's enabled sedi (coupon_locations): clear then re-insert.
+// Like app_coupon_sync_locations, unknown location ids (not belonging to the
+// tenant) are dropped, and an empty selection leaves the rows untouched.
 async function syncCouponLocations(slug: string, couponId: number, locationIds: number[]): Promise<void> {
   const table = await tenantTable(slug, "coupon_locations").catch(() => null);
   if (!table) return;
+  const knownRows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "id" }).catch(() => [] as RowDataPacket[]);
+  const known = new Set(knownRows.map((r) => Number(r.id ?? 0)).filter((n) => n > 0));
+  const ids = locationIds.filter((lid) => known.size === 0 || known.has(lid));
+  if (ids.length === 0) return;
   await deleteCouponLocations(slug, couponId);
-  for (const lid of locationIds) {
+  for (const lid of ids) {
     await tenantInsert(table, { coupon_id: couponId, location_id: lid }).catch(() => 0);
   }
 }
@@ -9196,17 +9240,40 @@ async function syncCouponLocations(slug: string, couponId: number, locationIds: 
 // it readonly). Persists the scope-restricted catalogs (service/product id
 // lists) as the *_ids_json columns and syncs coupon_locations, with the legacy
 // scope + "almeno una sede" validation.
-export async function saveManageCoupon(slug: string, body: Record<string, string>, id: number): Promise<ManageCouponRecord> {
+export async function saveManageCoupon(slug: string, body: Record<string, string>, id: number, by = 0): Promise<ManageCouponRecord> {
+  // EDIT: existence/deleted checks come FIRST like the legacy (which redirects
+  // "Coupon non trovato" / "Coupon gia eliminato dalla gestione" before any
+  // field validation).
+  let existingRow: RowDataPacket | null = null;
+  if (id > 0) {
+    const existing = await tenantSelect<RowDataPacket>({ slug, table: "coupons", where: "id = ?", params: [id], limit: 1 });
+    if (!existing[0]) throw new Error("Coupon non trovato");
+    if (existing[0].deleted_at) throw new Error("Coupon gia eliminato dalla gestione");
+    existingRow = existing[0];
+  }
+
+  // NEW: the legacy validates the code before everything else.
+  let code = "";
+  if (id <= 0) {
+    // Normalizzazione legacy (coupon_normalize_code): upper + rimozione spazi,
+    // SENZA strippare i caratteri invalidi — così la regex li rifiuta davvero.
+    code = String(body.code ?? "").trim().toUpperCase().replace(/\s+/g, "");
+    if (!code) throw new Error("Inserisci un codice.");
+    if (!/^[A-Z0-9][A-Z0-9_-]{0,39}$/.test(code)) throw new Error("Codice non valido. Usa solo lettere, numeri, - e _. (Max 40)");
+  }
+
   let type = String(body.discount_type ?? "percent").trim().toLowerCase();
   if (type === "amount") type = "fixed";
   if (type !== "percent" && type !== "fixed") type = "percent";
 
-  let value = roundMoney(Math.max(0, Number(String(body.discount_value ?? "0").replace(",", ".")) || 0));
+  // Legacy default: discount_value assente -> '10'.
+  let value = roundMoney(Math.max(0, Number(String(body.discount_value ?? "10").replace(",", ".")) || 0));
   if (type === "percent" && value > 100) value = 100;
   if (value <= 0) throw new Error("Inserisci un valore valido.");
 
   const minSubtotal = roundMoney(Math.max(0, Number(String(body.min_subtotal ?? "0").replace(",", ".")) || 0));
-  const usageLimit = Math.max(0, Math.round(Number(body.usage_limit ?? 0) || 0));
+  // (int) cast legacy: truncation, not rounding.
+  const usageLimit = Math.max(0, Math.trunc(Number(body.usage_limit ?? 0) || 0));
   let scope = normalizeCouponScope(String(body.apply_scope ?? "all_services_products"));
   if (scope === "all" && id <= 0) scope = "all_services_products";
   const description = String(body.description ?? "").trim();
@@ -9224,14 +9291,14 @@ export async function saveManageCoupon(slug: string, body: Record<string, string
   const productIds = parseCouponIdList(body.product_ids);
   const couponLocationIds = parseCouponIdList(body.coupon_location_ids);
 
-  // Scope validation (port of coupons.php $scopeError).
+  // Scope validation (port of coupons.php $scopeError). The "almeno una sede"
+  // check OVERWRITES the scope error in the legacy, so it is evaluated first.
+  const activeLocs = await activeLocationIds(slug);
+  if (activeLocs.length > 0 && couponLocationIds.length === 0) throw new Error("Seleziona almeno una sede abilitata.");
   if (scope === "service_categories" && serviceCategoryIds.length === 0) throw new Error("Seleziona almeno una categoria di servizi.");
   if (scope === "services" && serviceIds.length === 0) throw new Error("Seleziona almeno un servizio.");
   if (scope === "product_categories" && productCategoryIds.length === 0) throw new Error("Seleziona almeno una categoria di prodotti.");
   if (scope === "products" && productIds.length === 0) throw new Error("Seleziona almeno un prodotto.");
-  // "Seleziona almeno una sede abilitata" when the tenant has active sedi.
-  const activeLocs = await activeLocationIds(slug);
-  if (activeLocs.length > 0 && couponLocationIds.length === 0) throw new Error("Seleziona almeno una sede abilitata.");
 
   const values: Record<string, unknown> = {
     description: description !== "" ? description : null,
@@ -9249,20 +9316,18 @@ export async function saveManageCoupon(slug: string, body: Record<string, string
   };
 
   let couponId = id;
-  if (couponId > 0) {
-    const existing = await tenantSelect<RowDataPacket>({ slug, table: "coupons", where: "id = ? AND deleted_at IS NULL", params: [couponId], limit: 1 });
-    if (!existing[0]) throw new Error("Coupon non trovato.");
+  if (couponId > 0 && existingRow) {
     await tenantUpdate({ slug, table: "coupons", id: couponId, values });
   } else {
-    // Normalizzazione legacy (coupon_normalize_code): upper + rimozione spazi,
-    // SENZA strippare i caratteri invalidi — così la regex li rifiuta davvero.
-    const code = String(body.code ?? "").trim().toUpperCase().replace(/\s+/g, "");
-    if (!code) throw new Error("Inserisci un codice.");
-    if (!/^[A-Z0-9][A-Z0-9_-]{0,39}$/.test(code)) throw new Error("Codice non valido. Usa solo lettere, numeri, - e _. (Max 40)");
-    const dup = await tenantSelect<RowDataPacket>({ slug, table: "coupons", columns: "id", where: "code = ? AND deleted_at IS NULL", params: [code], limit: 1 });
-    if (dup[0]) throw new Error("Esiste gia un coupon con questo codice.");
+    // Dup check WITHOUT the deleted filter (legacy: a soft-deleted coupon still
+    // reserves its code), and with the legacy accented message.
+    const dup = await tenantSelect<RowDataPacket>({ slug, table: "coupons", columns: "id", where: "code = ?", params: [code], limit: 1 });
+    if (dup[0]) throw new Error("Esiste già un coupon con questo codice.");
     if (await couponPromoCodeExists(slug, code)) throw new Error("Questo codice è già utilizzato da una Promozione. Scegli un codice diverso.");
-    couponId = await tenantInsert(await tenantTable(slug, "coupons"), { ...values, code, is_active: 1 });
+    // created_by like the legacy INSERT; created_at explicitly with the app's
+    // LOCAL time (the Postgres CURRENT_TIMESTAMP default would store UTC while
+    // the legacy MySQL stores the local wall clock).
+    couponId = await tenantInsert(await tenantTable(slug, "coupons"), { ...values, code, is_active: 1, created_by: by > 0 ? by : null, created_at: new Date() });
   }
 
   await syncCouponLocations(slug, couponId, couponLocationIds);
@@ -9298,6 +9363,13 @@ export type CouponUsageStats = {
   partial: boolean;
 };
 
+// Port of coupon_status_is_cancelled(): the exact legacy cancelled-status list
+// (note: no_show is NOT cancelled — it still consumes the coupon).
+function couponStatusIsCancelled(status: unknown): boolean {
+  const s = String(status ?? "").trim().toLowerCase();
+  return ["cancelled", "canceled", "annullato", "annullata", "cancellato", "cancellata", "rejected", "rifiutato", "rifiutata"].includes(s);
+}
+
 async function couponUsageStats(
   slug: string,
   coupon: { code: string; type: "fixed" | "percent"; value: number },
@@ -9330,7 +9402,7 @@ async function couponUsageStats(
     const rowCode = storedCode !== "" ? storedCode : normalizeCouponCode(meta.code);
     if (rowCode !== code) continue;
     salesCount++;
-    const isCancelled = String(r.status ?? "").trim().toLowerCase() === "cancelled";
+    const isCancelled = couponStatusIsCancelled(r.status);
     if (!isCancelled) activeSales++;
     const subtotal = Math.max(0, Number(r.subtotal ?? 0));
     let disc: number | null = null;
@@ -9356,8 +9428,9 @@ async function couponUsageStats(
     if (normalizeCouponCode(meta.code) !== code) continue;
     appointmentsCount++;
     const st = String(r.status ?? "").trim().toLowerCase();
-    if (st === "pending" || st === "scheduled") openAppointmentsCount++;
-    const isCancelled = st === "canceled" || st === "cancelled" || st === "no_show";
+    // Legacy open list (appt_norm_status variants included) — blocks deletion.
+    if (["pending", "scheduled", "in sospeso", "prenotato"].includes(st)) openAppointmentsCount++;
+    const isCancelled = couponStatusIsCancelled(st);
     if (!isCancelled) activeAppts++;
     if (meta.discount > 0 && !isCancelled) usedAmount += Math.max(0, meta.discount);
   }
@@ -9401,8 +9474,9 @@ export async function deleteManageCoupon(
 ): Promise<{ ok: true; mode: "hard" | "soft"; message: string }> {
   if (id <= 0) throw new Error("ID coupon mancante.");
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "coupons", where: "id = ?", params: [id], limit: 1 });
-  if (!rows[0]) throw new Error("Coupon non trovato.");
-  if (rows[0].deleted_at) throw new Error("Coupon gia eliminato dalla gestione.");
+  // Messaggi querystring legacy: senza punto finale.
+  if (!rows[0]) throw new Error("Coupon non trovato");
+  if (rows[0].deleted_at) throw new Error("Coupon gia eliminato dalla gestione");
   const coupon = await mapCoupon(slug, rows[0]);
   const stats = await couponUsageStats(slug, coupon);
   if (stats.openAppointmentsCount > 0) {
@@ -9429,7 +9503,7 @@ export async function deleteManageCoupon(
   }
   await deleteCouponLocations(slug, id);
   await tenantDelete({ slug, table: "coupons", id });
-  return { ok: true, mode: "hard", message: "Coupon eliminato." };
+  return { ok: true, mode: "hard", message: "Coupon eliminato" };
 }
 
 // Disable a coupon (port of coupons.php action=cancel): is_active=0 + audit
@@ -9443,9 +9517,10 @@ export async function cancelManageCoupon(
 ): Promise<{ ok: true }> {
   if (id <= 0) throw new Error("ID coupon mancante.");
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "coupons", where: "id = ?", params: [id], limit: 1 });
-  if (!rows[0]) throw new Error("Coupon non trovato.");
-  if (rows[0].deleted_at) throw new Error("Coupon gia eliminato dalla gestione.");
-  if (Number(rows[0].is_active ?? 0) !== 1) throw new Error("Coupon gia disattivato.");
+  // Legacy order: not-found (danger, no period), then can_cancel (is_active) —
+  // a soft-deleted coupon (is_active=0) also answers "già disattivato".
+  if (!rows[0]) throw new Error("Coupon non trovato");
+  if (Number(rows[0].is_active ?? 0) !== 1) throw new Error("Coupon già disattivato.");
   let clean = String(reason ?? "").trim();
   if (clean.length > 255) clean = clean.slice(0, 255);
   const byId = by > 0 ? by : null;
@@ -9492,7 +9567,8 @@ export type ManageCouponListRow = CouponRule & {
 };
 
 export async function listManageCoupons(slug: string): Promise<ManageCouponListRow[]> {
-  const rows = await tenantSelect<RowDataPacket>({ slug, table: "coupons", where: "deleted_at IS NULL", orderBy: "code ASC" });
+  // Legacy list order: ORDER BY id DESC (newest first).
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "coupons", where: "deleted_at IS NULL", orderBy: "id DESC" });
 
   // coupon_id -> [location_id] (the enabled sedi per coupon) + location names.
   const locRows = await tenantSelect<RowDataPacket>({ slug, table: "coupon_locations", columns: "coupon_id, location_id" }).catch(() => [] as RowDataPacket[]);
@@ -13954,8 +14030,10 @@ async function mapCoupon(slug: string, row: RowDataPacket): Promise<CouponRule> 
     // treats "" as no limit. The previous today/+30d fallbacks invented a rolling
     // fake window — display-wrong AND a real bug: a no-expiry coupon previewed
     // as-of an appointment date >30 days ahead was wrongly judged expired.
-    startsAt: row.valid_from ? String(row.valid_from).slice(0, 10) : "",
-    endsAt: row.valid_to ? String(row.valid_to).slice(0, 10) : "",
+    // Postgres DATE columns arrive as local-midnight Date objects: String() would
+    // yield "Sat Jul 05 ..." and toISOString() shifts a day — format locally.
+    startsAt: row.valid_from ? (row.valid_from instanceof Date ? dateIsoLocal(row.valid_from) : String(row.valid_from).slice(0, 10)) : "",
+    endsAt: row.valid_to ? (row.valid_to instanceof Date ? dateIsoLocal(row.valid_to) : String(row.valid_to).slice(0, 10)) : "",
     usageLimit: Math.max(0, Math.round(Number(row.usage_limit ?? 0))),
     usedCount: await couponUsageCount(slug, code),
     createdAt: toIso(row.created_at),

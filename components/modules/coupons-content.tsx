@@ -25,13 +25,26 @@ type Coupon = {
   activeUsedCount?: number;
 };
 
+// Querystring params the legacy list reads: the redirect flash (?msg=&type=)
+// and the "Tutte le sedi" GET filter.
+export type CouponsQuery = {
+  msg?: string;
+  type?: string;
+  all_locations?: string;
+};
+
 function tenantSlug(): string {
   if (typeof window === "undefined") return "";
   return window.location.pathname.split("/")[1] || "";
 }
 
+// Port of fmt_money(): number_format(n, 2, ',', '.').
+// NON usare toLocaleString('it-IT'): CLDR minimumGroupingDigits=2 non
+// raggruppa le migliaia per 1000-9999.
 function fmtMoney(n: number): string {
-  return Number(n || 0).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const v = Number(n || 0);
+  const [int, dec] = Math.abs(v).toFixed(2).split(".");
+  return `${v < 0 ? "-" : ""}${int.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${dec}`;
 }
 
 function fmtDate(value?: string): string {
@@ -50,12 +63,17 @@ function statusInfo(coupon: Coupon): { label: string; badge: string } {
   return { label: "Attiva", badge: "bg-success" };
 }
 
-export function CouponsContent({ slug: slugProp }: { slug?: string } = {}) {
+// Legacy all_locations truthy set (app_all_locations_filter_enabled).
+function allLocationsFromQuery(value?: string): boolean {
+  return ["1", "true", "on", "yes", "all"].includes(String(value ?? "").trim().toLowerCase());
+}
+
+export function CouponsContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: CouponsQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
   const [coupons, setCoupons] = useState<Coupon[]>([]);
-  const [allLocations, setAllLocations] = useState(false);
+  const [allLocations, setAllLocations] = useState(() => allLocationsFromQuery(initialQuery?.all_locations));
   // Conteggio NON filtrato (empty state + bottone header) e numero sedi attive
   // (il filtro "Tutte le sedi" esiste solo per i tenant multi-sede, come il
   // legacy $couponShowAllLocationsFilter).
@@ -63,9 +81,14 @@ export function CouponsContent({ slug: slugProp }: { slug?: string } = {}) {
   const [locationsCount, setLocationsCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(0);
+  // Flash legacy (View::alert sopra il page header): dal redirect ?msg=&type=
+  // o dall'esito del delete in pagina.
+  const [flash, setFlash] = useState<{ msg: string; type: string } | null>(() =>
+    initialQuery?.msg ? { msg: initialQuery.msg, type: initialQuery.type || "success" } : null,
+  );
 
-  const load = useCallback((all?: boolean) => {
-    setLoading(true);
+  // Fetch puro (setState nei callback della Promise; loading gia' true di default).
+  const fetchData = useCallback((all?: boolean) => {
     const flag = all === undefined ? allLocations : all;
     fetch(`/api/manage/coupons?slug=${encodeURIComponent(slug)}${flag ? "&all_locations=1" : ""}`, {
       headers: { "x-tenant-slug": slug },
@@ -84,17 +107,35 @@ export function CouponsContent({ slug: slugProp }: { slug?: string } = {}) {
   }, [slug]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    fetchData();
+  }, [fetchData]);
+
+  const load = useCallback((all?: boolean) => {
+    setLoading(true);
+    fetchData(all);
+  }, [fetchData]);
 
   function href(suffix: string): string {
     return `/${encodeURIComponent(slug)}/${`coupons${suffix}`.replace("&", "?")}`;
   }
 
+  // Mantiene l'URL allineato al filtro applicato (il form legacy è un GET).
+  function syncUrl(all: boolean) {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("msg");
+    url.searchParams.delete("type");
+    if (all) url.searchParams.set("all_locations", "1");
+    else url.searchParams.delete("all_locations");
+    window.history.replaceState(null, "", url.toString());
+  }
+
   // Delete a coupon via POST (port of coupons.php action=delete). The server
   // refuses while open appointments reference it, soft-deletes when the coupon
-  // has usage (history preserved), and hard-deletes when unused. Confirm-gated.
-  // Replaces the old GET ?action=delete link (which fell to the Tailwind app).
+  // has usage (history preserved), and hard-deletes when unused. Confirm-gated
+  // ("Eliminare questo coupon?" — data-coupons-confirm). Legacy outcomes land
+  // as redirect flashes: success/danger/warning on the list, and the
+  // open-appointments warning on the EDIT page.
   async function deleteCoupon(c: Coupon) {
     if (busyId) return;
     if (typeof window !== "undefined" && !window.confirm("Eliminare questo coupon?")) return;
@@ -107,11 +148,16 @@ export function CouponsContent({ slug: slugProp }: { slug?: string } = {}) {
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j?.error) {
-        if (typeof window !== "undefined") window.alert(j?.error || "Impossibile eliminare il coupon.");
+        if (j?.redirectEdit) {
+          window.location.href = href(`&action=edit&id=${c.id}`) + `&msg=${encodeURIComponent(String(j.error))}&type=${encodeURIComponent(String(j.errorType || "warning"))}`;
+          return;
+        }
+        setFlash({ msg: String(j?.error || "Errore coupon."), type: String(j?.errorType || "danger") });
       } else {
-        if (typeof window !== "undefined" && j?.message) window.alert(j.message);
+        setFlash({ msg: String(j?.message || "Coupon eliminato"), type: "success" });
         load();
       }
+      if (typeof window !== "undefined") window.scrollTo(0, 0);
     } finally {
       setBusyId(0);
     }
@@ -123,12 +169,23 @@ export function CouponsContent({ slug: slugProp }: { slug?: string } = {}) {
   const showEmptyState = !loading && !hasAnyCoupons;
   // Legacy: la card filtro "Tutte le sedi" esiste solo con più sedi. NOTA:
   // il legacy nasconde per bug ANCHE la tabella nei tenant mono-sede
-  // (coupons.php 1168/1250) — qui la tabella resta visibile (fix deliberato).
+  // (coupons.php 1168/1250, endif mal posizionato — verificato live: con un
+  // coupon esistente la pagina mostra solo header+alert e il coupon diventa
+  // ingestibile). Qui la tabella resta visibile (fix deliberato).
   const showLocationsFilter = locationsCount > 1;
 
   return (
     <div className="container-fluid">
       <link rel="stylesheet" href="/assets/css/pages/coupons.css" />
+
+      {flash ? (
+        <div className={`alert alert-${flash.type} d-flex align-items-start gap-2`}>
+          <div>
+            <i className="bi bi-info-circle" />
+          </div>
+          <div>{flash.msg}</div>
+        </div>
+      ) : null}
 
       <div className="bs-page-header">
         <div className="bs-page-heading">
@@ -169,6 +226,7 @@ export function CouponsContent({ slug: slugProp }: { slug?: string } = {}) {
               className="row g-2 align-items-end"
               onSubmit={(e) => {
                 e.preventDefault();
+                syncUrl(allLocations);
                 load(allLocations);
               }}
             >
@@ -235,7 +293,8 @@ export function CouponsContent({ slug: slugProp }: { slug?: string } = {}) {
                           <td className="fw-semibold">{x.code}</td>
                           <td className="text-muted">{x.description && x.description !== "" ? x.description : "—"}</td>
                           <td>
-                            {x.type === "percent" ? <>{x.value}%</> : <>€ {fmtMoney(x.value)}</>}
+                            {/* Legacy percent: raw DECIMAL(10,2) -> "10.00%" (punto). */}
+                            {x.type === "percent" ? <>{Number(x.value ?? 0).toFixed(2)}%</> : <>€ {fmtMoney(x.value)}</>}
                           </td>
                           <td className="text-muted">€ {fmtMoney(x.minSubtotal)}</td>
                           <td className="text-muted">

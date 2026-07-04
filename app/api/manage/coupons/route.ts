@@ -26,9 +26,18 @@ export async function GET(request: Request) {
       if (!can(session.user.perms, "coupons.manage")) return jsonError("Permesso buoni mancante.", 403);
       const couponId = parseInteger(url.searchParams.get("id"), 0);
       if (couponId <= 0) return jsonError("ID coupon mancante.");
-      const coupon = await getManageCoupon(tenantSlug, couponId);
-      if (!coupon) return jsonError("Coupon non trovato.", 404);
-      return Response.json({ ok: true, source: "coupons?action=get", sourceMode: "database", coupon });
+      // getManageCoupon throws "Coupon gia eliminato dalla gestione" for a
+      // soft-deleted coupon (legacy: warning redirect to the list); a missing
+      // one is the querystring "Coupon non trovato" (danger redirect).
+      try {
+        const coupon = await getManageCoupon(tenantSlug, couponId);
+        if (!coupon) return Response.json({ ok: false, error: "Coupon non trovato", errorType: "danger" }, { status: 404 });
+        return Response.json({ ok: true, source: "coupons?action=get", sourceMode: "database", coupon });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Coupon non trovato";
+        const errorType = message === "Coupon gia eliminato dalla gestione" ? "warning" : "danger";
+        return Response.json({ ok: false, error: message, errorType }, { status: 404 });
+      }
     }
 
     // Coupon NEW/EDIT form context: catalog options (service/product categories
@@ -36,7 +45,16 @@ export async function GET(request: Request) {
     // Sedi abilitate table. Gated by coupons.manage like the editor.
     if (url.searchParams.get("action") === "form_context") {
       if (!can(session.user.perms, "coupons.manage")) return jsonError("Permesso buoni mancante.", 403);
-      return Response.json({ ok: true, source: "coupons?action=form_context", sourceMode: "database", context: await getCouponFormContext(tenantSlug) });
+      // currentLocationId: on NEW the legacy pre-checks ONLY the session's
+      // current sede (falling back to all when none is resolved).
+      const locationContext = await getManageLocationContext(tenantSlug).catch(() => null);
+      return Response.json({
+        ok: true,
+        source: "coupons?action=form_context",
+        sourceMode: "database",
+        context: await getCouponFormContext(tenantSlug),
+        currentLocationId: locationContext?.currentLocationId ?? 0,
+      });
     }
 
     // Server-side code generation (port of coupons.php ?do=gen_code): unique vs
@@ -97,7 +115,7 @@ export async function POST(request: Request) {
     // creates, id>0 updates; the code is immutable on edit.
     if (action === "save" || action === "new" || action === "edit" || action === "update") {
       if (!can(session.user.perms, "coupons.manage")) return jsonError("Permesso buoni mancante.", 403);
-      const coupon = await saveManageCoupon(tenantSlug, body, parseInteger(body.id, 0));
+      const coupon = await saveManageCoupon(tenantSlug, body, parseInteger(body.id, 0), session.user.id);
       return Response.json({ ok: true, source: "coupons?action=save", sourceMode: "database", coupon, coupons: await listManageCoupons(tenantSlug) });
     }
 
@@ -106,15 +124,33 @@ export async function POST(request: Request) {
     // hard-deletes when unused.
     if (action === "delete") {
       if (!can(session.user.perms, "coupons.manage")) return jsonError("Permesso buoni mancante.", 403);
-      const result = await deleteManageCoupon(tenantSlug, parseInteger(body.id, 0), session.user.id);
-      return Response.json({ ok: true, source: "coupons?action=delete", sourceMode: "database", mode: result.mode, message: result.message, coupons: await listManageCoupons(tenantSlug) });
+      // Legacy outcome mapping: not-found -> danger flash on the list; already
+      // deleted -> warning on the list; open appointments -> warning flash on
+      // the EDIT page (redirectEdit). Successes flash success on the list.
+      try {
+        const result = await deleteManageCoupon(tenantSlug, parseInteger(body.id, 0), session.user.id);
+        return Response.json({ ok: true, source: "coupons?action=delete", sourceMode: "database", mode: result.mode, message: result.message, msgType: "success", coupons: await listManageCoupons(tenantSlug) });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Errore coupon.";
+        const errorType = message === "Coupon non trovato" ? "danger" : "warning";
+        const redirectEdit = message.startsWith("Coupon associato a prenotazioni");
+        return Response.json({ ok: false, error: message, errorType, redirectEdit }, { status: 400 });
+      }
     }
 
     // Disable a coupon (port of coupons.php action=cancel): is_active=0 + audit.
     if (action === "cancel" || action === "disable") {
       if (!can(session.user.perms, "coupons.manage")) return jsonError("Permesso buoni mancante.", 403);
-      await cancelManageCoupon(tenantSlug, parseInteger(body.id, 0), String(body.cancel_reason ?? body.reason ?? ""), session.user.id);
-      return Response.json({ ok: true, source: "coupons?action=cancel", sourceMode: "database", coupons: await listManageCoupons(tenantSlug) });
+      // Legacy outcomes: not-found -> danger (list); "Coupon già disattivato."
+      // -> warning flash on the edit page.
+      try {
+        await cancelManageCoupon(tenantSlug, parseInteger(body.id, 0), String(body.cancel_reason ?? body.reason ?? ""), session.user.id);
+        return Response.json({ ok: true, source: "coupons?action=cancel", sourceMode: "database", coupons: await listManageCoupons(tenantSlug) });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Errore coupon.";
+        const errorType = message === "Coupon non trovato" ? "danger" : "warning";
+        return Response.json({ ok: false, error: message, errorType }, { status: 400 });
+      }
     }
 
     // preview/redeem are also reachable from the quick-booking drawer's coupon Apply

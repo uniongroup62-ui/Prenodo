@@ -3718,3 +3718,67 @@ completa + supplier_locations, dup, hasLocationRows true/false, productCount,
 delete bloccata verbatim, rename -> prodotti aggiornati, delete + pulizia
 supplier_locations, cleanup CLEAN) + 49/49 marker bundle + typecheck/lint
 puliti (warning no-css-tags pre-esistenti).
+
+## Buoni (coupons.php) — 2026-07-05
+AUDIT COMPLETO lista + form NEW/EDIT vs coupons.php (1253 righe) + coupons.js
++ coupons.css + helpers coupon_* (Helpers.php) + capture live (empty state,
+form new, create/edit/cancel/delete con redirect flash). Tenant di test
+mono-sede: verificato dal vivo il BUG legacy dell'endif mal posizionato
+(coupons.php 1168/1250): con coupon esistenti la lista mono-sede non
+renderizza ne' filtro ne' tabella (coupon ingestibili dalla UI).
+FIX PRINCIPALI (Next):
+1. mapCoupon: valid_from/valid_to sono colonne DATE -> node-pg da' Date
+   local-midnight e String().slice(0,10) produceva "Sat Jul 05" (date rotte
+   in lista/edit E nei confronti activeWindow) -> dateIsoLocal. createdAt/
+   cancelledAt (timestamp senza tz) formattati locali "Y-m-d H:i:s" (prima
+   toIso spostava a UTC, -2h vs live).
+2. INSERT coupon: created_by (mancava, legacy lo salva) + created_at con ora
+   LOCALE app (il DEFAULT CURRENT_TIMESTAMP Postgres e' UTC, il MySQL legacy
+   salva wall-clock locale).
+3. Ordine validazioni legacy: EDIT existing/deleted check PRIMA dei campi
+   ("Coupon non trovato" / "Coupon gia eliminato dalla gestione", senza
+   punto, con redirect lista danger/warning); NEW code vuoto/regex prima di
+   value; "Seleziona almeno una sede abilitata." SOVRASCRIVE lo scope error
+   (sede vince). Dup code SENZA filtro deleted (un soft-deleted riserva il
+   codice) e msg accentato "Esiste già un coupon con questo codice.".
+4. cancelManageCoupon: ordine legacy not-found -> is_active (soft-deleted
+   risponde "Coupon già disattivato." accentato, warning); delete hard msg
+   "Coupon eliminato" senza punto; esiti delete mappati come il legacy
+   (open-appts -> warning con redirect all'EDIT, not-found danger, gia
+   eliminato warning) e flash in pagina (niente window.alert).
+5. couponUsageStats: lista cancelled legacy completa (cancelled/canceled/
+   annullato/.../rejected, senza no_show che consuma) per sales E appts;
+   open appts anche 'in sospeso'/'prenotato'; esposti partial/residual per
+   l'alert del modale.
+6. Lista: ORDER BY id DESC (prima code ASC); sconto percent raw "10.00%";
+   fmt_money manuale (niente toLocaleString); flash ?msg=&type= con markup
+   View::alert (icona bi-info-circle) sopra il page header (SSR via
+   initialQuery dal router); filtro "Tutte le sedi" con replaceState.
+7. Form: NEW pre-seleziona SOLO la sede corrente (prima tutte; legacy
+   current-or-all) via currentLocationId nel form_context; blocco "Sedi
+   abilitate" sempre renderizzato con "Nessuna sede disponibile."; opzione
+   "Tutto il carrello (legacy)" persiste finche' il RECORD e' scope all;
+   bottone "Disattiva coupon" solo con stato Attiva (non su Programmato/
+   Scaduto, come il legacy); modale con alert "Storico collegato" per fixed
+   parziale con residuo; redirect legacy post-azione (create -> lista
+   "Coupon creato", update -> edit "Coupon aggiornato", disattiva -> edit
+   "Coupon disattivato"); "Salva" fisso + Annulla anchor; label prodotti
+   con guard product_display_name; ordinamenti opzioni legacy (categorie
+   servizi non-categorizzato last + sort_order, servizi raggruppati per
+   categoria, sedi per sort_order/id).
+8. syncCouponLocations: scarta id sede non del tenant (port
+   app_coupon_sync_locations); usage_limit troncato come (int) PHP;
+   discount_value default '10'.
+RESIDUI DELIBERATI: la tabella lista resta visibile anche mono-sede (il bug
+legacy dell'endif renderebbe i coupon ingestibili; solo la card filtro
+"Tutte le sedi" e' gated multi-sede). Il fallback sede-corrente di
+app_coupon_sync_locations con selezione vuota non e' replicato (irraggiungibile:
+la validazione sede blocca prima quando esistono sedi attive).
+Verifica: battery e2e 52/52 (ordine validazioni verbatim, clamp/virgola/
+trunc, dup + promo clash + code riservato da soft-deleted, GET record con
+date senza shift e createdAt locale, audit created/cancelled by "luca",
+lista id DESC + filtro sede + activeUsedCount, update code immutabile,
+cancel doppio "già disattivato.", delete hard/soft/bloccata da appt aperto
+con redirectEdit, soft-delete audit + esclusione lista, cleanup CLEAN) +
+70/70 marker bundle + typecheck/lint puliti (warning no-css-tags
+pre-esistenti).

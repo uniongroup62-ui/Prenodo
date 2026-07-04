@@ -12,8 +12,9 @@ import { useEffect, useState } from "react";
 // Submits to /api/manage/coupons (action=save; create when no id, update with
 // id — the code is immutable on edit, faithful to the readonly legacy input).
 // Also ported: the scope-restricted catalogs (service/product multi-selects),
-// the per-location "Sedi abilitate" toggles (coupon_locations sync) and the
-// server-side code generation (?do=gen_code) with the coupons.js client fallback.
+// the per-location "Sedi abilitate" toggles (coupon_locations sync), the
+// server-side code generation (?do=gen_code) with the coupons.js client
+// fallback, and the legacy redirect flashes (?msg=&type=).
 
 type CouponForm = {
   id: number;
@@ -63,7 +64,15 @@ type CouponMeta = {
   cancelledReason: string;
   salesCount: number;
   appointmentsCount: number;
+  partial: boolean;
+  residual: number | null;
   canCancel: boolean;
+};
+
+// Redirect flash the legacy page reads from the querystring.
+export type CouponFormQuery = {
+  msg?: string;
+  type?: string;
 };
 
 function tenantSlug(): string {
@@ -87,6 +96,15 @@ function fmtDateTime(value: string): string {
   return v !== "" ? v.slice(0, 19).replace("T", " ") : "—";
 }
 
+// Port of product_display_name(): "Nome (SKU)", skipping names already suffixed.
+function productDisplayName(name: string, sku: string): string {
+  const label = name.trim() !== "" ? name.trim() : "Prodotto";
+  const code = sku.trim();
+  if (code === "") return label;
+  if (new RegExp(`\\(${code.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\)\\s*$`, "u").test(label)) return label;
+  return `${label} (${code})`;
+}
+
 function emptyForm(): CouponForm {
   return {
     id: 0,
@@ -108,7 +126,7 @@ function resolveAction(): "new" | "edit" {
   return new URLSearchParams(window.location.search).get("action") === "edit" ? "edit" : "new";
 }
 
-export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
+export function CouponFormContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: CouponFormQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
@@ -118,10 +136,19 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // Flash legacy (View::alert sopra il page header) dal redirect ?msg=&type=.
+  // Ogni esito (save/cancel) naviga via redirect, quindi non serve un setter.
+  const [flash] = useState<{ msg: string; type: string } | null>(() =>
+    initialQuery?.msg ? { msg: initialQuery.msg, type: initialQuery.type || "success" } : null,
+  );
   const [showCancel, setShowCancel] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelling, setCancelling] = useState(false);
   const [context, setContext] = useState<CouponFormContext | null>(null);
+  // Legacy $showLegacyAllOption: the "Tutto il carrello (legacy)" option stays
+  // visible while the STORED record scope is 'all', even after switching the
+  // select to another value.
+  const [storedScopeAll, setStoredScopeAll] = useState(false);
   const [sel, setSel] = useState<CouponScopeSel>({ serviceCategoryIds: [], serviceIds: [], productCategoryIds: [], productIds: [], locationIds: [] });
 
   // On edit (action=edit&id=) prefill from coupons?action=get. On new, keep the
@@ -139,8 +166,12 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
       .then((j) => {
         const ctx: CouponFormContext = j.context ?? { locations: [], serviceCategories: [], services: [], productCategories: [], products: [], defaultLocationIds: [] };
         setContext(ctx);
-        // NEW default: all active sedi pre-checked (mirrors the legacy current-or-all default).
-        if (act !== "edit") setSel((prev) => ({ ...prev, locationIds: ctx.defaultLocationIds }));
+        // NEW default (legacy): ONLY the session's current sede pre-checked,
+        // falling back to all sedi when none is resolved.
+        if (act !== "edit") {
+          const current = Number(j.currentLocationId ?? 0);
+          setSel((prev) => ({ ...prev, locationIds: current > 0 ? [current] : ctx.defaultLocationIds }));
+        }
         return ctx;
       })
       .catch(() => setContext({ locations: [], serviceCategories: [], services: [], productCategories: [], products: [], defaultLocationIds: [] }));
@@ -164,7 +195,11 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
             .then((r) => r.json())
             .then((j) => {
               if (!j.ok || !j.coupon) {
-                setError(String(j.error ?? "Coupon non trovato."));
+                // Legacy: redirect to the list with the flash ("Coupon non
+                // trovato" danger / "Coupon gia eliminato dalla gestione" warning).
+                const msg = String(j.error ?? "Coupon non trovato");
+                const type = String(j.errorType ?? "danger");
+                window.location.href = `/${encodeURIComponent(slug)}/coupons?msg=${encodeURIComponent(msg)}&type=${encodeURIComponent(type)}`;
                 return;
               }
               const c = j.coupon;
@@ -180,6 +215,7 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
                 valid_from: String(c.startsAt ?? "").slice(0, 10),
                 valid_to: String(c.endsAt ?? "").slice(0, 10),
               });
+              setStoredScopeAll(String(c.applyScope ?? "") === "all");
               setMeta({
                 active: Boolean(c.active),
                 startsAt: String(c.startsAt ?? ""),
@@ -193,6 +229,8 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
                 cancelledReason: String(c.cancelledReason ?? ""),
                 salesCount: Number(c.salesCount ?? 0),
                 appointmentsCount: Number(c.appointmentsCount ?? 0),
+                partial: Boolean(c.partial),
+                residual: c.residual === null || c.residual === undefined ? null : Number(c.residual),
                 canCancel: Boolean(c.canCancel),
               });
               setSel({
@@ -251,12 +289,9 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
-  function backToList() {
-    window.location.href = `/${encodeURIComponent(slug)}/coupons`;
-  }
-
   // Disable the coupon (port of coupons.php action=cancel): POST action=cancel
-  // with the optional reason, then reload so the status card reflects it.
+  // with the optional reason, then redirect back to the edit view with the
+  // legacy flash ("Coupon disattivato" success / "Coupon già disattivato." warning).
   async function cancelCoupon() {
     if (cancelling || !meta) return;
     setCancelling(true);
@@ -267,12 +302,18 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
         body: JSON.stringify({ action: "cancel", id: form.id, cancel_reason: cancelReason }),
       });
       const j = await res.json().catch(() => ({}));
+      const base = `/${encodeURIComponent(slug)}/coupons?action=edit&id=${form.id}`;
       if (!res.ok || j?.error) {
-        setError(String(j?.error ?? "Impossibile disattivare il coupon."));
-        setShowCancel(false);
+        const msg = String(j?.error ?? "Impossibile disattivare il coupon.");
+        const type = String(j?.errorType ?? "warning");
+        if (msg === "Coupon non trovato") {
+          window.location.href = `/${encodeURIComponent(slug)}/coupons?msg=${encodeURIComponent(msg)}&type=danger`;
+          return;
+        }
+        window.location.href = `${base}&msg=${encodeURIComponent(msg)}&type=${encodeURIComponent(type)}`;
         return;
       }
-      window.location.reload();
+      window.location.href = `${base}&msg=${encodeURIComponent("Coupon disattivato")}&type=success`;
     } finally {
       setCancelling(false);
     }
@@ -304,7 +345,12 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
       setError('La data "Valido al" deve essere successiva o uguale a "Valido dal".');
       return;
     }
-    // Scope + sede validation (port of coupons.php $scopeError / "almeno una sede").
+    // Scope + sede validation (port of coupons.php $scopeError; the "almeno una
+    // sede" check overwrites the scope error, so it wins).
+    if ((context?.locations.length ?? 0) > 0 && sel.locationIds.length === 0) {
+      setError("Seleziona almeno una sede abilitata.");
+      return;
+    }
     if (form.apply_scope === "service_categories" && sel.serviceCategoryIds.length === 0) {
       setError("Seleziona almeno una categoria di servizi.");
       return;
@@ -319,10 +365,6 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
     }
     if (form.apply_scope === "products" && sel.productIds.length === 0) {
       setError("Seleziona almeno un prodotto.");
-      return;
-    }
-    if ((context?.locations.length ?? 0) > 0 && sel.locationIds.length === 0) {
-      setError("Seleziona almeno una sede abilitata.");
       return;
     }
 
@@ -354,11 +396,24 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
       });
       const j = await res.json();
       if (!res.ok || !j.ok) {
-        setError(String(j.error ?? "Errore nel salvataggio del coupon."));
+        const msg = String(j.error ?? "Errore nel salvataggio del coupon.");
+        // Legacy: not-found / already-deleted redirect to the list with the flash.
+        if (msg === "Coupon non trovato" || msg === "Coupon gia eliminato dalla gestione") {
+          const type = msg === "Coupon non trovato" ? "danger" : "warning";
+          window.location.href = `/${encodeURIComponent(slug)}/coupons?msg=${encodeURIComponent(msg)}&type=${type}`;
+          return;
+        }
+        setError(msg);
         setSaving(false);
         return;
       }
-      backToList();
+      // Legacy redirects: create -> list "Coupon creato"; edit -> stay on the
+      // edit view with "Coupon aggiornato" (both type=success).
+      if (form.id > 0) {
+        window.location.href = `/${encodeURIComponent(slug)}/coupons?action=edit&id=${form.id}&msg=${encodeURIComponent("Coupon aggiornato")}&type=success`;
+      } else {
+        window.location.href = `/${encodeURIComponent(slug)}/coupons?msg=${encodeURIComponent("Coupon creato")}&type=success`;
+      }
     } catch {
       setError("Errore nel salvataggio del coupon.");
       setSaving(false);
@@ -366,10 +421,23 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
   }
 
   const title = action === "new" ? "Nuovo coupon" : "Modifica coupon";
+  // Legacy: the "Disattiva coupon" button renders only while the status is
+  // ACTIVE (not scheduled/expired/disabled), even though the backend accepts
+  // the cancel for any is_active=1 coupon.
+  const isActiveStatus = meta ? statusInfo(meta).label === "Attiva" : false;
 
   return (
     <div className="container-fluid">
       <link rel="stylesheet" href="/assets/css/pages/coupons.css" />
+
+      {flash ? (
+        <div className={`alert alert-${flash.type} d-flex align-items-start gap-2`}>
+          <div>
+            <i className="bi bi-info-circle" />
+          </div>
+          <div>{flash.msg}</div>
+        </div>
+      ) : null}
 
       <div className="bs-page-header">
         <div className="bs-page-heading">
@@ -402,7 +470,7 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
               <div className="fw-semibold">{meta.createdByLabel}</div>
             </div>
             <div className="col-md-3 text-md-end">
-              {meta.canCancel ? (
+              {isActiveStatus ? (
                 <button type="button" className="btn btn-outline-danger" onClick={() => setShowCancel(true)}>
                   Disattiva coupon
                 </button>
@@ -456,6 +524,11 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
                       vendite/prenotazioni già associate manterranno il coupon storico.
                     </div>
                   </div>
+                  {meta.partial && (meta.residual ?? 0) > 0 ? (
+                    <div className="alert alert-warning">
+                      Storico collegato: <strong>{meta.salesCount}</strong> vendite e <strong>{meta.appointmentsCount}</strong> prenotazioni.
+                    </div>
+                  ) : null}
                   <div className="small text-muted mb-3">
                     Storico collegato: <strong>{meta.salesCount}</strong> vendite e <strong>{meta.appointmentsCount}</strong> prenotazioni.
                   </div>
@@ -475,7 +548,7 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
                     Indietro
                   </button>
                   <button type="button" className="btn btn-danger" disabled={cancelling} onClick={cancelCoupon}>
-                    {cancelling ? "Disattivazione…" : "Conferma disattivazione"}
+                    Conferma disattivazione
                   </button>
                 </div>
               </div>
@@ -592,7 +665,7 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
                   value={form.apply_scope}
                   onChange={(e) => set("apply_scope", e.target.value)}
                 >
-                  {form.apply_scope === "all" ? <option value="all">Tutto il carrello (legacy)</option> : null}
+                  {storedScopeAll || form.apply_scope === "all" ? <option value="all">Tutto il carrello (legacy)</option> : null}
                   <option value="service_categories">Categorie di servizi</option>
                   <option value="services">Servizi</option>
                   <option value="product_categories">Categorie di prodotti</option>
@@ -623,36 +696,39 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
                 />
               </div>
 
-              {(context?.locations.length ?? 0) > 0 ? (
-                <div className="col-12">
-                  <label className="form-label">Sedi abilitate</label>
-                  <div className="table-responsive border rounded">
-                    <table className="table table-sm align-middle mb-0">
-                      <thead>
-                        <tr>
-                          <th>Sede</th>
-                          <th className="text-center coupons-location-valid-cell">Valido</th>
+              <div className="col-12">
+                <label className="form-label">Sedi abilitate</label>
+                <div className="table-responsive border rounded">
+                  <table className="table table-sm align-middle mb-0">
+                    <thead>
+                      <tr>
+                        <th>Sede</th>
+                        <th className="text-center coupons-location-valid-cell">Valido</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(context?.locations ?? []).map((loc) => (
+                        <tr key={loc.id}>
+                          <td className="fw-semibold">{loc.name || `Sede #${loc.id}`}</td>
+                          <td className="text-center">
+                            <input
+                              className="form-check-input"
+                              type="checkbox"
+                              checked={sel.locationIds.includes(loc.id)}
+                              onChange={(e) => toggleId("locationIds", loc.id, e.target.checked)}
+                            />
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {context!.locations.map((loc) => (
-                          <tr key={loc.id}>
-                            <td className="fw-semibold">{loc.name || `Sede #${loc.id}`}</td>
-                            <td className="text-center">
-                              <input
-                                className="form-check-input"
-                                type="checkbox"
-                                checked={sel.locationIds.includes(loc.id)}
-                                onChange={(e) => toggleId("locationIds", loc.id, e.target.checked)}
-                              />
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                      ))}
+                      {(context?.locations.length ?? 0) === 0 ? (
+                        <tr>
+                          <td colSpan={2} className="text-muted">Nessuna sede disponibile.</td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
                 </div>
-              ) : null}
+              </div>
 
               {form.apply_scope === "service_categories" ? (
                 <div className="col-md-4">
@@ -726,7 +802,7 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
                   >
                     {(context?.products ?? []).map((o) => (
                       <option key={o.id} value={o.id}>
-                        {o.sku !== "" ? `${o.name} (${o.sku})` : o.name || `Prodotto #${o.id}`}
+                        {productDisplayName(o.name, o.sku)}
                       </option>
                     ))}
                   </select>
@@ -738,11 +814,11 @@ export function CouponFormContent({ slug: slugProp }: { slug?: string } = {}) {
             <div className="mt-3 d-flex gap-2">
               <button className="btn btn-primary" type="submit" disabled={saving}>
                 <i className="bi bi-check2-circle me-1" />
-                {saving ? "Salvataggio…" : "Salva"}
+                Salva
               </button>
-              <button className="btn btn-outline-secondary" type="button" onClick={backToList}>
+              <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/coupons`}>
                 Annulla
-              </button>
+              </a>
             </div>
           </form>
         </div>
