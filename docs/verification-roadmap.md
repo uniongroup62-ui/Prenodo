@@ -3345,3 +3345,21 @@ Verifica: battery 15/15 (paymentLabel Contanti, notesClean, quickPackageIds,
 accenti è/già, cancelledByName, guardia ritiro su annullata verbatim,
 delete_sale, cleanup CLEAN) + 32/32 marker + 2/2 negativi + typecheck; lint =
 baseline (l'unico error set-state-in-effect preesistente).
+
+## Pagamenti v4 — coda sotto-pagine (2026-07-04)
+Diff su catture live di Preordini/Prepagati/Impostazioni (le tre pagine non
+ancora diffate): PREORDINI e PREPAGATI già a parità (Vista con i valori/label
+legacy Aperti/Pronti al ritiro/Stock insufficiente / parziale/Scaduti/Solo
+ordinati/Solo pacchetti/Solo GiftBox/Tutti e Attivi/Già prenotati/Scaduti/
+Esauriti/Annullati/Tutti; colonne, ricerca "Cliente, prodotto, SKU, vendita..."
+/ "Servizio, vendita...", empty state verbatim, azione "Dettaglio vendita").
+FIX: i VALORI ?back= dei link live sono INGLESI (back=preorders/prepaids) —
+corretta la mappa del dettaglio vendita (le chiavi italiane non matchavano);
+IMPOSTAZIONI: esiti verbatim legacy ("Impostazioni Pagamenti salvate.",
+"1 preordine aggiornato."/"N preordini aggiornati.", "1 prepagato aggiornato."/
+"N prepagati aggiornati." dal count della route, prefissi errore per azione
+"Errore salvataggio impostazioni."/"Errore aggiornamento preordini/prepagati.").
+Residuo minore: i link "Dettaglio vendita" legacy preservano anche i filtri
+correnti nella query di ritorno (il Next torna alla pagina base).
+Verifica: 16/18 marker (2 falsi negativi da template-concat "Torna a X",
+componenti presenti come literal separati) + typecheck.

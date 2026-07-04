@@ -76,6 +76,7 @@ export function PosSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
 
   async function postAction(payload: Record<string, unknown>): Promise<void> {
     setFeedback(null);
+    const action = String(payload.action ?? "");
     try {
       const res = await fetch(`/api/manage/configuration?slug=${encodeURIComponent(slug)}&module=pos_settings`, {
         method: "POST",
@@ -84,10 +85,27 @@ export function PosSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j?.ok === false) {
-        setFeedback({ type: "danger", text: String(j?.error ?? j?.message ?? "Errore.") });
+        // Prefissi errore per azione come il legacy (pos_settings.php 34/42/50).
+        const fallback = action === "apply_existing_preorders"
+          ? "Errore aggiornamento preordini."
+          : action === "apply_existing_prepaids"
+            ? "Errore aggiornamento prepagati."
+            : "Errore salvataggio impostazioni.";
+        setFeedback({ type: "danger", text: String(j?.error ?? j?.message ?? fallback) });
         return;
       }
-      setFeedback({ type: "success", text: String(j?.message ?? "Impostazioni salvate.") });
+      // Esiti verbatim legacy (pos_settings.php 32/41/49): il salvataggio dice
+      // "Impostazioni Pagamenti salvate."; le due applicazioni riportano il
+      // conteggio con singolare/plurale.
+      let text = "Impostazioni Pagamenti salvate.";
+      if (action === "apply_existing_preorders") {
+        const count = Number(j?.count ?? 0) || 0;
+        text = count === 1 ? "1 preordine aggiornato." : `${count} preordini aggiornati.`;
+      } else if (action === "apply_existing_prepaids") {
+        const count = Number(j?.count ?? 0) || 0;
+        text = count === 1 ? "1 prepagato aggiornato." : `${count} prepagati aggiornati.`;
+      }
+      setFeedback({ type: "success", text: String(j?.message ?? text) });
       load();
     } catch {
       setFeedback({ type: "danger", text: "Errore di rete." });

@@ -187,13 +187,15 @@ function saleIdFromUrl(): number {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
 }
 
-// Sorgente di provenienza legacy (?back=movimenti|preordini|prepagati, pos_sale_detail.php
+// Sorgente di provenienza legacy (?back=movimenti|preorders|prepaids, pos_sale_detail.php
 // 4365-4389): guida l'etichetta "Torna a ..." del page header, il sottotitolo e l'URL
 // di ritorno del bottone Chiudi. Default: Movimenti.
 const BACK_SOURCES: Record<string, { label: string; page: string }> = {
   movimenti: { label: "Movimenti", page: "pos_history" },
-  preordini: { label: "Preordini", page: "pos_preorders" },
-  prepagati: { label: "Prepagati", page: "pos_prepaids" },
+  // I VALORI back= live sono inglesi (back=preorders/prepaids nei link di
+  // pos_preorders/pos_prepaids; movimenti per Rate/Movimenti).
+  preorders: { label: "Preordini", page: "pos_preorders" },
+  prepaids: { label: "Prepagati", page: "pos_prepaids" },
 };
 function backSourceFromUrl(): { label: string; page: string } {
   if (typeof window === "undefined") return BACK_SOURCES.movimenti;
