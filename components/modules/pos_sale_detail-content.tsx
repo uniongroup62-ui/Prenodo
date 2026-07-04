@@ -156,6 +156,13 @@ type SaleDetail = {
   sale: PosSale;
   operatorName: string;
   locationName: string;
+  // Quick-link header legacy "Apri GiftBox/GiftCard/Pacchetto" + meta "Pagamento:"
+  // + operatore dell'annullo per il box "Stato annullamento".
+  quickGiftcardIds?: number[];
+  quickGiftboxIds?: number[];
+  quickPackageIds?: number[];
+  paymentLabel?: string;
+  cancelledByName?: string;
   cancelSummary: CancelSummary;
   canCancel: boolean;
   canMarkCollected: boolean;
@@ -178,6 +185,20 @@ function saleIdFromUrl(): number {
   const id = new URLSearchParams(window.location.search).get("id");
   const n = Number(id ?? 0);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+// Sorgente di provenienza legacy (?back=movimenti|preordini|prepagati, pos_sale_detail.php
+// 4365-4389): guida l'etichetta "Torna a ..." del page header, il sottotitolo e l'URL
+// di ritorno del bottone Chiudi. Default: Movimenti.
+const BACK_SOURCES: Record<string, { label: string; page: string }> = {
+  movimenti: { label: "Movimenti", page: "pos_history" },
+  preordini: { label: "Preordini", page: "pos_preorders" },
+  prepagati: { label: "Prepagati", page: "pos_prepaids" },
+};
+function backSourceFromUrl(): { label: string; page: string } {
+  if (typeof window === "undefined") return BACK_SOURCES.movimenti;
+  const raw = String(new URLSearchParams(window.location.search).get("back") ?? "").toLowerCase();
+  return BACK_SOURCES[raw] ?? BACK_SOURCES.movimenti;
 }
 
 function fmtMoney(value: number): string {
@@ -311,10 +332,15 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
   const [reloadKey, setReloadKey] = useState(0);
   const load = useCallback(() => setReloadKey((k) => k + 1), []);
 
+  // Provenienza (?back=): etichetta e URL di ritorno (Torna a Movimenti/
+  // Preordini/Prepagati), letta nello stesso mount effect dell'id.
+  const [backSource, setBackSource] = useState<{ label: string; page: string }>(BACK_SOURCES.movimenti);
+
   // Mount-only: risolve l'id dall'URL (client-side). Id assente/invalido -> stato
   // errore; altrimenti saleId>0 fa partire il fetch dell'effect sotto.
   useEffect(() => {
     const id = saleIdFromUrl();
+    setBackSource(backSourceFromUrl());
     if (id <= 0) {
       setError("Vendita non valida.");
       setLoading(false);
@@ -355,7 +381,7 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
   const isCancelled = sale?.status === "cancelled";
   const groupedItems = useMemo(() => (sale ? groupSaleItems(sale.items) : []), [sale]);
   const clientLabel = sale && sale.clientName && sale.clientName.trim() && sale.clientName.trim() !== "Cliente banco" ? sale.clientName : "Cliente occasionale";
-  const backUrl = `/${encodeURIComponent(slug)}/pos_history`;
+  const backUrl = `/${encodeURIComponent(slug)}/${backSource.page}`;
 
   // Ordered product lines that can still be picked up (only on a non-cancelled sale).
   const collectableItems = useMemo(
@@ -382,7 +408,7 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
     if (!sale) return;
     const reason = cancelReason.trim();
     if (!reason) {
-      setError("La motivazione e obbligatoria per annullare una vendita.");
+      setError("La motivazione è obbligatoria per annullare una vendita.");
       return;
     }
     setBusy(true);
@@ -413,7 +439,7 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
       } else {
         setCancelOpen(false);
         setCancelReason("");
-        setFlash("Vendita annullata.");
+        setFlash("Vendita annullata con successo.");
         load();
       }
     } catch {
@@ -423,8 +449,10 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
     }
   }
 
-  async function markCollected(saleItemId: number, qty?: number) {
+  async function markCollected(saleItemId: number, qty?: number, lineQty?: number) {
     if (!sale) return;
+    // Conferma legacy prima del POST (pos_sale_detail.php data-confirm).
+    if (typeof window !== "undefined" && !window.confirm("Confermi il ritiro di questo prodotto? Il magazzino verrà scaricato.")) return;
     setBusy(true);
     setError("");
     try {
@@ -434,7 +462,13 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
       if (json?.error) {
         setError(json.error);
       } else {
-        setFlash("Ritiro registrato.");
+        // Esiti verbatim legacy (pos_sale_detail.php 2401-2403): variante parziale
+        // quando la quantità ritirata è inferiore a quella della riga.
+        const total = Math.max(1, Number(lineQty ?? 0) || Number(qty ?? 0) || 1);
+        const collected = qty && qty > 0 ? qty : total;
+        setFlash(collected < total
+          ? `Ritiro parziale registrato (${collected} su ${total}). Magazzino aggiornato.`
+          : "Prodotto segnato come ritirato. Magazzino aggiornato correttamente.");
         load();
       }
     } catch {
@@ -446,13 +480,14 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
 
   async function undoCollected(saleItemId: number) {
     if (!sale) return;
+    if (typeof window !== "undefined" && !window.confirm("Confermi la rimozione del ritiro? Il prodotto tornerà in Preordini e il magazzino verrà ripristinato.")) return;
     setBusy(true);
     setError("");
     try {
       const json = await postAction({ action: "undo_collected", sale_id: String(sale.id), sale_item_id: String(saleItemId) });
       if (json?.error) setError(json.error);
       else {
-        setFlash("Ritiro rimosso. Il prodotto e tornato in Preordini.");
+        setFlash("Ritiro rimosso. Il prodotto è tornato in Preordini.");
         load();
       }
     } catch {
@@ -464,6 +499,8 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
 
   async function prepaidExecute(prepaidId: number, qty: number) {
     if (!sale) return;
+    // Conferma legacy (senza accenti, come il data-confirm del PHP).
+    if (typeof window !== "undefined" && !window.confirm("Confermi esecuzione manuale di questo servizio? Il residuo verra scalato.")) return;
     setBusy(true);
     setError("");
     try {
@@ -482,6 +519,7 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
 
   async function prepaidUndo(usageId: number) {
     if (!sale) return;
+    if (typeof window !== "undefined" && !window.confirm("Confermi annullamento esecuzione manuale? Il residuo verra ripristinato.")) return;
     setBusy(true);
     setError("");
     try {
@@ -522,6 +560,22 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
     <div className="container-fluid py-3">
       <link rel="stylesheet" href="/assets/css/pages/pos_history.css" />
       <link rel="stylesheet" href="/assets/css/pages/pos_sale_detail.css" />
+
+      {/* Page header legacy (View::pageHeader): kicker Pagamenti, titolo, sottotitolo
+          con la pagina di provenienza e l'azione "Torna a Movimenti/Preordini/Prepagati". */}
+      <div className="bs-page-header">
+        <div className="bs-page-heading">
+          <div className="bs-page-kicker">Pagamenti</div>
+          <h1 className="bs-page-title">Dettaglio vendita</h1>
+          <div className="bs-page-subtitle">{`Dettaglio della vendita selezionata dalla pagina ${backSource.label}.`}</div>
+        </div>
+        <div className="bs-page-actions">
+          <a className="btn btn-outline-secondary btn-sm" href={backUrl}>
+            <i className="bi bi-arrow-left me-1" />
+            {`Torna a ${backSource.label}`}
+          </a>
+        </div>
+      </div>
 
       {loading ? (
         <div className="text-muted py-4">Caricamento…</div>
@@ -572,6 +626,11 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
                       {" • "}Preventivo: <strong>#{detail.quoteRef.number || String(detail.quoteRef.id)}</strong>
                     </>
                   ) : null}
+                  {detail?.paymentLabel ? (
+                    <>
+                      {" • "}Pagamento: <strong>{detail.paymentLabel}</strong>
+                    </>
+                  ) : null}
                 </div>
               </div>
               <div className="d-flex align-items-center gap-2 flex-wrap">
@@ -587,6 +646,34 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
                 <a className="btn btn-sm btn-outline-primary" href={backUrl}>
                   <i className="bi bi-x-lg me-1"></i>Chiudi
                 </a>
+                {/* Quick-link legacy agli artefatti emessi (conteggio se >1). */}
+                {detail?.quickGiftboxIds && detail.quickGiftboxIds.length > 0 ? (
+                  <a
+                    className="btn btn-sm btn-success"
+                    href={`/${encodeURIComponent(slug)}/giftbox?tab=instances&action=edit_instance&id=${detail.quickGiftboxIds[0]}`}
+                  >
+                    <i className="bi bi-gift me-1"></i>
+                    {`Apri GiftBox${detail.quickGiftboxIds.length > 1 ? ` (${detail.quickGiftboxIds.length})` : ""}`}
+                  </a>
+                ) : null}
+                {detail?.quickGiftcardIds && detail.quickGiftcardIds.length > 0 ? (
+                  <a
+                    className="btn btn-sm btn-success"
+                    href={`/${encodeURIComponent(slug)}/giftcard?action=edit&id=${detail.quickGiftcardIds[0]}`}
+                  >
+                    <i className="bi bi-gift me-1"></i>
+                    {`Apri GiftCard${detail.quickGiftcardIds.length > 1 ? ` (${detail.quickGiftcardIds.length})` : ""}`}
+                  </a>
+                ) : null}
+                {detail?.quickPackageIds && detail.quickPackageIds.length > 0 ? (
+                  <a
+                    className="btn btn-sm btn-outline-success"
+                    href={`/${encodeURIComponent(slug)}/packages?tab=clients&action=client_view&id=${detail.quickPackageIds[0]}`}
+                  >
+                    <i className="bi bi-box-seam me-1"></i>
+                    {`Apri Pacchetto${detail.quickPackageIds.length > 1 ? ` (${detail.quickPackageIds.length})` : ""}`}
+                  </a>
+                ) : null}
                 {!isCancelled ? (
                   <button
                     type="button"
@@ -616,16 +703,24 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
               </div>
             </div>
 
-            {/* Cancellation metadata when cancelled. */}
+            {/* "Stato annullamento" legacy: Stato / Data annullamento / Operatore / Motivo. */}
             {isCancelled ? (
               <div className="mt-3">
                 <div className="fw-semibold mb-2">Stato annullamento</div>
                 <div className="row g-3">
-                  <div className="col-12 col-md-4">
+                  <div className="col-6 col-md-2">
+                    <div className="small text-muted">Stato</div>
+                    <div><span className="badge text-bg-danger">Annullata</span></div>
+                  </div>
+                  <div className="col-6 col-md-3">
                     <div className="small text-muted">Data annullamento</div>
                     <div className="fw-semibold">{sale.cancelledAt ? fmtDateTime(sale.cancelledAt) : "—"}</div>
                   </div>
-                  <div className="col-12 col-md-8">
+                  <div className="col-6 col-md-3">
+                    <div className="small text-muted">Operatore</div>
+                    <div className="fw-semibold">{detail?.cancelledByName || "—"}</div>
+                  </div>
+                  <div className="col-12 col-md-4">
                     <div className="small text-muted">Motivo</div>
                     <div className="fw-semibold">{sale.cancelReason || "—"}</div>
                   </div>
@@ -645,9 +740,17 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
                     <div className="fw-semibold">Gestione Rate</div>
                     <div className="small text-muted">Piano rate collegato a questa vendita.</div>
                   </div>
+                  <div className="d-flex align-items-center gap-2">
+                  <a
+                    className="btn btn-sm btn-outline-primary"
+                    href={`/${encodeURIComponent(slug)}/installments_manage?plan_id=${detail.installmentPlan.id}`}
+                  >
+                    <i className="bi bi-cash-stack me-1"></i>Apri Gestione Rate
+                  </a>
                   <span className={`badge ${detail.installmentPlan.statusBadge || "text-bg-primary"}`}>
                     {detail.installmentPlan.statusLabel || "Attivo"}
                   </span>
+                  </div>
                 </div>
                 <div className="row g-3">
                   <div className="col-12 col-md-3">
@@ -757,7 +860,7 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
                             onChange={(e) => setCollectQty((m) => ({ ...m, [it.id]: Math.max(1, Math.min(Math.max(1, collectMax), Math.round(Number(e.target.value) || 1))) }))}
                           />
                         ) : null}
-                        <button type="button" className="btn btn-sm btn-success" disabled={busy || !canCollect} onClick={() => markCollected(it.id, lineQty > 1 ? chosen : undefined)}>
+                        <button type="button" className="btn btn-sm btn-success" disabled={busy || !canCollect} onClick={() => markCollected(it.id, lineQty > 1 ? chosen : undefined, lineQty)}>
                           <i className="bi bi-check2-circle me-1"></i>Segna ritirato
                         </button>
                       </div>
@@ -887,18 +990,19 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
                 <div className="col-12 col-lg-7">
                   <div className="table-responsive">
                     <table className="table table-sm align-middle mb-0">
+                      {/* Colonne legacy (pos_sale_detail.php 5122-5124): Elemento / Qtà /
+                          Totale — nessuna colonna Prezzo unitario. */}
                       <thead>
                         <tr>
                           <th>Elemento</th>
                           <th className="text-end">Qtà</th>
-                          <th className="text-end">Prezzo</th>
                           <th className="text-end">Totale</th>
                         </tr>
                       </thead>
                       <tbody>
                         {groupedItems.length === 0 ? (
                           <tr>
-                            <td colSpan={4} className="text-muted">
+                            <td colSpan={3} className="text-muted">
                               Nessun dettaglio righe disponibile.
                             </td>
                           </tr>
@@ -914,7 +1018,6 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
                                   </div>
                                 </td>
                                 <td className="text-end">{it.quantity}</td>
-                                <td className="text-end">€ {fmtMoney(it.unitPrice)}</td>
                                 <td className="text-end fw-semibold">€ {fmtMoney(it.total)}</td>
                               </tr>
                             );
@@ -972,6 +1075,15 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
                   ))
               )}
             </div>
+
+            {/* Note vendita "pulite" (senza marker tecnici) in <pre>, come il legacy
+                (pos_sale_detail.php 5500-5503 con $displayNotes). */}
+            {detail?.notesClean ? (
+              <div className="border rounded p-3 mt-3">
+                <div className="fw-semibold mb-2">Note</div>
+                <pre className="small mb-0" style={{ whiteSpace: "pre-wrap" }}>{detail.notesClean}</pre>
+              </div>
+            ) : null}
           </div>
 
           {/* Cancel modal: summary of what is cancelled/restored, blockers, stock decision,
@@ -999,9 +1111,32 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
                   </div>
                 ) : null}
 
+                {/* Sezione "Vendita annullabile" legacy (pos_sale_detail.php 5775-5800):
+                    intro + badge decisioni ("N decisione/i richiesta/e" o "Nessuna
+                    decisione extra") + nota ricalcolo Fidelity. */}
+                {summary && summary.blockers.length === 0 ? (
+                  <div className="alert alert-warning py-2">
+                    <div className="d-flex align-items-center justify-content-between gap-2">
+                      <div className="fw-semibold">Vendita annullabile</div>
+                      {(() => {
+                        const decisions = (summary.requiresStockDecision ? 1 : 0)
+                          + (summary.pointsStornoExtra ? 1 : 0)
+                          + summary.rechargePointStornoItems.length;
+                        return decisions > 0 ? (
+                          <span className="badge text-bg-warning text-dark">{`${decisions} decision${decisions === 1 ? "e" : "i"} richiest${decisions === 1 ? "a" : "e"}`}</span>
+                        ) : (
+                          <span className="badge text-bg-success">Nessuna decisione extra</span>
+                        );
+                      })()}
+                    </div>
+                    <div className="small">Questa operazione annullerà definitivamente la vendita.</div>
+                    <div className="small">I progressi Fidelity collegati alla vendita verranno ricalcolati.</div>
+                  </div>
+                ) : null}
+
                 {summary && summary.summary.length > 0 ? (
                   <div className="mb-2">
-                    <div className="small text-muted mb-1">Verranno annullati / ripristinati:</div>
+                    <div className="small text-muted mb-1">Cosa viene annullato</div>
                     <ul className="small mb-0 ps-3">
                       {summary.summary.map((line, i) => (
                         <li key={i}>{line}</li>
@@ -1023,31 +1158,39 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
                 {summary && summary.requiresStockDecision ? (
                   <div className="mb-2">
                     <div className="small fw-semibold mb-1">Magazzino prodotti</div>
+                    {/* Testi verbatim legacy (pos_sale_detail.php 5800-5815). */}
+                    {summary.products.length > 0 ? (
+                      <div className="small text-muted mb-1">
+                        Prodotti coinvolti: {summary.products.map((p) => `${p.name} x${p.qty}`).join(", ")}.
+                      </div>
+                    ) : null}
                     <div className="form-check">
                       <input
                         className="form-check-input"
                         type="radio"
                         name="stockMode"
-                        id="stockRestore"
+                        id="stockCancelRestore"
                         checked={stockMode === "restore"}
                         onChange={() => setStockMode("restore")}
                       />
-                      <label className="form-check-label" htmlFor="stockRestore">
-                        Ripristina la giacenza dei prodotti
+                      <label className="form-check-label" htmlFor="stockCancelRestore">
+                        Ripristina quantita a magazzino
                       </label>
+                      <div className="form-text">La giacenza dei prodotti verra aumentata della quantita annullata. Non verranno creati documenti di magazzino automatici.</div>
                     </div>
                     <div className="form-check">
                       <input
                         className="form-check-input"
                         type="radio"
                         name="stockMode"
-                        id="stockNoRestore"
+                        id="stockCancelNoRestore"
                         checked={stockMode === "no_restore"}
                         onChange={() => setStockMode("no_restore")}
                       />
-                      <label className="form-check-label" htmlFor="stockNoRestore">
-                        Non ripristinare la giacenza
+                      <label className="form-check-label" htmlFor="stockCancelNoRestore">
+                        Annulla senza ripristinare il magazzino
                       </label>
+                      <div className="form-text">La vendita sara annullata, ma la giacenza restera invariata.</div>
                     </div>
                   </div>
                 ) : null}
@@ -1162,16 +1305,19 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
 
                 <div className="mb-2">
                   <label className="form-label small fw-semibold" htmlFor="cancelReason">
-                    Motivo (obbligatorio)
+                    Motivazione
                   </label>
                   <textarea
                     id="cancelReason"
                     className="form-control form-control-sm"
                     rows={2}
+                    maxLength={255}
+                    placeholder="Es. errore operatore / cliente ha cambiato idea..."
                     value={cancelReason}
                     onChange={(e) => setCancelReason(e.target.value)}
                     disabled={Boolean(summary && summary.blockers.length > 0)}
                   />
+                  <div className="form-text">Campo obbligatorio, massimo 255 caratteri.</div>
                 </div>
 
                 <div className="d-flex justify-content-end gap-2">
@@ -1201,32 +1347,37 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
                 .pos-sale-cancel-dialog { width: 100%; max-width: 560px; margin: auto; }
               `}</style>
               <div className="pos-sale-cancel-dialog card p-3">
+                {/* Testi verbatim legacy (deleteCancelledSaleModal, pos_sale_detail.php
+                    5512-5622 + deleteModalLines 4545-4614). */}
                 <div className="d-flex align-items-center justify-content-between mb-2">
-                  <div className="h6 fw-semibold mb-0">Elimina vendita #{sale.id}</div>
+                  <div className="h6 fw-semibold mb-0">Elimina vendita annullata #{sale.id}</div>
                   <button type="button" className="btn-close" aria-label="Chiudi" onClick={() => setDeleteOpen(false)}></button>
                 </div>
                 <div className="alert alert-danger">
-                  <div className="fw-semibold mb-1">Operazione irreversibile</div>
+                  <div className="fw-semibold mb-1">Conferma eliminazione definitiva</div>
                   <div className="small">
                     La vendita annullata verrà eliminata definitivamente insieme alle sue righe.
                   </div>
                 </div>
                 <div className="mb-2">
-                  <div className="small text-muted mb-1">Verranno rimossi:</div>
+                  <div className="small text-muted mb-1">Cosa viene eliminato</div>
                   <ul className="small mb-0 ps-3">
-                    <li>La vendita #{sale.id} e le sue righe.</li>
+                    <li>{`Vendita annullata #${sale.id} del ${fmtDateTime(sale.createdAt)}: verrà eliminata dai Movimenti.`}</li>
+                    <li>{`Righe vendita: ${sale.items.length === 1 ? "verrà eliminata 1 riga" : `verranno eliminate ${sale.items.length} righe`}.`}</li>
                     {detail?.installmentPlan ? (
                       <li>
-                        Il piano rate collegato ({detail.installmentPlan.paymentTypeLabel || "Pagamento"} • residuo € {fmtMoney(detail.installmentPlan.remaining)}
-                        {detail.installmentPlan.paidCount > 0 ? ` • rate incassate: ${detail.installmentPlan.paidCount}` : ""}).
+                        {`Gestione Rate: verrà eliminato definitivamente il piano rate collegato (${detail.installmentPlan.paymentTypeLabel || "Pagamento"} • acconto € ${fmtMoney(detail.installmentPlan.downPayment)} • residuo € ${fmtMoney(detail.installmentPlan.remaining)} • rate incassate: ${detail.installmentPlan.paidCount}).`}
                       </li>
                     ) : null}
                     <li>Le scelte magazzino e gli eventi collegati.</li>
                   </ul>
+                  <div className="small text-muted mt-2">
+                    Le prenotazioni annullate collegate resteranno invariate per storico; eventuali artefatti collegati solo allo storico non verranno eliminati.
+                  </div>
                 </div>
                 <div className="d-flex justify-content-end gap-2">
                   <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => setDeleteOpen(false)}>
-                    Indietro
+                    Chiudi
                   </button>
                   <button type="button" className="btn btn-sm btn-danger" disabled={busy} onClick={confirmDelete}>
                     <i className="bi bi-trash me-1"></i>Elimina definitivamente

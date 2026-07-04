@@ -1133,9 +1133,9 @@ export async function cancelManageSale(
   const saleRow = await getSaleRow(slug, input.saleId);
   // Per-sale location access guard (port of _pos_hist_assert_sale_location_access).
   await assertSaleLocationAccess(slug, Number(saleRow.location_id ?? 0) || 0);
-  if (isCancelledStatus(saleRow.status)) throw new Error("Vendita gia annullata.");
+  if (isCancelledStatus(saleRow.status)) throw new Error("Vendita già annullata.");
   const reason = clean(input.reason, 255);
-  if (!reason) throw new Error("La motivazione e obbligatoria per annullare una vendita.");
+  if (!reason) throw new Error("La motivazione è obbligatoria per annullare una vendita.");
   const sale = await mapSale(slug, saleRow);
   const locationId = Number(saleRow.location_id ?? sale.locationId ?? 0) || 0;
   const productItems = sale.items.filter((item) => item.type === "product" && item.refId > 0 && item.status !== "ordered");
@@ -1503,6 +1503,14 @@ export type PosSaleDetail = {
   sale: PosSale;
   operatorName: string;
   locationName: string;
+  // Quick-link header legacy "Apri GiftBox/GiftCard/Pacchetto" (+ conteggio se >1):
+  // id degli artefatti emessi dalla vendita. Meta "Pagamento: <label>" e operatore
+  // dell'annullo per il box "Stato annullamento".
+  quickGiftcardIds: number[];
+  quickGiftboxIds: number[];
+  quickPackageIds: number[];
+  paymentLabel: string;
+  cancelledByName: string;
   cancelSummary: PosCancelSummary;
   canCancel: boolean;
   canMarkCollected: boolean;
@@ -1603,11 +1611,37 @@ export async function getManageSaleDetail(slug: string, id: number): Promise<Pos
   // "Cronologia utilizzo / ritiro" data: prepaid usage timelines + per-product pickup state.
   const prepaidTracking = notCancelled ? await buildPrepaidTracking(slug, id, sale).catch(() => []) : [];
   const preorderTracking = notCancelled ? await buildPreorderTracking(slug, sale).catch(() => []) : [];
+  // Quick-link header legacy (pos_sale_detail.php 4806-4835): "Apri GiftBox/GiftCard/
+  // Pacchetto" con conteggio quando >1 — gli artefatti EMESSI dalla vendita.
+  // GiftCard/GiftBox si risalgono dalle RIGHE vendita (refId della riga emessa:
+  // giftcards non ha una colonna sale_id); i pacchetti da client_packages.sale_id.
+  const quickGiftcardIds = [...new Set(sale.items.filter((it) => it.type === "giftcard" && Number(it.refId ?? 0) > 0).map((it) => Number(it.refId)))];
+  const quickGiftboxIds = [...new Set(sale.items.filter((it) => it.type === "giftbox" && Number(it.refId ?? 0) > 0).map((it) => Number(it.refId)))];
+  const quickPackageIds = (await tenantSelect<RowDataPacket>({ slug, table: "client_packages", columns: "id", where: "sale_id = ?", params: [id], orderBy: "id ASC" }).catch(() => [] as RowDataPacket[]))
+    .map((r) => Number(r.id ?? 0)).filter((v) => v > 0);
+  // Meta header "Pagamento: <label>" (display del payment_type legacy). Lo schema
+  // Next non ha sales.payment_type: il metodo BASE si deriva dai pagamenti
+  // registrati (primo tra contanti/carta/assegno/bonifico, come il Tipo pagamento
+  // scelto in cassa e riportato nelle note "Tipo pagamento: X").
+  const baseMethod = sale.payments.map((p) => String(p.method ?? "").toLowerCase()).find((m) => m === "cash" || m === "card" || m === "check" || m === "transfer") ?? "";
+  const paymentLabel = (LEGACY_PAYMENT_TYPE_LABELS as Record<string, string | undefined>)[baseMethod] ?? "";
+  // "Stato annullamento" legacy mostra anche l'OPERATORE dell'annullo.
+  let cancelledByName = "";
+  const cancelledBy = Number(row.cancelled_by ?? 0) || 0;
+  if (cancelledBy > 0) {
+    const userRows = await tenantSelect<RowDataPacket>({ slug, table: "users", columns: "name, email", where: "id = ?", params: [cancelledBy], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    cancelledByName = String(userRows[0]?.name ?? userRows[0]?.email ?? "").trim();
+  }
   return {
     ok: true,
     sale,
     operatorName,
     locationName,
+    quickGiftcardIds,
+    quickGiftboxIds,
+    quickPackageIds,
+    paymentLabel,
+    cancelledByName,
     cancelSummary,
     canCancel: sale.status !== "cancelled" && cancelSummary.blockers.length === 0,
     canMarkCollected: sale.status !== "cancelled",
@@ -3042,7 +3076,7 @@ export async function markManageSaleItemCollected(
   const saleRow = await getSaleRow(slug, input.saleId);
   // Per-sale location access guard (port of _pos_hist_assert_sale_location_access).
   await assertSaleLocationAccess(slug, Number(saleRow.location_id ?? 0) || 0);
-  if (isCancelledStatus(saleRow.status)) throw new Error("La vendita e annullata: il ritiro non puo essere registrato.");
+  if (isCancelledStatus(saleRow.status)) throw new Error("La vendita è annullata: il ritiro non può essere registrato.");
   const locationId = Number(saleRow.location_id ?? 0) || 0;
 
   const itemRows = await tenantSelect<RowDataPacket>({
@@ -3126,7 +3160,7 @@ export async function undoManageSaleItemCollected(
   if (input.saleId <= 0 || input.saleItemId <= 0) throw new Error("Riga prodotto non valida.");
   const saleRow = await getSaleRow(slug, input.saleId);
   await assertSaleLocationAccess(slug, Number(saleRow.location_id ?? 0) || 0);
-  if (isCancelledStatus(saleRow.status)) throw new Error("La vendita e annullata: non e possibile modificare il ritiro.");
+  if (isCancelledStatus(saleRow.status)) throw new Error("La vendita è annullata: non è possibile modificare il ritiro.");
   const locationId = Number(saleRow.location_id ?? 0) || 0;
 
   const itemRows = await tenantSelect<RowDataPacket>({

@@ -138,7 +138,7 @@ export function InstallmentsManageContent({ slug: slugProp }: { slug?: string } 
   const [payNote, setPayNote] = useState<Record<number, string>>({});
 
   // Cancel-plan state: pending force-confirm when the server refuses a plan with paid installments.
-  const [cancelForcePlanId, setCancelForcePlanId] = useState<number>(0);
+
 
   // Load the filtered plan list. Faithful to searchPlans($filters): the status synthetic values are
   // resolved server-side, so pass them straight through.
@@ -280,28 +280,6 @@ export function InstallmentsManageContent({ slug: slugProp }: { slug?: string } 
     }
   }
 
-  async function annullaPiano(plan: InstallmentPlan, force: boolean) {
-    setBusy(true);
-    setError("");
-    setFlash("");
-    try {
-      const json = await postAction({ action: "cancel", plan_id: String(plan.id), reason: "", ...(force ? { allow_paid: "1" } : {}) });
-      if (json?.error) {
-        setError(json.error);
-        // The server refuses a plan with already-paid rate unless allow_paid is set — offer a
-        // confirm-to-force button by remembering which plan tripped the guard.
-        setCancelForcePlanId(plan.id);
-      } else {
-        setFlash("Piano annullato");
-        setCancelForcePlanId(0);
-        applyResult(json, plan.id);
-      }
-    } catch {
-      setError("Operazione non completata.");
-    } finally {
-      setBusy(false);
-    }
-  }
 
   const posUrl = `/${encodeURIComponent(slug)}/pos`;
   const historyUrl = `/${encodeURIComponent(slug)}/pos_history`;
@@ -540,18 +518,14 @@ export function InstallmentsManageContent({ slug: slugProp }: { slug?: string } 
                 ) : (
                   <PlanDetail
                     plan={selectedPlan}
-                    busy={busy}
-                    cancelForce={cancelForcePlanId === selectedPlan.id}
-                    payType={payType}
+                    busy={busy}                    payType={payType}
                     payAt={payAt}
                     payNote={payNote}
                     setPayType={setPayType}
                     setPayAt={setPayAt}
                     setPayNote={setPayNote}
                     onIncassa={incassa}
-                    onRiapri={riapri}
-                    onAnnulla={annullaPiano}
-                  />
+                    onRiapri={riapri}                  />
                 )}
               </div>
             </div>
@@ -562,25 +536,19 @@ export function InstallmentsManageContent({ slug: slugProp }: { slug?: string } 
   );
 }
 
-// Selected-plan detail: the 8-item KPI grid, notes/cancellation alerts, "Annulla piano" button,
+// Selected-plan detail: the 8-item KPI grid, notes/cancellation alerts,
 // and the schedule table (down-payment info line + installment rows with inline incasso forms).
 function PlanDetail(props: {
   plan: InstallmentPlan;
-  busy: boolean;
-  cancelForce: boolean;
-  payType: Record<number, string>;
+  busy: boolean;  payType: Record<number, string>;
   payAt: Record<number, string>;
   payNote: Record<number, string>;
   setPayType: React.Dispatch<React.SetStateAction<Record<number, string>>>;
   setPayAt: React.Dispatch<React.SetStateAction<Record<number, string>>>;
   setPayNote: React.Dispatch<React.SetStateAction<Record<number, string>>>;
   onIncassa: (inst: Installment, planId: number) => void;
-  onRiapri: (inst: Installment, planId: number) => void;
-  onAnnulla: (plan: InstallmentPlan, force: boolean) => void;
-}) {
-  const { plan, busy, cancelForce, payType, payAt, payNote, setPayType, setPayAt, setPayNote, onIncassa, onRiapri, onAnnulla } = props;
-  const isCancelled = plan.status === "cancelled";
-
+  onRiapri: (inst: Installment, planId: number) => void;}) {
+  const { plan, busy, payType, payAt, payNote, setPayType, setPayAt, setPayNote, onIncassa, onRiapri } = props;
   return (
     <>
       <div className="installments-kpi mb-3">
@@ -634,17 +602,11 @@ function PlanDetail(props: {
         </div>
       ) : null}
 
-      {!isCancelled ? (
-        <div className="mb-3">
-          <button type="button" className="btn btn-outline-danger btn-sm" disabled={busy} onClick={() => onAnnulla(plan, cancelForce)}>
-            <i className="bi bi-x-circle me-1" />
-            {cancelForce ? "Annulla piano (forza)" : "Annulla piano"}
-          </button>
-          {cancelForce ? (
-            <div className="small text-danger mt-1">Il piano ha rate gi&agrave; incassate. Premi di nuovo per annullare comunque.</div>
-          ) : null}
-        </div>
-      ) : null}
+      {/* NB parità legacy: installments_manage.php NON ha un bottone "Annulla piano" —
+          il piano viene annullato SOLO dall'annullo della vendita collegata
+          (SaleInstallments::cancelPlanBySaleId dentro cancel_sale). Il bottone
+          inventato in una passata precedente è stato rimosso; l'action API cancel
+          resta per l'uso interno dell'annullo vendita. */}
 
       <div className="table-responsive">
         <table className="table table-sm align-middle schedule-table mb-0">

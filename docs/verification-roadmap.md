@@ -3275,3 +3275,73 @@ su prenotazione attiva + exclude in edit, cleanup CLEAN) + re-run redeem-edit
 28/28 + 38/38 marker modale + 5/5 verifiche NEGATIVE (testi inline spariti).
 Nota infra: DNS flaky del router sul pooler Supabase aggirato nei test con
 connection string a IP diretto (ssl rejectUnauthorized:false).
+
+## Pagamenti — AUDIT v4 (2026-07-04): Dettaglio vendita + area completa
+Metodo: doppio inventario agent sull'INTERA area (nav legacy: Pagamenti/
+Movimenti/Prepagati/Preordini/Impostazioni/Gestione Rate; NON esiste api_pos.php
+— le azioni sono mode= dentro pos.php e do= nelle pagine) + catture live di
+pos_history/pos_preorders/pos_prepaids/pos_settings/installments_manage/
+pos_sale_detail(#27).
+PARITÀ CONFERMATE (non-gap, verificati): niente Svuota carrello / prezzo libero
+/ barcode / IVA / stampa / scorciatoie (solo Enter coupon) nel legacy; nessun
+prefill cassa da cliente/appuntamento nel legacy (il ?appointment= Next resta
+capability latente senza UI); il secondo form filtri di Movimenti in d-none è
+NEL LEGACY (residuo anche là); Movimenti senza paginazione (cap + footer);
+"Stock: N" anche a 0; riga "Acconto iniziale" con badge "Incassato in vendita"
+nelle Rate; etichette riduzioni già verbatim (Buoni / promozioni / sconti ecc.).
+GAP CHIUSI:
+1. RIMOSSO il bottone "Annulla piano"/"(forza)" dalla Gestione Rate: INVENTATO
+   (installments_manage.php ha solo Incassa/Riapri; il piano si annulla SOLO
+   dall'annullo della vendita collegata). Verifica negativa sul bundle; l'action
+   API cancel resta per l'annullo vendita.
+2. DETTAGLIO VENDITA — struttura legacy completata:
+   • page header con kicker Pagamenti, titolo, sottotitolo "Dettaglio della
+     vendita selezionata dalla pagina X." e azione "Torna a Movimenti/Preordini/
+     Prepagati" pilotata da ?back= (movimenti default);
+   • meta header + "Pagamento: <label>" (derivato dal metodo base dei pagamenti:
+     lo schema Next non ha sales.payment_type);
+   • quick-link "Apri GiftBox/GiftCard/Pacchetto" (+" (N)" se >1) con gli href
+     legacy (giftbox tab=instances edit_instance / giftcard edit / packages
+     tab=clients client_view) — GC/GiftBox risaliti dalle righe vendita,
+     pacchetti da client_packages.sale_id;
+   • "Stato annullamento" con Stato badge + Operatore (nuovo cancelledByName);
+   • card Note (notesClean in <pre>) che era nel payload ma NON renderizzata;
+   • card Gestione Rate con link "Apri Gestione Rate" (?plan_id=);
+   • riepilogo a 3 COLONNE legacy (Elemento/Qtà/Totale — via la colonna Prezzo).
+3. MODALE ANNULLO verbatim: sezione "Vendita annullabile" con badge "N
+   decisione/i richiesta/e"/"Nessuna decisione extra", "Questa operazione
+   annullerà definitivamente la vendita.", "I progressi Fidelity collegati alla
+   vendita verranno ricalcolati."; "Cosa viene annullato" (era "Verranno
+   annullati / ripristinati:"); "Prodotti coinvolti: ..."; radio magazzino
+   legacy "Ripristina quantita a magazzino"/"Annulla senza ripristinare il
+   magazzino" con gli help verbatim; label "Motivazione" + placeholder
+   "Es. errore operatore / cliente ha cambiato idea..." + "Campo obbligatorio,
+   massimo 255 caratteri.".
+4. MODALE ELIMINA verbatim: titolo "Elimina vendita annullata #N", "Conferma
+   eliminazione definitiva", "Cosa viene eliminato" con le righe legacy
+   ("Vendita annullata #N del <data>: verrà eliminata dai Movimenti.", "Righe
+   vendita: ...", "Gestione Rate: verrà eliminato definitivamente il piano rate
+   collegato (tipo • acconto € • residuo € • rate incassate: N).", avviso
+   prenotazioni per storico), footer Chiudi/Elimina definitivamente.
+5. CONFERME legacy prima dei POST (data-confirm): ritiro / rimozione ritiro
+   (con accenti) ed esecuzione/annullo esecuzione manuale (senza accenti, come
+   il PHP), + esiti verbatim: "Vendita annullata con successo.", "Ritiro
+   parziale registrato (X su Y). Magazzino aggiornato." / "Prodotto segnato
+   come ritirato. Magazzino aggiornato correttamente.", "Ritiro rimosso. Il
+   prodotto è tornato in Preordini." (è).
+6. ACCENTI server ripristinati dove il legacy li ha: "La motivazione è
+   obbligatoria per annullare una vendita.", "Vendita già annullata.",
+   "La vendita è annullata: il ritiro non può essere registrato." / "... non è
+   possibile modificare il ritiro." (le guardie prepagati restano senza accenti
+   come nel PHP).
+RESIDUI DOCUMENTATI: suffissi esito legacy non portati ("... Commissioni
+operatore annullate: N (totale € X)." — il checkout Next non registra movimenti
+commissioni da stornare; " Piano rate collegato eliminato..." e conteggi
+artefatti nel delete); righe delete "Artefatti creati dalla vendita/Commissioni/
+Scelte magazzino: N" richiedono conteggi server non esposti; filtri Rate senza
+bottoni Filtra/Reset (aggiornamento live equivalente); all_locations resta il
+residuo di area documentato.
+Verifica: battery 15/15 (paymentLabel Contanti, notesClean, quickPackageIds,
+accenti è/già, cancelledByName, guardia ritiro su annullata verbatim,
+delete_sale, cleanup CLEAN) + 32/32 marker + 2/2 negativi + typecheck; lint =
+baseline (l'unico error set-state-in-effect preesistente).
