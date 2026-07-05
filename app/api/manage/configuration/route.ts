@@ -80,6 +80,11 @@ export async function GET(request: Request) {
       ...(moduleId === "giftcard_settings"
         ? { canGiftcardManage: can(session.user.perms, "giftcard.manage"), canCreate: can(session.user.perms, "pos.manage") }
         : {}),
+      // fidelity_membership_settings.php gates: header 'Livelli Card' su
+      // fidelity.levels; stato disabilitato con link Fidelity su fidelity.manage.
+      ...(moduleId === "fidelity_membership"
+        ? { canFidelityManage: can(session.user.perms, "fidelity.manage"), canLevels: can(session.user.perms, "fidelity.levels") }
+        : {}),
     });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Errore configurazione.");

@@ -714,6 +714,16 @@ export default async function TenantPage({
     );
   }
 
+  // Faithful Impostazioni tessera Fidelity (fidelity_membership_settings.php):
+  // flash ?msg/?err via redirect (#fidelity_card_settings).
+  if (page === "fidelity_membership_settings") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <FidelityMembershipSettingsContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
+      </ManageShell>
+    );
+  }
+
   // Faithful Adesione (fidelity_membership.php): filtro ?q + pagina ?p +
   // flash ?msg/?err.
   if (page === "fidelity_membership") {

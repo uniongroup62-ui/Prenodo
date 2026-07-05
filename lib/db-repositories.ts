@@ -16395,7 +16395,7 @@ async function rememberCardCode(slug: string, normalizedCode: string, cardId: nu
 // discounts_for_clients): i punti erano solo LOCKATI virtualmente — azzera le
 // colonne fidelity SENZA riaccredito e ripulisce le note automatiche
 // 'Fidelity: ...'. Returns the number of appointments touched.
-async function releasePendingAppointmentFidelityForClient(slug: string, clientId: number): Promise<number> {
+export async function releasePendingAppointmentFidelityForClient(slug: string, clientId: number): Promise<number> {
   if (clientId <= 0) return 0;
   const linked = await tenantSelect<RowDataPacket>({
     slug,
@@ -16422,6 +16422,36 @@ async function releasePendingAppointmentFidelityForClient(slug: string, clientId
   return linked.length;
 }
 
+// Port fedele di fidelity_card_sync_expired_statuses (Helpers.php ~4502):
+// disattiva le tessere già scadute e rilascia le agevolazioni Fidelity ancora
+// prenotate su appuntamenti pending/scheduled dei clienti con tessere scadute
+// (qualunque stato tessera). I punti erano solo lockati: nessun riaccredito.
+// No-op quando la scadenza tessera è disattivata.
+export async function syncExpiredFidelityCardStatuses(slug: string): Promise<number> {
+  const bizRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_adhesion_json", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const cfg = parseCardValidityConfig(bizRows[0]?.fidelity_adhesion_json);
+  if (!cfg.enabled) return 0;
+  const today = todayIso();
+  const cardsT = await tenantTable(slug, "cards").catch(() => null);
+  if (!cardsT) return 0;
+  const scoped = cardsT.mode === "shared";
+  const scopeSql = scoped ? "tenant_id = ? AND " : "";
+  const scopeParams = scoped ? [cardsT.tenantId ?? 0] : [];
+  const expiredClients = await dbQuery<RowDataPacket[]>(
+    `SELECT DISTINCT client_id FROM ${quoteIdentifier(cardsT.name)} WHERE ${scopeSql}expires_at IS NOT NULL AND expires_at < ?`,
+    [...scopeParams, today],
+  ).catch(() => [] as RowDataPacket[]);
+  const res = await dbExecute(
+    `UPDATE ${quoteIdentifier(cardsT.name)} SET status = 'inactive' WHERE ${scopeSql}status = 'active' AND expires_at IS NOT NULL AND expires_at < ?`,
+    [...scopeParams, today],
+  ).catch(() => null);
+  for (const row of expiredClients) {
+    const clientId = Number(row.client_id ?? 0);
+    if (clientId > 0) await releasePendingAppointmentFidelityForClient(slug, clientId).catch(() => 0);
+  }
+  return Number(res?.affectedRows ?? 0);
+}
+
 // List the Fidelity cards + validity config (port of the fidelity_membership.php
 // list): filtro q in SQL (codice/nome/email), paginazione 20/pagina, righe con
 // stato effettivo, finestra di rinnovo ('in fase di scadenza') e scadenza di
@@ -16434,16 +16464,8 @@ export async function getFidelityMembership(slug: string, q: string, pageRaw = 1
   const renewal = parseCardRenewalWindowConfig(bizRows[0]?.fidelity_adhesion_json);
   const today = todayIso();
 
-  // Sync scadute (best-effort, solo con scadenza tessera abilitata).
-  if (cfg.enabled) {
-    const cardsT = await tenantTable(slug, "cards").catch(() => null);
-    if (cardsT) {
-      await dbExecute(
-        `UPDATE ${quoteIdentifier(cardsT.name)} SET status = 'inactive' WHERE tenant_id = ? AND status = 'active' AND expires_at IS NOT NULL AND expires_at < ?`,
-        [cardsT.tenantId ?? 0, today],
-      ).catch(() => undefined);
-    }
-  }
+  // Sync scadute + release legacy delle agevolazioni prenotate (best-effort).
+  await syncExpiredFidelityCardStatuses(slug).catch(() => 0);
 
   const cardsT = await tenantTable(slug, "cards");
   const cT = await tenantTable(slug, "clients");

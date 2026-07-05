@@ -4695,3 +4695,79 @@ intatto e note ripulite, riattivazione con credito sync e guardia senza
 durata, eliminazione con reset e codice bloccato, client_search, ripristino
 businesses e zero residui) + 60/60 marker bundle + regressioni wallet 29/29
 e toggle 27/27 + typecheck/lint puliti.
+
+## Impostazioni tessera Fidelity (fidelity_membership_settings.php) — 2026-07-05
+AUDIT COMPLETO della pagina (539 righe: form scadenza/rinnovo/promemoria con
+handler save_fidelity_card_validity_default) + fidelity_membership_settings.js
+(222 righe) vs saveFidelityCardValidityDefault/getFidelityMembershipSettings +
+componente Next. FIX PRINCIPALI:
+1. CLAMP finestra rinnovo riscritto con ARITMETICA DI CALENDARIO legacy
+   (fidelity_card_duration_compare su base 2001-01-01 + max_strictly_smaller
+   con binary search per unità years->months->days): prima usava
+   un'approssimazione in giorni e CORROMPEVA l'unità (2 anni vs 365 giorni
+   scriveva 18008/years invece di 11/months); confronto Y-m-d numerico
+   (compare_ymd) perché con anni a 5 cifre il confronto stringa passava.
+   Clamp applicato SOLO con scadenza+rinnovo attivi; display GET con finestra
+   memorizzata già clampata + flag renewalClamped per il warning legacy.
+2. renewal_enabled NON più forzato a 0 con scadenza off (il legacy salva il
+   posted); confronto "Nessuna modifica da salvare." fedele: finestra
+   precedente CLAMPATA sulla durata precedente, reminder normalizzato,
+   expiryEnabledChanged||durationChanged||renewalChanged.
+3. Apply-to-existing fedele: contatori su flip di USABILITÀ (stato attivo E
+   non scaduta) — prima disable riattivava solo le inactive scadute perdendo
+   le attive-scadute; restore ora mantiene inattive le tessere disattivate
+   manualmente nel periodo senza scadenza, ripristina PRIMA la data snapshot
+   per-card e per le tessere senza snapshot usa emissione+durata memorizzata
+   (con clamp fine mese); durata di ripristino = posted>0 altrimenti durata
+   precedente (disable) / snapshot->default->posted (restore).
+4. RELEASE agevolazioni mancante: le tessere risultate scadute al restore
+   tolgono le agevolazioni prenotate (pending/scheduled) dei loro clienti via
+   releasePendingAppointmentFidelityForClient — colonne azzerate, note
+   automatiche ripulite, NESSUN riaccredito punti (erano solo lockati) — con
+   coda messaggio 'Alcune tessere sono risultate scadute e N prenotazione/i
+   con agevolazioni Fidelity hanno perso le agevolazioni prenotate su
+   appuntamenti in stato In sospeso / Prenotato.'; refresh dei clienti con
+   flip: ricalcolo livello + credito wallet sincronizzato sulle tessere attive
+   (credit_wallet_sync_active_cards); pulizia card_reminders pending
+   expiry_window in tutte le modalità.
+5. MESSAGGI VERBATIM per modalità (confermati 1:1 contro il PHP live): disable
+   con coda riattivate ('N tessera precedentemente scaduta è tornata attiva.')
+   + coda durata memorizzata ('Se riattiverai in futuro la scadenza
+   automatica... (N giorni).') prima assenti; restore col testo lungo legacy
+   ('hanno recuperato prima l'ultima data di scadenza memorizzata quando la
+   scadenza automatica era stata disattivata; ... (label).') + 'restano
+   scadute / non attive finché non usi Riattiva tessera.'; preserve con coda
+   'Rinnovo automatico e promemoria di scadenza sono stati aggiornati anche
+   per le tessere già presenti.' (prima assente); etichetta durata legacy
+   singolare/plurale ('1 giorno/mese/anno', '0 giorni').
+6. SYNC scadute legacy estesa: nuova syncExpiredFidelityCardStatuses
+   (UPDATE inactive + release per TUTTI i clienti con tessere scadute) usata
+   al load della pagina (GET modulo), sul POST prima del salvataggio (come il
+   legacy che sincronizza prima del blocco _mode) e in getFidelityMembership
+   (prima la sync di Adesione non rilasciava le agevolazioni).
+7. Componente riscritto sul JS legacy: show/hide dinamico (campi durata/
+   sezioni dipendenti nascoste con scadenza off, notice 'Scadenza tessera
+   disattivata.' solo da spenta, promemoria alternativo al rinnovo), bottone
+   Salva DISABILITATO senza modifiche (title 'Nessuna modifica da salvare' /
+   'Salva le modifiche alla tessera Fidelity'), MODAL 'Aggiorna tessere
+   Fidelity' con testi per modalità (generic/disable/restore/renewal_only) e
+   impatto rosso solo su restore (prima window.confirm con testo inventato),
+   redirect flash ?msg/#fidelity_card_settings (errori in pagina come il
+   legacy), stato disabilitato con Fidelity globale off (alert + header
+   Adesione/Fidelity gated fidelity.manage), 'Livelli Card' gated
+   fidelity.levels, warning clamp display; branch page.tsx con initialQuery;
+   GET route espone canFidelityManage/canLevels.
+GIA FEDELI: guardie durata/conferma verbatim, ordine guardie (durata ->
+nessuna modifica -> conferma), snapshot per-card al disable, testi statici.
+RESIDUI DELIBERATI: il POST con Fidelity globale off risponde 'Attiva prima la
+Fidelity per gestire le tessere.' (il legacy lo ignora con l'early-return);
+l'alert 'DB da aggiornare' senza tabella cards non è portato (schema Next
+completo); reminders_cleared non compare in nessun messaggio (come legacy).
+Verifica: battery e2e 29/29 (guardie, nessuna-modifica, clamp calendario
+2anni->11mesi e 11mesi->5mesi con JSON persistito, display 400g->364g con
+warning, preserve senza toccare le attive, disable con snapshot+2 riattivate+
+credito sync, restore da snapshot con release senza riaccredito e note
+ripulite, tessera senza snapshot da emissione+durata, sync su GET con release,
+ripristino businesses e zero residui) + confronto LIVE PHP dei flash
+(preserve/disable/restore/unchanged identici, JSON clamp identico) + 65/65
+marker bundle + regressione Adesione 32/32 + typecheck/lint puliti.
