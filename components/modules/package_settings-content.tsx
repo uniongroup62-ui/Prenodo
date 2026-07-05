@@ -85,7 +85,8 @@ export function PackageSettingsContent({ slug: slugProp }: { slug?: string } = {
         setFeedback({ type: "danger", text: String(j?.error ?? j?.message ?? "Errore.") });
         return;
       }
-      setFeedback({ type: "success", text: String(j?.message ?? "Impostazioni scadenza Pacchetti salvate.") });
+      setFeedback({ type: "success", text: String(j?.message ?? "Impostazioni scadenza Pacchetti salvate. I pacchetti gia presenti rimarranno invariati.") });
+      if (typeof window !== "undefined") window.scrollTo(0, 0);
       load();
     } catch {
       setFeedback({ type: "danger", text: "Errore di rete." });
@@ -111,8 +112,11 @@ export function PackageSettingsContent({ slug: slugProp }: { slug?: string } = {
       </div>
 
       {feedback ? (
-        <div className={`alert alert-${feedback.type}`} role="alert">
-          {feedback.text}
+        <div className={`alert alert-${feedback.type} d-flex align-items-start gap-2`} role="alert">
+          <div>
+            <i className="bi bi-info-circle" />
+          </div>
+          <div>{feedback.text}</div>
         </div>
       ) : null}
 

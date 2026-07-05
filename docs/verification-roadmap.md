@@ -3975,3 +3975,14 @@ e riserve, usage prodotti con stock/stock_docs/note verbatim, scadenza con
 guardie legacy e riattivazione, client_save con guardie, client_new bloccato,
 catalog_delete con detach, cleanup CLEAN) + 92/92 marker bundle + typecheck/
 lint puliti (warning no-css-tags pre-esistenti).
+
+## Pacchetti / Impostazioni (package_settings.php) — 2026-07-05
+Audit del residuo dell'area Pacchetti (131 righe): il componente Next era gia
+sostanzialmente fedele (layout card Scadenza predefinita + info box "Come
+funziona", clamp 0..36500 e whitelist unit days/months/years nel backend).
+FIX: messaggio di salvataggio verbatim del redirect legacy ("Impostazioni
+scadenza Pacchetti salvate. I pacchetti gia presenti rimarranno invariati." —
+prima troncato senza la coda) e flash con il markup View::alert (icona
+bi-info-circle + d-flex). Verifica: battery e2e 6/6 (msg verbatim, 90 months,
+clamp 36500 + unit fallback days, negativo->0, RIPRISTINO dei valori business
+originali) + 16/16 marker bundle + typecheck/lint puliti.

@@ -171,7 +171,8 @@ async function saveFeatureSettings(
     return null;
   }
   if (moduleId === "package_settings") {
-    if (action === "save" || action === "save_package_validity_default") return { message: "Impostazioni scadenza Pacchetti salvate.", module: await savePackageValidityDefault(slug, body) };
+    // Messaggio verbatim del redirect legacy (package_settings.php).
+    if (action === "save" || action === "save_package_validity_default") return { message: "Impostazioni scadenza Pacchetti salvate. I pacchetti gia presenti rimarranno invariati.", module: await savePackageValidityDefault(slug, body) };
     return null;
   }
   if (moduleId === "quote_settings") {
