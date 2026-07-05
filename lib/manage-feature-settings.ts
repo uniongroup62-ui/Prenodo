@@ -237,7 +237,9 @@ function isEmail(value: string): boolean {
 function isUrl(value: string): boolean {
   try {
     const parsed = new URL(value);
-    return Boolean(parsed.protocol && parsed.host);
+    // FILTER_VALIDATE_URL rifiuta host con caratteri fuori da RFC (es. "!"),
+    // che il WHATWG URL di Node invece accetta: valida anche l'hostname.
+    return Boolean(parsed.protocol && parsed.host) && /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/i.test(parsed.hostname);
   } catch {
     return false;
   }
@@ -290,10 +292,23 @@ function paymentMethodRowsFromRaw(raw: unknown): Array<{ name: string; details: 
   return out;
 }
 
+// Il body JSON della route appiattisce gli array: accetta anche pm_name /
+// pm_details come stringhe JSON (["Bonifico",...]) oltre agli array nativi.
+function pmArrayFromInput(value: unknown): unknown[] | null {
+  if (Array.isArray(value)) return value;
+  if (typeof value === "string" && value.trim().startsWith("[")) {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed;
+    } catch { /* not JSON */ }
+  }
+  return null;
+}
+
 // Build the raw `payment_methods` text from structured pm_name[]/pm_details[] arrays.
 function paymentMethodsRawFromInput(input: Record<string, unknown>): string {
-  const names = input.pm_name;
-  const details = input.pm_details;
+  const names = pmArrayFromInput(input.pm_name);
+  const details = pmArrayFromInput(input.pm_details);
   if (Array.isArray(names)) {
     const detailsArr = Array.isArray(details) ? details : [];
     const lines: string[] = [];

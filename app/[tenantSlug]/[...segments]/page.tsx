@@ -460,6 +460,16 @@ export default async function TenantPage({
     return <QuotePrintContent slug={tenantSlug} initialQuery={{ id: query.id }} />;
   }
 
+  // Faithful Preventivi / Impostazioni (quote_settings.php): flash ?msg/?err
+  // dal redirect legacy.
+  if (page === "quote_settings") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <QuoteSettingsContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
+      </ManageShell>
+    );
+  }
+
   // Faithful quotes LIST (quotes.php action=list): filtri server-side dalla
   // querystring + flash ?msg/?err.
   if (page === "quotes") {

@@ -4098,3 +4098,48 @@ paid-sync su DB, vendita collegata attiva/annullata, filtri lista, print,
 delete draft-only, cleanup CLEAN + ripristino businesses) + 84/84 marker
 bundle + regressione Pacchetti 48/48 + typecheck/lint puliti (warning
 no-css-tags pre-esistenti).
+
+## Preventivi / Impostazioni (quote_settings.php) — 2026-07-05
+Audit della pagina impostazioni preventivi (546 righe: dati anagrafici e
+intestazione documenti, condizioni preventivo, metodi di pagamento
+strutturati) + quote_settings.js vs il modulo Next, con capture live (GET +
+POST reali: redirect flash e alert errore verbatim verificati sul PHP).
+Il markup Next era gia vicino; fix su comportamenti e messaggi:
+1. Combobox Regione/Provincia/Citta erano MORTE (hidden controllati, nessuna
+   iniezione di italy-geo.js): ora hidden non controllati con defaultValue,
+   span app-combobox-text vuoti (li riempie lo script), italy-geo.js
+   iniettato post-mount con cache-buster, valori letti dal DOM al submit.
+2. Flash legacy: i salvataggi ora fanno redirect con ?msg= come il PHP
+   ('Dati anagrafici salvati' / 'Condizioni preventivo salvate' / 'Metodi di
+   pagamento salvati' — SENZA punto finale; prima la route rispondeva con il
+   punto e il componente mostrava un feedback in pagina senza reload);
+   markup View::alert con icona; errore in pagina senza redirect (mantiene i
+   valori inseriti) + scroll top.
+3. Wrapper errori verbatim nella route: profilo 'Errore salvataggio dati
+   anagrafici: <msg> (se persiste, controlla che lo schema business sia
+   aggiornato e che il DB possa eseguire ALTER/UPDATE)' (avvolge anche le
+   validazioni, verificato live); condizioni 'Colonne mancanti: aggiorna il
+   DB...' / 'Errore salvataggio condizioni preventivo: <msg>'; metodi
+   'Colonna mancante: ...' / 'Errore salvataggio metodi di pagamento: <msg>'.
+4. Header actions (Preventivi + Nuovo preventivo) ora gated su quotes.manage
+   come Auth::can del legacy (la route configuration espone canQuotesManage
+   per il modulo quote_settings).
+5. Metodi di pagamento: il form ora invia pm_name[]/pm_details[] (come il
+   POST legacy, serializzati JSON perche il body della route appiattisce gli
+   array) e la normalizzazione resta al SERVER (nome 120 char, dettagli 400,
+   newline->spazio, righe vuote saltate, max 50, join 'Nome: dettagli',
+   troncamento 8000, vuoto->NULL) — prima il client costruiva il raw senza i
+   limiti legacy.
+6. isUrl allineato a FILTER_VALIDATE_URL: il WHATWG URL di Node accettava
+   host con caratteri invalidi (es. '!') che il PHP rifiuta -> aggiunta la
+   validazione hostname ('Sito web non valido.' ora scatta come il legacy,
+   dopo la normalizzazione https://).
+Gia fedeli: campi/lunghezze profilo (255/40/.../190), messaggi 'PEC non
+valida.'/'Email documenti non valida.'/'Uno dei campi anagrafici supera la
+lunghezza massima consentita.', troncamento condizioni 12000, split UI
+'Nome: dettagli' con nome max 80, riga vuota minima nei metodi.
+Verifica: battery e2e 20/20 (validazioni profilo con wrapper, save profilo
+con normalizzazione https e flash senza punto, condizioni con troncamento e
+NULL, metodi strutturati con limiti server e ricostruzione righe dal raw,
+vuoto->NULL, ripristino businesses) + 37/37 marker bundle + regressione
+package_settings 6/6 e Preventivi 80/80 + typecheck/lint puliti.

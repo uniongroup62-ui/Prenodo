@@ -70,6 +70,8 @@ export async function GET(request: Request) {
       sourceMode: "database",
       module: moduleState,
       records: moduleState.records,
+      // quote_settings.php gates i bottoni header su quotes.manage.
+      ...(moduleId === "quote_settings" ? { canQuotesManage: can(session.user.perms, "quotes.manage") } : {}),
     });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Errore configurazione.");
@@ -176,9 +178,34 @@ async function saveFeatureSettings(
     return null;
   }
   if (moduleId === "quote_settings") {
-    if (action === "save_quote_profile" || action === "save_profile_quote") return { message: "Dati anagrafici salvati.", module: await saveQuoteProfile(slug, body) };
-    if (action === "save_quote_conditions") return { message: "Condizioni preventivo salvate.", module: await saveQuoteConditions(slug, body) };
-    if (action === "save_payment_methods") return { message: "Metodi di pagamento salvati.", module: await savePaymentMethods(slug, body) };
+    // Messaggi flash e wrapper errori verbatim di quote_settings.php (i msg
+    // del redirect legacy sono senza punto finale).
+    if (action === "save_quote_profile" || action === "save_profile_quote") {
+      try {
+        return { message: "Dati anagrafici salvati", module: await saveQuoteProfile(slug, body) };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        throw new Error(`Errore salvataggio dati anagrafici: ${msg} (se persiste, controlla che lo schema business sia aggiornato e che il DB possa eseguire ALTER/UPDATE)`);
+      }
+    }
+    if (action === "save_quote_conditions") {
+      try {
+        return { message: "Condizioni preventivo salvate", module: await saveQuoteConditions(slug, body) };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (/unknown column|column .* does not exist/i.test(msg)) throw new Error("Colonne mancanti: aggiorna il DB con il dump SQL completo aggiornato (Preventivi impostazioni).");
+        throw new Error(`Errore salvataggio condizioni preventivo: ${msg}`);
+      }
+    }
+    if (action === "save_payment_methods") {
+      try {
+        return { message: "Metodi di pagamento salvati", module: await savePaymentMethods(slug, body) };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (/unknown column|column .* does not exist/i.test(msg)) throw new Error("Colonna mancante: aggiorna il DB con il dump SQL completo aggiornato (Preventivi metodi di pagamento).");
+        throw new Error(`Errore salvataggio metodi di pagamento: ${msg}`);
+      }
+    }
     return null;
   }
   if (moduleId === "fidelity_membership") {
