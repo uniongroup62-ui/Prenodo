@@ -1,9 +1,9 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
-import { addManageClientPackageUsage, consumeDbClientPackage, deleteManagePackageCatalog, getManageClientPackage, getManagePackageCatalog, getPackageCatalogFormContext, issueDbClientPackage, listDbPackageState, listManagePackageCatalog, saveManagePackageCatalog, updateManageClientPackageExpiry } from "@/lib/db-repositories";
+import { addManageClientPackageUsage, consumeDbClientPackage, deleteManagePackageCatalog, getClientPackageCancelInfo, getManageClientPackage, getManageClientPackageForEdit, getManagePackageCatalog, getManagePackagesFilters, getPackageCatalogFormContext, issueDbClientPackage, listDbPackageState, listManageClientPackages, listManagePackageCatalog, saveManageClientPackage, saveManagePackageCatalog, updateManageClientPackageExpiry } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
 import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
-import { canAny } from "@/lib/role-permissions";
+import { can, canAny } from "@/lib/role-permissions";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -52,11 +52,77 @@ export async function GET(request: Request) {
     }
 
     // Client-package DETAIL (tab=clients action=view/client_view): header +
-    // per-service contents + usage history + expiry-edit flag.
+    // contents (servizi+prodotti con riserve) + movimenti (reali+virtuali) +
+    // voci registrabili + availability + expiry-edit flags.
     if (url.searchParams.get("action") === "view" || url.searchParams.get("action") === "client_view") {
       const detail = await getManageClientPackage(tenantSlug, parseInteger(url.searchParams.get("id"), 0));
-      if (!detail) return jsonError("Pacchetto cliente non trovato.", 404);
-      return Response.json({ ok: true, sourceMode: "database", detail });
+      // Messaggio querystring legacy (senza punto).
+      if (!detail) return jsonError("Pacchetto cliente non trovato", 404);
+      return Response.json({
+        ok: true,
+        sourceMode: "database",
+        detail,
+        perms: {
+          packagesClients: can(session.user.perms, "packages.clients"),
+          packagesCatalog: can(session.user.perms, "packages.catalog"),
+          packagesSettings: can(session.user.perms, "packages.settings"),
+          openSaleDetail: canAny(session.user.perms, ["pos.manage", "pos.movements", "pos.prepaids", "pos.preorders"]),
+          clientLinks: canAny(session.user.perms, ["clients.manage", "client_sheets.manage", "client_consents.manage"]),
+          quotesManage: can(session.user.perms, "quotes.manage"),
+        },
+      });
+    }
+
+    // Prefill form client_edit (tab=clients action=client_edit).
+    if (url.searchParams.get("action") === "client_get") {
+      const edit = await getManageClientPackageForEdit(tenantSlug, parseInteger(url.searchParams.get("id"), 0));
+      if (!edit) return jsonError("Pacchetto non trovato", 404);
+      return Response.json({ ok: true, sourceMode: "database", edit });
+    }
+
+    // Info redirect per client_cancel/client_delete (il legacy manda al
+    // dettaglio vendita quando esiste).
+    if (url.searchParams.get("action") === "client_cancel_info") {
+      const info = await getClientPackageCancelInfo(tenantSlug, parseInteger(url.searchParams.get("id"), 0));
+      return Response.json({ ok: true, sourceMode: "database", ...info });
+    }
+
+    // Filtri lista (clienti + nomi pacchetto + catalogo per il form).
+    if (url.searchParams.get("action") === "filters") {
+      const filters = await getManagePackagesFilters(tenantSlug);
+      return Response.json({ ok: true, sourceMode: "database", ...filters });
+    }
+
+    // LISTA pacchetti clienti fedele (tab=clients action=list): filtri
+    // cliente/pacchetto/stato + sede corrente (all_locations=1 la disattiva).
+    if (url.searchParams.get("action") === "client_list") {
+      const allLocations = ["1", "true", "on", "yes", "all"].includes(String(url.searchParams.get("all_locations") ?? "").trim().toLowerCase());
+      const locationContext = await getManageLocationContext(tenantSlug).catch(() => null);
+      const filterLocationId = allLocations ? 0 : (locationContext?.currentLocationId ?? 0);
+      const clientPackages = await listManageClientPackages(tenantSlug, {
+        clientId: parseInteger(url.searchParams.get("client_id"), 0),
+        packageName: url.searchParams.get("package_name") ?? "",
+        q: url.searchParams.get("q") ?? "",
+        status: url.searchParams.get("status") ?? "active",
+        locationId: filterLocationId,
+      });
+      const filters = await getManagePackagesFilters(tenantSlug);
+      return Response.json({
+        ok: true,
+        sourceMode: "database",
+        clientPackages,
+        clients: filters.clients,
+        packageNames: filters.packageNames,
+        hasAnyClientPackages: filters.hasAnyClientPackages,
+        locationsCount: locationContext?.locations.length ?? 0,
+        perms: {
+          packagesClients: can(session.user.perms, "packages.clients"),
+          packagesCatalog: can(session.user.perms, "packages.catalog"),
+          packagesSettings: can(session.user.perms, "packages.settings"),
+          posManage: can(session.user.perms, "pos.manage"),
+          clientLinks: canAny(session.user.perms, ["clients.manage", "client_sheets.manage", "client_consents.manage"]),
+        },
+      });
     }
 
     return Response.json({
@@ -107,20 +173,48 @@ export async function POST(request: Request) {
     }
 
     // Update a client package's expiry (port of update_client_package_expiry).
+    // Esiti legacy: msg "Scadenza pacchetto aggiornata" / err "Errore: <detail>".
     if (action === "update_expiry" || action === "update_client_package_expiry") {
       const cpId = parseInteger(body.client_package_id ?? body.id, 0);
-      await updateManageClientPackageExpiry(tenantSlug, cpId, String(body.expires_at ?? ""));
+      try {
+        await updateManageClientPackageExpiry(tenantSlug, cpId, String(body.expires_at ?? ""));
+      } catch (error) {
+        const detailMsg = error instanceof Error ? error.message : "Errore aggiornamento scadenza";
+        return Response.json({ ok: false, error: `Errore: ${detailMsg}` }, { status: 400 });
+      }
       const detail = await getManageClientPackage(tenantSlug, cpId);
-      return Response.json({ ok: true, source: "packages?action=update_expiry", sourceMode: "database", detail });
+      return Response.json({ ok: true, source: "packages?action=update_expiry", sourceMode: "database", message: "Scadenza pacchetto aggiornata", detail });
     }
 
-    // Register a manual usage movement (port of usage_add, service path):
-    // scala/ripristina sedute on a client package. Gated by packages.clients.
+    // Register a manual usage movement (port of usage_add): servizi (sedute con
+    // riserve) e prodotti (ritiro/ripristino con stock + documento magazzino).
     if (action === "usage_add") {
       const cpId = parseInteger(body.client_package_id ?? body.id, 0);
-      await addManageClientPackageUsage(tenantSlug, cpId, String(body.op ?? ""), parseInteger(body.qty, 1), parseInteger(body.service_id, 0), String(body.note ?? ""), session.user.id);
+      const locationContext = await getManageLocationContext(tenantSlug).catch(() => null);
+      const result = await addManageClientPackageUsage(
+        tenantSlug,
+        cpId,
+        String(body.op ?? ""),
+        parseInteger(body.qty, 1),
+        parseInteger(body.service_id, 0),
+        String(body.note ?? ""),
+        session.user.id,
+        {
+          itemRef: String(body.item_ref ?? ""),
+          usedAt: String(body.used_at ?? ""),
+          operatorName: session.user.name,
+          locationId: locationContext?.currentLocationId ?? 0,
+        },
+      );
       const detail = await getManageClientPackage(tenantSlug, cpId);
-      return Response.json({ ok: true, source: "packages?action=usage_add", sourceMode: "database", detail });
+      return Response.json({ ok: true, source: "packages?action=usage_add", sourceMode: "database", message: result.message, detail });
+    }
+
+    // Salvataggio edit pacchetto cliente (client_edit). client_new è bloccato
+    // dal legacy ("La vendita/assegnazione dei pacchetti avviene solo da Pagamenti.").
+    if (action === "client_save") {
+      const result = await saveManageClientPackage(tenantSlug, body);
+      return Response.json({ ok: true, source: "packages?action=client_save", sourceMode: "database", ...result });
     }
 
     // Delete a catalog template (port of action=catalog_delete): detach client

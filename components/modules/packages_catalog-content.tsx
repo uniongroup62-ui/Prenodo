@@ -26,25 +26,34 @@ function tenantSlug(): string {
   return window.location.pathname.split("/")[1] || "";
 }
 
+// Port of fmt_money(): number_format(n, 2, ',', '.').
 function fmtMoney(n: number): string {
-  return Number(n || 0).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const v = Number(n || 0);
+  const [int, dec] = Math.abs(v).toFixed(2).split(".");
+  return `${v < 0 ? "-" : ""}${int.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${dec}`;
 }
 
-export function PackagesCatalogContent({ slug: slugProp }: { slug?: string } = {}) {
+export type PackagesCatalogQuery = { all_locations?: string; msg?: string; err?: string };
+
+export function PackagesCatalogContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: PackagesCatalogQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
   const [rows, setRows] = useState<CatalogRow[]>([]);
-  const [allLocations, setAllLocations] = useState(false);
+  const [allLocations, setAllLocations] = useState(() =>
+    ["1", "true", "on", "yes", "all"].includes(String(initialQuery?.all_locations ?? "").trim().toLowerCase()),
+  );
   // Conteggio NON filtrato (empty state) + numero sedi (il filtro "Tutte le
   // sedi" esiste solo per i tenant multi-sede, come il legacy).
   const [totalCount, setTotalCount] = useState(0);
   const [locationsCount, setLocationsCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(0);
+  // Flash legacy (?msg/?err dai redirect) + esito delete in pagina.
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
 
-  const load = useCallback((all?: boolean) => {
-    setLoading(true);
+  // Fetch puro (setState nei callback della Promise; loading gia' true di default).
+  const fetchData = useCallback((all?: boolean) => {
     fetch(`/api/manage/packages?slug=${encodeURIComponent(slug)}&action=catalog${all ? "&all_locations=1" : ""}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
       .then((j) => {
@@ -56,9 +65,16 @@ export function PackagesCatalogContent({ slug: slugProp }: { slug?: string } = {
       .finally(() => setLoading(false));
   }, [slug]);
 
+  const load = useCallback((all?: boolean) => {
+    setLoading(true);
+    fetchData(all);
+  }, [fetchData]);
+
   useEffect(() => {
-    load();
-  }, [load]);
+    fetchData(["1", "true", "on", "yes", "all"].includes(String(initialQuery?.all_locations ?? "").trim().toLowerCase()));
+    // initialQuery è il GET del primo render: il refetch avviene solo con "Filtra".
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchData]);
 
   function page(suffix: string): string {
     return `/${encodeURIComponent(slug)}/${`${suffix}`.replace("&", "?")}`;
@@ -78,10 +94,14 @@ export function PackagesCatalogContent({ slug: slugProp }: { slug?: string } = {
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j?.error) {
-        if (typeof window !== "undefined") window.alert(j?.error || "Impossibile eliminare il pacchetto.");
+        // Flash err in pagina (redirect legacy con ?err=).
+        setFlash({ err: String(j?.error || "Errore eliminazione pacchetto.") });
       } else {
+        // Flash legacy "Pacchetto eliminato".
+        setFlash({ msg: "Pacchetto eliminato" });
         load();
       }
+      if (typeof window !== "undefined") window.scrollTo(0, 0);
     } finally {
       setBusyId(0);
     }
@@ -94,6 +114,23 @@ export function PackagesCatalogContent({ slug: slugProp }: { slug?: string } = {
   return (
     <div className="container-fluid">
       <link rel="stylesheet" href="/assets/css/pages/packages.css" />
+
+      {flash.msg ? (
+        <div className="alert alert-success d-flex align-items-start gap-2">
+          <div>
+            <i className="bi bi-info-circle" />
+          </div>
+          <div>{flash.msg}</div>
+        </div>
+      ) : null}
+      {flash.err ? (
+        <div className="alert alert-danger d-flex align-items-start gap-2">
+          <div>
+            <i className="bi bi-info-circle" />
+          </div>
+          <div>{flash.err}</div>
+        </div>
+      ) : null}
 
       <div className="bs-page-header">
         <div className="bs-page-heading">

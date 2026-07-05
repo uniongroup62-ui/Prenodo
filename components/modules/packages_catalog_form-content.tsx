@@ -194,9 +194,6 @@ export function PackagesCatalogFormContent({ slug: slugProp }: { slug?: string }
   function href(path: string): string {
     return `/${encodeURIComponent(slug)}/${path}`;
   }
-  function backToCatalog() {
-    window.location.href = href("packages?tab=catalog");
-  }
   function toggleLocation(lid: number, checked: boolean) {
     setLocationIds((prev) => (checked ? Array.from(new Set([...prev, lid])) : prev.filter((x) => x !== lid)));
   }
@@ -279,7 +276,8 @@ export function PackagesCatalogFormContent({ slug: slugProp }: { slug?: string }
         setSaving(false);
         return;
       }
-      backToCatalog();
+      // Redirect legacy: catalogo con flash "Pacchetto creato"/"Pacchetto aggiornato".
+      window.location.href = href(`packages?tab=catalog&msg=${encodeURIComponent(action === "edit" ? "Pacchetto aggiornato" : "Pacchetto creato")}`);
     } catch {
       setError("Errore salvataggio pacchetto.");
       setSaving(false);
@@ -582,7 +580,7 @@ export function PackagesCatalogFormContent({ slug: slugProp }: { slug?: string }
             <div className="mt-3 d-flex gap-2">
               <button className="btn btn-primary" type="submit" disabled={saving}>
                 <i className="bi bi-check2-circle me-1" />
-                {saving ? "Salvataggio…" : "Salva"}
+                Salva
               </button>
               <a className="btn btn-outline-secondary" href={href("packages?tab=catalog")}>
                 Annulla

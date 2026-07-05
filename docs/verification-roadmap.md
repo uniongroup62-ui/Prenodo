@@ -3880,3 +3880,98 @@ reali su 4 status + vendita + preventivo scaduto + pacchetto con snapshot +
 giftcard/giftbox destinatario, delete_summary conteggi + saldi raw, cascade
 con guardie e 0 residui) + 113/113 marker bundle + regression coupons 52/52 +
 typecheck/lint puliti (warning no-css-tags pre-esistenti).
+
+## Pacchetti (packages.php) — 2026-07-05
+AUDIT COMPLETO del monolite packages.php (4891 righe: tab clients + catalog,
+client_view/client_edit/client_cancel/client_delete/usage_add/
+update_client_package_expiry, catalog_new/catalog_edit/catalog_delete) +
+ClientPackages.php (updateClientPackageExpiry/packageRedeemedForExpiry) vs i
+moduli Next, con capture live (empty state clients verificato — il tenant
+legacy ha 0 pacchetti). Riscritti lista clients e detail, NUOVO form
+client_edit + redirect client_cancel/client_delete; catalogo esteso.
+FIX PRINCIPALI:
+1. Lista pacchetti clienti riscritta (prima solo 5 colonne senza filtri):
+   filtri legacy Cliente/Pacchetto (combobox ricercabili "Tutti") + Stato
+   (Attivi default/Completati/Scaduti/Annullati/Tutti, regole calcolate
+   canceled>completed>expired>active) + [Tutte le sedi] multi-sede + Filtra;
+   tabella 9 colonne (Cliente linkato se permessi clienti/schede/consensi,
+   Sede da location_id o dalla vendita, Contenuto da snapshot con fallback
+   catalogo/servizio "Nome ×qty", Rimanenti/Totali, Scadenza, Stato badge,
+   Dettagli+Modifica); ordine updated_at DESC LIMIT 300; header actions gated
+   (Impostazioni packagesSettings, Catalogo packagesCatalog e non su empty);
+   empty state con Nuova vendita (pos.manage) + Catalogo; flash ?msg/?err;
+   "Nessun pacchetto trovato con i filtri selezionati.".
+2. Dettaglio (client_view) riscritto: header legacy (Pacchetto cliente, nome,
+   Cliente linkato - Sede - Servizio/Servizi/Contenuto - Creato da preventivo
+   #N linkato con quotes.manage), badge stato + Dettaglio vendita (saleId da
+   sale_id O dalla nota vendita "CP#id" — port packages_find_sale_id) +
+   Modifica; alert riattivazione ("Questo pacchetto non può essere
+   riattivato." / "Contenuti disattivati presenti." con le voci '"X" è stato
+   eliminato/disattivato.'); riga Sedute totali/rimanenti ("N in sospeso su
+   prenotazioni" dalle prenotazioni APERTE via appointment_package_items
+   pending/scheduled non riscattate) /Inizio/Scadenza con matita -> modale
+   "Modifica scadenza pacchetto" verbatim (min oggi/inizio, lock con
+   messaggio se riattivazione impossibile); tabella "Contenuto pacchetto"
+   (Tipo/Voce/Totali/Rimanenti, prodotti con rimanenze da net delta usages);
+   Note; form "Registra seduta/ritiro" (Voce "Servizio • Nome — X/Y sedute
+   disponibili (N in sospeso)", Operazione Scala|Segna ritirato / Ripristina|
+   Ripristina ritiro con unità sedute/pz e help contestuali verbatim,
+   Data/ora, Nota con placeholder dinamico, Conferma) + "Torna alla lista";
+   tabella Movimenti (Quando/Quantità +N vd. unità/Tipo pending|redeem|
+   restore|cancel|adjust/Voce/Nota normalizzata "In sospeso|Annullato|
+   Riscatto su prenotazione #X"/Operatore) con i MOVIMENTI VIRTUALI legacy
+   (in sospeso per prenotazioni aperte; coppia sospeso+annullato per le
+   cancellate senza storico reale).
+3. usage_add completo: path PRODOTTI (ritiro/ripristino con quantità incluse
+   da snapshot, net delta, stock per sede product_stocks con guard enabled,
+   documento magazzino stock_docs scarico/carico con nota verbatim "Ritiro
+   prodotto da Pacchetti • pacchetto cliente #N • cliente: X • prodotto: Y
+   xQ", note default e messaggi "Ritiro prodotto registrato"/"Ripristino
+   ritiro prodotto registrato", errori verbatim su quantità/stock); path
+   SERVIZI con RISERVE (le sedute in sospeso su prenotazioni riducono le
+   scalabili: "Sedute insufficienti per il servizio selezionato: N già in
+   sospeso su prenotazioni"); used_at dall'input; guardie annullato/scaduto
+   verbatim; messaggi querystring senza punto (Quantità non valida,
+   Operazione non valida, Pacchetto non trovato, Seleziona la voce da
+   registrare, Seleziona il servizio da scalare, Superi le sedute totali...).
+4. Scadenza (update_client_package_expiry) allineata a ClientPackages:
+   guard "gia utilizzato" = packageRedeemedForExpiry (completed o
+   remaining<total — NON il conteggio usages: consume+restore in pari resta
+   modificabile), blocco riattivazione se contenuti eliminati con il
+   messaggio composito legacy, esiti "Scadenza pacchetto aggiornata" /
+   "Errore: <dettaglio>", riattivazione automatica da scaduto.
+5. NUOVO form client_edit fedele: Cliente*/Sede/Da catalogo (— personalizzato
+   —, precompila nome/servizio/sedute)/Servizio combobox, sedute totali/
+   rimanenti "(se vuoto = totali)", date, Scadenza disabilitata se usato
+   ("Scadenza non modificabile perche il pacchetto risulta gia utilizzato."),
+   Stato con Attivo disabilitato se riattivazione bloccata + annullato
+   readonly "Annullato (solo da dettaglio vendita)" e help "L'annullamento è
+   disponibile solo dal dettaglio vendita.", alert availability; POST con le
+   guardie legacy (Seleziona un cliente / Nome pacchetto obbligatorio / Il
+   pacchetto si annulla solo dal dettaglio vendita. / autofill catalogo con
+   validity_days / clamp rimanenti / snapshot) -> client_view "Pacchetto
+   aggiornato". client_new BLOCCATO come il legacy ("La vendita/assegnazione
+   dei pacchetti avviene solo da Pagamenti."); client_cancel/client_delete
+   -> redirect al dettaglio vendita (o al dettaglio pacchetto) con i
+   messaggi verbatim.
+6. Catalogo: lista con fmt_money manuale, flash ?msg/?err + "Pacchetto
+   eliminato" dopo il delete; form con redirect legacy ("Pacchetto creato"/
+   "Pacchetto aggiornato") e "Salva" fisso; già fedeli le validazioni server
+   (Nome obbligatorio, Seleziona almeno una sede..., Aggiungi almeno un
+   servizio/prodotto..., Per creare un pacchetto è necessario almeno un
+   servizio (sedute)., righe attive e abilitate per tutte le sedi) e il
+   calcolo prezzi (sconti riga percent/amount + sconto totale, prezzo
+   pacchetto = totale calcolato, package_services aggregato per sedute).
+RESIDUI DELIBERATI: package_settings è pagina separata (audit non incluso in
+questo giro); il form usage legacy aggiorna label/max via packages.js — il
+port ricalcola le stesse label da stato React; i "frozen service names" da
+snapshot appuntamenti usano appointment_services.service_name (snapshot Next)
+invece del decode JSON legacy; la lista lega la ricerca q legacy (UI rimossa
+nel PHP, supportata via API).
+Verifica: battery e2e 48/48 (validazioni catalogo verbatim, save con sconti e
+prezzo calcolato 118.00 + figli DB, lista/prefill, riserve da prenotazione
+aperta con movimento virtuale e saleId da nota CP#, usage servizi con guardie
+e riserve, usage prodotti con stock/stock_docs/note verbatim, scadenza con
+guardie legacy e riattivazione, client_save con guardie, client_new bloccato,
+catalog_delete con detach, cleanup CLEAN) + 92/92 marker bundle + typecheck/
+lint puliti (warning no-css-tags pre-esistenti).

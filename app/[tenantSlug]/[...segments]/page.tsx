@@ -77,6 +77,8 @@ import { PackagesContent } from "@/components/modules/packages-content";
 import { PackagesCatalogContent } from "@/components/modules/packages_catalog-content";
 import { PackagesCatalogFormContent } from "@/components/modules/packages_catalog_form-content";
 import { ClientPackageDetailContent } from "@/components/modules/client_package_detail-content";
+import { ClientPackageFormContent } from "@/components/modules/client_package_form-content";
+import { ClientPackageCancelRedirect } from "@/components/modules/client_package_cancel_redirect";
 import { PackageSettingsContent } from "@/components/modules/package_settings-content";
 import { MarketplaceSettingsContent } from "@/components/modules/marketplace-content";
 import { FidelityWalletContent } from "@/components/modules/fidelity_wallet-content";
@@ -183,7 +185,7 @@ export default async function TenantPage({
   searchParams,
 }: {
   params: Promise<{ tenantSlug: string; segments?: string[] }>;
-  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string; staff_id?: string; source?: string; detail_staff_id?: string; from?: string; to?: string; q?: string; cat?: string; cat_q?: string; cat_status?: string; category_filter_id?: string; low_stock?: string; supplier?: string; category?: string; code?: string; brand?: string; internal_code?: string; product_id?: string; category_search?: string; edit_id?: string; sku?: string; document_number?: string; date?: string; include_canceled?: string; p?: string; category_id?: string; scope?: string; msg?: string; err?: string; type?: string; all_locations?: string }>;
+  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string; staff_id?: string; source?: string; detail_staff_id?: string; from?: string; to?: string; q?: string; cat?: string; cat_q?: string; cat_status?: string; category_filter_id?: string; low_stock?: string; supplier?: string; category?: string; code?: string; brand?: string; internal_code?: string; product_id?: string; category_search?: string; edit_id?: string; sku?: string; document_number?: string; date?: string; include_canceled?: string; p?: string; category_id?: string; scope?: string; msg?: string; err?: string; type?: string; all_locations?: string; package_name?: string }>;
 }) {
   const { tenantSlug, segments } = await params;
   const query = await searchParams;
@@ -556,11 +558,65 @@ export default async function TenantPage({
 
   // Faithful client-package DETAIL (packages.php tab=clients action=view/
   // client_view): the client package header + contents + usage history + expiry
-  // edit, instead of the Tailwind fallback.
+  // edit, instead of the Tailwind fallback. initialQuery = flash legacy.
   if (page === "packages" && (query.action === "view" || query.action === "client_view")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
-        <ClientPackageDetailContent slug={tenantSlug} />
+        <ClientPackageDetailContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
+      </ManageShell>
+    );
+  }
+
+  // Faithful client-package EDIT form (packages.php tab=clients
+  // action=client_edit; client_new è bloccato dal legacy e il componente lo
+  // redirige con l'errore verbatim).
+  if (page === "packages" && (query.action === "client_edit" || query.action === "client_new")) {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <ClientPackageFormContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
+      </ManageShell>
+    );
+  }
+
+  // client_cancel / client_delete (packages.php): annullamento/eliminazione
+  // solo dal dettaglio vendita — redirect col messaggio verbatim.
+  if (page === "packages" && (query.action === "client_cancel" || query.action === "client_delete")) {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <ClientPackageCancelRedirect slug={tenantSlug} action={query.action} id={query.id} />
+      </ManageShell>
+    );
+  }
+
+  // Faithful packages CATALOG list (packages.php tab=catalog action=list):
+  // filtro all_locations + flash ?msg/?err dai redirect.
+  if (page === "packages" && query.tab === "catalog" && (query.action === undefined || query.action === "list")) {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <PackagesCatalogContent
+          slug={tenantSlug}
+          initialQuery={{ all_locations: query.all_locations, msg: query.msg, err: query.err }}
+        />
+      </ManageShell>
+    );
+  }
+
+  // Faithful packages CLIENTS list (packages.php tab=clients action=list):
+  // filtri GET (client_id/package_name/status/all_locations) + flash ?msg/?err.
+  if (page === "packages" && (query.tab === undefined || query.tab === "clients") && (query.action === undefined || query.action === "list")) {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <PackagesContent
+          slug={tenantSlug}
+          initialQuery={{
+            client_id: query.client_id,
+            package_name: query.package_name,
+            status: query.status,
+            all_locations: query.all_locations,
+            msg: query.msg,
+            err: query.err,
+          }}
+        />
       </ManageShell>
     );
   }

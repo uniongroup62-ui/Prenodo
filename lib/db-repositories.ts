@@ -6873,35 +6873,208 @@ export async function saveManagePackageCatalog(slug: string, body: Record<string
 }
 
 // ---- Client package DETAIL (packages.php action=client_view) ------------------
+// Badge stato legacy (pkg_status_badge): Attivo/Completato/Scaduto/Annullato.
+function pkgStatusMeta(st: string): { label: string; badge: string } {
+  switch (st) {
+    case "active": return { label: "Attivo", badge: "success" };
+    case "completed": return { label: "Completato", badge: "secondary" };
+    case "expired": return { label: "Scaduto", badge: "warning" };
+    case "canceled":
+    case "cancelled": return { label: "Annullato", badge: "danger" };
+    default: return { label: st !== "" ? st : "—", badge: "secondary" };
+  }
+}
+
+// Quantità impegnate da prenotazioni aperte (port packages_page_reserved_package_qty:
+// appointment_package_items JOIN appointments pending/scheduled, redeemed_at NULL).
+async function pkgReservedQty(slug: string, clientPackageId: number, clientPackageServiceId: number | null, serviceId: number): Promise<number> {
+  if (clientPackageId <= 0 || serviceId <= 0) return 0;
+  try {
+    const apiT = await tenantTable(slug, "appointment_package_items");
+    const apT = await tenantTable(slug, "appointments");
+    if (!(await tableExists(apiT.name)) || !(await tableExists(apT.name))) return 0;
+    const scoped = apiT.mode === "shared" && (await columnExists(apiT.name, "tenant_id"));
+    const hasCps = await columnExists(apiT.name, "client_package_service_id");
+    const params: unknown[] = [clientPackageId, serviceId];
+    let where = `api.client_package_id = ? AND api.service_id = ? AND a.status IN ('pending','scheduled') AND api.redeemed_at IS NULL`;
+    if (hasCps && clientPackageServiceId && clientPackageServiceId > 0) {
+      where += " AND (api.client_package_service_id = ? OR api.client_package_service_id IS NULL OR api.client_package_service_id = 0)";
+      params.push(clientPackageServiceId);
+    }
+    if (scoped) { where += " AND api.tenant_id = ?"; params.push(apiT.tenantId ?? 0); }
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT COALESCE(SUM(COALESCE(api.qty,1)),0) AS q FROM ${quoteIdentifier(apiT.name)} api JOIN ${quoteIdentifier(apT.name)} a ON a.id = api.appointment_id WHERE ${where}`,
+      params,
+    );
+    return Math.max(0, Number(rows[0]?.q ?? 0) || 0);
+  } catch {
+    return 0;
+  }
+}
+
+// Sale id per un pacchetto cliente (port packages_find_sale_id_for_client_package):
+// sale_id diretto, poi la nota "CP#<id>" nelle vendite del cliente.
+async function findSaleIdForClientPackage(slug: string, cp: RowDataPacket): Promise<number> {
+  const direct = Number(cp.sale_id ?? 0);
+  if (direct > 0) return direct;
+  const cpId = Number(cp.id ?? 0);
+  if (cpId <= 0) return 0;
+  const clientId = Number(cp.client_id ?? 0);
+  try {
+    const rows = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "sales",
+      columns: "id, notes",
+      where: clientId > 0 ? "notes LIKE ? AND client_id = ?" : "notes LIKE ?",
+      params: clientId > 0 ? [`%CP#${cpId}%`, clientId] : [`%CP#${cpId}%`],
+      orderBy: "id DESC",
+      limit: 30,
+    });
+    const re = new RegExp(`(^|[^0-9])CP#${cpId}([^0-9]|$)`);
+    for (const r of rows) if (re.test(String(r.notes ?? ""))) return Number(r.id ?? 0);
+  } catch { /* best-effort */ }
+  return 0;
+}
+
+// Disponibilità contenuti (port packages_page_content_availability): voce
+// eliminata -> error; disattivata -> warning, con i messaggi verbatim.
+export type PackageContentIssue = { type: string; label: string; message: string };
+async function clientPackageContentAvailability(slug: string, items: Array<{ type: string; itemId: number; name: string }>): Promise<{ errors: PackageContentIssue[]; warnings: PackageContentIssue[] }> {
+  const out: { errors: PackageContentIssue[]; warnings: PackageContentIssue[] } = { errors: [], warnings: [] };
+  const seen = new Set<string>();
+  for (const item of items) {
+    const type = item.type === "product" ? "product" : "service";
+    const itemId = Number(item.itemId ?? 0);
+    if (itemId <= 0) continue;
+    const key = `${type}:${itemId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const typeLabel = type === "product" ? "Prodotto" : "Servizio";
+    const table = type === "product" ? "products" : "services";
+    const rows = await tenantSelect<RowDataPacket>({ slug, table, columns: "id, name, COALESCE(is_active,1) AS ia", where: "id = ?", params: [itemId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    const snapshotLabel = String(item.name ?? "").trim();
+    if (!rows[0]) {
+      const label = snapshotLabel !== "" ? snapshotLabel : `${typeLabel} #${itemId}`;
+      out.errors.push({ type: typeLabel, label, message: `${typeLabel} "${label}" è stato eliminato.` });
+      continue;
+    }
+    const label = String(rows[0].name ?? "").trim() || snapshotLabel || `${typeLabel} #${itemId}`;
+    if (Number(rows[0].ia ?? 1) !== 1) {
+      out.warnings.push({ type: typeLabel, label, message: `${typeLabel} "${label}" è stato disattivato.` });
+    }
+  }
+  return out;
+}
+
+// Messaggio blocco riattivazione (port packages_page_reactivation_block_message).
+export function packageReactivationBlockMessage(errors: PackageContentIssue[]): string {
+  const parts = errors.slice(0, 5).map((e) => e.message).filter((m) => m !== "");
+  if (errors.length > 5) parts.push(`altri ${errors.length - 5} elementi`);
+  const txt = parts.length > 0 ? parts.join("; ") : "uno o più contenuti del pacchetto sono stati eliminati";
+  return `Non sarà possibile riattivare il pacchetto perché ${txt}. Rimuovi o sostituisci i contenuti indicati prima di riattivarlo.`;
+}
+
+// Contenuti (snapshot client_package_items con fallback catalogo) — righe
+// {type,item_id,name,qty} normalizzate come packages_page_normalize_item_rows.
+async function clientPackageSnapshotItems(slug: string, cpId: number, packageId: number): Promise<Array<{ type: string; itemId: number; name: string; qty: number }>> {
+  const merged = new Map<string, { type: string; itemId: number; name: string; qty: number; order: number }>();
+  let order = 0;
+  const push = (type: string, itemId: number, name: string, qty: number) => {
+    if (!["service", "product"].includes(type) || itemId <= 0) return;
+    const key = `${type}:${itemId}`;
+    const entry = merged.get(key);
+    if (entry) {
+      entry.qty += Math.max(1, qty);
+      if (entry.name === "" && name !== "") entry.name = name;
+    } else {
+      merged.set(key, { type, itemId, name, qty: Math.max(1, qty), order: order++ });
+    }
+  };
+  const snapRows = await tenantSelect<RowDataPacket>({ slug, table: "client_package_items", columns: "item_type, item_id, item_name_snapshot, qty, id", where: "client_package_id = ?", params: [cpId], orderBy: "COALESCE(sort_order,0) ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
+  for (const r of snapRows) push(String(r.item_type ?? "").trim().toLowerCase(), Number(r.item_id ?? 0), String(r.item_name_snapshot ?? "").trim(), Number(r.qty ?? 1));
+  if (merged.size === 0 && packageId > 0) {
+    const pkgItems = await tenantSelect<RowDataPacket>({ slug, table: "package_items", columns: "item_type, item_id, qty, id", where: "package_id = ?", params: [packageId], orderBy: "COALESCE(sort_order,0) ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
+    for (const r of pkgItems) push(String(r.item_type ?? "").trim().toLowerCase(), Number(r.item_id ?? 0), "", Number(r.qty ?? 1));
+  }
+  const rows = Array.from(merged.values()).sort((a, b) => a.order - b.order);
+  // Risolvi i nomi mancanti da services/products correnti.
+  for (const r of rows) {
+    if (r.name !== "") continue;
+    const table = r.type === "product" ? "products" : "services";
+    const nm = await tenantSelect<RowDataPacket>({ slug, table, columns: "id, name" + (r.type === "product" ? ", sku" : ""), where: "id = ?", params: [r.itemId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    let name = String(nm[0]?.name ?? "").trim();
+    if (r.type === "product" && name !== "") {
+      const sku = String(nm[0]?.sku ?? "").trim();
+      if (sku !== "" && !name.endsWith(`(${sku})`)) name = `${name} (${sku})`;
+    }
+    r.name = name;
+  }
+  return rows.map(({ type, itemId, name, qty }) => ({ type, itemId, name, qty }));
+}
+
+// Summary contenuti "Nome ×qty, ..." (port packages_page_items_summary_text).
+function packageItemsSummaryText(items: Array<{ type: string; itemId: number; name: string; qty: number }>): string {
+  if (items.length === 0) return "—";
+  return items.map((it) => `${it.name !== "" ? it.name : `${it.type === "product" ? "Prodotto" : "Servizio"} #${it.itemId}`} ×${Math.max(1, it.qty)}`).join(", ");
+}
+
 export type ClientPackageContent = { id: number; serviceId: number; serviceName: string; sessionsTotal: number; sessionsRemaining: number };
 export type ClientPackageUsage = { id: number; usedAt: string; delta: number; note: string; itemType: string; itemName: string; appointmentCode: string };
+// Riga contenuto del dettaglio legacy (Tipo/Voce/Totali/Rimanenti + riservati).
+export type ClientPackageContentRow = { type: string; itemId: number; name: string; qtyTotal: number; qtyRemaining: number; reservedQty: number };
+// Voce selezionabile del form "Registra seduta/ritiro".
+export type ClientPackageUsageItem = { itemRef: string; type: string; itemId: number; label: string; qtyTotal: number; qtyRemaining: number; qtyRemainingBase: number; reservedQty: number; restoreAvailable: number; unitLabel: string; typeLabel: string };
+// Movimento del dettaglio (con stato display legacy: pending/redeem/restore/cancel/adjust).
+export type ClientPackageMovement = { id: number; usedAt: string; delta: number; unitLabel: string; movementType: string; itemLabel: string; note: string; createdByName: string };
+
 export type ManageClientPackageDetail = {
   id: number;
   clientId: number;
   clientName: string;
   packageName: string;
   serviceName: string;
+  locationLabel: string;
+  contentSummary: string;
+  contentHasProducts: boolean;
+  isMulti: boolean;
   sessionsTotal: number;
   sessionsRemaining: number;
+  reservedQty: number;
   status: string;
   statusLabel: string;
   statusBadge: string;
   purchaseDate: string;
   startDate: string;
   expiresAt: string;
+  notes: string;
   saleId: number | null;
+  sourceQuoteId: number | null;
+  sourceQuoteNumber: string;
   contents: ClientPackageContent[];
+  contentRows: ClientPackageContentRow[];
+  usageItems: ClientPackageUsageItem[];
+  movements: ClientPackageMovement[];
   usages: ClientPackageUsage[];
+  availability: { errors: PackageContentIssue[]; warnings: PackageContentIssue[] };
   canEditExpiry: boolean;
+  expiryEditLocked: boolean;
+  expiryEditLockMessage: string;
+  expiryMinDate: string;
 };
 
 function clientPackageStatusMeta(stored: string, remaining: number, expiresAt: string): { key: string; label: string; badge: string } {
-  const s = String(stored ?? "").trim().toLowerCase();
-  if (s === "canceled" || s === "cancelled") return { key: "cancelled", label: "Annullato", badge: "bg-danger" };
-  if (remaining <= 0) return { key: "completed", label: "Completato", badge: "bg-secondary" };
-  const exp = String(expiresAt ?? "").slice(0, 10);
-  if (exp !== "" && exp < todayIso()) return { key: "expired", label: "Scaduto", badge: "bg-warning text-dark" };
-  return { key: "active", label: "Attivo", badge: "bg-success" };
+  const key = recomputeClientPackageStatus(stored, remaining, expiresAt);
+  const meta = pkgStatusMeta(key);
+  return { key, label: meta.label, badge: `bg-${meta.badge}${meta.badge === "warning" ? " text-dark" : ""}` };
+}
+
+// Port di ClientPackages::packageRedeemedForExpiry: completed -> true,
+// canceled -> false, altrimenti total>0 && remaining<total.
+function packageRedeemedForExpiry(stored: string, total: number, remaining: number): boolean {
+  const s = String(stored ?? "active").trim().toLowerCase();
+  if (s === "completed") return true;
+  if (s === "canceled" || s === "cancelled") return false;
+  return total > 0 && remaining < total;
 }
 
 // Full client-package DETAIL (port of packages.php action=client_view): the
@@ -6914,6 +7087,7 @@ export async function getManageClientPackage(slug: string, id: number): Promise<
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "client_packages", where: "id = ?", params: [id], limit: 1 });
   if (!rows[0]) return null;
   const cp = rows[0];
+  const packageId = Number(cp.package_id ?? 0);
 
   const clientId = Number(cp.client_id ?? 0);
   let clientName = "";
@@ -6923,48 +7097,249 @@ export async function getManageClientPackage(slug: string, id: number): Promise<
   }
   const serviceName = await serviceNameById(slug, Number(cp.service_id ?? 0), "");
 
-  // Per-service contents.
+  // Sede (location_id diretta o dalla vendita collegata).
+  const saleId = await findSaleIdForClientPackage(slug, cp);
+  let locationId = Number(cp.location_id ?? 0);
+  if (locationId <= 0 && saleId > 0) {
+    const sRows = await tenantSelect<RowDataPacket>({ slug, table: "sales", columns: "location_id", where: "id = ?", params: [saleId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    locationId = Number(sRows[0]?.location_id ?? 0);
+  }
+  let locationLabel = "";
+  if (locationId > 0) {
+    const lRows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "name", where: "id = ?", params: [locationId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    locationLabel = String(lRows[0]?.name ?? `Sede #${locationId}`);
+  }
+
+  // Per-service contents (con riallineamento dei totali aggregati, come il legacy).
   const cpsRows = await tenantSelect<RowDataPacket>({ slug, table: "client_package_services", where: "client_package_id = ?", params: [id], orderBy: "sort_order ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
   const contents: ClientPackageContent[] = [];
   let sumTotal = 0;
-  let sumRemaining = 0;
+  let sumRemainingBase = 0;
   for (const r of cpsRows) {
     const sid = Number(r.service_id ?? 0);
     const total = Math.max(0, Number(r.sessions_total ?? 0));
     const remaining = Math.max(0, Number(r.sessions_remaining ?? 0));
     sumTotal += total;
-    sumRemaining += remaining;
+    sumRemainingBase += remaining;
     contents.push({ id: Number(r.id ?? 0), serviceId: sid, serviceName: snapshotServiceName(r.service_snapshot_json) || (await serviceNameById(slug, sid, `Servizio #${sid}`)), sessionsTotal: total, sessionsRemaining: remaining });
   }
   const sessionsTotal = sumTotal > 0 ? sumTotal : Math.max(0, Number(cp.sessions_total ?? 0));
-  const sessionsRemaining = sumTotal > 0 ? sumRemaining : Math.max(0, Number(cp.sessions_remaining ?? 0));
+  const sessionsRemainingBase = sumTotal > 0 ? sumRemainingBase : Math.max(0, Number(cp.sessions_remaining ?? 0));
 
-  // Usage history (client_package_usages), newest first.
-  const usageRows = await tenantSelect<RowDataPacket>({ slug, table: "client_package_usages", where: "client_package_id = ?", params: [id], orderBy: "used_at DESC, id DESC", limit: 100 }).catch(() => [] as RowDataPacket[]);
-  const usages: ClientPackageUsage[] = [];
-  for (const r of usageRows) {
-    const itemType = String(r.item_type ?? "") || (r.service_id ? "service" : "");
-    const itemId = Number(r.item_id ?? r.service_id ?? 0);
-    let itemName = "";
-    if (itemType === "product" && itemId > 0) {
-      const pr = await tenantSelect<RowDataPacket>({ slug, table: "products", columns: "name", where: "id = ?", params: [itemId], limit: 1 }).catch(() => [] as RowDataPacket[]);
-      itemName = String(pr[0]?.name ?? `Prodotto #${itemId}`);
-    } else if (itemId > 0) {
-      itemName = await serviceNameById(slug, itemId, `Servizio #${itemId}`);
+  // Movimenti (client_package_usages) + nome operatore.
+  const usageRows = await tenantSelect<RowDataPacket>({ slug, table: "client_package_usages", where: "client_package_id = ?", params: [id], orderBy: "used_at DESC, id DESC", limit: 200 }).catch(() => [] as RowDataPacket[]);
+  const userName = new Map<number, string>();
+  {
+    const uids = Array.from(new Set(usageRows.map((r) => Number(r.created_by ?? 0)).filter((n) => n > 0)));
+    if (uids.length > 0) {
+      const ph = uids.map(() => "?").join(",");
+      for (const r of await tenantSelect<RowDataPacket>({ slug, table: "users", columns: "id, name", where: `id IN (${ph})`, params: uids }).catch(() => [] as RowDataPacket[])) userName.set(Number(r.id ?? 0), String(r.name ?? ""));
     }
-    let appointmentCode = "";
-    const apptId = Number(r.appointment_id ?? 0);
-    if (apptId > 0) {
-      const ap = await tenantSelect<RowDataPacket>({ slug, table: "appointments", columns: "public_code", where: "id = ?", params: [apptId], limit: 1 }).catch(() => [] as RowDataPacket[]);
-      appointmentCode = String(ap[0]?.public_code ?? "");
+  }
+  const productLabelCache = new Map<number, string>();
+  const productLabel = async (pid: number): Promise<string> => {
+    if (productLabelCache.has(pid)) return productLabelCache.get(pid) ?? "";
+    const pr = await tenantSelect<RowDataPacket>({ slug, table: "products", columns: "name, sku", where: "id = ?", params: [pid], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    let name = String(pr[0]?.name ?? "").trim();
+    const sku = String(pr[0]?.sku ?? "").trim();
+    if (name !== "" && sku !== "" && !name.endsWith(`(${sku})`)) name = `${name} (${sku})`;
+    if (name === "") name = `Prodotto #${pid}`;
+    productLabelCache.set(pid, name);
+    return name;
+  };
+  const apptCode = new Map<number, string>();
+  {
+    const aids = Array.from(new Set(usageRows.map((r) => Number(r.appointment_id ?? 0)).filter((n) => n > 0)));
+    if (aids.length > 0) {
+      const ph = aids.map(() => "?").join(",");
+      for (const r of await tenantSelect<RowDataPacket>({ slug, table: "appointments", columns: "id, public_code", where: `id IN (${ph})`, params: aids }).catch(() => [] as RowDataPacket[])) apptCode.set(Number(r.id ?? 0), String(r.public_code ?? ""));
     }
-    usages.push({ id: Number(r.id ?? 0), usedAt: toIso(r.used_at ?? r.created_at), delta: Number(r.delta ?? 0), note: String(r.note ?? ""), itemType, itemName, appointmentCode });
   }
 
-  const meta = clientPackageStatusMeta(String(cp.status ?? "active"), sessionsRemaining, String(cp.expires_at ?? ""));
-  // Expiry is editable only when the package is not cancelled and untouched
-  // (no consumption yet), mirroring updateClientPackageExpiry's guards.
-  const canEditExpiry = meta.key !== "cancelled" && sessionsRemaining === sessionsTotal && usages.length === 0;
+  const usages: ClientPackageUsage[] = [];
+  const movements: ClientPackageMovement[] = [];
+  const productNetDelta = new Map<number, number>();
+  for (const r of usageRows) {
+    const rawType = String(r.item_type ?? "").trim().toLowerCase();
+    const itemType = rawType !== "" ? rawType : Number(r.service_id ?? 0) > 0 ? "service" : "";
+    const itemId = Number(r.item_id ?? r.service_id ?? 0);
+    const delta = Number(r.delta ?? 0);
+    let itemLabel = "—";
+    if (itemType === "product" && itemId > 0) {
+      itemLabel = await productLabel(itemId);
+      productNetDelta.set(itemId, (productNetDelta.get(itemId) ?? 0) + delta);
+    } else if (itemType === "service" && itemId > 0) {
+      itemLabel = await serviceNameById(slug, itemId, `Servizio #${itemId}`);
+    }
+    const apptId = Number(r.appointment_id ?? 0);
+    let code = apptId > 0 ? apptCode.get(apptId) ?? "" : "";
+    const noteRaw = String(r.note ?? "").trim();
+    if (code === "") {
+      const m = noteRaw.match(/prenotazione\s*#\s*([A-Za-z0-9_-]+)/i);
+      if (m) code = m[1];
+    }
+    if (code === "" && apptId > 0) code = String(apptId);
+    // Normalizzazione nota + stato movimento (port packages_page_prepare_usage_display).
+    const nr = noteRaw.toLowerCase();
+    const isPending = /^\s*in\s+sospeso\s+su\s+prenotazione\s+#/i.test(noteRaw);
+    const isCanceled = /^\s*annullat[oa]\s+su\s+prenotazione\s+#/i.test(noteRaw) || (nr.includes("annullat") && apptId > 0 && delta > 0);
+    const isRedeem = /^\s*riscatto\s+su\s+prenotazione\s+#/i.test(noteRaw) || nr.includes("auto-consumo") || nr.includes("quick booking") || nr.includes("appt_deleted") || (apptId > 0 && delta < 0 && !isPending && !isCanceled);
+    let noteDisplay = noteRaw;
+    if (code !== "" && itemType !== "product") {
+      if (isPending) noteDisplay = `In sospeso su prenotazione #${code}`;
+      else if (isCanceled) noteDisplay = `Annullato su prenotazione #${code}`;
+      else if (isRedeem) noteDisplay = `Riscatto su prenotazione #${code}`;
+    }
+    if (noteDisplay === "") noteDisplay = "—";
+    const movementType = isPending ? "pending" : isCanceled ? "cancel" : isRedeem ? "redeem" : delta > 0 ? "restore" : delta < 0 ? "redeem" : "adjust";
+    const usedAt = pgDateTimeLocal(r.used_at ?? r.created_at);
+    usages.push({ id: Number(r.id ?? 0), usedAt, delta, note: noteRaw, itemType, itemName: itemLabel, appointmentCode: code });
+    movements.push({
+      id: Number(r.id ?? 0),
+      usedAt,
+      delta,
+      unitLabel: itemType === "product" ? "pz" : "sedute",
+      movementType,
+      itemLabel,
+      note: noteDisplay,
+      createdByName: userName.get(Number(r.created_by ?? 0)) || "—",
+    });
+  }
+
+  // Movimenti VIRTUALI per prenotazioni aperte / annullate senza storico reale
+  // (port cpVirtualUsages): "In sospeso su prenotazione #X" e la coppia
+  // sospeso+annullato per le cancellate prima del riscatto.
+  const realHistoryKeys = new Set(usageRows.filter((r) => Number(r.appointment_id ?? 0) > 0).map((r) => `${Number(r.appointment_id ?? 0)}:${Number(r.item_id ?? r.service_id ?? 0)}`));
+  let reservedQtyTotal = 0;
+  const reservedByService = new Map<number, number>();
+  try {
+    const apiT = await tenantTable(slug, "appointment_package_items");
+    const apT = await tenantTable(slug, "appointments");
+    if ((await tableExists(apiT.name)) && (await tableExists(apT.name))) {
+      const scoped = apiT.mode === "shared" && (await columnExists(apiT.name, "tenant_id"));
+      const params: unknown[] = [id];
+      let where = "api.client_package_id = ? AND api.redeemed_at IS NULL";
+      if (scoped) { where += " AND api.tenant_id = ?"; params.push(apiT.tenantId ?? 0); }
+      const pend = await dbQuery<RowDataPacket[]>(
+        `SELECT api.id, api.appointment_id, api.service_id, COALESCE(api.qty,1) AS qty, a.status, a.starts_at, a.created_at AS appt_created_at, a.cancelled_at, a.public_code FROM ${quoteIdentifier(apiT.name)} api JOIN ${quoteIdentifier(apT.name)} a ON a.id = api.appointment_id WHERE ${where} ORDER BY api.id ASC`,
+        params,
+      );
+      for (const pr of pend) {
+        const st = String(pr.status ?? "").trim().toLowerCase();
+        if (!["pending", "scheduled", "canceled", "cancelled", "no_show"].includes(st)) continue;
+        const apptId = Number(pr.appointment_id ?? 0);
+        const sid = Number(pr.service_id ?? 0);
+        if (apptId <= 0 || sid <= 0) continue;
+        const qty = Math.max(1, Number(pr.qty ?? 1));
+        const label = await serviceNameById(slug, sid, `Servizio #${sid}`);
+        const code = String(pr.public_code ?? "").trim() || String(apptId);
+        const baseId = Math.max(0, Number(pr.id ?? 0)) * 10;
+        const pendingAt = pgDateTimeLocal(pr.appt_created_at ?? pr.starts_at);
+        if (st === "pending" || st === "scheduled") {
+          reservedQtyTotal += qty;
+          reservedByService.set(sid, (reservedByService.get(sid) ?? 0) + qty);
+          movements.push({ id: baseId + 1, usedAt: pendingAt, delta: -qty, unitLabel: "sedute", movementType: "pending", itemLabel: label, note: `In sospeso su prenotazione #${code}`, createdByName: "—" });
+          continue;
+        }
+        if (!realHistoryKeys.has(`${apptId}:${sid}`)) {
+          const cancelAt = pgDateTimeLocal(pr.cancelled_at ?? pr.starts_at ?? pr.appt_created_at);
+          movements.push({ id: baseId + 1, usedAt: pendingAt, delta: -qty, unitLabel: "sedute", movementType: "pending", itemLabel: label, note: `In sospeso su prenotazione #${code}`, createdByName: "—" });
+          movements.push({ id: baseId + 2, usedAt: cancelAt, delta: qty, unitLabel: "sedute", movementType: "cancel", itemLabel: label, note: `${st === "no_show" ? "No show su prenotazione #" : "Annullato su prenotazione #"}${code}`, createdByName: "—" });
+        }
+      }
+    }
+  } catch { /* best-effort */ }
+  movements.sort((a, b) => {
+    const ta = new Date(a.usedAt.replace(" ", "T")).getTime() || 0;
+    const tb = new Date(b.usedAt.replace(" ", "T")).getTime() || 0;
+    if (ta !== tb) return tb - ta;
+    return b.id - a.id;
+  });
+
+  // Contenuto pacchetto (righe Tipo/Voce/Totali/Rimanenti) + voci registrabili.
+  const snapItems = await clientPackageSnapshotItems(slug, id, packageId);
+  const svcMetaById = new Map<number, { name: string; total: number; remaining: number; reserved: number }>();
+  for (const c of contents) {
+    const entry = svcMetaById.get(c.serviceId) ?? { name: c.serviceName, total: 0, remaining: 0, reserved: 0 };
+    entry.total += c.sessionsTotal;
+    entry.remaining += c.sessionsRemaining;
+    if (entry.name === "" && c.serviceName !== "") entry.name = c.serviceName;
+    svcMetaById.set(c.serviceId, entry);
+  }
+  for (const [sid, entry] of svcMetaById) entry.reserved = Math.min(entry.remaining, reservedByService.get(sid) ?? 0);
+  let contentRows: ClientPackageContentRow[] = [];
+  let contentHasProducts = false;
+  if (snapItems.length > 0) {
+    for (const it of snapItems) {
+      const row: ClientPackageContentRow = { type: it.type, itemId: it.itemId, name: it.name !== "" ? it.name : `${it.type === "product" ? "Prodotto" : "Servizio"} #${it.itemId}`, qtyTotal: Math.max(1, it.qty), qtyRemaining: Math.max(1, it.qty), reservedQty: 0 };
+      if (it.type === "service") {
+        const meta2 = svcMetaById.get(it.itemId);
+        if (meta2) {
+          if (meta2.name !== "") row.name = meta2.name;
+          row.qtyTotal = Math.max(1, meta2.total || row.qtyTotal);
+          row.qtyRemaining = Math.max(0, meta2.remaining - meta2.reserved);
+          row.reservedQty = meta2.reserved;
+        }
+      } else {
+        contentHasProducts = true;
+        const net = productNetDelta.get(it.itemId) ?? 0;
+        row.qtyRemaining = Math.max(0, Math.min(row.qtyTotal, row.qtyTotal + net));
+      }
+      contentRows.push(row);
+    }
+  } else if (svcMetaById.size > 0) {
+    contentRows = Array.from(svcMetaById.entries()).map(([sid, m]) => ({ type: "service", itemId: sid, name: m.name !== "" ? m.name : `Servizio #${sid}`, qtyTotal: Math.max(1, m.total), qtyRemaining: Math.max(0, m.remaining - m.reserved), reservedQty: m.reserved }));
+  } else if (Number(cp.service_id ?? 0) > 0) {
+    const sid = Number(cp.service_id ?? 0);
+    const legacyReserved = Math.min(sessionsRemainingBase, reservedByService.get(sid) ?? reservedQtyTotal);
+    contentRows = [{ type: "service", itemId: sid, name: serviceName !== "" ? serviceName : `Servizio #${sid}`, qtyTotal: Math.max(1, sessionsTotal), qtyRemaining: Math.max(0, sessionsRemainingBase - legacyReserved), reservedQty: legacyReserved }];
+  }
+
+  const usageItems: ClientPackageUsageItem[] = contentRows.map((row) => {
+    const remainingBase = row.type === "service" ? Math.min(row.qtyTotal, row.qtyRemaining + row.reservedQty) : row.qtyRemaining;
+    return {
+      itemRef: `${row.type}:${row.itemId}`,
+      type: row.type,
+      itemId: row.itemId,
+      label: row.name,
+      qtyTotal: row.qtyTotal,
+      qtyRemaining: row.qtyRemaining,
+      qtyRemainingBase: remainingBase,
+      reservedQty: row.reservedQty,
+      restoreAvailable: Math.max(0, row.qtyTotal - remainingBase),
+      unitLabel: row.type === "product" ? "pz" : "sedute",
+      typeLabel: row.type === "product" ? "Prodotto" : "Servizio",
+    };
+  });
+
+  const contentSummary = packageItemsSummaryText(snapItems.length > 0 ? snapItems : contentRows.map((r) => ({ type: r.type, itemId: r.itemId, name: r.name, qty: r.qtyTotal })));
+
+  // Riserve totali (esposte in "Sedute rimanenti" e nell'alert del form).
+  const reservedQty = Math.min(sessionsRemainingBase, reservedQtyTotal);
+  const sessionsRemaining = Math.max(0, sessionsRemainingBase - reservedQty);
+
+  const meta = clientPackageStatusMeta(String(cp.status ?? "active"), sessionsRemainingBase, String(cp.expires_at ?? ""));
+
+  // Disponibilità contenuti (per il blocco riattivazione su Scaduto).
+  const availability = meta.key === "expired"
+    ? await clientPackageContentAvailability(slug, contentRows.map((r) => ({ type: r.type, itemId: r.itemId, name: r.name })))
+    : { errors: [], warnings: [] };
+
+  // Scadenza modificabile: non annullato e non "già utilizzato" (redeemedForExpiry).
+  const redeemed = packageRedeemedForExpiry(String(cp.status ?? "active"), sessionsTotal, sessionsRemainingBase);
+  const canEditExpiry = meta.key !== "canceled" && !redeemed;
+  const expiryEditLocked = meta.key === "expired" && availability.errors.length > 0;
+  const startYmd = cp.start_date ? pgDateOnly(cp.start_date) : "";
+  let expiryMinDate = todayIso();
+  if (startYmd !== "" && startYmd > expiryMinDate) expiryMinDate = startYmd;
+
+  // Origine preventivo.
+  const sourceQuoteId = Number(cp.source_quote_id ?? 0) || null;
+  let sourceQuoteNumber = "";
+  if (sourceQuoteId) {
+    const qr = await tenantSelect<RowDataPacket>({ slug, table: "quotes", columns: "number", where: "id = ?", params: [sourceQuoteId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    sourceQuoteNumber = String(qr[0]?.number ?? "");
+  }
 
   return {
     id,
@@ -6972,18 +7347,33 @@ export async function getManageClientPackage(slug: string, id: number): Promise<
     clientName,
     packageName: String(cp.package_name ?? ""),
     serviceName,
+    locationLabel,
+    contentSummary,
+    contentHasProducts,
+    isMulti: contents.length > 1,
     sessionsTotal,
     sessionsRemaining,
+    reservedQty,
     status: meta.key,
     statusLabel: meta.label,
     statusBadge: meta.badge,
-    purchaseDate: cp.purchase_date ? toIso(cp.purchase_date) : "",
-    startDate: cp.start_date ? toIso(cp.start_date) : "",
-    expiresAt: cp.expires_at ? String(cp.expires_at).slice(0, 10) : "",
-    saleId: Number(cp.sale_id ?? 0) || null,
+    purchaseDate: cp.purchase_date ? pgDateOnly(cp.purchase_date) : "",
+    startDate: cp.start_date ? pgDateOnly(cp.start_date) : "",
+    expiresAt: cp.expires_at ? pgDateOnly(cp.expires_at) : "",
+    notes: String(cp.notes ?? ""),
+    saleId: saleId > 0 ? saleId : null,
+    sourceQuoteId,
+    sourceQuoteNumber,
     contents,
+    contentRows,
+    usageItems,
+    movements,
     usages,
+    availability,
     canEditExpiry,
+    expiryEditLocked,
+    expiryEditLockMessage: expiryEditLocked ? packageReactivationBlockMessage(availability.errors) : "",
+    expiryMinDate,
   };
 }
 
@@ -6991,7 +7381,8 @@ export async function getManageClientPackage(slug: string, id: number): Promise<
 // requires a valid date not before today / the package start, refuses a cancelled or
 // already-used package, then writes expires_at + recomputes status.
 export async function updateManageClientPackageExpiry(slug: string, id: number, expiresAt: string): Promise<{ ok: true }> {
-  if (id <= 0) throw new Error("Pacchetto non valido.");
+  // Messaggi verbatim di ClientPackages::updateClientPackageExpiry.
+  if (id <= 0) throw new Error("Pacchetto non valido");
   const requested = String(expiresAt ?? "").slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(requested)) throw new Error("Seleziona una nuova data di scadenza valida.");
   const today = todayIso();
@@ -7003,22 +7394,27 @@ export async function updateManageClientPackageExpiry(slug: string, id: number, 
   const stored = String(cp.status ?? "active").trim().toLowerCase();
   if (stored === "canceled" || stored === "cancelled") throw new Error("Non è possibile modificare la scadenza di un pacchetto annullato.");
 
-  // Already-used guard: any consumption (remaining < total) or a usage row.
+  // Guard "già utilizzato" (packageRedeemedForExpiry: completed, o remaining<total).
   const sumRows = await tenantSelect<RowDataPacket>({ slug, table: "client_package_services", columns: "sessions_total, sessions_remaining", where: "client_package_id = ?", params: [id] }).catch(() => [] as RowDataPacket[]);
   let sumTotal = 0;
   let sumRemaining = 0;
   for (const r of sumRows) { sumTotal += Number(r.sessions_total ?? 0); sumRemaining += Number(r.sessions_remaining ?? 0); }
   const total = sumTotal > 0 ? sumTotal : Number(cp.sessions_total ?? 0);
   const remaining = sumTotal > 0 ? sumRemaining : Number(cp.sessions_remaining ?? 0);
-  const usageCount = (await tenantSelect<RowDataPacket>({ slug, table: "client_package_usages", columns: "id", where: "client_package_id = ?", params: [id], limit: 1 }).catch(() => [] as RowDataPacket[])).length;
-  if (remaining !== total || usageCount > 0) throw new Error("Non è possibile modificare la scadenza di un pacchetto già utilizzato.");
+  if (packageRedeemedForExpiry(stored, total, remaining)) throw new Error("Non e possibile modificare la scadenza di un pacchetto gia utilizzato.");
 
-  const startYmd = cp.start_date ? String(cp.start_date).slice(0, 10) : "";
+  const startYmd = cp.start_date ? pgDateOnly(cp.start_date) : "";
   if (startYmd !== "" && requested < startYmd) throw new Error("La nuova data di scadenza non può essere precedente all'inizio del pacchetto.");
 
-  // Recompute status from the new expiry (active/expired), preserving cancelled/completed.
-  let newStatus = stored;
-  if (stored !== "completed" && remaining > 0) newStatus = requested < today ? "expired" : "active";
+  const oldStatus = recomputeClientPackageStatus(stored, remaining, cp.expires_at ? pgDateOnly(cp.expires_at) : "");
+  const newStatus = recomputeClientPackageStatus(stored, remaining, requested);
+  // Riattivazione da scaduto: bloccata se un contenuto è stato eliminato.
+  if (oldStatus === "expired" && newStatus === "active") {
+    const items = await clientPackageSnapshotItems(slug, id, Number(cp.package_id ?? 0));
+    const availability = await clientPackageContentAvailability(slug, items.map((it) => ({ type: it.type, itemId: it.itemId, name: it.name })));
+    if (availability.errors.length > 0) throw new Error(packageReactivationBlockMessage(availability.errors));
+  }
+
   await tenantUpdate({ slug, table: "client_packages", id, values: { expires_at: requested, status: newStatus } });
   return { ok: true };
 }
@@ -7051,39 +7447,168 @@ export async function addManageClientPackageUsage(
   serviceId: number,
   note: string,
   by: number,
-): Promise<{ ok: true }> {
-  if (id <= 0) throw new Error("Pacchetto non valido.");
+  options: { itemRef?: string; usedAt?: string; operatorName?: string; locationId?: number } = {},
+): Promise<{ ok: true; message: string }> {
+  // Messaggi verbatim di packages.php action=usage_add.
+  if (id <= 0) throw new Error("Pacchetto non valido");
   const mode = String(op ?? "").trim().toLowerCase();
-  if (mode !== "consume" && mode !== "restore") throw new Error("Operazione non valida.");
   const q = Math.trunc(Number(qty));
-  if (!Number.isFinite(q) || q <= 0 || q > 10000) throw new Error("Quantità non valida.");
+  if (!Number.isFinite(q) || q <= 0 || q > 10000) throw new Error("Quantità non valida");
+  if (mode !== "consume" && mode !== "restore") throw new Error("Operazione non valida");
   const delta = mode === "restore" ? Math.abs(q) : -Math.abs(q);
 
+  // item_ref "service:ID" | "product:ID" (port packages_page_parse_item_ref).
+  let usageItemType = "";
+  let usageItemId = 0;
+  const rawRef = String(options.itemRef ?? "").trim().toLowerCase();
+  const refMatch = rawRef.match(/^(service|product):(\d+)$/);
+  if (refMatch) {
+    usageItemType = refMatch[1];
+    usageItemId = Number(refMatch[2]);
+  }
+  if (usageItemType === "" && serviceId > 0) {
+    usageItemType = "service";
+    usageItemId = serviceId;
+  }
+  let serviceIdPost = usageItemType === "service" && usageItemId > 0 ? usageItemId : serviceId;
+
+  // used_at: input datetime-local o adesso (wall-clock locale).
+  const usedAtRaw = String(options.usedAt ?? "").trim().replace("T", " ");
+  const nowLocal = pgDateTimeLocal(new Date());
+  let usedAt = nowLocal;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(usedAtRaw)) usedAt = usedAtRaw.length === 16 ? `${usedAtRaw}:00` : usedAtRaw;
+
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "client_packages", where: "id = ?", params: [id], limit: 1 });
-  if (!rows[0]) throw new Error("Pacchetto non trovato.");
+  if (!rows[0]) throw new Error("Pacchetto non trovato");
   const cp = rows[0];
   const stored = String(cp.status ?? "active").trim().toLowerCase();
-  if (stored === "canceled" || stored === "cancelled") throw new Error("Pacchetto annullato: non puoi registrare sedute o ritiri.");
-  const expiresAt = String(cp.expires_at ?? "");
+  if (stored === "canceled" || stored === "cancelled") throw new Error("Pacchetto annullato: non puoi registrare sedute o ritiri");
+  const expiresAt = cp.expires_at ? pgDateOnly(cp.expires_at) : "";
   const isExpired = recomputeClientPackageStatus(stored, Math.max(0, Number(cp.sessions_remaining ?? 0)), expiresAt) === "expired";
   if (isExpired && delta < 0) throw new Error("Pacchetto scaduto: non puoi scalare sedute o ritiri. Puoi aggiornare la scadenza o registrare un ripristino.");
 
+  // Voce obbligatoria quando il pacchetto ha voci registrabili (snapshot/catalogo).
+  const snapItems = await clientPackageSnapshotItems(slug, id, Number(cp.package_id ?? 0));
+  if (usageItemType === "" && serviceIdPost <= 0 && snapItems.length > 0) {
+    throw new Error("Seleziona la voce da registrare");
+  }
+
   const usageTable = await tenantTable(slug, "client_package_usages");
+  const operatorUserId = by > 0 ? by : null;
+  const packageLocationId = Number(cp.location_id ?? 0) > 0 ? Number(cp.location_id ?? 0) : Number(options.locationId ?? 0);
+
+  // ---- PATH PRODOTTI: ritiro/ripristino con magazzino (stock + stock_docs) ----
+  if (usageItemType === "product") {
+    if (usageItemId <= 0) throw new Error("Seleziona il prodotto da ritirare.");
+    const pkgProductQty = snapItems.filter((it) => it.type === "product" && it.itemId === usageItemId).reduce((sum, it) => sum + Math.max(1, it.qty), 0);
+    if (pkgProductQty <= 0) throw new Error("Prodotto non incluso in questo pacchetto.");
+
+    const netRows = await tenantSelect<RowDataPacket>({ slug, table: "client_package_usages", columns: "COALESCE(SUM(delta),0) AS s", where: "client_package_id = ? AND LOWER(TRIM(COALESCE(item_type,''))) = 'product' AND item_id = ?", params: [id, usageItemId] }).catch(() => [] as RowDataPacket[]);
+    const currentRemaining = pkgProductQty + Number(netRows[0]?.s ?? 0);
+    const newRemaining = currentRemaining + delta;
+    if (newRemaining < 0) throw new Error("Quantità prodotto insufficienti per registrare il ritiro.");
+    if (newRemaining > pkgProductQty) throw new Error("Superi le quantità totali del prodotto incluso nel pacchetto.");
+
+    const prodRows = await tenantSelect<RowDataPacket>({ slug, table: "products", columns: "id, name, sku, stock", where: "id = ?", params: [usageItemId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    if (!prodRows[0]) throw new Error("Prodotto non trovato in magazzino.");
+    let label = String(prodRows[0].name ?? "").trim();
+    const sku = String(prodRows[0].sku ?? "").trim();
+    if (label !== "" && sku !== "" && !label.endsWith(`(${sku})`)) label = `${label} (${sku})`;
+    if (label === "") label = `Prodotto #${usageItemId}`;
+    const qtyAbs = Math.abs(delta);
+
+    // Nome cliente per la nota del documento magazzino.
+    let clientLabel = "";
+    const clientId = Number(cp.client_id ?? 0);
+    if (clientId > 0) {
+      const cRows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "full_name", where: "id = ?", params: [clientId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+      clientLabel = String(cRows[0]?.full_name ?? "").trim();
+    }
+    if (clientLabel === "") clientLabel = `Cliente #${clientId}`;
+
+    // Stock per sede (product_stocks) con fallback colonna products.stock.
+    const stockRows = packageLocationId > 0
+      ? await tenantSelect<RowDataPacket>({ slug, table: "product_stocks", columns: "stock, COALESCE(is_enabled,1) AS en", where: "product_id = ? AND location_id = ?", params: [usageItemId, packageLocationId], limit: 1 }).catch(() => [] as RowDataPacket[])
+      : [];
+    if (delta < 0) {
+      if (packageLocationId > 0 && stockRows[0] && Number(stockRows[0].en ?? 1) !== 1) {
+        throw new Error(`Prodotto non disponibile nella sede selezionata: ${label}.`);
+      }
+      const currentStock = Math.max(0, Number(stockRows[0]?.stock ?? prodRows[0].stock ?? 0));
+      if (currentStock < qtyAbs) throw new Error(`Stock insufficiente per registrare il ritiro del prodotto ${label}.`);
+    }
+
+    // Documento magazzino (stock_docs + stock_doc_items) come il legacy.
+    const docNote = delta < 0
+      ? `Ritiro prodotto da Pacchetti • pacchetto cliente #${id} • cliente: ${clientLabel} • prodotto: ${label} x${qtyAbs}`
+      : `Ripristino ritiro prodotto da Pacchetti • pacchetto cliente #${id} • cliente: ${clientLabel} • prodotto: ${label} x${qtyAbs}`;
+    try {
+      const docId = await tenantInsert(await tenantTable(slug, "stock_docs"), {
+        move_date: usedAt.slice(0, 10),
+        location_id: packageLocationId > 0 ? packageLocationId : null,
+        operator_user_id: operatorUserId,
+        operator_name: String(options.operatorName ?? "").trim() || null,
+        cause: delta < 0 ? "scarico" : "carico",
+        document_type: null,
+        document_number: null,
+        document_date: null,
+        notes: docNote,
+        is_canceled: 0,
+      });
+      if (docId > 0) {
+        await tenantInsert(await tenantTable(slug, "stock_doc_items"), { stock_doc_id: docId, product_id: usageItemId, qty: qtyAbs, incoming_flag: 0, incoming_qty: 0, incoming_eta: null }).catch(() => 0);
+      }
+    } catch { /* best-effort come il legacy (guarded) */ }
+
+    // Aggiorna lo stock (per sede se presente, altrimenti products.stock).
+    if (packageLocationId > 0 && stockRows[0]) {
+      const psT = await tenantTable(slug, "product_stocks");
+      const scoped = psT.mode === "shared" && (await columnExists(psT.name, "tenant_id"));
+      const sqlDelta = delta < 0 ? -qtyAbs : qtyAbs;
+      const params: unknown[] = [sqlDelta, usageItemId, packageLocationId];
+      let sql = `UPDATE ${quoteIdentifier(psT.name)} SET stock = stock + ? WHERE product_id = ? AND location_id = ?`;
+      if (delta < 0) sql += " AND stock >= " + qtyAbs;
+      if (scoped) { sql += " AND tenant_id = ?"; params.push(psT.tenantId ?? 0); }
+      const res = await dbExecute(sql, params);
+      if (delta < 0 && res.affectedRows <= 0) throw new Error("Stock insufficiente: il magazzino è stato modificato da un'altra operazione.");
+    } else {
+      const pT = await tenantTable(slug, "products");
+      const scoped = pT.mode === "shared" && (await columnExists(pT.name, "tenant_id"));
+      const params: unknown[] = [delta < 0 ? -qtyAbs : qtyAbs, usageItemId];
+      let sql = `UPDATE ${quoteIdentifier(pT.name)} SET stock = stock + ? WHERE id = ?`;
+      if (delta < 0) sql += " AND stock >= " + qtyAbs;
+      if (scoped) { sql += " AND tenant_id = ?"; params.push(pT.tenantId ?? 0); }
+      const res = await dbExecute(sql, params);
+      if (delta < 0 && res.affectedRows <= 0) throw new Error("Stock insufficiente: il magazzino è stato modificato da un'altra operazione.");
+    }
+
+    const usageNote = note.trim() !== "" ? note.trim() : delta < 0 ? "Ritiro prodotto incluso nel pacchetto" : "Ripristino ritiro prodotto incluso nel pacchetto";
+    await tenantInsert(usageTable, { client_package_id: id, service_id: null, item_type: "product", item_id: usageItemId, location_id: packageLocationId > 0 ? packageLocationId : null, used_at: usedAt, delta, note: usageNote, appointment_id: null, created_by: operatorUserId }).catch(() => 0);
+    return { ok: true, message: delta < 0 ? "Ritiro prodotto registrato" : "Ripristino ritiro prodotto registrato" };
+  }
+
+  // ---- PATH SERVIZI ----
   const cpsRows = await tenantSelect<RowDataPacket>({ slug, table: "client_package_services", where: "client_package_id = ?", params: [id], orderBy: "sort_order ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
 
   if (cpsRows.length > 0) {
     const isMulti = cpsRows.length > 1;
-    let targetServiceId = serviceId;
-    if (isMulti && targetServiceId <= 0) throw new Error("Seleziona il servizio da scalare.");
-    if (targetServiceId <= 0) targetServiceId = Number(cpsRows[0].service_id ?? 0);
-    const target = cpsRows.find((r) => Number(r.service_id ?? 0) === targetServiceId);
-    if (!target) throw new Error("Servizio non incluso in questo pacchetto.");
+    if (isMulti && serviceIdPost <= 0) throw new Error("Seleziona il servizio da scalare");
+    if (serviceIdPost <= 0) serviceIdPost = Number(cpsRows[0].service_id ?? 0);
+    const target = cpsRows.find((r) => Number(r.service_id ?? 0) === serviceIdPost);
+    if (!target) throw new Error("Servizio non incluso in questo pacchetto");
 
     const remaining = Math.max(0, Number(target.sessions_remaining ?? 0));
     const total = Math.max(0, Number(target.sessions_total ?? 0));
+    // Le riserve su prenotazioni aperte riducono le sedute scalabili.
+    const reservedQty = Math.min(remaining, await pkgReservedQty(slug, id, Number(target.id ?? 0), serviceIdPost));
+    const available = Math.max(0, remaining - reservedQty);
     const newRemaining = remaining + delta;
-    if (delta < 0 && Math.abs(delta) > remaining) throw new Error("Sedute insufficienti per il servizio selezionato.");
-    if (newRemaining > total) throw new Error("Superi le sedute totali del servizio selezionato.");
+    if (delta < 0 && Math.abs(delta) > available) {
+      let msg = "Sedute insufficienti per il servizio selezionato";
+      if (reservedQty > 0) msg += `: ${reservedQty} già in sospeso su prenotazioni`;
+      throw new Error(msg);
+    }
+    if (newRemaining > total) throw new Error("Superi le sedute totali del servizio selezionato");
 
     await tenantUpdate({ slug, table: "client_package_services", id: Number(target.id ?? 0), values: { sessions_remaining: newRemaining } });
 
@@ -7095,23 +7620,331 @@ export async function addManageClientPackageUsage(
     }
     if (sumTotal <= 0) sumTotal = Math.max(1, Number(cp.sessions_total ?? 1));
 
-    await tenantInsert(usageTable, { client_package_id: id, service_id: targetServiceId, item_type: "service", item_id: targetServiceId, used_at: new Date(), delta, note: note.trim() !== "" ? note.trim() : null, created_by: by > 0 ? by : null }).catch(() => 0);
+    await tenantInsert(usageTable, { client_package_id: id, service_id: serviceIdPost, item_type: "service", item_id: serviceIdPost, location_id: packageLocationId > 0 ? packageLocationId : null, used_at: usedAt, delta, note: note.trim() !== "" ? note.trim() : null, created_by: operatorUserId }).catch(() => 0);
     const newStatus = recomputeClientPackageStatus(stored, sumRemaining, expiresAt);
     await tenantUpdate({ slug, table: "client_packages", id, values: { sessions_total: sumTotal, sessions_remaining: sumRemaining, status: newStatus } });
-    return { ok: true };
+    return { ok: true, message: "Movimento registrato" };
   }
 
-  // Fallback: no per-service rows — operate on the client_packages aggregate.
+  // Fallback legacy: nessuna riga per-servizio — aggregato client_packages.
   const remaining = Math.max(0, Number(cp.sessions_remaining ?? 0));
   const total = Math.max(0, Number(cp.sessions_total ?? 0));
+  const legacyReserved = Math.min(remaining, await pkgReservedQty(slug, id, null, Number(cp.service_id ?? 0)));
+  const availableRemaining = Math.max(0, remaining - legacyReserved);
   const newRemaining = remaining + delta;
-  if (delta < 0 && Math.abs(delta) > remaining) throw new Error("Sedute insufficienti.");
-  if (newRemaining > total) throw new Error("Superi le sedute totali: aumenta prima le sedute totali.");
+  if (delta < 0 && Math.abs(delta) > availableRemaining) {
+    let msg = "Sedute insufficienti";
+    if (legacyReserved > 0) msg += `: ${legacyReserved} già in sospeso su prenotazioni`;
+    throw new Error(msg);
+  }
+  if (newRemaining > total) throw new Error("Superi le sedute totali: aumenta prima le sedute totali");
   const sid = Number(cp.service_id ?? 0);
-  await tenantInsert(usageTable, { client_package_id: id, service_id: sid > 0 ? sid : null, item_type: sid > 0 ? "service" : null, item_id: sid > 0 ? sid : null, used_at: new Date(), delta, note: note.trim() !== "" ? note.trim() : null, created_by: by > 0 ? by : null }).catch(() => 0);
+  await tenantInsert(usageTable, { client_package_id: id, service_id: sid > 0 ? sid : null, item_type: sid > 0 ? "service" : null, item_id: sid > 0 ? sid : null, location_id: packageLocationId > 0 ? packageLocationId : null, used_at: usedAt, delta, note: note.trim() !== "" ? note.trim() : null, created_by: operatorUserId }).catch(() => 0);
   const newStatus = recomputeClientPackageStatus(stored, newRemaining, expiresAt);
   await tenantUpdate({ slug, table: "client_packages", id, values: { sessions_remaining: newRemaining, status: newStatus } });
-  return { ok: true };
+  return { ok: true, message: "Movimento registrato" };
+}
+
+// ---- Lista pacchetti clienti (packages.php tab=clients action=list) -----------
+export type ManageClientPackageRow = {
+  id: number;
+  clientId: number;
+  clientName: string;
+  packageName: string;
+  locationLabel: string;
+  contentSummary: string;
+  sessionsRemaining: number;
+  sessionsTotal: number;
+  expiresAt: string;
+  statusKey: string;
+  statusLabel: string;
+  statusBadge: string;
+};
+
+// Port della lista legacy: filtri cliente/nome pacchetto/stato calcolato,
+// filtro sede (location_id o sede della vendita; senza sede -> visibile),
+// ORDER BY updated_at DESC, id DESC LIMIT 300, contenuto da snapshot con
+// fallback catalogo/servizio.
+export async function listManageClientPackages(
+  slug: string,
+  opts: { clientId?: number; packageName?: string; q?: string; status?: string; locationId?: number } = {},
+): Promise<ManageClientPackageRow[]> {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (opts.clientId && opts.clientId > 0) { clauses.push("client_id = ?"); params.push(opts.clientId); }
+  if (opts.packageName && opts.packageName.trim() !== "") { clauses.push("package_name = ?"); params.push(opts.packageName.trim()); }
+  const sf = String(opts.status ?? "active").trim().toLowerCase();
+  if (sf === "active") clauses.push("status <> 'canceled' AND sessions_remaining > 0 AND (expires_at IS NULL OR expires_at >= CURRENT_DATE)");
+  else if (sf === "completed") clauses.push("status <> 'canceled' AND sessions_remaining <= 0");
+  else if (sf === "expired") clauses.push("status <> 'canceled' AND sessions_remaining > 0 AND expires_at IS NOT NULL AND expires_at < CURRENT_DATE");
+  else if (sf === "canceled") clauses.push("status = 'canceled'");
+
+  const rows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "client_packages",
+    where: clauses.join(" AND "),
+    params,
+    orderBy: "updated_at DESC, id DESC",
+    limit: 300,
+  });
+
+  // Batch: nomi clienti, sedi, snapshot items, servizi.
+  const clientIds = Array.from(new Set(rows.map((r) => Number(r.client_id ?? 0)).filter((n) => n > 0)));
+  const clientNames = new Map<number, string>();
+  if (clientIds.length > 0) {
+    const ph = clientIds.map(() => "?").join(",");
+    for (const r of await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, full_name", where: `id IN (${ph})`, params: clientIds }).catch(() => [] as RowDataPacket[])) clientNames.set(Number(r.id ?? 0), String(r.full_name ?? ""));
+  }
+  const locName = new Map<number, string>();
+  for (const r of await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "id, name" }).catch(() => [] as RowDataPacket[])) locName.set(Number(r.id ?? 0), String(r.name ?? `Sede #${r.id}`));
+
+  // Filtro sede legacy: location_id diretta, altrimenti sede della vendita;
+  // senza sede risolta il pacchetto resta visibile.
+  const filterLocationId = Number(opts.locationId ?? 0);
+  const filtered: RowDataPacket[] = [];
+  for (const r of rows) {
+    if (filterLocationId > 0) {
+      let loc = Number(r.location_id ?? 0);
+      if (loc <= 0) {
+        const saleId = await findSaleIdForClientPackage(slug, r);
+        if (saleId > 0) {
+          const s = await tenantSelect<RowDataPacket>({ slug, table: "sales", columns: "location_id", where: "id = ?", params: [saleId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+          loc = Number(s[0]?.location_id ?? 0);
+        }
+      }
+      if (loc > 0 && loc !== filterLocationId) continue;
+    }
+    filtered.push(r);
+  }
+
+  const out: ManageClientPackageRow[] = [];
+  for (const r of filtered.slice(0, 300)) {
+    const cpId = Number(r.id ?? 0);
+    const snapItems = await clientPackageSnapshotItems(slug, cpId, Number(r.package_id ?? 0));
+    let contentSummary = packageItemsSummaryText(snapItems);
+    if (contentSummary === "—") {
+      const sid = Number(r.service_id ?? 0);
+      if (sid > 0) contentSummary = await serviceNameById(slug, sid, "—");
+    }
+    // Ricerca libera (legacy q su full_name/package_name).
+    const clientName = clientNames.get(Number(r.client_id ?? 0)) ?? "";
+    if (opts.q && opts.q.trim() !== "") {
+      const needle = opts.q.trim().toLowerCase();
+      if (!clientName.toLowerCase().includes(needle) && !String(r.package_name ?? "").toLowerCase().includes(needle)) continue;
+    }
+    const key = recomputeClientPackageStatus(String(r.status ?? "active"), Math.max(0, Number(r.sessions_remaining ?? 0)), r.expires_at ? pgDateOnly(r.expires_at) : "");
+    const meta = pkgStatusMeta(key);
+    const locId = Number(r.location_id ?? 0);
+    out.push({
+      id: cpId,
+      clientId: Number(r.client_id ?? 0),
+      clientName,
+      packageName: String(r.package_name ?? ""),
+      locationLabel: locId > 0 ? (locName.get(locId) ?? `Sede #${locId}`) : "-",
+      contentSummary,
+      sessionsRemaining: Math.max(0, Number(r.sessions_remaining ?? 0)),
+      sessionsTotal: Math.max(0, Number(r.sessions_total ?? 0)),
+      expiresAt: r.expires_at ? pgDateOnly(r.expires_at) : "",
+      statusKey: key,
+      statusLabel: meta.label,
+      statusBadge: meta.badge,
+    });
+  }
+  return out;
+}
+
+// Opzioni filtri lista (clienti + nomi pacchetto distinti) e catalogo per il form.
+export async function getManagePackagesFilters(slug: string): Promise<{ clients: { id: number; label: string }[]; packageNames: string[]; catalog: { id: number; name: string; sessionsTotal: number; serviceId: number; validityDays: number }[]; hasAnyClientPackages: boolean }> {
+  const clientRows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, full_name", orderBy: "full_name ASC" }).catch(() => [] as RowDataPacket[]);
+  const nameRows = await tenantSelect<RowDataPacket>({ slug, table: "client_packages", columns: "DISTINCT package_name", where: "package_name IS NOT NULL AND package_name <> ''", orderBy: "package_name ASC" }).catch(() => [] as RowDataPacket[]);
+  const anyRows = await tenantSelect<RowDataPacket>({ slug, table: "client_packages", columns: "id", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const catalogRows = await tenantSelect<RowDataPacket>({ slug, table: "packages", columns: "id, name, sessions_total, service_id, validity_days, is_active", orderBy: "COALESCE(is_active,1) DESC, name ASC" }).catch(() => [] as RowDataPacket[]);
+  return {
+    clients: clientRows.map((r) => ({ id: Number(r.id ?? 0), label: String(r.full_name ?? "") })).filter((c) => c.id > 0),
+    packageNames: nameRows.map((r) => String(r.package_name ?? "")).filter((n) => n !== ""),
+    catalog: catalogRows.map((r) => ({ id: Number(r.id ?? 0), name: String(r.name ?? ""), sessionsTotal: Number(r.sessions_total ?? 0), serviceId: Number(r.service_id ?? 0), validityDays: Number(r.validity_days ?? 0) })).filter((p) => p.id > 0),
+    hasAnyClientPackages: anyRows.length > 0,
+  };
+}
+
+// ---- Form client_edit (packages.php action=client_edit) -----------------------
+export type ManageClientPackageEdit = {
+  id: number;
+  clientId: number;
+  packageId: number;
+  packageName: string;
+  serviceId: number;
+  locationId: number;
+  purchaseDate: string;
+  startDate: string;
+  expiresAt: string;
+  sessionsTotal: number;
+  sessionsRemaining: number;
+  status: string;
+  computedStatus: string;
+  notes: string;
+  expiryEditable: boolean;
+  availability: { errors: PackageContentIssue[]; warnings: PackageContentIssue[] };
+};
+
+export async function getManageClientPackageForEdit(slug: string, id: number): Promise<ManageClientPackageEdit | null> {
+  if (id <= 0) return null;
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "client_packages", where: "id = ?", params: [id], limit: 1 });
+  if (!rows[0]) return null;
+  const cp = rows[0];
+  const computed = recomputeClientPackageStatus(String(cp.status ?? "active"), Math.max(0, Number(cp.sessions_remaining ?? 0)), cp.expires_at ? pgDateOnly(cp.expires_at) : "");
+  // Disponibilità contenuti per il blocco riattivazione (solo su scaduto).
+  let availability: { errors: PackageContentIssue[]; warnings: PackageContentIssue[] } = { errors: [], warnings: [] };
+  if (computed === "expired") {
+    const items = await clientPackageSnapshotItems(slug, id, Number(cp.package_id ?? 0));
+    availability = await clientPackageContentAvailability(slug, items.map((it) => ({ type: it.type, itemId: it.itemId, name: it.name })));
+  }
+  const sumRows = await tenantSelect<RowDataPacket>({ slug, table: "client_package_services", columns: "sessions_total, sessions_remaining", where: "client_package_id = ?", params: [id] }).catch(() => [] as RowDataPacket[]);
+  let sumTotal = 0;
+  let sumRemaining = 0;
+  for (const r of sumRows) { sumTotal += Number(r.sessions_total ?? 0); sumRemaining += Number(r.sessions_remaining ?? 0); }
+  const total = sumTotal > 0 ? sumTotal : Number(cp.sessions_total ?? 0);
+  const remaining = sumTotal > 0 ? sumRemaining : Number(cp.sessions_remaining ?? 0);
+  return {
+    id,
+    clientId: Number(cp.client_id ?? 0),
+    packageId: Number(cp.package_id ?? 0),
+    packageName: String(cp.package_name ?? ""),
+    serviceId: Number(cp.service_id ?? 0),
+    locationId: Number(cp.location_id ?? 0),
+    purchaseDate: cp.purchase_date ? pgDateOnly(cp.purchase_date) : "",
+    startDate: cp.start_date ? pgDateOnly(cp.start_date) : "",
+    expiresAt: cp.expires_at ? pgDateOnly(cp.expires_at) : "",
+    sessionsTotal: Math.max(0, Number(cp.sessions_total ?? 0)),
+    sessionsRemaining: Math.max(0, Number(cp.sessions_remaining ?? 0)),
+    status: String(cp.status ?? "active").trim().toLowerCase(),
+    computedStatus: computed,
+    notes: String(cp.notes ?? ""),
+    expiryEditable: !packageRedeemedForExpiry(String(cp.status ?? "active"), total, remaining),
+    availability,
+  };
+}
+
+// Salvataggio edit pacchetto cliente (port del POST client_edit; client_new è
+// bloccato: "La vendita/assegnazione dei pacchetti avviene solo da Pagamenti.").
+export async function saveManageClientPackage(slug: string, body: Record<string, string>): Promise<{ id: number; message: string }> {
+  const id = Math.trunc(Number(body.id ?? 0));
+  if (id <= 0) throw new Error("La vendita/assegnazione dei pacchetti avviene solo da Pagamenti.");
+
+  const clientId = Math.trunc(Number(body.client_id ?? 0));
+  if (clientId <= 0) throw new Error("Seleziona un cliente");
+  let packageId = Math.trunc(Number(body.package_id ?? 0)) || 0;
+  let packageName = String(body.package_name ?? "").trim();
+  let serviceId = Math.trunc(Number(body.service_id ?? 0)) || 0;
+  const locationId = Math.trunc(Number(body.location_id ?? 0)) || 0;
+
+  const normDate = (v: unknown): string | null => {
+    const s = String(v ?? "").trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+  };
+  const purchaseDate = normDate(body.purchase_date);
+  const startDate = normDate(body.start_date);
+  let expiresAt = normDate(body.expires_at);
+
+  let sessionsTotal = Math.max(1, Math.trunc(Number(body.sessions_total ?? 1)) || 1);
+  let sessionsRemaining = Math.trunc(Number(body.sessions_remaining !== undefined && String(body.sessions_remaining) !== "" ? body.sessions_remaining : sessionsTotal));
+  const notes = String(body.notes ?? "").trim();
+  let status = String(body.status ?? "active").trim().toLowerCase();
+  if (!["active", "completed", "expired", "canceled"].includes(status)) status = "active";
+
+  // Autofill da catalogo (come il legacy).
+  if (packageId > 0) {
+    const pRows = await tenantSelect<RowDataPacket>({ slug, table: "packages", where: "id = ?", params: [packageId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    const p = pRows[0];
+    if (p) {
+      // Sede abilitata per il pacchetto catalogo.
+      if (locationId > 0) {
+        const pl = await tenantSelect<RowDataPacket>({ slug, table: "package_locations", columns: "location_id", where: "package_id = ?", params: [packageId] }).catch(() => [] as RowDataPacket[]);
+        if (pl.length > 0 && !pl.some((r) => Number(r.location_id ?? 0) === locationId)) {
+          throw new Error("Pacchetto catalogo non abilitato per la sede selezionata.");
+        }
+      }
+      if (packageName === "") packageName = String(p.name ?? "");
+      if (serviceId <= 0 && Number(p.service_id ?? 0) > 0) serviceId = Number(p.service_id ?? 0);
+      if (!body.sessions_total) sessionsTotal = Math.max(1, Number(p.sessions_total ?? 1));
+      if (body.sessions_remaining === undefined || String(body.sessions_remaining) === "") sessionsRemaining = sessionsTotal;
+      if (!expiresAt && startDate && Number(p.validity_days ?? 0) > 0) {
+        const d = new Date(`${startDate}T00:00:00`);
+        d.setDate(d.getDate() + Number(p.validity_days ?? 0));
+        expiresAt = dateIsoLocal(d);
+      }
+    } else {
+      packageId = 0;
+    }
+  }
+
+  if (packageName === "") throw new Error("Nome pacchetto obbligatorio");
+  if (sessionsRemaining < 0) sessionsRemaining = 0;
+  if (sessionsRemaining > sessionsTotal) sessionsRemaining = sessionsTotal;
+
+  const existingRows = await tenantSelect<RowDataPacket>({ slug, table: "client_packages", where: "id = ?", params: [id], limit: 1 });
+  if (!existingRows[0]) throw new Error("Pacchetto non trovato");
+  const existing = existingRows[0];
+  const existingStatus = String(existing.status ?? "").trim().toLowerCase();
+  const existingComputed = recomputeClientPackageStatus(existingStatus, Math.max(0, Number(existing.sessions_remaining ?? 0)), existing.expires_at ? pgDateOnly(existing.expires_at) : "");
+
+  // Scadenza non modificabile se il pacchetto è già utilizzato.
+  const existingExpires = existing.expires_at ? pgDateOnly(existing.expires_at) : null;
+  if ((expiresAt ?? null) !== (existingExpires ?? null)) {
+    const sumRows = await tenantSelect<RowDataPacket>({ slug, table: "client_package_services", columns: "sessions_total, sessions_remaining", where: "client_package_id = ?", params: [id] }).catch(() => [] as RowDataPacket[]);
+    let sTot = 0;
+    let sRem = 0;
+    for (const r of sumRows) { sTot += Number(r.sessions_total ?? 0); sRem += Number(r.sessions_remaining ?? 0); }
+    const t = sTot > 0 ? sTot : Number(existing.sessions_total ?? 0);
+    const rem = sTot > 0 ? sRem : Number(existing.sessions_remaining ?? 0);
+    if (packageRedeemedForExpiry(existingStatus, t, rem)) {
+      throw new Error("Non e possibile modificare la scadenza di un pacchetto gia utilizzato.");
+    }
+  }
+
+  if (existingStatus === "canceled") {
+    status = "canceled";
+  } else if (status === "canceled") {
+    throw new Error("Il pacchetto si annulla solo dal dettaglio vendita.");
+  }
+
+  status = recomputeClientPackageStatus(status, sessionsRemaining, expiresAt ?? "");
+
+  // Riattivazione da scaduto bloccata se contenuti eliminati.
+  if (existingComputed === "expired" && status === "active") {
+    const items = await clientPackageSnapshotItems(slug, id, packageId);
+    const availability = await clientPackageContentAvailability(slug, items.map((it) => ({ type: it.type, itemId: it.itemId, name: it.name })));
+    if (availability.errors.length > 0) throw new Error(packageReactivationBlockMessage(availability.errors));
+  }
+
+  await tenantUpdate({
+    slug,
+    table: "client_packages",
+    id,
+    values: {
+      client_id: clientId,
+      package_id: packageId > 0 ? packageId : null,
+      package_name: packageName,
+      service_id: serviceId > 0 ? serviceId : null,
+      purchase_date: purchaseDate,
+      start_date: startDate,
+      expires_at: expiresAt,
+      sessions_total: sessionsTotal,
+      sessions_remaining: sessionsRemaining,
+      status,
+      notes: notes !== "" ? notes : null,
+      location_id: locationId > 0 ? locationId : null,
+    },
+  });
+  return { id, message: "Pacchetto aggiornato" };
+}
+
+// Info per client_cancel/client_delete: il redirect legacy va al dettaglio
+// vendita quando esiste, con i messaggi verbatim.
+export async function getClientPackageCancelInfo(slug: string, id: number): Promise<{ saleId: number }> {
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "client_packages", columns: "id, client_id, package_name, purchase_date, sale_id", where: "id = ?", params: [id], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  if (!rows[0]) return { saleId: 0 };
+  return { saleId: await findSaleIdForClientPackage(slug, rows[0]) };
 }
 
 export async function issueDbClientPackage(
