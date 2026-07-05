@@ -186,7 +186,7 @@ export default async function TenantPage({
   searchParams,
 }: {
   params: Promise<{ tenantSlug: string; segments?: string[] }>;
-  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string; staff_id?: string; source?: string; detail_staff_id?: string; from?: string; to?: string; q?: string; cat?: string; cat_q?: string; cat_status?: string; category_filter_id?: string; low_stock?: string; supplier?: string; category?: string; code?: string; brand?: string; internal_code?: string; product_id?: string; category_search?: string; edit_id?: string; sku?: string; document_number?: string; number?: string; date?: string; include_canceled?: string; p?: string; category_id?: string; scope?: string; msg?: string; err?: string; type?: string; all_locations?: string; package_name?: string }>;
+  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string; staff_id?: string; source?: string; detail_staff_id?: string; from?: string; to?: string; q?: string; cat?: string; cat_q?: string; cat_status?: string; category_filter_id?: string; low_stock?: string; supplier?: string; category?: string; code?: string; brand?: string; internal_code?: string; product_id?: string; category_search?: string; edit_id?: string; sku?: string; document_number?: string; number?: string; date?: string; include_canceled?: string; p?: string; category_id?: string; scope?: string; msg?: string; err?: string; type?: string; all_locations?: string; package_name?: string; p_pending?: string; p_list?: string; warn_locked?: string }>;
 }) {
   const { tenantSlug, segments } = await params;
   const query = await searchParams;
@@ -710,6 +710,27 @@ export default async function TenantPage({
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
         <GiftBoxFormContent slug={tenantSlug} initialQuery={{ action: query.action, id: query.id, msg: query.msg, err: query.err }} />
+      </ManageShell>
+    );
+  }
+
+  // Faithful Portafoglio punti (fidelity_wallet.php): querystring legacy
+  // (?client_id/p/p_pending/p_list) + flash ?msg/?err + ?warn_locked.
+  if (page === "fidelity_wallet") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <FidelityWalletContent
+          slug={tenantSlug}
+          initialQuery={{
+            client_id: query.client_id,
+            p: query.p,
+            p_pending: query.p_pending,
+            p_list: query.p_list,
+            msg: query.msg,
+            err: query.err,
+            warn_locked: query.warn_locked,
+          }}
+        />
       </ManageShell>
     );
   }

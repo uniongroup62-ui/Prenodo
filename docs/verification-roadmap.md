@@ -4565,3 +4565,69 @@ motivo, preview refs, ordine lista, KPI sede+tessere+top clienti, ripristino
 businesses e zero residui) + 102/102 marker bundle + regressioni
 fidelity-toggle 27/27 e fidcamp 10/11 (1 FAIL atteso sul messaggio overlap
 corretto) + typecheck/lint puliti.
+
+## Portafoglio punti (fidelity_wallet.php) — 2026-07-05
+AUDIT COMPLETO della pagina Portafoglio (1288 righe: stati disabilitati,
+movimento manuale con protezione punti prenotati, dettaglio cliente con
+calendario scadenze, movimenti paginati, punti in sospeso, lista clienti) +
+fidelity_wallet.js vs il modulo Next. FIX PRINCIPALI:
+1. 'Disponibili' RAW legacy (availablePointsRaw): può scendere sotto zero —
+   prima la riserva veniva clampata al saldo e il disponibile non andava mai
+   negativo; alert 'Disponibile negativo' col testo verbatim.
+2. Calendario scadenze RAGGRUPPATO PER GIORNO (23:59:59) come il legacy
+   (prima una riga per LOTTO con colonne inventate 'Guadagnati il/Origine'):
+   quota 'vincolati' dai lock-lots scaduti (parse lock@YYYYMMDD...),
+   'Vincolati su: Prenotazione #X, #Y +N' (title completo), 'Da rimuovere
+   (cron): N', righe table-warning/table-info sul passato, 'ore H:i',
+   'Prossima scadenza: d/m/Y H:i (N Punti).', vuoto -> 'Nessun punto con
+   scadenza rilevata (saldo consumato o storico vuoto).'; alert legacy
+   'Punti già scaduti (cron non eseguito)' (expiredPending) e 'Punti scaduti
+   ma vincolati' con link 'Vedi punti in sospeso'.
+3. Movimenti punti fedeli: colonna SEDE (location_name con fallback nome
+   sede/'Sede non disponibile', mostrata quando transactions.location_id
+   esiste), tipi legacy ('scadenza' per expire, 'kind • source #id' — prima
+   etichette inventate 'Accredito/Riscatto/...'), Δ '+N'/-N colorato,
+   PAGINAZIONE SERVER 20/pagina via ?p=N con 'Pagina X di Y • Totale: N' e
+   link « Prev / Next » (prima slice client su 100 movimenti max).
+4. Punti in sospeso legacy: badge riepilogo ('Totale sospesi: N Punti',
+   'Voci: N', 'Sconto: N', 'omaggio: N'), colonne Quando/Sede/Prenotazione
+   #cod/Stato/Punti/Dettaglio ('Sconto: <b>N</b> • omaggio: <b>N</b>')/Apri,
+   paginazione ?p_pending=N con 'Totale voci: N'.
+5. Flusso warn_locked legacy: il movimento manuale fa REDIRECT FLASH
+   (?msg/?err + &warn_locked=N quando restano punti prenotati) e la pagina
+   mostra l'alert 'Punti prenotati su appuntamenti' con la tabella delle
+   prenotazioni che li vincolano (Data/Stato/Sconto/gift/Totale/Codice/Apri)
+   — prima feedback in pagina senza né redirect né alert; la route espone
+   warnLocked anche sull'errore 'tutti prenotati'.
+6. Vista elenco legacy: filtro Cliente come COMBOBOX app-combobox 'Tutti i
+   clienti' guidato dalla querystring (?client_id) con Filtra/Reset (prima
+   input testo con filtro client-side), 'Dettagli' come link, paginazione
+   ?p_list=N con 'Totale clienti: N' o hint verbatim; il dettaglio si apre
+   SOLO con cliente selezionato (prima lista sempre visibile sotto).
+7. Stato disabilitato legacy con EARLY RETURN dedicato: header con azione
+   'Portafoglio' (-> page=wallet) + alert-info con i link alle sezioni —
+   prima solo l'alert; blocco intestazione cliente con 'Scadenza punti: N
+   giorni'/'Avviso: entro N giorni'/'Scadenza punti: disattivata'; box KPI
+   'In scadenza entro N giorni' sempre visibile; nota form con la frase
+   scadenza legacy ('La scadenza dei punti viene calcolata dalla data del
+   movimento/accredito...') e senza la frase extra non legacy.
+8. Messaggio errore movimento allineato ('Operazione non riuscita (punti
+   insufficienti o movimento duplicato).'); 'Cliente non trovato.' ->
+   'Seleziona un cliente.' come il legacy; branch page.tsx con initialQuery
+   (client_id/p/p_pending/p_list/msg/err/warn_locked).
+GIA FEDELI: guardie del movimento manuale (punti interi >=1, cliente,
+adesione tessera), protezione punti prenotati con rimozione parziale e i
+messaggi composti ('Rimossi N Punti. N Punti non rimossi perché prenotati
+su appuntamenti in sospeso/prenotati.' / 'N Punti non rimossi per saldo
+insufficiente.'), kind manual/adjust, expire-on-read dei lotti.
+RESIDUI DELIBERATI: la paginazione di punti-in-sospeso e lista clienti è
+slice client-side sulla stessa querystring (dati identici al legacy, che
+pagina in SQL le stesse liste); il warn_locked mostra le prenotazioni dal
+dettaglio (equivalente a reservedAppointmentsList, limit 50).
+Verifica: battery e2e 29/29 (stati disabilitati verbatim, guardie, add con
+tx manual+nota, riserva 30/50 con disponibile RAW, rimozione parziale con
+messaggi e warnLocked, saldo zero/resto insufficiente, kind adjust, lista
+titolari tessera anche disattiva, calendario per giorno con expire-on-read
+e saldo riallineato, paginazione movimenti, ripristino businesses e zero
+residui) + 72/72 marker bundle + regressioni fidelity_points 42/42 e
+fidelity-toggle 27/27 + typecheck/lint puliti.

@@ -78,10 +78,15 @@ export async function GET(request: Request) {
       return Response.json({ ok: true, sourceMode: "database", membership: await getFidelityMembership(tenantSlug, url.searchParams.get("q") ?? "") });
     }
 
-    // Fidelity WALLET / points ledger (fidelity_wallet.php "Portafoglio").
+    // Fidelity WALLET / points ledger (fidelity_wallet.php "Portafoglio"),
+    // con la pagina movimenti (?p=N, 20/pagina come il legacy).
     if (url.searchParams.get("action") === "wallet") {
       if (!can(session.user.perms, "fidelity.wallet") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso portafoglio fidelity mancante.", 403);
-      return Response.json({ ok: true, sourceMode: "database", wallet: await getFidelityWallet(tenantSlug, parseInteger(url.searchParams.get("client_id"), 0)) });
+      return Response.json({
+        ok: true,
+        sourceMode: "database",
+        wallet: await getFidelityWallet(tenantSlug, parseInteger(url.searchParams.get("client_id"), 0), parseInteger(url.searchParams.get("p"), 1)),
+      });
     }
 
     // CREDIT movements ledger (credit_movements.php "Movimenti Credito"),
@@ -154,10 +159,17 @@ export async function POST(request: Request) {
     }
 
     // Fidelity WALLET manual points movement (port of manual_move_points).
+    // Il flusso legacy allega &warn_locked=N al redirect quando i punti sono
+    // tutti prenotati: lo esponiamo insieme all'errore.
     if (body.action === "wallet_move" || body._mode === "manual_move_points") {
       if (!can(session.user.perms, "fidelity.wallet") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso portafoglio fidelity mancante.", 403);
-      const result = await fidelityWalletManualMove(tenantSlug, parseInteger(body.client_id, 0), String(body.op ?? "add"), body.points, String(body.note ?? ""), session.user.id);
-      return Response.json({ sourceMode: "database", ...result });
+      try {
+        const result = await fidelityWalletManualMove(tenantSlug, parseInteger(body.client_id, 0), String(body.op ?? "add"), body.points, String(body.note ?? ""), session.user.id);
+        return Response.json({ sourceMode: "database", ...result });
+      } catch (error) {
+        const warnLocked = Number((error as { warnLocked?: number })?.warnLocked ?? 0) || 0;
+        return Response.json({ ok: false, error: error instanceof Error ? error.message : "Operazione non riuscita.", ...(warnLocked > 0 ? { warnLocked } : {}) });
+      }
     }
 
     // Fidelity MEMBERSHIP / card actions (port of create/update/reactivate/delete_card).

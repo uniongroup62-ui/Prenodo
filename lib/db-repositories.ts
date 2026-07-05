@@ -16605,8 +16605,9 @@ export async function deleteFidelityCard(slug: string, cardId: number): Promise<
 }
 
 // ---- Fidelity WALLET / points ledger (fidelity_wallet.php) --------------------
-export type FidelityWalletMovement = { id: number; kind: string; deltaPoints: number; note: string; sourceType: string; createdAt: string };
-export type FidelityWalletPending = { id: number; publicCode: string; startsAt: string; status: string; discountPoints: number; giftPoints: number };
+export type FidelityWalletMovement = { id: number; kind: string; deltaPoints: number; note: string; sourceType: string; sourceId: number; createdAt: string; locationId: number; locationName: string };
+export type FidelityWalletPending = { id: number; publicCode: string; startsAt: string; status: string; discountPoints: number; giftPoints: number; locationId: number; locationName: string };
+export type FidelityWalletScheduleRow = { expiresAt: string; points: number; lockedPoints: number };
 export type FidelityWalletDetail = {
   clientId: number;
   clientName: string;
@@ -16616,20 +16617,31 @@ export type FidelityWalletDetail = {
   reserved: number;
   available: number;
   movements: FidelityWalletMovement[];
+  txTotal: number;
+  txPage: number;
+  txPages: number;
   pending: FidelityWalletPending[];
-  // F1 — scadenze punti (point_lots): punti in scadenza entro expire_warn_days,
-  // calendario lotti residui, avvisi lock-lots e disponibile negativo.
+  pendingCount: number;
+  pendingDiscountTotal: number;
+  pendingGiftTotal: number;
+  pendingTotal: number;
+  pendingLockRefsInline: string;
+  pendingLockRefsTitle: string;
   expireEnabled: boolean;
+  expireDays: number;
   expireWarnDays: number;
   expiringSoon: number;
-  lockedPoints: number;
-  availableNegative: boolean;
-  schedule: PointLotScheduleRow[];
+  expiredPending: number;
+  lockedExpired: number;
+  schedule: FidelityWalletScheduleRow[];
+  nextExpiryAt: string;
+  nextExpiryPoints: number;
 };
 export type FidelityWalletClient = { id: number; name: string; email: string; points: number };
 export type FidelityWalletData = {
   fidelityEnabled: boolean;
   pointsEnabled: boolean;
+  hasTxLocation: boolean;
   clients: FidelityWalletClient[];
   detail: FidelityWalletDetail | null;
 };
@@ -16662,7 +16674,19 @@ export async function fidelityReservedPoints(slug: string, clientId: number): Pr
   return Math.max(0, normalizeFidelityPoints(rows[0]?.s ?? 0));
 }
 
-async function getFidelityWalletDetail(slug: string, clientId: number): Promise<FidelityWalletDetail | null> {
+// Scadenza dai lock-lots: source_type 'lock@YYYYMMDDHHMMSS' o 'lock@YYYYMMDD',
+// normalizzata a fine giornata (fidelity_wallet.php $parseLockExpiry).
+function parseLockExpiryDay(sourceType: string): string | null {
+  const st = String(sourceType ?? "").trim().toLowerCase();
+  if (!st.startsWith("lock@")) return null;
+  const raw = st.slice(5);
+  if (/^\d{14}$/.test(raw) || /^\d{8}$/.test(raw)) {
+    return `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)} 23:59:59`;
+  }
+  return null;
+}
+
+async function getFidelityWalletDetail(slug: string, clientId: number, txPageRaw = 1): Promise<FidelityWalletDetail | null> {
   // Expire-on-read (port of Fidelity::availablePoints ~2154): con scadenza attiva
   // i lotti scaduti vengono processati prima di leggere il saldo.
   const lotsSettings = await fidelityLotsSettings(slug).catch(() => ({ expireEnabled: false, expireDays: 0, expireWarnDays: 30 }));
@@ -16671,29 +16695,65 @@ async function getFidelityWalletDetail(slug: string, clientId: number): Promise<
   const clientRows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, full_name, email, points", where: "id = ?", params: [clientId], limit: 1 });
   if (!clientRows[0]) return null;
   const pointsBalance = normalizeFidelityPoints(clientRows[0].points ?? 0);
-  const reservedRaw = await fidelityReservedPoints(slug, clientId);
-  const reserved = Math.min(reservedRaw, Math.max(0, pointsBalance));
+  const reserved = await fidelityReservedPoints(slug, clientId);
+  // Disponibile RAW legacy (availablePointsRaw): può scendere sotto zero.
   const available = normalizeFidelityPoints(pointsBalance - reserved);
 
-  const txRows = await tenantSelect<RowDataPacket>({ slug, table: "transactions", columns: "id, kind, source_type, delta_points, note, created_at", where: "client_id = ?", params: [clientId], orderBy: "id DESC", limit: 100 }).catch(() => [] as RowDataPacket[]);
+  // Movimenti punti paginati 20/pagina (legacy $txPerPage=20, ORDER id DESC).
+  const perPage = 20;
+  const countRows = await tenantSelect<RowDataPacket>({ slug, table: "transactions", columns: "COUNT(*) AS c", where: "client_id = ?", params: [clientId] }).catch(() => [] as RowDataPacket[]);
+  const txTotal = Number(countRows[0]?.c ?? 0);
+  const txPages = Math.max(1, Math.ceil(txTotal / perPage));
+  let txPage = Math.max(1, Math.trunc(Number(txPageRaw) || 1));
+  if (txPage > txPages) txPage = txPages;
+  const tT = await tenantTable(slug, "transactions");
+  const scopedTx = tT.mode === "shared" && (await columnExists(tT.name, "tenant_id"));
+  const txRows = await dbQuery<RowDataPacket[]>(
+    `SELECT id, kind, source_type, source_id, delta_points, note, created_at, location_id, location_name
+       FROM ${quoteIdentifier(tT.name)}
+      WHERE client_id = ?${scopedTx ? " AND tenant_id = ?" : ""}
+   ORDER BY id DESC
+      LIMIT ${perPage} OFFSET ${(txPage - 1) * perPage}`,
+    scopedTx ? [clientId, tT.tenantId ?? 0] : [clientId],
+  ).catch(() => [] as RowDataPacket[]);
+  const locRows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "id, name" }).catch(() => [] as RowDataPacket[]);
+  const locNames = new Map<number, string>();
+  for (const l of locRows) locNames.set(Number(l.id ?? 0), String(l.name ?? ""));
+  const locLabel = (locationId: number, locationName: string): string => {
+    let name = String(locationName ?? "").trim();
+    if (name === "" && locationId > 0) name = locNames.get(locationId) ?? `Sede #${locationId}`;
+    if (name === "") name = "Sede non disponibile";
+    return name;
+  };
   const movements: FidelityWalletMovement[] = txRows.map((r) => ({
     id: Number(r.id ?? 0),
     kind: String(r.kind ?? "manual"),
     deltaPoints: normalizeFidelityPoints(r.delta_points ?? 0),
     note: String(r.note ?? ""),
     sourceType: String(r.source_type ?? ""),
+    sourceId: Number(r.source_id ?? 0),
     createdAt: toIso(r.created_at),
+    locationId: Number(r.location_id ?? 0),
+    locationName: locLabel(Number(r.location_id ?? 0), String(r.location_name ?? "")),
   }));
 
-  const pendRows = await tenantSelect<RowDataPacket>({
-    slug,
-    table: "appointments",
-    columns: "id, public_code, starts_at, status, COALESCE(fidelity_points_used,0) AS discount_points, COALESCE(fidelity_gift_points_used,0) AS gift_points",
-    where: "client_id = ? AND status IN ('pending','scheduled') AND (COALESCE(fidelity_points_used,0) > 0 OR COALESCE(fidelity_gift_points_used,0) > 0)",
-    params: [clientId],
-    orderBy: "starts_at ASC, id ASC",
-    limit: 200,
-  }).catch(() => [] as RowDataPacket[]);
+  // Punti in sospeso (prenotazioni aperte con sconto/omaggio), LIMIT 200 legacy.
+  const aT = await tenantTable(slug, "appointments");
+  const lT = await tenantTable(slug, "locations");
+  const scopedA = aT.mode === "shared" && (await columnExists(aT.name, "tenant_id"));
+  const pendRows = await dbQuery<RowDataPacket[]>(
+    `SELECT a.id, a.public_code, a.starts_at, a.status, a.location_id, l.name AS location_name,
+            COALESCE(a.fidelity_points_used,0) AS discount_points,
+            COALESCE(a.fidelity_gift_points_used,0) AS gift_points
+       FROM ${quoteIdentifier(aT.name)} a
+       LEFT JOIN ${quoteIdentifier(lT.name)} l ON l.id = a.location_id${scopedA ? " AND l.tenant_id = a.tenant_id" : ""}
+      WHERE a.client_id = ?${scopedA ? " AND a.tenant_id = ?" : ""}
+        AND a.status IN ('pending','scheduled')
+        AND (COALESCE(a.fidelity_points_used,0) > 0 OR COALESCE(a.fidelity_gift_points_used,0) > 0)
+   ORDER BY a.starts_at ASC, a.id ASC
+      LIMIT 200`,
+    scopedA ? [clientId, aT.tenantId ?? 0] : [clientId],
+  ).catch(() => [] as RowDataPacket[]);
   const pending: FidelityWalletPending[] = pendRows.map((r) => ({
     id: Number(r.id ?? 0),
     publicCode: String(r.public_code ?? ""),
@@ -16701,11 +16761,59 @@ async function getFidelityWalletDetail(slug: string, clientId: number): Promise<
     status: String(r.status ?? ""),
     discountPoints: normalizeFidelityPoints(r.discount_points ?? 0),
     giftPoints: normalizeFidelityPoints(r.gift_points ?? 0),
+    locationId: Number(r.location_id ?? 0),
+    locationName: locLabel(Number(r.location_id ?? 0), String(r.location_name ?? "")),
   }));
+  const pendingCount = pending.length;
+  const pendingDiscountTotal = pending.reduce((s, p) => s + p.discountPoints, 0);
+  const pendingGiftTotal = pending.reduce((s, p) => s + p.giftPoints, 0);
+  const pendingTotal = pendingDiscountTotal + pendingGiftTotal;
+  // 'Vincolati su: Prenotazione #X, #Y +N' (fidelity_wallet.php ~441-463).
+  const refs = [...new Set(pending.map((p) => `Prenotazione #${(p.publicCode !== "" ? p.publicCode : String(p.id)).replace(/^#/, "")}`))];
+  const pendingLockRefsTitle = refs.join(", ");
+  let pendingLockRefsInline = refs.slice(0, 3).join(", ");
+  if (refs.length > 3) pendingLockRefsInline += ` +${refs.length - 3}`;
 
-  // F1 — dettaglio scadenze dal calendario lotti.
-  const schedule = await pointLotsSchedule(slug, clientId).catch(() => [] as PointLotScheduleRow[]);
-  const lockedPoints = schedule.filter((l) => l.isLock).reduce((s, l) => s + l.remaining, 0);
+  // Calendario scadenze legacy: lotti raggruppati PER GIORNO (23:59:59) +
+  // lock-lots scaduti come quota 'vincolata'; expiredPending = residui non-lock
+  // già scaduti (cron non eseguito); lockedExpired = residui lock scaduti.
+  const lots = await pointLotsSchedule(slug, clientId).catch(() => [] as PointLotScheduleRow[]);
+  const dayStart = `${todayIso()} 00:00:00`;
+  let expiredPending = 0;
+  let lockedExpired = 0;
+  const map = new Map<string, { points: number; lockedPoints: number }>();
+  for (const lot of lots) {
+    if (lot.remaining <= 0) continue;
+    if (lot.isLock) {
+      const day = parseLockExpiryDay(lot.sourceType);
+      if (!day || day >= dayStart) continue;
+      const cur = map.get(day) ?? { points: 0, lockedPoints: 0 };
+      cur.points += lot.remaining;
+      cur.lockedPoints += lot.remaining;
+      map.set(day, cur);
+      lockedExpired += lot.remaining;
+      continue;
+    }
+    if (!lot.expiresAt) continue;
+    const day = `${String(lot.expiresAt).slice(0, 10)} 23:59:59`;
+    const cur = map.get(day) ?? { points: 0, lockedPoints: 0 };
+    cur.points += lot.remaining;
+    map.set(day, cur);
+    if (String(lot.expiresAt) < dayStart) expiredPending += lot.remaining;
+  }
+  const schedule: FidelityWalletScheduleRow[] = [...map.entries()]
+    .map(([expiresAt, v]) => ({ expiresAt, points: v.points, lockedPoints: v.lockedPoints }))
+    .filter((r) => r.points > 0)
+    .sort((a, b) => (a.expiresAt < b.expiresAt ? -1 : 1));
+  let nextExpiryAt = "";
+  let nextExpiryPoints = 0;
+  for (const row of schedule) {
+    if (row.expiresAt < dayStart) continue;
+    nextExpiryAt = row.expiresAt;
+    nextExpiryPoints = row.points;
+    break;
+  }
+
   const expiringSoon = lotsSettings.expireEnabled ? await expiringSoonPoints(slug, clientId).catch(() => 0) : 0;
 
   return {
@@ -16717,21 +16825,33 @@ async function getFidelityWalletDetail(slug: string, clientId: number): Promise<
     reserved,
     available,
     movements,
+    txTotal,
+    txPage,
+    txPages,
     pending,
+    pendingCount,
+    pendingDiscountTotal,
+    pendingGiftTotal,
+    pendingTotal,
+    pendingLockRefsInline,
+    pendingLockRefsTitle,
     expireEnabled: lotsSettings.expireEnabled,
+    expireDays: lotsSettings.expireDays,
     expireWarnDays: lotsSettings.expireWarnDays,
     expiringSoon,
-    lockedPoints,
-    availableNegative: pointsBalance - reservedRaw < 0,
+    expiredPending,
+    lockedExpired,
     schedule,
+    nextExpiryAt,
+    nextExpiryPoints,
   };
 }
 
 // List the Fidelity points wallet (port of fidelity_wallet.php): the client list is
 // scoped to CARD HOLDERS (clients with a tessera, active or not), plus the optional
-// per-client detail (balance / reserved / available / movements / pending appts).
-// NB: the legacy point_lots expiry schedule is omitted — the Next never writes lots.
-export async function getFidelityWallet(slug: string, clientId: number): Promise<FidelityWalletData> {
+// per-client detail (balance / reserved / available raw / movements paginati /
+// pending appts / calendario scadenze per giorno).
+export async function getFidelityWallet(slug: string, clientId: number, txPage = 1): Promise<FidelityWalletData> {
   const settings = await getFidelityPointsSettings(slug);
   const cardRows = await tenantSelect<RowDataPacket>({ slug, table: "cards", columns: "DISTINCT client_id", where: "client_id > 0" }).catch(() => [] as RowDataPacket[]);
   const clientIds = [...new Set(cardRows.map((r) => Number(r.client_id ?? 0)).filter((n) => n > 0))];
@@ -16741,12 +16861,15 @@ export async function getFidelityWallet(slug: string, clientId: number): Promise
     const rows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, full_name, email, points", where: `id IN (${placeholders})`, params: clientIds, orderBy: "full_name ASC" }).catch(() => [] as RowDataPacket[]);
     clients = rows.map((r) => ({ id: Number(r.id ?? 0), name: String(r.full_name ?? ""), email: String(r.email ?? ""), points: normalizeFidelityPoints(r.points ?? 0) }));
   }
+  const tT = await tenantTable(slug, "transactions").catch(() => null);
+  const hasTxLocation = tT ? await columnExists(tT.name, "location_id") : false;
 
   return {
     fidelityEnabled: settings.globalEnabled,
     pointsEnabled: settings.pointsEnabled,
+    hasTxLocation,
     clients,
-    detail: clientId > 0 ? await getFidelityWalletDetail(slug, clientId) : null,
+    detail: clientId > 0 ? await getFidelityWalletDetail(slug, clientId, txPage) : null,
   };
 }
 
@@ -16778,7 +16901,7 @@ export async function fidelityWalletManualMove(
   if (!(await fidelityIsClientAdhering(slug, clientId))) throw new Error("Cliente non aderisce alla Fidelity (tessera non attiva/scaduta).");
 
   const clientRows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, points", where: "id = ?", params: [clientId], limit: 1 });
-  if (!clientRows[0]) throw new Error("Cliente non trovato.");
+  if (!clientRows[0]) throw new Error("Seleziona un cliente.");
   const curPts = normalizeFidelityPoints(clientRows[0].points ?? 0);
 
   let lockedReserved = 0;
@@ -16799,14 +16922,19 @@ export async function fidelityWalletManualMove(
 
     if (pts <= 0) {
       if (curPts <= 0) throw new Error(`Impossibile rimuovere ${reqPts} Punti: saldo insufficiente (disponibili 0).`);
-      if (free <= 0 && reserved > 0) throw new Error(`Impossibile rimuovere ${reqPts} Punti: i punti disponibili sono già prenotati su appuntamenti in sospeso/prenotati.`);
+      if (free <= 0 && reserved > 0) {
+        // Il flusso legacy allega warn_locked=N al redirect: marcatore per il componente.
+        const e = new Error(`Impossibile rimuovere ${reqPts} Punti: i punti disponibili sono già prenotati su appuntamenti in sospeso/prenotati.`) as Error & { warnLocked?: number };
+        e.warnLocked = lockedReserved;
+        throw e;
+      }
       throw new Error(`Impossibile rimuovere ${reqPts} Punti: saldo insufficiente (disponibili ${free}).`);
     }
   }
 
   const delta = op === "remove" ? -pts : pts;
   const nextPoints = normalizeFidelityPoints(curPts + delta);
-  if (delta < 0 && nextPoints < 0) throw new Error("Operazione non riuscita (punti insufficienti).");
+  if (delta < 0 && nextPoints < 0) throw new Error("Operazione non riuscita (punti insufficienti o movimento duplicato).");
 
   const manualKind = delta < 0 ? "adjust" : "manual";
   // POINT_LOTS (F1): init dei lotti sul saldo PRE-movimento, poi il movimento
