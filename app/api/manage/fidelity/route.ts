@@ -1,5 +1,5 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
-import { addDbWalletMovement, dbWalletBalance, deleteFidelityCampaign, deleteFidelityCard, fidelityCampaignPreview, fidelityDisableImpact, fidelityLinkedAppointmentsDetailed, fidelityWalletManualMove, getFidelityEnabled, getFidelityLevelsSettings, getFidelityMembership, getFidelityPointsSettings, getFidelityPointsStats, getFidelityWallet, getManageCreditMovements, issueFidelityCard, listDbClients, listDbWalletMovements, listFidelityCampaigns, manualCreditDebit, reactivateFidelityCard, saveFidelityCampaign, saveFidelityLevels, saveFidelityPointsSettings, setFidelityEnabled, toggleFidelityCampaign, updateFidelityCardStatus } from "@/lib/db-repositories";
+import { addDbWalletMovement, dbWalletBalance, deleteFidelityCampaign, deleteFidelityCard, fidelityCampaignPreview, fidelityDisableImpact, fidelityLinkedAppointmentsDetailed, fidelityWalletManualMove, getFidelityEnabled, getFidelityLevelsEditorData, getFidelityMembership, getFidelityPointsSettings, getFidelityPointsStats, getFidelityWallet, getManageCreditMovements, issueFidelityCard, listDbClients, listDbWalletMovements, listFidelityCampaigns, manualCreditDebit, previewFidelityLevelDelete, previewFidelityLevelThresholds, reactivateFidelityCard, saveFidelityCampaign, saveFidelityLevels, saveFidelityPointsSettings, setFidelityEnabled, toggleFidelityCampaign, updateFidelityCardStatus } from "@/lib/db-repositories";
 import { searchGiftRecipientClients } from "@/lib/gift-issue-details";
 import { currentManageSession } from "@/lib/manage-auth";
 import { getManageLocationContext } from "@/lib/manage-locations";
@@ -68,9 +68,10 @@ export async function GET(request: Request) {
       return Response.json({ ok: true, sourceMode: "database", campaigns: await listFidelityCampaigns(tenantSlug) });
     }
 
-    // Fidelity card LEVELS settings (fidelity_levels.php).
+    // Fidelity card LEVELS settings (editor #livelli-card di fidelity_points.php):
+    // livelli + baseKey (primo livello a 0 punti) + conteggi d'uso + label punti.
     if (url.searchParams.get("action") === "levels") {
-      return Response.json({ ok: true, sourceMode: "database", levels: await getFidelityLevelsSettings(tenantSlug) });
+      return Response.json({ ok: true, sourceMode: "database", levels: await getFidelityLevelsEditorData(tenantSlug) });
     }
 
     // Fidelity MEMBERSHIP / cards list (fidelity_membership.php "Adesione"),
@@ -153,8 +154,37 @@ export async function POST(request: Request) {
     // Save card levels (port of fidelity_levels.php save_levels).
     if (body.action === "save_levels" || body._mode === "save_levels") {
       if (!can(session.user.perms, "fidelity.levels") && !can(session.user.perms, "fidelity.points") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso livelli fidelity mancante.", 403);
-      const levels = await saveFidelityLevels(tenantSlug, body);
-      return Response.json({ ok: true, sourceMode: "database", levels });
+      const levels = await saveFidelityLevels(tenantSlug, body as Record<string, unknown>, session.user.id);
+      return Response.json({ ok: true, sourceMode: "database", levels, message: (levels as { message?: string }).message });
+    }
+
+    // Preview impatto modifica soglie livelli (fidelity_points.php
+    // _mode=preview_fidelity_level_thresholds): changes + firma + clienti + regole.
+    if (body.action === "preview_level_thresholds" || body._mode === "preview_fidelity_level_thresholds") {
+      if (!can(session.user.perms, "fidelity.levels") && !can(session.user.perms, "fidelity.points") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso livelli fidelity mancante.", 403);
+      try {
+        const impact = await previewFidelityLevelThresholds(tenantSlug, body as Record<string, unknown>);
+        return Response.json({ ok: true, impact });
+      } catch (error) {
+        return jsonError(error instanceof Error ? error.message : "Preview non disponibile.");
+      }
+    }
+
+    // Preview impatto eliminazione livello (fidelity_points.php
+    // _mode=preview_fidelity_level_delete): clienti/campagne/promozioni/omaggi.
+    if (body.action === "preview_level_delete" || body._mode === "preview_fidelity_level_delete") {
+      if (!can(session.user.perms, "fidelity.levels") && !can(session.user.perms, "fidelity.points") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso livelli fidelity mancante.", 403);
+      try {
+        const tokens: string[] = [];
+        if (body.level_token) tokens.push(String(body.level_token));
+        const posted = (body as Record<string, unknown>).delete_tokens ?? (body as Record<string, unknown>)["delete_tokens[]"];
+        const postedList = Array.isArray(posted) ? posted : posted ? String(posted).split(",") : [];
+        for (const t of postedList) tokens.push(String(t));
+        const impact = await previewFidelityLevelDelete(tenantSlug, tokens);
+        return Response.json({ ok: true, impact });
+      } catch (error) {
+        return jsonError(error instanceof Error ? error.message : "Preview non disponibile.");
+      }
     }
 
     // CREDIT manual debit (port of credit_movements.php manual_credit_debit).

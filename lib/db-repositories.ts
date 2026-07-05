@@ -1,6 +1,6 @@
 import "server-only";
 
-import { randomBytes } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import type { Location } from "@/lib/demo-data";
 import type { AppointmentStatus, AppointmentWithMeta } from "@/lib/appointment-engine";
@@ -14075,9 +14075,9 @@ async function promotionActivationContentIssues(slug: string, id: number): Promi
 // Detach a promotion from still-open appointments so a delete/deactivate does not
 // leave a dangling reference (port of Promotions::clearPendingAppointmentsForPromotion).
 // Done + historical rows keep their promotion for the record.
-async function clearPendingAppointmentsForPromotion(slug: string, id: number): Promise<void> {
+async function clearPendingAppointmentsForPromotion(slug: string, id: number): Promise<number> {
   const appt = await tenantTable(slug, "appointments");
-  if (!(await columnExists(appt.name, "promotion_id"))) return;
+  if (!(await columnExists(appt.name, "promotion_id"))) return 0;
   // Set "pending" legacy (Promotions.php 1496-1514): In sospeso + Prenotato coi
   // sinonimi IT/EN normalizzati.
   const pendingSet = ["pending", "in sospeso", "in attesa", "attesa", "scheduled", "prenotato", "prenotata", "confirmed", "confermato", "confermata"];
@@ -14086,7 +14086,7 @@ async function clearPendingAppointmentsForPromotion(slug: string, id: number): P
     `SELECT id, notes FROM ${quoteIdentifier(appt.name)} WHERE tenant_id = ? AND promotion_id = ? AND LOWER(TRIM(COALESCE(status,''))) IN (${inPh})`,
     [appt.tenantId ?? 0, id, ...pendingSet],
   ).catch(() => [] as RowDataPacket[]);
-  if (!rows.length) return;
+  if (!rows.length) return 0;
   const apptIds = rows.map((r) => Number(r.id));
 
   // 1) Ripristina i prezzi promozionali sulle righe servizio: price = list_price
@@ -14126,6 +14126,7 @@ async function clearPendingAppointmentsForPromotion(slug: string, id: number): P
       [red.tenantId ?? 0, id, ...apptIds],
     ).catch(() => undefined);
   }
+  return apptIds.length;
 }
 
 // Activate/deactivate a promotion (port of promotions.php toggle / Promotions::
@@ -15914,139 +15915,563 @@ export async function recalcClientFidelityLevel(slug: string, clientId: number):
   return key;
 }
 
-// Ricalcolo di massa (save_levels legacy ~1074-1086): titolari tessera + chi ha
-// ancora un livello assegnato (per azzerare i residui).
-async function recalcAllClientFidelityLevels(slug: string, cap = 2000): Promise<number> {
-  const cardRows = await tenantSelect<RowDataPacket>({ slug, table: "cards", columns: "DISTINCT client_id", where: "client_id > 0", limit: cap }).catch(() => [] as RowDataPacket[]);
-  const levelRows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id", where: "COALESCE(fidelity_level,'') <> ''", limit: cap }).catch(() => [] as RowDataPacket[]);
-  const ids = [...new Set([...cardRows.map((r) => Number(r.client_id ?? 0)), ...levelRows.map((r) => Number(r.id ?? 0))])].filter((n) => n > 0).slice(0, cap);
-  for (const clientId of ids) await recalcClientFidelityLevel(slug, clientId).catch(() => "");
+// Ricalcolo di massa (save_levels legacy ~1074-1086): TUTTI i clienti, come il
+// loop legacy `SELECT id FROM clients ORDER BY id ASC` + calcClientLevel con
+// UPDATE incondizionato (quando i livelli sono spenti scrive '' e azzera i
+// residui). Batch: aderenti + punti maturati con due query, non una per cliente.
+async function recalcAllClientFidelityLevels(slug: string, cap = 5000): Promise<number> {
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id", orderBy: "id ASC", limit: cap }).catch(() => [] as RowDataPacket[]);
+  const ids = rows.map((r) => Number(r.id ?? 0)).filter((n) => n > 0);
+  if (ids.length === 0) return 0;
+  const snapshot = await fidelityClientsLevelSnapshot(slug).catch(() => new Map<number, string>());
+  for (const clientId of ids) {
+    await tenantUpdate({ slug, table: "clients", id: clientId, values: { fidelity_level: snapshot.get(clientId) ?? "" } }).catch(() => 0);
+  }
   return ids.length;
 }
 
-// Rimuove una key di livello da una colonna JSON-array e disattiva la riga quando
-// la lista resta vuota (cascata legacy fidelity_levels_cleanup_deleted_levels).
-function stripLevelKeys(raw: unknown, removed: Set<string>): { changed: boolean; empty: boolean; next: string } {
-  let list: string[] = [];
-  const s = String(raw ?? "").trim();
-  if (s !== "") { try { const p = JSON.parse(s); if (Array.isArray(p)) list = p.map((x) => String(x)); } catch { list = []; } }
-  if (list.length === 0) return { changed: false, empty: false, next: s };
-  const next = list.filter((k) => !removed.has(k));
-  return { changed: next.length !== list.length, empty: next.length === 0, next: JSON.stringify(next) };
+// Livello a punti corrente per TUTTI i clienti (batch di Fidelity::calcClientLevelPoints):
+// '' per non aderenti o programma/sezione livelli spenti; altrimenti la key col
+// min_points più alto <= punti maturati nel periodo.
+async function fidelityClientsLevelSnapshot(slug: string): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  const clientRows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id", orderBy: "id ASC" }).catch(() => [] as RowDataPacket[]);
+  const points = await getFidelityPointsSettings(slug);
+  const levelsCfg = await getFidelityLevelsSettings(slug);
+  const operational = points.globalEnabled && levelsCfg.enabled && levelsCfg.pointsEnabled && levelsCfg.levels.length > 0;
+  if (!operational) {
+    for (const r of clientRows) out.set(Number(r.id ?? 0), "");
+    return out;
+  }
+  const adheringRows = await tenantSelect<RowDataPacket>({ slug, table: "cards", columns: "DISTINCT client_id", where: "status = 'active' AND (expires_at IS NULL OR expires_at >= ?)", params: [todayIso()] }).catch(() => [] as RowDataPacket[]);
+  const adhering = new Set(adheringRows.map((r) => Number(r.client_id ?? 0)));
+  const bizRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_level_period_days", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const periodDays = Math.max(0, Math.min(36500, Math.round(Number(bizRows[0]?.fidelity_level_period_days ?? 365))));
+  const txT = await tenantTable(slug, "transactions").catch(() => null);
+  const earnedByClient = new Map<number, number>();
+  if (txT) {
+    const scoped = txT.mode === "shared";
+    const earnedRows = await dbQuery<RowDataPacket[]>(
+      `SELECT client_id, COALESCE(SUM(delta_points),0) AS s FROM ${quoteIdentifier(txT.name)} WHERE ${scoped ? "tenant_id = ? AND " : ""}delta_points > 0${periodDays > 0 ? " AND created_at >= ?" : ""} GROUP BY client_id`,
+      [...(scoped ? [txT.tenantId ?? 0] : []), ...(periodDays > 0 ? [new Date(Date.now() - periodDays * 86400000)] : [])],
+    ).catch(() => [] as RowDataPacket[]);
+    for (const r of earnedRows) earnedByClient.set(Number(r.client_id ?? 0), Math.max(0, normalizeFidelityPoints(r.s ?? 0)));
+  }
+  for (const r of clientRows) {
+    const cid = Number(r.id ?? 0);
+    if (!adhering.has(cid)) { out.set(cid, ""); continue; }
+    const earned = earnedByClient.get(cid) ?? 0;
+    let best = "";
+    let bestMin = -1;
+    for (const level of levelsCfg.levels) {
+      if (level.minPoints <= earned && level.minPoints > bestMin) { best = level.key; bestMin = level.minPoints; }
+    }
+    out.set(cid, best);
+  }
+  return out;
 }
 
-export async function saveFidelityLevels(slug: string, body: Record<string, string>): Promise<FidelityLevelsSettings> {
-  const rows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "id, fidelity_card_levels_json", orderBy: "id ASC", limit: 1 });
+// ---- fidelity_levels.php: helper port fedeli --------------------------------
+
+// fidelity_levels_norm_key: consente anche ':' (token family:key).
+function levelToken(v: unknown): string {
+  return String(v ?? "").trim().toLowerCase().replace(/[^a-z0-9_\-:]/g, "").replace(/^[_-]+|[_-]+$/g, "");
+}
+
+// fidelity_levels_norm_points: virgola->punto, troncamento intero legacy
+// (Fidelity::normalizePoints: floor per positivi), clamp 0..100000000.
+function normLevelPoints(raw: unknown): number {
+  const n = Number(String(raw ?? "0").replace(",", "."));
+  if (!Number.isFinite(n)) return 0;
+  let pts = n > 0 ? Math.floor(n + 1e-9) : n < 0 ? Math.ceil(n - 1e-9) : 0;
+  if (pts < 0) pts = 0;
+  if (pts > 100000000) pts = 100000000;
+  return pts;
+}
+
+// fidelity_levels_json_list: array/JSON/lista separata da ;,\n -> token unici ordinati.
+function levelJsonList(raw: unknown): string[] {
+  let arr: unknown;
+  if (Array.isArray(raw)) arr = raw;
+  else {
+    const txt = String(raw ?? "").trim();
+    if (txt === "") return [];
+    try {
+      const dec = JSON.parse(txt);
+      arr = dec && typeof dec === "object" ? dec : txt.split(/[;,\n]+/);
+    } catch {
+      arr = txt.split(/[;,\n]+/);
+    }
+  }
+  const out = new Set<string>();
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) { v.forEach(walk); return; }
+    if (v && typeof v === "object") { Object.values(v).forEach(walk); return; }
+    const k = levelToken(v);
+    if (k !== "") out.add(k);
+  };
+  walk(arr);
+  return [...out].sort();
+}
+
+// fidelity_levels_list_has_key: match su key nuda o 'family:key'.
+function levelListHasKey(raw: unknown, family: string, key: string): boolean {
+  const fam = levelToken(family);
+  const k = levelToken(key);
+  if (k === "") return false;
+  const prefixed = `${fam}:${k}`;
+  return levelJsonList(raw).some((token) => token === k || token === prefixed);
+}
+
+// fidelity_levels_strip_deleted_point_levels: toglie le key eliminate (family
+// ''|'points'); per i target promozione i token restanti sono ri-prefissati 'points:'.
+function stripDeletedPointLevels(raw: unknown, deleted: Set<string>, forPromotionTarget = false): { touched: boolean; remaining: string[]; removed: string[] } {
+  const tokens = levelJsonList(raw);
+  if (tokens.length === 0 || deleted.size === 0) return { touched: false, remaining: tokens, removed: [] };
+  const remaining = new Set<string>();
+  const removed = new Set<string>();
+  let touched = false;
+  for (const tokenRaw of tokens) {
+    const token = levelToken(tokenRaw);
+    if (token === "") continue;
+    let family = "";
+    let key = token;
+    if (token.includes(":")) {
+      const i = token.indexOf(":");
+      family = levelToken(token.slice(0, i));
+      key = levelToken(token.slice(i + 1));
+    }
+    if ((family === "" || family === "points") && key !== "" && deleted.has(key)) {
+      removed.add(key);
+      touched = true;
+      continue;
+    }
+    const keep = levelToken(forPromotionTarget
+      ? (family === "" || family === "points" ? `points:${key}` : `${family}:${key}`)
+      : (family === "points" ? key : token));
+    if (keep !== "") remaining.add(keep);
+  }
+  return { touched, remaining: [...remaining].sort(), removed: [...removed].sort() };
+}
+
+// fidelity_levels_encode_json_list: null quando vuota.
+function encodeLevelJsonList(tokens: string[]): string | null {
+  const clean = [...new Set(tokens.map(levelToken).filter((t) => t !== ""))].sort();
+  return clean.length > 0 ? JSON.stringify(clean) : null;
+}
+
+// fidelity_levels_base_key / base_name: il base è il PRIMO livello a 0 punti
+// della lista esistente; fallback 'base' (o base_N se già usata).
+function levelsBaseKey(levels: FidelityLevel[]): string {
+  const used = new Set<string>();
+  for (const lv of levels) {
+    const key = levelToken(lv.key);
+    if (key !== "") used.add(key);
+    if (Math.abs(normLevelPoints(lv.minPoints)) < 1e-7 && key !== "") return key;
+  }
+  if (!used.has("base")) return "base";
+  let n = 2;
+  while (used.has(`base_${n}`)) n++;
+  return `base_${n}`;
+}
+
+function levelsBaseName(levels: FidelityLevel[]): string {
+  for (const lv of levels) {
+    if (Math.abs(normLevelPoints(lv.minPoints)) >= 1e-7) continue;
+    const name = String(lv.name ?? "").trim();
+    if (name !== "") return name.length > 50 ? name.slice(0, 50) : name;
+  }
+  return "Base";
+}
+
+// fidelity_levels_ensure_base_points_level: base sempre presente con 0 punti
+// (key/nome dal set ESISTENTE); un non-base a 0 punti è un errore legacy.
+function ensureBasePointsLevel(levels: FidelityLevel[], existing: FidelityLevel[]): FidelityLevel[] {
+  const baseKey = levelsBaseKey(existing);
+  let baseName = levelsBaseName(existing);
+  const out: FidelityLevel[] = [];
+  let hasBase = false;
+  for (const lv of levels) {
+    const key = levelToken(lv.key);
+    if (key === "") continue;
+    let name = String(lv.name ?? "").trim();
+    if (name === "") continue;
+    if (name.length > 50) name = name.slice(0, 50);
+    const pts = normLevelPoints(lv.minPoints);
+    if (key === baseKey) {
+      hasBase = true;
+      baseName = name !== "" ? name : baseName;
+      out.push({ key: baseKey, name: baseName, minPoints: 0 });
+      continue;
+    }
+    if (Math.abs(pts) < 1e-7) throw new Error("Solo il livello base predefinito puo avere 0 punti.");
+    out.push({ key, name, minPoints: pts });
+  }
+  if (!hasBase) out.unshift({ key: baseKey, name: baseName !== "" ? baseName : "Base", minPoints: 0 });
+  out.sort((a, b) => a.minPoints - b.minPoints);
+  return out;
+}
+
+// Firma sha256 delle modifiche soglia (fidelity_levels_threshold_change_signature):
+// deve solo essere coerente tra preview e salvataggio.
+function thresholdChangeSignature(changes: Array<{ key: string; old: number; new: number }>): string {
+  const rows = changes
+    .map((c) => ({ key: levelToken(c.key), old: normLevelPoints(c.old), new: normLevelPoints(c.new) }))
+    .filter((c) => c.key !== "")
+    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  return createHash("sha256").update(JSON.stringify(rows)).digest("hex");
+}
+
+// Lista da un campo del body: array reale, stringa JSON '["a","b"]' o CSV
+// (parseRequestBody appiattisce gli array JSON con join ',').
+function bodyList(v: unknown): unknown[] {
+  if (Array.isArray(v)) return v;
+  if (v === undefined || v === null) return [];
+  const s = String(v).trim();
+  if (s === "") return [];
+  if (s.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(s);
+      if (Array.isArray(parsed)) return parsed;
+    } catch { /* fallthrough */ }
+  }
+  return s.includes(",") ? s.split(",") : [s];
+}
+
+// Parse dei livelli postati (fidelity_points_level_keys/names/points, con
+// fallback levels_json delle prime versioni del componente): nome obbligatorio
+// (cap 50), key dal nome se assente, dedup _N, punti normalizzati, sort asc.
+function parsePostedPointLevels(body: Record<string, unknown>): FidelityLevel[] {
+  const asArray = bodyList;
+  let keys = asArray(body["fidelity_points_level_keys"] ?? body["fidelity_points_level_keys[]"]);
+  let names = asArray(body["fidelity_points_level_names"] ?? body["fidelity_points_level_names[]"]);
+  let pts = asArray(body["fidelity_points_level_points"] ?? body["fidelity_points_level_points[]"]);
+  if (names.length === 0 && typeof body.levels_json === "string" && body.levels_json.trim() !== "") {
+    try {
+      const dec = JSON.parse(body.levels_json);
+      if (Array.isArray(dec)) {
+        keys = dec.map((l) => (l as Record<string, unknown>).key ?? "");
+        names = dec.map((l) => (l as Record<string, unknown>).name ?? "");
+        pts = dec.map((l) => (l as Record<string, unknown>).minPoints ?? (l as Record<string, unknown>).min_points ?? 0);
+      }
+    } catch { /* ignore */ }
+  }
+  const seen = new Set<string>();
+  const uniqKey = (base: string): string => {
+    let k = String(base).trim().toLowerCase().replace(/[^a-z0-9_-]/g, "").replace(/^[_-]+|[_-]+$/g, "");
+    if (k === "") k = "level";
+    if (k.length > 64) k = k.slice(0, 64);
+    if (seen.has(k)) { let n = 2; while (seen.has(`${k}_${n}`)) n++; k = `${k}_${n}`; }
+    seen.add(k);
+    return k;
+  };
+  const out: FidelityLevel[] = [];
+  const n = Math.max(names.length, pts.length, keys.length);
+  for (let i = 0; i < n; i++) {
+    let name = String(names[i] ?? "").trim();
+    if (name === "") continue;
+    if (name.length > 50) name = name.slice(0, 50);
+    const postedKey = String(keys[i] ?? "").trim();
+    const key = uniqKey(postedKey !== "" ? postedKey : normalizeLevelKey(name));
+    out.push({ key, name, minPoints: normLevelPoints(pts[i] ?? 0) });
+  }
+  out.sort((a, b) => a.minPoints - b.minPoints);
+  return out;
+}
+
+// Token di conferma (fidelity_delete_confirmed[] / fidelity_disable_confirmed[]).
+function confirmTokenSet(raw: unknown): Set<string> {
+  const out = new Set<string>();
+  for (const v of bodyList(raw)) {
+    const tok = levelToken(v);
+    if (tok !== "") out.add(tok);
+  }
+  return out;
+}
+
+// Conteggi d'uso dei livelli (fidelity_points_level_usage_counts): livello a
+// punti corrente per cliente con fallback clients.fidelity_level.
+export async function fidelityLevelUsageCounts(slug: string): Promise<Record<string, number>> {
+  const cfg = await getFidelityLevelsSettings(slug);
+  const out: Record<string, number> = {};
+  for (const lv of cfg.levels) out[levelToken(lv.key)] = 0;
+  const snapshot = await fidelityClientsLevelSnapshot(slug).catch(() => new Map<number, string>());
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, fidelity_level", orderBy: "id ASC" }).catch(() => [] as RowDataPacket[]);
+  for (const row of rows) {
+    const cid = Number(row.id ?? 0);
+    if (cid <= 0) continue;
+    let key = levelToken(snapshot.get(cid) ?? "");
+    if (key === "") key = levelToken(row.fidelity_level ?? "");
+    if (key !== "" && key in out) out[key] += 1;
+  }
+  return out;
+}
+
+// Dati per l'editor Livelli Card (fidelity_points.php ~2873-2880 + $fidLabel):
+// livelli (fallback base singolo), baseKey, usage e label punti.
+export type FidelityLevelsEditorData = FidelityLevelsSettings & {
+  baseKey: string;
+  usage: Record<string, number>;
+  label: string;
+};
+export async function getFidelityLevelsEditorData(slug: string): Promise<FidelityLevelsEditorData> {
+  const cfg = await getFidelityLevelsSettings(slug);
+  let levels = cfg.levels;
+  if (levels.length === 0) levels = [{ key: "base", name: "Base", minPoints: 0 }];
+  const bizRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_points_label", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const label = String(bizRows[0]?.fidelity_points_label ?? "").trim() || "Punti";
+  return {
+    ...cfg,
+    levels,
+    baseKey: levelsBaseKey(levels),
+    usage: await fidelityLevelUsageCounts(slug).catch(() => ({} as Record<string, number>)),
+    label,
+  };
+}
+
+// Cascata sui livelli ELIMINATI (fidelity_levels_cleanup_deleted_levels):
+// campagne punti / promozioni target-fidelity / omaggi fidelity_only; le righe
+// svuotate NON vengono riscritte, solo disattivate se attive; le prenotazioni
+// aperte di TUTTE le promozioni toccate perdono la promozione.
+async function cleanupDeletedPointLevels(slug: string, deletedKeys: Set<string>, userId: number | null): Promise<{ promoUpd: number; promoOff: number; giftUpd: number; giftOff: number; appts: number; campUpd: number; campOff: number }> {
+  const stats = { promoUpd: 0, promoOff: 0, giftUpd: 0, giftOff: 0, appts: 0, campUpd: 0, campOff: 0 };
+  if (deletedKeys.size === 0) return stats;
+
+  // Promozioni target Fidelity.
+  const promoRows = await tenantSelect<RowDataPacket>({ slug, table: "promotions", columns: "id, is_active, target_fidelity_levels", where: "target_type = 'fidelity'" }).catch(() => [] as RowDataPacket[]);
+  const affectedPromotionIds: number[] = [];
+  for (const row of promoRows) {
+    const pid = Number(row.id ?? 0);
+    if (pid <= 0) continue;
+    const res = stripDeletedPointLevels(row.target_fidelity_levels, deletedKeys, true);
+    if (!res.touched) continue;
+    affectedPromotionIds.push(pid);
+    if (res.remaining.length > 0) {
+      await tenantUpdate({ slug, table: "promotions", id: pid, values: { target_fidelity_levels: encodeLevelJsonList(res.remaining), updated_at: new Date(), ...(userId ? { updated_by: userId } : {}) } }).catch(() => 0);
+      stats.promoUpd += 1;
+      continue;
+    }
+    if (Number(row.is_active ?? 0) !== 1) continue;
+    await tenantUpdate({ slug, table: "promotions", id: pid, values: { is_active: 0, updated_at: new Date(), ...(userId ? { updated_by: userId } : {}) } }).catch(() => 0);
+    stats.promoOff += 1;
+  }
+  for (const pid of affectedPromotionIds) {
+    stats.appts += await clearPendingAppointmentsForPromotion(slug, pid).catch(() => 0);
+  }
+
+  // Omaggi fidelity_only (gifts.eligible_levels_points).
+  const handledGifts = new Set<number>();
+  const giftRows = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "id, active, eligible_levels_points", where: "deleted_at IS NULL AND eligibility = 'fidelity_only'" }).catch(() => [] as RowDataPacket[]);
+  for (const row of giftRows) {
+    const gid = Number(row.id ?? 0);
+    if (gid <= 0) continue;
+    const res = stripDeletedPointLevels(row.eligible_levels_points, deletedKeys, false);
+    if (!res.touched) continue;
+    handledGifts.add(gid);
+    if (res.remaining.length > 0) {
+      await tenantUpdate({ slug, table: "gifts", id: gid, values: { eligible_levels_points: encodeLevelJsonList(res.remaining), updated_at: new Date(), ...(userId ? { updated_by: userId } : {}) } }).catch(() => 0);
+      stats.giftUpd += 1;
+      continue;
+    }
+    if (Number(row.active ?? 0) !== 1) continue;
+    await tenantUpdate({ slug, table: "gifts", id: gid, values: { active: 0, updated_at: new Date(), ...(userId ? { updated_by: userId } : {}) } }).catch(() => 0);
+    stats.giftOff += 1;
+  }
+  // Compat legacy gift_rules.target_level_key: solo disattivazione.
+  for (const gid of await findLinkedGiftRuleIds(slug, deletedKeys)) {
+    if (handledGifts.has(gid)) continue;
+    const active = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "COALESCE(active,0) AS a", where: "id = ? AND deleted_at IS NULL", params: [gid], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    if (Number(active[0]?.a ?? 0) !== 1) continue;
+    await tenantUpdate({ slug, table: "gifts", id: gid, values: { active: 0, updated_at: new Date(), ...(userId ? { updated_by: userId } : {}) } }).catch(() => 0);
+    stats.giftOff += 1;
+  }
+
+  // Campagne punti (fidelity_campaigns.eligible_points_levels).
+  const campRows = await tenantSelect<RowDataPacket>({ slug, table: "fidelity_campaigns", columns: "id, active, eligible_points_levels", where: "deleted_at IS NULL" }).catch(() => [] as RowDataPacket[]);
+  for (const row of campRows) {
+    const cid = Number(row.id ?? 0);
+    if (cid <= 0) continue;
+    const res = stripDeletedPointLevels(row.eligible_points_levels, deletedKeys, false);
+    if (!res.touched) continue;
+    if (res.remaining.length > 0) {
+      await tenantUpdate({ slug, table: "fidelity_campaigns", id: cid, values: { eligible_points_levels: encodeLevelJsonList(res.remaining), updated_at: new Date() } }).catch(() => 0);
+      stats.campUpd += 1;
+      continue;
+    }
+    if (Number(row.active ?? 0) !== 1) continue;
+    await tenantUpdate({ slug, table: "fidelity_campaigns", id: cid, values: { active: 0, updated_at: new Date() } }).catch(() => 0);
+    stats.campOff += 1;
+  }
+
+  return stats;
+}
+
+// Omaggi collegati via regole legacy gift_rules.target_level_key.
+async function findLinkedGiftRuleIds(slug: string, keys: Set<string>): Promise<number[]> {
+  if (keys.size === 0) return [];
+  const giftsT = await tenantTable(slug, "gifts").catch(() => null);
+  const setsT = await tenantTable(slug, "gift_rule_sets").catch(() => null);
+  const rulesT = await tenantTable(slug, "gift_rules").catch(() => null);
+  if (!giftsT || !setsT || !rulesT) return [];
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT DISTINCT g.id AS gift_id, r.target_level_key
+       FROM ${quoteIdentifier(giftsT.name)} g
+       JOIN ${quoteIdentifier(setsT.name)} rs ON rs.gift_id = g.id${setsT.mode === "shared" ? " AND rs.tenant_id = g.tenant_id" : ""}
+       JOIN ${quoteIdentifier(rulesT.name)} r ON r.rule_set_id = rs.id${rulesT.mode === "shared" ? " AND r.tenant_id = rs.tenant_id" : ""}
+      WHERE ${giftsT.mode === "shared" ? "g.tenant_id = ? AND " : ""}g.deleted_at IS NULL AND r.target_level_key IS NOT NULL AND r.target_level_key <> ''`,
+    giftsT.mode === "shared" ? [giftsT.tenantId ?? 0] : [],
+  ).catch(() => [] as RowDataPacket[]);
+  const out = new Set<number>();
+  for (const row of rows) {
+    const gid = Number(row.gift_id ?? 0);
+    if (gid <= 0) continue;
+    for (const key of keys) {
+      if (levelListHasKey([String(row.target_level_key ?? "")], "points", key)) { out.add(gid); break; }
+    }
+  }
+  return [...out].sort((a, b) => a - b);
+}
+
+// Disattivazione per TOGGLE (fidelity_levels_disable_linked_campaigns): le
+// campagne/promozioni/omaggi collegati a QUALSIASI livello esistente vengono
+// solo disattivati (liste intatte) + clear prenotazioni delle promozioni.
+async function disableLinkedCampaignsForLevels(slug: string, keys: Set<string>, userId: number | null): Promise<{ promotions: number; gifts: number; pointCampaigns: number; appointments: number }> {
+  const stats = { promotions: 0, gifts: 0, pointCampaigns: 0, appointments: 0 };
+  if (keys.size === 0) return stats;
+
+  const campRows = await tenantSelect<RowDataPacket>({ slug, table: "fidelity_campaigns", columns: "id, active, eligible_points_levels", where: "deleted_at IS NULL" }).catch(() => [] as RowDataPacket[]);
+  for (const row of campRows) {
+    if (Number(row.active ?? 0) !== 1) continue;
+    let linked = false;
+    for (const key of keys) if (levelListHasKey(row.eligible_points_levels, "points", key)) { linked = true; break; }
+    if (!linked) continue;
+    await tenantUpdate({ slug, table: "fidelity_campaigns", id: Number(row.id), values: { active: 0, updated_at: new Date() } }).catch(() => 0);
+    stats.pointCampaigns += 1;
+  }
+
+  const promoRows = await tenantSelect<RowDataPacket>({ slug, table: "promotions", columns: "id, is_active, target_fidelity_levels", where: "1=1" }).catch(() => [] as RowDataPacket[]);
+  const linkedPromoIds: number[] = [];
+  for (const row of promoRows) {
+    let linked = false;
+    for (const key of keys) if (levelListHasKey(row.target_fidelity_levels, "points", key)) { linked = true; break; }
+    if (linked) linkedPromoIds.push(Number(row.id ?? 0));
+  }
+  for (const pid of linkedPromoIds) {
+    stats.appointments += await clearPendingAppointmentsForPromotion(slug, pid).catch(() => 0);
+    await tenantUpdate({ slug, table: "promotions", id: pid, values: { is_active: 0, updated_at: new Date(), ...(userId ? { updated_by: userId } : {}) } }).catch(() => 0);
+    stats.promotions += 1;
+  }
+
+  const giftRows = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "id, active, eligible_levels_points", where: "deleted_at IS NULL" }).catch(() => [] as RowDataPacket[]);
+  const linkedGiftIds = new Set<number>();
+  for (const row of giftRows) {
+    for (const key of keys) {
+      if (levelListHasKey(row.eligible_levels_points, "points", key)) { linkedGiftIds.add(Number(row.id ?? 0)); break; }
+    }
+  }
+  for (const gid of await findLinkedGiftRuleIds(slug, keys)) linkedGiftIds.add(gid);
+  for (const gid of linkedGiftIds) {
+    await tenantUpdate({ slug, table: "gifts", id: gid, values: { active: 0, updated_at: new Date(), ...(userId ? { updated_by: userId } : {}) } }).catch(() => 0);
+    stats.gifts += 1;
+  }
+
+  return stats;
+}
+
+// Port completo di fidelity_levels.php save_levels: guardia globale, conferme
+// popup (toggle disattivazione, firma modifiche soglia, eliminazione per-key),
+// ensure-base sul base key ESISTENTE (primo livello a 0 punti), guardia 0-punti
+// e punti duplicati verbatim, cascata su eliminati + toggle, liste preservate a
+// sezione spenta, ricalcolo livelli di tutti i clienti e messaggio composto.
+export async function saveFidelityLevels(slug: string, body: Record<string, unknown>, userId: number | null = null): Promise<FidelityLevelsSettings & { message?: string }> {
+  // Guard legacy: pagina disabilitata con Fidelity globale off (redirect err).
+  if (!(await getFidelityEnabled(slug))) {
+    throw new Error("Attiva prima la Fidelity per configurare i livelli card.");
+  }
+
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "id", orderBy: "id ASC", limit: 1 });
   if (!rows[0]) throw new Error("Business non trovato.");
   const bizId = Number(rows[0].id ?? 0);
-  const existing = parseFidelityCardLevels(rows[0].fidelity_card_levels_json);
+  // Livelli esistenti dalle SETTINGS (con migrazione legacy Bronze/Silver/Gold),
+  // come $s['card_levels_points'] in fidelity_levels.php.
+  const existingCfg = await getFidelityLevelsSettings(slug);
+  const existingPoints = existingCfg.levels;
+  const existingByKey = new Map(existingPoints.map((l) => [levelToken(l.key), l]));
   const truthy = (v: unknown) => ["1", "true", "on", "yes"].includes(String(v ?? "").toLowerCase());
 
   const enabled = truthy(body.fidelity_levels_enabled);
-  const pointsEnabled = enabled && truthy(body.fidelity_levels_points_enabled);
+  let pointsEnabled = truthy(body.fidelity_levels_points_enabled);
+  if (!enabled) pointsEnabled = false;
 
-  let levels: FidelityLevel[] = existing.levels;
+  // Conferme popup per disattivazione (anche lato backend, contro POST manuali).
+  const confirmedDisables = confirmTokenSet(body.fidelity_disable_confirmed ?? body["fidelity_disable_confirmed[]"]);
+  const disabledFamiliesByToggle = new Set<string>();
+  if (existingCfg.enabled && !enabled) {
+    if (!confirmedDisables.has("all") && !confirmedDisables.has("points")) {
+      throw new Error("Conferma prima la disattivazione dei Livelli Card dal popup.");
+    }
+    disabledFamiliesByToggle.add("points");
+  } else if (enabled) {
+    if (existingCfg.pointsEnabled && !pointsEnabled) {
+      if (!confirmedDisables.has("points") && !confirmedDisables.has("all")) {
+        throw new Error("Conferma prima la disattivazione dei livelli card a punti dal popup.");
+      }
+      disabledFamiliesByToggle.add("points");
+    }
+  }
+
+  // Parse + ensure base (con guardie legacy 0-punti / punti duplicati).
+  let pointsLevels: FidelityLevel[] = existingPoints;
   if (pointsEnabled) {
-    let raw: unknown = body.levels_json;
-    if (typeof raw === "string") { try { raw = JSON.parse(raw); } catch { raw = []; } }
-    const inputs = Array.isArray(raw) ? raw : [];
-    const seen = new Set<string>();
-    const uniqKey = (base: string): string => {
-      let k = normalizeLevelKey(base);
-      if (seen.has(k)) { let n = 2; while (seen.has(`${k}_${n}`)) n++; k = `${k}_${n}`; }
-      seen.add(k);
-      return k;
-    };
-    const parsed: FidelityLevel[] = [];
-    for (const l of inputs) {
-      const o = l as Record<string, unknown>;
-      let name = String(o.name ?? "").trim();
-      if (name === "") continue;
-      if (name.length > 50) name = name.slice(0, 50);
-      const key = uniqKey(String(o.key ?? "").trim() !== "" ? String(o.key) : name);
-      parsed.push({ key, name, minPoints: Math.max(0, Number(String(o.minPoints ?? o.min_points ?? 0).replace(",", ".")) || 0) });
-    }
-    parsed.sort((a, b) => a.minPoints - b.minPoints);
-    // Ensure the base level (key 'base', min 0).
-    if (!parsed.some((l) => l.key === "base")) {
-      const baseName = existing.levels.find((l) => l.key === "base")?.name ?? "Base";
-      parsed.unshift({ key: "base", name: baseName, minPoints: 0 });
-    }
-    // No two levels with the same min points.
-    const seenPts = new Set<string>();
-    for (const l of parsed) {
-      const k = l.minPoints.toFixed(2);
-      if (seenPts.has(k)) throw new Error("Non puoi salvare due livelli card con gli stessi punti necessari.");
-      seenPts.add(k);
-    }
-    levels = parsed;
+    pointsLevels = ensureBasePointsLevel(parsePostedPointLevels(body), existingPoints);
   }
-
-  // F4 — cascata legacy sui livelli RIMOSSI (o sull'intera sezione disattivata):
-  // le key spariscono da campagne punti / promozioni target-fidelity / omaggi;
-  // le righe rimaste senza livelli target vengono disattivate; le prenotazioni
-  // aperte delle promozioni disattivate perdono la promozione.
-  const prevKeys = existing.pointsEnabled ? existing.levels.map((l) => l.key) : [];
-  const nextKeys = pointsEnabled ? levels.map((l) => l.key) : [];
-  const removedKeys = new Set(prevKeys.filter((k) => !nextKeys.includes(k)));
-  const truthyFlagLocal = (v: unknown) => ["1", "true", "on", "yes"].includes(String(v ?? "").toLowerCase());
-
-  const cascade = { campUpd: 0, campOff: 0, promoUpd: 0, promoOff: 0, giftUpd: 0, giftOff: 0, apptCleared: 0 };
-  if (removedKeys.size > 0) {
-    // Conferma legacy: eliminare livelli richiede la conferma dal popup.
-    if (!truthyFlagLocal(body.fidelity_delete_confirmed) && !truthyFlagLocal(body.fidelity_disable_confirmed)) {
-      const removedNames = existing.levels.filter((l) => removedKeys.has(l.key)).map((l) => l.name);
-      throw new Error(`Conferma prima l'eliminazione del livello a punti "${removedNames[0] ?? ""}".`);
-    }
-
-    // Campagne punti (fidelity_campaigns.eligible_points_levels).
-    const campRows = await tenantSelect<RowDataPacket>({ slug, table: "fidelity_campaigns", columns: "id, active, eligible_points_levels", where: "deleted_at IS NULL" }).catch(() => [] as RowDataPacket[]);
-    for (const row of campRows) {
-      const res = stripLevelKeys(row.eligible_points_levels, removedKeys);
-      if (!res.changed) continue;
-      const deactivate = res.empty && Number(row.active ?? 0) === 1;
-      await tenantUpdate({ slug, table: "fidelity_campaigns", id: Number(row.id), values: { eligible_points_levels: res.next, ...(deactivate ? { active: 0 } : {}), updated_at: new Date() } }).catch(() => 0);
-      if (deactivate) cascade.campOff += 1; else cascade.campUpd += 1;
-    }
-
-    // Promozioni target Fidelity (promotions.target_fidelity_levels).
-    const promoTable = await tenantTable(slug, "promotions").catch(() => null);
-    if (promoTable && (await columnExists(promoTable.name, "target_fidelity_levels"))) {
-      const promoRows = await tenantSelect<RowDataPacket>({ slug, table: "promotions", columns: "id, is_active, target_fidelity_levels", where: "target_type = 'fidelity'" }).catch(() => [] as RowDataPacket[]);
-      const deactivatedPromoIds: number[] = [];
-      for (const row of promoRows) {
-        const res = stripLevelKeys(row.target_fidelity_levels, removedKeys);
-        if (!res.changed) continue;
-        const deactivate = res.empty && Number(row.is_active ?? 0) === 1;
-        await tenantUpdate({ slug, table: "promotions", id: Number(row.id), values: { target_fidelity_levels: res.next, ...(deactivate ? { is_active: 0 } : {}) } }).catch(() => 0);
-        if (deactivate) { cascade.promoOff += 1; deactivatedPromoIds.push(Number(row.id)); } else cascade.promoUpd += 1;
-      }
-      // Prenotazioni aperte collegate alle promozioni disattivate (clearPendingAppointments).
-      const apptTable = await tenantTable(slug, "appointments").catch(() => null);
-      if (deactivatedPromoIds.length > 0 && apptTable && (await columnExists(apptTable.name, "promotion_id"))) {
-        const ph = deactivatedPromoIds.map(() => "?").join(",");
-        cascade.apptCleared = Number((await dbExecute(
-          `UPDATE ${quoteIdentifier(apptTable.name)} SET promotion_id = NULL, discount_type = NULL, discount_value = NULL WHERE tenant_id = ? AND status IN ('pending','scheduled') AND promotion_id IN (${ph})`,
-          [apptTable.tenantId ?? 0, ...deactivatedPromoIds],
-        ).catch(() => ({ affectedRows: 0 }))).affectedRows ?? 0) || 0;
-      }
-    }
-
-    // Omaggi (gifts.eligible_levels_points).
-    const giftsTable = await tenantTable(slug, "gifts").catch(() => null);
-    if (giftsTable && (await columnExists(giftsTable.name, "eligible_levels_points"))) {
-      const giftRows = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "id, active, eligible_levels_points", where: "deleted_at IS NULL" }).catch(() => [] as RowDataPacket[]);
-      for (const row of giftRows) {
-        const res = stripLevelKeys(row.eligible_levels_points, removedKeys);
-        if (!res.changed) continue;
-        const deactivate = res.empty && Number(row.active ?? 0) === 1;
-        await tenantUpdate({ slug, table: "gifts", id: Number(row.id), values: { eligible_levels_points: res.next, ...(deactivate ? { active: 0 } : {}), updated_at: new Date() } }).catch(() => 0);
-        if (deactivate) cascade.giftOff += 1; else cascade.giftUpd += 1;
-      }
+  if (enabled && pointsEnabled) {
+    const seenPoints = new Set<string>();
+    for (const lv of pointsLevels) {
+      const ptsKey = normLevelPoints(lv.minPoints).toFixed(2);
+      if (seenPoints.has(ptsKey)) throw new Error("Non puoi salvare due livelli card con gli stessi punti necessari.");
+      seenPoints.add(ptsKey);
     }
   }
 
-  const json = JSON.stringify({ format: "split", points_enabled: pointsEnabled ? 1 : 0, points_levels: levels.map((l) => ({ key: l.key, name: l.name, min_points: l.minPoints })) });
+  // Modifiche soglia sui livelli esistenti: firma di conferma obbligatoria.
+  const thresholdChanges: Array<{ key: string; old: number; new: number }> = [];
+  if (enabled && pointsEnabled) {
+    for (const lv of pointsLevels) {
+      const key = levelToken(lv.key);
+      const old = existingByKey.get(key);
+      if (key === "" || !old) continue;
+      const oldPts = normLevelPoints(old.minPoints);
+      const newPts = normLevelPoints(lv.minPoints);
+      if (Math.abs(oldPts - newPts) < 1e-7) continue;
+      thresholdChanges.push({ key, old: oldPts, new: newPts });
+    }
+  }
+  if (thresholdChanges.length > 0) {
+    const expected = thresholdChangeSignature(thresholdChanges);
+    const posted = String(body.fidelity_threshold_change_confirmed ?? "").trim();
+    if (posted === "" || posted !== expected) {
+      throw new Error("Conferma prima la modifica dei punti necessari dal popup.");
+    }
+  }
+
+  // Livelli eliminati: conferma esplicita per-key ('points:KEY').
+  const confirmedDeletes = confirmTokenSet(body.fidelity_delete_confirmed ?? body["fidelity_delete_confirmed[]"]);
+  const deletedKeys = new Set<string>();
+  if (enabled && pointsEnabled) {
+    const newPointKeys = new Set(pointsLevels.map((l) => levelToken(l.key)).filter((k) => k !== ""));
+    for (const [oldKey, oldLv] of existingByKey) {
+      if (oldKey === "" || newPointKeys.has(oldKey)) continue;
+      if (!confirmedDeletes.has(`points:${oldKey}`)) {
+        throw new Error(`Conferma prima l'eliminazione del livello a punti "${String(oldLv.name ?? oldKey)}".`);
+      }
+      deletedKeys.add(oldKey);
+    }
+  }
+
+  // Se la sezione è disattivata, preserviamo la lista ma salviamo il toggle a 0.
+  const pointsLevelsToSave = enabled && pointsEnabled ? pointsLevels : existingPoints;
+  const json = JSON.stringify({ format: "split", points_enabled: enabled && pointsEnabled ? 1 : 0, points_levels: pointsLevelsToSave.map((l) => ({ key: l.key, name: l.name, min_points: l.minPoints })) });
   const values = await filterColumns((await tenantTable(slug, "businesses")).name, {
     fidelity_levels_enabled: enabled ? 1 : 0,
     fidelity_card_levels_json: json,
@@ -16054,20 +16479,317 @@ export async function saveFidelityLevels(slug: string, body: Record<string, stri
   });
   await tenantUpdate({ slug, table: "businesses", id: bizId, values });
 
+  const cleanupStats = deletedKeys.size > 0
+    ? await cleanupDeletedPointLevels(slug, deletedKeys, userId)
+    : { promoUpd: 0, promoOff: 0, giftUpd: 0, giftOff: 0, appts: 0, campUpd: 0, campOff: 0 };
+
+  let disableStats = { promotions: 0, gifts: 0, pointCampaigns: 0, appointments: 0 };
+  if (disabledFamiliesByToggle.has("points")) {
+    const allKeys = new Set(existingPoints.map((l) => levelToken(l.key)).filter((k) => k !== ""));
+    disableStats = await disableLinkedCampaignsForLevels(slug, allKeys, userId);
+  }
+
   // Ricalcolo livelli clienti (legacy save_levels ~1074-1086).
   await recalcAllClientFidelityLevels(slug).catch(() => 0);
 
   const settings = await getFidelityLevelsSettings(slug);
   // Messaggio composto legacy "Livelli Card salvati" + dettaglio cascata.
-  const parts: string[] = [];
-  if (cascade.promoUpd) parts.push(`${cascade.promoUpd} promozioni aggiornate`);
-  if (cascade.promoOff) parts.push(`${cascade.promoOff} promozioni disattivate`);
-  if (cascade.giftUpd) parts.push(`${cascade.giftUpd} campagne omaggio aggiornate`);
-  if (cascade.giftOff) parts.push(`${cascade.giftOff} campagne omaggio disattivate`);
-  if (cascade.campUpd) parts.push(`${cascade.campUpd} campagne punti aggiornate`);
-  if (cascade.campOff) parts.push(`${cascade.campOff} campagne punti disattivate`);
-  if (cascade.apptCleared) parts.push(`${cascade.apptCleared} prenotazioni aggiornate`);
-  return { ...settings, message: `Livelli Card salvati${parts.length ? `. ${parts.join(", ")}.` : ""}` } as FidelityLevelsSettings & { message: string };
+  let message = "Livelli Card salvati";
+  if (deletedKeys.size > 0) {
+    const parts: string[] = [];
+    if (cleanupStats.promoUpd) parts.push(`${cleanupStats.promoUpd} promozioni aggiornate`);
+    if (cleanupStats.promoOff) parts.push(`${cleanupStats.promoOff} promozioni disattivate`);
+    if (cleanupStats.giftUpd) parts.push(`${cleanupStats.giftUpd} campagne omaggio aggiornate`);
+    if (cleanupStats.giftOff) parts.push(`${cleanupStats.giftOff} campagne omaggio disattivate`);
+    if (cleanupStats.campUpd) parts.push(`${cleanupStats.campUpd} campagne punti aggiornate`);
+    if (cleanupStats.campOff) parts.push(`${cleanupStats.campOff} campagne punti disattivate`);
+    if (cleanupStats.appts) parts.push(`${cleanupStats.appts} prenotazioni aggiornate`);
+    if (parts.length > 0) message += `. ${parts.join(", ")}.`;
+  }
+  if (disabledFamiliesByToggle.size > 0) {
+    const parts: string[] = [];
+    if (disableStats.promotions) parts.push(`${disableStats.promotions} promozioni disattivate`);
+    if (disableStats.gifts) parts.push(`${disableStats.gifts} campagne omaggio disattivate`);
+    if (disableStats.pointCampaigns) parts.push(`${disableStats.pointCampaigns} campagne punti disattivate`);
+    if (disableStats.appointments) parts.push(`${disableStats.appointments} prenotazioni aggiornate`);
+    if (parts.length > 0) message += `. ${parts.join(", ")}.`;
+  }
+  return { ...settings, message };
+}
+
+// ---- Preview impatto Livelli Card (fidelity_points.php) ----------------------
+
+// Impatto eliminazione livello (preview_fidelity_level_delete): conteggi SENZA
+// scritture — clienti che perderebbero il livello (+ livello di destinazione),
+// campagne punti / promozioni / omaggi aggiornati o disattivati.
+export async function previewFidelityLevelDelete(slug: string, tokens: string[]): Promise<Record<string, unknown>> {
+  const deleted = new Set<string>();
+  for (const raw of tokens) {
+    const token = levelToken(raw);
+    if (token === "") continue;
+    let family = "";
+    let key = token;
+    if (token.includes(":")) {
+      const i = token.indexOf(":");
+      family = levelToken(token.slice(0, i));
+      key = levelToken(token.slice(i + 1));
+    }
+    if ((family === "" || family === "points") && key !== "") deleted.add(key);
+  }
+  if (deleted.size === 0) throw new Error("Livello non valido.");
+
+  const cfg = await getFidelityLevelsSettings(slug);
+  const remainingLevels = cfg.levels.filter((l) => !deleted.has(levelToken(l.key)));
+
+  // Clienti che oggi hanno un livello eliminato -> livello di destinazione.
+  const clients = { count: 0, next_levels: {} as Record<string, { name: string; count: number }> };
+  const snapshot = await fidelityClientsLevelSnapshot(slug).catch(() => new Map<number, string>());
+  const clientRows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, fidelity_level", orderBy: "id ASC" }).catch(() => [] as RowDataPacket[]);
+  const bizRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_level_period_days", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const periodDays = Math.max(0, Math.min(36500, Math.round(Number(bizRows[0]?.fidelity_level_period_days ?? 365))));
+  for (const row of clientRows) {
+    const cid = Number(row.id ?? 0);
+    if (cid <= 0) continue;
+    let cur = levelToken(snapshot.get(cid) ?? "");
+    if (cur === "") cur = levelToken(row.fidelity_level ?? "");
+    if (cur === "" || !deleted.has(cur)) continue;
+    clients.count += 1;
+    const earned = await fidelityEarnedPointsInPeriod(slug, cid, periodDays).catch(() => 0);
+    let bestKey = "";
+    let bestName = "";
+    let bestNeed = -1;
+    let fallbackKey = "";
+    let fallbackName = "";
+    let fallbackNeed: number | null = null;
+    for (const lv of remainingLevels) {
+      const need = normLevelPoints(lv.minPoints);
+      if (fallbackNeed === null || need < fallbackNeed - 1e-7) {
+        fallbackNeed = need;
+        fallbackKey = levelToken(lv.key);
+        fallbackName = String(lv.name ?? "").trim() || lv.key;
+      }
+      if (earned + 1e-7 >= need && need > bestNeed + 1e-7) {
+        bestNeed = need;
+        bestKey = levelToken(lv.key);
+        bestName = String(lv.name ?? "").trim() || lv.key;
+      }
+    }
+    if (bestKey === "" && fallbackKey !== "") { bestKey = fallbackKey; bestName = fallbackName; }
+    const nextKey = bestKey !== "" ? bestKey : "base";
+    if (bestName === "") bestName = "Livello base";
+    if (!clients.next_levels[nextKey]) clients.next_levels[nextKey] = { name: bestName, count: 0 };
+    clients.next_levels[nextKey].count += 1;
+  }
+  clients.next_levels = Object.fromEntries(Object.entries(clients.next_levels).sort((a, b) => b[1].count - a[1].count));
+
+  const impact = {
+    clients,
+    campaigns: { updated: 0, disabled: 0 },
+    promotions: { updated: 0, disabled: 0, appointments: 0 },
+    gifts: { updated: 0, disabled: 0 },
+  };
+
+  const campRows = await tenantSelect<RowDataPacket>({ slug, table: "fidelity_campaigns", columns: "id, active, eligible_points_levels", where: "deleted_at IS NULL" }).catch(() => [] as RowDataPacket[]);
+  for (const row of campRows) {
+    const res = stripDeletedPointLevels(row.eligible_points_levels, deleted, false);
+    if (!res.touched) continue;
+    if (res.remaining.length > 0) impact.campaigns.updated += 1;
+    else if (Number(row.active ?? 0) === 1) impact.campaigns.disabled += 1;
+  }
+
+  const promoRows = await tenantSelect<RowDataPacket>({ slug, table: "promotions", columns: "id, is_active, target_fidelity_levels", where: "target_type = 'fidelity'" }).catch(() => [] as RowDataPacket[]);
+  const affectedPromotions: number[] = [];
+  for (const row of promoRows) {
+    const pid = Number(row.id ?? 0);
+    if (pid <= 0) continue;
+    const res = stripDeletedPointLevels(row.target_fidelity_levels, deleted, true);
+    if (!res.touched) continue;
+    affectedPromotions.push(pid);
+    if (res.remaining.length > 0) impact.promotions.updated += 1;
+    else if (Number(row.is_active ?? 0) === 1) impact.promotions.disabled += 1;
+  }
+  impact.promotions.appointments = await countOpenAppointmentsForPromotions(slug, affectedPromotions);
+
+  const handledGifts = new Set<number>();
+  const giftRows = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "id, active, eligible_levels_points", where: "deleted_at IS NULL AND eligibility = 'fidelity_only'" }).catch(() => [] as RowDataPacket[]);
+  for (const row of giftRows) {
+    const gid = Number(row.id ?? 0);
+    if (gid <= 0) continue;
+    const res = stripDeletedPointLevels(row.eligible_levels_points, deleted, false);
+    if (!res.touched) continue;
+    handledGifts.add(gid);
+    if (res.remaining.length > 0) impact.gifts.updated += 1;
+    else if (Number(row.active ?? 0) === 1) impact.gifts.disabled += 1;
+  }
+  for (const gid of await findLinkedGiftRuleIds(slug, deleted)) {
+    if (handledGifts.has(gid)) continue;
+    const active = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "COALESCE(active,0) AS a", where: "id = ? AND deleted_at IS NULL", params: [gid], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    if (Number(active[0]?.a ?? 0) === 1) impact.gifts.disabled += 1;
+  }
+
+  return impact;
+}
+
+// Punti maturati nel periodo (Fidelity::earnedPointsInLastDays).
+async function fidelityEarnedPointsInPeriod(slug: string, clientId: number, periodDays: number): Promise<number> {
+  const where = periodDays > 0 ? "client_id = ? AND delta_points > 0 AND created_at >= ?" : "client_id = ? AND delta_points > 0";
+  const params: unknown[] = periodDays > 0 ? [clientId, new Date(Date.now() - periodDays * 86400000)] : [clientId];
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "transactions", columns: "COALESCE(SUM(delta_points),0) AS s", where, params }).catch(() => [] as RowDataPacket[]);
+  return Math.max(0, normalizeFidelityPoints(rows[0]?.s ?? 0));
+}
+
+// Prenotazioni aperte collegate a promozioni (fidelity_points_preview_open_appointments_for_promotions).
+async function countOpenAppointmentsForPromotions(slug: string, promotionIds: number[]): Promise<number> {
+  const ids = [...new Set(promotionIds.map((n) => Math.trunc(Number(n)) || 0).filter((n) => n > 0))];
+  if (ids.length === 0) return 0;
+  const appt = await tenantTable(slug, "appointments").catch(() => null);
+  if (!appt) return 0;
+  const statuses = ["pending", "scheduled", "in sospeso", "prenotato", "in_attesa", "booked"];
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT COUNT(*) AS c FROM ${quoteIdentifier(appt.name)} WHERE ${appt.mode === "shared" ? "tenant_id = ? AND " : ""}promotion_id IN (${ids.map(() => "?").join(",")}) AND LOWER(TRIM(status)) IN (${statuses.map(() => "?").join(",")})`,
+    [...(appt.mode === "shared" ? [appt.tenantId ?? 0] : []), ...ids, ...statuses],
+  ).catch(() => [] as RowDataPacket[]);
+  return Number(rows[0]?.c ?? 0);
+}
+
+// Impatto modifica soglie (preview_fidelity_level_thresholds): changes con
+// firma, ricalcolo clienti aderenti (salgono/scendono/invariati) e regole
+// collegate che restano attive sulla nuova soglia.
+export async function previewFidelityLevelThresholds(slug: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const cfg = await getFidelityLevelsSettings(slug);
+  const existingLevels = cfg.levels;
+  const newLevels = ensureBasePointsLevel(parsePostedPointLevels(body), existingLevels);
+
+  const seenPoints = new Set<string>();
+  for (const lv of newLevels) {
+    const ptsKey = normLevelPoints(lv.minPoints).toFixed(2);
+    if (seenPoints.has(ptsKey)) throw new Error("Non puoi salvare due livelli card con gli stessi punti necessari.");
+    seenPoints.add(ptsKey);
+  }
+
+  const existingByKey = new Map(existingLevels.map((l) => [levelToken(l.key), l]));
+  const changes: Array<{ key: string; name: string; old: number; new: number }> = [];
+  const changedKeys = new Set<string>();
+  for (const lv of newLevels) {
+    const key = levelToken(lv.key);
+    const old = existingByKey.get(key);
+    if (key === "" || !old) continue;
+    const oldPts = normLevelPoints(old.minPoints);
+    const newPts = normLevelPoints(lv.minPoints);
+    if (Math.abs(oldPts - newPts) < 1e-7) continue;
+    changes.push({ key, name: String(lv.name ?? "").trim() || String(old.name ?? key), old: oldPts, new: newPts });
+    changedKeys.add(key);
+  }
+
+  const impact: Record<string, unknown> = {
+    changes,
+    signature: thresholdChangeSignature(changes),
+    clients: { checked: 0, adhering: 0, changed: 0, same: 0, moved_up: 0, moved_down: 0, none_after: 0, samples: {} },
+    links: await previewThresholdLinks(slug, changedKeys),
+  };
+  if (changes.length === 0) return impact;
+
+  const rankOf = (levels: FidelityLevel[]): Map<string, number> => {
+    const sorted = levels
+      .map((l) => ({ key: levelToken(l.key), pts: normLevelPoints(l.minPoints) }))
+      .filter((l) => l.key !== "")
+      .sort((a, b) => a.pts - b.pts);
+    return new Map(sorted.map((l, i) => [l.key, i]));
+  };
+  const newRanks = rankOf(newLevels);
+  const oldRanks = rankOf(existingLevels);
+
+  const clientsStats = impact.clients as Record<string, number>;
+  const snapshot = await fidelityClientsLevelSnapshot(slug).catch(() => new Map<number, string>());
+  const adheringRows = await tenantSelect<RowDataPacket>({ slug, table: "cards", columns: "DISTINCT client_id", where: "status = 'active' AND (expires_at IS NULL OR expires_at >= ?)", params: [todayIso()] }).catch(() => [] as RowDataPacket[]);
+  const adhering = new Set(adheringRows.map((r) => Number(r.client_id ?? 0)));
+  const bizRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_level_period_days", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const periodDays = Math.max(0, Math.min(36500, Math.round(Number(bizRows[0]?.fidelity_level_period_days ?? 365))));
+  const clientRows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, fidelity_level", orderBy: "id ASC" }).catch(() => [] as RowDataPacket[]);
+  for (const row of clientRows) {
+    const cid = Number(row.id ?? 0);
+    if (cid <= 0) continue;
+    clientsStats.checked += 1;
+    if (!adhering.has(cid)) continue;
+    clientsStats.adhering += 1;
+
+    let oldKey = levelToken(snapshot.get(cid) ?? "");
+    if (oldKey === "") oldKey = levelToken(row.fidelity_level ?? "");
+    if (oldKey === "") oldKey = levelsBaseKey(existingLevels);
+
+    const earned = await fidelityEarnedPointsInPeriod(slug, cid, periodDays).catch(() => 0);
+    let newKey = "";
+    let bestNeed = -1;
+    let fallbackKey = "";
+    let fallbackNeed: number | null = null;
+    for (const lv of newLevels) {
+      const key = levelToken(lv.key);
+      if (key === "") continue;
+      const need = normLevelPoints(lv.minPoints);
+      if (fallbackNeed === null || need < fallbackNeed - 1e-7) { fallbackKey = key; fallbackNeed = need; }
+      if (earned + 1e-7 >= need && need > bestNeed + 1e-7) { newKey = key; bestNeed = need; }
+    }
+    if (newKey === "") newKey = fallbackKey;
+
+    if (oldKey === newKey) { clientsStats.same += 1; continue; }
+    clientsStats.changed += 1;
+    const oldRank = oldRanks.has(oldKey) ? Number(oldRanks.get(oldKey)) : -1;
+    const newRank = newRanks.has(newKey) ? Number(newRanks.get(newKey)) : -1;
+    if (newKey === "") clientsStats.none_after += 1;
+    else if (newRank > oldRank) clientsStats.moved_up += 1;
+    else if (newRank < oldRank) clientsStats.moved_down += 1;
+  }
+
+  return impact;
+}
+
+// Regole collegate ai livelli con soglia cambiata (fidelity_points_preview_threshold_links).
+async function previewThresholdLinks(slug: string, changedKeys: Set<string>): Promise<Record<string, number>> {
+  const out = { campaigns: 0, promotions: 0, gifts: 0, giftboxes: 0, open_appointments: 0 };
+  if (changedKeys.size === 0) return out;
+
+  const matchAny = (raw: unknown, promotionTarget: boolean): boolean => {
+    for (const token of levelJsonList(raw)) {
+      let family = "";
+      let key = token;
+      if (token.includes(":")) {
+        const i = token.indexOf(":");
+        family = levelToken(token.slice(0, i));
+        key = levelToken(token.slice(i + 1));
+      }
+      if (promotionTarget && family !== "" && family !== "points") continue;
+      if (key !== "" && changedKeys.has(key)) return true;
+    }
+    return false;
+  };
+
+  const campRows = await tenantSelect<RowDataPacket>({ slug, table: "fidelity_campaigns", columns: "id, eligible_points_levels", where: "deleted_at IS NULL" }).catch(() => [] as RowDataPacket[]);
+  out.campaigns = campRows.filter((r) => matchAny(r.eligible_points_levels, false)).length;
+
+  const promoRows = await tenantSelect<RowDataPacket>({ slug, table: "promotions", columns: "id, target_fidelity_levels", where: "target_type = 'fidelity'" }).catch(() => [] as RowDataPacket[]);
+  const affected = promoRows.filter((r) => matchAny(r.target_fidelity_levels, true)).map((r) => Number(r.id ?? 0));
+  out.promotions = affected.length;
+  out.open_appointments = await countOpenAppointmentsForPromotions(slug, affected);
+
+  const giftRows = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "id, eligible_levels_points", where: "deleted_at IS NULL AND eligibility = 'fidelity_only'" }).catch(() => [] as RowDataPacket[]);
+  out.gifts = giftRows.filter((r) => matchAny(r.eligible_levels_points, false)).length;
+
+  const gbT = await tenantTable(slug, "giftboxes").catch(() => null);
+  if (gbT) {
+    if (await columnExists(gbT.name, "eligible_levels_points")) {
+      const gbRows = await tenantSelect<RowDataPacket>({ slug, table: "giftboxes", columns: "id, eligible_levels_points", where: "deleted_at IS NULL" }).catch(() => [] as RowDataPacket[]);
+      out.giftboxes += gbRows.filter((r) => matchAny(r.eligible_levels_points, false)).length;
+    }
+    if (await columnExists(gbT.name, "required_level_key")) {
+      const gbRows = await tenantSelect<RowDataPacket>({ slug, table: "giftboxes", columns: "required_level_key", where: "deleted_at IS NULL" }).catch(() => [] as RowDataPacket[]);
+      for (const row of gbRows) {
+        const key = levelToken(row.required_level_key ?? "");
+        if (key !== "" && changedKeys.has(key)) out.giftboxes += 1;
+      }
+    }
+  }
+
+  return out;
 }
 
 // Two campaign periods overlap (null start = -inf, null end = +inf).

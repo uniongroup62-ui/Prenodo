@@ -4771,3 +4771,79 @@ ripulite, tessera senza snapshot da emissione+durata, sync su GET con release,
 ripristino businesses e zero residui) + confronto LIVE PHP dei flash
 (preserve/disable/restore/unchanged identici, JSON clamp identico) + 65/65
 marker bundle + regressione Adesione 32/32 + typecheck/lint puliti.
+
+## Livelli Card (fidelity_levels.php + editor #livelli-card) — 2026-07-05
+AUDIT COMPLETO dell'endpoint solo-POST fidelity_levels.php (1124 righe:
+save_levels con conferme e cascata) + editor inline di fidelity_points.php
+(#livelli-card, righe 3398-3489) + fidelity_points.js (326-858: validazioni,
+preview soglie/eliminazione, token conferma) + preview endpoints
+(preview_fidelity_level_thresholds / preview_fidelity_level_delete) vs
+saveFidelityLevels/FidelityLevelsContent. FIX PRINCIPALI:
+1. BASE LEVEL DINAMICO: il base è il PRIMO livello a 0 punti della lista
+   esistente (fidelity_levels_base_key, es. 'bronze' dalla migrazione legacy
+   Bronze/Silver/Gold) — prima era hardcoded 'base' (un tenant migrato avrebbe
+   avuto un doppio base e il bronze trattato come eliminabile); nome base
+   preservato, punti forzati a 0; guardia verbatim 'Solo il livello base
+   predefinito puo avere 0 punti.' (prima assente, cadeva nel messaggio
+   sbagliato dei punti duplicati); punti normalizzati col troncamento intero
+   legacy (normalizePoints) + clamp 0..100000000.
+2. CONFERMA FIRMATA SOGLIE (prima assente): modifiche ai punti necessari dei
+   livelli esistenti richiedono fidelity_threshold_change_confirmed = sha256
+   delle modifiche (preview -> firma -> save), guardia 'Conferma prima la
+   modifica dei punti necessari dal popup.'; nuovo endpoint preview con
+   changes/firma, clienti ricalcolati (aderenti, salgono/scendono/invariati) e
+   regole collegate (campagne/promozioni/omaggi/giftbox eligible+required_level
+   /prenotazioni aperte).
+3. ELIMINAZIONE PER-KEY: conferma 'points:KEY' per OGNI livello eliminato
+   (prima un flag unico) con guardia verbatim col NOME ('Conferma prima
+   l'eliminazione del livello a punti "Gold".'); nuovo endpoint preview
+   impatto (clienti che perdono il livello + livello di destinazione,
+   campagne/promozioni/omaggi aggiornati o disattivati, prenotazioni aperte)
+   SENZA scritture.
+4. CASCATA FEDELE: token 'family:key' parsati (prima match esatto che mancava
+   'points:gold' nei target promozione), righe SVUOTATE solo disattivate senza
+   riscrivere la lista (prima scriveva '[]'), target promozione ri-prefissati
+   'points:' sui restanti, omaggi filtrati eligibility='fidelity_only' (prima
+   tutti) + compat regole legacy gift_rules.target_level_key (disattivazione),
+   prenotazioni aperte ripulite per TUTTE le promozioni toccate con la logica
+   centralizzata Promotions (prezzi riga ripristinati, note 'Promozione:'
+   rimosse, redemption aperte eliminate — prima un UPDATE secco solo sulle
+   disattivate), updated_by sui cleanup.
+5. TOGGLE-DISABLE (prima assente): guardie 'Conferma prima la disattivazione
+   dei Livelli Card dal popup.' / '...dei livelli card a punti dal popup.'
+   (token all/points); alla disattivazione i collegati vengono SOLO disattivati
+   (liste intatte) con la seconda frase di stats nel messaggio; lista livelli
+   preservata nel JSON con points_enabled=0; renewal non forzato.
+6. MESSAGGIO COMPOSTO legacy con entrambe le frasi ('Livelli Card salvati' +
+   'N promozioni aggiornate/disattivate, N campagne omaggio ..., N campagne
+   punti ..., N prenotazioni aggiornate.'), guardia globale off ('Attiva prima
+   la Fidelity per configurare i livelli card.'), ricalcolo livelli di TUTTI i
+   clienti con UPDATE incondizionato (azzera i residui quando spento — prima
+   skippava la scrittura), errore col prefisso flash 'Errore salvataggio
+   livelli card: '.
+7. EDITOR RIFATTO sul JS legacy: hint d'uso per riga ('N clienti hanno questo
+   livello. Se cambi i punti, ti verra richiesto un riepilogo...') dai conteggi
+   server (calcClientLevelPoints con fallback fidelity_level), label punti
+   configurabile nell'input-group, validazioni client verbatim, modal 'Elimina
+   livello card' con accordion impatto e 'Rimuovi livello' (token accumulati),
+   modal 'Modifica livello card' con soglie X -> Y (toLocaleString it-IT come
+   il JS), 'Conferma e salva' con firma, righe nuove rimosse senza preview;
+   successo/errore via redirect flash su fidelity_points; GET editor esteso
+   (levels+baseKey+usage+label); /fidelity_levels ora REDIRIGE a
+   fidelity_points portando ?msg/?err (la pagina standalone non esiste nel
+   legacy); array postati come stringhe JSON (parseRequestBody appiattisce gli
+   array in CSV).
+GIA FEDELI: dedup key _N, sort per punti, nome cap 50/key cap 64, formato JSON
+{"format":"split",...} (confermato identico al live), righe base senza bottone
+rimozione.
+RESIDUI DELIBERATI: normalizeFidelityPoints condiviso usa Math.round (legacy
+trunc) fuori dal perimetro livelli; il sample di clienti nel preview soglie
+(max 8, non renderizzato dal JS legacy) non è popolato.
+Verifica: battery e2e 31/31 (migrazione+baseKey bronze, guardie verbatim,
+preview soglie con firma e cliente che scende, save con firma + ricalcolo
+cliente, preview delete senza scritture, cascata completa con messaggio
+composto e liste intatte, toggle-disable con guardie+stats+lista preservata+
+livelli azzerati, ripristino businesses e zero residui) + confronto LIVE PHP
+(msg/err flash identici incl. prefisso, JSON persistito identico) + 58/58
+marker bundle + regressione Punti 42/42 + redirect /fidelity_levels 307 con
+flash + typecheck/lint puliti.

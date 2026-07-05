@@ -87,7 +87,6 @@ import { CreditMovementsContent } from "@/components/modules/credit_movements-co
 import { ClientSheetsContent } from "@/components/modules/client_sheets-content";
 import { ClientConsentsContent } from "@/components/modules/client_consents-content";
 import { ClientSheetTemplatesContent } from "@/components/modules/client_sheet_templates-content";
-import { FidelityLevelsContent } from "@/components/modules/fidelity_levels-content";
 import { FidelityMembershipSettingsContent } from "@/components/modules/fidelity_membership_settings-content";
 import { PosContent } from "@/components/modules/pos-content";
 import { CalendarContent } from "@/components/modules/calendar-content";
@@ -174,7 +173,6 @@ const FAITHFUL_MODULES: Record<string, React.ComponentType<{ slug?: string }>> =
   client_sheets: ClientSheetsContent,
   client_consents: ClientConsentsContent,
   client_sheet_templates: ClientSheetTemplatesContent,
-  fidelity_levels: FidelityLevelsContent,
   fidelity_membership_settings: FidelityMembershipSettingsContent,
   pos: PosContent,
   calendar: CalendarContent,
@@ -712,6 +710,15 @@ export default async function TenantPage({
         <GiftBoxFormContent slug={tenantSlug} initialQuery={{ action: query.action, id: query.id, msg: query.msg, err: query.err }} />
       </ManageShell>
     );
+  }
+
+  // fidelity_levels.php: il GET legacy redirige SEMPRE a fidelity_points
+  // portando con sé i flash ?msg/?err (l'editor Livelli Card vive lì).
+  if (page === "fidelity_levels") {
+    const qs = new URLSearchParams();
+    if (query.msg) qs.set("msg", query.msg);
+    if (query.err) qs.set("err", query.err);
+    redirect(`/${encodeURIComponent(tenantSlug)}/fidelity_points${qs.size > 0 ? `?${qs.toString()}` : ""}`);
   }
 
   // Faithful Impostazioni tessera Fidelity (fidelity_membership_settings.php):
