@@ -5011,3 +5011,36 @@ con tutte le guardie, edit_guard, clone con anti-duplicato rispettato, delete,
 ripristino) + regressione motore 38/38 + 80/80 marker bundle + LIVE PHP
 (create->'Promozione salvata'+open_summary, toggle on/off e delete flash
 identici) + typecheck/lint puliti.
+
+## Punti — SECONDA PASSATA di verifica (fidelity_points.php) — 2026-07-05
+Ri-audit su richiesta della pagina Punti (3845 righe + fidelity_points.js).
+BASELINE CONFERMATA prima dei ritocchi: battery e2e 42/42 e 102/102 marker
+ancora verdi (settings/toggle generale/campagne/KPI del primo audit F7 +
+l'editor Livelli Card riscritto nell'audit fidelity_levels con la sua battery
+31/31). Riletti integralmente i blocchi non ancora ri-verificati: gate permessi
+POST (pointsOnlyPostModes con 403 JSON sulle preview), guardia globale off,
+toggle_fidelity coi messaggi composti (campagne bloccanti / conferma
+appuntamenti / code riattivazione promo-omaggi), save_settings (preserva le
+preferenze a modulo spento, guardia scadenza>0, conferme firmate
+expiry/redeem, code messaggi '. Scadenze punti aggiornate sui saldi residui'
+/'. Punti Fidelity disattivati/attivati'/'. N campagna punti attiva
+disattivata'/'. Rimosse automaticamente le agevolazioni punti da N
+prenotazioni'), preview campagne (delete/toggle), KPI con filtro sede e
+clienti con tessera attiva, top clienti con link
+fidelity_wallet&client_id&location_id (gia fedele nel componente), tabella e
+form campagne (badge 'Disattivata da Punti', 'ID: N', scaglioni, destinatari,
+'Vuota = subito.'/'Mai'), banner nessuna-campagna, modali conferma.
+RITOCCO APPLICATO: portati i due handler compat DORMIENTI (raggiungibili solo
+con POST manuale, verificati 1:1 sul PHP live):
+- _mode=manual_move -> 'Il movimento manuale e stato spostato in "Fidelity ->
+  Portafoglio".' (il legacy redirige al Portafoglio con quell'err);
+- _mode=save_rule/delete_rule -> 'Le regole per singolo servizio/prodotto non
+  sono piu usate nelle campagne Punti.'
+RESIDUI DELIBERATI: l'alert warn_locked su QUESTA pagina (?client_id federated
++ ?warn_locked, righe 3024-3085, variante senza accenti e con '--') e un
+dead-path: nessun flusso vi redirige piu (il movimento manuale vive nel
+Portafoglio, dove l'alert e portato); il deep-link ?campaign_id=N /
+?new_campaign=1 apre il form lato client senza URL (nessuna pagina esterna
+li linka).
+Verifica: compat testati su Next e LIVE PHP (messaggi identici) + regressioni
+complete 42/42 + 102/102 marker + Livelli 31/31 + typecheck pulito.

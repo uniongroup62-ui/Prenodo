@@ -144,6 +144,16 @@ export async function POST(request: Request) {
       return Response.json({ sourceMode: "database", ...result });
     }
 
+    // Compat legacy (fidelity_points.php ~2170/2789): il movimento manuale è
+    // stato spostato nel Portafoglio; le regole per singolo servizio/prodotto
+    // non esistono più nelle campagne Punti.
+    if (body._mode === "manual_move") {
+      return jsonError('Il movimento manuale e stato spostato in "Fidelity -> Portafoglio".');
+    }
+    if (body._mode === "save_rule" || body._mode === "delete_rule") {
+      return jsonError("Le regole per singolo servizio/prodotto non sono piu usate nelle campagne Punti.");
+    }
+
     // Save the Fidelity Points settings (port of fidelity_points.php save_settings).
     if (body.action === "save_points_settings" || body._mode === "save_settings") {
       if (!can(session.user.perms, "fidelity.points") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso punti fidelity mancante.", 403);
