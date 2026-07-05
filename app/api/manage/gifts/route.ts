@@ -1,5 +1,5 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
-import { deleteManageGift, getManageGift, giftFormCatalog, issueDbGift, listDbGifts, listManageGifts, redeemDbGift, saveManageGift, toggleManageGift } from "@/lib/db-repositories";
+import { addManageGiftExcludedClient, deleteManageGift, getManageGift, giftFormCatalog, giftStructureBlockReason, issueDbGift, listDbGifts, listManageGiftPage, listManageGifts, redeemDbGift, removeManageGiftExcludedClient, saveManageGift, toggleManageGift, updateManageGiftTerms } from "@/lib/db-repositories";
 import { assignGiftManual, cancelGiftInstance, checkGiftManualAssignmentEligibility, deleteClosedGiftInstance, getGiftInstanceDetail, giftCampaignSummaryStats, listGiftInstances, redeemGiftInstanceItems, sendGiftVoucherEmailManage, updateGiftInstanceInternalNote, updateGiftInstanceNote } from "@/lib/gifts-instances";
 import { currentManageSession } from "@/lib/manage-auth";
 import { getManageLocationContext } from "@/lib/manage-locations";
@@ -38,6 +38,26 @@ export async function GET(request: Request) {
       const gift = await getManageGift(tenantSlug, giftId);
       if (!gift) return jsonError("Campagna non trovata.", 404);
       return Response.json({ ok: true, source: "gifts?action=get", sourceMode: "database", gift });
+    }
+
+    // Payload COMPLETO della vista campagne legacy (gifts.php default view):
+    // righe con badge stato, label sconto/regola, riepilogo, condizioni,
+    // esclusioni con candidati, blocchi riattivazione e lock strutturale.
+    if (action === "page") {
+      if (!can(session.user.perms, "gifts.manage")) return jsonError("Permesso omaggi mancante.", 403);
+      const page = await listManageGiftPage(tenantSlug);
+      return Response.json({ ok: true, sourceMode: "database", ...page });
+    }
+
+    // Guardia lock strutturale prima di aprire il form di modifica (gifts.php
+    // action=edit -> Gifts::structureEditBlockReason): se la campagna ha gia'
+    // dati operativi il legacy redirige alla lista con ?err=reason&open_summary.
+    if (action === "edit_guard") {
+      if (!can(session.user.perms, "gifts.manage")) return jsonError("Permesso omaggi mancante.", 403);
+      const giftId = parseInteger(url.searchParams.get("id"), 0);
+      if (giftId <= 0) return jsonError("ID campagna mancante.");
+      const reason = await giftStructureBlockReason(tenantSlug, giftId);
+      return Response.json({ ok: true, sourceMode: "database", blocked: reason !== "", reason });
     }
 
     // Gift CAMPAIGN list (port of gifts.php default view / Gifts::listGifts).
@@ -112,19 +132,57 @@ export async function POST(request: Request) {
       return Response.json({ ok: true, source: "gifts?action=save", sourceMode: "database", gift, gifts: await listDbGifts(tenantSlug) });
     }
 
-    // Campaign activate/deactivate (port of gifts.php action=toggle_active).
+    // Campaign activate/deactivate (port of gifts.php action=toggle_active):
+    // flash 'Campagna attivata'/'Campagna disattivata'; sugli errori il legacy
+    // redirige con ?err=...&open_summary=ID quando la guardia lo marca.
     if (action === "toggle_active" || action === "toggle") {
       if (!can(session.user.perms, "gifts.manage")) return jsonError("Permesso omaggi mancante.", 403);
       const active = ["1", "true", "on", "yes"].includes(String(body.active ?? "").toLowerCase());
-      const result = await toggleManageGift(tenantSlug, parseInteger(body.id, 0), active, session.user.id);
-      return Response.json({ sourceMode: "database", ...result, campaigns: await listManageGifts(tenantSlug) });
+      try {
+        const result = await toggleManageGift(tenantSlug, parseInteger(body.id, 0), active, session.user.id);
+        return Response.json({ sourceMode: "database", ...result, msg: result.active ? "Campagna attivata" : "Campagna disattivata", campaigns: await listManageGifts(tenantSlug) });
+      } catch (error) {
+        const openSummary = error instanceof Error ? (error as Error & { openSummary?: number }).openSummary ?? 0 : 0;
+        return Response.json({ ok: false, error: error instanceof Error ? error.message : "Errore omaggi.", open_summary: openSummary }, { status: 400 });
+      }
     }
 
-    // Campaign delete (port of gifts.php action=delete / Gifts::softDeleteGift).
+    // Campaign delete (port of gifts.php action=delete / Gifts::softDeleteGift):
+    // flash 'Campagna eliminata' / err 'Errore eliminazione campagna'.
     if (action === "delete" || action === "delete_campaign") {
       if (!can(session.user.perms, "gifts.manage")) return jsonError("Permesso omaggi mancante.", 403);
-      const result = await deleteManageGift(tenantSlug, parseInteger(body.id, 0), session.user.id);
-      return Response.json({ sourceMode: "database", ...result, campaigns: await listManageGifts(tenantSlug) });
+      try {
+        const result = await deleteManageGift(tenantSlug, parseInteger(body.id, 0), session.user.id);
+        return Response.json({ sourceMode: "database", ...result, msg: "Campagna eliminata", campaigns: await listManageGifts(tenantSlug) });
+      } catch {
+        return Response.json({ ok: false, error: "Errore eliminazione campagna" }, { status: 400 });
+      }
+    }
+
+    // Condizioni gift dal riepilogo (gifts.php _mode=gift_terms_update /
+    // Gifts::updateGiftTerms): flash 'Condizioni gift aggiornate' + open_summary.
+    if (action === "gift_terms_update") {
+      if (!can(session.user.perms, "gifts.manage")) return jsonError("Permesso omaggi mancante.", 403);
+      const giftId = parseInteger(body.gift_id ?? body.id, 0);
+      const enabled = ["1", "true", "on", "yes"].includes(String(body.terms_enabled ?? "").toLowerCase());
+      await updateManageGiftTerms(tenantSlug, giftId, enabled, String(body.terms_text ?? ""), session.user.id);
+      return Response.json({ ok: true, sourceMode: "database", msg: "Condizioni gift aggiornate", open_summary: giftId });
+    }
+
+    // Esclusioni clienti dal riepilogo (gifts.php _mode=gift_exclusion_add /
+    // gift_exclusion_remove) con guardie snapshot + istanze bloccanti.
+    if (action === "gift_exclusion_add") {
+      if (!can(session.user.perms, "gifts.manage")) return jsonError("Permesso omaggi mancante.", 403);
+      const giftId = parseInteger(body.gift_id ?? body.id, 0);
+      await addManageGiftExcludedClient(tenantSlug, giftId, parseInteger(body.client_id, 0), session.user.id);
+      return Response.json({ ok: true, sourceMode: "database", msg: "Cliente aggiunto all'esclusione", open_summary: giftId });
+    }
+
+    if (action === "gift_exclusion_remove") {
+      if (!can(session.user.perms, "gifts.manage")) return jsonError("Permesso omaggi mancante.", 403);
+      const giftId = parseInteger(body.gift_id ?? body.id, 0);
+      await removeManageGiftExcludedClient(tenantSlug, giftId, parseInteger(body.client_id, 0), session.user.id);
+      return Response.json({ ok: true, sourceMode: "database", msg: "Cliente rimosso dall'esclusione", open_summary: giftId });
     }
 
     // ------ AZIONI ISTANZA (gift_instance.php POST _mode=...) ------

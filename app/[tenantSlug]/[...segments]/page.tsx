@@ -184,7 +184,7 @@ export default async function TenantPage({
   searchParams,
 }: {
   params: Promise<{ tenantSlug: string; segments?: string[] }>;
-  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string; staff_id?: string; source?: string; detail_staff_id?: string; from?: string; to?: string; q?: string; cat?: string; cat_q?: string; cat_status?: string; category_filter_id?: string; low_stock?: string; supplier?: string; category?: string; code?: string; brand?: string; internal_code?: string; product_id?: string; category_search?: string; edit_id?: string; sku?: string; document_number?: string; number?: string; date?: string; include_canceled?: string; p?: string; category_id?: string; scope?: string; msg?: string; err?: string; type?: string; all_locations?: string; package_name?: string; p_pending?: string; p_list?: string; warn_locked?: string; open_summary?: string }>;
+  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string; staff_id?: string; source?: string; detail_staff_id?: string; from?: string; to?: string; q?: string; cat?: string; cat_q?: string; cat_status?: string; category_filter_id?: string; low_stock?: string; supplier?: string; category?: string; code?: string; brand?: string; internal_code?: string; product_id?: string; category_search?: string; edit_id?: string; sku?: string; document_number?: string; number?: string; date?: string; include_canceled?: string; p?: string; category_id?: string; scope?: string; msg?: string; err?: string; type?: string; all_locations?: string; package_name?: string; p_pending?: string; p_list?: string; warn_locked?: string; open_summary?: string; inst_client_id?: string; inst_gift_id?: string; inst_state?: string; inst_p?: string }>;
 }) {
   const { tenantSlug, segments } = await params;
   const query = await searchParams;
@@ -581,12 +581,25 @@ export default async function TenantPage({
     );
   }
 
-  // Vista "Campagne gift" legacy (gifts.php action=campaigns): stessa
-  // GiftsContent, che legge ?action=campaigns e mostra SOLO le campagne.
+  // Vista "Campagne gift" legacy (gifts.php action=campaigns): flash ?msg/?err
+  // dai redirect + auto-apertura del Riepilogo via ?open_summary.
   if (page === "gifts" && query.action === "campaigns") {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
-        <GiftsContent slug={tenantSlug} />
+        <GiftsContent slug={tenantSlug} initialQuery={{ action: "campaigns", msg: query.msg, err: query.err, open_summary: query.open_summary }} />
+      </ManageShell>
+    );
+  }
+
+  // Vista default "Omaggi assegnati" (gifts.php): filtri istanze e paginazione
+  // dal querystring (form GET legacy) + flash ?msg/?err dei redirect.
+  if (page === "gifts") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <GiftsContent
+          slug={tenantSlug}
+          initialQuery={{ msg: query.msg, err: query.err, inst_client_id: query.inst_client_id, inst_gift_id: query.inst_gift_id, inst_state: query.inst_state, inst_p: query.inst_p }}
+        />
       </ManageShell>
     );
   }

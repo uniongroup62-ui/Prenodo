@@ -141,15 +141,29 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
       .catch(() => ({}));
 
     if ((act === "edit" || act === "clone") && Number.isFinite(id) && id > 0) {
+      // Guardia lock strutturale legacy (gifts.php 626-642): la modifica di una
+      // campagna con dati operativi redirige alla lista con ?open_summary&err.
+      const guardPromise = act === "edit"
+        ? fetch(`/api/manage/gifts?slug=${encodeURIComponent(slug)}&action=edit_guard&id=${id}`, { headers: { "x-tenant-slug": slug } })
+            .then((r) => r.json())
+            .catch(() => ({ blocked: false }))
+        : Promise.resolve({ blocked: false });
       Promise.all([
         ctxPromise,
         fetch(`/api/manage/gifts?slug=${encodeURIComponent(slug)}&action=get&id=${id}`, {
           headers: { "x-tenant-slug": slug },
         }).then((r) => r.json()),
+        guardPromise,
       ])
-        .then(([, j]) => {
+        .then(([, j, guard]) => {
           if (!j.ok || !j.gift) {
-            setError(String(j.error ?? "Campagna non trovata."));
+            // gifts.php 629-631 / 646-648: campagna inesistente -> redirect lista.
+            window.location.href = `/${encodeURIComponent(slug)}/gifts?action=campaigns&err=${encodeURIComponent("Campagna non trovata")}`;
+            return;
+          }
+          if (act === "edit" && guard && (guard as Record<string, unknown>).blocked) {
+            const reason = String((guard as Record<string, unknown>).reason ?? "La campagna ha gia dati operativi: usa Clona campagna.");
+            window.location.href = `/${encodeURIComponent(slug)}/gifts?action=campaigns&open_summary=${id}&err=${encodeURIComponent(reason)}`;
             return;
           }
           const g = j.gift;
@@ -232,10 +246,6 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
     });
   }
 
-  function backToList() {
-    window.location.href = `/${encodeURIComponent(slug)}/gifts?action=campaigns`;
-  }
-
   const minValidFrom = useMemo(() => (action === "new" ? new Date().toISOString().slice(0, 10) : ""), [action]);
 
   async function onSubmit(event: React.FormEvent) {
@@ -314,7 +324,10 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
         setSaving(false);
         return;
       }
-      backToList();
+      // Redirect flash legacy (gifts.php 533-539): msg + apertura Riepilogo.
+      const savedId = Number(j.gift?.id ?? 0) || 0;
+      const msg = form.clone_source_id > 0 ? "Clone campagna creato" : "Campagna salvata";
+      window.location.href = `/${encodeURIComponent(slug)}/gifts?action=campaigns&msg=${encodeURIComponent(msg)}${savedId > 0 ? `&open_summary=${savedId}` : ""}`;
     } catch {
       setError("Errore nel salvataggio della campagna.");
       setSaving(false);

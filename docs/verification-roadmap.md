@@ -5044,3 +5044,63 @@ Portafoglio, dove l'alert e portato); il deep-link ?campaign_id=N /
 li linka).
 Verifica: compat testati su Next e LIVE PHP (messaggi identici) + regressioni
 complete 42/42 + 102/102 marker + Livelli 31/31 + typecheck pulito.
+
+## Omaggi — SECONDA PASSATA: LISTA + RIEPILOGO riscritti (gifts.php) — 2026-07-05
+Ri-audit su richiesta. BASELINE: motore/istanze verdi (93 test su 6 battery,
+ripatchate con installment_choice), MA la vista campagne Next era un prototipo:
+flash locali inventati, badge stato con ordine sbagliato (Completata dopo il
+toggle), date senza ora, badge 'Manuale' e description in tabella inventati,
+filtri campagne dead-code, riepilogo monco (niente regola/condizioni/esclusioni/
+livelli/scadenza), niente ?open_summary, Modifica non gated dal lock.
+RISCRITTURA COMPLETA:
+1. LIB listManageGiftPage: righe con badge stato port di campaignStatusMeta
+   (ordine legacy Completata->Sospesa->Disattivata->Programmata->Attiva),
+   uso/sedi/livelli ('Punti: X' / 'Tutti i livelli Fidelity' / '—'), validita
+   e date d/m/Y H:i in ORA LOCALE (fix TZ: i Date del driver pg resi con
+   sqlDateTimePrefix, non toISOString che scala -2h), scadenza gift ('N giorni
+   dallo sblocco'/'Nessuna scadenza automatica'), regola di sblocco verbatim
+   (5 tipi, fmt_money con migliaia col punto: 'Spesa totale >= € 1.234,50'),
+   termini (default 3 righe legacy), esclusi con meta snapshot + candidati
+   filtrati (eligibility+livelli+istanze bloccanti), stats istanze (aggregata
+   inline per evitare il ciclo import con gifts-instances), lock strutturale
+   giftUsageSummary (istanze+collegamenti+movimenti).
+2. GUARDIE toggle legacy: activation issues con items {type,name,label,context}
+   e messaggio 'Non è possibile riattivare la campagna omaggio perché ...';
+   allineati al legacy anche i target regola (solo service_qty/product_qty) e
+   il soft-delete (deleted_at -> 'eliminato' col nome reale, SKU inclusa);
+   'Campagna completata: non può essere riattivata' (con open_summary);
+   fidelity_only a Fidelity off -> resta sospesa con err verbatim; flash
+   'Campagna attivata'/'Campagna disattivata'/'Campagna eliminata'/'Errore
+   eliminazione campagna'; gli errori propagano open_summary nel JSON.
+3. ROUTE: GET action=page / edit_guard (reason 'La campagna omaggio ha gia
+   generato dati operativi (N istanze, ...): usa Clona campagna ...'); POST
+   gift_terms_update ('Condizioni gift aggiornate' + open_summary, testo
+   normalizzato, vuoto -> default), gift_exclusion_add/remove ("Cliente
+   aggiunto/rimosso dall'esclusione", guardie 'Cliente non trovato'/'Il
+   cliente non rientra nelle impostazioni attuali della campagna.'/'Il cliente
+   ha già un accumulo oppure un omaggio disponibile/riscattato per questa
+   campagna.', marker gift_progress_resets client_exclusion_start/end con
+   reason legacy, remove -> giftRecalcClient).
+4. COMPONENTE gifts-content riscritto: flash redirect ?msg/?err (msg che inizia
+   con 'errore:' -> danger, gifts.php 684), header count 'N campagne', colonna
+   Nome solo nome, dropdown gated legacy (Modifica solo senza dati operativi;
+   Attiva con window.alert(blockMsg) se bloccata; niente toggle su Completata;
+   confirm eliminazione verbatim), riepilogo COMPLETO (alert non riattivabile
+   con items, Configurazione 11 voci, Statistiche 11 righe, Regola di sblocco
+   con help, Condizioni gift form, Clienti esclusi con candidates/help/Rimuovi),
+   auto-open ?open_summary, istanze con filtri/paginazione via querystring GET
+   (come il form GET legacy) e date d/m/Y H:i, assign_manual con redirect flash
+   ?inst_client_id&msg. page.tsx: branch gifts default+campaigns con initialQuery.
+5. FORM: edit guard con redirect ?open_summary&err (gifts.php 626-642),
+   'Campagna non trovata' su id inesistente, post-save redirect flash
+   'Campagna salvata'/'Clone campagna creato' + open_summary (gifts.php 533-539).
+Verifica: battery NUOVA e2e-gifts-page 51/51 (payload page completo, stati,
+guardie toggle con openSummary, condizioni con normalizzazione/default,
+esclusioni con tutte le guardie + marker, lock strutturale/edit_guard, delete,
+ripristino) + LIVE PHP (toggle on/off/completata, condizioni update+default,
+esclusioni add/remove/guardia fidelity_only, marker resets, delete: redirect
+Location IDENTICI) + regressioni 6 battery gift 93/93 + 80/80 marker bundle +
+smoke SSR flash + typecheck/lint puliti.
+RESIDUI DELIBERATI: filtri istanze con select semplici (il combobox ricerca
+legacy e solo UI); filtro 'Tutte le sedi' non renderizzato (tenant mono-sede);
+GiftLoyaltyAttribution non portato (residuo standing).

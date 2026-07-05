@@ -19722,49 +19722,36 @@ export async function listManageGifts(slug: string): Promise<ManageGiftListRow[]
   });
 }
 
-// Reward/rule references that must resolve to a live service/product before a gift
-// campaign can be (re)activated (port of Gifts::activationContentIssues).
-async function giftActivationContentIssues(slug: string, id: number): Promise<string[]> {
-  const gift = await getManageGift(slug, id);
-  if (!gift) return [];
-  const refs: { type: "service" | "product"; refId: number; context: string }[] = [];
-  for (const item of gift.rewardItems) {
-    if (item.type === "service" && item.serviceId > 0) refs.push({ type: "service", refId: item.serviceId, context: "Premio" });
-    else if (item.type === "product" && item.productId > 0) refs.push({ type: "product", refId: item.productId, context: "Premio" });
-  }
-  if (gift.rule.targetServiceId > 0) refs.push({ type: "service", refId: gift.rule.targetServiceId, context: "Regola di sblocco" });
-  if (gift.rule.targetProductId > 0) refs.push({ type: "product", refId: gift.rule.targetProductId, context: "Regola di sblocco" });
-
-  const seen = new Set<string>();
-  const issues: string[] = [];
-  for (const ref of refs) {
-    const key = `${ref.type}:${ref.refId}:${ref.context}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const table = ref.type === "service" ? "services" : "products";
-    const typeLabel = ref.type === "service" ? "Servizio" : "Prodotto";
-    const rows = await tenantSelect<RowDataPacket>({ slug, table, columns: "id, name, is_active", where: "id = ?", params: [ref.refId], limit: 1 }).catch(() => [] as RowDataPacket[]);
-    if (!rows[0]) {
-      issues.push(`[${ref.context}] ${typeLabel} #${ref.refId} eliminato`);
-    } else if (Number(rows[0].is_active ?? 1) === 0) {
-      issues.push(`[${ref.context}] ${typeLabel} "${String(rows[0].name ?? `#${ref.refId}`)}" disattivato`);
-    }
-  }
-  return issues;
-}
-
 // Activate/deactivate a gift campaign (port of gifts.php toggle_active + Gifts::
 // setGiftActive): activating is refused while the reward/unlock references a
 // deleted/disabled service or product; a manual toggle clears auto_disabled.
 export async function toggleManageGift(slug: string, id: number, active: boolean, by: number): Promise<{ ok: true; active: boolean }> {
   if (id <= 0) throw new Error("Campagna non valida.");
-  const rows = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "id, active, deleted_at", where: "id = ?", params: [id], limit: 1 });
-  if (!rows[0]) throw new Error("Campagna omaggio non trovata.");
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "id, active, deleted_at, valid_to, eligibility", where: "id = ?", params: [id], limit: 1 });
+  if (!rows[0]) throw new Error("Campagna non trovata");
   if (rows[0].deleted_at) throw new Error("Campagna omaggio eliminata.");
   if (active) {
-    const issues = await giftActivationContentIssues(slug, id);
-    if (issues.length > 0) {
-      throw new Error(`Non è possibile riattivare la campagna omaggio: contiene servizi o prodotti eliminati/disattivati. ${issues.join("; ")}.`);
+    // Guardie legacy (gifts.php toggle_active 363-396): blocchi contenuti con
+    // messaggio composto + open_summary, campagna completata, Fidelity off su
+    // fidelity_only -> resta sospesa (active=0 + auto_disabled).
+    const issues = await giftActivationIssuesLegacy(slug, id);
+    if (issues.hasBlockers) {
+      const e = new Error(issues.message) as Error & { openSummary?: number };
+      e.openSummary = id;
+      throw e;
+    }
+    const validToTs = rows[0].valid_to ? new Date(toIso(rows[0].valid_to)).getTime() : NaN;
+    if (Number.isFinite(validToTs) && validToTs < Date.now()) {
+      const e = new Error("Campagna completata: non può essere riattivata") as Error & { openSummary?: number };
+      e.openSummary = id;
+      throw e;
+    }
+    if (String(rows[0].eligibility ?? "").toLowerCase() === "fidelity_only") {
+      const biz = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_enabled", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+      if (Number(biz[0]?.fidelity_enabled ?? 0) !== 1) {
+        await tenantUpdate({ slug, table: "gifts", id, values: { active: 0, auto_disabled_by_fidelity: 1, updated_by: by > 0 ? by : null, updated_at: new Date() } }).catch(() => 0);
+        throw new Error("Impossibile attivare la campagna: la Fidelity è disattivata. La campagna resta sospesa.");
+      }
     }
   }
   const wasActive = Number(rows[0].active ?? 0) === 1;
@@ -19833,6 +19820,410 @@ export async function deleteManageGift(slug: string, id: number, by: number): Pr
     await tenantUpdate({ slug, table: "gifts", id, values: { deleted_at: new Date(), deleted_by: by > 0 ? by : null, active: 0 } }).catch(() => 0);
     return { ok: true, mode: "soft" };
   }
+}
+
+// ==========================================================================
+// Gifts LIST page (gifts.php action=campaigns): righe con stato legacy,
+// riepilogo per campagna (regola/condizioni/esclusioni), guardie toggle e
+// azioni condizioni/esclusioni del modal Riepilogo.
+// ==========================================================================
+
+function giftPageDmyHm(value: unknown): string {
+  // sqlDateTimePrefix rende i Date del driver pg in ORA LOCALE (come il d/m/Y
+  // H:i del legacy sul valore naive); toIso li sposterebbe in UTC (-2h).
+  const s = value ? sqlDateTimePrefix(value).trim() : "";
+  if (!/^\d{4}-\d{2}-\d{2}/.test(s)) return "—";
+  const hm = s.length >= 16 ? s.slice(11, 16) : "00:00";
+  return `${s.slice(8, 10)}/${s.slice(5, 7)}/${s.slice(0, 4)} ${hm}`;
+}
+
+// Gifts::giftDefaultTermsLines.
+const GIFT_DEFAULT_TERMS = [
+  "Voucher utilizzabile una sola volta.",
+  "Non convertibile in denaro e non rimborsabile.",
+  "Presentare il barcode o il codice voucher in cassa.",
+].join("\n");
+
+// Gifts::normalizeGiftTermsText: righe trimmate senza vuote, null se vuoto, cap 12000.
+function normalizeGiftTermsText(raw: unknown): string | null {
+  const text = String(raw ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const lines = text.split(/\n+/).map((l) => l.trim()).filter((l) => l !== "");
+  let out = lines.join("\n").trim();
+  if (out === "") return null;
+  if (out.length > 12000) out = out.slice(0, 12000);
+  return out;
+}
+
+// clientSnapshotMatchesGiftEligibility: all_clients sempre; fidelity_only solo
+// aderenti (e livello Punti combaciante quando configurato).
+function giftSnapshotMatchesEligibility(snapshot: { adhering: boolean; pointsLevel: string }, eligibility: string, eligiblePts: string[]): boolean {
+  if (eligibility !== "fidelity_only") return true;
+  if (!snapshot.adhering) return false;
+  if (eligiblePts.length === 0) return true;
+  return snapshot.pointsLevel !== "" && eligiblePts.includes(snapshot.pointsLevel);
+}
+
+// clientHasBlockingGiftInstanceForExclusion: accumulo/disponibile/riscattato.
+async function giftClientHasBlockingInstance(slug: string, giftId: number, clientId: number): Promise<boolean> {
+  if (giftId <= 0 || clientId <= 0) return false;
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "gift_instances", columns: "COUNT(*) AS c", where: "gift_id = ? AND client_id = ? AND state IN ('accumulo','disponibile','riscattato')", params: [giftId, clientId] }).catch(() => [] as RowDataPacket[]);
+  return Number(rows[0]?.c ?? 0) > 0;
+}
+
+function giftEligiblePtsFromRow(row: RowDataPacket): string[] {
+  return parsePromoStringList(row.eligible_levels_points).map((v) => String(v).trim().toLowerCase()).filter((v) => v !== "");
+}
+
+// Marker per-cliente in gift_progress_resets (persistProgressResetMarker legacy
+// per client_exclusion_start/end).
+async function giftPersistClientResetMarker(slug: string, giftId: number, clientId: number, sourceState: string, reason: string, by: number): Promise<void> {
+  const table = await tenantTable(slug, "gift_progress_resets").catch(() => null);
+  if (!table) return;
+  const now = new Date();
+  await tenantInsert(table, {
+    gift_id: giftId,
+    client_id: clientId,
+    source_instance_id: null,
+    source_state: sourceState.slice(0, 40),
+    reset_at: now,
+    reason: reason.slice(0, 255) || null,
+    created_by: by > 0 ? by : null,
+    created_at: now,
+  }).catch(() => 0);
+}
+
+// Gifts::activationContentIssues con items/message legacy (context Premio /
+// Regola di sblocco, nomi con SKU, 'è stato eliminato/disattivato').
+export async function giftActivationIssuesLegacy(slug: string, id: number): Promise<{ hasBlockers: boolean; message: string; items: { type: string; name: string; label: string; context: string }[] }> {
+  const gift = await getManageGift(slug, id);
+  if (!gift) return { hasBlockers: false, message: "", items: [] };
+  const refs: { type: "service" | "product"; refId: number; context: string }[] = [];
+  for (const item of gift.rewardItems) {
+    if (item.type === "service" && item.serviceId > 0) refs.push({ type: "service", refId: item.serviceId, context: "Premio" });
+    else if (item.type === "product" && item.productId > 0) refs.push({ type: "product", refId: item.productId, context: "Premio" });
+  }
+  // Come il legacy: i target regola contano solo per service_qty / product_qty.
+  const ruleType = String(gift.rule.ruleType ?? "").trim().toLowerCase();
+  if (ruleType === "service_qty" && gift.rule.targetServiceId > 0) refs.push({ type: "service", refId: gift.rule.targetServiceId, context: "Regola di sblocco" });
+  if (ruleType === "product_qty" && gift.rule.targetProductId > 0) refs.push({ type: "product", refId: gift.rule.targetProductId, context: "Regola di sblocco" });
+
+  const seen = new Set<string>();
+  const items: { type: string; name: string; label: string; context: string }[] = [];
+  for (const ref of refs) {
+    const key = `${ref.type}:${ref.refId}:${ref.context.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const table = ref.type === "service" ? "services" : "products";
+    const typeLabel = ref.type === "service" ? "Servizio" : "Prodotto";
+    const physName = (await tenantTable(slug, table)).name;
+    const hasSku = ref.type === "product" && (await columnExists(physName, "sku"));
+    const hasDeletedAt = await columnExists(physName, "deleted_at");
+    const rows = await tenantSelect<RowDataPacket>({ slug, table, columns: `id, name, is_active${hasSku ? ", sku" : ""}${hasDeletedAt ? ", deleted_at" : ""}`, where: "id = ?", params: [ref.refId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    if (!rows[0]) {
+      items.push({ type: typeLabel, name: `${typeLabel} #${ref.refId}`, label: "eliminato", context: ref.context });
+      continue;
+    }
+    let name = String(rows[0].name ?? "").trim() || `${typeLabel} #${ref.refId}`;
+    const sku = String(rows[0].sku ?? "").trim();
+    if (ref.type === "product" && sku !== "" && !name.includes(`(${sku})`)) name += ` (${sku})`;
+    // Soft-delete: 'eliminato' col nome reale (Gifts.php 3661-3671).
+    if (hasDeletedAt && rows[0].deleted_at) {
+      items.push({ type: typeLabel, name, label: "eliminato", context: ref.context });
+      continue;
+    }
+    if (Number(rows[0].is_active ?? 1) !== 1) items.push({ type: typeLabel, name, label: "disattivato", context: ref.context });
+  }
+
+  if (items.length === 0) return { hasBlockers: false, message: "", items: [] };
+  const parts = items.map((it) => `${it.type} "${it.name}"${it.context !== "" ? ` (${it.context})` : ""} è stato ${it.label}`);
+  return {
+    hasBlockers: true,
+    items,
+    message: `Non è possibile riattivare la campagna omaggio perché ${parts.join("; ")}. Attiva o ripristina gli elementi indicati per continuare.`,
+  };
+}
+
+// Gifts::giftUsageSummary / giftStructureEditBlockReason.
+export async function giftStructureBlockReason(slug: string, giftId: number): Promise<string> {
+  const usage = await giftUsageSummaryCounts(slug, giftId);
+  if (usage.operationalTotal <= 0) return "";
+  const parts: string[] = [];
+  if (usage.instances > 0) parts.push(`${usage.instances} istanze`);
+  if (usage.appointmentLinks > 0) parts.push(`${usage.appointmentLinks} collegamenti a prenotazioni`);
+  if (usage.transactions > 0) parts.push(`${usage.transactions} movimenti`);
+  const detail = parts.length > 0 ? ` (${parts.join(", ")})` : "";
+  return `La campagna omaggio ha gia generato dati operativi${detail}: usa Clona campagna per modificarne regole, premio o validita.`;
+}
+
+async function giftUsageSummaryCounts(slug: string, giftId: number): Promise<{ instances: number; appointmentLinks: number; transactions: number; operationalTotal: number }> {
+  const out = { instances: 0, appointmentLinks: 0, transactions: 0, operationalTotal: 0 };
+  if (giftId <= 0) return out;
+  const inst = await tenantSelect<RowDataPacket>({ slug, table: "gift_instances", columns: "COUNT(*) AS c", where: "gift_id = ?", params: [giftId] }).catch(() => [] as RowDataPacket[]);
+  out.instances = Number(inst[0]?.c ?? 0);
+  const instT = await tenantTable(slug, "gift_instances").catch(() => null);
+  const agiT = await tenantTable(slug, "appointment_gift_items").catch(() => null);
+  if (agiT && instT) {
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT COUNT(*) AS c FROM ${quoteIdentifier(agiT.name)} agi JOIN ${quoteIdentifier(instT.name)} gi ON gi.id = agi.instance_id${instT.mode === "shared" ? " AND gi.tenant_id = agi.tenant_id" : ""} WHERE ${agiT.mode === "shared" ? "agi.tenant_id = ? AND " : ""}gi.gift_id = ?`,
+      [...(agiT.mode === "shared" ? [agiT.tenantId ?? 0] : []), giftId],
+    ).catch(() => [] as RowDataPacket[]);
+    out.appointmentLinks = Number(rows[0]?.c ?? 0);
+  }
+  const gtT = await tenantTable(slug, "gift_transactions").catch(() => null);
+  if (gtT && instT) {
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT COUNT(*) AS c FROM ${quoteIdentifier(gtT.name)} gt JOIN ${quoteIdentifier(instT.name)} gi ON gi.id = gt.instance_id${instT.mode === "shared" ? " AND gi.tenant_id = gt.tenant_id" : ""} WHERE ${gtT.mode === "shared" ? "gt.tenant_id = ? AND " : ""}gi.gift_id = ?`,
+      [...(gtT.mode === "shared" ? [gtT.tenantId ?? 0] : []), giftId],
+    ).catch(() => [] as RowDataPacket[]);
+    out.transactions = Number(rows[0]?.c ?? 0);
+  }
+  out.operationalTotal = out.instances + out.appointmentLinks + out.transactions;
+  return out;
+}
+
+// Gifts::unlockRuleSummary per la regola singola del form Next.
+function giftUnlockRuleLabel(rule: { ruleType: string; targetServiceId: number; targetProductId: number; threshold: number }, svcName: string, prdName: string): string {
+  const cmp = ">=";
+  const thr = Math.max(1, Math.round(rule.threshold));
+  if (rule.ruleType === "service_qty") {
+    const name = svcName !== "" ? svcName : rule.targetServiceId > 0 ? `#${rule.targetServiceId}` : "";
+    return `Quantità servizio${name !== "" ? ` (${name})` : ""} ${cmp} ${thr}`;
+  }
+  if (rule.ruleType === "product_qty") {
+    const name = prdName !== "" ? prdName : rule.targetProductId > 0 ? `#${rule.targetProductId}` : "";
+    return `Quantità prodotto${name !== "" ? ` (${name})` : ""} ${cmp} ${thr}`;
+  }
+  if (rule.ruleType === "appointments_count") return `Numero appuntamenti ${cmp} ${thr}`;
+  if (rule.ruleType === "total_spend") {
+    const v = Math.max(0, rule.threshold);
+    const [int, dec] = v.toFixed(2).split(".");
+    return `Spesa totale ${cmp} € ${int.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${dec}`;
+  }
+  if (rule.ruleType === "first_visit") return "Prima visita";
+  return "";
+}
+
+export type GiftListPageRow = ManageGiftListRow & {
+  usoLabel: string;
+  locationLabel: string;
+  status: { code: string; label: string; badge: string; isCompleted: boolean };
+  canDeactivate: boolean;
+  canToggle: boolean;
+  canEditStructure: boolean;
+  activationBlockMsg: string;
+  activationIssueItems: { type: string; name: string; label: string; context: string }[];
+  levelsLabel: string;
+  validityLabel: string;
+  expiryLabel: string;
+  createdLabel: string;
+  updatedLabel: string;
+  ruleSummary: string;
+  termsEnabled: boolean;
+  termsText: string;
+  excludedCount: number;
+  excludedClients: { id: number; name: string; meta: string }[];
+  exclusionCandidates: { id: number; name: string }[];
+  stats: { clientsTotal: number; instancesTotal: number; accumulo: number; disponibile: number; riscattato: number; scaduto: number; annullato: number; lastUnlock: string; lastRedeem: string; lastCancel: string; lastActivity: string };
+};
+
+// Righe lista + payload modal Riepilogo (gifts.php action=campaigns).
+export async function listManageGiftPage(slug: string): Promise<{ rows: GiftListPageRow[]; fidelityEnabled: boolean }> {
+  const biz = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_enabled", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const fidEnabled = Number(biz[0]?.fidelity_enabled ?? 0) === 1;
+
+  const base = await listManageGifts(slug);
+  const raw = await tenantSelect<RowDataPacket>({ slug, table: "gifts", where: "deleted_at IS NULL", orderBy: "id DESC" }).catch(() => [] as RowDataPacket[]);
+  const rawById = new Map(raw.map((r) => [Number(r.id ?? 0), r]));
+
+  const locRows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "id, name", orderBy: "id ASC" }).catch(() => [] as RowDataPacket[]);
+  const locationNames = new Map(locRows.map((r) => [Number(r.id ?? 0), String(r.name ?? `Sede #${Number(r.id ?? 0)}`)]));
+
+  const levelsCfg = await getFidelityLevelsSettings(slug).catch(() => ({ enabled: false, pointsEnabled: false, levels: [] as FidelityLevel[] }));
+  const pointLabels = new Map(levelsCfg.levels.map((l) => [l.key.toLowerCase(), l.name || l.key]));
+
+  const snapshots = await promoClientSnapshots(slug);
+  const nowTs = Date.now();
+
+  const out: GiftListPageRow[] = [];
+  for (const rowBase of base) {
+    const row = rawById.get(rowBase.id);
+    if (!row) continue;
+    const suspendedByFidelity = !fidEnabled && rowBase.fidelityOnly && Number(row.auto_disabled_by_fidelity ?? 0) === 1;
+
+    // Gifts::campaignStatusMeta — ordine legacy: Completata PRIMA di tutto.
+    const validFromTs = row.valid_from ? new Date(toIso(row.valid_from)).getTime() : NaN;
+    const validToTs = row.valid_to ? new Date(toIso(row.valid_to)).getTime() : NaN;
+    let status = { code: "active", label: "Attiva", badge: "success", isCompleted: false };
+    if (Number.isFinite(validToTs) && validToTs < nowTs) status = { code: "completed", label: "Completata", badge: "dark", isCompleted: true };
+    else if (suspendedByFidelity) status = { code: "suspended", label: "Sospesa", badge: "warning", isCompleted: false };
+    else if (Number(row.active ?? 0) !== 1) status = { code: "inactive", label: "Disattivata", badge: "secondary", isCompleted: false };
+    else if (Number.isFinite(validFromTs) && validFromTs > nowTs) status = { code: "scheduled", label: "Programmata", badge: "info", isCompleted: false };
+
+    const canDeactivate = Number(row.active ?? 0) === 1 || status.code === "suspended";
+    const canToggle = !status.isCompleted;
+    const usage = await giftUsageSummaryCounts(slug, rowBase.id);
+    const canEditStructure = usage.operationalTotal <= 0;
+
+    let activationBlockMsg = "";
+    let activationIssueItems: GiftListPageRow["activationIssueItems"] = [];
+    if (!canDeactivate || ["inactive", "completed"].includes(status.code)) {
+      const issues = await giftActivationIssuesLegacy(slug, rowBase.id).catch(() => ({ hasBlockers: false, message: "", items: [] }));
+      if (issues.hasBlockers) {
+        activationBlockMsg = issues.message;
+        activationIssueItems = issues.items;
+      }
+    }
+
+    // gifts_page_levels_summary.
+    let levelsLabel = "—";
+    if (rowBase.fidelityOnly) {
+      const pts = giftEligiblePtsFromRow(row);
+      levelsLabel = pts.length > 0 ? `Punti: ${pts.map((k) => pointLabels.get(k) ?? k).join(", ")}` : "Tutti i livelli Fidelity";
+    }
+
+    const gift = await getManageGift(slug, rowBase.id);
+    const svcName = gift && gift.rule.targetServiceId > 0
+      ? String((await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "name", where: "id = ?", params: [gift.rule.targetServiceId], limit: 1 }).catch(() => [] as RowDataPacket[]))[0]?.name ?? "")
+      : "";
+    const prdName = gift && gift.rule.targetProductId > 0
+      ? String((await tenantSelect<RowDataPacket>({ slug, table: "products", columns: "name", where: "id = ?", params: [gift.rule.targetProductId], limit: 1 }).catch(() => [] as RowDataPacket[]))[0]?.name ?? "")
+      : "";
+    const ruleSummary = gift ? giftUnlockRuleLabel({ ...gift.rule, threshold: Number(gift.rule.threshold) || 0 }, svcName, prdName) || "—" : "—";
+
+    const termsEnabled = Number(row.terms_enabled ?? 1) === 1;
+    let termsText = String(row.terms_text ?? "").trim();
+    if (termsText === "") termsText = GIFT_DEFAULT_TERMS;
+
+    const eligibility = rowBase.fidelityOnly ? "fidelity_only" : "all_clients";
+    const eligiblePts = giftEligiblePtsFromRow(row);
+    const excludedIds = parsePromoStringList(row.excluded_client_ids).map((v) => Math.trunc(Number(v)) || 0).filter((n) => n > 0);
+    const snapById = new Map(snapshots.map((s) => [s.id, s]));
+    const excludedClients = excludedIds
+      .map((cid) => snapById.get(cid) ?? { id: cid, fullName: `Cliente #${cid}`, adhering: false, pointsLevel: "" })
+      .sort((a, b) => a.fullName.toLowerCase().localeCompare(b.fullName.toLowerCase()) || a.id - b.id)
+      .map((s) => ({ id: s.id, name: s.fullName, meta: promoSnapshotMeta(s, pointLabels) }));
+    const exclusionCandidates: { id: number; name: string }[] = [];
+    for (const snap of snapshots) {
+      if (excludedIds.includes(snap.id)) continue;
+      if (!giftSnapshotMatchesEligibility(snap, eligibility, eligiblePts)) continue;
+      if (await giftClientHasBlockingInstance(slug, rowBase.id, snap.id)) continue;
+      exclusionCandidates.push({ id: snap.id, name: snap.fullName });
+    }
+
+    // Stats istanze (stessa aggregata di giftCampaignSummaryStats — inline per
+    // evitare il ciclo di import con gifts-instances).
+    const instT = await tenantTable(slug, "gift_instances");
+    const stRows = await dbQuery<RowDataPacket[]>(
+      `SELECT COUNT(*) total,
+              COUNT(DISTINCT client_id) clients,
+              COUNT(*) FILTER (WHERE LOWER(COALESCE(state,'')) = 'accumulo') accumulo,
+              COUNT(*) FILTER (WHERE LOWER(COALESCE(state,'')) = 'disponibile') disponibile,
+              COUNT(*) FILTER (WHERE LOWER(COALESCE(state,'')) = 'riscattato') riscattato,
+              COUNT(*) FILTER (WHERE LOWER(COALESCE(state,'')) = 'scaduto') scaduto,
+              COUNT(*) FILTER (WHERE LOWER(COALESCE(state,'')) = 'annullato') annullato,
+              MAX(unlocked_at) last_unlock,
+              MAX(redeemed_at) last_redeem,
+              MAX(cancelled_at) last_cancel,
+              GREATEST(COALESCE(MAX(created_at), '1970-01-01'), COALESCE(MAX(updated_at), '1970-01-01')) last_activity
+         FROM ${quoteIdentifier(instT.name)}
+        WHERE tenant_id = ? AND gift_id = ?`,
+      [instT.tenantId ?? 0, rowBase.id],
+    ).catch(() => [] as RowDataPacket[]);
+    const st = (stRows[0] ?? {}) as Record<string, unknown>;
+    const stDt = (v: unknown): string => {
+      const s = v ? sqlDateTimePrefix(v) : "";
+      return s && !s.startsWith("1970-") ? s : "";
+    };
+
+    out.push({
+      ...rowBase,
+      usoLabel: rowBase.fidelityOnly ? "Solo clienti con Fidelity" : "Tutti i clienti",
+      locationLabel: rowBase.locationIds.length > 0 ? rowBase.locationIds.map((idn) => locationNames.get(idn) ?? `Sede #${idn}`).join(", ") : "Tutte le sedi",
+      status,
+      canDeactivate,
+      canToggle,
+      canEditStructure,
+      activationBlockMsg,
+      activationIssueItems,
+      levelsLabel,
+      validityLabel: `${giftPageDmyHm(row.valid_from)} → ${giftPageDmyHm(row.valid_to)}`,
+      expiryLabel: Number(row.expires_after_days ?? 0) > 0 ? `${Math.trunc(Number(row.expires_after_days))} giorni dallo sblocco` : "Nessuna scadenza automatica",
+      createdLabel: giftPageDmyHm(row.created_at),
+      updatedLabel: giftPageDmyHm(row.updated_at),
+      ruleSummary,
+      termsEnabled,
+      termsText,
+      excludedCount: excludedIds.length,
+      excludedClients,
+      exclusionCandidates,
+      stats: {
+        clientsTotal: Number(st.clients ?? 0),
+        instancesTotal: Number(st.total ?? 0),
+        accumulo: Number(st.accumulo ?? 0),
+        disponibile: Number(st.disponibile ?? 0),
+        riscattato: Number(st.riscattato ?? 0),
+        scaduto: Number(st.scaduto ?? 0),
+        annullato: Number(st.annullato ?? 0),
+        lastUnlock: giftPageDmyHm(stDt(st.last_unlock)),
+        lastRedeem: giftPageDmyHm(stDt(st.last_redeem)),
+        lastCancel: giftPageDmyHm(stDt(st.last_cancel)),
+        lastActivity: giftPageDmyHm(stDt(st.last_activity)),
+      },
+    });
+  }
+
+  return { rows: out, fidelityEnabled: fidEnabled };
+}
+
+// Port di Gifts::updateGiftTerms (guardie/normalizzazione/default verbatim).
+export async function updateManageGiftTerms(slug: string, giftId: number, enabled: boolean, termsText: string, by: number): Promise<void> {
+  if (giftId <= 0) throw new Error("Campagna omaggio non valida");
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "id, deleted_at", where: "id = ?", params: [giftId], limit: 1 });
+  if (!rows[0]) throw new Error("Campagna omaggio non trovata");
+  if (rows[0].deleted_at) throw new Error("Campagna omaggio eliminata");
+  let text = normalizeGiftTermsText(termsText);
+  if (text === null) text = GIFT_DEFAULT_TERMS;
+  await tenantUpdate({ slug, table: "gifts", id: giftId, values: { terms_enabled: enabled ? 1 : 0, terms_text: text, updated_by: by > 0 ? by : null, updated_at: new Date() } });
+}
+
+// Port di Gifts::addGiftExcludedClient (guardie verbatim + marker reset).
+export async function addManageGiftExcludedClient(slug: string, giftId: number, clientId: number, by: number): Promise<void> {
+  if (giftId <= 0 || clientId <= 0) throw new Error("Dati non validi");
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "gifts", where: "id = ?", params: [giftId], limit: 1 });
+  if (!rows[0]) throw new Error("Campagna omaggio non trovata");
+  if (rows[0].deleted_at) throw new Error("Campagna omaggio eliminata");
+  const clientRows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id", where: "id = ?", params: [clientId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  if (!clientRows[0]) throw new Error("Cliente non trovato");
+
+  const eligibility = String(rows[0].eligibility ?? "all_clients").trim().toLowerCase() === "fidelity_only" ? "fidelity_only" : "all_clients";
+  const eligiblePts = giftEligiblePtsFromRow(rows[0]);
+  const snapshots = await promoClientSnapshots(slug, [clientId]);
+  const snapshot = snapshots[0] ?? { id: clientId, fullName: `Cliente #${clientId}`, adhering: false, pointsLevel: "" };
+  if (!giftSnapshotMatchesEligibility(snapshot, eligibility, eligiblePts)) {
+    throw new Error("Il cliente non rientra nelle impostazioni attuali della campagna.");
+  }
+  if (await giftClientHasBlockingInstance(slug, giftId, clientId)) {
+    throw new Error("Il cliente ha già un accumulo oppure un omaggio disponibile/riscattato per questa campagna.");
+  }
+
+  const excludedIds = parsePromoStringList(rows[0].excluded_client_ids).map((v) => Math.trunc(Number(v)) || 0).filter((n) => n > 0);
+  if (excludedIds.includes(clientId)) return;
+  excludedIds.push(clientId);
+  await tenantUpdate({ slug, table: "gifts", id: giftId, values: { excluded_client_ids: JSON.stringify([...new Set(excludedIds)]), updated_by: by > 0 ? by : null, updated_at: new Date() } });
+  await giftPersistClientResetMarker(slug, giftId, clientId, "client_exclusion_start", "Cliente escluso dalla campagna omaggio", by).catch(() => undefined);
+}
+
+// Port di Gifts::removeGiftExcludedClient (+ ricalcolo cliente come il legacy).
+export async function removeManageGiftExcludedClient(slug: string, giftId: number, clientId: number, by: number): Promise<void> {
+  if (giftId <= 0 || clientId <= 0) throw new Error("Dati non validi");
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "gifts", where: "id = ?", params: [giftId], limit: 1 });
+  if (!rows[0]) throw new Error("Campagna omaggio non trovata");
+  const excludedIds = parsePromoStringList(rows[0].excluded_client_ids).map((v) => Math.trunc(Number(v)) || 0).filter((n) => n > 0);
+  if (!excludedIds.includes(clientId)) return;
+  const next = excludedIds.filter((idn) => idn !== clientId);
+  await tenantUpdate({ slug, table: "gifts", id: giftId, values: { excluded_client_ids: next.length > 0 ? JSON.stringify(next) : null, updated_by: by > 0 ? by : null, updated_at: new Date() } });
+  await giftPersistClientResetMarker(slug, giftId, clientId, "client_exclusion_end", "Cliente riammesso alla campagna omaggio", by).catch(() => undefined);
+  await giftRecalcClient(slug, clientId, giftId, true).catch(() => undefined);
 }
 
 // ---------------------------------------------------------------------------
