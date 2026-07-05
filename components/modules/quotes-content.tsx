@@ -1,39 +1,46 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-// Faithful port of the PHP quotes list page (app/pages/quotes.php), fed by the
-// existing DB-backed /api/manage/quotes. Reproduces the original Bootstrap
-// markup (bs-page-header, filter card, list table, empty state) verbatim.
+// Port fedele della LISTA preventivi (app/pages/quotes.php action=list):
+// filtri server-side Cliente (combobox ricercabile) / Stato / Data / Numero
+// (+ "Tutte le sedi" multi-sede), tabella Data/Numero/Cliente/Sede/Stato/
+// Totale/Azioni con stato EFFETTIVO (auto-expire + paid-sync lato server),
+// Elimina solo per le bozze, empty state e flash ?msg/?err.
 
-type QuoteLine = {
-  id: number;
-  type: string;
-  refId: number;
-  name: string;
-  quantity: number;
-  unitPrice: number;
-  total: number;
+type QuotesQuery = {
+  client_id?: string;
+  status?: string;
+  date?: string;
+  number?: string;
+  all_locations?: string;
+  msg?: string;
+  err?: string;
 };
 
-type Quote = {
+type ListRow = {
   id: number;
-  code: string;
-  clientId: number;
-  clientName: string;
-  lines: QuoteLine[];
-  subtotal: number;
-  discount: number;
+  date: string;
+  number: string;
+  client: string;
+  location: string;
+  statusKey: string;
+  statusLabel: string;
+  badge: string;
   total: number;
-  status: string;
-  publicToken?: string;
-  expiresAt?: string;
-  acceptedAt?: string;
-  convertedSaleId?: number;
-  createdAt?: string;
+  canDelete: boolean;
 };
 
-// PHP filter dropdown options (label + value), reproduced verbatim.
+type ListPayload = {
+  ok?: boolean;
+  rows?: ListRow[];
+  hasAnyQuotes?: boolean;
+  clientItems?: Array<{ id: string; label: string }>;
+  multiLocation?: boolean;
+  canSettings?: boolean;
+};
+
+// $allowedStatus (ordine legacy del select Stato).
 const STATUS_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "draft", label: "Bozza" },
   { value: "sent", label: "Inviato" },
@@ -44,114 +51,189 @@ const STATUS_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "canceled", label: "Annullato" },
 ];
 
-// Map of API/PHP status -> { label, Bootstrap badge class } used in the table.
-const STATUS_BADGES: Record<string, { label: string; cls: string }> = {
-  draft: { label: "Bozza", cls: "text-bg-secondary" },
-  sent: { label: "Inviato", cls: "text-bg-info" },
-  expired: { label: "Scaduto", cls: "text-bg-warning" },
-  accepted: { label: "Accettato", cls: "text-bg-success" },
-  converted: { label: "Pagato", cls: "text-bg-success" },
-  paid: { label: "Pagato", cls: "text-bg-success" },
-  rejected: { label: "Rifiutato", cls: "text-bg-danger" },
-  canceled: { label: "Annullato", cls: "text-bg-dark" },
-};
-
 function tenantSlug(): string {
   if (typeof window === "undefined") return "";
   return window.location.pathname.split("/")[1] || "";
 }
 
-function fmtDate(iso?: string): string {
-  if (!iso) return "—";
-  const d = iso.slice(0, 10);
-  const [y, m, day] = d.split("-");
-  return day && m && y ? `${day}/${m}/${y}` : "—";
+// $fmtMoney: number_format(2, ',', '.') — port manuale (toLocaleString it-IT
+// non raggruppa 1000-9999).
+function fmtMoney(v: number): string {
+  const n = Number(v) || 0;
+  const [int, dec] = Math.abs(n).toFixed(2).split(".");
+  return `${n < 0 ? "-" : ""}${int.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${dec}`;
 }
 
-function fmtEuro(n: number): string {
-  return `€ ${Number(n || 0).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+// $fmtDate: d/m/Y, '—' se vuota.
+function fmtDate(d: string): string {
+  const s = String(d ?? "").trim();
+  if (s === "") return "—";
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : s;
 }
 
-function statusBadge(status: string): { label: string; cls: string } {
-  return STATUS_BADGES[status] ?? { label: status || "—", cls: "text-bg-secondary" };
+// norm() di quotes.js: lowercase + rimozione accenti.
+function normSearch(s: string): string {
+  return String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
 }
 
-export function QuotesContent({ slug: slugProp }: { slug?: string } = {}) {
+// Combobox filtro Cliente (markup app-combobox + comportamento quotes.js:
+// dropdown-item, ricerca normalizzata, "Nessun risultato").
+function ClientFilterCombobox({
+  items,
+  value,
+  onChange,
+}: {
+  items: Array<{ id: string; label: string }>;
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    function onDoc(e: MouseEvent) {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+  const data = [{ id: "0", label: "Tutti" }, ...items];
+  const q = normSearch(search);
+  const shown = data.filter((it) => !q || normSearch(it.label).includes(q));
+  const selected = data.find((it) => it.id === value);
+  const hasSelection = value !== "" && value !== "0" && selected;
+  return (
+    <div className={`app-combobox dropdown ${open ? "show" : ""}`} id="clientFilterBox" ref={boxRef}>
+      <button
+        className="btn btn-outline-secondary dropdown-toggle w-100 app-combobox-toggle"
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className={`app-combobox-text ${hasSelection ? "" : "d-none"}`}>{hasSelection ? selected?.label : ""}</span>
+        <span className={`text-muted app-combobox-placeholder ${hasSelection ? "d-none" : ""}`}>Tutti</span>
+      </button>
+      <div className={`dropdown-menu p-2 ${open ? "show" : ""}`}>
+        <input
+          type="text"
+          className="form-control form-control-sm app-combobox-search"
+          placeholder="Cerca…"
+          autoComplete="off"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <div className="app-combobox-list mt-2" style={{ maxHeight: "14rem", overflowY: "auto" }}>
+          {shown.length === 0 ? (
+            <div className="text-muted small px-2 py-1">Nessun risultato</div>
+          ) : (
+            shown.map((it) => (
+              <button
+                key={it.id}
+                type="button"
+                className="dropdown-item d-flex justify-content-between align-items-center"
+                onClick={() => {
+                  onChange(it.id);
+                  setSearch("");
+                  setOpen(false);
+                }}
+              >
+                {it.label}
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+      <input type="hidden" name="client_id" value={value} readOnly />
+    </div>
+  );
+}
+
+export function QuotesContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: QuotesQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
-  const [quotes, setQuotes] = useState<Quote[]>([]);
+
+  // Filtri applicati (dalla querystring, come il form GET legacy).
+  const [applied] = useState(() => ({
+    clientId: String(initialQuery?.client_id ?? "0") || "0",
+    status: String(initialQuery?.status ?? ""),
+    date: String(initialQuery?.date ?? ""),
+    number: String(initialQuery?.number ?? ""),
+    allLocations: ["1", "true", "on", "yes", "all"].includes(String(initialQuery?.all_locations ?? "").toLowerCase()),
+  }));
+
+  const [data, setData] = useState<ListPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(0);
 
-  // Filter form state (legacy: GET form with client_id / status / date / number).
-  const [clientId, setClientId] = useState("0");
-  const [status, setStatus] = useState("");
-  const [date, setDate] = useState("");
-  const [number, setNumber] = useState("");
-  const [applied, setApplied] = useState({ clientId: "0", status: "", date: "", number: "" });
+  // Stato del form filtri (GET come il legacy: il submit naviga con i parametri).
+  const [clientId, setClientId] = useState(applied.clientId);
+  const [status, setStatus] = useState(applied.status);
+  const [date, setDate] = useState(applied.date);
+  const [number, setNumber] = useState(applied.number);
+  const [allLocations, setAllLocations] = useState(applied.allLocations);
 
-  const load = useCallback(() => {
-    setLoading(true);
-    fetch(`/api/manage/quotes?slug=${encodeURIComponent(slug)}`, {
-      headers: { "x-tenant-slug": slug },
-    })
-      .then((r) => r.json())
-      .then((j) => setQuotes(Array.isArray(j.quotes) ? j.quotes : []))
-      .catch(() => setQuotes([]))
-      .finally(() => setLoading(false));
-  }, [slug]);
+  // Flash legacy (View::alert): ?msg= success + ?err= danger dal redirect.
+  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
 
   useEffect(() => {
-    load();
-  }, [load]);
+    const params = new URLSearchParams({ slug, action: "list" });
+    if (applied.clientId !== "0") params.set("client_id", applied.clientId);
+    if (applied.status !== "") params.set("status", applied.status);
+    if (applied.date !== "") params.set("date", applied.date);
+    if (applied.number !== "") params.set("number", applied.number);
+    if (applied.allLocations) params.set("all_locations", "1");
+    fetch(`/api/manage/quotes?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
+      .then((r) => r.json())
+      .then((j: ListPayload) => setData(j))
+      .catch(() => setData({ rows: [], hasAnyQuotes: false, clientItems: [] }))
+      .finally(() => setLoading(false));
+  }, [slug, applied]);
 
-  // Distinct client list for the filter combobox, derived from loaded quotes.
-  const clientItems = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const q of quotes) {
-      if (q.clientId > 0) map.set(String(q.clientId), q.clientName || "Cliente");
-    }
-    return Array.from(map, ([id, label]) => ({ id, label }));
-  }, [quotes]);
-
-  // Client-side filtering (the API exposes no filter params).
-  const filtered = useMemo(() => {
-    return quotes.filter((q) => {
-      if (applied.clientId && applied.clientId !== "0" && String(q.clientId) !== applied.clientId) return false;
-      if (applied.status && q.status !== applied.status) return false;
-      if (applied.date && (q.createdAt ?? "").slice(0, 10) !== applied.date) return false;
-      if (applied.number && !String(q.code ?? "").toLowerCase().includes(applied.number.toLowerCase())) return false;
-      return true;
-    });
-  }, [quotes, applied]);
-
-  function href(suffix: string): string {
-    return `/${encodeURIComponent(slug)}/${`quotes${suffix}`.replace("&", "?")}`;
+  function listUrl(params?: URLSearchParams): string {
+    const qs = params && Array.from(params.keys()).length > 0 ? `?${params.toString()}` : "";
+    return `/${encodeURIComponent(slug)}/quotes${qs}`;
   }
 
-  // Delete a DRAFT quote via POST (the server refuses sent/converted ones).
-  // Confirm-gated. Replaces the old GET ?action=delete link (Tailwind fallback).
-  async function deleteQuote(q: Quote) {
+  function applyFilters(e: React.FormEvent) {
+    e.preventDefault();
+    const params = new URLSearchParams();
+    if (clientId !== "" && clientId !== "0") params.set("client_id", clientId);
+    if (status !== "") params.set("status", status);
+    if (date !== "") params.set("date", date);
+    if (number !== "") params.set("number", number);
+    if (allLocations) params.set("all_locations", "1");
+    window.location.href = listUrl(params);
+  }
+
+  // Elimina (solo bozze): confirm legacy + redirect con flash msg/err.
+  async function deleteQuote(id: number) {
     if (busyId) return;
-    if (typeof window !== "undefined" && !window.confirm("Eliminare questo preventivo?")) return;
-    setBusyId(q.id);
+    if (!window.confirm("Eliminare questo preventivo?")) return;
+    setBusyId(id);
     try {
       const res = await fetch(`/api/manage/quotes?slug=${encodeURIComponent(slug)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-        body: JSON.stringify({ action: "delete", id: q.id }),
+        body: JSON.stringify({ action: "delete", id: String(id) }),
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok || j?.error) {
-        if (typeof window !== "undefined") window.alert(j?.error || "Impossibile eliminare il preventivo.");
-      } else {
-        load();
+      if (j?.redirect === "view" && j?.id) {
+        window.location.href = `/${encodeURIComponent(slug)}/quotes?action=view&id=${j.id}${j?.err ? `&err=${encodeURIComponent(String(j.err))}` : ""}`;
+        return;
       }
+      const params = new URLSearchParams();
+      if (j?.msg) params.set("msg", String(j.msg));
+      else if (j?.err) params.set("err", String(j.err));
+      window.location.href = listUrl(params);
     } finally {
       setBusyId(0);
     }
   }
+
+  const rows = data?.rows ?? [];
+  const hasAnyQuotes = data?.hasAnyQuotes ?? false;
 
   return (
     <div className="container-fluid">
@@ -165,90 +247,38 @@ export function QuotesContent({ slug: slugProp }: { slug?: string } = {}) {
         </div>
         <div className="bs-page-actions">
           <div className="d-flex gap-2">
-            <a className="btn btn-outline-secondary btn-pill" href={`/${encodeURIComponent(slug)}/quote_settings`}>
-              <i className="bi bi-gear me-1" />
-              Impostazioni
-            </a>
-            <a className="btn btn-primary btn-pill" href={href("&action=new")}>
-              <i className="bi bi-plus-lg me-1" />
-              Nuovo preventivo
-            </a>
+            {data?.canSettings ? (
+              <a className="btn btn-outline-secondary btn-pill" href={`/${encodeURIComponent(slug)}/quote_settings`}>
+                <i className="bi bi-gear me-1" />
+                Impostazioni
+              </a>
+            ) : null}
+            {hasAnyQuotes ? (
+              <a className="btn btn-primary btn-pill" href={`/${encodeURIComponent(slug)}/quotes?action=new`}>
+                <i className="bi bi-plus-lg me-1" />
+                Nuovo preventivo
+              </a>
+            ) : null}
           </div>
         </div>
       </div>
 
-      <div className="card p-3 mb-3">
-        <form
-          className="row g-2 align-items-end"
-          onSubmit={(e) => {
-            e.preventDefault();
-            setApplied({ clientId, status, date, number });
-          }}
-        >
-          <div className="col-lg-3">
-            <label className="form-label">Cliente</label>
-            <select className="form-select" value={clientId} onChange={(e) => setClientId(e.target.value)}>
-              <option value="0">Tutti</option>
-              {clientItems.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
-          </div>
+      {flash.msg ? (
+        <div className="alert alert-success d-flex align-items-start gap-2" role="alert">
+          <div><i className="bi bi-info-circle" /></div>
+          <div>{flash.msg}</div>
+        </div>
+      ) : null}
+      {flash.err ? (
+        <div className="alert alert-danger d-flex align-items-start gap-2" role="alert">
+          <div><i className="bi bi-info-circle" /></div>
+          <div>{flash.err}</div>
+        </div>
+      ) : null}
 
-          <div className="col-lg-2">
-            <label className="form-label">Stato</label>
-            <select className="form-select" name="status" value={status} onChange={(e) => setStatus(e.target.value)}>
-              <option value="">Tutti</option>
-              {STATUS_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="col-lg-2">
-            <label className="form-label">Data</label>
-            <input type="date" className="form-control" name="date" value={date} onChange={(e) => setDate(e.target.value)} />
-          </div>
-
-          <div className="col-lg-2">
-            <label className="form-label">Numero</label>
-            <input
-              className="form-control"
-              name="number"
-              placeholder="Es. 12/2026"
-              value={number}
-              onChange={(e) => setNumber(e.target.value)}
-            />
-          </div>
-
-          <div className="col-lg-3 d-flex align-items-center gap-3 flex-wrap app-filter-actions">
-            <button className="btn btn-outline-primary app-filter-submit" type="submit">
-              <i className="bi bi-search me-1" />
-              Filtra
-            </button>
-            <a
-              className="btn btn-outline-secondary app-filter-reset"
-              href={href("")}
-              onClick={(e) => {
-                e.preventDefault();
-                setClientId("0");
-                setStatus("");
-                setDate("");
-                setNumber("");
-                setApplied({ clientId: "0", status: "", date: "", number: "" });
-              }}
-            >
-              Reset
-            </a>
-          </div>
-        </form>
-      </div>
-
-      {!loading && quotes.length === 0 ? (
+      {loading ? (
+        <div className="card p-3 text-muted small">Caricamento…</div>
+      ) : !hasAnyQuotes ? (
         <div className="card border-0 shadow-sm quotes-empty-card">
           <div className="quotes-empty-state">
             <div className="quotes-empty-icon" aria-hidden="true">
@@ -256,11 +286,11 @@ export function QuotesContent({ slug: slugProp }: { slug?: string } = {}) {
             </div>
             <h2>Nessun preventivo presente</h2>
             <p>
-              Crea il primo preventivo per preparare proposte, inviarle ai clienti e trasformarle in vendite quando vengono
-              accettate.
+              Crea il primo preventivo per preparare proposte, inviarle ai clienti e trasformarle in vendite quando
+              vengono accettate.
             </p>
             <div className="d-flex justify-content-center gap-2 flex-wrap">
-              <a className="btn btn-primary" href={href("&action=new")}>
+              <a className="btn btn-primary" href={`/${encodeURIComponent(slug)}/quotes?action=new`}>
                 <i className="bi bi-plus-lg me-1" />
                 Nuovo preventivo
               </a>
@@ -268,72 +298,128 @@ export function QuotesContent({ slug: slugProp }: { slug?: string } = {}) {
           </div>
         </div>
       ) : (
-        <div className="card">
-          <div className="table-responsive">
-            <table className="table mb-0 align-middle">
-              <thead>
-                <tr>
-                  <th>Data</th>
-                  <th>Numero</th>
-                  <th>Cliente</th>
-                  <th>Sede</th>
-                  <th>Stato</th>
-                  <th className="text-end">Totale</th>
-                  <th className="text-end">Azioni</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.length === 0 ? (
+        <>
+          <div className="card p-3 mb-3">
+            <form method="get" className="row g-2 align-items-end" onSubmit={applyFilters}>
+              <div className="col-lg-3">
+                <label className="form-label">Cliente</label>
+                <ClientFilterCombobox items={data?.clientItems ?? []} value={clientId} onChange={setClientId} />
+              </div>
+
+              <div className="col-lg-2">
+                <label className="form-label">Stato</label>
+                <select className="form-select" name="status" value={status} onChange={(e) => setStatus(e.target.value)}>
+                  <option value="">Tutti</option>
+                  {STATUS_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="col-lg-2">
+                <label className="form-label">Data</label>
+                <input type="date" className="form-control" name="date" value={date} onChange={(e) => setDate(e.target.value)} />
+              </div>
+
+              <div className="col-lg-2">
+                <label className="form-label">Numero</label>
+                <input
+                  className="form-control"
+                  name="number"
+                  value={number}
+                  placeholder="Es. 12/2026"
+                  onChange={(e) => setNumber(e.target.value)}
+                />
+              </div>
+
+              <div className="col-lg-3 d-flex align-items-center gap-3 flex-wrap app-filter-actions">
+                {data?.multiLocation ? (
+                  <div className="form-check mb-0">
+                    <input
+                      className="form-check-input"
+                      type="checkbox"
+                      id="quotesAllLocations"
+                      name="all_locations"
+                      value="1"
+                      checked={allLocations}
+                      onChange={(e) => setAllLocations(e.target.checked)}
+                    />
+                    <label className="form-check-label" htmlFor="quotesAllLocations">
+                      Tutte le sedi
+                    </label>
+                  </div>
+                ) : null}
+                <button className="btn btn-outline-primary app-filter-submit" type="submit">
+                  <i className="bi bi-search me-1" />
+                  Filtra
+                </button>
+                <a className="btn btn-outline-secondary app-filter-reset" href={listUrl()}>
+                  Reset
+                </a>
+              </div>
+            </form>
+          </div>
+
+          <div className="card">
+            <div className="table-responsive">
+              <table className="table mb-0 align-middle">
+                <thead>
                   <tr>
-                    <td colSpan={7} className="text-muted small p-3">
-                      {loading ? "Caricamento…" : "Nessun preventivo."}
-                    </td>
+                    <th>Data</th>
+                    <th>Numero</th>
+                    <th>Cliente</th>
+                    <th>Sede</th>
+                    <th>Stato</th>
+                    <th className="text-end">Totale</th>
+                    <th className="text-end">Azioni</th>
                   </tr>
-                ) : (
-                  filtered.map((q) => {
-                    const badge = statusBadge(q.status);
-                    return (
-                      <tr key={q.id}>
-                        <td>{fmtDate(q.createdAt)}</td>
-                        <td className="fw-semibold">{q.code}</td>
-                        <td>{q.clientName}</td>
-                        <td>—</td>
-                        <td>
-                          <span className={`badge ${badge.cls}`}>{badge.label}</span>
-                        </td>
-                        <td className="text-end fw-semibold">{fmtEuro(q.total)}</td>
-                        <td className="text-end">
-                          <a className="btn btn-sm btn-outline-secondary" href={href(`&action=view&id=${q.id}`)}>
-                            Apri
-                          </a>{" "}
-                          {q.status !== "converted" ? (
-                            <>
-                              <a
-                                className="btn btn-sm btn-success"
-                                href={`/${encodeURIComponent(slug)}/pos?quote=${q.id}`}
-                                title="Carica il preventivo in cassa e incassa"
-                              >
-                                Incassa
-                              </a>{" "}
-                            </>
-                          ) : null}
-                          <button
-                            type="button"
+                </thead>
+                <tbody>
+                  {rows.map((r) => (
+                    <tr key={r.id}>
+                      <td>{fmtDate(r.date)}</td>
+                      <td className="fw-semibold">{r.number || "—"}</td>
+                      <td>{r.client}</td>
+                      <td>{r.location}</td>
+                      <td>
+                        <span className={`badge text-bg-${r.badge}`}>{r.statusLabel}</span>
+                      </td>
+                      <td className="text-end fw-semibold">€ {fmtMoney(r.total)}</td>
+                      <td className="text-end">
+                        <a className="btn btn-sm btn-outline-secondary" href={`/${encodeURIComponent(slug)}/quotes?action=view&id=${r.id}`}>
+                          Apri
+                        </a>{" "}
+                        {r.canDelete ? (
+                          <a
                             className="btn btn-sm btn-outline-danger"
-                            disabled={busyId === q.id}
-                            onClick={() => deleteQuote(q)}
+                            href={`/${encodeURIComponent(slug)}/quotes?action=delete&id=${r.id}`}
+                            data-confirm="Eliminare questo preventivo?"
+                            aria-disabled={busyId === r.id}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              deleteQuote(r.id);
+                            }}
                           >
                             Elimina
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
+                          </a>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                  {rows.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="text-muted p-3">
+                        Nessun preventivo trovato con i filtri selezionati.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );

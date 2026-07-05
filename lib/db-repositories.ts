@@ -5713,6 +5713,1774 @@ export async function getManageQuoteDetail(slug: string, id: number): Promise<Ma
   };
 }
 
+// ==== Preventivi legacy-fedeli (quotes.php) =====================================
+// Porta 1:1 la pagina monolitica: stato effettivo, badge, auto-expire/paid-sync,
+// filtri lista, view con disponibilità contenuti e vendita collegata, form
+// new/edit con numero automatico N/YYYY e prezzi catalogo bloccati, delete
+// draft-only, invio email con guardie e stampa.
+
+export const QUOTE_ALLOWED_STATUS: Record<string, string> = {
+  draft: "Bozza",
+  sent: "Inviato",
+  expired: "Scaduto",
+  accepted: "Accettato",
+  paid: "Pagato",
+  rejected: "Rifiutato",
+  canceled: "Annullato",
+};
+const QUOTE_EDITABLE_STATUS: Record<string, string> = {
+  draft: "Bozza",
+  accepted: "Accettato",
+  rejected: "Rifiutato",
+  canceled: "Annullato",
+};
+
+// Contesto sedi calcolato dalla route (evita l'import circolare di
+// manage-locations): sedi attive visibili all'utente + sede corrente.
+export type QuoteLocationCtx = {
+  currentLocationId: number;
+  locationIds: number[];
+  locations: Array<{ id: number; name: string }>;
+};
+
+// quote_status_badge(): colore badge per stato effettivo.
+export function quoteStatusBadgeLegacy(statusKey: string): string {
+  if (statusKey === "sent") return "primary";
+  if (statusKey === "accepted") return "success";
+  if (statusKey === "paid") return "success";
+  if (statusKey === "rejected") return "danger";
+  if (statusKey === "canceled") return "dark";
+  if (statusKey === "expired") return "warning";
+  return "secondary";
+}
+
+// quote_normalize_date_input(): solo YYYY-MM-DD valido, altrimenti null.
+function quoteNormalizeDateInput(value: unknown): string | null {
+  const s = String(value ?? "").trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (mo < 1 || mo > 12 || d < 1) return null;
+  const days = new Date(y, mo, 0).getDate();
+  if (d > days) return null;
+  return s;
+}
+
+// payment_methods_parse(): righe non vuote, max 240 char/riga, dedupe, max 50.
+export function paymentMethodsParse(raw: unknown): string[] {
+  const lines = String(raw ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (let ln of lines) {
+    ln = ln.trim();
+    if (ln === "") continue;
+    if (ln.length > 240) ln = ln.slice(0, 240);
+    if (seen.has(ln)) continue;
+    seen.add(ln);
+    out.push(ln);
+    if (out.length >= 50) break;
+  }
+  return out;
+}
+
+// payment_methods_decode(): JSON array, altrimenti fallback newline.
+export function paymentMethodsDecode(raw: unknown): string[] {
+  const s = String(raw ?? "").trim();
+  if (s === "") return [];
+  try {
+    const dec = JSON.parse(s);
+    if (Array.isArray(dec)) {
+      const out: string[] = [];
+      const seen = new Set<string>();
+      for (const v of dec) {
+        const t = String(v ?? "").trim();
+        if (t === "" || seen.has(t)) continue;
+        seen.add(t);
+        out.push(t);
+        if (out.length >= 50) break;
+      }
+      return out;
+    }
+  } catch { /* fallback newline */ }
+  return paymentMethodsParse(s);
+}
+
+// quote_sale_extract_quote_id_from_notes(): marker "Preventivo collegato: Q#<id>".
+function quoteSaleExtractQuoteIdFromNotes(notes: string): number {
+  const m = /(?:^|\r|\n)Preventivo\s+collegato:\s*Q#(\d+)\b/i.exec(notes ?? "");
+  return m ? Number(m[1]) : 0;
+}
+
+function quoteSaleIsCancelledStatus(status: unknown): boolean {
+  return ["cancelled", "canceled", "annullata", "annullato"].includes(String(status ?? "").trim().toLowerCase());
+}
+
+type LinkedSale = { id: number; saleDate: string; status: string };
+
+// quote_sale_find_linked_sale(): vendita collegata via source_quote_id o marker
+// nelle note; salta le annullate salvo includeCancelled.
+async function quoteSaleFindLinkedSale(slug: string, quoteId: number, includeCancelled: boolean): Promise<LinkedSale | null> {
+  if (quoteId <= 0) return null;
+  let rows = await tenantSelect<RowDataPacket>({
+    slug, table: "sales", columns: "id, sale_date, status, notes, source_quote_id",
+    where: "source_quote_id = ?", params: [quoteId], orderBy: "id DESC",
+  }).catch(() => [] as RowDataPacket[]);
+  if (rows.length === 0) {
+    rows = await tenantSelect<RowDataPacket>({
+      slug, table: "sales", columns: "id, sale_date, status, notes, source_quote_id",
+      where: "notes LIKE ?", params: [`%Preventivo collegato: Q#${quoteId}%`], orderBy: "id DESC",
+    }).catch(() => [] as RowDataPacket[]);
+  }
+  for (const row of rows) {
+    if (Number(row.source_quote_id ?? 0) !== quoteId) {
+      if (quoteSaleExtractQuoteIdFromNotes(String(row.notes ?? "")) !== quoteId) continue;
+    }
+    if (!includeCancelled && quoteSaleIsCancelledStatus(row.status)) continue;
+    return { id: Number(row.id ?? 0), saleDate: row.sale_date ? pgDateOnly(row.sale_date) : "", status: String(row.status ?? "") };
+  }
+  return null;
+}
+
+// quote_effective_status(): Annullato prevale; Pagato se stato paid o vendita
+// attiva collegata; sent scaduto -> expired. hasActiveLinkedSale può arrivare
+// precalcolato (lista) per evitare una query per riga.
+async function quoteEffectiveStatusDb(slug: string, row: RowDataPacket, hasActiveLinkedSale?: boolean): Promise<string> {
+  let status = String(row.status ?? "draft").trim().toLowerCase();
+  if (status === "") status = "draft";
+  if (!["canceled", "cancelled"].includes(status)) {
+    if (status === "paid") return "paid";
+    const qid = Number(row.id ?? 0);
+    if (qid > 0) {
+      const linked = hasActiveLinkedSale ?? (await quoteSaleFindLinkedSale(slug, qid, false)) !== null;
+      if (linked) return "paid";
+    }
+  }
+  const vu = row.valid_until ? quoteNormalizeDateInput(pgDateOnly(row.valid_until)) : null;
+  if (status === "sent" && vu !== null && vu < todayIso()) return "expired";
+  if (status === "cancelled") return "canceled";
+  return status;
+}
+
+// quote_user_can_access(): sede del preventivo nel set abilitato per l'utente.
+function quoteUserCanAccess(row: RowDataPacket, ctx: QuoteLocationCtx): boolean {
+  const locationId = Number(row.location_id ?? 0);
+  if (locationId <= 0) return true;
+  return ctx.locationIds.includes(locationId);
+}
+
+function quoteCanDeleteEffective(effective: string): boolean {
+  return effective === "draft";
+}
+
+function quoteCanSendEmailFrom(effective: string, validUntil: string | null): boolean {
+  if (!["draft", "sent"].includes(effective)) return false;
+  return validUntil === null || validUntil >= todayIso();
+}
+
+function quoteIsLockedForEditEffective(effective: string): boolean {
+  return ["accepted", "paid", "canceled"].includes(effective);
+}
+
+// Auto-expire + auto-sync paid al load pagina (best-effort, tenant-scoped).
+async function quoteAutoExpireAndSyncPaid(slug: string): Promise<void> {
+  try {
+    const t = await tenantTable(slug, "quotes");
+    const scoped = t.mode === "shared" && (await columnExists(t.name, "tenant_id"));
+    await dbExecute(
+      `UPDATE \`${t.name}\` SET status='expired' WHERE status='sent' AND valid_until IS NOT NULL AND valid_until < CURRENT_DATE${scoped ? " AND tenant_id = ?" : ""}`,
+      scoped ? [t.tenantId ?? 0] : [],
+    ).catch(() => undefined);
+
+    const s = await tenantTable(slug, "sales");
+    if (!(await columnExists(s.name, "source_quote_id"))) return;
+    const joinTenant = scoped ? " AND s2.tenant_id = q.tenant_id" : "";
+    // Snapshot sede aggiornato sulle righe che stanno per diventare Pagato.
+    const paidRows = await dbQuery<RowDataPacket[]>(
+      `SELECT q.id, q.location_id FROM \`${t.name}\` q JOIN \`${s.name}\` s2 ON s2.source_quote_id = q.id${joinTenant}
+        WHERE q.status NOT IN ('paid','canceled','cancelled')
+          AND LOWER(COALESCE(s2.status,'')) NOT IN ('cancelled','canceled','annullata','annullato')${scoped ? " AND q.tenant_id = ?" : ""}`,
+      scoped ? [t.tenantId ?? 0] : [],
+    ).catch(() => [] as RowDataPacket[]);
+    for (const pr of paidRows) {
+      await quoteSaveLocationSnapshotDb(slug, Number(pr.id ?? 0), Number(pr.location_id ?? 0) || null).catch(() => undefined);
+    }
+    await dbExecute(
+      `UPDATE \`${t.name}\` q SET status='paid' FROM \`${s.name}\` s2
+        WHERE s2.source_quote_id = q.id${joinTenant}
+          AND q.status NOT IN ('paid','canceled','cancelled')
+          AND LOWER(COALESCE(s2.status,'')) NOT IN ('cancelled','canceled','annullata','annullato')${scoped ? " AND q.tenant_id = ?" : ""}`,
+      scoped ? [t.tenantId ?? 0] : [],
+    ).catch(() => undefined);
+  } catch { /* best-effort come il legacy */ }
+}
+
+// app_business_quote_profile(): profilo intestazione preventivo dal business.
+type QuoteBizProfile = {
+  company_name: string; vat: string; tax_code: string; sdi: string; pec: string;
+  address: string; cap: string; city: string; province: string; region: string;
+  phone: string; email: string; website: string; footer: string; terms_default: string;
+  payment_methods_raw: string;
+};
+async function quoteBusinessProfile(slug: string): Promise<QuoteBizProfile> {
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const biz = rows[0] ?? ({} as RowDataPacket);
+  const str = (v: unknown) => String(v ?? "");
+  return {
+    company_name: str(biz.quote_company_name ?? biz.business_name ?? biz.name),
+    vat: str(biz.quote_vat_number),
+    tax_code: str(biz.quote_tax_code),
+    sdi: str(biz.quote_sdi),
+    pec: str(biz.quote_pec),
+    address: str(biz.quote_address ?? biz.address),
+    cap: str(biz.quote_cap),
+    city: str(biz.quote_city),
+    province: str(biz.quote_province),
+    region: str(biz.quote_region),
+    phone: str(biz.quote_phone ?? biz.phone),
+    email: str(biz.quote_email ?? biz.email),
+    website: str(biz.quote_website ?? biz.website),
+    footer: str(biz.quote_footer),
+    terms_default: str(biz.quote_terms),
+    payment_methods_raw: str(biz.payment_methods),
+  };
+}
+
+// Mappa colonna snapshot quotes -> chiave profilo (app_quote_location_snapshot_map).
+const QUOTE_LOCATION_SNAPSHOT_MAP: Array<[string, keyof QuoteBizProfile]> = [
+  ["location_company_name", "company_name"],
+  ["location_vat_number", "vat"],
+  ["location_tax_code", "tax_code"],
+  ["location_sdi", "sdi"],
+  ["location_pec", "pec"],
+  ["location_address", "address"],
+  ["location_cap", "cap"],
+  ["location_city", "city"],
+  ["location_province", "province"],
+  ["location_region", "region"],
+  ["location_phone", "phone"],
+  ["location_email", "email"],
+  ["location_website", "website"],
+];
+
+// app_quote_refresh_location_snapshot(): stampa sede + profilo sulle colonne
+// location_* del preventivo (il profilo sede legacy è il profilo business con
+// il nome della sede — app_location_legal_profile aggiunge solo location_name).
+async function quoteSaveLocationSnapshotDb(slug: string, quoteId: number, locationId: number | null): Promise<void> {
+  if (quoteId <= 0) return;
+  let locId = locationId ?? 0;
+  if (locId <= 0) {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "quotes", columns: "location_id", where: "id = ?", params: [quoteId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    locId = Number(rows[0]?.location_id ?? 0);
+  }
+  if (locId <= 0) return;
+  const locRows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "id, name", where: "id = ?", params: [locId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const profile = await quoteBusinessProfile(slug);
+  const values: Record<string, unknown> = {
+    location_id: locId,
+    location_name: String(locRows[0]?.name ?? "").trim() || null,
+  };
+  for (const [qCol, pKey] of QUOTE_LOCATION_SNAPSHOT_MAP) {
+    const v = String(profile[pKey] ?? "").trim();
+    values[qCol] = v !== "" ? v : null;
+  }
+  await tenantUpdate({ slug, table: "quotes", id: quoteId, values }).catch(() => undefined);
+}
+
+// app_quote_profile_from_quote(): intestazione effettiva (profilo business +
+// nome sede live + snapshot congelato per preventivi Pagato/Annullato).
+async function quoteApplyLocationSnapshotToHeader(slug: string, q: RowDataPacket, base: QuoteBizProfile): Promise<QuoteBizProfile & { location_name?: string }> {
+  const profile: QuoteBizProfile & { location_name?: string } = { ...base };
+  const locationId = Number(q.location_id ?? 0);
+  let hasLiveLocation = false;
+  if (locationId > 0) {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "id, name", where: "id = ?", params: [locationId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    hasLiveLocation = rows.length > 0;
+    if (hasLiveLocation) profile.location_name = String(rows[0].name ?? "");
+  }
+  const effective = await quoteEffectiveStatusDb(slug, q);
+  const useLockedSnapshot = ["paid", "canceled"].includes(effective);
+  for (const [qCol, key] of QUOTE_LOCATION_SNAPSHOT_MAP) {
+    const value = String(q[qCol] ?? "").trim();
+    if (value === "") continue;
+    if (useLockedSnapshot || !hasLiveLocation || String(profile[key] ?? "").trim() === "") {
+      (profile as Record<string, string>)[key as string] = value;
+    }
+  }
+  return profile;
+}
+
+// quote_location_label_from_quote(): location_name salvata, altrimenti lookup.
+async function quoteLocationLabelFromQuote(slug: string, row: RowDataPacket): Promise<string> {
+  const label = String(row.location_name ?? "").trim();
+  if (label !== "") return label;
+  const locationId = Number(row.location_id ?? 0);
+  if (locationId > 0) {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "name", where: "id = ?", params: [locationId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    return String(rows[0]?.name ?? "").trim();
+  }
+  return "";
+}
+
+async function quoteCatalogLocationLabel(slug: string, locationId: number | null): Promise<string> {
+  const locId = locationId ?? 0;
+  if (locId <= 0) return "sede selezionata";
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "name", where: "id = ?", params: [locId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const label = String(rows[0]?.name ?? "").trim();
+  return label !== "" ? label : `sede #${locId}`;
+}
+
+// quote_catalog_location_allowed(): abilitazione per sede per tipo riga.
+async function quoteCatalogLocationAllowed(slug: string, type: string, itemId: number, locationId: number | null): Promise<boolean> {
+  const locId = locationId ?? 0;
+  if (itemId <= 0 || locId <= 0) return true;
+  const t = String(type ?? "").trim().toLowerCase();
+  if (t === "product") {
+    // app_product_location_enabled: senza righe stock il prodotto vale ovunque.
+    const anyRows = await tenantSelect<RowDataPacket>({ slug, table: "product_stocks", columns: "location_id", where: "product_id = ?", params: [itemId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    if (anyRows.length === 0) return true;
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "product_stocks", columns: "location_id", where: "product_id = ? AND location_id = ? AND COALESCE(is_enabled,1) = 1", params: [itemId, locId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    return rows.length > 0;
+  }
+  if (t === "service") {
+    // app_service_location_allowed: nessuna riga di mapping = valido ovunque.
+    const anyRows = await tenantSelect<RowDataPacket>({ slug, table: "service_locations", columns: "location_id", where: "service_id = ?", params: [itemId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    if (anyRows.length === 0) return true;
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "service_locations", columns: "location_id", where: "service_id = ? AND location_id = ?", params: [itemId, locId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    return rows.length > 0;
+  }
+  if (t === "package") {
+    // app_package_location_allowed: un pacchetto senza righe sedi NON è abilitato.
+    const anyRows = await tenantSelect<RowDataPacket>({ slug, table: "package_locations", columns: "location_id", where: "package_id = ?", params: [itemId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    if (anyRows.length === 0) return false;
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "package_locations", columns: "location_id", where: "package_id = ? AND location_id = ?", params: [itemId, locId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    return rows.length > 0;
+  }
+  return true;
+}
+
+// quote_catalog_location_meta(): sedi abilitate + flag restricted per il form.
+async function quoteCatalogLocationMeta(slug: string, type: string, itemId: number): Promise<{ location_ids: number[]; location_restricted: boolean }> {
+  if (itemId <= 0) return { location_ids: [], location_restricted: false };
+  if (type === "product") {
+    // Con lo schema stock i prodotti sono sempre "restricted" (ids abilitati).
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "product_stocks", columns: "location_id", where: "product_id = ? AND COALESCE(is_enabled,1) = 1", params: [itemId] }).catch(() => [] as RowDataPacket[]);
+    return { location_ids: Array.from(new Set(rows.map((r) => Number(r.location_id ?? 0)).filter((n) => n > 0))), location_restricted: true };
+  }
+  if (type === "service") {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "service_locations", columns: "location_id", where: "service_id = ?", params: [itemId], orderBy: "location_id ASC" }).catch(() => [] as RowDataPacket[]);
+    const ids = Array.from(new Set(rows.map((r) => Number(r.location_id ?? 0)).filter((n) => n > 0)));
+    return { location_ids: ids, location_restricted: ids.length > 0 };
+  }
+  if (type === "package") {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "package_locations", columns: "location_id", where: "package_id = ?", params: [itemId], orderBy: "location_id ASC" }).catch(() => [] as RowDataPacket[]);
+    const ids = Array.from(new Set(rows.map((r) => Number(r.location_id ?? 0)).filter((n) => n > 0)));
+    return { location_ids: ids, location_restricted: ids.length > 0 };
+  }
+  return { location_ids: [], location_restricted: false };
+}
+
+// --- Disponibilità contenuti preventivo (QuoteAvailability.php) ---------------
+export type QuoteCatalogIssue = { type: string; label: string; message: string; context: string | null };
+type QuoteAvailability = { errors: QuoteCatalogIssue[]; warnings: QuoteCatalogIssue[] };
+
+function quoteCatalogCompactLabel(value: string, max = 180): string {
+  const v = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (v === "") return "";
+  return v.length > max ? `${v.slice(0, Math.max(1, max - 1))}…` : v;
+}
+
+function quoteCatalogTypeLabel(type: string): string {
+  const t = String(type ?? "").trim().toLowerCase();
+  if (t === "service") return "Servizio";
+  if (t === "product") return "Prodotto";
+  if (t === "package") return "Pacchetto";
+  return "Voce";
+}
+
+function quoteCatalogAddIssue(out: QuoteAvailability, bucket: "errors" | "warnings", type: string, label: string, message: string, context: string | null, seen: Set<string>): void {
+  const lbl = quoteCatalogCompactLabel(label);
+  const msg = quoteCatalogCompactLabel(message, 260);
+  const ctx = context !== null ? quoteCatalogCompactLabel(context, 220) : null;
+  const key = `${bucket}|${type.toLowerCase()}|${lbl.toLowerCase()}|${(ctx ?? "").toLowerCase()}|${msg.toLowerCase()}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  out[bucket].push({ type, label: lbl, message: msg, context: ctx });
+}
+
+// quote_catalog_check_single_reference(): eliminato -> error, disattivato ->
+// warning, non abilitato per la sede -> error (testi verbatim, "non e" legacy).
+async function quoteCatalogCheckSingleReference(
+  slug: string, type: string, itemId: number, snapshotLabel: string,
+  out: QuoteAvailability, seen: Set<string>, context: string | null, locationId: number | null,
+): Promise<RowDataPacket | null> {
+  const t = String(type ?? "").trim().toLowerCase();
+  if (itemId <= 0) return null;
+  const table = t === "service" ? "services" : t === "product" ? "products" : t === "package" ? "packages" : null;
+  if (!table) return null;
+  const columns = t === "product"
+    ? "id, name, sku, COALESCE(is_active,1) AS ia"
+    : t === "package"
+      ? "id, name, COALESCE(is_active,1) AS ia, service_id"
+      : "id, name, COALESCE(is_active,1) AS ia";
+  const rows = await tenantSelect<RowDataPacket>({ slug, table, columns, where: "id = ?", params: [itemId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const typeLabel = quoteCatalogTypeLabel(t);
+  if (!rows[0]) {
+    const label = snapshotLabel !== "" ? snapshotLabel : `${typeLabel} #${itemId}`;
+    quoteCatalogAddIssue(out, "errors", typeLabel, label, `${typeLabel} "${label}" è stato eliminato.`, context, seen);
+    return null;
+  }
+  const row = rows[0];
+  let label = "";
+  if (t === "product") {
+    let name = String(row.name ?? "").trim() || (snapshotLabel || `Prodotto #${itemId}`);
+    const sku = String(row.sku ?? "").trim();
+    if (sku !== "" && !name.includes(`(${sku})`)) name += ` (${sku})`;
+    label = quoteCatalogCompactLabel(name);
+  } else {
+    label = quoteCatalogCompactLabel(String(row.name ?? "").trim() || (snapshotLabel || `${typeLabel} #${itemId}`));
+  }
+  if (label === "") label = snapshotLabel || `${typeLabel} #${itemId}`;
+  if (Number(row.ia ?? 1) !== 1) {
+    quoteCatalogAddIssue(out, "warnings", typeLabel, label, `${typeLabel} "${label}" è stato disattivato.`, context, seen);
+  }
+  if (locationId && !(await quoteCatalogLocationAllowed(slug, t, itemId, locationId))) {
+    const locLabel = await quoteCatalogLocationLabel(slug, locationId);
+    quoteCatalogAddIssue(out, "errors", typeLabel, label, `${typeLabel} "${label}" non e abilitato per la sede "${locLabel}".`, context, seen);
+  }
+  return row;
+}
+
+// quote_catalog_check_package_components(): componenti del pacchetto
+// (package_items + package_services + packages.service_id legacy).
+async function quoteCatalogCheckPackageComponents(slug: string, packageId: number, packageLabel: string, out: QuoteAvailability, seen: Set<string>, locationId: number | null): Promise<void> {
+  if (packageId <= 0) return;
+  const context = `Pacchetto "${quoteCatalogCompactLabel(packageLabel)}"`;
+  const seenComponents = new Set<string>();
+  const items = await tenantSelect<RowDataPacket>({
+    slug, table: "package_items", columns: "item_type, item_id",
+    where: "package_id = ? AND LOWER(TRIM(COALESCE(item_type,''))) IN ('service','product')",
+    params: [packageId], orderBy: "sort_order ASC, id ASC",
+  }).catch(() => [] as RowDataPacket[]);
+  for (const r of items) {
+    const type = String(r.item_type ?? "").trim().toLowerCase();
+    const iid = Number(r.item_id ?? 0);
+    if (!["service", "product"].includes(type) || iid <= 0) continue;
+    const key = `${type}:${iid}`;
+    if (seenComponents.has(key)) continue;
+    seenComponents.add(key);
+    await quoteCatalogCheckSingleReference(slug, type, iid, `${quoteCatalogTypeLabel(type)} #${iid}`, out, seen, context, locationId);
+  }
+  const svcRows = await tenantSelect<RowDataPacket>({
+    slug, table: "package_services", columns: "service_id", where: "package_id = ?", params: [packageId], orderBy: "sort_order ASC, id ASC",
+  }).catch(() => [] as RowDataPacket[]);
+  for (const r of svcRows) {
+    const sid = Number(r.service_id ?? 0);
+    if (sid <= 0) continue;
+    const key = `service:${sid}`;
+    if (seenComponents.has(key)) continue;
+    seenComponents.add(key);
+    await quoteCatalogCheckSingleReference(slug, "service", sid, `Servizio #${sid}`, out, seen, context, locationId);
+  }
+  const pkgRows = await tenantSelect<RowDataPacket>({ slug, table: "packages", columns: "COALESCE(service_id,0) AS sid", where: "id = ?", params: [packageId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const sid = Number(pkgRows[0]?.sid ?? 0);
+  if (sid > 0 && !seenComponents.has(`service:${sid}`)) {
+    await quoteCatalogCheckSingleReference(slug, "service", sid, `Servizio #${sid}`, out, seen, context, locationId);
+  }
+}
+
+type QuoteAvailabilityItemInput = { item_type: string; item_id: number; description: string; sku: string };
+
+// quote_catalog_item_label_from_snapshot().
+function quoteCatalogItemLabelFromSnapshot(item: QuoteAvailabilityItemInput, type: string): string {
+  const fallback = `${quoteCatalogTypeLabel(type)} #${Number(item.item_id ?? 0)}`;
+  let desc = String(item.description ?? "").trim();
+  if (desc === "") desc = fallback;
+  if (type === "product") {
+    const sku = String(item.sku ?? "").trim();
+    if (sku !== "" && !desc.includes(`(${sku})`)) desc += ` (${sku})`;
+  }
+  return quoteCatalogCompactLabel(desc);
+}
+
+// quote_catalog_availability_check_items().
+async function quoteCatalogAvailabilityCheckItems(slug: string, items: QuoteAvailabilityItemInput[], locationId: number | null): Promise<QuoteAvailability> {
+  const out: QuoteAvailability = { errors: [], warnings: [] };
+  const seen = new Set<string>();
+  for (const item of items) {
+    const type = String(item.item_type ?? "custom").trim().toLowerCase();
+    if (!["service", "product", "package"].includes(type)) continue;
+    const itemId = Number(item.item_id ?? 0);
+    if (itemId <= 0) continue;
+    const snapshotLabel = quoteCatalogItemLabelFromSnapshot(item, type);
+    const row = await quoteCatalogCheckSingleReference(slug, type, itemId, snapshotLabel, out, seen, null, locationId);
+    if (type === "package" && row) {
+      const pkgLabel = String(row.name ?? "").trim() || snapshotLabel;
+      await quoteCatalogCheckPackageComponents(slug, itemId, pkgLabel, out, seen, locationId);
+    }
+  }
+  return out;
+}
+
+// quote_catalog_availability_check(): dal preventivo salvato.
+async function quoteCatalogAvailabilityCheck(slug: string, quoteId: number): Promise<QuoteAvailability> {
+  if (quoteId <= 0) return { errors: [], warnings: [] };
+  let locationId: number | null = null;
+  const qRows = await tenantSelect<RowDataPacket>({ slug, table: "quotes", columns: "location_id", where: "id = ?", params: [quoteId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  locationId = Number(qRows[0]?.location_id ?? 0) || null;
+  const items = await tenantSelect<RowDataPacket>({
+    slug, table: "quote_items", columns: "id, item_type, item_id, description, sku",
+    where: "quote_id = ?", params: [quoteId], orderBy: "position ASC, id ASC",
+  }).catch(() => [] as RowDataPacket[]);
+  return quoteCatalogAvailabilityCheckItems(
+    slug,
+    items.map((r) => ({ item_type: String(r.item_type ?? ""), item_id: Number(r.item_id ?? 0), description: String(r.description ?? ""), sku: String(r.sku ?? "") })),
+    locationId,
+  );
+}
+
+// quote_catalog_issue_list_text().
+function quoteCatalogIssueListText(issues: QuoteCatalogIssue[], limit = 5): string {
+  const parts: string[] = [];
+  let i = 0;
+  for (const issue of issues) {
+    let msg = String(issue.message ?? "").trim();
+    if (msg === "") continue;
+    const ctx = String(issue.context ?? "").trim();
+    if (ctx !== "") msg += ` (${ctx})`;
+    parts.push(msg);
+    i++;
+    if (i >= limit) break;
+  }
+  if (issues.length > limit) parts.push(`altri ${issues.length - limit} elementi`);
+  return parts.join("; ");
+}
+
+// quote_catalog_acceptance_block_message() (accenti mancanti verbatim).
+function quoteCatalogAcceptanceBlockMessage(availability: QuoteAvailability): string {
+  let txt = quoteCatalogIssueListText(availability.errors ?? [], 4);
+  if (txt === "") txt = "sono presenti contenuti non disponibili nel preventivo";
+  return `Non sara possibile impostare il preventivo in stato "Accettato" ne inviarlo via email perche ${txt}. Correggi le righe indicate dal preventivo per rimuovere il blocco.`;
+}
+
+// quote_catalog_unit_price(): prezzo catalogo corrente (senza filtro attivo).
+async function quoteCatalogUnitPriceDb(slug: string, type: string, itemId: number): Promise<number | null> {
+  const t = String(type ?? "").trim().toLowerCase();
+  const table = t === "product" ? "products" : t === "service" ? "services" : t === "package" ? "packages" : null;
+  if (!table || itemId <= 0) return null;
+  const rows = await tenantSelect<RowDataPacket>({ slug, table, columns: "price", where: "id = ?", params: [itemId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  if (!rows[0] || rows[0].price === null || rows[0].price === undefined) return null;
+  return Number(rows[0].price);
+}
+
+// quote_split_full_name(): "Cognome, Nome" oppure ultima parola = cognome.
+export function quoteSplitFullName(full: string): [string, string] {
+  const f = String(full ?? "").trim();
+  if (f === "") return ["", ""];
+  if (f.includes(",")) {
+    const parts = f.split(",").map((p) => p.trim());
+    const last = parts[0] ?? "";
+    const first = parts.slice(1).join(",").trim();
+    return [first, last];
+  }
+  const parts = f.split(/\s+/).filter((p) => p !== "");
+  if (parts.length <= 1) return [f, ""];
+  const last = parts.pop() as string;
+  return [parts.join(" ").trim(), last];
+}
+
+// quote_ensure_public_token(): token esadecimale 32/64 con retry.
+function quotePublicTokenIsValid(token: string): boolean {
+  return /^(?:[a-f0-9]{32}|[a-f0-9]{64})$/i.test(String(token ?? "").trim());
+}
+async function quoteEnsurePublicTokenDb(slug: string, quoteId: number): Promise<string> {
+  const read = async (): Promise<string> => {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "quotes", columns: "public_token", where: "id = ?", params: [quoteId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    return String(rows[0]?.public_token ?? "").trim();
+  };
+  let tok = await read();
+  if (quotePublicTokenIsValid(tok)) return tok.toLowerCase();
+  const t = await tenantTable(slug, "quotes");
+  const scoped = t.mode === "shared" && (await columnExists(t.name, "tenant_id"));
+  for (let i = 0; i < 20; i++) {
+    const fresh = randomHex(32);
+    try {
+      await dbExecute(
+        `UPDATE \`${t.name}\` SET public_token = ? WHERE id = ?${scoped ? " AND tenant_id = ?" : ""} AND (public_token IS NULL OR public_token = '' OR public_token !~* '^([0-9A-Fa-f]{32}|[0-9A-Fa-f]{64})$')`,
+        scoped ? [fresh, quoteId, t.tenantId ?? 0] : [fresh, quoteId],
+      );
+      tok = await read();
+      if (quotePublicTokenIsValid(tok)) return tok.toLowerCase();
+    } catch { /* duplicato: ritenta */ }
+  }
+  throw new Error("Impossibile generare un token pubblico (DB non aggiornato?).");
+}
+
+// Numero progressivo per anno: MAX della parte prima dello slash per l'anno.
+async function quoteNextNumberSeq(slug: string, year: number): Promise<number> {
+  try {
+    const t = await tenantTable(slug, "quotes");
+    const scoped = t.mode === "shared" && (await columnExists(t.name, "tenant_id"));
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT MAX((substring(split_part(number,'/',1) from '^[0-9]+'))::int) AS m FROM \`${t.name}\` WHERE split_part(number,'/',-1) = ?${scoped ? " AND tenant_id = ?" : ""}`,
+      scoped ? [String(year), t.tenantId ?? 0] : [String(year)],
+    );
+    return Number(rows[0]?.m ?? 0) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+// Endpoint next_number (quotes.php action=next_number).
+export async function quoteNextNumber(slug: string, quoteDate: string): Promise<{ year: number; number: string }> {
+  const qd = quoteNormalizeDateInput(quoteDate) ?? todayIso();
+  const year = Number(qd.slice(0, 4));
+  const seq = await quoteNextNumberSeq(slug, year);
+  return { year, number: `${seq + 1}/${year}` };
+}
+
+// Join clients tenant-safe per client_display (COALESCE client_name, full_name).
+async function quoteClientDisplayJoin(slug: string): Promise<{ quotesTable: string; clientsTable: string; scoped: boolean; tenantId: number }> {
+  const qt = await tenantTable(slug, "quotes");
+  const ct = await tenantTable(slug, "clients");
+  const scoped = qt.mode === "shared" && (await columnExists(qt.name, "tenant_id"));
+  return { quotesTable: qt.name, clientsTable: ct.name, scoped, tenantId: qt.tenantId ?? 0 };
+}
+
+// Vendite collegate precalcolate per la lista (evita 1 query per riga).
+async function quoteLinkedSalesActiveSet(slug: string, quoteIds: number[]): Promise<Set<number>> {
+  const set = new Set<number>();
+  if (quoteIds.length === 0) return set;
+  const ph = quoteIds.map(() => "?").join(",");
+  const bySource = await tenantSelect<RowDataPacket>({
+    slug, table: "sales", columns: "id, status, source_quote_id",
+    where: `source_quote_id IN (${ph})`, params: quoteIds,
+  }).catch(() => [] as RowDataPacket[]);
+  for (const r of bySource) {
+    if (!quoteSaleIsCancelledStatus(r.status)) set.add(Number(r.source_quote_id ?? 0));
+  }
+  const byNotes = await tenantSelect<RowDataPacket>({
+    slug, table: "sales", columns: "id, status, notes, source_quote_id",
+    where: "notes LIKE ?", params: ["%Preventivo collegato: Q#%"], orderBy: "id DESC", limit: 500,
+  }).catch(() => [] as RowDataPacket[]);
+  for (const r of byNotes) {
+    if (quoteSaleIsCancelledStatus(r.status)) continue;
+    const qid = quoteSaleExtractQuoteIdFromNotes(String(r.notes ?? ""));
+    if (qid > 0 && quoteIds.includes(qid)) set.add(qid);
+  }
+  return set;
+}
+
+// ---- LISTA (quotes.php action=list) -------------------------------------------
+export type ManageQuoteListRow = {
+  id: number;
+  date: string;
+  number: string;
+  client: string;
+  location: string;
+  statusKey: string;
+  statusLabel: string;
+  badge: string;
+  total: number;
+  canDelete: boolean;
+};
+export type ManageQuotesList = {
+  rows: ManageQuoteListRow[];
+  hasAnyQuotes: boolean;
+  clientItems: Array<{ id: string; label: string }>;
+  multiLocation: boolean;
+};
+export async function getManageQuotesList(
+  slug: string,
+  filters: { clientId: number; status: string; date: string; number: string; allLocations: boolean },
+  ctx: QuoteLocationCtx,
+): Promise<ManageQuotesList> {
+  await quoteAutoExpireAndSyncPaid(slug);
+
+  const { quotesTable, clientsTable, scoped, tenantId } = await quoteClientDisplayJoin(slug);
+  const filterDate = quoteNormalizeDateInput(filters.date);
+  const filterLocation = filters.allLocations ? 0 : ctx.currentLocationId;
+
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (scoped) { where.push("q.tenant_id = ?"); params.push(tenantId); }
+  if (filters.clientId > 0) { where.push("q.client_id = ?"); params.push(filters.clientId); }
+  if (filters.status !== "" && QUOTE_ALLOWED_STATUS[filters.status]) {
+    if (filters.status === "paid") {
+      where.push(`(q.status = ? OR EXISTS (SELECT 1 FROM \`${(await tenantTable(slug, "sales")).name}\` s WHERE s.source_quote_id = q.id${scoped ? " AND s.tenant_id = q.tenant_id" : ""} AND LOWER(COALESCE(s.status,'')) NOT IN ('cancelled','canceled','annullata','annullato')))`);
+      params.push(filters.status);
+    } else {
+      where.push("q.status = ?");
+      params.push(filters.status);
+    }
+  }
+  if (filterDate) { where.push("q.quote_date = ?"); params.push(filterDate); }
+  if (filters.number !== "") { where.push("q.number ILIKE ?"); params.push(`%${filters.number}%`); }
+  if (filterLocation > 0) { where.push("(q.location_id = ? OR q.location_id IS NULL)"); params.push(filterLocation); }
+
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT q.*, COALESCE(q.client_name, c.full_name) AS client_display
+       FROM \`${quotesTable}\` q
+       LEFT JOIN \`${clientsTable}\` c ON c.id = q.client_id${scoped ? " AND c.tenant_id = q.tenant_id" : ""}
+      ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
+      ORDER BY q.id DESC
+      LIMIT 300`,
+    params,
+  ).catch(() => [] as RowDataPacket[]);
+
+  const linkedActive = await quoteLinkedSalesActiveSet(slug, rows.map((r) => Number(r.id ?? 0)));
+
+  const listRows: ManageQuoteListRow[] = [];
+  for (const r of rows) {
+    const statusKey = await quoteEffectiveStatusDb(slug, r, linkedActive.has(Number(r.id ?? 0)));
+    const clientLbl = String(r.client_display ?? "").trim() || "—";
+    const locLbl = (await quoteLocationLabelFromQuote(slug, r)) || "—";
+    listRows.push({
+      id: Number(r.id ?? 0),
+      date: r.quote_date ? pgDateOnly(r.quote_date) : "",
+      number: String(r.number ?? "—"),
+      client: clientLbl,
+      location: locLbl,
+      statusKey,
+      statusLabel: QUOTE_ALLOWED_STATUS[statusKey] ?? statusKey,
+      badge: quoteStatusBadgeLegacy(statusKey),
+      total: Number(r.total ?? 0),
+      canDelete: quoteCanDeleteEffective(statusKey),
+    });
+  }
+
+  const anyRows = await tenantSelect<RowDataPacket>({ slug, table: "quotes", columns: "id", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const clientRows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, full_name", orderBy: "full_name ASC" }).catch(() => [] as RowDataPacket[]);
+
+  return {
+    rows: listRows,
+    hasAnyQuotes: anyRows.length > 0,
+    clientItems: clientRows.map((c) => ({ id: String(Number(c.id ?? 0)), label: String(c.full_name ?? "") })),
+    multiLocation: ctx.locations.length > 1,
+  };
+}
+
+// ---- VIEW (quotes.php action=view) ---------------------------------------------
+export type ManageQuoteViewItem = { description: string; displayDescription: string; sku: string; itemType: string; qty: string; unitPrice: number; taxRate: string; discountPercent: string; lineTotal: number };
+export type ManageQuoteViewData = {
+  id: number;
+  number: string;
+  quoteDate: string;
+  validUntil: string;
+  statusKey: string;
+  statusLabel: string;
+  badge: string;
+  locationLabel: string;
+  lockedForEdit: boolean;
+  canSendEmail: boolean;
+  hasPublicToken: boolean;
+  publicUrl: string;
+  linkedSaleId: number;
+  linkedSaleDate: string;
+  linkedSaleCancelled: boolean;
+  availabilityErrors: QuoteCatalogIssue[];
+  availabilityWarnings: QuoteCatalogIssue[];
+  showAvailabilityAlerts: boolean;
+  clientLabel: string;
+  client: { companyName: string; vatNumber: string; taxCode: string; sdi: string; pec: string; phone: string; email: string; address: string; cap: string; city: string; province: string };
+  notes: string;
+  publicNote: string;
+  paymentMethods: string[];
+  terms: string;
+  items: ManageQuoteViewItem[];
+  subtotal: number;
+  discountTotal: number;
+  taxTotal: number;
+  total: number;
+};
+export type ManageQuoteViewResult = { redirect?: { to: "list"; err: string }; view?: ManageQuoteViewData };
+
+export async function getManageQuoteViewData(slug: string, id: number, ctx: QuoteLocationCtx): Promise<ManageQuoteViewResult> {
+  const { quotesTable, clientsTable, scoped, tenantId } = await quoteClientDisplayJoin(slug);
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT q.*, COALESCE(q.client_name, c.full_name) AS client_display
+       FROM \`${quotesTable}\` q
+       LEFT JOIN \`${clientsTable}\` c ON c.id = q.client_id${scoped ? " AND c.tenant_id = q.tenant_id" : ""}
+      WHERE q.id = ?${scoped ? " AND q.tenant_id = ?" : ""} LIMIT 1`,
+    scoped ? [id, tenantId] : [id],
+  ).catch(() => [] as RowDataPacket[]);
+  const q = rows[0];
+  if (!q) return { redirect: { to: "list", err: "Preventivo non trovato" } };
+  if (!quoteUserCanAccess(q, ctx)) return { redirect: { to: "list", err: "Preventivo non disponibile per le sedi abilitate." } };
+
+  const itemRows = await tenantSelect<RowDataPacket>({ slug, table: "quote_items", where: "quote_id = ?", params: [id], orderBy: "position ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
+  const statusKey = await quoteEffectiveStatusDb(slug, q);
+  const validUntilNorm = q.valid_until ? quoteNormalizeDateInput(pgDateOnly(q.valid_until)) : null;
+
+  const linkedActive = await quoteSaleFindLinkedSale(slug, id, false);
+  const linkedAny = linkedActive ?? (await quoteSaleFindLinkedSale(slug, id, true));
+  const availability = await quoteCatalogAvailabilityCheck(slug, id);
+
+  let clientLabel = String(q.client_display ?? "").trim();
+  if (clientLabel === "") clientLabel = String(q.client_name ?? "—").trim();
+  if (clientLabel === "") clientLabel = "—";
+
+  const token = String(q.public_token ?? "").trim();
+
+  return {
+    view: {
+      id,
+      number: String(q.number ?? ""),
+      quoteDate: q.quote_date ? pgDateOnly(q.quote_date) : "",
+      validUntil: q.valid_until ? pgDateOnly(q.valid_until) : "",
+      statusKey,
+      statusLabel: QUOTE_ALLOWED_STATUS[statusKey] ?? statusKey,
+      badge: quoteStatusBadgeLegacy(statusKey),
+      locationLabel: await quoteLocationLabelFromQuote(slug, q),
+      lockedForEdit: quoteIsLockedForEditEffective(statusKey),
+      canSendEmail: quoteCanSendEmailFrom(statusKey, validUntilNorm),
+      hasPublicToken: true,
+      publicUrl: token !== "" ? quotePublicUrl(slug, token) : "",
+      linkedSaleId: Number(linkedAny?.id ?? 0),
+      linkedSaleDate: linkedAny?.saleDate ?? "",
+      linkedSaleCancelled: linkedAny ? quoteSaleIsCancelledStatus(linkedAny.status) : false,
+      availabilityErrors: availability.errors,
+      availabilityWarnings: availability.warnings,
+      showAvailabilityAlerts: statusKey !== "paid",
+      clientLabel,
+      client: {
+        companyName: String(q.client_company_name ?? ""),
+        vatNumber: String(q.client_vat_number ?? ""),
+        taxCode: String(q.client_tax_code ?? ""),
+        sdi: String(q.client_sdi ?? ""),
+        pec: String(q.client_pec ?? ""),
+        phone: String(q.client_phone ?? ""),
+        email: String(q.client_email ?? ""),
+        address: String(q.client_address ?? ""),
+        cap: String(q.client_cap ?? ""),
+        city: String(q.client_city ?? ""),
+        province: String(q.client_province ?? ""),
+      },
+      notes: String(q.notes ?? ""),
+      publicNote: String(q.public_note ?? ""),
+      paymentMethods: paymentMethodsDecode(q.payment_methods),
+      terms: String(q.terms ?? ""),
+      items: itemRows.map((r) => mapQuoteViewItem(r)),
+      subtotal: Number(q.subtotal ?? 0),
+      discountTotal: Number(q.discount_total ?? 0),
+      taxTotal: Number(q.tax_total ?? 0),
+      total: Number(q.total ?? 0),
+    },
+  };
+}
+
+// Riga view/print: q.tà e IVA come stringhe raw del DB ("1.00", "0.00" come il
+// PHP), descrizione prodotto con (SKU) via product_display_name.
+function mapQuoteViewItem(r: RowDataPacket): ManageQuoteViewItem {
+  const itemType = String(r.item_type ?? "").toLowerCase();
+  const description = String(r.description ?? "");
+  const sku = String(r.sku ?? "").trim();
+  let displayDescription = description;
+  if (itemType === "product" && sku !== "" && !description.includes(`(${sku})`)) {
+    displayDescription = `${description} (${sku})`;
+  }
+  return {
+    description,
+    displayDescription,
+    sku,
+    itemType,
+    qty: String(r.qty ?? 1),
+    unitPrice: Number(r.unit_price ?? 0),
+    taxRate: String(r.tax_rate ?? 0),
+    discountPercent: String(r.discount_percent ?? 0),
+    lineTotal: Number(r.line_total ?? 0),
+  };
+}
+
+// ---- FORM new/edit (quotes.php) ------------------------------------------------
+export type ManageQuoteFormClient = {
+  id: number; full_name: string; first_name: string | null; last_name: string | null;
+  email: string | null; phone: string | null; address: string | null; cap: string | null;
+  city: string | null; province: string | null; region: string | null; company_name: string | null;
+  vat_number: string | null; tax_code: string | null; sdi: string | null; pec: string | null;
+};
+export type ManageQuoteFormCatalogRow = Record<string, unknown> & { location_ids: number[]; location_restricted: boolean };
+export type ManageQuoteFormItem = {
+  quote_item_id: number; item_type: string; item_id: number | null; description: string;
+  sku: string | null; qty: number; unit_price: number; tax_rate: number; discount_percent: number;
+};
+export type ManageQuoteFormData = {
+  redirect?: { to: "list" | "view"; id?: number; err: string };
+  form?: {
+    id: number;
+    number: string;
+    quoteDate: string;
+    validUntil: string;
+    locationId: number;
+    clientId: number;
+    clientFirstName: string;
+    clientLastName: string;
+    clientEmail: string;
+    clientPhone: string;
+    clientAddress: string;
+    clientCap: string;
+    clientCity: string;
+    clientProvince: string;
+    clientRegion: string;
+    clientCompanyName: string;
+    clientVatNumber: string;
+    clientTaxCode: string;
+    clientSdi: string;
+    clientPec: string;
+    statusSelectValue: string;
+    statusAutoOptionLabel: string;
+    notes: string;
+    publicNote: string;
+    terms: string;
+    availablePaymentMethods: string[];
+    selectedPaymentMethods: string[];
+    itemsInitial: ManageQuoteFormItem[];
+  };
+  config?: {
+    clients: ManageQuoteFormClient[];
+    products: ManageQuoteFormCatalogRow[];
+    services: ManageQuoteFormCatalogRow[];
+    packages: ManageQuoteFormCatalogRow[];
+    locations: Array<{ id: number; name: string }>;
+    initialLocationId: string;
+  };
+};
+
+// Cataloghi form: righe attive con meta sedi (come $products/$services/$packages).
+async function quoteFormCatalog(slug: string, table: "products" | "services" | "packages"): Promise<ManageQuoteFormCatalogRow[]> {
+  const columns = table === "products"
+    ? "id, name, sku, price, COALESCE(is_active,1) AS is_active"
+    : table === "services"
+      ? "id, name, price, COALESCE(is_active,1) AS is_active"
+      : "id, name, sessions_total, price, validity_days, service_id, COALESCE(is_active,1) AS is_active";
+  const rows = await tenantSelect<RowDataPacket>({ slug, table, columns, where: "COALESCE(is_active,1) = 1", orderBy: "name ASC" }).catch(() => [] as RowDataPacket[]);
+  const type = table === "products" ? "product" : table === "services" ? "service" : "package";
+  const out: ManageQuoteFormCatalogRow[] = [];
+  for (const r of rows) {
+    const meta = await quoteCatalogLocationMeta(slug, type, Number(r.id ?? 0));
+    out.push({ ...r, price: r.price !== null && r.price !== undefined ? String(r.price) : r.price, ...meta } as ManageQuoteFormCatalogRow);
+  }
+  return out;
+}
+
+// Anagrafica clienti per combobox form/lista (con fallback compatibilità legacy).
+async function quoteFormClients(slug: string): Promise<ManageQuoteFormClient[]> {
+  const full = await tenantSelect<RowDataPacket>({
+    slug, table: "clients",
+    columns: "id, full_name, first_name, last_name, email, phone, address, cap, city, province, region, company_name, vat_number, tax_code, sdi, pec",
+    orderBy: "full_name ASC",
+  }).catch(() => null);
+  const rows = full ?? (await tenantSelect<RowDataPacket>({
+    slug, table: "clients",
+    columns: "id, full_name, first_name, last_name, email, phone, address, cap, city, province, region",
+    orderBy: "full_name ASC",
+  }).catch(() => [] as RowDataPacket[]));
+  const strOrNull = (v: unknown) => (v === null || v === undefined ? null : String(v));
+  return rows.map((c) => ({
+    id: Number(c.id ?? 0),
+    full_name: String(c.full_name ?? ""),
+    first_name: strOrNull(c.first_name),
+    last_name: strOrNull(c.last_name),
+    email: strOrNull(c.email),
+    phone: strOrNull(c.phone),
+    address: strOrNull(c.address),
+    cap: strOrNull(c.cap),
+    city: strOrNull(c.city),
+    province: strOrNull(c.province),
+    region: strOrNull(c.region),
+    company_name: strOrNull(c.company_name),
+    vat_number: strOrNull(c.vat_number),
+    tax_code: strOrNull(c.tax_code),
+    sdi: strOrNull(c.sdi),
+    pec: strOrNull(c.pec),
+  }));
+}
+
+export async function getManageQuoteFormData(
+  slug: string,
+  opts: { action: "new" | "edit"; id: number; locationId: number },
+  ctx: QuoteLocationCtx,
+): Promise<ManageQuoteFormData> {
+  const isEdit = opts.action === "edit";
+  let q: RowDataPacket | null = null;
+  let qItems: RowDataPacket[] = [];
+  if (isEdit) {
+    const { quotesTable, clientsTable, scoped, tenantId } = await quoteClientDisplayJoin(slug);
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT q.*, COALESCE(q.client_name, c.full_name) AS client_display
+         FROM \`${quotesTable}\` q
+         LEFT JOIN \`${clientsTable}\` c ON c.id = q.client_id${scoped ? " AND c.tenant_id = q.tenant_id" : ""}
+        WHERE q.id = ?${scoped ? " AND q.tenant_id = ?" : ""} LIMIT 1`,
+      scoped ? [opts.id, tenantId] : [opts.id],
+    ).catch(() => [] as RowDataPacket[]);
+    q = rows[0] ?? null;
+    if (!q) return { redirect: { to: "list", err: "Preventivo non trovato" } };
+    if (!quoteUserCanAccess(q, ctx)) return { redirect: { to: "list", err: "Preventivo non disponibile per le sedi abilitate." } };
+    qItems = await tenantSelect<RowDataPacket>({ slug, table: "quote_items", where: "quote_id = ?", params: [opts.id], orderBy: "position ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
+    const effective = await quoteEffectiveStatusDb(slug, q);
+    if (quoteIsLockedForEditEffective(effective)) {
+      const lockedLabel = QUOTE_ALLOWED_STATUS[effective] ?? effective;
+      return { redirect: { to: "view", id: opts.id, err: `Preventivo in stato "${lockedLabel}" non modificabile.` } };
+    }
+  }
+
+  // Sede del form: da querystring/quote, altrimenti la corrente.
+  let formLocationId = opts.locationId > 0 && ctx.locationIds.includes(opts.locationId) ? opts.locationId : 0;
+  if (formLocationId <= 0 && isEdit) formLocationId = Number(q?.location_id ?? 0);
+  if (formLocationId <= 0) formLocationId = ctx.currentLocationId;
+
+  const biz = await quoteBusinessProfile(slug);
+  const formStatusEffective = isEdit && q ? await quoteEffectiveStatusDb(slug, q) : "draft";
+  let formStatus = QUOTE_ALLOWED_STATUS[formStatusEffective] ? formStatusEffective : "draft";
+  let statusSelectValue = formStatus;
+  let statusAutoOptionLabel = "";
+  if (!QUOTE_EDITABLE_STATUS[statusSelectValue]) {
+    if (["sent", "expired"].includes(statusSelectValue)) {
+      statusAutoOptionLabel = `${QUOTE_ALLOWED_STATUS[statusSelectValue] ?? statusSelectValue} (automatico)`;
+      statusSelectValue = "__keep_auto__";
+    } else {
+      statusSelectValue = "draft";
+      formStatus = "draft";
+    }
+  }
+
+  // Nome/Cognome UI da client_name (quote_split_full_name).
+  const fullClientName = isEdit ? String(q?.client_name ?? q?.client_display ?? "") : "";
+  const [firstName, lastName] = fullClientName !== "" ? quoteSplitFullName(fullClientName) : ["", ""];
+
+  // Numero suggerito per nuovo.
+  let number = isEdit ? String(q?.number ?? "") : "";
+  const quoteDate = isEdit && q?.quote_date ? pgDateOnly(q.quote_date) : todayIso();
+  if (!isEdit) {
+    const year = Number(quoteDate.slice(0, 4));
+    const seq = await quoteNextNumberSeq(slug, year);
+    number = `${seq + 1}/${year}`;
+  }
+
+  const availablePaymentMethods = paymentMethodsParse(biz.payment_methods_raw);
+  let selectedPaymentMethods = paymentMethodsDecode(isEdit ? q?.payment_methods : "");
+  if (availablePaymentMethods.length > 0 && selectedPaymentMethods.length > 0) {
+    const set = new Set(availablePaymentMethods);
+    selectedPaymentMethods = selectedPaymentMethods.filter((v) => set.has(v));
+  }
+
+  const itemsInitial: ManageQuoteFormItem[] = qItems.map((it) => ({
+    quote_item_id: Number(it.id ?? 0),
+    item_type: String(it.item_type ?? "custom"),
+    item_id: it.item_id === null || it.item_id === undefined ? null : Number(it.item_id),
+    description: String(it.description ?? ""),
+    sku: it.sku === null || it.sku === undefined ? null : String(it.sku),
+    qty: Number(it.qty ?? 1),
+    unit_price: Number(it.unit_price ?? 0),
+    tax_rate: Number(it.tax_rate ?? 0),
+    discount_percent: Number(it.discount_percent ?? 0),
+  }));
+
+  return {
+    form: {
+      id: isEdit ? Number(q?.id ?? 0) : 0,
+      number,
+      quoteDate,
+      validUntil: isEdit && q?.valid_until ? pgDateOnly(q.valid_until) : "",
+      locationId: formLocationId,
+      clientId: isEdit ? Number(q?.client_id ?? 0) : 0,
+      clientFirstName: firstName,
+      clientLastName: lastName,
+      clientEmail: isEdit ? String(q?.client_email ?? "") : "",
+      clientPhone: isEdit ? String(q?.client_phone ?? "") : "",
+      clientAddress: isEdit ? String(q?.client_address ?? "") : "",
+      clientCap: isEdit ? String(q?.client_cap ?? "") : "",
+      clientCity: isEdit ? String(q?.client_city ?? "") : "",
+      clientProvince: isEdit ? String(q?.client_province ?? "") : "",
+      clientRegion: "",
+      clientCompanyName: isEdit ? String(q?.client_company_name ?? "") : "",
+      clientVatNumber: isEdit ? String(q?.client_vat_number ?? "") : "",
+      clientTaxCode: isEdit ? String(q?.client_tax_code ?? "") : "",
+      clientSdi: isEdit ? String(q?.client_sdi ?? "") : "",
+      clientPec: isEdit ? String(q?.client_pec ?? "") : "",
+      statusSelectValue,
+      statusAutoOptionLabel,
+      notes: isEdit ? String(q?.notes ?? "") : "",
+      publicNote: isEdit ? String(q?.public_note ?? "") : "",
+      terms: isEdit ? String(q?.terms ?? "") : biz.terms_default,
+      availablePaymentMethods,
+      selectedPaymentMethods,
+      itemsInitial,
+    },
+    config: {
+      clients: await quoteFormClients(slug),
+      products: await quoteFormCatalog(slug, "products"),
+      services: await quoteFormCatalog(slug, "services"),
+      packages: await quoteFormCatalog(slug, "packages"),
+      locations: ctx.locations,
+      initialLocationId: String(formLocationId || ctx.currentLocationId || ""),
+    },
+  };
+}
+
+// ---- SAVE new/edit (quotes.php POST) -------------------------------------------
+export type ManageQuoteSaveResult = { ok: true; id: number } | { ok: false; error: string };
+
+function quoteSaveIsDuplicateError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error ?? "");
+  const code = (error as { code?: string })?.code ?? "";
+  return code === "23505" || code === "23000" || /duplicate/i.test(msg);
+}
+
+export async function saveManageQuote(
+  slug: string,
+  action: "new" | "edit",
+  body: Record<string, unknown>,
+  userId: number,
+  ctx: QuoteLocationCtx,
+): Promise<ManageQuoteSaveResult> {
+  const str = (k: string) => String(body[k] ?? "").trim();
+  let err = "";
+  let id = Math.trunc(Number(body.id ?? 0)) || 0;
+
+  const quoteDate = quoteNormalizeDateInput(body.quote_date) ?? todayIso();
+  const validUntil = quoteNormalizeDateInput(body.valid_until);
+
+  // app_resolve_location_id(raw, true, false): id valido tra le sedi abilitate,
+  // altrimenti 0; vuoto -> sede corrente.
+  const rawLoc = String(body.location_id ?? "").trim();
+  let locationId = 0;
+  if (rawLoc !== "" && Number.parseInt(rawLoc, 10) > 0) {
+    const n = Number.parseInt(rawLoc, 10);
+    locationId = ctx.locationIds.includes(n) ? n : 0;
+  } else if (rawLoc === "") {
+    locationId = ctx.currentLocationId;
+  }
+  if (!locationId && ctx.locations.length > 0) err = "Seleziona una sede valida per il preventivo.";
+
+  let clientId = Math.trunc(Number(body.client_id ?? 0)) || 0;
+  if (clientId <= 0) clientId = 0;
+
+  let clientName = str("client_name");
+  const clientLastName = str("client_last_name");
+  if (clientLastName !== "") {
+    const re = new RegExp(`\\b${clientLastName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b$`, "iu");
+    if (clientName === "") clientName = clientLastName;
+    else if (!re.test(clientName)) clientName = `${clientName} ${clientLastName}`.trim();
+  }
+
+  let clientEmail = str("client_email");
+  let clientPhone = str("client_phone");
+  let clientAddress = str("client_address");
+  let clientCap = str("client_cap");
+  const clientRegion = str("client_region");
+  let clientCity = str("client_city");
+  let clientProvince = str("client_province");
+  let clientTaxCode = str("client_tax_code");
+  let clientVatNumber = str("client_vat_number");
+  let clientSdi = str("client_sdi");
+  let clientCompanyName = str("client_company_name");
+  let clientPec = str("client_pec");
+
+  const numberIn = str("number").replace(/[\r\n]+/g, "");
+  if (numberIn !== "" && numberIn.length > 32) err = "Numero preventivo troppo lungo (max 32 caratteri).";
+
+  let numberToSave = numberIn;
+  if (action === "edit" && numberToSave === "" && id > 0) {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "quotes", columns: "number", where: "id = ?", params: [id], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    numberToSave = String(rows[0]?.number ?? "").trim();
+  }
+  if (!err && action === "edit" && numberToSave === "") err = "Numero preventivo non valido.";
+
+  let prevQuoteMeta: RowDataPacket | null = null;
+  if (action === "edit" && id > 0) {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "quotes", columns: "id, status, valid_until, location_id, sent_at", where: "id = ?", params: [id], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    prevQuoteMeta = rows[0] ?? null;
+    if (!err && !prevQuoteMeta) err = "Preventivo non trovato.";
+    if (!err && prevQuoteMeta && !quoteUserCanAccess(prevQuoteMeta, ctx)) err = "Preventivo non disponibile per le sedi abilitate.";
+    if (!err && prevQuoteMeta) {
+      const effective = await quoteEffectiveStatusDb(slug, prevQuoteMeta);
+      if (quoteIsLockedForEditEffective(effective)) {
+        err = `Preventivo in stato "${QUOTE_ALLOWED_STATUS[effective] ?? effective}" non modificabile.`;
+      }
+    }
+  }
+
+  // Risoluzione stato: editabile diretto; __keep_auto__/altro -> stato precedente
+  // (expired torna sent solo se davvero inviato).
+  const statusIn = str("status") || "draft";
+  let status: string;
+  if (QUOTE_EDITABLE_STATUS[statusIn]) {
+    status = statusIn;
+  } else if (action === "edit") {
+    const prevRawStatus = String(prevQuoteMeta?.status ?? "draft");
+    if (prevRawStatus === "expired") {
+      status = String(prevQuoteMeta?.sent_at ?? "").trim() !== "" && prevQuoteMeta?.sent_at !== null ? "sent" : "draft";
+    } else if (QUOTE_ALLOWED_STATUS[prevRawStatus]) {
+      status = prevRawStatus;
+    } else {
+      status = "draft";
+    }
+  } else {
+    status = "draft";
+  }
+  if (!err && validUntil && status === "sent" && validUntil < todayIso()) status = "expired";
+
+  const publicNote = str("public_note");
+
+  // Metodi di pagamento: solo quelli configurati in Impostazioni.
+  const biz = await quoteBusinessProfile(slug);
+  const availablePms = paymentMethodsParse(biz.payment_methods_raw);
+  // Il form Next invia payment_methods come stringa JSON (il body JSON della
+  // route appiattisce gli array); il legacy riceve payment_methods[].
+  let pmPost: unknown[] = [];
+  if (Array.isArray(body.payment_methods)) {
+    pmPost = body.payment_methods as unknown[];
+  } else if (typeof body.payment_methods === "string" && body.payment_methods.trim() !== "") {
+    try {
+      const parsed = JSON.parse(body.payment_methods);
+      if (Array.isArray(parsed)) pmPost = parsed;
+    } catch { pmPost = []; }
+  }
+  const pmSelected: string[] = [];
+  if (availablePms.length > 0 && pmPost.length > 0) {
+    const set = new Set(availablePms);
+    const seen = new Set<string>();
+    for (const v of pmPost) {
+      const t = String(v ?? "").trim();
+      if (t === "" || seen.has(t)) continue;
+      if (set.has(t)) {
+        seen.add(t);
+        pmSelected.push(t);
+      }
+    }
+  }
+  const paymentMethodsJson = pmSelected.length > 0 ? JSON.stringify(pmSelected) : null;
+
+  const notes = str("notes");
+  const terms = str("terms");
+
+  let items: unknown[] = [];
+  try {
+    const parsed = JSON.parse(String(body.items_json ?? "[]"));
+    if (Array.isArray(parsed)) items = parsed;
+  } catch { items = []; }
+
+  // Prezzi bloccati: righe esistenti mantengono lo snapshot, nuove righe
+  // prendono il prezzo catalogo corrente.
+  const previousQuoteItemsById = new Map<number, RowDataPacket>();
+  if (action === "edit" && id > 0) {
+    const prevRows = await tenantSelect<RowDataPacket>({ slug, table: "quote_items", columns: "id, item_type, item_id, unit_price", where: "quote_id = ?", params: [id] }).catch(() => [] as RowDataPacket[]);
+    for (const pr of prevRows) {
+      const pid = Number(pr.id ?? 0);
+      if (pid > 0) previousQuoteItemsById.set(pid, pr);
+    }
+  }
+
+  type CleanItem = { position: number; item_type: string; item_id: number | null; description: string; sku: string | null; qty: number; unit_price: number; tax_rate: number; discount_percent: number; line_subtotal: number; line_tax: number; line_total: number };
+  const cleanItems: CleanItem[] = [];
+  let subtotal = 0;
+  let discountTotal = 0;
+  let taxTotal = 0;
+  let grandTotal = 0;
+  let pos = 0;
+  for (const raw of items) {
+    if (err) break;
+    if (!raw || typeof raw !== "object") continue;
+    const it = raw as Record<string, unknown>;
+    const desc = String(it.description ?? "").trim();
+    if (desc === "") continue;
+    let qty = Number(it.qty ?? 1);
+    if (!Number.isFinite(qty) || qty <= 0) qty = 1;
+    let unit = Number(it.unit_price ?? 0);
+    if (!Number.isFinite(unit) || unit < 0) unit = 0;
+    let taxRate = Number(it.tax_rate ?? 0);
+    if (!Number.isFinite(taxRate) || taxRate < 0) taxRate = 0;
+    if (taxRate > 100) taxRate = 100;
+    let disc = Number(it.discount_percent ?? 0);
+    if (!Number.isFinite(disc) || disc < 0) disc = 0;
+    if (disc > 100) disc = 100;
+    let type = String(it.item_type ?? "custom");
+    if (!["custom", "product", "service", "package"].includes(type)) type = "custom";
+    let itemId: number | null = Math.trunc(Number(it.item_id ?? 0)) || 0;
+    if (itemId <= 0) itemId = null;
+    let sku: string | null = String(it.sku ?? "").trim();
+    if (sku === "") sku = null;
+    const quoteItemId = Math.trunc(Number(it.quote_item_id ?? 0)) || 0;
+
+    if (["product", "service", "package"].includes(type)) {
+      if (!itemId) {
+        err = `Riga preventivo non valida: seleziona un elemento valido per ${type === "product" ? "Prodotto" : type === "service" ? "Servizio" : "Pacchetto"}.`;
+        break;
+      }
+      let lockedUnit: number | null = null;
+      if (action === "edit" && quoteItemId > 0 && previousQuoteItemsById.has(quoteItemId)) {
+        const prevItem = previousQuoteItemsById.get(quoteItemId) as RowDataPacket;
+        if (String(prevItem.item_type ?? "") === type && Number(prevItem.item_id ?? 0) === itemId) {
+          lockedUnit = Number(prevItem.unit_price ?? 0);
+        }
+      }
+      if (lockedUnit === null) lockedUnit = await quoteCatalogUnitPriceDb(slug, type, itemId);
+      if (lockedUnit === null) {
+        err = "Impossibile recuperare il prezzo catalogo della riga selezionata.";
+        break;
+      }
+      unit = Math.max(0, lockedUnit);
+    }
+
+    const gross = qty * unit;
+    const lineSub = roundMoney(gross * (1 - disc / 100));
+    const lineDisc = roundMoney(gross - gross * (1 - disc / 100));
+    const lineTax = roundMoney(gross * (1 - disc / 100) * (taxRate / 100));
+    const lineTot = roundMoney(gross * (1 - disc / 100) + gross * (1 - disc / 100) * (taxRate / 100));
+    subtotal += lineSub;
+    discountTotal += lineDisc;
+    taxTotal += lineTax;
+    grandTotal += lineTot;
+    cleanItems.push({ position: pos, item_type: type, item_id: itemId, description: desc, sku, qty, unit_price: unit, tax_rate: taxRate, discount_percent: disc, line_subtotal: lineSub, line_tax: lineTax, line_total: lineTot });
+    pos++;
+  }
+
+  if (!err && cleanItems.length === 0) err = "Aggiungi almeno una riga al preventivo.";
+
+  // Compatibilità sede riga per riga.
+  if (!err && locationId) {
+    for (const ci of cleanItems) {
+      const ciType = String(ci.item_type ?? "custom").toLowerCase();
+      const ciItemId = Number(ci.item_id ?? 0);
+      if (!["service", "product", "package"].includes(ciType) || ciItemId <= 0) continue;
+      if (!(await quoteCatalogLocationAllowed(slug, ciType, ciItemId, locationId))) {
+        const typeLabel = ciType === "product" ? "Prodotto" : ciType === "service" ? "Servizio" : "Pacchetto";
+        const locLabel = await quoteCatalogLocationLabel(slug, locationId);
+        const descLabel = String(ci.description ?? "").trim() || `${typeLabel} #${ciItemId}`;
+        err = `${typeLabel} "${descLabel}" non abilitato per la sede "${locLabel}".`;
+        break;
+      }
+    }
+  }
+
+  // Lo stato Accettato è bloccato dalle righe eliminate (i disattivi avvisano solo).
+  if (!err && status === "accepted") {
+    const availability = await quoteCatalogAvailabilityCheckItems(
+      slug,
+      cleanItems.map((ci) => ({ item_type: ci.item_type, item_id: Number(ci.item_id ?? 0), description: ci.description, sku: ci.sku ?? "" })),
+      locationId || null,
+    );
+    if (availability.errors.length > 0) err = quoteCatalogAcceptanceBlockMessage(availability);
+  }
+
+  // Backfill snapshot cliente dai dati anagrafici se selezionato.
+  if (!err && clientId > 0 && (
+    clientName === "" || clientEmail === "" || clientPhone === "" || clientAddress === "" ||
+    clientCap === "" || clientCity === "" || clientProvince === "" ||
+    clientCompanyName === "" || clientVatNumber === "" || clientTaxCode === "" || clientSdi === "" || clientPec === ""
+  )) {
+    const rows = await tenantSelect<RowDataPacket>({
+      slug, table: "clients",
+      columns: "full_name, email, phone, address, cap, city, province, company_name, vat_number, tax_code, sdi, pec",
+      where: "id = ?", params: [clientId], limit: 1,
+    }).catch(() => [] as RowDataPacket[]);
+    const c = rows[0];
+    if (c) {
+      if (clientName === "") clientName = String(c.full_name ?? "");
+      if (clientEmail === "") clientEmail = String(c.email ?? "");
+      if (clientPhone === "") clientPhone = String(c.phone ?? "");
+      if (clientAddress === "") clientAddress = String(c.address ?? "");
+      if (clientCap === "") clientCap = String(c.cap ?? "");
+      if (clientCity === "") clientCity = String(c.city ?? "");
+      if (clientProvince === "") clientProvince = String(c.province ?? "");
+      if (clientCompanyName === "") clientCompanyName = String(c.company_name ?? "");
+      if (clientVatNumber === "") clientVatNumber = String(c.vat_number ?? "");
+      if (clientTaxCode === "") clientTaxCode = String(c.tax_code ?? "");
+      if (clientSdi === "") clientSdi = String(c.sdi ?? "");
+      if (clientPec === "") clientPec = String(c.pec ?? "");
+    }
+  }
+
+  if (err) return { ok: false, error: err };
+
+  const orNull = (v: string) => (v !== "" ? v : null);
+  const quoteValues = (num: string): Record<string, unknown> => ({
+    number: num,
+    quote_date: quoteDate,
+    valid_until: validUntil,
+    client_id: clientId > 0 ? clientId : null,
+    client_name: orNull(clientName),
+    client_company_name: orNull(clientCompanyName),
+    client_vat_number: orNull(clientVatNumber),
+    client_tax_code: orNull(clientTaxCode),
+    client_sdi: orNull(clientSdi),
+    client_pec: orNull(clientPec),
+    client_email: orNull(clientEmail),
+    client_phone: orNull(clientPhone),
+    client_address: orNull(clientAddress),
+    client_cap: orNull(clientCap),
+    client_city: orNull(clientCity),
+    client_province: orNull(clientProvince),
+    status,
+    notes: orNull(notes),
+    public_note: orNull(publicNote),
+    payment_methods: paymentMethodsJson,
+    terms: orNull(terms),
+    subtotal: roundMoney(subtotal),
+    discount_total: roundMoney(discountTotal),
+    tax_total: roundMoney(taxTotal),
+    total: roundMoney(grandTotal),
+  });
+
+  try {
+    if (action === "new") {
+      // Cliente auto-creato dallo snapshot manuale (quote_create_client_from_snapshot).
+      if (clientId <= 0) {
+        const clientSeed: Record<string, string> = {
+          full_name: clientName,
+          first_name: str("client_name"),
+          last_name: clientLastName,
+          company_name: clientCompanyName,
+          vat_number: clientVatNumber,
+          tax_code: clientTaxCode,
+          sdi: clientSdi,
+          pec: clientPec,
+          phone: clientPhone,
+          email: clientEmail,
+          address: clientAddress,
+          cap: clientCap,
+          city: clientCity,
+          province: clientProvince,
+          region: clientRegion,
+        };
+        const manualPresent = ["full_name", "first_name", "last_name", "company_name", "email", "phone", "address", "cap", "city", "province", "region", "tax_code", "vat_number", "sdi", "pec"]
+          .some((k) => (clientSeed[k] ?? "").trim() !== "");
+        if (manualPresent) {
+          let full = clientSeed.full_name.trim();
+          if (full === "") full = `${clientSeed.first_name} ${clientSeed.last_name}`.trim();
+          if (full === "") full = clientSeed.company_name.trim();
+          if (full === "") full = clientSeed.email.trim();
+          if (full === "") full = clientSeed.phone.trim();
+          if (full === "") full = "Cliente preventivo";
+          const clientsTable = await tenantTable(slug, "clients");
+          const newClientValues = await filterColumns(clientsTable.name, {
+            full_name: full,
+            first_name: orNull(clientSeed.first_name),
+            last_name: orNull(clientSeed.last_name),
+            company_name: orNull(clientSeed.company_name),
+            vat_number: orNull(clientSeed.vat_number),
+            tax_code: orNull(clientSeed.tax_code),
+            sdi: orNull(clientSeed.sdi),
+            pec: orNull(clientSeed.pec),
+            phone: orNull(clientSeed.phone),
+            email: orNull(clientSeed.email),
+            address: orNull(clientSeed.address),
+            cap: orNull(clientSeed.cap),
+            city: orNull(clientSeed.city),
+            province: orNull(clientSeed.province),
+            region: orNull(clientSeed.region),
+            registration_date: todayIso(),
+            notes: "Creato automaticamente dal salvataggio di un preventivo.",
+            location_id: locationId > 0 ? locationId : null,
+            created_at: new Date(),
+          });
+          clientId = await tenantInsert(clientsTable, newClientValues);
+          if (clientName === "") {
+            clientName = full;
+          }
+        }
+      }
+
+      const quotesTable = await tenantTable(slug, "quotes");
+      const insertQuote = async (num: string): Promise<number> => {
+        const values = await filterColumns(quotesTable.name, {
+          ...quoteValues(num),
+          created_by: userId > 0 ? userId : null,
+          created_at: new Date(),
+        });
+        return tenantInsert(quotesTable, values);
+      };
+
+      if (numberIn !== "") {
+        try {
+          id = await insertQuote(numberIn);
+        } catch (e) {
+          if (quoteSaveIsDuplicateError(e)) throw new Error("Numero preventivo già esistente. Scegli un numero diverso.");
+          throw e;
+        }
+      } else {
+        // Numero automatico N/YYYY con retry sui duplicati.
+        const year = Number(quoteDate.slice(0, 4));
+        let seq = await quoteNextNumberSeq(slug, year);
+        let inserted = false;
+        for (let i = 0; i < 30; i++) {
+          seq++;
+          try {
+            id = await insertQuote(`${seq}/${year}`);
+            inserted = true;
+            break;
+          } catch (e) {
+            if (quoteSaveIsDuplicateError(e)) continue;
+            throw e;
+          }
+        }
+        if (!inserted) throw new Error("Impossibile generare un numero preventivo univoco.");
+      }
+    } else {
+      if (id <= 0) throw new Error("ID preventivo non valido.");
+      const values = await filterColumns((await tenantTable(slug, "quotes")).name, {
+        ...quoteValues(numberToSave),
+        updated_at: new Date(),
+      });
+      await tenantUpdate({ slug, table: "quotes", id, values });
+
+      const itemTable = await tenantTable(slug, "quote_items");
+      const scoped = itemTable.mode === "shared" && (await columnExists(itemTable.name, "tenant_id"));
+      await dbExecute(
+        `DELETE FROM \`${itemTable.name}\` WHERE quote_id = ?${scoped ? " AND tenant_id = ?" : ""}`,
+        scoped ? [id, itemTable.tenantId ?? 0] : [id],
+      );
+    }
+
+    const itemTable = await tenantTable(slug, "quote_items");
+    for (const ci of cleanItems) {
+      await tenantInsert(itemTable, { quote_id: id, ...ci, created_at: new Date() });
+    }
+
+    await quoteSaveLocationSnapshotDb(slug, id, locationId > 0 ? locationId : null);
+
+    return { ok: true, id };
+  } catch (e) {
+    const msgE = e instanceof Error ? e.message : String(e);
+    if (msgE === "Numero preventivo già esistente. Scegli un numero diverso." || msgE === "Impossibile generare un numero preventivo univoco.") {
+      return { ok: false, error: msgE };
+    }
+    if (quoteSaveIsDuplicateError(e)) return { ok: false, error: "Numero preventivo già esistente. Scegli un numero diverso." };
+    if (/unknown column|column .* does not exist/i.test(msgE)) return { ok: false, error: "DB non aggiornato: importa il dump SQL completo aggiornato e riprova." };
+    return { ok: false, error: `Errore salvataggio: ${msgE}` };
+  }
+}
+
+// ---- DELETE (quotes.php action=delete) -----------------------------------------
+export type ManageQuoteDeleteResult = { redirect: "list" | "view"; id?: number; msg?: string; err?: string };
+export async function deleteManageQuoteLegacy(slug: string, id: number, ctx: QuoteLocationCtx): Promise<ManageQuoteDeleteResult> {
+  try {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "quotes", where: "id = ?", params: [id], limit: 1 });
+    const dq = rows[0];
+    if (!dq) return { redirect: "list", err: "Preventivo non trovato" };
+    if (!quoteUserCanAccess(dq, ctx)) return { redirect: "list", err: "Preventivo non disponibile per le sedi abilitate." };
+    const effective = await quoteEffectiveStatusDb(slug, dq);
+    if (!quoteCanDeleteEffective(effective)) {
+      return { redirect: "view", id, err: "Puoi eliminare solo preventivi in bozza. Per preventivi inviati o storicizzati usa lo stato Annullato/Rifiutato." };
+    }
+    const itemTable = await tenantTable(slug, "quote_items");
+    const scoped = itemTable.mode === "shared" && (await columnExists(itemTable.name, "tenant_id"));
+    await dbExecute(
+      `DELETE FROM \`${itemTable.name}\` WHERE quote_id = ?${scoped ? " AND tenant_id = ?" : ""}`,
+      scoped ? [id, itemTable.tenantId ?? 0] : [id],
+    );
+    await tenantDelete({ slug, table: "quotes", id });
+    return { redirect: "list", msg: "Preventivo eliminato" };
+  } catch (e) {
+    return { redirect: "list", err: `Errore eliminazione: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+// ---- SEND email (quotes.php action=send) ---------------------------------------
+export type ManageQuoteSendResult = { redirect: "list" | "view"; id?: number; msg?: string; err?: string };
+export async function sendManageQuoteEmailLegacy(
+  slug: string,
+  id: number,
+  opts: { toEmail?: string; message?: string },
+  ctx: QuoteLocationCtx,
+): Promise<ManageQuoteSendResult> {
+  const { quotesTable, clientsTable, scoped, tenantId } = await quoteClientDisplayJoin(slug);
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT q.*, COALESCE(q.client_name, c.full_name) AS client_display
+       FROM \`${quotesTable}\` q
+       LEFT JOIN \`${clientsTable}\` c ON c.id = q.client_id${scoped ? " AND c.tenant_id = q.tenant_id" : ""}
+      WHERE q.id = ?${scoped ? " AND q.tenant_id = ?" : ""} LIMIT 1`,
+    scoped ? [id, tenantId] : [id],
+  ).catch(() => [] as RowDataPacket[]);
+  const qq = rows[0];
+  if (!qq) return { redirect: "list", err: "Preventivo non trovato" };
+  if (!quoteUserCanAccess(qq, ctx)) return { redirect: "list", err: "Preventivo non disponibile per le sedi abilitate." };
+
+  const sendValidUntil = qq.valid_until ? quoteNormalizeDateInput(pgDateOnly(qq.valid_until)) : null;
+  if (sendValidUntil !== null && sendValidUntil < todayIso()) {
+    return { redirect: "view", id, err: "Aggiorna la data di validita prima di inviare il preventivo." };
+  }
+  const effective = await quoteEffectiveStatusDb(slug, qq);
+  if (!quoteCanSendEmailFrom(effective, sendValidUntil)) {
+    const sl = QUOTE_ALLOWED_STATUS[effective] ?? effective;
+    return { redirect: "view", id, err: `Invio email non consentito per preventivi in stato "${sl}".` };
+  }
+
+  const availability = await quoteCatalogAvailabilityCheck(slug, id);
+  if (availability.errors.length > 0) {
+    return { redirect: "view", id, err: quoteCatalogAcceptanceBlockMessage(availability) };
+  }
+
+  let to = String(opts.toEmail ?? "").trim();
+  if (to === "") to = String(qq.client_email ?? "").trim();
+  if (to === "" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+    return { redirect: "view", id, err: "Email destinatario non valida." };
+  }
+
+  const customMsg = String(opts.message ?? "").trim();
+
+  let token = "";
+  try {
+    token = await quoteEnsurePublicTokenDb(slug, id);
+  } catch {
+    return { redirect: "view", id, err: "Invio email fallito (controlla configurazione server)." };
+  }
+  const publicUrl = quotePublicUrl(slug, token);
+  const pdfUrl = quotePublicPdfUrl(slug, token);
+
+  const bizBase = await quoteBusinessProfile(slug);
+  const sendBiz = await quoteApplyLocationSnapshotToHeader(slug, qq, bizBase);
+  const bizName = String(sendBiz.company_name ?? "").trim();
+  const clientName = String(qq.client_display ?? qq.client_name ?? "").trim();
+  const number = String(qq.number ?? "");
+
+  let subject = `Preventivo ${number}`;
+  if (bizName !== "") subject += ` - ${bizName}`;
+
+  let body = clientName !== "" ? `Ciao <strong>${escapeQuoteHtml(clientName)}</strong>,<br><br>` : "Ciao,<br><br>";
+  body += `ti inviamo il tuo preventivo <strong>#${escapeQuoteHtml(number)}</strong>.`;
+  const validUntilFmt = formatQuoteValidUntil(qq.valid_until ? pgDateOnly(qq.valid_until) : "");
+  if (validUntilFmt !== "") body += `<br>Valido fino al: <strong>${escapeQuoteHtml(validUntilFmt)}</strong>.`;
+  body += "<br><br>";
+  if (customMsg !== "") {
+    const safeMsg = escapeQuoteHtml(customMsg).replace(/(\r\n|\n\r|\n|\r)/g, "<br>$1");
+    body += `<div style="padding:10px 12px;border:1px solid #e5e7eb;border-radius:12px;background:#f9fafb;margin:10px 0;white-space:pre-wrap;">${safeMsg}</div>`;
+  }
+  if (publicUrl !== "") {
+    body += `<a href="${escapeQuoteHtml(publicUrl)}" style="display:inline-block;background:#4e6da5;color:#fff;text-decoration:none;padding:10px 14px;border-radius:10px;font-weight:600">Apri preventivo</a><br><br>`;
+  }
+  if (pdfUrl !== "") {
+    body += `Scarica PDF: <a href="${escapeQuoteHtml(pdfUrl)}">${escapeQuoteHtml(pdfUrl)}</a><br>`;
+  }
+
+  let ok = false;
+  if (emailConfigured()) {
+    const branding = await quoteEmailBranding(slug);
+    const { html, text } = buildModernEmailTemplate(subject, body, {
+      business_name: bizName,
+      business_email: String(sendBiz.email ?? "").trim(),
+      business_logo_url: branding.logoUrl,
+    });
+    const res = await sendEmail({
+      to,
+      subject,
+      html,
+      text,
+      fromEmail: String(sendBiz.email ?? "").trim() || undefined,
+      fromName: bizName || undefined,
+    }).catch(() => ({ ok: false as const, error: "send failed" }));
+    ok = res.ok === true;
+  }
+
+  if (ok) {
+    // Mark as sent (best-effort): draft -> sent + sent_at/sent_to_email.
+    try {
+      const t = await tenantTable(slug, "quotes");
+      const scopedQ = t.mode === "shared" && (await columnExists(t.name, "tenant_id"));
+      await dbExecute(
+        `UPDATE \`${t.name}\` SET status = CASE WHEN status='draft' THEN 'sent' ELSE status END, sent_at = ?, sent_to_email = ?, updated_at = ? WHERE id = ?${scopedQ ? " AND tenant_id = ?" : ""}`,
+        scopedQ ? [new Date(), to, new Date(), id, t.tenantId ?? 0] : [new Date(), to, new Date(), id],
+      );
+    } catch { /* best-effort */ }
+    return { redirect: "view", id, msg: `Email inviata a ${to}` };
+  }
+  return { redirect: "view", id, err: "Invio email fallito (controlla configurazione server)." };
+}
+
+// ---- PRINT (quotes.php action=print) -------------------------------------------
+export type ManageQuotePrintData = {
+  redirect?: { to: "list"; err: string };
+  print?: {
+    id: number;
+    number: string;
+    quoteDate: string;
+    validUntil: string;
+    statusLabel: string;
+    clientLabel: string;
+    client: { companyName: string; vatNumber: string; taxCode: string; sdi: string; pec: string; phone: string; email: string; address: string; cap: string; city: string; province: string };
+    biz: { companyName: string; vat: string; taxCode: string; sdi: string; pec: string; address: string; cap: string; city: string; province: string; phone: string; email: string; website: string; footer: string; termsDefault: string };
+    items: ManageQuoteViewItem[];
+    subtotal: number;
+    discountTotal: number;
+    taxTotal: number;
+    total: number;
+    publicNote: string;
+    paymentMethods: string[];
+    terms: string;
+  };
+};
+export async function getManageQuotePrintData(slug: string, id: number, ctx: QuoteLocationCtx): Promise<ManageQuotePrintData> {
+  const { quotesTable, clientsTable, scoped, tenantId } = await quoteClientDisplayJoin(slug);
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT q.*, COALESCE(q.client_name, c.full_name) AS client_display
+       FROM \`${quotesTable}\` q
+       LEFT JOIN \`${clientsTable}\` c ON c.id = q.client_id${scoped ? " AND c.tenant_id = q.tenant_id" : ""}
+      WHERE q.id = ?${scoped ? " AND q.tenant_id = ?" : ""} LIMIT 1`,
+    scoped ? [id, tenantId] : [id],
+  ).catch(() => [] as RowDataPacket[]);
+  const q = rows[0];
+  if (!q) return { redirect: { to: "list", err: "Preventivo non trovato" } };
+  if (!quoteUserCanAccess(q, ctx)) return { redirect: { to: "list", err: "Preventivo non disponibile per le sedi abilitate." } };
+
+  const itemRows = await tenantSelect<RowDataPacket>({ slug, table: "quote_items", where: "quote_id = ?", params: [id], orderBy: "position ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
+  const statusKey = await quoteEffectiveStatusDb(slug, q);
+  const bizBase = await quoteBusinessProfile(slug);
+  const biz = await quoteApplyLocationSnapshotToHeader(slug, q, bizBase);
+
+  let clientLabel = String(q.client_display ?? "").trim();
+  if (clientLabel === "") clientLabel = String(q.client_name ?? "Cliente").trim();
+
+  return {
+    print: {
+      id,
+      number: String(q.number ?? ""),
+      quoteDate: q.quote_date ? pgDateOnly(q.quote_date) : "",
+      validUntil: q.valid_until ? pgDateOnly(q.valid_until) : "",
+      statusLabel: QUOTE_ALLOWED_STATUS[statusKey] ?? statusKey,
+      clientLabel,
+      client: {
+        companyName: String(q.client_company_name ?? ""),
+        vatNumber: String(q.client_vat_number ?? ""),
+        taxCode: String(q.client_tax_code ?? ""),
+        sdi: String(q.client_sdi ?? ""),
+        pec: String(q.client_pec ?? ""),
+        phone: String(q.client_phone ?? ""),
+        email: String(q.client_email ?? ""),
+        address: String(q.client_address ?? ""),
+        cap: String(q.client_cap ?? ""),
+        city: String(q.client_city ?? ""),
+        province: String(q.client_province ?? ""),
+      },
+      biz: {
+        companyName: String(biz.company_name ?? ""),
+        vat: String(biz.vat ?? ""),
+        taxCode: String(biz.tax_code ?? ""),
+        sdi: String(biz.sdi ?? ""),
+        pec: String(biz.pec ?? ""),
+        address: String(biz.address ?? ""),
+        cap: String(biz.cap ?? ""),
+        city: String(biz.city ?? ""),
+        province: String(biz.province ?? ""),
+        phone: String(biz.phone ?? ""),
+        email: String(biz.email ?? ""),
+        website: String(biz.website ?? ""),
+        footer: String(biz.footer ?? ""),
+        termsDefault: String(biz.terms_default ?? ""),
+      },
+      items: itemRows.map((r) => mapQuoteViewItem(r)),
+      subtotal: Number(q.subtotal ?? 0),
+      discountTotal: Number(q.discount_total ?? 0),
+      taxTotal: Number(q.tax_total ?? 0),
+      total: Number(q.total ?? 0),
+      publicNote: String(q.public_note ?? ""),
+      paymentMethods: paymentMethodsDecode(q.payment_methods),
+      terms: String(q.terms ?? "").trim() !== "" ? String(q.terms ?? "") : String(biz.terms_default ?? ""),
+    },
+  };
+}
+
 // Port of the quotes.php manual "Invia email" action (action=email): emails the
 // quote to the client with the public-page link and a PDF link, then marks the
 // quote sent. The Next quotes route previously only flipped the status via
@@ -11688,7 +13456,7 @@ function computePromoDiscountCents(promo: RowDataPacket, ch: PromoChildren, cart
   const allocFixedProRata = (us: PromoUnit[], fixedTotC: number) => {
     const sum = us.reduce((s, u) => s + u.unitC, 0);
     if (sum <= 0) return;
-    let tot = Math.min(fixedTotC, sum);
+    const tot = Math.min(fixedTotC, sum);
     const rema: number[] = [];
     let sumBase = 0;
     us.forEach((u, i) => {

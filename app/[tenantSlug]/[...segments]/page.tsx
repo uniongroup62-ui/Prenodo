@@ -20,6 +20,7 @@ import { PromotionFormContent } from "@/components/modules/promotion_form-conten
 import { QuotesContent } from "@/components/modules/quotes-content";
 import { QuoteFormContent } from "@/components/modules/quote_form-content";
 import { QuoteDetailContent } from "@/components/modules/quote_detail-content";
+import { QuotePrintContent } from "@/components/modules/quote_print-content";
 import { RechargesContent } from "@/components/modules/recharges-content";
 import { SuppliersContent } from "@/components/modules/suppliers-content";
 import { SupplierFormContent } from "@/components/modules/supplier_form-content";
@@ -185,7 +186,7 @@ export default async function TenantPage({
   searchParams,
 }: {
   params: Promise<{ tenantSlug: string; segments?: string[] }>;
-  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string; staff_id?: string; source?: string; detail_staff_id?: string; from?: string; to?: string; q?: string; cat?: string; cat_q?: string; cat_status?: string; category_filter_id?: string; low_stock?: string; supplier?: string; category?: string; code?: string; brand?: string; internal_code?: string; product_id?: string; category_search?: string; edit_id?: string; sku?: string; document_number?: string; date?: string; include_canceled?: string; p?: string; category_id?: string; scope?: string; msg?: string; err?: string; type?: string; all_locations?: string; package_name?: string }>;
+  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string; staff_id?: string; source?: string; detail_staff_id?: string; from?: string; to?: string; q?: string; cat?: string; cat_q?: string; cat_status?: string; category_filter_id?: string; low_stock?: string; supplier?: string; category?: string; code?: string; brand?: string; internal_code?: string; product_id?: string; category_search?: string; edit_id?: string; sku?: string; document_number?: string; number?: string; date?: string; include_canceled?: string; p?: string; category_id?: string; scope?: string; msg?: string; err?: string; type?: string; all_locations?: string; package_name?: string }>;
 }) {
   const { tenantSlug, segments } = await params;
   const query = await searchParams;
@@ -430,25 +431,52 @@ export default async function TenantPage({
     );
   }
 
-  // Faithful quote NEW form (quotes.php action=new — "Nuovo preventivo"). The
-  // quotes list links to index.php?page=quotes&action=new; route it to the
-  // faithful CORE editor (client + line items + discount + totals + save). The
-  // action=view/edit detail stays on the existing fallback for now (TODO in the
-  // form component).
+  // Faithful quote NEW/EDIT form (quotes.php action=new|edit).
   if (page === "quotes" && (query.action === "new" || query.action === "edit")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
-        <QuoteFormContent />
+        <QuoteFormContent
+          slug={tenantSlug}
+          initialQuery={{ action: query.action, id: query.id, location_id: query.location_id, msg: query.msg, err: query.err }}
+        />
       </ManageShell>
     );
   }
 
-  // Faithful quote DETAIL (quotes.php action=view): header + client + items +
-  // totals + linked sale + Invia email, instead of the Tailwind fallback.
+  // Faithful quote DETAIL (quotes.php action=view): header actions condizionali,
+  // alert vendita collegata/disponibilità, righe + totali, modale Invia email.
   if (page === "quotes" && query.action === "view") {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
-        <QuoteDetailContent />
+        <QuoteDetailContent slug={tenantSlug} initialQuery={{ id: query.id, msg: query.msg, err: query.err }} />
+      </ManageShell>
+    );
+  }
+
+  // Faithful quote PRINT (quotes.php action=print&embed=1, aperta in _blank
+  // senza chrome). action=pdf è servita dalla stessa vista stampabile
+  // (residuo documentato: nessun renderer PDF server-side in Next).
+  if (page === "quotes" && (query.action === "print" || query.action === "pdf")) {
+    return <QuotePrintContent slug={tenantSlug} initialQuery={{ id: query.id }} />;
+  }
+
+  // Faithful quotes LIST (quotes.php action=list): filtri server-side dalla
+  // querystring + flash ?msg/?err.
+  if (page === "quotes") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <QuotesContent
+          slug={tenantSlug}
+          initialQuery={{
+            client_id: query.client_id,
+            status: query.status,
+            date: query.date,
+            number: query.number,
+            all_locations: query.all_locations,
+            msg: query.msg,
+            err: query.err,
+          }}
+        />
       </ManageShell>
     );
   }

@@ -3986,3 +3986,115 @@ prima troncato senza la coda) e flash con il markup View::alert (icona
 bi-info-circle + d-flex). Verifica: battery e2e 6/6 (msg verbatim, 90 months,
 clamp 36500 + unit fallback days, negativo->0, RIPRISTINO dei valori business
 originali) + 16/16 marker bundle + typecheck/lint puliti.
+
+## Preventivi (quotes.php) — 2026-07-05
+AUDIT COMPLETO del monolite quotes.php (2647 righe: list/view/new/edit/print/
+pdf/delete/send/next_number) + QuoteSale.php + QuoteAvailability.php +
+assets/js/pages/quotes.js vs i moduli Next, con capture live (lista con 1
+preventivo reale, view, form new/edit, print). I 3 componenti Next erano un
+"CORE port" divergente (lista client-side senza sede/filtri veri, form a
+layout inventato senza numero/stato/sede/metodi pagamento, detail ridotto):
+riscritti tutti + NUOVA stampa.
+FIX PRINCIPALI:
+1. Stato EFFETTIVO legacy portato sul server (quote_effective_status):
+   Annullato prevale; Pagato se stato paid O vendita ATTIVA collegata
+   (source_quote_id oppure marker note "Preventivo collegato: Q#id",
+   annullate escluse); sent con validita scaduta -> Scaduto. Badge legacy
+   (sent=primary, expired=warning, canceled=dark...). AUTO-EXPIRE e
+   AUTO-SYNC PAID stampati sul DB a ogni load lista (tenant-scoped, con
+   refresh dello snapshot sede prima del paid).
+2. Lista riscritta: filtri server-side Cliente (combobox ricercabile con
+   TUTTI i clienti ordinati per nome, non solo quelli con preventivi) /
+   Stato (paid matcha anche la vendita attiva collegata via EXISTS) / Data /
+   Numero LIKE / "Tutte le sedi" multi-sede; scoping sede legacy
+   (location_id = corrente OR NULL); ORDER q.id DESC LIMIT 300; colonna Sede
+   (location_name o lookup); Elimina SOLO per bozze con confirm "Eliminare
+   questo preventivo?"; header Impostazioni (perm quotes.settings) + Nuovo
+   preventivo solo se hasAnyQuotes; empty state legacy; "Nessun preventivo
+   trovato con i filtri selezionati."; flash ?msg/?err; fmt_money manuale.
+   RIMOSSO il bottone "Incassa" inventato (non esiste nel legacy).
+3. Dettaglio riscritto: subtitle Data • Valido fino al • Sede • Stato badge;
+   azioni condizionali legacy (Modifica solo se non accepted/paid/canceled;
+   Dettaglio vendita success/outline se annullata; "Vai a Pagamenti" solo
+   accepted senza blocchi, href pos?quote_id= — pos-content ora accetta
+   anche quote_id oltre a quote; PDF; Invia email nei 4 stati con i title
+   disabled verbatim; Stampa _blank embed=1); alert vendita collegata
+   (annullata warning / acquistato success con "Apri dettaglio vendita" /
+   accettato info/warning); ALERT DISPONIBILITA (QuoteAvailability port
+   completo: eliminato=error, disattivato=warning, componenti dei pacchetti
+   via package_items+package_services+service_id con contesto 'Pacchetto
+   "X"', dedupe, label prodotto con SKU, messaggi verbatim con accenti
+   legacy '"X" è stato eliminato.' / 'non e abilitato per la sede'),
+   nascosti su stato Pagato; card Cliente con campi fiscali + riga CAP
+   citta (prov); card Note interne / Nota per il cliente / Metodi di
+   pagamento; righe con product_display_name + SKU + "Sconto: X%", q.tà e
+   IVA raw dal DB ("2.00", "22.00%"); modale invio con apostrofi tipografici
+   verbatim e Link pubblico (già generato) se token presente.
+4. Form new/edit riscritto da zero sul layout legacy a 2 colonne: numero
+   AUTOMATICO N/YYYY (endpoint next_number, aggiornato al cambio data finche
+   non modificato a mano, MAX(split_part) per anno); stato con SOLO gli
+   editabili + opzione "Inviato/Scaduto (automatico)" per gli stati gestiti
+   dal sistema; sede hidden mono-sede o select con confirm+reload verbatim;
+   combobox Cliente che prefilla lo snapshot (split "Cognome, Nome" o ultima
+   parola) e triggera la cascata italy-geo; Regione/Provincia/Citta js-it-*
+   con italy-geo.js iniettato; Info fiscali; metodi di pagamento CHECKBOX
+   dai metodi configurati in Preventivi/Impostazioni con resa strutturata
+   "Nome: dettagli"; condizioni con default quote_terms; box righe con
+   PREZZO BLOCCATO readonly per servizio/prodotto/pacchetto (title legacy),
+   alert() verbatim (Seleziona un servizio. / Inserisci una descrizione. /
+   ...), descrizioni composte legacy (prodotto "Nome (SKU)", pacchetto
+   "Nome (N sedute)"); tabella righe 7 colonne con SKU/sconto; totali col
+   toLocaleString it-IT (fedele a quotes.js, NON number_format).
+5. SAVE legacy completo lato server: ordine validazioni e messaggi verbatim
+   (Seleziona una sede valida / Numero troppo lungo max 32 / Riga non
+   valida: seleziona un elemento valido per X / Aggiungi almeno una riga /
+   'Tipo "desc" non abilitato per la sede "Sede1".' / blocco Accettato con
+   messaggio composito 'Non sara possibile impostare il preventivo in stato
+   "Accettato" ne inviarlo via email perche ... Correggi le righe indicate
+   dal preventivo per rimuovere il blocco.'); PREZZI CATALOGO BLOCCATI (in
+   edit lo snapshot della riga esistente resta anche se il catalogo cambia,
+   le righe nuove prendono il prezzo corrente); nome+cognome uniti con
+   regex legacy; backfill snapshot dal cliente selezionato; CLIENTE
+   AUTO-CREATO dallo snapshot manuale (notes 'Creato automaticamente dal
+   salvataggio di un preventivo.', registration_date oggi, sede); numero
+   manuale con duplicato -> 'Numero preventivo già esistente. Scegli un
+   numero diverso.'; numero automatico con retry 30 -> 'Impossibile
+   generare un numero preventivo univoco.'; __keep_auto__/stati non
+   editabili -> stato precedente (expired torna sent solo se sent_at);
+   sent+validita passata -> expired; metodi pagamento filtrati sui
+   configurati (JSON); snapshot sede location_* dal profilo business;
+   created_by + created_at/updated_at localtime; redirect view con
+   'Preventivo salvato'.
+6. DELETE legacy: accesso sedi, solo bozza EFFETTIVA ('Puoi eliminare solo
+   preventivi in bozza. Per preventivi inviati o storicizzati usa lo stato
+   Annullato/Rifiutato.' -> redirect view), 'Preventivo eliminato' /
+   'Preventivo non trovato' (senza punto) / 'Errore eliminazione: X'.
+7. SEND legacy con guardie in ordine (validita scaduta 'Aggiorna la data di
+   validita prima di inviare il preventivo.' / stato 'Invio email non
+   consentito per preventivi in stato "X".' / blocco disponibilita / 'Email
+   destinatario non valida.'), token pubblico 32-hex garantito con retry,
+   corpo email legacy (Ciao <nome>, Apri preventivo, Scarica PDF),
+   mark-sent (draft->sent + sent_at/sent_to_email) SOLO a invio riuscito,
+   'Email inviata a X' / 'Invio email fallito (controlla configurazione
+   server).' — prima il route flippava lo stato a sent PRIMA dell'invio.
+8. NUOVA pagina STAMPA (print&embed=1, senza chrome): toolbar no-print
+   Torna/Stampa (window.print), intestazione attivita dal profilo preventivo
+   (app_quote_profile_from_quote: profilo business + nome sede live +
+   snapshot congelato per Pagato/Annullato), meta N./Data/Valido/Stato,
+   cliente con indirizzo "CAP citta (prov)" separato da •, righe, totali,
+   Nota, Metodi di pagamento, Condizioni con fallback quote_terms, footer.
+RESIDUI DELIBERATI: action=pdf serve la vista stampabile (nessun renderer
+PDF server-side in Next; il bottone e l'URL legacy restano); il checkout POS
+marca la quote 'converted' invece di 'paid' — lo stato effettivo e il
+paid-sync la normalizzano a 'paid' al primo load della lista; quote_settings
+è pagina separata (audit a parte); il feed GET default resta per
+notifications_quotes.
+Verifica: battery e2e 80/80 (next_number, guardie save verbatim, save
+completo con numero auto/prezzi bloccati/cliente auto/snapshot sede/metodi
+filtrati/matematica righe e totali, duplicati, edit con snapshot prezzi,
+availability disattivato/eliminato con blocchi Accettato+send, send guardie
++ token, lock edit per stato effettivo, __keep_auto__, auto-expire e
+paid-sync su DB, vendita collegata attiva/annullata, filtri lista, print,
+delete draft-only, cleanup CLEAN + ripristino businesses) + 84/84 marker
+bundle + regressione Pacchetti 48/48 + typecheck/lint puliti (warning
+no-css-tags pre-esistenti).

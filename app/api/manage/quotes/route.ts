@@ -1,5 +1,21 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
-import { convertDbQuoteToSale, createDbQuote, deleteDbQuote, getManageQuoteDetail, getManageQuoteForEdit, listDbClients, listDbProducts, listDbQuotes, listDbServices, sendQuoteEmail, updateDbQuote, updateDbQuoteStatus, type QuoteLineInput, type QuoteSaveInput } from "@/lib/db-repositories";
+import {
+  convertDbQuoteToSale,
+  createDbQuote,
+  deleteManageQuoteLegacy,
+  getManageQuoteFormData,
+  getManageQuotePrintData,
+  getManageQuoteViewData,
+  getManageQuotesList,
+  listDbQuotes,
+  quoteNextNumber,
+  saveManageQuote,
+  sendManageQuoteEmailLegacy,
+  updateDbQuote,
+  type QuoteLineInput,
+  type QuoteLocationCtx,
+  type QuoteSaveInput,
+} from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
 import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -9,6 +25,17 @@ import { columnExists, dbExecute, tenantTable } from "@/lib/tenant-db";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+// Contesto sedi per le funzioni quotes (sedi attive visibili all'utente +
+// sede corrente) — port di $quoteLocations/app_current_location_id.
+async function quoteLocationCtx(slug: string): Promise<QuoteLocationCtx> {
+  const context = await getManageLocationContext(slug);
+  return {
+    currentLocationId: context.currentLocationId,
+    locationIds: context.locations.map((l) => l.id),
+    locations: context.locations.map((l) => ({ id: l.id, name: l.name })),
+  };
+}
+
 export async function GET(request: Request) {
   const tenantSlug = manageTenantSlugFromRequest(request);
   const session = await currentManageSession(tenantSlug);
@@ -17,40 +44,60 @@ export async function GET(request: Request) {
 
   try {
     const url = new URL(request.url);
+    const action = url.searchParams.get("action") ?? "";
 
-    // Editor context: the catalog the faithful Nuovo preventivo form needs —
-    // clients (for the cliente picker) + services + products (for the line
-    // items). Numeric prices are parsed from the managed catalog so the form can
-    // seed an editable unit price per line.
-    // Quote DETAIL (action=view): header + client + items + totals + linked sale.
-    if (url.searchParams.get("action") === "view") {
-      const detail = await getManageQuoteDetail(tenantSlug, parseInteger(url.searchParams.get("id"), 0));
-      if (!detail) return jsonError("Preventivo non trovato.", 404);
-      return Response.json({ ok: true, sourceMode: "database", detail });
+    // Numero progressivo per anno (quotes.php action=next_number).
+    if (action === "next_number") {
+      const next = await quoteNextNumber(tenantSlug, url.searchParams.get("quote_date") ?? "");
+      return Response.json({ ok: true, ...next });
     }
 
-    // Edit-form prefill (action=edit): the quote in the CORE editor's shape.
-    if (url.searchParams.get("action") === "edit_get") {
-      const quote = await getManageQuoteForEdit(tenantSlug, parseInteger(url.searchParams.get("id"), 0));
-      if (!quote) return jsonError("Preventivo non trovato.", 404);
-      return Response.json({ ok: true, sourceMode: "database", quote });
-    }
-
-    if (url.searchParams.get("action") === "context") {
-      const [clients, services, products] = await Promise.all([
-        listDbClients({ slug: tenantSlug }),
-        listDbServices({ slug: tenantSlug }),
-        listDbProducts({ slug: tenantSlug }),
-      ]);
+    // Lista legacy con filtri server-side (quotes.php action=list).
+    if (action === "list") {
+      const ctx = await quoteLocationCtx(tenantSlug);
+      const list = await getManageQuotesList(tenantSlug, {
+        clientId: parseInteger(url.searchParams.get("client_id"), 0),
+        status: (url.searchParams.get("status") ?? "").trim(),
+        date: (url.searchParams.get("date") ?? "").trim(),
+        number: (url.searchParams.get("number") ?? "").trim(),
+        allLocations: ["1", "true", "on", "yes", "all"].includes((url.searchParams.get("all_locations") ?? "").trim().toLowerCase()),
+      }, ctx);
       return Response.json({
         ok: true,
         sourceMode: "database",
-        clients: clients.map((c) => ({ id: c.id, name: c.name, email: c.email, phone: c.phone })),
-        services: services.map((s) => ({ id: s.id, name: s.name, price: priceFromManaged(s.price) })),
-        products: products.map((p) => ({ id: p.id, name: p.name, price: priceFromManaged(p.price) })),
+        ...list,
+        selectedClientId: String(parseInteger(url.searchParams.get("client_id"), 0)),
+        canSettings: can(session.user.perms, "quotes.settings"),
       });
     }
 
+    // Dettaglio legacy completo (quotes.php action=view).
+    if (action === "view") {
+      const ctx = await quoteLocationCtx(tenantSlug);
+      const result = await getManageQuoteViewData(tenantSlug, parseInteger(url.searchParams.get("id"), 0), ctx);
+      return Response.json({ ok: true, sourceMode: "database", ...result });
+    }
+
+    // Stampa embed-friendly (quotes.php action=print).
+    if (action === "print") {
+      const ctx = await quoteLocationCtx(tenantSlug);
+      const result = await getManageQuotePrintData(tenantSlug, parseInteger(url.searchParams.get("id"), 0), ctx);
+      return Response.json({ ok: true, sourceMode: "database", ...result });
+    }
+
+    // Dati form new/edit (quotes.php action=new|edit GET).
+    if (action === "form") {
+      const ctx = await quoteLocationCtx(tenantSlug);
+      const mode = url.searchParams.get("mode") === "edit" ? "edit" : "new";
+      const result = await getManageQuoteFormData(tenantSlug, {
+        action: mode,
+        id: parseInteger(url.searchParams.get("id"), 0),
+        locationId: parseInteger(url.searchParams.get("location_id"), 0),
+      }, ctx);
+      return Response.json({ ok: true, sourceMode: "database", ...result });
+    }
+
+    // Feed generico (consumato da notifications_quotes).
     return Response.json({
       ok: true,
       sourceMode: "database",
@@ -61,14 +108,6 @@ export async function GET(request: Request) {
   }
 }
 
-// The managed catalog formats price as a string (e.g. "30 euro" / "12.5 euro").
-// Parse the leading number for the editor's editable unit-price seed.
-function priceFromManaged(value: unknown): number {
-  const match = String(value ?? "").replace(",", ".").match(/-?\d+(\.\d+)?/);
-  const n = match ? Number.parseFloat(match[0]) : 0;
-  return Number.isFinite(n) ? n : 0;
-}
-
 export async function POST(request: Request) {
   const tenantSlug = manageTenantSlugFromRequest(request);
   const session = await currentManageSession(tenantSlug);
@@ -76,6 +115,7 @@ export async function POST(request: Request) {
   if (!can(session.user.perms, "quotes.manage")) return jsonError("Permesso preventivi mancante.", 403);
 
   const body = await parseRequestBody(request);
+  const rawBody = body as Record<string, unknown>;
   const action = body.action ?? "create";
 
   try {
@@ -115,6 +155,16 @@ export async function POST(request: Request) {
       });
     }
 
+    // Salvataggio legacy new/edit (quotes.php POST): validazioni e messaggi
+    // verbatim, prezzi catalogo bloccati, numero automatico N/YYYY.
+    if (action === "save") {
+      const ctx = await quoteLocationCtx(tenantSlug);
+      const mode = String(rawBody.mode ?? "new") === "edit" ? "edit" : "new";
+      const result = await saveManageQuote(tenantSlug, mode, rawBody, session.user.id, ctx);
+      if (!result.ok) return Response.json({ ok: false, error: result.error });
+      return Response.json({ ok: true, sourceMode: "database", id: result.id, message: "Preventivo salvato" });
+    }
+
     if (action === "create") {
       const quote = await createDbQuote(quoteSaveInputFromBody(body), tenantSlug);
       return Response.json({ ok: true, source: "quotes?action=create", sourceMode: "database", quote, quotes: await listDbQuotes(tenantSlug) });
@@ -123,35 +173,30 @@ export async function POST(request: Request) {
     const id = parseInteger(body.id);
     if (id <= 0) return jsonError("ID preventivo mancante.");
 
-    // Update an existing quote (port of quotes.php action=edit save).
+    // Update an existing quote (compat consumer legacy del CORE editor).
     if (action === "update") {
       const quote = await updateDbQuote(id, quoteSaveInputFromBody(body), tenantSlug);
       return Response.json({ ok: true, source: "quotes?action=update", sourceMode: "database", quote, quotes: await listDbQuotes(tenantSlug) });
     }
 
+    // Invio email legacy (quotes.php action=send): guardie in ordine legacy,
+    // token pubblico, mark-sent solo su invio riuscito.
     if (action === "send") {
-      // Port of quotes.php action=email: email the quote to the client (public +
-      // PDF links), then mark it sent. sendQuoteEmail is best-effort / SES-gated and
-      // also performs the legacy "mark sent" stamp on a successful send; we still
-      // flip the status first via updateDbQuoteStatus so the documented status
-      // transition is preserved even when SES is unconfigured (unchanged behaviour).
-      const quote = await updateDbQuoteStatus(id, "sent", tenantSlug);
-      await sendQuoteEmail(id, tenantSlug, { toEmail: body.to_email, message: body.message });
-      return Response.json({ ok: true, sourceMode: "database", quote, quotes: await listDbQuotes(tenantSlug) });
+      const ctx = await quoteLocationCtx(tenantSlug);
+      const result = await sendManageQuoteEmailLegacy(tenantSlug, id, { toEmail: body.to_email, message: body.message }, ctx);
+      return Response.json({ ok: !result.err, sourceMode: "database", ...result });
     }
-    if (action === "accept") {
-      const quote = await updateDbQuoteStatus(id, "accepted", tenantSlug);
-      return Response.json({ ok: true, sourceMode: "database", quote, quotes: await listDbQuotes(tenantSlug) });
-    }
+
     if (action === "convert") {
       const result = await convertDbQuoteToSale(id, tenantSlug, parseInteger(body.location_id, 0));
       return Response.json({ ok: true, source: "quotes?action=convert", sourceMode: "database", ...result, quotes: await listDbQuotes(tenantSlug) });
     }
 
-    // Delete a draft quote (port of quotes.php action=delete).
+    // Delete legacy (quotes.php action=delete): solo bozze, messaggi verbatim.
     if (action === "delete") {
-      await deleteDbQuote(tenantSlug, id);
-      return Response.json({ ok: true, source: "quotes?action=delete", sourceMode: "database", quotes: await listDbQuotes(tenantSlug) });
+      const ctx = await quoteLocationCtx(tenantSlug);
+      const result = await deleteManageQuoteLegacy(tenantSlug, id, ctx);
+      return Response.json({ ok: !result.err, sourceMode: "database", ...result });
     }
 
     return jsonError("Azione preventivi non supportata.");

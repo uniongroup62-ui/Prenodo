@@ -760,7 +760,9 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (quotePreloadRef.current) return;
-    const rawId = new URLSearchParams(window.location.search).get("quote");
+    // ?quote= (Next) o ?quote_id= (URL legacy "Vai a Pagamenti" del dettaglio preventivo).
+    const posParams = new URLSearchParams(window.location.search);
+    const rawId = posParams.get("quote") ?? posParams.get("quote_id");
     const quoteId = Math.max(0, Number.parseInt(String(rawId ?? ""), 10) || 0);
     if (quoteId <= 0) {
       quotePreloadRef.current = true;
