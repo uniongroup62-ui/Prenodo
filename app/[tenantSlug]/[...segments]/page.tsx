@@ -714,6 +714,15 @@ export default async function TenantPage({
     );
   }
 
+  // Faithful Punti Fidelity (fidelity_points.php): flash ?msg/?err.
+  if (page === "fidelity_points") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <FidelityPointsContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
+      </ManageShell>
+    );
+  }
+
   // Faithful Fidelity (fidelity.php): toggle generale con flash ?msg/?err.
   if (page === "fidelity") {
     return (

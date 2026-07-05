@@ -15328,17 +15328,68 @@ export async function getFidelityPointsSettings(slug: string): Promise<FidelityP
 }
 
 // F7 — statistiche reali della pagina Punti (colonna destra legacy): punti
-// emessi/usati/scaduti dal ledger transactions + campagne attive + campagna
-// attiva oggi (per il banner).
-export type FidelityPointsStats = { emitted: number; used: number; expired: number; activeCampaigns: number; activeCampaignToday: string };
-export async function getFidelityPointsStats(slug: string): Promise<FidelityPointsStats> {
+// emessi/usati/scaduti dal ledger transactions (filtrati sulla SEDE corrente
+// quando transactions.location_id esiste), saldo/clienti/top clienti limitati
+// ai clienti con TESSERA Fidelity attiva (kpiClientsWhere), campagne attive e
+// campagna attiva oggi (per il banner).
+export type FidelityPointsStats = {
+  emitted: number;
+  used: number;
+  expired: number;
+  balance: number;
+  clientsWithPoints: number;
+  activeCampaigns: number;
+  activeCampaignToday: string;
+  topClients: Array<{ id: number; name: string; points: number }>;
+  hasTxLocation: boolean;
+};
+export async function getFidelityPointsStats(slug: string, locationId = 0): Promise<FidelityPointsStats> {
+  const txTable = await tenantTable(slug, "transactions").catch(() => null);
+  const hasTxLocation = txTable ? await columnExists(txTable.name, "location_id") : false;
+  const locWhere = hasTxLocation && locationId > 0 ? " AND location_id = ?" : "";
+  const locParams: unknown[] = hasTxLocation && locationId > 0 ? [locationId] : [];
   const sum = async (where: string): Promise<number> => {
-    const rows = await tenantSelect<RowDataPacket>({ slug, table: "transactions", columns: "COALESCE(SUM(delta_points),0) AS s", where }).catch(() => [] as RowDataPacket[]);
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "transactions", columns: "COALESCE(SUM(delta_points),0) AS s", where: `${where}${locWhere}`, params: locParams }).catch(() => [] as RowDataPacket[]);
     return Math.abs(normalizeFidelityPoints(rows[0]?.s ?? 0));
   };
   const emitted = await sum("delta_points > 0");
   const used = await sum("kind = 'redeem'");
   const expired = await sum("kind = 'expire'");
+
+  // Saldo/clienti/top clienti: solo clienti con tessera attiva e non scaduta
+  // (fidelity_points.php ~2896: EXISTS su cards; fallback tutti i clienti).
+  const cT = await tenantTable(slug, "clients").catch(() => null);
+  const cardsT = await tenantTable(slug, "cards").catch(() => null);
+  let balance = 0;
+  let clientsWithPoints = 0;
+  let topClients: Array<{ id: number; name: string; points: number }> = [];
+  if (cT) {
+    const scoped = cT.mode === "shared" && (await columnExists(cT.name, "tenant_id"));
+    const cardsScoped = cardsT ? cardsT.mode === "shared" && (await columnExists(cardsT.name, "tenant_id")) : false;
+    const cardsWhere = cardsT
+      ? ` AND EXISTS (SELECT 1 FROM ${quoteIdentifier(cardsT.name)} fc WHERE fc.client_id = c.id AND fc.status = 'active' AND (fc.expires_at IS NULL OR fc.expires_at >= ?)${cardsScoped ? " AND fc.tenant_id = c.tenant_id" : ""})`
+      : "";
+    const baseWhere = `1=1${scoped ? " AND c.tenant_id = ?" : ""}${cardsWhere}`;
+    const baseParams: unknown[] = [...(scoped ? [cT.tenantId ?? 0] : []), ...(cardsT ? [todayIso()] : [])];
+    const balRows = await dbQuery<RowDataPacket[]>(
+      `SELECT COALESCE(SUM(CASE WHEN c.points > 0 THEN c.points ELSE 0 END),0) AS bal,
+              COALESCE(SUM(CASE WHEN c.points > 0 THEN 1 ELSE 0 END),0) AS n
+         FROM ${quoteIdentifier(cT.name)} c
+        WHERE ${baseWhere}`,
+      baseParams,
+    ).catch(() => [] as RowDataPacket[]);
+    balance = Math.max(0, normalizeFidelityPoints(balRows[0]?.bal ?? 0));
+    clientsWithPoints = Number(balRows[0]?.n ?? 0);
+    const topRows = await dbQuery<RowDataPacket[]>(
+      `SELECT c.id, c.full_name, c.points
+         FROM ${quoteIdentifier(cT.name)} c
+        WHERE ${baseWhere} AND c.points > 0
+     ORDER BY c.points DESC, c.full_name ASC
+        LIMIT 10`,
+      baseParams,
+    ).catch(() => [] as RowDataPacket[]);
+    topClients = topRows.map((r) => ({ id: Number(r.id ?? 0), name: String(r.full_name ?? ""), points: normalizeFidelityPoints(r.points ?? 0) }));
+  }
 
   let activeCampaigns = 0;
   let activeCampaignToday = "";
@@ -15358,7 +15409,7 @@ export async function getFidelityPointsStats(slug: string): Promise<FidelityPoin
       break;
     }
   }
-  return { emitted, used, expired, activeCampaigns, activeCampaignToday };
+  return { emitted, used, expired, balance, clientsWithPoints, activeCampaigns, activeCampaignToday, topClients, hasTxLocation };
 }
 
 // Save the fidelity points earn/redeem/expire settings (port of fidelity_points.php
@@ -15401,62 +15452,89 @@ export async function saveFidelityPointsSettings(slug: string, body: Record<stri
   }
 
   const globalEnabled = Number(existing.fidelity_enabled ?? 0) === 1;
-  if (globalEnabled && pointsEnabled && expireEnabled && expireDays <= 0) {
+  // Blocco legacy: con Fidelity generale disattivata tutte le azioni della
+  // pagina Punti sono bloccate (fidelity_points.php ~1763-1769).
+  if (!globalEnabled) {
+    throw new Error('Fidelity e disattivata. Attiva la funzione in "Impostazione generale" per utilizzare questa sezione.');
+  }
+  if (pointsEnabled && expireEnabled && expireDays <= 0) {
     throw new Error('Per abilitare la scadenza punti inserisci un valore maggiore di 0 in "Scadenza dopo".');
   }
 
-  // F6 — conferme popup legacy (fidelity_points.php ~2014-2025) + rimozione
-  // agevolazioni + disattivazione campagne quando si spengono punti/redeem.
+  // F6 — conferme popup legacy (fidelity_points.php ~2014-2025): TUTTE le
+  // guardie vengono valutate PRIMA di qualsiasi scrittura (i redirect legacy
+  // avvengono prima della transazione).
   const truthyConfirm = (v: unknown) => ["1", "true", "on", "yes"].includes(String(v ?? "").toLowerCase());
   const pointsWasEnabled = Number(existing.fidelity_points_enabled ?? 0) === 1;
   const redeemWasEnabled = Number(existing.fidelity_redeem_enabled ?? 0) === 1;
   const disablingPoints = pointsWasEnabled && !pointsEnabled;
-  const disablingRedeem = pointsEnabled && redeemWasEnabled && !redeemEnabled;
+  const disablingRedeem = pointsWasEnabled && redeemWasEnabled && !(pointsEnabled && redeemEnabled) && !disablingPoints;
 
-  let strippedAppointments = 0;
-  if (globalEnabled && (disablingPoints || disablingRedeem)) {
-    const impacted = await tenantSelect<RowDataPacket>({
+  // WHERE legacy del ramo redeem (collect_disable_redeem_impacted_appointments):
+  // sconto punti O scelta conflitto discount/later sulle prenotazioni aperte.
+  const REDEEM_WHERE = "status IN ('pending','scheduled') AND (COALESCE(fidelity_points_used,0) > 0 OR COALESCE(fidelity_discount,0) > 0 OR LOWER(COALESCE(fidelity_conflict_choice,'')) IN ('discount','later'))";
+  let impacted: RowDataPacket[] = [];
+  if (disablingPoints || disablingRedeem) {
+    impacted = await tenantSelect<RowDataPacket>({
       slug,
       table: "appointments",
-      columns: "id, client_id, COALESCE(fidelity_points_used,0) AS pts, COALESCE(fidelity_gift_points_used,0) AS gpts",
-      where: "status IN ('pending','scheduled') AND (COALESCE(fidelity_points_used,0) > 0 OR COALESCE(fidelity_discount,0) > 0)",
+      columns: "id, COALESCE(fidelity_conflict_choice,'') AS choice",
+      where: REDEEM_WHERE,
     }).catch(() => [] as RowDataPacket[]);
-    if (impacted.length > 0 && !truthyConfirm(body.fidelity_disable_confirmed)) {
+    if (impacted.length > 0 && !truthyConfirm(body.fidelity_disable_confirmed) && !truthyConfirm(body.disable_redeem_appointments_confirmed)) {
       const targetLabel = disablingPoints ? "Punti Fidelity" : "sconto tramite punti";
       throw new Error(
         `Prima di disattivare "${targetLabel}" conferma dal popup la rimozione degli sconti/scelte punti da ${impacted.length} ${impacted.length === 1 ? "prenotazione aperta" : "prenotazioni aperte"}. Saldo punti, movimenti e storico resteranno salvati.`,
       );
     }
-    // Strip confermato: le prenotazioni aperte perdono lo sconto punti; i punti
-    // riservati tornano al saldo (nel modello Next la riserva è una detrazione).
-    for (const appt of impacted) {
-      const clientId = Number(appt.client_id ?? 0);
-      const restore = Math.max(0, Math.round(Number(appt.pts ?? 0))) + (disablingPoints ? Math.max(0, Math.round(Number(appt.gpts ?? 0))) : 0);
-      if (restore > 0 && clientId > 0) {
-        const clientsTable = await tenantTable(slug, "clients");
-        await dbExecute(
-          `UPDATE ${quoteIdentifier(clientsTable.name)} SET points = COALESCE(points,0) + ? WHERE tenant_id = ? AND id = ?`,
-          [restore, clientsTable.tenantId ?? 0, clientId],
-        ).catch(() => undefined);
+  }
+
+  // Conferma cambio scadenza (fidelity_points.php ~2022-2025) — anch'essa
+  // PRIMA delle scritture.
+  const prevExpireEnabledGuard = Number(existing.fidelity_expire_enabled ?? 0) === 1;
+  const prevExpireDaysGuard = Math.max(0, Math.round(Number(existing.fidelity_expire_days ?? 0)));
+  const expiryChanged = prevExpireEnabledGuard !== expireEnabled || (expireEnabled && prevExpireDaysGuard !== expireDays);
+  if (expiryChanged && !truthyConfirm(body.fidelity_expiry_confirmed) && !truthyConfirm(body.expiry_settings_confirmed)) {
+    throw new Error("Prima di modificare la scadenza punti conferma dal popup: i punti residui aperti verranno riallineati alla nuova impostazione.");
+  }
+
+  // Strip legacy (remove_disable_redeem_impacted_associations): AZZERA solo
+  // sconto punti e scelte discount/later — i punti erano lockati virtualmente,
+  // NIENTE riaccredito al saldo; i campi omaggio NON vengono toccati. Le note
+  // automatiche 'Fidelity: -...' / 'Fidelity: scelta in negozio' vengono
+  // ripulite (scope redeem: 'omaggio prenotato' resta).
+  let strippedAppointments = 0;
+  if ((disablingPoints || disablingRedeem) && impacted.length > 0) {
+    const noteRows = await tenantSelect<RowDataPacket>({
+      slug, table: "appointments", columns: "id, notes",
+      where: `${REDEEM_WHERE} AND notes IS NOT NULL AND notes <> ''`,
+    }).catch(() => [] as RowDataPacket[]);
+    for (const row of noteRows) {
+      const old = String(row.notes ?? "");
+      const kept: string[] = [];
+      for (const line of old.split(/\r\n|\r|\n/)) {
+        const trimmed = line.trim();
+        if (trimmed !== "" && /^fidelity:\s*(?:-|scelta in negozio)/i.test(trimmed)) continue;
+        kept.push(line);
       }
+      const next = kept.join("\n").trim();
+      if (next === old) continue;
+      await tenantUpdate({ slug, table: "appointments", id: Number(row.id ?? 0), values: { notes: next !== "" ? next : null } }).catch(() => undefined);
+    }
+    for (const appt of impacted) {
+      const choice = String(appt.choice ?? "").trim().toLowerCase();
       await tenantUpdate({
         slug,
         table: "appointments",
         id: Number(appt.id),
-        values: disablingPoints
-          ? { fidelity_points_used: 0, fidelity_discount: 0, fidelity_gift_points_used: 0, fidelity_gift_idx: null, fidelity_conflict_choice: "" }
-          : { fidelity_points_used: 0, fidelity_discount: 0 },
+        values: {
+          fidelity_points_used: 0,
+          fidelity_discount: 0,
+          ...(choice === "discount" || choice === "later" ? { fidelity_conflict_choice: null } : {}),
+        },
       }).catch(() => undefined);
     }
     strippedAppointments = impacted.length;
-  }
-
-  // Conferma cambio scadenza (fidelity_points.php ~2022-2025).
-  const prevExpireEnabledGuard = Number(existing.fidelity_expire_enabled ?? 0) === 1;
-  const prevExpireDaysGuard = Math.max(0, Math.round(Number(existing.fidelity_expire_days ?? 0)));
-  const expiryChanged = prevExpireEnabledGuard !== expireEnabled || (expireEnabled && prevExpireDaysGuard !== expireDays);
-  if (globalEnabled && pointsEnabled && expiryChanged && !truthyConfirm(body.fidelity_expiry_confirmed)) {
-    throw new Error("Prima di modificare la scadenza punti conferma dal popup: i punti residui aperti verranno riallineati alla nuova impostazione.");
   }
 
   // Punti disattivati -> campagne punti attive disattivate (auto_disabled_by_points).
@@ -15517,6 +15595,7 @@ export type FidelityCampaign = {
   id: number;
   name: string;
   active: boolean;
+  autoDisabledByPoints: boolean;
   startsAt: string;
   endsAt: string;
   earnMode: "amount" | "tiers";
@@ -15562,6 +15641,7 @@ function mapFidelityCampaign(row: RowDataPacket): FidelityCampaign {
     id: Number(row.id ?? 0),
     name: String(row.name ?? "Campagna punti"),
     active: Number(row.active ?? 0) === 1,
+    autoDisabledByPoints: Number(row.active ?? 0) !== 1 && Number(row.auto_disabled_by_points ?? 0) === 1,
     startsAt: row.starts_at ? String(row.starts_at).slice(0, 10) : "",
     endsAt: row.ends_at ? String(row.ends_at).slice(0, 10) : "",
     earnMode,
@@ -15573,8 +15653,151 @@ function mapFidelityCampaign(row: RowDataPacket): FidelityCampaign {
 }
 
 export async function listFidelityCampaigns(slug: string): Promise<FidelityCampaign[]> {
-  const rows = await tenantSelect<RowDataPacket>({ slug, table: "fidelity_campaigns", where: "deleted_at IS NULL", orderBy: "id DESC" }).catch(() => [] as RowDataPacket[]);
+  // Ordine legacy Fidelity::listCampaigns: attive prima, poi con scadenza,
+  // poi con inizio, per date desc, id desc.
+  const rows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "fidelity_campaigns",
+    where: "deleted_at IS NULL",
+    orderBy: "active DESC, (ends_at IS NULL)::int ASC, (starts_at IS NULL)::int ASC, starts_at DESC, ends_at DESC, id DESC",
+  }).catch(() => [] as RowDataPacket[]);
   return rows.map(mapFidelityCampaign);
+}
+
+// Blocco legacy della pagina Punti: con Fidelity generale disattivata tutte le
+// azioni (settings/campagne) sono bloccate.
+async function assertFidelityGlobalOn(slug: string): Promise<void> {
+  if (!(await getFidelityEnabled(slug))) {
+    throw new Error('Fidelity e disattivata. Attiva la funzione in "Impostazione generale" per utilizzare questa sezione.');
+  }
+}
+
+// Fidelity::enabled() legacy = globale && modulo Punti.
+async function fidelityPointsOperational(slug: string): Promise<boolean> {
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_enabled, fidelity_points_enabled", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  return Number(rows[0]?.fidelity_enabled ?? 0) === 1 && Number(rows[0]?.fidelity_points_enabled ?? 0) === 1;
+}
+
+// fidelity_page_campaign_delete_preview: contatori dei collegamenti della
+// campagna (prenotazioni per stato, vendite, ricariche, movimenti punti earn).
+export type FidelityCampaignPreview = {
+  campaign: { id: number; name: string; active: boolean; deleted: boolean };
+  references: number;
+  will_archive: boolean;
+  can_archive: boolean;
+  has_open_appointments: boolean;
+  appointments: { total: number; open: number; done: number; canceled: number; other: number; points: number };
+  sales: { total: number; active: number; canceled: number; points: number };
+  recharges: { total: number; active: number; voided: number; points: number };
+  movements: { total: number; points: number };
+};
+
+export async function fidelityCampaignPreview(slug: string, campaignId: number): Promise<FidelityCampaignPreview> {
+  if (campaignId <= 0) throw new Error("Campagna non valida.");
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "fidelity_campaigns", columns: "id, name, active, deleted_at", where: "id = ?", params: [campaignId], limit: 1 });
+  if (!rows[0]) throw new Error("Campagna punti non trovata.");
+
+  const appointments = { total: 0, open: 0, done: 0, canceled: 0, other: 0, points: 0 };
+  const aRows = await tenantSelect<RowDataPacket>({
+    slug, table: "appointments",
+    columns: `COUNT(*) AS total,
+              COALESCE(SUM(CASE WHEN LOWER(TRIM(COALESCE(status,''))) IN ('pending','scheduled') THEN 1 ELSE 0 END),0) AS open_count,
+              COALESCE(SUM(CASE WHEN LOWER(TRIM(COALESCE(status,''))) = 'done' THEN 1 ELSE 0 END),0) AS done_count,
+              COALESCE(SUM(CASE WHEN LOWER(TRIM(COALESCE(status,''))) IN ('canceled','cancelled','rejected','annullato','rifiutato') THEN 1 ELSE 0 END),0) AS canceled_count,
+              COALESCE(SUM(COALESCE(fidelity_points_earned,0)),0) AS points`,
+    where: "fidelity_campaign_id = ?",
+    params: [campaignId],
+  }).catch(() => [] as RowDataPacket[]);
+  if (aRows[0]) {
+    appointments.total = Number(aRows[0].total ?? 0);
+    appointments.open = Number(aRows[0].open_count ?? 0);
+    appointments.done = Number(aRows[0].done_count ?? 0);
+    appointments.canceled = Number(aRows[0].canceled_count ?? 0);
+    appointments.points = Math.trunc(normalizeFidelityPoints(aRows[0].points ?? 0));
+    appointments.other = Math.max(0, appointments.total - appointments.open - appointments.done - appointments.canceled);
+  }
+
+  const sales = { total: 0, active: 0, canceled: 0, points: 0 };
+  const sRows = await tenantSelect<RowDataPacket>({
+    slug, table: "sales",
+    columns: `COUNT(*) AS total,
+              COALESCE(SUM(CASE WHEN LOWER(TRIM(COALESCE(status,''))) IN ('cancelled','canceled') THEN 1 ELSE 0 END),0) AS canceled_count,
+              COALESCE(SUM(CASE WHEN LOWER(TRIM(COALESCE(status,''))) NOT IN ('cancelled','canceled') OR status IS NULL THEN 1 ELSE 0 END),0) AS active_count,
+              COALESCE(SUM(COALESCE(fidelity_points_earned,0)),0) AS points`,
+    where: "fidelity_campaign_id = ?",
+    params: [campaignId],
+  }).catch(() => [] as RowDataPacket[]);
+  if (sRows[0]) {
+    sales.total = Number(sRows[0].total ?? 0);
+    sales.active = Number(sRows[0].active_count ?? 0);
+    sales.canceled = Number(sRows[0].canceled_count ?? 0);
+    sales.points = Math.trunc(normalizeFidelityPoints(sRows[0].points ?? 0));
+  }
+
+  const recharges = { total: 0, active: 0, voided: 0, points: 0 };
+  const rT = await tenantTable(slug, "recharges").catch(() => null);
+  if (rT && (await columnExists(rT.name, "fidelity_campaign_id"))) {
+    const hasVoid = await columnExists(rT.name, "is_void");
+    const hasPoints = await columnExists(rT.name, "points_earned");
+    const rRows = await tenantSelect<RowDataPacket>({
+      slug, table: "recharges",
+      columns: `COUNT(*) AS total,
+                ${hasVoid ? "COALESCE(SUM(CASE WHEN COALESCE(is_void,0) = 1 THEN 1 ELSE 0 END),0)" : "0"} AS voided_count,
+                ${hasVoid ? "COALESCE(SUM(CASE WHEN COALESCE(is_void,0) = 0 THEN 1 ELSE 0 END),0)" : "COUNT(*)"} AS active_count,
+                ${hasPoints ? "COALESCE(SUM(COALESCE(points_earned,0)),0)" : "0"} AS points`,
+      where: "fidelity_campaign_id = ?",
+      params: [campaignId],
+    }).catch(() => [] as RowDataPacket[]);
+    if (rRows[0]) {
+      recharges.total = Number(rRows[0].total ?? 0);
+      recharges.active = Number(rRows[0].active_count ?? 0);
+      recharges.voided = Number(rRows[0].voided_count ?? 0);
+      recharges.points = Math.trunc(normalizeFidelityPoints(rRows[0].points ?? 0));
+    }
+  }
+
+  // Movimenti earn collegati (transactions su appuntamenti/vendite/ricariche
+  // della campagna).
+  const movements = { total: 0, points: 0 };
+  {
+    const tT = await tenantTable(slug, "transactions").catch(() => null);
+    const aT = await tenantTable(slug, "appointments").catch(() => null);
+    const sT = await tenantTable(slug, "sales").catch(() => null);
+    if (tT && aT && sT) {
+      const scoped = tT.mode === "shared" && (await columnExists(tT.name, "tenant_id"));
+      const parts = [
+        `SELECT t.delta_points FROM ${quoteIdentifier(tT.name)} t JOIN ${quoteIdentifier(aT.name)} a ON a.id = t.source_id${scoped ? " AND a.tenant_id = t.tenant_id" : ""} WHERE t.source_type = 'appointment' AND t.kind = 'earn' AND a.fidelity_campaign_id = ?${scoped ? " AND t.tenant_id = ?" : ""}`,
+        `SELECT t.delta_points FROM ${quoteIdentifier(tT.name)} t JOIN ${quoteIdentifier(sT.name)} s ON s.id = t.source_id${scoped ? " AND s.tenant_id = t.tenant_id" : ""} WHERE t.source_type = 'sale' AND t.kind = 'earn' AND s.fidelity_campaign_id = ?${scoped ? " AND t.tenant_id = ?" : ""}`,
+      ];
+      const params: unknown[] = scoped ? [campaignId, tT.tenantId ?? 0, campaignId, tT.tenantId ?? 0] : [campaignId, campaignId];
+      if (rT && (await columnExists(rT.name, "fidelity_campaign_id"))) {
+        parts.push(`SELECT t.delta_points FROM ${quoteIdentifier(tT.name)} t JOIN ${quoteIdentifier(rT.name)} r ON r.id = t.source_id${scoped ? " AND r.tenant_id = t.tenant_id" : ""} WHERE t.source_type = 'credit_recharge' AND t.kind = 'earn' AND r.fidelity_campaign_id = ?${scoped ? " AND t.tenant_id = ?" : ""}`);
+        params.push(campaignId);
+        if (scoped) params.push(tT.tenantId ?? 0);
+      }
+      const mRows = await dbQuery<RowDataPacket[]>(
+        `SELECT COUNT(*) AS total, COALESCE(SUM(delta_points),0) AS points FROM (${parts.join("\nUNION ALL\n")}) z`,
+        params,
+      ).catch(() => [] as RowDataPacket[]);
+      if (mRows[0]) {
+        movements.total = Number(mRows[0].total ?? 0);
+        movements.points = Math.trunc(normalizeFidelityPoints(mRows[0].points ?? 0));
+      }
+    }
+  }
+
+  const references = appointments.total + sales.total + recharges.total;
+  return {
+    campaign: { id: Number(rows[0].id ?? 0), name: String(rows[0].name ?? `Campagna #${campaignId}`), active: Number(rows[0].active ?? 0) === 1, deleted: Boolean(rows[0].deleted_at) },
+    references,
+    will_archive: references > 0,
+    can_archive: true,
+    has_open_appointments: appointments.open > 0,
+    appointments,
+    sales,
+    recharges,
+    movements,
+  };
 }
 
 // The set of valid point-level keys (businesses.fidelity_card_levels_json + the
@@ -15859,18 +16082,29 @@ function campaignPeriodsOverlap(s1: string, e1: string, s2: string, e2: string):
 async function assertNoActiveCampaignOverlap(slug: string, campaignId: number, startsAt: string, endsAt: string): Promise<void> {
   const actives = (await listFidelityCampaigns(slug)).filter((c) => c.active && c.id !== campaignId);
   const clash = actives.find((c) => campaignPeriodsOverlap(startsAt, endsAt, c.startsAt, c.endsAt));
-  if (clash) throw new Error(`Periodo sovrapposto a un'altra campagna punti attiva ("${clash.name}"). Modifica le date o disattiva l'altra campagna.`);
+  if (clash) {
+    // Messaggio verbatim legacy (fidelity_page_campaign_period_overlap_message):
+    // label '"NOME" (ID N)' + periodo 'Subito|d/m/Y -> Mai|d/m/Y'.
+    const dmy = (s: string) => `${s.slice(8, 10)}/${s.slice(5, 7)}/${s.slice(0, 4)}`;
+    const name = clash.name.trim();
+    let label = name !== "" ? `"${name}"` : "campagna esistente";
+    if (clash.id > 0) label += ` (ID ${clash.id})`;
+    const period = `${clash.startsAt !== "" ? dmy(clash.startsAt) : "Subito"} -> ${clash.endsAt !== "" ? dmy(clash.endsAt) : "Mai"}`;
+    throw new Error(`Esiste gia una campagna punti attiva nello stesso periodo: ${label} (${period}). Modifica le date, disattiva l'altra campagna oppure salva questa campagna come inattiva.`);
+  }
 }
 
 // Create / update a points campaign (port of save_fidelity_campaign): amount or
 // tiers earn mode, level eligibility, min spend, active window; activating needs
 // Fidelity on + a non-overlapping active period + valid levels.
 export async function saveFidelityCampaign(slug: string, body: Record<string, string>, id: number): Promise<FidelityCampaign> {
+  await assertFidelityGlobalOn(slug);
   let name = String(body.name ?? body.fid_campaign_name ?? "").trim();
   if (name === "") name = "Campagna punti";
   if (name.length > 120) name = name.slice(0, 120);
   const active = ["1", "true", "on", "yes"].includes(String(body.active ?? body.fid_campaign_active ?? "").toLowerCase());
-  if (active && !(await getFidelityEnabled(slug))) throw new Error("Attiva prima Punti Fidelity per attivare le campagne punti.");
+  // Fidelity::enabled() legacy = globale && modulo Punti.
+  if (active && !(await fidelityPointsOperational(slug))) throw new Error("Attiva prima Punti Fidelity per attivare le campagne punti.");
 
   const startsAt = normalizeClientDate(body.starts_at ?? body.fid_campaign_starts_at) ?? "";
   const endsNever = ["1", "true", "on", "yes"].includes(String(body.ends_never ?? body.fid_campaign_ends_never ?? "").toLowerCase());
@@ -15931,12 +16165,13 @@ export async function saveFidelityCampaign(slug: string, body: Record<string, st
 // Activate/deactivate a campaign (port of toggle_fidelity_campaign): activating
 // needs Fidelity on, valid levels, and a non-overlapping active period.
 export async function toggleFidelityCampaign(slug: string, id: number, active: boolean): Promise<FidelityCampaign> {
+  await assertFidelityGlobalOn(slug);
   if (id <= 0) throw new Error("Campagna non valida.");
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "fidelity_campaigns", where: "id = ?", params: [id], limit: 1 });
   if (!rows[0]) throw new Error("Campagna non trovata.");
   if (rows[0].deleted_at) throw new Error("Questa campagna punti e stata rimossa e non puo essere riattivata.");
   if (active) {
-    if (!(await getFidelityEnabled(slug))) throw new Error("Attiva prima Punti Fidelity per riattivare le campagne punti.");
+    if (!(await fidelityPointsOperational(slug))) throw new Error("Attiva prima Punti Fidelity per riattivare le campagne punti.");
     const camp = mapFidelityCampaign(rows[0]);
     if (camp.eligibleLevels.length > 0) {
       const available = await fidelityPointLevelKeys(slug);
@@ -15949,19 +16184,28 @@ export async function toggleFidelityCampaign(slug: string, id: number, active: b
   return mapFidelityCampaign(out[0]);
 }
 
-// Delete a campaign (port of delete_fidelity_campaign): hard-delete when nothing
-// references it, else soft-delete (deleted_at + active=0) to preserve history.
-export async function deleteFidelityCampaign(slug: string, id: number, by: number): Promise<{ ok: true; mode: "hard" | "soft" }> {
+// Delete a campaign (port of delete_fidelity_campaign): hard-delete quando
+// NESSUN riferimento (prenotazioni + vendite + ricariche), altrimenti
+// soft-delete (active=0 + deleted_at/by/reason) preservando lo storico.
+export async function deleteFidelityCampaign(slug: string, id: number, by: number, reason = ""): Promise<{ ok: true; mode: "hard" | "soft" | "already" }> {
+  await assertFidelityGlobalOn(slug);
   if (id <= 0) throw new Error("Campagna non valida.");
-  const rows = await tenantSelect<RowDataPacket>({ slug, table: "fidelity_campaigns", columns: "id, deleted_at", where: "id = ?", params: [id], limit: 1 });
-  if (!rows[0]) throw new Error("Campagna non trovata.");
-  if (rows[0].deleted_at) return { ok: true, mode: "soft" };
-  const refs = (await tenantSelect<RowDataPacket>({ slug, table: "appointments", columns: "id", where: "fidelity_campaign_id = ?", params: [id], limit: 1 }).catch(() => [] as RowDataPacket[])).length;
-  if (refs === 0) {
+  const preview = await fidelityCampaignPreview(slug, id);
+  if (preview.campaign.deleted) return { ok: true, mode: "already" };
+  if (preview.references <= 0) {
     await tenantDelete({ slug, table: "fidelity_campaigns", id });
     return { ok: true, mode: "hard" };
   }
-  await tenantUpdate({ slug, table: "fidelity_campaigns", id, values: { active: 0, deleted_at: new Date(), deleted_by: by > 0 ? by : null, updated_at: new Date() } });
+  let deleteReason = String(reason ?? "").trim();
+  if (deleteReason.length > 255) deleteReason = deleteReason.slice(0, 255);
+  const values = await filterColumns((await tenantTable(slug, "fidelity_campaigns")).name, {
+    active: 0,
+    deleted_at: new Date(),
+    deleted_by: by > 0 ? by : null,
+    deleted_reason: deleteReason !== "" ? deleteReason : null,
+    updated_at: new Date(),
+  });
+  await tenantUpdate({ slug, table: "fidelity_campaigns", id, values });
   return { ok: true, mode: "soft" };
 }
 

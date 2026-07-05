@@ -1,5 +1,5 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
-import { addDbWalletMovement, dbWalletBalance, deleteFidelityCampaign, deleteFidelityCard, fidelityDisableImpact, fidelityWalletManualMove, getFidelityEnabled, getFidelityLevelsSettings, getFidelityMembership, getFidelityPointsSettings, getFidelityPointsStats, getFidelityWallet, getManageCreditMovements, issueFidelityCard, listDbClients, listDbWalletMovements, listFidelityCampaigns, manualCreditDebit, reactivateFidelityCard, saveFidelityCampaign, saveFidelityLevels, saveFidelityPointsSettings, setFidelityEnabled, toggleFidelityCampaign, updateFidelityCardStatus } from "@/lib/db-repositories";
+import { addDbWalletMovement, dbWalletBalance, deleteFidelityCampaign, deleteFidelityCard, fidelityCampaignPreview, fidelityDisableImpact, fidelityLinkedAppointmentsDetailed, fidelityWalletManualMove, getFidelityEnabled, getFidelityLevelsSettings, getFidelityMembership, getFidelityPointsSettings, getFidelityPointsStats, getFidelityWallet, getManageCreditMovements, issueFidelityCard, listDbClients, listDbWalletMovements, listFidelityCampaigns, manualCreditDebit, reactivateFidelityCard, saveFidelityCampaign, saveFidelityLevels, saveFidelityPointsSettings, setFidelityEnabled, toggleFidelityCampaign, updateFidelityCardStatus } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
 import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -32,14 +32,34 @@ export async function GET(request: Request) {
 
     // Fidelity Points earn/redeem/expire settings (fidelity_points.php).
     if (url.searchParams.get("action") === "points_settings") {
-      // stats = colonna destra legacy della pagina Punti (emessi/usati/scaduti/
-      // campagne attive) + campagna attiva oggi per il banner.
+      // stats = colonna destra legacy della pagina Punti (emessi/usati/scaduti
+      // filtrati sulla sede corrente, saldo/top clienti con tessera attiva,
+      // campagne attive) + campagna attiva oggi; redeemImpacted = prenotazioni
+      // aperte con sconto/scelta punti per la modale di conferma legacy;
+      // canPoints/canLevels per la vista "solo Livelli Card".
+      const settings = await getFidelityPointsSettings(tenantSlug);
+      const locationContext = await getManageLocationContext(tenantSlug).catch(() => null);
+      const stats = await getFidelityPointsStats(tenantSlug, locationContext?.currentLocationId ?? 0);
+      const redeemImpacted = settings.globalEnabled && settings.pointsEnabled && settings.redeemEnabled
+        ? (await fidelityLinkedAppointmentsDetailed(tenantSlug)).filter((a) => a.pointsUsed > 0.00001 || a.pointsDiscount > 0.00001 || ["discount", "later"].includes(a.conflictChoice))
+        : [];
       return Response.json({
         ok: true,
         sourceMode: "database",
-        settings: await getFidelityPointsSettings(tenantSlug),
-        stats: await getFidelityPointsStats(tenantSlug),
+        settings,
+        stats,
+        redeemImpacted,
+        currentLocationId: locationContext?.currentLocationId ?? 0,
+        canPoints: can(session.user.perms, "fidelity.points") || can(session.user.perms, "fidelity.manage"),
+        canLevels: can(session.user.perms, "fidelity.levels") || can(session.user.perms, "fidelity.manage"),
+        canFidelityManage: can(session.user.perms, "fidelity.manage"),
       });
+    }
+
+    // Preview impatto campagna (preview_fidelity_campaign_delete/toggle).
+    if (url.searchParams.get("action") === "campaign_preview") {
+      const preview = await fidelityCampaignPreview(tenantSlug, parseInteger(url.searchParams.get("id"), 0));
+      return Response.json({ ok: true, sourceMode: "database", preview });
     }
 
     // Fidelity POINTS campaigns list (fidelity_campaigns).
@@ -174,7 +194,7 @@ export async function POST(request: Request) {
         const campaign = await toggleFidelityCampaign(tenantSlug, parseInteger(body.id, 0), active);
         return Response.json({ ok: true, sourceMode: "database", campaign, campaigns: await listFidelityCampaigns(tenantSlug) });
       }
-      const result = await deleteFidelityCampaign(tenantSlug, parseInteger(body.id, 0), session.user.id);
+      const result = await deleteFidelityCampaign(tenantSlug, parseInteger(body.id, 0), session.user.id, String(body.reason ?? body.delete_reason ?? ""));
       return Response.json({ ok: true, sourceMode: "database", mode: result.mode, campaigns: await listFidelityCampaigns(tenantSlug) });
     }
 

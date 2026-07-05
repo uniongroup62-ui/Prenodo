@@ -4496,3 +4496,72 @@ strip con saldo INVARIATO + note ripulite + campagne punti auto-disattivate,
 riattivazione con ripristini e marker, rami idempotenti, ripristino
 businesses e zero residui ZZ) + 45/45 marker bundle + regressioni fidcamp
 11/11 e fidwallet 11/11 + typecheck/lint puliti.
+
+## Punti Fidelity (fidelity_points.php) — 2026-07-05
+AUDIT COMPLETO della pagina Punti (3845 righe: impostazioni con conferme,
+livelli inline, campagne punti con preview di impatto, KPI sede, top clienti)
++ fidelity_points.js (1334 righe) vs i moduli Next. FIX PRINCIPALI:
+1. SECONDO BUG DOPPIO ACCREDITO: lo strip di "disattiva sconto/punti"
+   riaccreditava clients.points — come per il toggle generale, i punti sulle
+   prenotazioni aperte sono lockati virtualmente: ora azzera solo
+   fidelity_points_used/discount (+ conflict_choice solo se discount/later).
+2. Strip col PERIMETRO legacy (remove_disable_redeem_impacted_associations):
+   variante REDEEM — i campi omaggio (gift_points_used/gift_idx) NON vengono
+   toccati nemmeno spegnendo il modulo Punti; WHERE con conflict_choice IN
+   (discount,later); note automatiche ripulite in scope redeem ('Fidelity: -'
+   e 'scelta in negozio'; 'omaggio prenotato' resta).
+3. GUARDIE PRIMA DELLE SCRITTURE: prima conferma redeem/points, poi conferma
+   scadenza, POI le scritture (prima lo strip avveniva anche quando la
+   conferma scadenza falliva dopo); blocco legacy con Fidelity generale OFF
+   ('Fidelity e disattivata. Attiva la funzione in "Impostazione generale"
+   per utilizzare questa sezione.') su settings e campagne.
+4. Campagne punti: messaggio overlap VERBATIM ('Esiste gia una campagna punti
+   attiva nello stesso periodo: "X" (ID N) (Subito|d/m/Y -> Mai|d/m/Y).
+   Modifica le date, disattiva l'altra campagna oppure salva questa campagna
+   come inattiva.' — prima testo inventato); guardie 'Attiva prima Punti
+   Fidelity...' sulla condizione legacy globale && modulo Punti (prima solo
+   globale); delete con RIFERIMENTI COMPLETI (prenotazioni + vendite +
+   ricariche, prima solo prenotazioni), deleted_reason salvato, messaggi per
+   modalita (hard 'eliminata definitivamente.' / soft 'rimossa dall elenco
+   operativo...' / 'Campagna punti gia rimossa.'); ordine lista legacy
+   (attive prima, poi per date); payload con auto_disabled_by_points.
+5. PREVIEW di impatto legacy (preview_fidelity_campaign_toggle/delete):
+   endpoint campaign_preview con i contatori del PHP (prenotazioni
+   aperte/storiche per stato, vendite attive/annullate, ricariche
+   attive/stornate, movimenti earn con UNION su appuntamenti/vendite/
+   ricariche) e le modali col rendering di fidelity_points.js (alert
+   condizionali, card contatori, accordion eliminazione, 'Riferimenti
+   totali', motivo con placeholder 'Es. campagna sostituita').
+6. KPI colonna destra fedeli: emessi/usati/scaduti FILTRATI SULLA SEDE
+   corrente (transactions.location_id), 'Saldo totale globale' e 'Clienti con
+   punti globali' limitati ai clienti con TESSERA attiva non scaduta (EXISTS
+   su cards), Top clienti = top 10 server-side con link Dettagli +
+   location_id (prima client-side su tutti i clienti senza filtro tessere);
+   caption 'Statistiche operative sede: <nome|tutte le sedi>'; fmt_points.
+7. Componente: stato 'Fidelity disattivata' (points-disabled-card con
+   empty-promotions.svg e link Impostazione generale gated fidelity.manage) —
+   prima assente; sezioni operative NASCOSTE con modulo Punti off (prima solo
+   le sottosezioni); banner 'nessuna campagna punti attiva' sul CONTEGGIO
+   attive (prima su 'attiva oggi'); vista solo-Livelli (perm fidelity.levels
+   senza fidelity.points: titolo 'Livelli Card', settings/campagne/stats
+   nascosti); modali conferma CLIENT-SIDE come fidelity_points.js (redeem/
+   points con pannello 'Prenotazioni coinvolte' in variante ASCII della
+   pagina e testi dinamici Punti-vs-sconto; scadenza con le 3 varianti
+   Attivare/Disattivare/Aggiornare + 'Cosa non cambia'); redirect flash
+   ?msg/?err + branch page.tsx; form campagna con i default legacy ('Nuova
+   campagna punti', attiva, inizio oggi, step dalle impostazioni, modal-xl,
+   maxlength 120) e formati legacy ('Fisso: 1 punto ogni 12,50 EUR',
+   'Subito -> Mai', riga 'ID: N', badge 'Disattivata da Punti').
+RESIDUI DELIBERATI: alert ?warn_locked&client_id (punti bloccati su
+prenotazioni, redirect da flussi wallet legacy) non replicato; le preview
+threshold/delete dei LIVELLI restano nel modulo Livelli (audit F4);
+e2e-fidcamp (campagna F) codifica il vecchio messaggio overlap non verbatim
+-> 1 FAIL atteso.
+Verifica: battery e2e 42/42 (guardie in ordine con DB invariato, strip senza
+riaccredito e omaggi intatti, note redeem-scope, preferenze preservate con
+punti off + campagne auto-disattivate, overlap/livello/date/scaglioni
+verbatim, guardie operative e globale off, delete hard/soft/already con
+motivo, preview refs, ordine lista, KPI sede+tessere+top clienti, ripristino
+businesses e zero residui) + 102/102 marker bundle + regressioni
+fidelity-toggle 27/27 e fidcamp 10/11 (1 FAIL atteso sul messaggio overlap
+corretto) + typecheck/lint puliti.
