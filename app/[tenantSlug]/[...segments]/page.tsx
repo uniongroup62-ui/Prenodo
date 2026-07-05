@@ -714,6 +714,15 @@ export default async function TenantPage({
     );
   }
 
+  // Faithful Fidelity (fidelity.php): toggle generale con flash ?msg/?err.
+  if (page === "fidelity") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <FidelityContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
+      </ManageShell>
+    );
+  }
+
   // Faithful GiftCard / Impostazioni (giftcard_settings.php): flash ?msg/?err.
   if (page === "giftcard_settings") {
     return (

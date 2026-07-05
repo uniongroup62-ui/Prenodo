@@ -4426,3 +4426,73 @@ Verifica: battery e2e 16/16 (flash verbatim, clamp/fallback, troncamento,
 vuoto->NULL, reset, prefill con business_name, ripristino businesses) +
 36/36 marker bundle + regressioni giftbox_settings 15/15 e GiftCard 93/93 +
 typecheck/lint puliti.
+
+## Fidelity (fidelity.php) — 2026-07-05
+AUDIT COMPLETO della pagina hub Fidelity (1134 righe: toggle generale con
+guardie di disattivazione, modale campagne bloccanti / prenotazioni
+coinvolte, strip agevolazioni, ripristini alla riattivazione) + fidelity.js
+vs il modulo Next, con capture live. FIX PRINCIPALI:
+1. BUG DOPPIO ACCREDITO: lo strip Next riaccreditava clients.points per i
+   punti delle prenotazioni aperte — nel legacy i punti su In sospeso/
+   Prenotato sono solo LOCKATI virtualmente (Fidelity::reservedPoints:
+   disponibile = saldo - riservato; AppointmentLifecycle ~974 'i punti erano
+   solo prenotati/lockati... non accreditarli di nuovo'). Ora lo strip
+   azzera SOLO le colonne fidelity (points_used/discount/gift_points_used=0,
+   gift_idx/conflict_choice=NULL — senza toccare fidelity_campaign_id come
+   il legacy) e il saldo cliente resta invariato.
+2. Pulizia note automatiche legacy allo strip
+   (fidelity_page_strip_appointment_auto_notes): rimosse le righe
+   /^Fidelity:\s*(-|omaggio prenotato|scelta in negozio)/i dalle note delle
+   prenotazioni coinvolte (nota utente mantenuta, note vuote -> NULL) —
+   prima assente.
+3. Guardie POST verbatim: campagne bloccanti 'Per disattivare l'impostazione
+   generale Fidelity devi prima disattivare le campagne collegate: N
+   campagna/e Promozioni collegate alla Fidelity e N campagna/e Omaggi
+   collegate alla Fidelity.'; conferma popup 'Prima di disattivare Fidelity
+   conferma dal popup la rimozione delle agevolazioni Fidelity da N
+   prenotazione/i in stato In sospeso/Prenotato.' (prima shape JSON
+   needsConfirm non legacy).
+4. Messaggio disattivazione composto verbatim: 'Fidelity disattivata. N
+   campagna/e punti attiva/e disattivata/e. rimosse automaticamente le
+   agevolazioni Fidelity da N prenotazione/i (N con agevolazioni)' —
+   'rimosse' minuscolo e dettaglio '(N con agevolazioni)' come il legacy
+   (prima 'Rimosse' maiuscolo senza dettaglio); disattivazione a flag già
+   spento passa dal ramo generico e disattiva comunque le campagne punti
+   attive (prima early-return).
+5. GET action=state con l'IMPATTO calcolato al load come il GET legacy:
+   campagne Promozioni/Omaggi bloccanti (nomi, ordine title/name ASC,
+   fallback 'omaggio #id' minuscolo) e — solo senza campagne bloccanti — le
+   prenotazioni coinvolte DETTAGLIATE (public_code, date, stato, cliente,
+   servizi aggregati 'Nome ×q' da appointment_services, punti/sconto/
+   omaggio/scelta normalizzati, ordine starts_at ASC id ASC).
+6. Componente riscritto: submit intercettato come fidelity.js (solo
+   disattivando con impatto) con le DUE varianti modale legacy — 'campaigns'
+   (info bloccante modal-xl con le liste 'Campagne Promozioni/Omaggi da
+   disattivare', badge 'Promozione'/'gift', bottoni 'Apri Promozioni'/'Apri
+   Omaggi'/'Chiudi') e 'appointments' (conferma con pannello 'Prenotazioni
+   coinvolte' + 'Visualizzate fino a 3 prenotazioni alla volta...', righe
+   con badge Prenotato/In sospeso, data 'd/m/Y H:i - H:i' o '→', 'Punti: N
+   Punti • sconto € X'/'Sconto punti: € X', 'gift/scelta Fidelity:
+   prenotato/scelta in negozio/collegata', link 'Apri' alla prenotazione,
+   card warning-subtle 'Continuando perderai le agevolazioni Fidelity gia
+   prenotate', footer Annulla/'Conferma disattivazione') — prima una
+   conferma generica senza liste; POST con redirect flash ?msg/?err e markup
+   View::alert (prima stato in pagina senza reload); branch page.tsx
+   dedicato con initialQuery; fmt_points legacy (intero troncato).
+7. Riattivazione: ripristino promozioni/omaggi auto-disattivati con filtro
+   target legacy (promotions target_type='fidelity', gifts
+   eligibility='fidelity_only' — prima senza filtro), updated_at aggiornato,
+   messaggi 'N campagna/e Promozioni target Fidelity riattivata/e' / 'N
+   campagna/e Omaggi Solo clienti con Fidelity riattivata/e' e marker
+   gift_progress_resets 'fidelity_disabled_end' (già presenti).
+RESIDUI DELIBERATI: gli errori inattesi del toggle rispondono col messaggio
+grezzo (il prefisso legacy 'Errore salvataggio: ' copriva solo le eccezioni
+impreviste del blocco POST); le vecchie battery e2e-fidelity/e2e-fidpoints
+(campagna F) codificano la shape pre-fix (needsConfirm/riaccredito +5) e una
+guardia fidpoints aggiunta dopo la loro scrittura — non rieseguibili così.
+Verifica: battery e2e 27/27 (state con impatto, blocco campagne con flag
+invariato, dettagli prenotazioni coinvolte con servizi ×q, conferma popup,
+strip con saldo INVARIATO + note ripulite + campagne punti auto-disattivate,
+riattivazione con ripristini e marker, rami idempotenti, ripristino
+businesses e zero residui ZZ) + 45/45 marker bundle + regressioni fidcamp
+11/11 e fidwallet 11/11 + typecheck/lint puliti.

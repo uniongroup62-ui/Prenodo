@@ -1,5 +1,5 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
-import { addDbWalletMovement, dbWalletBalance, deleteFidelityCampaign, deleteFidelityCard, fidelityWalletManualMove, getFidelityEnabled, getFidelityLevelsSettings, getFidelityMembership, getFidelityPointsSettings, getFidelityPointsStats, getFidelityWallet, getManageCreditMovements, issueFidelityCard, listDbClients, listDbWalletMovements, listFidelityCampaigns, manualCreditDebit, reactivateFidelityCard, saveFidelityCampaign, saveFidelityLevels, saveFidelityPointsSettings, setFidelityEnabled, toggleFidelityCampaign, updateFidelityCardStatus } from "@/lib/db-repositories";
+import { addDbWalletMovement, dbWalletBalance, deleteFidelityCampaign, deleteFidelityCard, fidelityDisableImpact, fidelityWalletManualMove, getFidelityEnabled, getFidelityLevelsSettings, getFidelityMembership, getFidelityPointsSettings, getFidelityPointsStats, getFidelityWallet, getManageCreditMovements, issueFidelityCard, listDbClients, listDbWalletMovements, listFidelityCampaigns, manualCreditDebit, reactivateFidelityCard, saveFidelityCampaign, saveFidelityLevels, saveFidelityPointsSettings, setFidelityEnabled, toggleFidelityCampaign, updateFidelityCardStatus } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
 import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -20,9 +20,14 @@ export async function GET(request: Request) {
 
   try {
     const url = new URL(request.url);
-    // Global Fidelity enabled flag (for the main fidelity.php page toggle).
+    // Global Fidelity enabled flag (for the main fidelity.php page toggle) +
+    // l'impatto della disattivazione calcolato al load come il GET legacy:
+    // campagne bloccanti, e (solo senza campagne) le prenotazioni coinvolte
+    // per la modale di conferma.
     if (url.searchParams.get("action") === "state") {
-      return Response.json({ ok: true, sourceMode: "database", enabled: await getFidelityEnabled(tenantSlug) });
+      const enabled = await getFidelityEnabled(tenantSlug);
+      const impact = enabled ? await fidelityDisableImpact(tenantSlug) : { blockingPromotions: [], blockingGifts: [], linkedAppointments: [] };
+      return Response.json({ ok: true, sourceMode: "database", enabled, impact });
     }
 
     // Fidelity Points earn/redeem/expire settings (fidelity_points.php).

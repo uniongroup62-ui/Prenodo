@@ -15018,10 +15018,25 @@ export async function touchDbConfigModule(moduleId: string, slug: string): Promi
 }
 
 // ---- Global Fidelity toggle (fidelity.php _mode=toggle_fidelity) --------------
+export type FidelityImpactedAppointment = {
+  id: number;
+  publicCode: string;
+  startsAt: string;
+  endsAt: string;
+  status: string;
+  clientName: string;
+  servicesLabel: string;
+  pointsUsed: number;
+  pointsDiscount: number;
+  giftPointsUsed: number;
+  giftIdx: number | null;
+  conflictChoice: string;
+};
+
 export type FidelityDisableImpact = {
   blockingPromotions: Array<{ id: number; name: string }>;
   blockingGifts: Array<{ id: number; name: string }>;
-  linkedAppointmentCount: number;
+  linkedAppointments: FidelityImpactedAppointment[];
 };
 
 export async function getFidelityEnabled(slug: string): Promise<boolean> {
@@ -15029,45 +15044,150 @@ export async function getFidelityEnabled(slug: string): Promise<boolean> {
   return Number(rows[0]?.fidelity_enabled ?? 0) === 1;
 }
 
-// Pending/scheduled appointments still carrying Fidelity benefits (the disable
-// would strip them). Returns the rows (id + client + reserved points) for the strip.
-async function fidelityLinkedAppointments(slug: string): Promise<RowDataPacket[]> {
-  return tenantSelect<RowDataPacket>({
-    slug,
-    table: "appointments",
-    columns: "id, client_id, fidelity_points_used, fidelity_gift_points_used",
-    where: "status IN ('pending','scheduled') AND (COALESCE(fidelity_points_used,0) > 0 OR COALESCE(fidelity_discount,0) > 0 OR COALESCE(fidelity_gift_points_used,0) > 0 OR COALESCE(fidelity_gift_idx,0) > 0 OR COALESCE(fidelity_conflict_choice,'') <> '')",
-  }).catch(() => [] as RowDataPacket[]);
+// WHERE legacy sulle prenotazioni con agevolazioni Fidelity ancora collegate
+// (fidelity_page_appointment_loyalty_where).
+const FIDELITY_APPT_LOYALTY_WHERE =
+  "(COALESCE(fidelity_points_used,0) > 0 OR COALESCE(fidelity_discount,0) > 0 OR COALESCE(fidelity_gift_points_used,0) > 0 OR COALESCE(fidelity_gift_idx,0) > 0 OR COALESCE(fidelity_conflict_choice,'') <> '')";
+
+// Prenotazioni In sospeso/Prenotato coinvolte dalla disattivazione, con i
+// dettagli del pannello legacy (fidelity_page_collect_disable_impacted_appointments):
+// servizi aggregati "Nome ×q", punti/sconto/omaggio/scelta normalizzati.
+export async function fidelityLinkedAppointmentsDetailed(slug: string): Promise<FidelityImpactedAppointment[]> {
+  const aT = await tenantTable(slug, "appointments");
+  const cT = await tenantTable(slug, "clients");
+  const sT = await tenantTable(slug, "appointment_services");
+  const scoped = aT.mode === "shared" && (await columnExists(aT.name, "tenant_id"));
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT a.id,
+            COALESCE(a.public_code,'') AS public_code,
+            a.starts_at,
+            a.ends_at,
+            a.status,
+            COALESCE(c.full_name,'') AS client_name,
+            COALESCE(a.fidelity_points_used,0) AS points_used,
+            COALESCE(a.fidelity_discount,0) AS points_discount,
+            COALESCE(a.fidelity_gift_points_used,0) AS gift_points_used,
+            a.fidelity_gift_idx AS gift_idx,
+            COALESCE(a.fidelity_conflict_choice,'') AS conflict_choice,
+            COALESCE(sv.services_label,'') AS services_label
+       FROM \`${aT.name}\` a
+       LEFT JOIN \`${cT.name}\` c ON c.id = a.client_id${scoped ? " AND c.tenant_id = a.tenant_id" : ""}
+       LEFT JOIN (
+         SELECT appointment_id,
+                STRING_AGG(
+                  CASE WHEN COALESCE(qty,1) > 1 THEN COALESCE(service_name,'') || ' ×' || qty ELSE COALESCE(service_name,'') END,
+                  ', ' ORDER BY service_name ASC
+                ) AS services_label
+           FROM \`${sT.name}\`${scoped ? " WHERE tenant_id = ?" : ""}
+          GROUP BY appointment_id
+       ) sv ON sv.appointment_id = a.id
+      WHERE a.status IN ('pending','scheduled')
+        AND ${FIDELITY_APPT_LOYALTY_WHERE.replace(/fidelity_/g, "a.fidelity_")}
+        ${scoped ? "AND a.tenant_id = ?" : ""}
+   ORDER BY a.starts_at ASC, a.id ASC`,
+    scoped ? [sT.tenantId ?? 0, aT.tenantId ?? 0] : [],
+  ).catch(() => [] as RowDataPacket[]);
+
+  const out: FidelityImpactedAppointment[] = [];
+  for (const r of rows) {
+    const id = Number(r.id ?? 0);
+    if (id <= 0) continue;
+    const pointsUsed = Math.max(0, normalizeFidelityPoints(r.points_used ?? 0));
+    const pointsDiscount = Math.abs(roundMoney(Number(r.points_discount ?? 0)));
+    const giftPointsUsed = Math.max(0, normalizeFidelityPoints(r.gift_points_used ?? 0));
+    let giftIdx: number | null = r.gift_idx === null || r.gift_idx === undefined || String(r.gift_idx) === "" ? null : Number(r.gift_idx);
+    if (giftIdx !== null && giftIdx <= 0) giftIdx = null;
+    let conflictChoice = String(r.conflict_choice ?? "").trim().toLowerCase();
+    if (!["discount", "gift", "later"].includes(conflictChoice)) conflictChoice = "";
+    if (pointsUsed <= 0.0000001 && pointsDiscount <= 0.0000001 && giftPointsUsed <= 0.0000001 && giftIdx === null && conflictChoice === "") continue;
+    let publicCode = String(r.public_code ?? "").trim();
+    if (publicCode === "") publicCode = String(id);
+    let servicesLabel = String(r.services_label ?? "").trim();
+    if (servicesLabel === "") servicesLabel = "Servizi non disponibili";
+    const localDt = (v: unknown): string => {
+      if (!v) return "";
+      if (v instanceof Date) {
+        const p = (n: number) => String(n).padStart(2, "0");
+        return `${v.getFullYear()}-${p(v.getMonth() + 1)}-${p(v.getDate())} ${p(v.getHours())}:${p(v.getMinutes())}:${p(v.getSeconds())}`;
+      }
+      return String(v).replace("T", " ").slice(0, 19);
+    };
+    out.push({
+      id,
+      publicCode,
+      startsAt: localDt(r.starts_at),
+      endsAt: localDt(r.ends_at),
+      status: String(r.status ?? ""),
+      clientName: String(r.client_name ?? "").trim(),
+      servicesLabel,
+      pointsUsed,
+      pointsDiscount,
+      giftPointsUsed,
+      giftIdx,
+      conflictChoice,
+    });
+  }
+  return out;
 }
 
-// Fidelity-linked campaigns that block disabling (port of the two collect_*
-// helpers): active promotions targeting fidelity + active fidelity-only gifts.
-async function fidelityDisableImpact(slug: string): Promise<FidelityDisableImpact> {
+// Impatto della disattivazione (i collect_* legacy): campagne Promozioni target
+// fidelity attive + campagne Omaggi fidelity_only attive; le prenotazioni
+// coinvolte vengono calcolate SOLO quando non ci sono campagne bloccanti
+// (come il GET legacy).
+export async function fidelityDisableImpact(slug: string): Promise<FidelityDisableImpact> {
   const promoRows = await tenantSelect<RowDataPacket>({ slug, table: "promotions", columns: "id, title", where: "target_type = 'fidelity' AND COALESCE(is_active,0) = 1", orderBy: "title ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
   const giftRows = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "id, name", where: "deleted_at IS NULL AND eligibility = 'fidelity_only' AND COALESCE(active,0) = 1", orderBy: "name ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
-  const linked = await fidelityLinkedAppointments(slug);
-  return {
-    blockingPromotions: promoRows.map((r) => ({ id: Number(r.id ?? 0), name: String(r.title || `Promozione #${r.id}`) })),
-    blockingGifts: giftRows.map((r) => ({ id: Number(r.id ?? 0), name: String(r.name || `Omaggio #${r.id}`) })),
-    linkedAppointmentCount: linked.length,
-  };
+  const blockingPromotions = promoRows.map((r) => ({ id: Number(r.id ?? 0), name: String(r.title ?? "").trim() || `Promozione #${r.id}` }));
+  const blockingGifts = giftRows.map((r) => ({ id: Number(r.id ?? 0), name: String(r.name ?? "").trim() || `omaggio #${r.id}` }));
+  const linkedAppointments = blockingPromotions.length === 0 && blockingGifts.length === 0 ? await fidelityLinkedAppointmentsDetailed(slug) : [];
+  return { blockingPromotions, blockingGifts, linkedAppointments };
+}
+
+// fidelity_page_strip_appointment_auto_notes: rimuove le righe automatiche
+// "Fidelity: -N ..." / "Fidelity: omaggio prenotato ..." / "Fidelity: scelta in
+// negozio" dalle note della prenotazione.
+function fidelityStripAppointmentAutoNotes(notes: string): string {
+  if (notes === "") return "";
+  const kept: string[] = [];
+  for (const line of notes.split(/\r\n|\r|\n/)) {
+    const trimmed = line.trim();
+    if (trimmed !== "" && /^fidelity:\s*(?:-|omaggio prenotato|scelta in negozio)/i.test(trimmed)) continue;
+    kept.push(line);
+  }
+  return kept.join("\n").trim();
 }
 
 // Enable/disable the whole Fidelity program (port of fidelity.php toggle_fidelity).
-// Enabling is a plain flag write. Disabling: refuse while fidelity-targeted
-// Promozioni/Omaggi campaigns are active; when pending/scheduled appointments
-// still carry Fidelity benefits, require `confirmed` (returns needsConfirm), then
-// strip those benefits (restore the reserved points to the client + clear the
-// fidelity columns), flip the flag, and deactivate active fidelity_campaigns.
+// Enabling: flag on + ripristino di promozioni/omaggi auto-disattivati.
+// Disabling: rifiuta finché ci sono campagne Promozioni/Omaggi collegate attive;
+// con prenotazioni In sospeso/Prenotato con agevolazioni richiede la conferma dal
+// popup, poi AZZERA le colonne fidelity delle prenotazioni (i punti erano solo
+// lockati virtualmente: NIENTE riaccredito contabile, come il legacy), ripulisce
+// le note automatiche, spegne il flag e disattiva le campagne punti attive.
 export async function setFidelityEnabled(
   slug: string,
   enabled: boolean,
   confirmed: boolean,
-): Promise<{ ok: boolean; enabled: boolean; needsConfirm?: boolean; impact?: FidelityDisableImpact; strippedAppointments?: number; deactivatedCampaigns?: number; restoredPromotions?: number; restoredGifts?: number; message?: string }> {
+): Promise<{ ok: boolean; enabled: boolean; strippedAppointments?: number; deactivatedCampaigns?: number; restoredPromotions?: number; restoredGifts?: number; message?: string }> {
   const bizRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "id, fidelity_enabled", orderBy: "id ASC", limit: 1 });
   if (!bizRows[0]) throw new Error("Business non trovato.");
   const bizId = Number(bizRows[0].id ?? 0);
   const currentlyEnabled = Number(bizRows[0].fidelity_enabled ?? 0) === 1;
+
+  // Disattivazione campagne punti attive (fidelity_page_deactivate_active_campaigns):
+  // active=0 + auto_disabled_by_points=1, ritorna quante erano attive.
+  const deactivateActiveCampaigns = async (): Promise<number> => {
+    const campTable = await tenantTable(slug, "fidelity_campaigns").catch(() => null);
+    if (!campTable) return 0;
+    const scoped = campTable.mode === "shared" && (await columnExists(campTable.name, "tenant_id"));
+    const hasDeleted = await columnExists(campTable.name, "deleted_at");
+    const hasAutoFlag = await columnExists(campTable.name, "auto_disabled_by_points");
+    const res = await dbExecute(
+      `UPDATE ${quoteIdentifier(campTable.name)} SET active = 0${hasAutoFlag ? ", auto_disabled_by_points = 1" : ""}, updated_at = ? WHERE COALESCE(active,0) = 1${hasDeleted ? " AND deleted_at IS NULL" : ""}${scoped ? " AND tenant_id = ?" : ""}`,
+      scoped ? [new Date(), campTable.tenantId ?? 0] : [new Date()],
+    ).catch(() => ({ affectedRows: 0, insertId: 0 }));
+    return res.affectedRows ?? 0;
+  };
 
   if (enabled) {
     await tenantUpdate({ slug, table: "businesses", id: bizId, values: { fidelity_enabled: 1 } });
@@ -15080,8 +15200,8 @@ export async function setFidelityEnabled(
       const promoTable = await tenantTable(slug, "promotions").catch(() => null);
       if (promoTable && (await columnExists(promoTable.name, "auto_disabled_by_fidelity"))) {
         const res = await dbExecute(
-          `UPDATE ${quoteIdentifier(promoTable.name)} SET is_active = 1, auto_disabled_by_fidelity = 0 WHERE tenant_id = ? AND COALESCE(auto_disabled_by_fidelity,0) = 1`,
-          [promoTable.tenantId ?? 0],
+          `UPDATE ${quoteIdentifier(promoTable.name)} SET is_active = 1, auto_disabled_by_fidelity = 0, updated_at = ? WHERE tenant_id = ? AND target_type = 'fidelity' AND COALESCE(auto_disabled_by_fidelity,0) = 1`,
+          [new Date(), promoTable.tenantId ?? 0],
         ).catch(() => ({ affectedRows: 0 }));
         restoredPromotions = Number(res.affectedRows ?? 0) || 0;
       }
@@ -15089,11 +15209,11 @@ export async function setFidelityEnabled(
       if (giftsTable && (await columnExists(giftsTable.name, "auto_disabled_by_fidelity"))) {
         // Id PRIMA dell'update, per i marker di fine sospensione.
         const toRestore = await dbQuery<RowDataPacket[]>(
-          `SELECT id FROM ${quoteIdentifier(giftsTable.name)} WHERE tenant_id = ? AND COALESCE(auto_disabled_by_fidelity,0) = 1${(await columnExists(giftsTable.name, "deleted_at")) ? " AND deleted_at IS NULL" : ""}`,
+          `SELECT id FROM ${quoteIdentifier(giftsTable.name)} WHERE tenant_id = ? AND eligibility = 'fidelity_only' AND COALESCE(auto_disabled_by_fidelity,0) = 1${(await columnExists(giftsTable.name, "deleted_at")) ? " AND deleted_at IS NULL" : ""}`,
           [giftsTable.tenantId ?? 0],
         ).catch(() => [] as RowDataPacket[]);
         const res = await dbExecute(
-          `UPDATE ${quoteIdentifier(giftsTable.name)} SET active = 1, auto_disabled_by_fidelity = 0 WHERE tenant_id = ? AND COALESCE(auto_disabled_by_fidelity,0) = 1${(await columnExists(giftsTable.name, "deleted_at")) ? " AND deleted_at IS NULL" : ""}`,
+          `UPDATE ${quoteIdentifier(giftsTable.name)} SET active = 1, auto_disabled_by_fidelity = 0 WHERE tenant_id = ? AND eligibility = 'fidelity_only' AND COALESCE(auto_disabled_by_fidelity,0) = 1${(await columnExists(giftsTable.name, "deleted_at")) ? " AND deleted_at IS NULL" : ""}`,
           [giftsTable.tenantId ?? 0],
         ).catch(() => ({ affectedRows: 0 }));
         restoredGifts = Number(res.affectedRows ?? 0) || 0;
@@ -15111,8 +15231,13 @@ export async function setFidelityEnabled(
   }
 
   if (!currentlyEnabled) {
+    // Legacy: la disattivazione a flag già spento passa dal ramo generico —
+    // spegne comunque il flag e disattiva le eventuali campagne punti attive.
     await tenantUpdate({ slug, table: "businesses", id: bizId, values: { fidelity_enabled: 0 } });
-    return { ok: true, enabled: false, message: "Fidelity disattivata" };
+    const deactivatedCampaigns = await deactivateActiveCampaigns();
+    let message = "Fidelity disattivata";
+    if (deactivatedCampaigns > 0) message += `. ${deactivatedCampaigns} ${deactivatedCampaigns === 1 ? "campagna punti attiva disattivata" : "campagne punti attive disattivate"}`;
+    return { ok: true, enabled: false, deactivatedCampaigns, message };
   }
 
   const impact = await fidelityDisableImpact(slug);
@@ -15123,47 +15248,43 @@ export async function setFidelityEnabled(
     throw new Error(`Per disattivare l'impostazione generale Fidelity devi prima disattivare le campagne collegate: ${parts.join(" e ")}.`);
   }
 
-  const linked = await fidelityLinkedAppointments(slug);
+  const linked = impact.linkedAppointments;
   if (linked.length > 0 && !confirmed) {
-    return { ok: false, enabled: true, needsConfirm: true, impact };
+    throw new Error(`Prima di disattivare Fidelity conferma dal popup la rimozione delle agevolazioni Fidelity da ${linked.length} ${linked.length === 1 ? "prenotazione" : "prenotazioni"} in stato In sospeso/Prenotato.`);
   }
 
-  // Strip the fidelity benefits from the linked appointments + restore points.
-  for (const appt of linked) {
-    const apptId = Number(appt.id ?? 0);
-    const clientId = Number(appt.client_id ?? 0);
-    const restore = Math.max(0, Math.round(Number(appt.fidelity_points_used ?? 0))) + Math.max(0, Math.round(Number(appt.fidelity_gift_points_used ?? 0)));
-    if (restore > 0 && clientId > 0) {
-      await dbExecute(
-        `UPDATE ${quoteIdentifier((await tenantTable(slug, "clients")).name)} SET points = COALESCE(points,0) + ? WHERE id = ?${(await columnExists((await tenantTable(slug, "clients")).name, "tenant_id")) ? " AND tenant_id = ?" : ""}`,
-        (await columnExists((await tenantTable(slug, "clients")).name, "tenant_id")) ? [restore, clientId, (await tenantTable(slug, "clients")).tenantId ?? 0] : [restore, clientId],
-      ).catch(() => undefined);
+  // Strip legacy: AZZERA le colonne fidelity sulle prenotazioni aperte (punti
+  // solo lockati virtualmente: nessun riaccredito) + note automatiche ripulite.
+  if (linked.length > 0) {
+    for (const appt of linked) {
+      await tenantUpdate({
+        slug, table: "appointments", id: appt.id,
+        values: { fidelity_points_used: 0, fidelity_discount: 0, fidelity_gift_points_used: 0, fidelity_gift_idx: null, fidelity_conflict_choice: null },
+      }).catch(() => undefined);
     }
-    await tenantUpdate({ slug, table: "appointments", id: apptId, values: { fidelity_points_used: 0, fidelity_discount: 0, fidelity_gift_points_used: 0, fidelity_gift_idx: null, fidelity_conflict_choice: "", fidelity_campaign_id: null } }).catch(() => undefined);
+    const noteRows = await tenantSelect<RowDataPacket>({
+      slug, table: "appointments", columns: "id, notes",
+      where: `id IN (${linked.map(() => "?").join(",")}) AND notes IS NOT NULL AND notes <> ''`,
+      params: linked.map((a) => a.id),
+    }).catch(() => [] as RowDataPacket[]);
+    for (const row of noteRows) {
+      const old = String(row.notes ?? "");
+      const next = fidelityStripAppointmentAutoNotes(old);
+      if (next === old) continue;
+      await tenantUpdate({ slug, table: "appointments", id: Number(row.id ?? 0), values: { notes: next !== "" ? next : null } }).catch(() => undefined);
+    }
   }
 
   await tenantUpdate({ slug, table: "businesses", id: bizId, values: { fidelity_enabled: 0 } });
+  const deactivatedCampaigns = await deactivateActiveCampaigns();
 
-  // Deactivate active points campaigns.
-  let deactivatedCampaigns = 0;
-  const campTable = await tenantTable(slug, "fidelity_campaigns").catch(() => null);
-  if (campTable) {
-    const scoped = campTable.mode === "shared" && (await columnExists(campTable.name, "tenant_id"));
-    const hasDeleted = await columnExists(campTable.name, "deleted_at");
-    // auto_disabled_by_points=1 (fidelity_page_deactivate_active_campaigns):
-    // il badge UI "Disattivata da Punti" e il toggle campagna lo azzerano.
-    const hasAutoFlag = await columnExists(campTable.name, "auto_disabled_by_points");
-    const res = await dbExecute(
-      `UPDATE ${quoteIdentifier(campTable.name)} SET active = 0${hasAutoFlag ? ", auto_disabled_by_points = 1" : ""} WHERE COALESCE(active,0) = 1${hasDeleted ? " AND deleted_at IS NULL" : ""}${scoped ? " AND tenant_id = ?" : ""}`,
-      scoped ? [campTable.tenantId ?? 0] : [],
-    ).catch(() => ({ affectedRows: 0, insertId: 0 }));
-    deactivatedCampaigns = res.affectedRows ?? 0;
-  }
-
-  // Messaggio composto legacy (fidelity.php ~881-897).
+  // Messaggio composto legacy (fidelity.php ~881-897, 'rimosse' minuscolo e
+  // dettaglio '(N con agevolazioni)').
   let message = "Fidelity disattivata";
   if (deactivatedCampaigns > 0) message += `. ${deactivatedCampaigns} ${deactivatedCampaigns === 1 ? "campagna punti attiva disattivata" : "campagne punti attive disattivate"}`;
-  if (linked.length > 0) message += `. Rimosse automaticamente le agevolazioni Fidelity da ${linked.length} ${linked.length === 1 ? "prenotazione" : "prenotazioni"}`;
+  if (linked.length > 0) {
+    message += `. rimosse automaticamente le agevolazioni Fidelity da ${linked.length} ${linked.length === 1 ? "prenotazione" : "prenotazioni"} (${linked.length} con agevolazioni)`;
+  }
 
   return { ok: true, enabled: false, strippedAppointments: linked.length, deactivatedCampaigns, message };
 }
