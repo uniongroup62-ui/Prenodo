@@ -42,11 +42,6 @@ const localDateTime = (v: unknown): string => {
   }
   return String(v).replace("T", " ").slice(0, 19);
 };
-const isoDate = localDate;
-const isoDateTime = (v: unknown): string => {
-  const s = localDateTime(v);
-  return s === "" ? "" : s.replace(" ", "T");
-};
 // giftbox_page_dt_display: d/m/Y H:i (o solo data).
 const displayDmyHm = (v: unknown): string => {
   const s = localDateTime(v);
@@ -124,13 +119,6 @@ async function giftLocationLabel(slug: string, locationId: number, fallback = ""
   if (fb !== "" && fb !== "-") return fb;
   if (locId > 0) return `Sede #${locId}`;
   return "-";
-}
-
-async function userLabel(slug: string, id: number): Promise<string> {
-  if (!id || id <= 0) return "";
-  const rows = await tenantSelect<RowDataPacket>({ slug, table: "users", columns: "name, email", where: "id = ?", params: [id], limit: 1 }).catch(() => [] as RowDataPacket[]);
-  if (!rows[0]) return `#${id}`;
-  return clean(rows[0].name) || clean(rows[0].email) || `#${id}`;
 }
 
 // Token voucher pubblico: backfill lazy quando manca (le istanze emesse da
@@ -1668,7 +1656,271 @@ export async function hasAnyGiftBoxInstances(slug: string): Promise<boolean> {
 // GIFTCARD — dettaglio card completo
 // ============================================================================
 
-export type GiftCardDetailItem = { rowId: number; itemType: string; name: string; qty: number; redeemedQty: number; remainingQty: number };
+// GiftCard::expireDueGiftCards: stampa 'expired' sulle attive con scadenza
+// (DATE) già passata. Chiamata a ogni load pagina come il PHP.
+export async function expireDueGiftCards(slug: string): Promise<void> {
+  const t = await tenantTable(slug, "giftcards");
+  const scoped = t.mode === "shared" && (await columnExists(t.name, "tenant_id"));
+  await dbExecute(
+    `UPDATE \`${t.name}\` SET status = 'expired', updated_at = ? WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at < ?${scoped ? " AND tenant_id = ?" : ""}`,
+    scoped ? [new Date(), todayIso(), t.tenantId ?? 0] : [new Date(), todayIso()],
+  ).catch(() => 0);
+}
+
+// giftcard_page_status_meta: badge/label legacy (code normalizzato).
+export function giftCardStatusMeta(status: string): { code: string; label: string; badge: string } {
+  let code = clean(status).toLowerCase();
+  if (code === "canceled") code = "cancelled";
+  const map: Record<string, { label: string; badge: string }> = {
+    active: { label: "Attiva", badge: "success" },
+    redeemed: { label: "Riscattata", badge: "info" },
+    expired: { label: "Scaduta", badge: "warning" },
+    cancelled: { label: "Annullata", badge: "danger" },
+  };
+  const meta = map[code];
+  if (!meta) return { code, label: code !== "" ? code.charAt(0).toUpperCase() + code.slice(1) : "—", badge: "secondary" };
+  return { code, label: meta.label, badge: meta.badge };
+}
+
+async function giftCardRow(slug: string, id: number): Promise<RowDataPacket | null> {
+  if (id <= 0) return null;
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "giftcards", where: "id = ?", params: [id], limit: 1 });
+  return rows[0] ?? null;
+}
+
+// GiftCard::isExpiredByDate: expires_at (DATE) + 23:59:59 < adesso.
+function gcIsExpiredByDate(expiresAt: unknown): boolean {
+  const d = localDate(expiresAt);
+  if (d === "") return false;
+  return `${d} 23:59:59` < localDateTime(new Date());
+}
+
+async function gcMarkExpiredIfDue(slug: string, id: number): Promise<void> {
+  const card = await giftCardRow(slug, id);
+  if (!card) return;
+  const st = clean(card.status).toLowerCase();
+  if (st !== "active") return;
+  if (!gcIsExpiredByDate(card.expires_at)) return;
+  await tenantUpdate({ slug, table: "giftcards", id, values: { status: "expired", updated_at: new Date() } }).catch(() => 0);
+}
+
+// product_display_name legacy: "Nome (SKU)" senza duplicare lo sku.
+function gcProductDisplayName(name: string, sku: string, fallback = "Prodotto"): string {
+  let label = clean(name);
+  if (label === "") label = fallback;
+  const code = clean(sku);
+  if (code === "") return label;
+  if (label.endsWith(`(${code})`)) return label;
+  return `${label} (${code})`;
+}
+
+// GiftCard::listItems: display_name da item_name con fallback catalogo + sku.
+type GcItemRow = { rowId: number; itemType: string; itemId: number; label: string; name: string; qty: number; redeemedQty: number; remainingQty: number };
+async function gcListItems(slug: string, giftcardId: number): Promise<GcItemRow[]> {
+  const iT = await tenantTable(slug, "giftcard_items");
+  const sT = await tenantTable(slug, "services");
+  const pT = await tenantTable(slug, "products");
+  const scoped = iT.mode === "shared" && (await columnExists(iT.name, "tenant_id"));
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT i.*,
+            COALESCE(i.item_name,
+                     CASE WHEN i.item_type = 'service' THEN s.name END,
+                     CASE WHEN i.item_type = 'product' THEN p.name END
+            ) AS display_name,
+            COALESCE(i.sku, p.sku) AS display_sku
+       FROM \`${iT.name}\` i
+       LEFT JOIN \`${sT.name}\` s ON (i.item_type = 'service' AND s.id = i.item_id${scoped ? " AND s.tenant_id = i.tenant_id" : ""})
+       LEFT JOIN \`${pT.name}\` p ON (i.item_type = 'product' AND p.id = i.item_id${scoped ? " AND p.tenant_id = i.tenant_id" : ""})
+      WHERE i.giftcard_id = ?${scoped ? " AND i.tenant_id = ?" : ""}
+      ORDER BY i.id ASC`,
+    scoped ? [giftcardId, iT.tenantId ?? 0] : [giftcardId],
+  ).catch(() => [] as RowDataPacket[]);
+  return rows.map((r) => {
+    const itemType = clean(r.item_type).toLowerCase();
+    const label = itemType === "service" ? "Servizio" : itemType === "product" ? "Prodotto" : "Item";
+    let name = clean(r.display_name);
+    if (itemType === "product") name = gcProductDisplayName(name, clean(r.display_sku));
+    if (name === "") name = itemType === "product" ? "Prodotto" : "Servizio";
+    const qty = Math.max(0, Math.trunc(Number(r.qty ?? 0)));
+    const redeemed = Math.max(0, Math.trunc(Number(r.redeemed_qty ?? 0)));
+    return {
+      rowId: Number(r.id ?? 0),
+      itemType,
+      itemId: Number(r.item_id ?? 0),
+      label,
+      name,
+      qty,
+      redeemedQty: redeemed,
+      remainingQty: Math.max(0, qty - redeemed),
+    };
+  });
+}
+
+// GiftCard::insertTransaction (nota 252+'...', meta JSON, sede snapshot).
+async function gcInsertTransaction(
+  slug: string,
+  giftcardId: number,
+  type: string,
+  amount: number,
+  note: string,
+  meta: Record<string, unknown> | null,
+  by: number,
+  locationId = 0,
+  locationName = "",
+): Promise<void> {
+  let noteTrimmed = clean(note);
+  if (noteTrimmed.length > 255) noteTrimmed = `${noteTrimmed.slice(0, 252)}...`;
+  let locName = clean(locationName);
+  if (locationId > 0 && locName === "") {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "name", where: "id = ?", params: [locationId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    locName = clean(rows[0]?.name);
+  }
+  await tenantInsert(await tenantTable(slug, "giftcard_transactions"), {
+    giftcard_id: giftcardId,
+    type: clean(type).toLowerCase() || "adjust",
+    amount: round2(amount),
+    note: noteTrimmed !== "" ? noteTrimmed : null,
+    meta_json: meta ? JSON.stringify(meta) : null,
+    created_at: new Date(),
+    created_by: by > 0 ? by : null,
+    location_id: locationId > 0 ? locationId : null,
+    location_name: locName !== "" ? locName : null,
+  }).catch(() => 0);
+}
+
+// GiftCard::expiryDateLabel + buildExpiryChangeNote.
+function gcExpiryDateLabel(raw: string): string {
+  const s = clean(raw).slice(0, 10);
+  if (s === "") return "nessuna scadenza";
+  return displayDmy(s) || s;
+}
+
+// GiftCard::activeUsageLinkCounts: prenotazioni/vendite con giftcard_used>0
+// non annullate.
+async function gcActiveUsageLinkCounts(slug: string, giftcardId: number): Promise<{ appointments: number; sales: number }> {
+  const out = { appointments: 0, sales: 0 };
+  if (giftcardId <= 0) return out;
+  const aRows = await tenantSelect<RowDataPacket>({
+    slug, table: "appointments", columns: "COUNT(*) AS n",
+    where: "giftcard_id = ? AND COALESCE(giftcard_used, 0) > 0 AND LOWER(COALESCE(status,'')) NOT IN ('canceled','cancelled','rejected')",
+    params: [giftcardId],
+  }).catch(() => [] as RowDataPacket[]);
+  out.appointments = Number(aRows[0]?.n ?? 0);
+  const sRows = await tenantSelect<RowDataPacket>({
+    slug, table: "sales", columns: "COUNT(*) AS n",
+    where: "giftcard_id = ? AND COALESCE(giftcard_used, 0) > 0 AND LOWER(COALESCE(status,'')) NOT IN ('canceled','cancelled')",
+    params: [giftcardId],
+  }).catch(() => [] as RowDataPacket[]);
+  out.sales = Number(sRows[0]?.n ?? 0);
+  return out;
+}
+
+// GiftCard::recipientEditLockInfo: messaggi verbatim in ordine legacy.
+async function gcRecipientLockInfo(slug: string, card: RowDataPacket, items: GcItemRow[]): Promise<{ locked: boolean; message: string }> {
+  const giftId = Number(card.id ?? 0);
+  if (giftId <= 0) return { locked: true, message: "GiftCard non trovata." };
+  const status = clean(card.status).toLowerCase();
+  const isExpiredDate = gcIsExpiredByDate(card.expires_at);
+  if (status === "cancelled" || status === "canceled") {
+    return { locked: true, message: "Non e possibile modificare il destinatario di questa GiftCard perche e annullata." };
+  }
+  for (const it of items) {
+    if (it.redeemedQty > 0) {
+      return { locked: true, message: "Non e piu possibile modificare il destinatario di questa GiftCard perche risulta gia riscattata, anche solo parzialmente." };
+    }
+  }
+  const usage = await gcActiveUsageLinkCounts(slug, giftId);
+  if (usage.appointments > 0 || usage.sales > 0) {
+    return { locked: true, message: "Non e piu possibile modificare il destinatario di questa GiftCard perche risulta gia riscattata, anche solo parzialmente." };
+  }
+  const initial = round2(Number(card.initial_amount ?? 0));
+  const balance = round2(Number(card.balance ?? 0));
+  if (Math.abs(balance - initial) > 0.00001) {
+    return { locked: true, message: "Non e piu possibile modificare il destinatario di questa GiftCard perche risulta gia riscattata, anche solo parzialmente." };
+  }
+  if (status === "redeemed") {
+    return { locked: true, message: "Non e piu possibile modificare il destinatario di questa GiftCard perche risulta gia riscattata." };
+  }
+  if (status === "expired" || isExpiredDate) {
+    return { locked: true, message: "Non e possibile modificare il destinatario di questa GiftCard perche e scaduta." };
+  }
+  return { locked: false, message: "" };
+}
+
+// GiftCard::isGiftCardRedeemedForExpiry: riscattata anche solo parzialmente
+// (status, credito scalato, item riscattati).
+async function gcIsRedeemedForExpiry(slug: string, id: number, card: RowDataPacket): Promise<boolean> {
+  const status = clean(card.status).toLowerCase();
+  if (status === "redeemed") return true;
+  const initial = round2(Number(card.initial_amount ?? 0));
+  const balance = round2(Number(card.balance ?? 0));
+  if (initial > 0.00001 && balance + 0.00001 < initial) return true;
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "giftcard_items", columns: "COALESCE(SUM(redeemed_qty),0) AS n", where: "giftcard_id = ?", params: [id] }).catch(() => [] as RowDataPacket[]);
+  return Number(rows[0]?.n ?? 0) > 0;
+}
+
+// gc_page_date_only: solo Y-m-d ('—' se vuota).
+function gcDateOnly(v: unknown): string {
+  const s = localDate(v);
+  return s !== "" ? s : "—";
+}
+
+// Nota cliente ripulita dagli append legacy "[ANNULLATA ...]"/"[INFO ...]".
+function gcCleanClientNote(raw: string): string {
+  let note = clean(raw);
+  if (note === "") return "";
+  note = note.replace(/^\s*\[(ANNULLATA|INFO)[^\]]*\].*$/gim, "");
+  note = note.replace(/\n{3,}/g, "\n\n");
+  return note.trim();
+}
+
+// Link "Dettaglio vendita" legacy: righe vendita GiftCard con il codice.
+async function gcFindSaleByCode(slug: string, code: string): Promise<number> {
+  const c = clean(code);
+  if (c === "") return 0;
+  const siT = await tenantTable(slug, "sale_items");
+  const scoped = siT.mode === "shared" && (await columnExists(siT.name, "tenant_id"));
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT sale_id FROM \`${siT.name}\` WHERE item_name LIKE ? AND item_name LIKE ?${scoped ? " AND tenant_id = ?" : ""} ORDER BY id DESC LIMIT 1`,
+    scoped ? ["GiftCard%", `%${c}%`, siT.tenantId ?? 0] : ["GiftCard%", `%${c}%`],
+  ).catch(() => [] as RowDataPacket[]);
+  return Number(rows[0]?.sale_id ?? 0);
+}
+
+// gc_find_linked_appointment_for_movement: prenotazione collegata al movimento
+// (public_code, fallback id numerico) con giftcard_used>0.
+async function gcFindLinkedAppointment(slug: string, giftcardId: number, reference: string): Promise<{ id: number; publicCode: string; status: string; createdAt: string } | null> {
+  const ref = clean(reference);
+  if (giftcardId <= 0 || ref === "") return null;
+  let rows = await tenantSelect<RowDataPacket>({
+    slug, table: "appointments", columns: "id, public_code, status, created_at",
+    where: "giftcard_id = ? AND public_code = ? AND COALESCE(giftcard_used, 0) > 0",
+    params: [giftcardId, ref], orderBy: "id DESC", limit: 1,
+  }).catch(() => [] as RowDataPacket[]);
+  if (!rows[0] && /^\d+$/.test(ref)) {
+    rows = await tenantSelect<RowDataPacket>({
+      slug, table: "appointments", columns: "id, public_code, status, created_at",
+      where: "giftcard_id = ? AND id = ? AND COALESCE(giftcard_used, 0) > 0",
+      params: [giftcardId, Number(ref)], limit: 1,
+    }).catch(() => [] as RowDataPacket[]);
+  }
+  if (!rows[0]) return null;
+  const apptId = Number(rows[0].id ?? 0);
+  let code = clean(rows[0].public_code);
+  if (code === "") code = String(apptId);
+  return { id: apptId, publicCode: code, status: clean(rows[0].status).toLowerCase(), createdAt: localDateTime(rows[0].created_at) };
+}
+
+export type GiftCardMovement = {
+  at: string;
+  type: string;
+  amount: number;
+  locationLabel: string;
+  note: string;
+  operatorName: string;
+};
+
+export type GiftCardDetailItem = GcItemRow;
 
 export type GiftCardFull = {
   id: number;
@@ -1677,6 +1929,7 @@ export type GiftCardFull = {
   status: string;
   statusLabel: string;
   statusBadge: string;
+  readOnly: boolean;
   eventType: string;
   eventLabel: string;
   senderClientId: number;
@@ -1685,148 +1938,192 @@ export type GiftCardFull = {
   recipientName: string;
   recipientEmail: string;
   recipientClient: { id: number; name: string; email: string; phone: string } | null;
-  locationName: string;
+  recipientLocked: boolean;
+  recipientLockMessage: string;
+  locationLabel: string;
   voucherHideAmount: boolean;
   initialAmount: number;
   balance: number;
   note: string;
   giftMessage: string;
   internalNote: string;
-  issuedAt: string;
-  expiresAt: string;
-  redeemedAt: string;
-  cancelledAt: string;
-  scheduledSendOn: string;
-  lastEmailSentAt: string;
+  issuedDate: string;
+  validFromDate: string;
+  expiresDate: string;
+  scheduledSendLabel: string;
+  lastEmailSentAtRaw: string;
   lastEmailSentTo: string;
-  lastEmailShowAmount: boolean;
-  linkedSaleId: number | null;
+  linkedSaleId: number;
   items: GiftCardDetailItem[];
   hasMoney: boolean;
-  movements: GiftIssueMovement[];
-  canEdit: boolean;
-  canRedeem: boolean;
+  hasItems: boolean;
+  movements: GiftCardMovement[];
+  opsDisabled: boolean;
   expiryEditable: boolean;
-  expiryLockedReason: string;
+  expiryMinDate: string;
+  expiryModalValue: string;
+  expiryMinBeyondToday: boolean;
 };
-
-const GC_STATUS_META: Record<string, { label: string; badge: string }> = {
-  active: { label: "Attiva", badge: "bg-success" },
-  redeemed: { label: "Riscattata", badge: "bg-info" },
-  expired: { label: "Scaduta", badge: "bg-warning" },
-  cancelled: { label: "Annullata", badge: "bg-danger" },
-};
-
-async function giftCardRow(slug: string, id: number): Promise<RowDataPacket | null> {
-  if (id <= 0) return null;
-  const rows = await tenantSelect<RowDataPacket>({ slug, table: "giftcards", where: "id = ?", params: [id], limit: 1 });
-  return rows[0] ?? null;
-}
-
-function gcEffectiveStatus(raw: string, expiresAt: string): string {
-  let st = clean(raw).toLowerCase();
-  if (st === "canceled") st = "cancelled";
-  if (st === "active" && expiresAt !== "" && expiresAt < todayIso()) st = "expired";
-  return st;
-}
 
 export async function getGiftCardFull(slug: string, id: number): Promise<GiftCardFull | null> {
   const card = await giftCardRow(slug, id);
   if (!card) return null;
 
-  const expiresAt = isoDate(card.expires_at);
-  const status = gcEffectiveStatus(String(card.status ?? "active"), expiresAt);
-  const meta = GC_STATUS_META[status] ?? { label: status, badge: "bg-secondary" };
+  const meta = giftCardStatusMeta(String(card.status ?? "active"));
+  const st = meta.code;
+  const readOnly = st === "cancelled";
 
   const senderClientId = Number(card.client_id ?? 0) || 0;
   const sender = await clientRow(slug, senderClientId);
   const recipientClientId = Number(card.recipient_client_id ?? 0) || 0;
   const recipientClient = recipientClientId > 0 ? await clientRow(slug, recipientClientId) : null;
 
-  // Voucher per servizi/prodotti (giftcard_items) — spesso assenti (card monetarie).
-  const itemRows = await tenantSelect<RowDataPacket>({ slug, table: "giftcard_items", where: "giftcard_id = ?", params: [id], orderBy: "id ASC" }).catch(() => [] as RowDataPacket[]);
-  const items: GiftCardDetailItem[] = itemRows.map((r) => {
-    const qty = Math.max(1, Number(r.qty ?? 1));
-    const redeemed = Math.max(0, Math.min(qty, Number(r.redeemed_qty ?? 0)));
-    return {
-      rowId: Number(r.id ?? 0),
-      itemType: clean(r.item_type) || "service",
-      name: clean(r.item_name) || `Item #${r.id}`,
-      qty,
-      redeemedQty: redeemed,
-      remainingQty: Math.max(0, qty - redeemed),
-    };
-  });
+  const items = await gcListItems(slug, id);
+  const lock = await gcRecipientLockInfo(slug, card, items);
 
-  const txRows = await tenantSelect<RowDataPacket>({ slug, table: "giftcard_transactions", where: "giftcard_id = ?", params: [id], orderBy: "created_at DESC, id DESC", limit: 200 }).catch(() => [] as RowDataPacket[]);
-  const movements: GiftIssueMovement[] = [];
+  const initialAmount = round2(Number(card.initial_amount ?? 0));
+  const balance = round2(Number(card.balance ?? 0));
+  const hasItems = items.length > 0;
+  const hasMoney = initialAmount > 0.00001 || balance > 0.00001;
+
+  // Scadenza modificabile: non annullata e non riscattata (anche parziale).
+  const redeemedForExpiry = await gcIsRedeemedForExpiry(slug, id, card);
+  const expiryEditable = !readOnly && !redeemedForExpiry;
+
+  // Inizio validità da issued_at (solo data) + minimo modale legacy.
+  const validFromDate = localDate(card.issued_at) || "—";
+  const today = todayIso();
+  let expiryMinDate = today;
+  if (validFromDate !== "—") {
+    const d = new Date(`${validFromDate}T00:00:00`);
+    d.setDate(d.getDate() + 1);
+    const minFromIssued = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    if (minFromIssued > expiryMinDate) expiryMinDate = minFromIssued;
+  }
+  const expiresDate = localDate(card.expires_at);
+  let expiryModalValue = expiresDate;
+  if (expiryModalValue === "" || expiryModalValue < expiryMinDate) expiryModalValue = expiryMinDate;
+
+  // Movimenti: ledger reale (GiftCard::listTransactions ORDER id DESC) con la
+  // normalizzazione prenotazioni gc_prepare_movement_display, poi ri-ordinati
+  // per data desc (id desc a parità) come la pagina.
+  const uT = await tenantTable(slug, "users");
+  const tT = await tenantTable(slug, "giftcard_transactions");
+  const scopedTx = tT.mode === "shared" && (await columnExists(tT.name, "tenant_id"));
+  const txRows = await dbQuery<RowDataPacket[]>(
+    `SELECT t.*, u.name AS user_name
+       FROM \`${tT.name}\` t
+       LEFT JOIN \`${uT.name}\` u ON u.id = t.created_by${scopedTx ? " AND u.tenant_id = t.tenant_id" : ""}
+      WHERE t.giftcard_id = ?${scopedTx ? " AND t.tenant_id = ?" : ""}
+      ORDER BY t.id DESC
+      LIMIT 500`,
+    scopedTx ? [id, tT.tenantId ?? 0] : [id],
+  ).catch(() => [] as RowDataPacket[]);
+
+  const prepared: Array<{ at: string; txId: number; type: string; amount: number; locationId: number; locationName: string; note: string; operatorName: string }> = [];
   for (const r of txRows) {
-    movements.push({
-      at: isoDateTime(r.created_at),
-      type: clean(r.type) || "adjust",
-      qty: null,
+    let typeDisp = clean(r.type) || "adjust";
+    const noteRaw = clean(r.note);
+    let noteDisp = noteRaw;
+    let at = localDateTime(r.created_at);
+    const m = /^\s*(?:Uso\s+GiftCard|Riscatto)\s+su\s+prenotazione\s+#\s*(.+)\s*$/i.exec(noteRaw);
+    if (m) {
+      let ref = clean(m[1]);
+      ref = clean(ref.replace(/\s*\[.*$/u, ""));
+      const appt = await gcFindLinkedAppointment(slug, id, ref);
+      if (appt) {
+        const stCode = appt.status;
+        if (stCode === "done") {
+          typeDisp = "redeem";
+          noteDisp = `Riscatto su prenotazione #${appt.publicCode}`;
+        } else {
+          typeDisp = "pending";
+          noteDisp = `In sospeso su prenotazione #${appt.publicCode}`;
+          if (appt.createdAt !== "") at = appt.createdAt;
+        }
+      } else if (ref !== "") {
+        noteDisp = `Riscatto su prenotazione #${ref}`;
+      }
+    }
+    if (noteDisp === "") noteDisp = "—";
+    prepared.push({
+      at,
+      txId: Number(r.id ?? 0),
+      type: typeDisp,
       amount: round2(Number(r.amount ?? 0)),
-      itemLabel: "—",
+      locationId: Number(r.location_id ?? 0),
       locationName: clean(r.location_name),
-      note: clean(r.note),
-      operatorName: await userLabel(slug, Number(r.created_by ?? 0)),
+      note: noteDisp,
+      operatorName: clean(r.user_name) || "—",
+    });
+  }
+  prepared.sort((a, b) => {
+    if (a.at !== b.at) return a.at < b.at ? 1 : -1;
+    return b.txId - a.txId;
+  });
+  const movements: GiftCardMovement[] = [];
+  for (const p of prepared) {
+    movements.push({
+      at: p.at !== "" ? p.at : "",
+      type: p.type,
+      amount: p.amount,
+      locationLabel: await giftLocationLabel(slug, p.locationId, p.locationName),
+      note: p.note,
+      operatorName: p.operatorName,
     });
   }
 
-  let linkedSaleId: number | null = null;
-  const noteMatch = clean(card.note).match(/Vendita\s+#(\d+)/i);
-  if (noteMatch) linkedSaleId = Number(noteMatch[1]) || null;
-
-  let expiryLockedReason = "";
-  if (status === "cancelled") expiryLockedReason = "Scadenza non modificabile perche la GiftCard e annullata.";
-  else if (status === "redeemed") expiryLockedReason = "Scadenza non modificabile perche la GiftCard risulta gia riscattata.";
-
   const publicToken = await ensureVoucherToken(slug, "giftcards", id, String(card.voucher_public_token ?? ""));
-  const balance = round2(Number(card.balance ?? 0));
+  const scheduled = localDate(card.scheduled_send_on);
+  const lastEmailSentAtRaw = localDateTime(card.last_email_sent_at);
 
   return {
     id,
     code: clean(card.code),
     publicToken,
-    status,
+    status: st,
     statusLabel: meta.label,
     statusBadge: meta.badge,
+    readOnly,
     eventType: clean(card.event_type) || "giftcard",
     eventLabel: giftEventLabel(String(card.event_type ?? ""), "GiftCard (generica)"),
     senderClientId,
-    senderName: sender?.name ?? (senderClientId > 0 ? `Cliente #${senderClientId}` : "—"),
+    senderName: sender?.name ?? "",
     recipientClientId,
     recipientName: clean(card.recipient_name),
     recipientEmail: clean(card.recipient_email),
     recipientClient: recipientClient ? { id: recipientClientId, ...recipientClient } : null,
-    locationName: clean(card.location_name),
+    recipientLocked: lock.locked,
+    recipientLockMessage: lock.locked ? (lock.message || "Destinatario non modificabile.") : "",
+    locationLabel: await giftLocationLabel(slug, Number(card.location_id ?? 0), clean(card.location_name)),
     voucherHideAmount: Number(card.voucher_hide_amount ?? 0) === 1,
-    initialAmount: round2(Number(card.initial_amount ?? 0)),
+    initialAmount,
     balance,
-    note: clean(card.note),
+    note: gcCleanClientNote(String(card.note ?? "")),
     giftMessage: clean(card.gift_message),
     internalNote: clean(card.internal_note),
-    issuedAt: isoDateTime(card.issued_at),
-    expiresAt,
-    redeemedAt: isoDateTime(card.redeemed_at),
-    cancelledAt: isoDateTime(card.cancelled_at),
-    scheduledSendOn: isoDate(card.scheduled_send_on),
-    lastEmailSentAt: isoDateTime(card.last_email_sent_at),
+    issuedDate: gcDateOnly(card.issued_at),
+    validFromDate,
+    expiresDate,
+    scheduledSendLabel: scheduled !== "" && lastEmailSentAtRaw === "" ? displayDmy(scheduled) : "",
+    lastEmailSentAtRaw,
     lastEmailSentTo: clean(card.last_email_sent_to),
-    lastEmailShowAmount: Number(card.last_email_hide_amount ?? 0) !== 1,
-    linkedSaleId,
+    linkedSaleId: await gcFindSaleByCode(slug, clean(card.code)),
     items,
-    hasMoney: round2(Number(card.initial_amount ?? 0)) > 0,
+    hasMoney,
+    hasItems,
     movements,
-    canEdit: status !== "cancelled",
-    canRedeem: status === "active" && balance > 0,
-    expiryEditable: expiryLockedReason === "",
-    expiryLockedReason,
+    opsDisabled: st === "cancelled" || st === "expired",
+    expiryEditable,
+    expiryMinDate,
+    expiryModalValue,
+    expiryMinBeyondToday: expiryMinDate > today,
   };
 }
 
-// "Dati GiftCard" (giftcard.php _mode=update): mittente obbligatorio, evento,
-// nascondi importo, destinatario (+cliente), nota cliente, messaggio di dedica.
+// "Dati GiftCard" (giftcard.php _mode=update + GiftCard::updateGiftCard):
+// mittente obbligatorio, lock destinatario server-side, movimento "Cambio
+// destinatario" (GiftCard::logRecipientChange).
 export async function updateGiftCardData(
   slug: string,
   id: number,
@@ -1840,11 +2137,18 @@ export async function updateGiftCardData(
     note?: string;
     giftMessage?: string;
   },
+  by = 0,
 ): Promise<{ ok: true; message: string }> {
   const card = await giftCardRow(slug, id);
   if (!card) throw new Error("GiftCard non trovata.");
-  const st = clean(card.status).toLowerCase();
-  if (st === "cancelled" || st === "canceled") throw new Error("Non è possibile modificare una GiftCard annullata.");
+
+  const items = await gcListItems(slug, id);
+  const lock = await gcRecipientLockInfo(slug, card, items);
+  const before = gbNormalizeRecipientSnapshot({
+    recipient_name: card.recipient_name,
+    recipient_email: card.recipient_email,
+    recipient_client_id: card.recipient_client_id,
+  });
 
   const senderClientId = Math.max(0, Math.trunc(Number(input.senderClientId ?? 0)));
   if (senderClientId <= 0) throw new Error("Seleziona un mittente.");
@@ -1853,154 +2157,660 @@ export async function updateGiftCardData(
 
   let recipientName = clean(input.recipientName);
   let recipientEmail = clean(input.recipientEmail);
-  const recipientClientId = Math.max(0, Math.trunc(Number(input.recipientClientId ?? 0)));
-  if (recipientClientId > 0) {
+  let recipientClientId = Math.max(0, Math.trunc(Number(input.recipientClientId ?? 0)));
+  if (lock.locked) {
+    // Lock server-side: lo snapshot destinatario resta quello corrente.
+    recipientName = clean(card.recipient_name);
+    recipientEmail = clean(card.recipient_email);
+    recipientClientId = before.recipient_client_id;
+  } else if (recipientClientId > 0) {
     const c = await clientRow(slug, recipientClientId);
     if (!c) throw new Error("Cliente destinatario non trovato.");
     if (c.name !== "") recipientName = c.name;
     if (c.email !== "" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c.email)) recipientEmail = c.email;
   }
+  if (recipientName.length > 120) recipientName = recipientName.slice(0, 120);
+  if (recipientEmail.length > 190) recipientEmail = recipientEmail.slice(0, 190);
+  if (recipientEmail !== "" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) recipientEmail = "";
+
+  const st = clean(card.status).toLowerCase();
+  if (st === "cancelled" || st === "canceled") throw new Error("Non è possibile modificare una GiftCard annullata.");
 
   const eventKey = clean(input.eventType).toLowerCase();
-  const values = {
-    client_id: senderClientId,
-    event_type: GIFT_EVENT_OPTIONS.some((e) => e.key === eventKey) ? eventKey : clean(card.event_type) || "giftcard",
-    voucher_hide_amount: input.voucherHideAmount ? 1 : 0,
-    recipient_client_id: recipientClientId > 0 ? recipientClientId : null,
-    recipient_name: recipientName !== "" ? recipientName : null,
-    recipient_email: recipientEmail !== "" ? recipientEmail : null,
-    note: input.note !== undefined ? (clean(input.note) || null) : undefined,
-    gift_message: input.giftMessage !== undefined ? (clean(input.giftMessage) || null) : undefined,
-    updated_at: new Date(),
-  };
-  await tenantUpdate({ slug, table: "giftcards", id, values: Object.fromEntries(Object.entries(values).filter(([, v]) => v !== undefined)) });
+  let note = input.note !== undefined ? clean(input.note) : clean(card.note);
+  if (note.length > 1000) note = note.slice(0, 1000);
+  let giftMessage = input.giftMessage !== undefined ? clean(input.giftMessage) : clean(card.gift_message);
+  if (giftMessage.length > 2000) giftMessage = giftMessage.slice(0, 2000);
+
+  await tenantUpdate({
+    slug, table: "giftcards", id,
+    values: {
+      client_id: senderClientId,
+      event_type: GIFT_EVENT_OPTIONS.some((e) => e.key === eventKey) ? eventKey : clean(card.event_type) || "giftcard",
+      voucher_hide_amount: input.voucherHideAmount !== undefined ? (input.voucherHideAmount ? 1 : 0) : Number(card.voucher_hide_amount ?? 0),
+      recipient_client_id: recipientClientId > 0 ? recipientClientId : null,
+      recipient_name: recipientName !== "" ? recipientName : null,
+      recipient_email: recipientEmail !== "" ? recipientEmail : null,
+      note: note !== "" ? note : null,
+      gift_message: giftMessage !== "" ? giftMessage : null,
+      updated_at: new Date(),
+      updated_by: by > 0 ? by : null,
+    },
+  });
+
+  // Movimento "Cambio destinatario: X -> Y" (adjust 0 + meta), solo se cambia.
+  if (!lock.locked) {
+    const after = gbNormalizeRecipientSnapshot({ recipient_name: recipientName, recipient_email: recipientEmail, recipient_client_id: recipientClientId });
+    const changed = before.recipient_name !== after.recipient_name || before.recipient_email !== after.recipient_email || before.recipient_client_id !== after.recipient_client_id;
+    if (changed) {
+      await gcInsertTransaction(
+        slug, id, "adjust", 0,
+        `Cambio destinatario: ${gbRecipientSnapshotLabel(before)} -> ${gbRecipientSnapshotLabel(after)}`,
+        { action: "recipient_change", before, after },
+        by,
+      );
+    }
+  }
   return { ok: true, message: "GiftCard aggiornata" };
 }
 
-// Modale "Modifica scadenza GiftCard" (giftcard.php _mode=update_expiry).
-export async function updateGiftCardExpiry(slug: string, id: number, expiresAtRaw: string): Promise<{ ok: true; message: string }> {
+// Modale "Modifica scadenza GiftCard" (GiftCard::updateGiftCardExpiry):
+// guardie in ordine legacy, scadenza salvata come DATA, movimento adjust
+// "Modifica scadenza GiftCard: ..." (+ " (GiftCard riattivata)").
+export async function updateGiftCardExpiry(slug: string, id: number, expiresAtRaw: string, by = 0): Promise<{ ok: true; message: string }> {
+  const raw = clean(expiresAtRaw);
+  const m = /^(\d{4}-\d{2}-\d{2})/.exec(raw);
+  if (!m || Number.isNaN(Date.parse(m[1]))) throw new Error("Seleziona una nuova data di scadenza valida.");
+  const next = m[1];
+  const today = todayIso();
+  if (next < today) throw new Error("La nuova data di scadenza non può essere precedente a oggi.");
+
   const card = await giftCardRow(slug, id);
   if (!card) throw new Error("GiftCard non trovata.");
-  const st = clean(card.status).toLowerCase();
+
+  const validFrom = localDate(card.issued_at);
+  if (validFrom !== "" && next <= validFrom) throw new Error('La data "Valida al" deve essere almeno il giorno successivo a "Valida dal".');
+
+  let st = clean(card.status).toLowerCase();
+  if (st === "") st = "active";
   if (st === "cancelled" || st === "canceled") throw new Error("Non è possibile modificare la scadenza di una GiftCard annullata.");
-  if (st === "redeemed") throw new Error("Non e possibile modificare la scadenza di una GiftCard riscattata.");
 
-  const next = clean(expiresAtRaw);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(next) || Number.isNaN(Date.parse(next))) throw new Error("Seleziona una nuova data di scadenza valida.");
-  if (next < todayIso()) throw new Error("La nuova data di scadenza non può essere precedente a oggi.");
-  const issued = isoDate(card.issued_at);
-  if (issued !== "" && next <= issued) throw new Error('La data "Valida al" deve essere almeno il giorno successivo a "Valida dal".');
+  const currentExpires = localDate(card.expires_at);
+  const changed = currentExpires !== next;
+  if (changed && (await gcIsRedeemedForExpiry(slug, id, card))) {
+    throw new Error("Non e possibile modificare la scadenza di una GiftCard riscattata.");
+  }
 
-  const values: Record<string, unknown> = { expires_at: `${next} 23:59:59`, updated_at: new Date() };
-  if (st === "expired") values.status = "active";
-  await tenantUpdate({ slug, table: "giftcards", id, values });
-  // Ledger legacy (type expiry_change).
-  await tenantInsert(await tenantTable(slug, "giftcard_transactions"), { giftcard_id: id, type: "expiry_change", amount: 0, note: `Nuova scadenza: ${next}`, created_at: new Date() }).catch(() => 0);
+  let nextStatus = st;
+  if (!["redeemed", "cancelled", "canceled"].includes(st)) nextStatus = next < today ? "expired" : "active";
+
+  await tenantUpdate({ slug, table: "giftcards", id, values: { expires_at: next, status: nextStatus, updated_at: new Date(), updated_by: by > 0 ? by : null } });
+
+  if (changed) {
+    const reactivated = st === "expired" && nextStatus === "active";
+    let note = `Modifica scadenza GiftCard: ${gcExpiryDateLabel(currentExpires)} -> ${gcExpiryDateLabel(next)}`;
+    if (reactivated) note += " (GiftCard riattivata)";
+    await gcInsertTransaction(slug, id, "adjust", 0, note, {
+      action: "expiry_change",
+      old_expires_at: currentExpires !== "" ? currentExpires : null,
+      new_expires_at: next,
+      old_status: st,
+      new_status: nextStatus,
+      reactivated,
+    }, by);
+  }
   return { ok: true, message: "Scadenza GiftCard aggiornata" };
 }
 
-export async function updateGiftCardInternalNote(slug: string, id: number, noteRaw: string): Promise<{ ok: true; message: string }> {
+// GiftCard::updateGiftCardInternalNote (clamp 2000, blocco su annullata).
+export async function updateGiftCardInternalNote(slug: string, id: number, noteRaw: string, by = 0): Promise<{ ok: true; message: string }> {
   const card = await giftCardRow(slug, id);
   if (!card) throw new Error("GiftCard non trovata.");
-  await tenantUpdate({ slug, table: "giftcards", id, values: { internal_note: clean(noteRaw) || null, updated_at: new Date() } });
+  const st = clean(card.status).toLowerCase();
+  if (st === "cancelled" || st === "canceled") throw new Error("Non è possibile modificare una GiftCard annullata.");
+  let note = clean(noteRaw);
+  if (note.length > 2000) note = note.slice(0, 2000);
+  await tenantUpdate({ slug, table: "giftcards", id, values: { internal_note: note !== "" ? note : null, updated_at: new Date(), updated_by: by > 0 ? by : null } });
   return { ok: true, message: "Nota interna salvata" };
 }
 
-// Riscatto per-item (giftcard.php _mode=redeem_item / GiftCard::redeemGiftCardItem):
-// scala redeemed_qty sulla voce; la card diventa 'redeemed' quando credito e
-// voci sono esauriti.
-export async function redeemGiftCardItemManage(slug: string, id: number, itemRowId: number, qtyRaw: number, note: string, by: number, location: { id: number; name: string } | null): Promise<{ ok: true; message: string }> {
+// Compat _mode=update_note (clamp 1000, blocco su annullata).
+export async function updateGiftCardClientNote(slug: string, id: number, noteRaw: string, by = 0): Promise<{ ok: true; message: string }> {
   const card = await giftCardRow(slug, id);
   if (!card) throw new Error("GiftCard non trovata.");
-  const st = gcEffectiveStatus(String(card.status ?? "active"), isoDate(card.expires_at));
-  if (st === "expired") throw new Error("GiftCard scaduta.");
-  if (st !== "active") throw new Error(`GiftCard non utilizzabile (stato: ${st}).`);
+  const st = clean(card.status).toLowerCase();
+  if (st === "cancelled" || st === "canceled") throw new Error("Non è possibile modificare una GiftCard annullata.");
+  let note = clean(noteRaw);
+  if (note.length > 1000) note = note.slice(0, 1000);
+  await tenantUpdate({ slug, table: "giftcards", id, values: { note: note !== "" ? note : null, updated_at: new Date(), updated_by: by > 0 ? by : null } });
+  return { ok: true, message: "Nota per il cliente salvata" };
+}
 
-  const rows = await tenantSelect<RowDataPacket>({ slug, table: "giftcard_items", where: "id = ? AND giftcard_id = ?", params: [itemRowId, id], limit: 1 }).catch(() => [] as RowDataPacket[]);
-  if (!rows[0]) throw new Error("Voce non trovata.");
-  const qtyTotal = Math.max(1, Number(rows[0].qty ?? 1));
-  const redeemed = Math.max(0, Number(rows[0].redeemed_qty ?? 0));
-  const residual = Math.max(0, qtyTotal - redeemed);
-  if (residual <= 0) throw new Error("Nessun residuo da riscattare per questa voce.");
-  const qty = Math.max(1, Math.trunc(Number(qtyRaw) || 1));
-  if (qty > residual) throw new Error(`Quantità eccede il residuo (residuo: ${residual}).`);
+// "Riscatta (scala credito)" (GiftCard::redeemGiftCard -> addTransaction):
+// stato flip 'redeemed' solo con credito 0 E item esauriti; redeemed_at NULL
+// quando resta attiva.
+export async function redeemGiftCardCredit(slug: string, id: number, amountRaw: number, note: string, by: number, location: { id: number; name: string } | null): Promise<{ ok: true; message: string }> {
+  const amount = round2(Number(amountRaw) || 0);
+  if (amount <= 0) throw new Error("Importo non valido.");
 
-  await tenantUpdate({ slug, table: "giftcard_items", id: itemRowId, values: { redeemed_qty: redeemed + qty } });
-  await tenantInsert(await tenantTable(slug, "giftcard_transactions"), {
-    giftcard_id: id,
-    type: "redeem",
-    amount: 0,
-    note: clean(note) || `Riscatto item: ${clean(rows[0].item_name)} × ${qty}`,
-    created_at: new Date(),
-    created_by: by > 0 ? by : null,
-    location_id: location && location.id > 0 ? location.id : null,
-    location_name: location ? clean(location.name) || null : null,
-  }).catch(() => 0);
-
-  // Flip a 'redeemed' quando saldo 0 e nessun residuo item (GiftCard.php ~2301).
-  const balance = round2(Number(card.balance ?? 0));
-  const itemRows = await tenantSelect<RowDataPacket>({ slug, table: "giftcard_items", columns: "qty, redeemed_qty", where: "giftcard_id = ?", params: [id] }).catch(() => [] as RowDataPacket[]);
-  const anyResidual = itemRows.some((r) => Math.max(0, Number(r.qty ?? 1)) - Math.max(0, Number(r.redeemed_qty ?? 0)) > 0);
-  if (balance <= 0.00001 && !anyResidual) {
-    await tenantUpdate({ slug, table: "giftcards", id, values: { status: "redeemed", redeemed_at: new Date(), updated_at: new Date() } }).catch(() => 0);
+  const card = await giftCardRow(slug, id);
+  if (!card) throw new Error("GiftCard non trovata.");
+  const status = clean(card.status).toLowerCase();
+  if (["cancelled", "canceled", "expired"].includes(status)) throw new Error(`GiftCard non utilizzabile (stato: ${status}).`);
+  if (gcIsExpiredByDate(card.expires_at)) {
+    await gcMarkExpiredIfDue(slug, id);
+    throw new Error("GiftCard scaduta.");
   }
+
+  const balance = round2(Number(card.balance ?? 0));
+  const newBal = round2(balance - amount);
+  if (newBal < 0) throw new Error("Saldo insufficiente.");
+
+  const remRows = await tenantSelect<RowDataPacket>({ slug, table: "giftcard_items", columns: "COALESCE(SUM(GREATEST(qty - redeemed_qty, 0)),0) AS rem", where: "giftcard_id = ?", params: [id] }).catch(() => [] as RowDataPacket[]);
+  const itemsRemaining = Number(remRows[0]?.rem ?? 0);
+  const newStatus = newBal <= 0 && itemsRemaining <= 0 ? "redeemed" : "active";
+
+  const now = new Date();
+  await tenantUpdate({
+    slug, table: "giftcards", id,
+    values: {
+      balance: newBal,
+      status: newStatus,
+      redeemed_at: newStatus === "redeemed" ? now : null,
+      updated_at: now,
+      updated_by: by > 0 ? by : null,
+    },
+  });
+
+  let txNote = clean(note);
+  if (txNote === "") txNote = "Riscatto GiftCard";
+  const locId = location && location.id > 0 ? location.id : Number(card.location_id ?? 0);
+  await gcInsertTransaction(slug, id, "redeem", -amount, txNote, null, by, locId, location?.name ?? "");
+  return { ok: true, message: "Riscatto registrato" };
+}
+
+// Riscatto per-item (GiftCard::redeemGiftCardItem): guardie verbatim, sede
+// (servizio abilitato / prodotto abbinato) e SCALA LO STOCK del prodotto.
+export async function redeemGiftCardItemManage(slug: string, id: number, itemRowId: number, qtyRaw: number, note: string, by: number, location: { id: number; name: string } | null): Promise<{ ok: true; message: string }> {
+  if (id <= 0 || itemRowId <= 0) throw new Error("GiftCard non trovata.");
+  let qty = Math.trunc(Number(qtyRaw) || 0);
+  if (qty <= 0) qty = 1;
+  if (qty > 999) qty = 999;
+
+  const card = await giftCardRow(slug, id);
+  if (!card) throw new Error("GiftCard non trovata.");
+  const status = clean(card.status).toLowerCase();
+  if (["cancelled", "canceled", "expired"].includes(status)) throw new Error(`GiftCard non utilizzabile (stato: ${status}).`);
+  if (gcIsExpiredByDate(card.expires_at)) {
+    await gcMarkExpiredIfDue(slug, id);
+    throw new Error("GiftCard scaduta.");
+  }
+  let txLocationId = location && location.id > 0 ? location.id : 0;
+  if (txLocationId <= 0) txLocationId = Number(card.location_id ?? 0);
+
+  const items = await gcListItems(slug, id);
+  const it = items.find((row) => row.rowId === itemRowId);
+  if (!it) throw new Error("Voce non trovata.");
+  if (it.remainingQty <= 0) throw new Error("Nessun residuo da riscattare per questa voce.");
+  if (qty > it.remainingQty) throw new Error(`Quantità eccede il residuo (residuo: ${it.remainingQty}).`);
+
+  // validateItemAllowedForLocation: servizio abilitato / prodotto abbinato.
+  if (it.itemId > 0 && txLocationId > 0) {
+    if (it.itemType === "service") {
+      const anyRows = await tenantSelect<RowDataPacket>({ slug, table: "service_locations", columns: "location_id", where: "service_id = ?", params: [it.itemId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+      if (anyRows.length > 0) {
+        const allowed = await tenantSelect<RowDataPacket>({ slug, table: "service_locations", columns: "location_id", where: "service_id = ? AND location_id = ?", params: [it.itemId, txLocationId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+        if (allowed.length === 0) throw new Error(`Servizio non abilitato per la sede selezionata: ${it.name !== "" ? it.name : "Servizio"}.`);
+      }
+    }
+    if (it.itemType === "product") {
+      // app_product_location_enabled + adjustProductStockForItemRedeem.
+      const anyStock = await tenantSelect<RowDataPacket>({ slug, table: "product_stocks", columns: "location_id", where: "product_id = ?", params: [it.itemId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+      if (anyStock.length > 0) {
+        const enabled = await tenantSelect<RowDataPacket>({ slug, table: "product_stocks", columns: "location_id", where: "product_id = ? AND location_id = ? AND COALESCE(is_enabled,1) = 1", params: [it.itemId, txLocationId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+        if (enabled.length === 0) throw new Error(`Prodotto non abbinato alla sede selezionata: ${it.name}.`);
+        const psT = await tenantTable(slug, "product_stocks");
+        const scoped = psT.mode === "shared" && (await columnExists(psT.name, "tenant_id"));
+        const res = await dbExecute(
+          `UPDATE \`${psT.name}\` SET stock = stock - ? WHERE product_id = ? AND location_id = ? AND stock >= ?${scoped ? " AND tenant_id = ?" : ""}`,
+          scoped ? [qty, it.itemId, txLocationId, qty, psT.tenantId ?? 0] : [qty, it.itemId, txLocationId, qty],
+        ).catch(() => ({ affectedRows: 0 }));
+        if (Number((res as { affectedRows?: number }).affectedRows ?? 0) <= 0) {
+          throw new Error(`Stock insufficiente per il prodotto "${it.name}" nella sede selezionata.`);
+        }
+      } else {
+        const pT = await tenantTable(slug, "products");
+        const scoped = pT.mode === "shared" && (await columnExists(pT.name, "tenant_id"));
+        const res = await dbExecute(
+          `UPDATE \`${pT.name}\` SET stock = stock - ? WHERE id = ? AND stock >= ?${scoped ? " AND tenant_id = ?" : ""}`,
+          scoped ? [qty, it.itemId, qty, pT.tenantId ?? 0] : [qty, it.itemId, qty],
+        ).catch(() => ({ affectedRows: 0 }));
+        if (Number((res as { affectedRows?: number }).affectedRows ?? 0) <= 0) {
+          throw new Error(`Stock insufficiente per il prodotto "${it.name}" nella sede selezionata.`);
+        }
+      }
+    }
+  }
+
+  await tenantUpdate({ slug, table: "giftcard_items", id: itemRowId, values: { redeemed_qty: it.redeemedQty + qty } });
+
+  // Nota di default legacy: 'Riscatto servizio/prodotto: <label> xN'.
+  let txNote = clean(note);
+  if (txNote.length > 255) txNote = txNote.slice(0, 255);
+  if (txNote === "") txNote = `${it.itemType === "product" ? "Riscatto prodotto: " : "Riscatto servizio: "}${it.name} x${qty}`;
+  const meta: Record<string, unknown> = { kind: "item_redeem", item_row_id: itemRowId, item_type: it.itemType, item_id: it.itemId, qty };
+  if (txLocationId > 0) {
+    meta.location_id = txLocationId;
+    const locRows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "name", where: "id = ?", params: [txLocationId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    meta.location_name = clean(locRows[0]?.name) || null;
+  }
+  await gcInsertTransaction(slug, id, "redeem", 0, txNote, meta, by, txLocationId, location?.name ?? "");
+
+  // Status: 'redeemed' solo con credito 0 e item esauriti; redeemed_at NULL
+  // quando resta attiva.
+  const balance = round2(Number(card.balance ?? 0));
+  const remRows = await tenantSelect<RowDataPacket>({ slug, table: "giftcard_items", columns: "COALESCE(SUM(GREATEST(qty - redeemed_qty, 0)),0) AS rem", where: "giftcard_id = ?", params: [id] }).catch(() => [] as RowDataPacket[]);
+  const itemsRemaining = Number(remRows[0]?.rem ?? 0);
+  const newStatus = balance <= 0 && itemsRemaining <= 0 ? "redeemed" : "active";
+  const now = new Date();
+  await tenantUpdate({
+    slug, table: "giftcards", id,
+    values: { status: newStatus, redeemed_at: newStatus === "redeemed" ? now : null, updated_at: now, updated_by: by > 0 ? by : null },
+  }).catch(() => 0);
   return { ok: true, message: "Riscatto item registrato" };
 }
 
-// "Invio email al destinatario" (giftcard.php _mode=send_email). showAmount
-// replica "Mostra importo e contenuto nella mail".
-export async function sendGiftCardEmailManage(slug: string, id: number, toRaw: string, showAmount: boolean, giftMessageRaw: string): Promise<{ ok: true; message: string }> {
-  const detail = await getGiftCardFull(slug, id);
-  if (!detail) throw new Error("GiftCard non trovata.");
-  if (detail.status === "cancelled") throw new Error("Non è possibile inviare una GiftCard annullata.");
-  if (detail.status === "expired") throw new Error("Non e possibile inviare una GiftCard scaduta.");
-  const to = clean(toRaw);
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) throw new Error("Email destinatario non valida.");
-  if (!emailConfigured()) throw new Error("Invio email non disponibile");
+// "Invio email al destinatario" (GiftCard::sendGiftCardEmail): guardie e corpo
+// legacy (hero con badge importo + immagine evento, dedica, nota cliente,
+// Dettagli, Valore/Contenuto regalo, codice, Vedi Voucher, Condizioni).
+export async function sendGiftCardEmailManage(slug: string, id: number, toRaw: string, showAmount: boolean, giftMessageRaw: string, by = 0): Promise<{ ok: true; message: string }> {
+  if (id <= 0) throw new Error("GiftCard non trovata.");
+  let to = clean(toRaw);
+  if (to.length > 190) to = to.slice(0, 190);
+  if (to === "" || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) throw new Error("Email destinatario non valida.");
+
+  const card = await giftCardRow(slug, id);
+  if (!card) throw new Error("GiftCard non trovata.");
 
   const bizRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "name, email, giftcard_terms", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
   const biz = bizRows[0] ?? null;
-  const bizName = clean(biz?.name) || "BeautySuite";
-  const terms = clean(biz?.giftcard_terms);
+  let bizName = clean(biz?.name);
+  if (bizName === "") bizName = "La mia attività";
 
+  const code = clean(card.code);
+  const status = clean(card.status).toLowerCase();
+  if (status === "cancelled" || status === "canceled") throw new Error("Non è possibile inviare una GiftCard annullata.");
+  if (status === "expired" || gcIsExpiredByDate(card.expires_at)) {
+    await gcMarkExpiredIfDue(slug, id);
+    throw new Error("Non e possibile inviare una GiftCard scaduta.");
+  }
+
+  const initial = round2(Number(card.initial_amount ?? 0));
+  const items = await gcListItems(slug, id);
+  const sender = await clientRow(slug, Number(card.client_id ?? 0) || 0);
+  const clientName = clean(sender?.name);
+  const recipientName = clean(card.recipient_name);
+
+  const eventKey = clean(card.event_type).toLowerCase() || "giftcard";
+  const ev = GIFT_EVENT_OPTIONS.find((e) => e.key === eventKey) ?? GIFT_EVENT_OPTIONS[0];
+  // Subject evento (GiftCard::eventMap): '<subject> - <attività>'.
+  const subjectByEvent: Record<string, string> = {
+    giftcard: "Hai ricevuto una GiftCard",
+    compleanno: "Buon Compleanno!",
+    anniversario: "Felice Anniversario!",
+    capodanno: "Buon Anno!",
+    natale: "Buon Natale!",
+    epifania: "Buona Epifania!",
+    san_valentino: "Buon San Valentino!",
+    festa_donna: "Buona Festa della Donna!",
+    pasqua: "Buona Pasqua!",
+    pasquetta: "Buona Pasquetta!",
+    festa_mamma: "Buona Festa della Mamma!",
+    festa_papa: "Buona Festa del Papà!",
+  };
+  const eventImages: Record<string, string> = {
+    giftcard: "/assets/img/giftcard-events/giftcard.png",
+    compleanno: "/assets/img/giftcard-events/birthday.png",
+    anniversario: "/assets/img/giftcard-events/anniversary.png",
+    capodanno: "/assets/img/giftcard-events/new_year.png",
+    natale: "/assets/img/giftcard-events/christmas.png",
+    epifania: "/assets/img/giftcard-events/epiphany.png",
+    san_valentino: "/assets/img/giftcard-events/valentines_day.png",
+    festa_donna: "/assets/img/giftcard-events/womens_day.png",
+    pasqua: "/assets/img/giftcard-events/easter.png",
+    pasquetta: "/assets/img/giftcard-events/easter_monday.png",
+    festa_mamma: "/assets/img/giftcard-events/mothers_day.png",
+    festa_papa: "/assets/img/giftcard-events/fathers_day.png",
+  };
+  const subject = eventKey === "giftcard"
+    ? `Hai ricevuto una GiftCard - ${bizName}`
+    : `${subjectByEvent[eventKey] ?? "Hai ricevuto una GiftCard"} - ${bizName}`;
+
+  let msg = clean(giftMessageRaw) !== "" ? clean(giftMessageRaw) : clean(card.gift_message);
+  if (msg.length > 2000) msg = msg.slice(0, 2000);
+  let noteUser = clean(card.note);
+  if (noteUser.length > 2000) noteUser = noteUser.slice(0, 2000);
+
+  const h = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+  const fmtDt = (v: unknown): string => displayDmyHm(v) || "—";
+  const fmtDate = (v: unknown): string => displayDmy(v) || "—";
+  // number_format(v, 2, ',', '.')
+  const fmtMoney = (v: number): string => {
+    const [int, dec] = Math.abs(v).toFixed(2).split(".");
+    return `${v < 0 ? "-" : ""}${int.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${dec}`;
+  };
+
+  let html = "";
+  let greet = "Ciao";
+  if (recipientName !== "") greet += ` ${recipientName}`;
+  greet += "!";
+  html += `<p style="margin:0 0 10px 0">${h(greet)}</p>`;
+  if (clientName !== "") {
+    html += `<p style="margin:0 0 12px 0">Hai ricevuto una <strong>GiftCard</strong> da <strong>${h(clientName)}</strong>, valida presso <strong>${h(bizName)}</strong>.</p>`;
+  } else {
+    html += `<p style="margin:0 0 12px 0">Hai ricevuto una <strong>GiftCard</strong> valida presso <strong>${h(bizName)}</strong>.</p>`;
+  }
+
+  const amountBadge = showAmount && initial > 0 ? `€ ${fmtMoney(initial)}` : "";
   const base = String(process.env.PRENODO_PUBLIC_BASE_URL ?? "").replace(/\/+$/, "");
-  const voucherUrl = base !== "" ? `${base}/${slug}/giftcard_voucher?public=1&embed=1&token=${encodeURIComponent(detail.publicToken)}` : "";
-  const h = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  const fmtIt = (iso: string) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : "—");
-  const money = (n: number) => `€ ${n.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  const giftMessage = clean(giftMessageRaw) || detail.giftMessage;
+  let imgAbs = base !== "" ? `${base}${eventImages[eventKey] ?? eventImages.giftcard}` : "";
+  if (imgAbs === "" && base !== "") imgAbs = `${base}/assets/img/giftcard-events/giftcard.png`;
+  const imgAlt = ev.label !== "" ? ev.label : "GiftCard";
 
-  let html = `<div style="background:#0f766e;color:#ffffff;padding:16px 20px;border-radius:12px 12px 0 0;font-size:18px;font-weight:700">La tua GiftCard</div>`;
-  html += `<div style="border:1px solid #e5e7eb;border-top:0;padding:20px;border-radius:0 0 12px 12px">`;
-  html += `<p style="margin:0 0 6px">Ciao ${h(detail.recipientName || "")},</p>`;
-  html += `<p style="margin:0 0 14px">hai ricevuto una <strong>GiftCard</strong> da ${h(detail.senderName)}!</p>`;
-  if (giftMessage) html += `<p style="margin:0 0 14px;font-style:italic;white-space:pre-line">&ldquo;${h(giftMessage)}&rdquo;</p>`;
-  html += `<div style="text-align:center;margin:14px 0"><div style="display:inline-block;background:#f0fdfa;border:2px dashed #0f766e;border-radius:12px;padding:14px 26px;font-size:24px;font-weight:800;letter-spacing:2px">${h(detail.code)}</div><div style="font-size:12px;color:#6b7280;margin-top:6px">MOSTRA QUESTO CODICE IN CASSA</div></div>`;
-  if (voucherUrl) html += `<div style="text-align:center;margin:14px 0"><a href="${h(voucherUrl)}" style="display:inline-block;background:#0f766e;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:12px;font-weight:600;letter-spacing:.2px">Vedi Voucher</a></div>`;
-  html += `<table style="width:100%;border-collapse:collapse;font-size:14px;margin:10px 0">`;
-  const row = (k: string, v: string) => `<tr><td style="padding:6px 0;color:#6b7280">${h(k)}</td><td style="padding:6px 0;text-align:right;font-weight:600">${h(v)}</td></tr>`;
-  html += row("Evento", detail.eventLabel);
-  if (showAmount && detail.hasMoney) {
-    html += row("Importo", money(detail.initialAmount));
-    html += row("Saldo", money(detail.balance));
+  html += '<div style="border:1px solid #e5e7eb;border-radius:16px;overflow:hidden;margin:14px 0 18px 0">';
+  html += '  <div style="background:#0f766e;color:#ffffff;padding:12px 14px">';
+  html += '    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse"><tr>';
+  html += '      <td style="font-size:18px;font-weight:800">Hai ricevuto una GiftCard!</td>';
+  if (amountBadge !== "") {
+    html += `      <td align="right" style="font-size:18px;font-weight:800;white-space:nowrap">${h(amountBadge)}</td>`;
   }
-  html += row("Emessa il", fmtIt(detail.issuedAt.slice(0, 10)));
-  html += row("Scadenza", detail.expiresAt ? fmtIt(detail.expiresAt) : "Nessuna scadenza");
-  html += `</table>`;
-  if (showAmount && detail.items.length) {
-    html += `<p style="margin:12px 0 4px;font-weight:700">Contenuto regalo</p><ul style="margin:0 0 10px;padding-left:18px">`;
-    for (const it of detail.items) html += `<li>${h(it.name)}${it.qty > 1 ? ` × ${it.qty}` : ""}</li>`;
-    html += `</ul>`;
+  html += "    </tr></table>";
+  html += "  </div>";
+  if (imgAbs !== "") {
+    html += '  <div style="background:#ffffff;padding:0;text-align:center">';
+    html += `    <img src="${h(imgAbs)}" alt="${h(imgAlt)}" style="width:100%;max-width:640px;height:auto;display:block" />`;
+    html += "  </div>";
   }
-  if (!showAmount) html += `<p style="margin:12px 0;color:#6b7280">Recati in negozio per scoprire il contenuto della tua GiftCard.</p>`;
-  if (terms) html += `<p style="margin:12px 0 4px;font-weight:700">Condizioni</p><p style="margin:0;color:#6b7280;font-size:12px;white-space:pre-line">${h(terms)}</p>`;
-  html += `</div>`;
+  html += "</div>";
 
-  const subject = `Hai ricevuto una GiftCard - ${bizName}`;
-  const tpl = buildModernEmailTemplate(subject, html, { business_name: bizName, business_email: clean(biz?.email) });
-  const result = await sendEmail({ to, subject, html: tpl.html, text: tpl.text, fromName: bizName, replyTo: clean(biz?.email) || undefined });
-  if (!result.ok) throw new Error(result.error || "Invio email non riuscito");
+  if (msg !== "") {
+    html += '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px 14px;margin:0 0 16px 0;background:#ffffff">';
+    html += '<div style="font-weight:800;margin-bottom:6px">Messaggio di dedica</div>';
+    html += `<div style="white-space:pre-wrap">${h(msg)}</div>`;
+    html += "</div>";
+  }
+  if (noteUser !== "") {
+    html += '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px 14px;margin:0 0 16px 0;background:#ffffff">';
+    html += '<div style="font-weight:800;margin-bottom:6px">Nota per il cliente</div>';
+    html += `<div style="white-space:pre-wrap">${h(noteUser)}</div>`;
+    html += "</div>";
+  }
 
-  await tenantUpdate({ slug, table: "giftcards", id, values: { last_email_sent_at: new Date(), last_email_sent_to: to, last_email_hide_amount: showAmount ? 0 : 1, updated_at: new Date() } }).catch(() => 0);
+  const owner = clientName !== "" ? clientName : "—";
+  const recipient = recipientName !== "" ? recipientName : to;
+  const row = (label: string, value: string): string =>
+    `<tr><td style="padding:6px 0;color:#6b7280;font-size:12px">${h(label)}</td><td align="right" style="padding:6px 0;font-weight:600">${h(value)}</td></tr>`;
+  html += '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px 14px;margin:0 0 16px 0;background:#ffffff">';
+  html += '<div style="font-weight:800;margin:0 0 8px 0">Dettagli GiftCard</div>';
+  html += '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">';
+  html += row("Mittente", owner);
+  html += row("Destinatario", recipient);
+  html += row("Emessa", fmtDt(card.issued_at));
+  html += row("Scadenza", fmtDate(card.expires_at));
+  html += row("Esaurita il", status === "redeemed" ? fmtDt(card.redeemed_at) : "—");
+  html += row("Annullata il", status === "cancelled" ? fmtDt(card.cancelled_at) : "—");
+  html += "</table>";
+  html += "</div>";
+
+  if (showAmount) {
+    let hasDetails = false;
+    if (initial > 0) {
+      hasDetails = true;
+      html += `<p style="margin:0 0 8px 0"><strong>Valore:</strong> € ${h(fmtMoney(initial))}</p>`;
+    }
+    if (items.length > 0) {
+      hasDetails = true;
+      html += '<div style="margin:0 0 10px 0"><strong>Contenuto regalo:</strong></div>';
+      html += '<ul style="margin:0 0 14px 18px;padding:0">';
+      for (const it of items) {
+        const q = it.qty > 1 ? ` x${it.qty}` : "";
+        html += `<li>${h(`${it.label}: ${it.name}${q}`)}</li>`;
+      }
+      html += "</ul>";
+    }
+    if (!hasDetails) {
+      html += '<p style="margin:0 0 14px 0">Presenta il codice qui sotto in cassa per utilizzare la GiftCard.</p>';
+    }
+  } else {
+    html += '<p style="margin:0 0 14px 0"><strong>Nota:</strong> per scoprire il valore e/o i servizi/prodotti inclusi, recati in negozio e mostra il codice in cassa.</p>';
+  }
+
+  const publicToken = await ensureVoucherToken(slug, "giftcards", id, String(card.voucher_public_token ?? ""));
+  const voucherUrl = base !== "" ? `${base}/${slug}/giftcard_voucher?public=1&embed=1&token=${encodeURIComponent(publicToken)}` : "";
+  html += '<div style="border:1px solid #e5e7eb;border-radius:14px;padding:14px 16px;margin:0 0 12px 0;background:#ffffff">';
+  html += '<div style="color:#6b7280;font-size:12px">Codice di riscatto</div>';
+  html += `<div style="font-size:28px;font-weight:600;letter-spacing:1px;margin-top:2px">${h(code)}</div>`;
+  html += '<div style="color:#6b7280;font-size:12px;margin-top:6px">MOSTRA QUESTO CODICE IN CASSA</div>';
+  html += "</div>";
+  if (voucherUrl !== "") {
+    html += '<div style="text-align:center;margin:0 0 18px 0">';
+    html += `<a href="${h(voucherUrl)}" style="display:inline-block;background:#0f766e;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:12px;font-weight:600;letter-spacing:.2px">Vedi Voucher</a>`;
+    html += "</div>";
+  }
+
+  // Condizioni: setting giftcard_terms, righe di default legacy se vuoto
+  // (l'ultima interpola direttamente il nome attività).
+  html += '<div style="border-top:1px solid #e5e7eb;padding-top:12px;margin-top:6px">';
+  html += '<div style="font-weight:800;margin:0 0 8px 0">Condizioni</div>';
+  const termsRaw = clean(biz?.giftcard_terms).replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  let termsLines: string[];
+  if (termsRaw === "") {
+    termsLines = [
+      "La GiftCard è utilizzabile fino a esaurimento credito e/o fino all'utilizzo dei servizi/prodotti inclusi, oppure fino alla data di scadenza (se presente).",
+      "Non convertibile in denaro e non rimborsabile.",
+      "Presentare il codice (QR) o il codice alfanumerico in cassa per l'utilizzo.",
+      `In caso di smarrimento, contatta ${bizName} indicando il codice GiftCard.`,
+    ];
+  } else {
+    termsLines = termsRaw.split(/\n+/);
+  }
+  html += '<ul style="margin:0 0 0 18px;padding:0;color:#374151">';
+  for (let ln of termsLines) {
+    ln = clean(ln).replace(/^[-•\t\s]+/u, "");
+    if (ln === "") continue;
+    ln = ln.replace(/\{BUSINESS_NAME\}|\{\{BUSINESS_NAME\}\}|%BUSINESS_NAME%/g, bizName);
+    html += `<li>${h(ln)}</li>`;
+  }
+  html += "</ul>";
+  html += "</div>";
+
+  // Legacy senza guardia mail-fn: l'invio fallito (o SES non configurato)
+  // risponde con il messaggio 'Verifica la configurazione email del server.'.
+  let ok = false;
+  if (emailConfigured()) {
+    const tpl = buildModernEmailTemplate(subject, html, { business_name: bizName, business_email: clean(biz?.email) });
+    const result = await sendEmail({ to, subject, html: tpl.html, text: tpl.text, fromName: bizName, replyTo: clean(biz?.email) || undefined }).catch(() => ({ ok: false as const }));
+    ok = result.ok === true;
+  }
+  if (!ok) throw new Error("Invio email non riuscito. Verifica la configurazione email del server.");
+
+  await tenantUpdate({
+    slug, table: "giftcards", id,
+    values: {
+      last_email_sent_at: new Date(),
+      last_email_sent_to: to,
+      last_email_hide_amount: showAmount ? 0 : 1,
+      gift_message: msg !== "" ? msg : null,
+      scheduled_send_on: null,
+      email_send_claimed_at: null,
+      updated_at: new Date(),
+      updated_by: by > 0 ? by : null,
+    },
+  }).catch(() => 0);
   return { ok: true, message: `Email inviata a ${to}` };
+}
+
+// GiftCard::sendDueScheduledGiftCards: invio automatico programmato con claim
+// anti-doppio invio (15 minuti).
+export async function sendDueScheduledGiftCards(slug: string, limit = 100, by = 0): Promise<{ ok: boolean; sent: number; errors: number }> {
+  const lim = Math.max(1, Math.min(500, Math.trunc(limit) || 100));
+  const t = await tenantTable(slug, "giftcards");
+  const scoped = t.mode === "shared" && (await columnExists(t.name, "tenant_id"));
+  const today = todayIso();
+  const claimBefore = new Date(Date.now() - 15 * 60 * 1000);
+
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT id, recipient_email, COALESCE(email_show_amount, 1) AS email_show_amount
+       FROM \`${t.name}\`
+      WHERE status = 'active'
+        AND scheduled_send_on IS NOT NULL
+        AND scheduled_send_on <= ?
+        AND (expires_at IS NULL OR expires_at >= ?)
+        AND recipient_email IS NOT NULL
+        AND recipient_email <> ''
+        AND last_email_sent_at IS NULL
+        AND (email_send_claimed_at IS NULL OR email_send_claimed_at < ?)
+        ${scoped ? "AND tenant_id = ?" : ""}
+      ORDER BY scheduled_send_on ASC, id ASC
+      LIMIT ${lim}`,
+    scoped ? [today, today, claimBefore, t.tenantId ?? 0] : [today, today, claimBefore],
+  ).catch(() => [] as RowDataPacket[]);
+
+  let sent = 0;
+  let errors = 0;
+  for (const r of rows) {
+    const cardId = Number(r.id ?? 0);
+    const to = clean(r.recipient_email);
+    if (cardId <= 0 || to === "") continue;
+    const claimed = await dbExecute(
+      `UPDATE \`${t.name}\` SET email_send_claimed_at = ?
+        WHERE id = ?
+          AND status = 'active'
+          AND scheduled_send_on IS NOT NULL
+          AND scheduled_send_on <= ?
+          AND (expires_at IS NULL OR expires_at >= ?)
+          AND recipient_email IS NOT NULL
+          AND recipient_email <> ''
+          AND last_email_sent_at IS NULL
+          AND (email_send_claimed_at IS NULL OR email_send_claimed_at < ?)
+          ${scoped ? "AND tenant_id = ?" : ""}`,
+      scoped ? [new Date(), cardId, today, today, claimBefore, t.tenantId ?? 0] : [new Date(), cardId, today, today, claimBefore],
+    ).catch(() => ({ affectedRows: 0 }));
+    if (Number((claimed as { affectedRows?: number }).affectedRows ?? 0) <= 0) continue;
+    try {
+      await sendGiftCardEmailManage(slug, cardId, to, Number(r.email_show_amount ?? 1) !== 0, "", by);
+      sent += 1;
+    } catch {
+      errors += 1;
+      await dbExecute(
+        `UPDATE \`${t.name}\` SET email_send_claimed_at = NULL WHERE id = ? AND last_email_sent_at IS NULL${scoped ? " AND tenant_id = ?" : ""}`,
+        scoped ? [cardId, t.tenantId ?? 0] : [cardId],
+      ).catch(() => 0);
+    }
+  }
+  return { ok: true, sent, errors };
+}
+
+// ---- LISTA GiftCard (GiftCard::listGiftCards + colonne pagina) ---------------
+export type GiftCardManageListRow = {
+  id: number;
+  code: string;
+  senderId: number;
+  senderName: string;
+  recipientName: string;
+  locationLabel: string;
+  initialAmount: number;
+  balance: number;
+  status: string;
+  statusLabel: string;
+  statusBadge: string;
+  issuedDate: string;
+  expiresDate: string;
+};
+
+export async function listGiftCardsManage(
+  slug: string,
+  filters: { q?: string; status?: string; clientId?: number; locationId?: number } = {},
+  limit = 200,
+): Promise<GiftCardManageListRow[]> {
+  const gcT = await tenantTable(slug, "giftcards");
+  const cT = await tenantTable(slug, "clients");
+  const lT = await tenantTable(slug, "locations");
+  const scoped = gcT.mode === "shared" && (await columnExists(gcT.name, "tenant_id"));
+
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (scoped) { where.push("gc.tenant_id = ?"); params.push(gcT.tenantId ?? 0); }
+  const q = clean(filters.q);
+  if (q !== "") {
+    where.push("(gc.code LIKE ? OR gc.recipient_name LIKE ? OR gc.recipient_email LIKE ?)");
+    const like = `%${q}%`;
+    params.push(like, like, like);
+  }
+  const status = clean(filters.status);
+  if (status !== "" && ["active", "redeemed", "expired", "cancelled"].includes(status)) {
+    where.push("gc.status = ?");
+    params.push(status);
+  }
+  const clientId = Math.max(0, Math.trunc(Number(filters.clientId ?? 0)));
+  if (clientId > 0) { where.push("gc.client_id = ?"); params.push(clientId); }
+  const locationId = Math.max(0, Math.trunc(Number(filters.locationId ?? 0)));
+  if (locationId > 0) { where.push("gc.location_id = ?"); params.push(locationId); }
+
+  const lim = Math.max(1, Math.min(500, Math.trunc(limit) || 200));
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT gc.*, c.full_name AS client_name
+       FROM \`${gcT.name}\` gc
+       LEFT JOIN \`${cT.name}\` c ON c.id = gc.client_id${scoped ? " AND c.tenant_id = gc.tenant_id" : ""}
+      ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
+      ORDER BY gc.id DESC
+      LIMIT ${lim}`,
+    params,
+  ).catch(() => [] as RowDataPacket[]);
+
+  // Label sede risolta in batch (gc_page_location_label).
+  const locIds = [...new Set(rows.map((r) => Number(r.location_id ?? 0)).filter((n) => n > 0))];
+  const locNames = new Map<number, string>();
+  if (locIds.length > 0) {
+    const scopedL = lT.mode === "shared" && (await columnExists(lT.name, "tenant_id"));
+    const lRows = await dbQuery<RowDataPacket[]>(
+      `SELECT id, name FROM \`${lT.name}\` WHERE id IN (${locIds.map(() => "?").join(",")})${scopedL ? " AND tenant_id = ?" : ""}`,
+      scopedL ? [...locIds, lT.tenantId ?? 0] : locIds,
+    ).catch(() => [] as RowDataPacket[]);
+    for (const r of lRows) locNames.set(Number(r.id ?? 0), clean(r.name));
+  }
+  const locLabel = (locId: number, fallback: string): string => {
+    if (locId > 0) {
+      const name = locNames.get(locId) ?? "";
+      if (name !== "" && name.toLowerCase() !== "sede") return name;
+    }
+    const fb = clean(fallback);
+    if (fb !== "" && fb !== "-") return fb;
+    if (locId > 0) return `Sede #${locId}`;
+    return "-";
+  };
+
+  return rows.map((r) => {
+    const meta = giftCardStatusMeta(String(r.status ?? ""));
+    return {
+      id: Number(r.id ?? 0),
+      code: clean(r.code),
+      senderId: Number(r.client_id ?? 0),
+      senderName: clean(r.client_name) || "—",
+      recipientName: clean(r.recipient_name) || "—",
+      locationLabel: locLabel(Number(r.location_id ?? 0), clean(r.location_name)),
+      initialAmount: round2(Number(r.initial_amount ?? 0)),
+      balance: round2(Number(r.balance ?? 0)),
+      status: meta.code,
+      statusLabel: meta.label,
+      statusBadge: meta.badge,
+      issuedDate: gcDateOnly(r.issued_at),
+      expiresDate: localDate(r.expires_at) || "—",
+    };
+  });
+}
+
+export async function hasAnyGiftCards(slug: string): Promise<boolean> {
+  const rows = await listGiftCardsManage(slug, {}, 1);
+  return rows.length > 0;
 }

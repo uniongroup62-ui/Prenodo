@@ -4286,3 +4286,112 @@ Verifica: battery e2e 15/15 (flash verbatim, clamp/fallback, troncamento,
 vuoto->NULL, reset, prefill, ripristino businesses) + 23/23 marker bundle +
 regressioni GiftBox 63/63, package_settings 6/6, quote_settings 20/20 +
 typecheck/lint puliti.
+
+## GiftCard (giftcard.php) — 2026-07-05
+AUDIT COMPLETO di giftcard.php (1927 righe: lista + edit con riscatto credito
+e per-item, lock destinatario, scadenza, email, movimenti normalizzati) +
+GiftCard.php (funzioni list/get/update/updateExpiry/redeem/redeemItem/
+sendEmail/scheduled/expireDue/recipientEditLockInfo) + giftcard.js vs i moduli
+Next, con capture live (lista con 1 card reale, edit) e dati MySQL tenant 25.
+FIX PRINCIPALI:
+1. Lista riscritta su filtri SERVER-SIDE legacy (GiftCard::listGiftCards):
+   Mittente (combobox app-combobox con TUTTI i clienti), Cerca (LIKE su
+   codice/destinatario/email), Stato whitelist, "Tutte le sedi" con filtro
+   sede STRETTO (gc.location_id = ? — le card senza sede spariscono); ORDER
+   gc.id DESC LIMIT 200; AUTO-EXPIRE (expires_at DATE < oggi) e INVII
+   PROGRAMMATI (sendDueScheduledGiftCards 20 con claim 15min) a ogni load;
+   colonna Sede sempre presente con gc_page_location_label; Emessa =
+   gc_page_date_only (Y-m-d), Scadenza raw ('—' se vuota); € fmt_money
+   manuale (prima toLocaleString); badge bg-*; voucher/codice -> link manage
+   ?id=&embed=1 (prima token pubblico); header legacy [Torna alla lista]
+   [Crea GiftCard pos.manage, nascosto sull'empty state] SENZA Impostazioni
+   (solo nell'empty state, gated giftcard.settings); empty state su conteggio
+   NON filtrato; action=new -> lista con flash 'Per creare una GiftCard vai
+   in "Pagamenti" e usa il pulsante GiftCard.'; flash ?msg/?err; route con
+   permesso stretto giftcard.manage su lista/dettaglio.
+2. Dettaglio: riepilogo legacy completo (Importo iniziale/Saldo € fmt_money,
+   Emessa il e Inizio validità SOLO DATA da issued_at, Scadenza con matita,
+   Evento, Sede emissione, Voucher 'Importo nascosto/visibile', Contenuto
+   regalo 'Label: Nome — Q (residuo R)' con product_display_name '(SKU)',
+   Messaggio di dedica); readonly TOTALE su annullata (alert verbatim +
+   js-gc-readonly-form: tutti i campi disabilitati); nota cliente ripulita
+   dagli append [ANNULLATA|INFO]; 'Dettaglio vendita' dal lookup sale_items
+   LIKE 'GiftCard%'+codice (prima 'Vendita #N' nella nota); ogni _mode fa
+   redirect flash come il PHP (prima stato in pagina).
+3. MOVIMENTI fedeli: ledger reale con JOIN users (Operatore) e sede
+   (gc_page_location_label), Data raw, Importo € colorato +/-, e la
+   normalizzazione prenotazioni gc_prepare_movement_display: nota
+   'Uso GiftCard|Riscatto su prenotazione #REF' risolta sull'appuntamento
+   (public_code, fallback id, giftcard_used>0) -> eseguito = redeem
+   'Riscatto su prenotazione #COD', aperto = pending 'In sospeso su
+   prenotazione #COD' con data di creazione prenotazione; fallback
+   'Riscatto su prenotazione #ref'; ordinati per data desc (id desc a pari).
+4. Dati GiftCard: guardie verbatim in ordine legacy ('Seleziona un
+   mittente.' / 'Mittente selezionato non valido.' / 'Cliente destinatario
+   non trovato.' / 'Non è possibile modificare una GiftCard annullata.');
+   LOCK DESTINATARIO (recipientEditLockInfo) con i 4 messaggi verbatim
+   (annullata / item riscattati o usi attivi su prenotazioni+vendite o saldo
+   diverso dall'iniziale -> 'anche solo parzialmente' / riscattata /
+   scaduta), enforcement server-side (lo snapshot resta quello corrente);
+   nome/email forzati dall'anagrafica del cliente selezionato; MOVIMENTO
+   'Cambio destinatario: X -> Y' (adjust 0 + meta) solo se cambia; clamp
+   120/190/1000/2000; ricerca cliente SERVER-SIDE (port api_clients
+   action=search) con debounce 250ms; flash 'GiftCard aggiornata'.
+5. Scadenza: salvata come DATA (prima datetime 23:59:59 su colonna DATE);
+   guardie verbatim in ordine legacy ('Seleziona una nuova data di scadenza
+   valida.' / '...non può essere precedente a oggi.' / 'La data "Valida al"
+   deve essere almeno il giorno successivo a "Valida dal".' / annullata /
+   RISCATTATA ANCHE PARZIALE via isGiftCardRedeemedForExpiry: prima
+   bloccava solo status redeemed); minimo modale = max(oggi, emissione+1g)
+   con frase condizionale; MOVIMENTO adjust 'Modifica scadenza GiftCard:
+   <vecchia d/m/Y|nessuna scadenza> -> <nuova> (GiftCard riattivata)' + meta
+   (prima type 'expiry_change' fuori enum e nota inventata, scartato in
+   silenzio dal CHECK); nessun movimento se la data non cambia;
+   riattivazione automatica da Scaduta.
+6. NUOVO riscatto credito (port addTransaction): 'Importo non valido.' /
+   'GiftCard non utilizzabile (stato: X).' / scaduta per data con stampa
+   expired + 'GiftCard scaduta.' / 'Saldo insufficiente.'; nota default
+   'Riscatto GiftCard'; movimento redeem -importo con sede corrente e
+   operatore; flip 'redeemed' SOLO con credito 0 E item esauriti
+   (redeemed_at NULL quando resta attiva); flash 'Riscatto registrato';
+   topup/cancel -> 'Operazione non disponibile.'.
+7. Riscatto per-item: guardie verbatim (voce/residuo/'Quantità eccede il
+   residuo (residuo: N).'), qty clamp 1..999, SEDE ('Servizio non abilitato
+   per la sede selezionata: X.' / 'Prodotto non abbinato alla sede
+   selezionata: X.') e SCALA LO STOCK del prodotto sulla sede corrente
+   ('Stock insufficiente per il prodotto "X" nella sede selezionata.') —
+   prima assenti; nota default legacy 'Riscatto servizio/prodotto: <label>
+   xN' (prima 'Riscatto item: ... × q'); meta kind item_redeem + location;
+   layout Operazioni legacy (form bordered, badge bg-light text-dark border,
+   'Riscatta (scala credito)' Importo/Nota col-5/7, box 'Riscatta credito'
+   per card solo servizi/prodotti, bottoni btn-outline-primary).
+8. Email: guardie in ordine legacy (email -> annullata -> scaduta con stampa
+   expired) SENZA la guardia mail-fn del GiftBox: il fallimento (o SES non
+   configurato) risponde 'Invio email non riuscito. Verifica la
+   configurazione email del server.'; CORPO legacy completo (hero teal 'Hai
+   ricevuto una GiftCard!' con badge importo e immagine evento, dedica, Nota
+   per il cliente, Dettagli Mittente/Destinatario/Emessa d/m/Y H:i/Scadenza/
+   Esaurita il/Annullata il, Valore + 'Contenuto regalo:' o nota 'recati in
+   negozio', Codice di riscatto, Vedi Voucher, Condizioni default con nome
+   attività interpolato e {BUSINESS_NAME}); subject per evento; salvataggio
+   last_email_* + gift_message + scheduled_send_on=NULL + claim azzerato;
+   checkbox 'Mostra importo e contenuto nella mail' SEMPRE spuntato di
+   default (prima seguiva l'ultimo invio); alert 'Invio programmato: d/m/Y'
+   quando scheduled_send_on e nessun invio tracciato.
+9. Eventi GiftCard dal map legacy (ordine giftcard/compleanno/anniversario/
+   capodanno/... già corretto in GIFT_EVENT_OPTIONS); nota interna con
+   blocco su annullata + clamp 2000; compat _mode=update_note.
+RESIDUI DELIBERATI: GiftLoyaltyAttribution::assignRecipientClient non portato
+(salvato recipient_client_id come il fallback legacy senza warn Fidelity);
+'Saldo insufficiente.' su card redeemed a saldo 0 (fedele: addTransaction non
+guarda lo stato redeemed); e2e-pos-gift.mjs non rieseguibile (script vecchio
+senza fix DNS pooler, fallisce in connessione a prescindere).
+Verifica: battery e2e 93/93 (lista con filtri/expire-due/sede stretta,
+dettaglio con date/min scadenza/labels, update con guardie+lock server-side+
+movimento cambio destinatario, scadenza con guardie/movimento/riattivazione/
+blocco parziale, riscatto credito con saldo/flip/note default, riscatto item
+con sede+stock e flip redeemed, scaduta per data, email guardie SES-off,
+nota interna, movimenti pending/redeem da prenotazione con data prenotazione,
+link vendita, invii programmati con claim reset, ricerca clienti, cleanup
+CLEAN) + 92/92 marker bundle + regressioni GiftBox 63/63 e giftbox_settings
+15/15 + typecheck/lint puliti.

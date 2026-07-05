@@ -664,7 +664,29 @@ export default async function TenantPage({
   if (page === "giftcard" && (query.action === "edit" || query.action === "view")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
-        <GiftCardDetailContent slug={tenantSlug} />
+        <GiftCardDetailContent slug={tenantSlug} initialQuery={{ id: query.id, msg: query.msg, err: query.err }} />
+      </ManageShell>
+    );
+  }
+
+  // Faithful giftcard LIST (giftcard.php action=list): filtri server-side dalla
+  // querystring + flash ?msg/?err (action=new -> lista con il messaggio legacy
+  // "vai in Pagamenti").
+  if (page === "giftcard") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <GiftcardContent
+          slug={tenantSlug}
+          initialQuery={{
+            action: query.action,
+            q: query.q,
+            status: query.status,
+            client_id: query.client_id,
+            all_locations: query.all_locations,
+            msg: query.msg,
+            err: query.err,
+          }}
+        />
       </ManageShell>
     );
   }

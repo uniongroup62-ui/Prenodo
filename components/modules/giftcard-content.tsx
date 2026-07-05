@@ -1,30 +1,51 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-// Faithful port of the PHP giftcard LIST (app/pages/giftcard.php action=list):
-// filtri Mittente / Cerca / Stato (+ "Tutte le sedi" per i tenant multi-sede),
-// tabella Codice | Mittente | Destinatario | [Sede] | Iniziale | Saldo | Stato |
-// Emessa | Scadenza | Azioni con badge legacy (Attiva/Riscattata/Scaduta/
-// Annullata) e Codice linkato al voucher pubblico. La creazione avviene SOLO da
-// Pagamenti (bottone "Crea GiftCard" → pos), come il legacy.
+// Port fedele della LISTA GiftCard (app/pages/giftcard.php action=list):
+// filtri SERVER-SIDE Mittente (combobox ricercabile con tutti i clienti) /
+// Cerca (codice, destinatario, email) / Stato (+ Tutte le sedi multi-sede con
+// filtro sede STRETTO), expire-due + invii programmati al load, tabella
+// Codice | Mittente | Destinatario | Sede | Iniziale | Saldo | Stato | Emessa
+// | Scadenza | Azioni con date raw (YYYY-MM-DD), € fmt_money e Codice ->
+// voucher manage (?id=&embed=1). action=new -> lista con il flash legacy
+// 'Per creare una GiftCard vai in "Pagamenti"...'. La creazione avviene SOLO
+// da Pagamenti (header [Torna alla lista][Crea GiftCard pos.manage]).
+
+type GiftcardQuery = {
+  action?: string;
+  q?: string;
+  status?: string;
+  client_id?: string;
+  all_locations?: string;
+  msg?: string;
+  err?: string;
+};
 
 type Row = {
   id: number;
   code: string;
-  publicToken: string;
   senderId: number;
   senderName: string;
   recipientName: string;
-  recipientEmail: string;
-  locationName: string;
+  locationLabel: string;
+  initialAmount: number;
+  balance: number;
   status: string;
   statusLabel: string;
   statusBadge: string;
-  issuedAt: string;
-  expiresAt: string;
-  initialAmount: number;
-  balance: number;
+  issuedDate: string;
+  expiresDate: string;
+};
+
+type ListPayload = {
+  ok?: boolean;
+  rows?: Row[];
+  hasAnyGiftCards?: boolean;
+  clientItems?: Array<{ id: string; label: string }>;
+  showAllLocationsFilter?: boolean;
+  canCreate?: boolean;
+  canSettings?: boolean;
 };
 
 function tenantSlug(): string {
@@ -32,69 +53,152 @@ function tenantSlug(): string {
   return window.location.pathname.split("/")[1] || "";
 }
 
-function fmtMoney(n: number): string {
-  return Number(n || 0).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// fmt_money legacy: 2 decimali, virgola, punto per le migliaia.
+function fmtMoney(v: number): string {
+  const n = Number(v) || 0;
+  const [int, dec] = Math.abs(n).toFixed(2).split(".");
+  return `${n < 0 ? "-" : ""}${int.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${dec}`;
 }
 
-export function GiftcardContent({ slug: slugProp }: { slug?: string } = {}) {
+// gcFilterNorm di giftcard.js: lowercase + rimozione accenti.
+function normSearch(s: string): string {
+  return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+}
+
+// Combobox filtro Mittente (gcInitFilterCombobox: dropdown-item + "Nessun
+// risultato", voce "Tutti").
+function SenderFilterCombobox({
+  items,
+  value,
+  onChange,
+}: {
+  items: Array<{ id: string; label: string }>;
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    function onDoc(e: MouseEvent) {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+  const data = [{ id: "0", label: "Tutti" }, ...items];
+  const q = normSearch(search);
+  const shown = data.filter((it) => !q || normSearch(it.label).includes(q));
+  const selected = data.find((it) => it.id === value);
+  const hasSelection = value !== "" && value !== "0" && selected;
+  return (
+    <div className={`app-combobox dropdown ${open ? "show" : ""}`} id="giftcardClientFilterBox" ref={boxRef}>
+      <button
+        className="btn btn-outline-secondary dropdown-toggle w-100 app-combobox-toggle"
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className={`app-combobox-text ${hasSelection ? "" : "d-none"}`}>{hasSelection ? selected?.label : ""}</span>
+        <span className={`text-muted app-combobox-placeholder ${hasSelection ? "d-none" : ""}`}>Tutti</span>
+      </button>
+      <div className={`dropdown-menu p-2 w-100 ${open ? "show" : ""}`}>
+        <input
+          type="text"
+          className="form-control form-control-sm app-combobox-search"
+          placeholder="Cerca…"
+          autoComplete="off"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <div className="app-combobox-list mt-2" style={{ maxHeight: "14rem", overflowY: "auto" }}>
+          {shown.length === 0 ? (
+            <div className="text-muted small px-2 py-1">Nessun risultato</div>
+          ) : (
+            shown.map((it) => (
+              <button
+                key={it.id}
+                type="button"
+                className="dropdown-item d-flex justify-content-between align-items-center"
+                onClick={() => {
+                  onChange(it.id);
+                  setSearch("");
+                  setOpen(false);
+                }}
+              >
+                {it.label}
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+      <input type="hidden" name="client_id" value={value} readOnly />
+    </div>
+  );
+}
+
+export function GiftcardContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: GiftcardQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
-  const [rows, setRows] = useState<Row[]>([]);
-  const [totalCount, setTotalCount] = useState(0);
-  const [locationsCount, setLocationsCount] = useState(0);
-  const [loading, setLoading] = useState(true);
-  // Filtri legacy (form GET): applicati al submit "Filtra".
-  const [clientFilter, setClientFilter] = useState(0);
-  const [q, setQ] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
-  const [allLocations, setAllLocations] = useState(false);
-  const [applied, setApplied] = useState({ clientFilter: 0, q: "", statusFilter: "" });
 
-  const load = useCallback((all?: boolean) => {
-    setLoading(true);
-    fetch(`/api/manage/giftcards?slug=${encodeURIComponent(slug)}&action=manage_list${all ? "&all_locations=1" : ""}`, { headers: { "x-tenant-slug": slug } })
-      .then((r) => r.json())
-      .then((j) => {
-        setRows(Array.isArray(j.rows) ? j.rows : []);
-        setTotalCount(Number(j.totalCount ?? 0));
-        setLocationsCount(Number(j.locationsCount ?? 0));
-      })
-      .catch(() => setRows([]))
-      .finally(() => setLoading(false));
-  }, [slug]);
+  // Filtri applicati (form GET legacy: il submit naviga con i parametri).
+  const [applied] = useState(() => ({
+    clientId: String(initialQuery?.client_id ?? "0") || "0",
+    q: String(initialQuery?.q ?? ""),
+    status: String(initialQuery?.status ?? ""),
+    allLocations: ["1", "true", "on", "yes", "all"].includes(String(initialQuery?.all_locations ?? "").toLowerCase()),
+  }));
+
+  const [data, setData] = useState<ListPayload | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [clientFilter, setClientFilter] = useState(applied.clientId);
+  const [q, setQ] = useState(applied.q);
+  const [statusFilter, setStatusFilter] = useState(applied.status);
+  const [allLocations, setAllLocations] = useState(applied.allLocations);
+
+  // Flash legacy (View::alert): ?msg= success + ?err= danger dal redirect;
+  // action=new -> messaggio legacy "vai in Pagamenti".
+  const [flash] = useState<{ msg?: string; err?: string }>(() => ({
+    msg: initialQuery?.msg ?? (initialQuery?.action === "new" ? 'Per creare una GiftCard vai in "Pagamenti" e usa il pulsante GiftCard.' : undefined),
+    err: initialQuery?.err,
+  }));
 
   useEffect(() => {
-    load();
-  }, [load]);
+    const params = new URLSearchParams({ slug, action: "manage_list" });
+    if (applied.clientId !== "0") params.set("client_id", applied.clientId);
+    if (applied.q !== "") params.set("q", applied.q);
+    if (applied.status !== "") params.set("status", applied.status);
+    if (applied.allLocations) params.set("all_locations", "1");
+    fetch(`/api/manage/giftcards?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
+      .then((r) => r.json())
+      .then((j: ListPayload) => setData(j))
+      .catch(() => setData({ rows: [], hasAnyGiftCards: false, clientItems: [] }))
+      .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug]);
 
-  function href(suffix: string): string {
-    return `/${encodeURIComponent(slug)}/${suffix.replace("&", "?")}`;
+  function href(qs: string): string {
+    return `/${encodeURIComponent(slug)}/${qs}`;
   }
-  function voucherHref(r: Row): string {
-    return `/${encodeURIComponent(slug)}/giftcard_voucher?public=1&embed=1&token=${encodeURIComponent(r.publicToken)}`;
+
+  function applyFilters(e: React.FormEvent) {
+    e.preventDefault();
+    const params = new URLSearchParams();
+    if (clientFilter !== "" && clientFilter !== "0") params.set("client_id", clientFilter);
+    if (q !== "") params.set("q", q);
+    if (statusFilter !== "") params.set("status", statusFilter);
+    if (allLocations) params.set("all_locations", "1");
+    const qs = params.toString();
+    window.location.href = href(`giftcard${qs !== "" ? `?${qs}` : ""}`);
   }
 
-  const senderOptions = useMemo(() => {
-    const seen = new Map<number, string>();
-    for (const r of rows) if (r.senderId > 0 && !seen.has(r.senderId)) seen.set(r.senderId, r.senderName);
-    return Array.from(seen.entries()).sort((a, b) => a[1].localeCompare(b[1]));
-  }, [rows]);
-
-  const filtered = useMemo(() => {
-    const needle = applied.q.trim().toLowerCase();
-    return rows.filter((r) => {
-      if (applied.clientFilter > 0 && r.senderId !== applied.clientFilter) return false;
-      if (applied.statusFilter !== "" && r.status !== applied.statusFilter) return false;
-      if (needle !== "" && !`${r.code} ${r.recipientName} ${r.recipientEmail} ${r.senderName}`.toLowerCase().includes(needle)) return false;
-      return true;
-    });
-  }, [rows, applied]);
-
-  const hasAny = totalCount > 0;
+  const rows = data?.rows ?? [];
+  const hasAny = data?.hasAnyGiftCards ?? false;
   const showEmptyState = !loading && !hasAny;
-  const showLocationCol = rows.some((r) => r.locationName !== "") || locationsCount > 1;
-  const colCount = showLocationCol ? 10 : 9;
+  const canCreate = data?.canCreate ?? false;
+  const canSettings = data?.canSettings ?? false;
+  const showAllLocationsFilter = data?.showAllLocationsFilter ?? false;
 
   return (
     <div className="container-fluid">
@@ -112,7 +216,7 @@ export function GiftcardContent({ slug: slugProp }: { slug?: string } = {}) {
               <i className="bi bi-arrow-left me-1" />
               Torna alla lista
             </a>
-            {hasAny ? (
+            {canCreate && !showEmptyState ? (
               <a className="btn btn-primary btn-pill" href={href("pos")}>
                 <i className="bi bi-plus-lg me-1" />
                 Crea GiftCard
@@ -122,7 +226,22 @@ export function GiftcardContent({ slug: slugProp }: { slug?: string } = {}) {
         </div>
       </div>
 
-      {showEmptyState ? (
+      {flash.msg ? (
+        <div className="alert alert-success d-flex align-items-start gap-2" role="alert">
+          <div><i className="bi bi-info-circle" /></div>
+          <div>{flash.msg}</div>
+        </div>
+      ) : null}
+      {flash.err ? (
+        <div className="alert alert-danger d-flex align-items-start gap-2" role="alert">
+          <div><i className="bi bi-info-circle" /></div>
+          <div>{flash.err}</div>
+        </div>
+      ) : null}
+
+      {loading ? (
+        <div className="card p-3 text-muted small">Caricamento…</div>
+      ) : showEmptyState ? (
         <div className="card border-0 shadow-sm giftcard-empty-card">
           <div className="giftcard-empty-state">
             <div className="giftcard-empty-icon" aria-hidden="true">
@@ -131,45 +250,37 @@ export function GiftcardContent({ slug: slugProp }: { slug?: string } = {}) {
             <h2>Nessuna GiftCard presente</h2>
             <p>Le GiftCard emesse da Pagamenti compariranno qui. Potrai monitorare mittente, destinatario, saldo, scadenze, riscatti e sede di emissione.</p>
             <div className="d-flex justify-content-center gap-2 flex-wrap">
-              <a className="btn btn-primary" href={href("pos")}>
-                <i className="bi bi-plus-lg me-1" />
-                Crea GiftCard
-              </a>
-              <a className="btn btn-outline-secondary" href={href("giftcard_settings")}>
-                <i className="bi bi-gear me-1" />
-                Impostazioni
-              </a>
+              {canCreate ? (
+                <a className="btn btn-primary" href={href("pos")}>
+                  <i className="bi bi-plus-lg me-1" />
+                  Crea GiftCard
+                </a>
+              ) : null}
+              {canSettings ? (
+                <a className="btn btn-outline-secondary" href={href("giftcard_settings")}>
+                  <i className="bi bi-gear me-1" />
+                  Impostazioni
+                </a>
+              ) : null}
             </div>
           </div>
         </div>
       ) : (
         <>
           <div className="card p-3 mb-3">
-            <form
-              className="row g-2 align-items-end"
-              onSubmit={(e) => {
-                e.preventDefault();
-                setApplied({ clientFilter, q, statusFilter });
-                load(allLocations);
-              }}
-            >
+            <form className="row g-2 align-items-end" method="get" onSubmit={applyFilters}>
               <div className="col-lg-3">
-                <label className="form-label small">Mittente</label>
-                <select className="form-select" value={String(clientFilter)} onChange={(e) => setClientFilter(Number(e.target.value) || 0)}>
-                  <option value="0">Tutti</option>
-                  {senderOptions.map(([id, name]) => (
-                    <option value={id} key={id}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
+                <label className="form-label">Mittente</label>
+                <SenderFilterCombobox items={data?.clientItems ?? []} value={clientFilter} onChange={setClientFilter} />
               </div>
+
               <div className="col-lg-3">
-                <label className="form-label small">Cerca</label>
+                <label className="form-label">Cerca</label>
                 <input className="form-control" name="q" placeholder="Codice, destinatario..." value={q} onChange={(e) => setQ(e.target.value)} />
               </div>
-              <div className="col-lg-2">
-                <label className="form-label small">Stato</label>
+
+              <div className={showAllLocationsFilter ? "col-lg-2" : "col-lg-3"}>
+                <label className="form-label">Stato</label>
                 <select className="form-select" name="status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                   <option value="">Tutti</option>
                   <option value="active">Attiva</option>
@@ -178,13 +289,16 @@ export function GiftcardContent({ slug: slugProp }: { slug?: string } = {}) {
                   <option value="cancelled">Annullata</option>
                 </select>
               </div>
-              {locationsCount > 1 ? (
-                <div className="col-lg-2 d-flex align-items-center">
+
+              {showAllLocationsFilter ? (
+                <div className="col-lg-2 d-flex align-items-center justify-content-start">
                   <div className="form-check mb-2">
                     <input
                       className="form-check-input"
                       type="checkbox"
                       id="giftcardAllLocations"
+                      name="all_locations"
+                      value="1"
                       checked={allLocations}
                       onChange={(e) => setAllLocations(e.target.checked)}
                     />
@@ -194,7 +308,8 @@ export function GiftcardContent({ slug: slugProp }: { slug?: string } = {}) {
                   </div>
                 </div>
               ) : null}
-              <div className="col-lg-2 d-flex align-items-end gap-2">
+
+              <div className="col-lg-2 d-grid">
                 <button className="btn btn-outline-primary" type="submit">
                   <i className="bi bi-search me-1" />
                   Filtra
@@ -211,7 +326,7 @@ export function GiftcardContent({ slug: slugProp }: { slug?: string } = {}) {
                     <th>Codice</th>
                     <th>Mittente</th>
                     <th>Destinatario</th>
-                    {showLocationCol ? <th>Sede</th> : null}
+                    <th>Sede</th>
                     <th className="text-end">Iniziale</th>
                     <th className="text-end">Saldo</th>
                     <th>Stato</th>
@@ -221,47 +336,46 @@ export function GiftcardContent({ slug: slugProp }: { slug?: string } = {}) {
                   </tr>
                 </thead>
                 <tbody>
-                  {loading ? (
-                    <tr>
-                      <td colSpan={colCount} className="text-muted small p-3">
-                        Caricamento…
+                  {rows.map((r) => (
+                    <tr key={r.id}>
+                      <td className="fw-semibold">
+                        <a className="text-decoration-none" target="_blank" rel="noopener" href={href(`giftcard_voucher?id=${r.id}&embed=1`)} title="Apri voucher / stampa">
+                          {r.code}
+                        </a>
+                      </td>
+                      <td>{r.senderName}</td>
+                      <td className="text-muted">{r.recipientName}</td>
+                      <td className="text-muted">{r.locationLabel}</td>
+                      <td className="text-end">€ {fmtMoney(r.initialAmount)}</td>
+                      <td className="text-end fw-semibold">€ {fmtMoney(r.balance)}</td>
+                      <td>
+                        <span className={`badge bg-${r.statusBadge}`}>{r.statusLabel}</span>
+                      </td>
+                      <td className="text-muted">{r.issuedDate}</td>
+                      <td className="text-muted">{r.expiresDate}</td>
+                      <td className="text-end">
+                        <a
+                          className="btn btn-sm btn-outline-secondary me-1"
+                          target="_blank"
+                          rel="noopener"
+                          href={href(`giftcard_voucher?id=${r.id}&embed=1`)}
+                          title="Voucher / stampa"
+                        >
+                          <i className="bi bi-printer" />
+                        </a>
+                        <a className="btn btn-sm btn-outline-secondary" href={href(`giftcard?action=edit&id=${r.id}`)}>
+                          Dettaglio
+                        </a>
                       </td>
                     </tr>
-                  ) : filtered.length === 0 ? (
+                  ))}
+                  {rows.length === 0 ? (
                     <tr>
-                      <td colSpan={colCount} className="text-muted p-3">
+                      <td colSpan={10} className="text-muted p-3">
                         Nessuna GiftCard trovata con i filtri selezionati.
                       </td>
                     </tr>
-                  ) : (
-                    filtered.map((r) => (
-                      <tr key={r.id}>
-                        <td className="fw-semibold">
-                          <a href={voucherHref(r)} target="_blank" rel="noopener">
-                            {r.code}
-                          </a>
-                        </td>
-                        <td className="text-muted">{r.senderName}</td>
-                        <td className="text-muted">{r.recipientName}</td>
-                        {showLocationCol ? <td className="text-muted">{r.locationName || "—"}</td> : null}
-                        <td className="text-end">€ {fmtMoney(r.initialAmount)}</td>
-                        <td className="text-end">€ {fmtMoney(r.balance)}</td>
-                        <td>
-                          <span className={`badge ${r.statusBadge}`}>{r.statusLabel}</span>
-                        </td>
-                        <td className="text-muted">{r.issuedAt || "—"}</td>
-                        <td className="text-muted">{r.expiresAt || "—"}</td>
-                        <td className="text-end">
-                          <a className="btn btn-sm btn-outline-secondary" title="Voucher" target="_blank" rel="noopener" href={voucherHref(r)}>
-                            <i className="bi bi-printer" />
-                          </a>{" "}
-                          <a className="btn btn-sm btn-outline-secondary" href={href(`giftcard&action=edit&id=${r.id}`)}>
-                            Dettaglio
-                          </a>
-                        </td>
-                      </tr>
-                    ))
-                  )}
+                  ) : null}
                 </tbody>
               </table>
             </div>
