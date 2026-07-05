@@ -16219,13 +16219,18 @@ export type FidelityCard = {
   issuedAt: string;
   expiresAt: string;
   status: string;
+  statusEffective: string;
   expired: boolean;
+  inRenewalWindow: boolean;
+  reactivateExpiresAt: string;
 };
 export type FidelityCardValidity = { enabled: boolean; value: number; unit: string; defaultExpiresAt: string };
 export type FidelityMembershipData = {
   fidelityEnabled: boolean;
   cards: FidelityCard[];
   total: number;
+  page: number;
+  totalPages: number;
   expiredCount: number;
   validity: FidelityCardValidity;
 };
@@ -16385,71 +16390,130 @@ async function rememberCardCode(slug: string, normalizedCode: string, cardId: nu
   });
 }
 
-// Restore + clear the Fidelity benefits reserved on a single client's pending/
-// scheduled appointments (per-client port of fidelity_card_release_pending_
-// appointment_discounts_for_clients). Returns the number of appointments touched.
+// Clear the Fidelity benefits reserved on a single client's pending/scheduled
+// appointments (per-client port of fidelity_card_release_pending_appointment_
+// discounts_for_clients): i punti erano solo LOCKATI virtualmente — azzera le
+// colonne fidelity SENZA riaccredito e ripulisce le note automatiche
+// 'Fidelity: ...'. Returns the number of appointments touched.
 async function releasePendingAppointmentFidelityForClient(slug: string, clientId: number): Promise<number> {
   if (clientId <= 0) return 0;
   const linked = await tenantSelect<RowDataPacket>({
     slug,
     table: "appointments",
-    columns: "id, fidelity_points_used, fidelity_gift_points_used",
+    columns: "id, notes",
     where: "client_id = ? AND status IN ('pending','scheduled') AND (COALESCE(fidelity_points_used,0) > 0 OR COALESCE(fidelity_discount,0) > 0 OR COALESCE(fidelity_gift_points_used,0) > 0 OR COALESCE(fidelity_gift_idx,0) > 0 OR COALESCE(fidelity_conflict_choice,'') <> '')",
     params: [clientId],
   }).catch(() => [] as RowDataPacket[]);
   for (const appt of linked) {
-    const restore = Math.max(0, Math.round(Number(appt.fidelity_points_used ?? 0))) + Math.max(0, Math.round(Number(appt.fidelity_gift_points_used ?? 0)));
-    if (restore > 0) {
-      const clients = await tenantTable(slug, "clients");
-      await dbExecute(`UPDATE ${quoteIdentifier(clients.name)} SET points = COALESCE(points,0) + ? WHERE id = ? AND tenant_id = ?`, [restore, clientId, clients.tenantId ?? 0]).catch(() => undefined);
+    // Pulizia note automatiche (fidelity_card_cleanup_appointment_auto_notes).
+    const old = String(appt.notes ?? "");
+    if (old !== "") {
+      const kept: string[] = [];
+      for (const line of old.split(/\r\n|\r|\n/)) {
+        const trimmed = line.trim();
+        if (trimmed !== "" && /^fidelity:\s*(?:-|omaggio prenotato|scelta in negozio)/i.test(trimmed)) continue;
+        kept.push(line);
+      }
+      const next = kept.join("\n").trim();
+      if (next !== old) await tenantUpdate({ slug, table: "appointments", id: Number(appt.id), values: { notes: next !== "" ? next : null } }).catch(() => 0);
     }
-    await tenantUpdate({ slug, table: "appointments", id: Number(appt.id), values: { fidelity_points_used: 0, fidelity_discount: 0, fidelity_gift_points_used: 0, fidelity_gift_idx: null, fidelity_conflict_choice: "", fidelity_campaign_id: null } }).catch(() => 0);
+    await tenantUpdate({ slug, table: "appointments", id: Number(appt.id), values: { fidelity_points_used: 0, fidelity_discount: 0, fidelity_gift_points_used: 0, fidelity_gift_idx: null, fidelity_conflict_choice: null } }).catch(() => 0);
   }
   return linked.length;
 }
 
-// List the Fidelity cards + validity config (port of the fidelity_membership.php list).
-export async function getFidelityMembership(slug: string, q: string): Promise<FidelityMembershipData> {
+// List the Fidelity cards + validity config (port of the fidelity_membership.php
+// list): filtro q in SQL (codice/nome/email), paginazione 20/pagina, righe con
+// stato effettivo, finestra di rinnovo ('in fase di scadenza') e scadenza di
+// riattivazione; le tessere attive già scadute vengono stampate 'inactive' al
+// load (fidelity_card_sync_expired_statuses, solo con scadenza tessera attiva).
+export async function getFidelityMembership(slug: string, q: string, pageRaw = 1): Promise<FidelityMembershipData> {
   const fidelityEnabled = await getFidelityEnabled(slug);
   const bizRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_adhesion_json", orderBy: "id ASC", limit: 1 });
   const cfg = parseCardValidityConfig(bizRows[0]?.fidelity_adhesion_json);
+  const renewal = parseCardRenewalWindowConfig(bizRows[0]?.fidelity_adhesion_json);
   const today = todayIso();
 
-  const cardRows = await tenantSelect<RowDataPacket>({ slug, table: "cards", columns: "id, code, client_id, issued_at, expires_at, status", orderBy: "id DESC", limit: 500 }).catch(() => [] as RowDataPacket[]);
-  const clientIds = [...new Set(cardRows.map((r) => Number(r.client_id ?? 0)).filter((n) => n > 0))];
-  const clientMap = new Map<number, { name: string; email: string }>();
-  if (clientIds.length > 0) {
-    const placeholders = clientIds.map(() => "?").join(",");
-    const clientRows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, full_name, email", where: `id IN (${placeholders})`, params: clientIds }).catch(() => [] as RowDataPacket[]);
-    for (const c of clientRows) clientMap.set(Number(c.id), { name: String(c.full_name ?? ""), email: String(c.email ?? "") });
+  // Sync scadute (best-effort, solo con scadenza tessera abilitata).
+  if (cfg.enabled) {
+    const cardsT = await tenantTable(slug, "cards").catch(() => null);
+    if (cardsT) {
+      await dbExecute(
+        `UPDATE ${quoteIdentifier(cardsT.name)} SET status = 'inactive' WHERE tenant_id = ? AND status = 'active' AND expires_at IS NOT NULL AND expires_at < ?`,
+        [cardsT.tenantId ?? 0, today],
+      ).catch(() => undefined);
+    }
   }
 
-  const term = q.trim().toLowerCase();
-  let cards: FidelityCard[] = cardRows.map((r) => {
+  const cardsT = await tenantTable(slug, "cards");
+  const cT = await tenantTable(slug, "clients");
+  const scoped = cardsT.mode === "shared" && (await columnExists(cardsT.name, "tenant_id"));
+  const term = q.trim();
+  const whereParts: string[] = [];
+  const params: unknown[] = [];
+  if (scoped) { whereParts.push("fc.tenant_id = ?"); params.push(cardsT.tenantId ?? 0); }
+  if (term !== "") {
+    whereParts.push("(fc.code LIKE ? OR c.full_name LIKE ? OR c.email LIKE ?)");
+    const like = `%${term}%`;
+    params.push(like, like, like);
+  }
+  const whereSql = whereParts.length > 0 ? `WHERE ${whereParts.join(" AND ")}` : "";
+  const countRows = await dbQuery<RowDataPacket[]>(
+    `SELECT COUNT(*) AS c FROM ${quoteIdentifier(cardsT.name)} fc JOIN ${quoteIdentifier(cT.name)} c ON c.id = fc.client_id${scoped ? " AND c.tenant_id = fc.tenant_id" : ""} ${whereSql}`,
+    params,
+  ).catch(() => [] as RowDataPacket[]);
+  const total = Number(countRows[0]?.c ?? 0);
+  const perPage = 20;
+  const totalPages = Math.max(1, Math.ceil(total / perPage));
+  let page = Math.max(1, Math.trunc(Number(pageRaw) || 1));
+  if (page > totalPages) page = totalPages;
+
+  const cardRows = await dbQuery<RowDataPacket[]>(
+    `SELECT fc.id, fc.code, fc.client_id, fc.issued_at, fc.expires_at, fc.status, c.full_name, c.email
+       FROM ${quoteIdentifier(cardsT.name)} fc
+       JOIN ${quoteIdentifier(cT.name)} c ON c.id = fc.client_id${scoped ? " AND c.tenant_id = fc.tenant_id" : ""}
+      ${whereSql}
+   ORDER BY fc.id DESC
+      LIMIT ${perPage} OFFSET ${(page - 1) * perPage}`,
+    params,
+  ).catch(() => [] as RowDataPacket[]);
+
+  const cards: FidelityCard[] = cardRows.map((r) => {
     const clientId = Number(r.client_id ?? 0);
-    const client = clientMap.get(clientId) ?? { name: "", email: "" };
     const expiresAt = normalizeClientDate(typeof r.expires_at === "string" ? r.expires_at : r.expires_at ? dateIsoLocal(new Date(String(r.expires_at))) : "") ?? "";
     const issuedAt = normalizeClientDate(typeof r.issued_at === "string" ? r.issued_at : r.issued_at ? dateIsoLocal(new Date(String(r.issued_at))) : "") ?? "";
+    let status = String(r.status ?? "active");
+    if (!["active", "inactive"].includes(status)) status = "active";
+    const expired = expiresAt !== "" && expiresAt < today;
+    // '(in fase di scadenza)': oggi dentro [scadenza - finestra, scadenza].
+    let inRenewalWindow = false;
+    if (!expired && expiresAt !== "" && renewal.enabled && renewal.value > 0) {
+      const windowStart = addCardDuration(expiresAt, -Math.abs(renewal.value), renewal.unit);
+      inRenewalWindow = today >= windowStart && today <= expiresAt;
+    }
     return {
       id: Number(r.id ?? 0),
       code: String(r.code ?? ""),
       clientId,
-      clientName: client.name,
-      clientEmail: client.email,
+      clientName: String(r.full_name ?? ""),
+      clientEmail: String(r.email ?? ""),
       issuedAt,
       expiresAt,
-      status: String(r.status ?? "active"),
-      expired: expiresAt !== "" && expiresAt < today,
+      status,
+      statusEffective: expired && status === "active" ? "inactive" : status,
+      expired,
+      inRenewalWindow,
+      reactivateExpiresAt: expired && cfg.enabled && cfg.value > 0 ? (cardDefaultExpiresAt(cfg, today) ?? "") : "",
     };
   });
-  if (term !== "") {
-    cards = cards.filter((c) => c.code.toLowerCase().includes(term) || c.clientName.toLowerCase().includes(term) || c.clientEmail.toLowerCase().includes(term));
-  }
 
   return {
     fidelityEnabled,
     cards,
-    total: cards.length,
+    total,
+    page,
+    totalPages,
+    // Legacy $expiredRowsCount: tessere scadute nella PAGINA corrente.
     expiredCount: cards.filter((c) => c.expired).length,
     validity: { enabled: cfg.enabled, value: cfg.value, unit: cfg.unit, defaultExpiresAt: cardDefaultExpiresAt(cfg, today) ?? "" },
   };
@@ -16556,9 +16620,15 @@ export async function reactivateFidelityCard(slug: string, cardId: number): Prom
   if (newExpires === null) throw new Error("Imposta prima una durata tessera in Fidelity → Adesione → Impostazioni tessera Fidelity per poter riattivare la tessera.");
 
   await tenantUpdate({ slug, table: "cards", id: cardId, values: { expires_at: newExpires, status: "active" } });
-  // F4: la riattivazione ripristina l'adesione -> ricalcolo livello.
+  // F4: la riattivazione ripristina l'adesione -> ricalcolo livello + sync del
+  // credito wallet sulla tessera riattivata (legacy credit_wallet_sync_active_cards).
   const reactClientId = Number((await tenantSelect<RowDataPacket>({ slug, table: "cards", columns: "client_id", where: "id = ?", params: [cardId], limit: 1 }).catch(() => []))[0]?.client_id ?? 0);
-  if (reactClientId > 0) await recalcClientFidelityLevel(slug, reactClientId).catch(() => "");
+  if (reactClientId > 0) {
+    await recalcClientFidelityLevel(slug, reactClientId).catch(() => "");
+    const wallet = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "credit_balance", where: "id = ?", params: [reactClientId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    const credit = roundMoney(Number(wallet[0]?.credit_balance ?? 0) || 0);
+    await tenantUpdate({ slug, table: "cards", id: cardId, values: { credit } }).catch(() => 0);
+  }
   return { ok: true, expiresAt: newExpires };
 }
 

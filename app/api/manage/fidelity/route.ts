@@ -1,5 +1,6 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
 import { addDbWalletMovement, dbWalletBalance, deleteFidelityCampaign, deleteFidelityCard, fidelityCampaignPreview, fidelityDisableImpact, fidelityLinkedAppointmentsDetailed, fidelityWalletManualMove, getFidelityEnabled, getFidelityLevelsSettings, getFidelityMembership, getFidelityPointsSettings, getFidelityPointsStats, getFidelityWallet, getManageCreditMovements, issueFidelityCard, listDbClients, listDbWalletMovements, listFidelityCampaigns, manualCreditDebit, reactivateFidelityCard, saveFidelityCampaign, saveFidelityLevels, saveFidelityPointsSettings, setFidelityEnabled, toggleFidelityCampaign, updateFidelityCardStatus } from "@/lib/db-repositories";
+import { searchGiftRecipientClients } from "@/lib/gift-issue-details";
 import { currentManageSession } from "@/lib/manage-auth";
 import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -72,10 +73,23 @@ export async function GET(request: Request) {
       return Response.json({ ok: true, sourceMode: "database", levels: await getFidelityLevelsSettings(tenantSlug) });
     }
 
-    // Fidelity MEMBERSHIP / cards list (fidelity_membership.php "Adesione").
+    // Fidelity MEMBERSHIP / cards list (fidelity_membership.php "Adesione"),
+    // con filtro ?q e pagina ?p (20/pagina); perms per le azioni header gated.
     if (url.searchParams.get("action") === "membership") {
       if (!can(session.user.perms, "fidelity.membership") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso adesione fidelity mancante.", 403);
-      return Response.json({ ok: true, sourceMode: "database", membership: await getFidelityMembership(tenantSlug, url.searchParams.get("q") ?? "") });
+      return Response.json({
+        ok: true,
+        sourceMode: "database",
+        membership: await getFidelityMembership(tenantSlug, url.searchParams.get("q") ?? "", parseInteger(url.searchParams.get("p"), 1)),
+        canFidelityManage: can(session.user.perms, "fidelity.manage"),
+        canLevels: can(session.user.perms, "fidelity.levels") || can(session.user.perms, "fidelity.manage"),
+      });
+    }
+
+    // Ricerca clienti per la Nuova tessera (api_clients.php action=search).
+    if (url.searchParams.get("action") === "client_search") {
+      const clients = await searchGiftRecipientClients(tenantSlug, url.searchParams.get("q") ?? "");
+      return Response.json({ ok: true, clients });
     }
 
     // Fidelity WALLET / points ledger (fidelity_wallet.php "Portafoglio"),

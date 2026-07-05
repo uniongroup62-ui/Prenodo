@@ -714,6 +714,16 @@ export default async function TenantPage({
     );
   }
 
+  // Faithful Adesione (fidelity_membership.php): filtro ?q + pagina ?p +
+  // flash ?msg/?err.
+  if (page === "fidelity_membership") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <FidelityMembershipContent slug={tenantSlug} initialQuery={{ q: query.q, p: query.p, msg: query.msg, err: query.err }} />
+      </ManageShell>
+    );
+  }
+
   // Faithful Portafoglio punti (fidelity_wallet.php): querystring legacy
   // (?client_id/p/p_pending/p_list) + flash ?msg/?err + ?warn_locked.
   if (page === "fidelity_wallet") {

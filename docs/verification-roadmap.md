@@ -4631,3 +4631,67 @@ titolari tessera anche disattiva, calendario per giorno con expire-on-read
 e saldo riallineato, paginazione movimenti, ripristino businesses e zero
 residui) + 72/72 marker bundle + regressioni fidelity_points 42/42 e
 fidelity-toggle 27/27 + typecheck/lint puliti.
+
+## Adesione (fidelity_membership.php) — 2026-07-05
+AUDIT COMPLETO della pagina Adesione (1170 righe: tessere con crea/aggiorna/
+riattiva/elimina, registro anti-riuso codici, release agevolazioni) +
+fidelity_membership.js vs il modulo Next. FIX PRINCIPALI:
+1. TERZO BUG DOPPIO ACCREDITO: releasePendingAppointmentFidelityForClient
+   (usato da disattivazione ed eliminazione tessera) riaccreditava
+   clients.points — il release legacy azzera SOLO le colonne fidelity (punti
+   lockati virtualmente): ora nessun riaccredito, fidelity_conflict_choice a
+   NULL (prima stringa vuota), fidelity_campaign_id NON toccato (prima
+   azzerato) e note automatiche 'Fidelity: ...' ripulite (prima assente).
+2. Lista fedele: filtro q in SQL (codice/nome/email — prima client-side su
+   500 tessere), PAGINAZIONE 20/pagina via ?p con 'Pagina X di Y • Totale:
+   N', stato EFFETTIVO ('Disattivata (scaduta)' per attive scadute),
+   '(in fase di scadenza)' nella finestra di rinnovo (parse renewal window),
+   scadenza di riattivazione per riga, sync legacy delle scadute al load
+   (active + expires < oggi -> inactive, solo con scadenza tessera abilitata,
+   fidelity_card_sync_expired_statuses); expiredCount = scadute della PAGINA
+   (per l'alert 'Tessere scadute rilevate' col testo lungo verbatim — prima
+   un contatore nell'header non legacy).
+3. Messaggi composti verbatim con REDIRECT FLASH ?msg/?err (prima stato in
+   pagina): disattivazione 'Tessera disattivata. Le prenotazioni in stato In
+   sospeso / Prenotato hanno perso le agevolazioni prenotate (N prenotazione/i
+   con agevolazioni Fidelity). Le prenotazioni in stato Eseguito restano
+   invariate.'; eliminazione 'Tessera eliminata. Credito cliente mantenuto.
+   Il codice tessera resta riservato e non potra essere riutilizzato.' +
+   'Rimossi N gift/omaggi in accumulo legati a campagne Solo clienti con
+   Fidelity.' + release + coda Eseguito; confirm eliminazione LUNGO legacy
+   ('ATTENZIONE: questa operazione resetta completamente PUNTI e
+   MOVIMENTI...'); confirm disattivazione dal JS legacy ('Impostando
+   "Disattiva" il cliente perderà...Continuare?' — prima assente).
+4. Modale Modifica legacy: help scadenza dinamico ('Tessera scaduta. Con la
+   riattivazione la nuova scadenza sarà d/m/Y.' / '...imposta prima una
+   durata tessera...'), 'Riattiva tessera' DISABILITATO senza durata
+   configurata, Salva sempre presente (prima nascosto su scaduta e select
+   disabilitata), nota completa a 4 righe ('Nota: se la regola adesione è
+   Solo clienti con tessera...' — prima 2 righe), bottoni tabella legacy
+   (Modifica btn-warning icona, Elimina icona).
+5. Ricerca cliente della Nuova tessera SERVER-SIDE (api_clients search, min
+   2 caratteri, debounce — prima filtro client-side sui soli titolari
+   wallet); risultati '#id • email • telefono'; scadenza anteprima '—' e
+   form-text con la coda 'Non modificabile qui.'; warning gia-scaduta col
+   testo verbatim.
+6. Riattivazione: sincronizza il CREDITO wallet sulla tessera riattivata
+   (credit_wallet_sync_active_cards — prima assente); stato disabilitato con
+   early-return, header 'Fidelity' gated fidelity.manage e testo alternativo
+   'Chiedi a un Admin...' (perms canFidelityManage/canLevels dal payload).
+GIA FEDELI: guardie create/update/reactivate verbatim, codice auto 6 cifre
+progressivo su registro anti-riuso permanente, credito wallet sulla tessera
+alla creazione, blocco emissione gia scaduta, reset punti/lotti/movimenti e
+codice riservato all'eliminazione.
+RESIDUI DELIBERATI: gli snapshot legacy pre-eliminazione
+(fidelity_loyalty_preserve_card_on_sources_before_delete /
+snapshot_executed_appointments) non sono portati — servono agli avvisi di
+storno post-eliminazione del flusso annullamenti legacy; il POST con Fidelity
+globale off risponde con la guardia 'Attiva prima la Fidelity...' (il legacy
+ignora il POST con l'early-return della pagina).
+Verifica: battery e2e 32/32 (guardie verbatim, codice auto + registro,
+scadenza +365gg e credito alla creazione, filtro q SQL, stato effettivo,
+finestra rinnovo, sync scadute, release senza riaccredito con campaign_id
+intatto e note ripulite, riattivazione con credito sync e guardia senza
+durata, eliminazione con reset e codice bloccato, client_search, ripristino
+businesses e zero residui) + 60/60 marker bundle + regressioni wallet 29/29
+e toggle 27/27 + typecheck/lint puliti.
