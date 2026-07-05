@@ -81,6 +81,8 @@ export type ResourceCabin = {
   locationId: number | null;
   locationName: string;
   serviceLinks: LinkedService[];
+  // Blocchi legacy (servizi + prenotazioni future) per il popup della riga.
+  blockers?: CabinBlockerItem[];
 };
 
 export type ResourceStaff = {
@@ -348,7 +350,7 @@ export async function saveCabin(slug: string, body: Record<string, string>): Pro
 
 export type SaveCabinsBulkResult =
   | { ok: true; cabins: ResourceCabin[] }
-  | { ok: false; error: string; blockingServices?: LinkedService[]; cabins: ResourceCabin[] };
+  | { ok: false; error: string; blockingServices?: CabinBlockerItem[]; popup?: CabinDeleteBlockPopup; cabins: ResourceCabin[] };
 
 // Faithful port of cabins.php POST bulk-save (the #cabinsForm with cabins_count
 // + cabin_names[] + cabin_ids[], scoped to location_id). Upserts the kept rows
@@ -407,10 +409,10 @@ export async function saveCabinsBulk(slug: string, body: Record<string, string>)
   for (const pid of ids) {
     if (pid > 0 && activeById.has(pid)) submittedExistingIds.add(pid);
   }
-  const blockingServices: LinkedService[] = [];
+  const blockingServices: CabinBlockerItem[] = [];
   for (const rid of activeById.keys()) {
     if (!submittedExistingIds.has(rid)) {
-      const blockers = await cabinBlockers(slug, rid);
+      const blockers = await cabinDeleteBlockersLegacy(slug, rid, String(activeById.get(rid)?.name ?? ""));
       if (blockers.length) blockingServices.push(...blockers);
     }
   }
@@ -419,6 +421,11 @@ export async function saveCabinsBulk(slug: string, body: Record<string, string>)
       ok: false,
       error: "Impostazioni non salvate: una o piu cabine sono associate a servizi o prenotazioni future.",
       blockingServices,
+      popup: cabinBlockPopup(
+        "Impossibile eliminare la cabina",
+        "Una o più cabine che stai rimuovendo sono associate ai servizi elencati. Rimuovi prima la cabina dai servizi collegati e poi riprova.",
+        blockingServices,
+      ),
       cabins: await listCabins(slug, locationId, await listLocations(slug)),
     };
   }
@@ -448,16 +455,196 @@ export async function saveCabinsBulk(slug: string, body: Record<string, string>)
       await tenantUpdate({ slug, table: "cabins", id: rid, values: { is_active: 0 } });
     }
   }
+  // cabin_reorder_active dopo il salvataggio (cabins.php 508).
+  await reorderActiveCabins(slug, hasLocationCol ? locationId : 0);
 
   return { ok: true, cabins: await listCabins(slug, locationId, await listLocations(slug)) };
 }
 
-export async function deleteCabin(slug: string, id: number): Promise<void> {
+// Voce del popup #cabinDeleteBlockModal legacy (cabin_delete_blockers_for_cabin:
+// servizi collegati via service_cabins E services.cabin_id + prenotazioni
+// future pending/scheduled con dettaglio data/cliente/stato).
+export type CabinBlockerItem = {
+  block_kind?: "appointment";
+  service_id: number;
+  service_name: string;
+  service_active: number;
+  cabin_id: number;
+  cabin_name: string;
+  detail?: string;
+};
+
+export type CabinDeleteBlockPopup = { title: string; message: string; services: CabinBlockerItem[] };
+
+export async function cabinDeleteBlockersLegacy(slug: string, cabinId: number, cabinName = ""): Promise<CabinBlockerItem[]> {
+  if (!(cabinId > 0)) return [];
+  const out: CabinBlockerItem[] = [];
+
+  // Servizi collegati (service_cabins + colonna legacy services.cabin_id).
+  const byServiceId = new Map<number, CabinBlockerItem>();
+  const services = await tenantTable(slug, "services").catch(() => null);
+  if (services) {
+    const svcScope = services.mode === "shared" ? " AND s.tenant_id = ?" : "";
+    const svcParams = services.mode === "shared" ? [services.tenantId ?? 0] : [];
+    const sc = await tenantTable(slug, "service_cabins").catch(() => null);
+    if (sc) {
+      const rows = await dbQuery<RowDataPacket[]>(
+        `SELECT s.id AS service_id, COALESCE(NULLIF(TRIM(s.name), ''), CONCAT('Servizio #', s.id)) AS service_name, COALESCE(s.is_active, 1) AS service_active
+           FROM ${quoteIdentifier(sc.name)} scx
+           JOIN ${quoteIdentifier(services.name)} s ON s.id = scx.service_id
+          WHERE scx.cabin_id = ?${svcScope}
+          ORDER BY s.name ASC, s.id ASC`,
+        [cabinId, ...svcParams],
+      ).catch(() => [] as RowDataPacket[]);
+      for (const row of rows) {
+        const sid = Number(row.service_id ?? 0);
+        if (sid > 0) byServiceId.set(sid, { service_id: sid, service_name: String(row.service_name ?? `Servizio #${sid}`), service_active: Number(row.service_active ?? 1), cabin_id: cabinId, cabin_name: cabinName });
+      }
+    }
+    if (await columnExists(services.name, "cabin_id")) {
+      const rows = await dbQuery<RowDataPacket[]>(
+        `SELECT s.id AS service_id, COALESCE(NULLIF(TRIM(s.name), ''), CONCAT('Servizio #', s.id)) AS service_name, COALESCE(s.is_active, 1) AS service_active
+           FROM ${quoteIdentifier(services.name)} s
+          WHERE s.cabin_id = ?${svcScope}
+          ORDER BY s.name ASC, s.id ASC`,
+        [cabinId, ...svcParams],
+      ).catch(() => [] as RowDataPacket[]);
+      for (const row of rows) {
+        const sid = Number(row.service_id ?? 0);
+        if (sid > 0) byServiceId.set(sid, { service_id: sid, service_name: String(row.service_name ?? `Servizio #${sid}`), service_active: Number(row.service_active ?? 1), cabin_id: cabinId, cabin_name: cabinName });
+      }
+    }
+  }
+  out.push(...byServiceId.values());
+
+  // Prenotazioni FUTURE pending/scheduled (appointments.cabin_id, servizio
+  // legacy con cabin_id e appointment_segments.cabin_id).
+  const appt = await tenantTable(slug, "appointments").catch(() => null);
+  if (appt) {
+    const seen = new Set<number>();
+    const clients = await tenantTable(slug, "clients").catch(() => null);
+    const clientJoin = clients ? `LEFT JOIN ${quoteIdentifier(clients.name)} cl ON cl.id = a.client_id` : "";
+    const clientSelect = clients ? "cl.full_name AS client_name" : "NULL AS client_name";
+    const hasPublicCode = await columnExists(appt.name, "public_code");
+    const scope = appt.mode === "shared" ? " AND a.tenant_id = ?" : "";
+    const scopeParams = appt.mode === "shared" ? [appt.tenantId ?? 0] : [];
+    const pushAppt = (row: RowDataPacket) => {
+      const aid = Number(row.appointment_id ?? 0);
+      if (!(aid > 0) || seen.has(aid)) return;
+      seen.add(aid);
+      const raw = row.starts_at instanceof Date
+        ? `${row.starts_at.getFullYear()}-${String(row.starts_at.getMonth() + 1).padStart(2, "0")}-${String(row.starts_at.getDate()).padStart(2, "0")} ${String(row.starts_at.getHours()).padStart(2, "0")}:${String(row.starts_at.getMinutes()).padStart(2, "0")}`
+        : String(row.starts_at ?? "").replace("T", " ");
+      const when = /^\d{4}-\d{2}-\d{2}/.test(raw) ? `${raw.slice(8, 10)}/${raw.slice(5, 7)}/${raw.slice(0, 4)} ${raw.length >= 16 ? raw.slice(11, 16) : "00:00"}` : "";
+      const code = String(row.public_code ?? "").trim();
+      const detail: string[] = [];
+      if (when) detail.push(when);
+      const client = String(row.client_name ?? "").trim();
+      if (client) detail.push(client);
+      const status = String(row.status ?? "").trim();
+      if (status) detail.push(status);
+      out.push({
+        block_kind: "appointment",
+        service_id: 0,
+        service_name: `Prenotazione ${code !== "" ? code : `#${aid}`}`,
+        service_active: 1,
+        cabin_id: cabinId,
+        cabin_name: cabinName,
+        detail: detail.join(" - "),
+      });
+    };
+
+    const segments = await tenantTable(slug, "appointment_segments").catch(() => null);
+    if (segments && await columnExists(segments.name, "cabin_id")) {
+      const rows = await dbQuery<RowDataPacket[]>(
+        `SELECT DISTINCT a.id AS appointment_id, ${hasPublicCode ? "a.public_code" : "NULL AS public_code"}, a.starts_at, a.status, ${clientSelect}
+           FROM ${quoteIdentifier(segments.name)} sg
+           JOIN ${quoteIdentifier(appt.name)} a ON a.id = sg.appointment_id
+           ${clientJoin}
+          WHERE a.status IN ('pending','scheduled') AND sg.ends_at >= NOW()
+            AND COALESCE(sg.cabin_id, a.cabin_id) = ?${scope}
+          ORDER BY a.starts_at ASC, a.id ASC`,
+        [cabinId, ...scopeParams],
+      ).catch(() => [] as RowDataPacket[]);
+      rows.forEach(pushAppt);
+    }
+    const excludeSegmented = segments ? ` AND NOT EXISTS (SELECT 1 FROM ${quoteIdentifier(segments.name)} sg2 WHERE sg2.appointment_id = a.id)` : "";
+    const svcJoin = services && await columnExists(services.name, "cabin_id") ? `LEFT JOIN ${quoteIdentifier(services.name)} sv ON sv.id = a.service_id` : "";
+    const cabinCond = svcJoin ? "(a.cabin_id = ? OR (a.cabin_id IS NULL AND sv.cabin_id = ?))" : "a.cabin_id = ?";
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT DISTINCT a.id AS appointment_id, ${hasPublicCode ? "a.public_code" : "NULL AS public_code"}, a.starts_at, a.status, ${clientSelect}
+         FROM ${quoteIdentifier(appt.name)} a
+         ${svcJoin}
+         ${clientJoin}
+        WHERE a.status IN ('pending','scheduled') AND a.ends_at >= NOW()${excludeSegmented}
+          AND ${cabinCond}${scope}
+        ORDER BY a.starts_at ASC, a.id ASC`,
+      svcJoin ? [cabinId, cabinId, ...scopeParams] : [cabinId, ...scopeParams],
+    ).catch(() => [] as RowDataPacket[]);
+    rows.forEach(pushAppt);
+  }
+
+  return out;
+}
+
+// cabin_flash_delete_block_popup: con prenotazioni il messaggio cambia (senza accento).
+function cabinBlockPopup(title: string, message: string, services: CabinBlockerItem[]): CabinDeleteBlockPopup {
+  const hasAppointment = services.some((item) => item.block_kind === "appointment");
+  return {
+    title,
+    message: hasAppointment ? "La cabina e associata a servizi o prenotazioni future. Rimuovi prima i collegamenti o sposta le prenotazioni e poi riprova." : message,
+    services,
+  };
+}
+
+// cabin_reorder_active: ricompatta position 1..N per le cabine attive della sede.
+async function reorderActiveCabins(slug: string, locationId: number): Promise<void> {
+  const table = await tenantTable(slug, "cabins").catch(() => null);
+  if (!table) return;
+  const hasLocation = await columnExists(table.name, "location_id");
+  const rows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "cabins",
+    columns: "id",
+    where: hasLocation && locationId > 0 ? "COALESCE(is_active,1)=1 AND location_id = ?" : "COALESCE(is_active,1)=1",
+    params: hasLocation && locationId > 0 ? [locationId] : [],
+    orderBy: "position ASC, id ASC",
+  }).catch(() => []);
+  let position = 1;
+  for (const row of rows) {
+    const rid = Number(row.id ?? 0);
+    if (rid > 0) await tenantUpdate({ slug, table: "cabins", id: rid, values: { position: position++ } }).catch(() => undefined);
+  }
+}
+
+// Port di cabins.php action=delete (363-398): soft delete con guardie e popup.
+export async function deleteCabin(slug: string, id: number, locationId = 0): Promise<void> {
   const cabinId = Math.max(0, Number(id) || 0);
-  if (!cabinId) throw new Error("Cabina non valida.");
-  const blockers = await cabinBlockers(slug, cabinId);
-  if (blockers.length) throw new Error("Cabina non eliminata: e associata a servizi o prenotazioni future.");
+  const table = await tenantTable(slug, "cabins").catch(() => null);
+  const hasLocation = table ? await columnExists(table.name, "location_id") : false;
+  const rows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "cabins",
+    columns: "id, name",
+    where: hasLocation && locationId > 0 ? "id = ? AND COALESCE(is_active,1)=1 AND (location_id = ? OR location_id IS NULL)" : "id = ? AND COALESCE(is_active,1)=1",
+    params: hasLocation && locationId > 0 ? [cabinId, locationId] : [cabinId],
+    limit: 1,
+  }).catch(() => []);
+  if (!rows[0]) throw new Error("Cabina non trovata");
+
+  const blockers = await cabinDeleteBlockersLegacy(slug, cabinId, String(rows[0].name ?? ""));
+  if (blockers.length) {
+    // Messaggio flash SENZA accento su 'e' (cabins.php 384) + popup di sessione.
+    const error = new Error("Cabina non eliminata: e associata a servizi o prenotazioni future.") as Error & { popup?: CabinDeleteBlockPopup };
+    error.popup = cabinBlockPopup(
+      "Impossibile eliminare la cabina",
+      "La cabina è associata ai servizi elencati. Rimuovi prima la cabina dai servizi collegati: finché è presente in un servizio non può essere eliminata.",
+      blockers,
+    );
+    throw error;
+  }
   await tenantUpdate({ slug, table: "cabins", id: cabinId, values: { is_active: 0 } });
+  await reorderActiveCabins(slug, locationId);
 }
 
 export async function saveStaffMember(slug: string, body: Record<string, string>): Promise<ResourceStaff> {
@@ -936,18 +1123,24 @@ async function listCabins(slug: string, activeLocationId: number, locations: Res
     orderBy: "position ASC, id ASC",
   }).catch(() => []);
   const serviceMap = await cabinServiceLinks(slug, rows.map((row) => Number(row.id ?? 0)).filter((id) => id > 0));
-  return rows.map((row) => {
+  const out: ResourceCabin[] = [];
+  for (const row of rows) {
+    const id = Number(row.id ?? 0);
+    if (!(id > 0)) continue;
     const locationId = nullableNumber(row.location_id);
-    return {
-      id: Number(row.id ?? 0),
+    out.push({
+      id,
       name: String(row.name ?? ""),
       position: Number(row.position ?? 0),
       isActive: Number(row.is_active ?? 1) === 1,
       locationId,
       locationName: locationName(locations, locationId),
-      serviceLinks: serviceMap.get(Number(row.id ?? 0)) ?? [],
-    };
-  }).filter((item) => item.id > 0);
+      serviceLinks: serviceMap.get(id) ?? [],
+      // Blocchi legacy per il popup della riga (cabins.php initialCabins[].services).
+      blockers: await cabinDeleteBlockersLegacy(slug, id, String(row.name ?? "")),
+    });
+  }
+  return out;
 }
 
 async function listStaff(slug: string, activeLocationId: number, locations: ResourceLocation[]): Promise<ResourceStaff[]> {

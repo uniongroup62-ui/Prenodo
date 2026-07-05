@@ -607,6 +607,15 @@ export default async function TenantPage({
     );
   }
 
+  // Cabine (cabins.php): flash ?msg/?err dei redirect legacy.
+  if (page === "cabins") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <CabinsContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
+      </ManageShell>
+    );
+  }
+
   // Risorse condivise (resources.php): lista + form Nuova/Modifica su pagina
   // dedicata (?action=new|edit&id=) + flash ?msg/?err dei redirect legacy.
   if (page === "resources") {

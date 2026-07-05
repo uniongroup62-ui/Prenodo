@@ -5270,3 +5270,43 @@ sort_order+guardia, ripristino) + LIVE PHP (create, guardie nell HTML,
 pannello conferma nome coi medesimi testi, redirect identici, popup delete
 di sessione IDENTICO campo per campo) + 60/60 marker su 4 viste +
 regressioni 45/45 + typecheck/lint puliti.
+
+## Cabine — SECONDA PASSATA: pagina completa (cabins.php + cabins.js) — 2026-07-06
+Ri-audit su richiesta (il motore bulk era gia' coperto da V4). DIVERGENZE
+TROVATE E CORRETTE:
+1. DELETE SINGOLA MORTA: il cestino della riga era un link a
+   ?action=delete&id mai gestito dal routing Next (click = ricarica pagina
+   senza effetto). Ora POST cabin_delete con il flusso legacy completo:
+   'Cabina non trovata' su id inesistente/fuori sede, blocchi -> err
+   'Cabina non eliminata: e associata a servizi o prenotazioni future.'
+   (senza accento, come il sorgente) + popup di sessione, soft delete +
+   cabin_reorder_active (position ricompattate 1..N) + flash 'Cabina
+   eliminata'.
+2. BLOCKERS INCOMPLETI: il Next usava solo service_cabins e riduceva le
+   prenotazioni a un conteggio generico. Portato
+   cabin_delete_blockers_for_cabin 1:1: servizi via service_cabins E
+   colonna legacy services.cabin_id (con service_active), prenotazioni
+   FUTURE pending/scheduled dettagliate (appointments.cabin_id, servizio
+   legacy, appointment_segments.cabin_id con esclusione dei segmentati)
+   con voce 'Prenotazione CODE' e detail 'd/m/Y H:i - cliente - stato'.
+3. POPUP: etichette di cabins.js portate ('NomeCabina → Servizio
+   (Attivo/Disattivo)' con freccia unicode; 'NomeCabina -> Prenotazione X -
+   dettaglio' con freccia ASCII per gli appuntamenti; prima il Next
+   scriveva 'Cabina' generico), messaggio SCAMBIATO quando c'e' una
+   prenotazione ('La cabina e associata a servizi o prenotazioni
+   future...', senza accenti), accordion 'Servizi collegati' con badge
+   count (prima lista piatta), empty 'Sono presenti servizi associati.'.
+4. FLASH legacy: 'Impostazioni salvate' via redirect (prima reload
+   silenzioso), 'Cabina eliminata', err del bulk bloccato con form
+   ricaricato dallo stato reale (cabins.php 468-471); alert in testa alla
+   pagina (prima dentro la card); branch page.tsx con initialQuery.
+5. BULK: popup del blocco dal payload server (legacy-shaped) e
+   cabin_reorder_active dopo il salvataggio.
+Verifica: battery NUOVA e2e-cabins-page 20/20 (validazioni verbatim, bulk
+con nome collassato/posizioni/sede, blockers nel context, anti-bypass con
+servizi e con prenotazione dettagliata + messaggio scambiato, delete
+bloccata/pulita/404 + reorder, ripristino) + LIVE PHP (bulk 'Impostazioni
+salvate' con gli stessi dati, anti-bypass identico, delete bloccata da
+servizio e da prenotazione con popup di sessione IDENTICI campo per campo,
+delete pulite con reorder) + 24/24 marker bundle + regressioni (cabins 14,
+resources 25, services 40) + typecheck/lint puliti.

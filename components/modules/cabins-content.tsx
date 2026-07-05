@@ -15,6 +15,18 @@ type ServiceLink = {
   isActive: boolean;
 };
 
+// Voce di blocco legacy (cabin_delete_blockers_for_cabin): servizi collegati
+// (anche via services.cabin_id) + prenotazioni future con dettaglio.
+type BlockerItem = {
+  block_kind?: "appointment";
+  service_id: number;
+  service_name: string;
+  service_active: number;
+  cabin_id: number;
+  cabin_name: string;
+  detail?: string;
+};
+
 type Cabin = {
   id: number;
   name: string;
@@ -23,7 +35,10 @@ type Cabin = {
   locationId: number | null;
   locationName: string;
   serviceLinks: ServiceLink[];
+  blockers?: BlockerItem[];
 };
+
+type CabinsQuery = { msg?: string; err?: string };
 
 type Location = {
   id: number;
@@ -41,7 +56,7 @@ type ResourceContext = {
 type CabinRow = {
   id: number;
   name: string;
-  services: ServiceLink[];
+  services: BlockerItem[];
 };
 
 function tenantSlug(): string {
@@ -56,7 +71,7 @@ function clampCount(value: number): number {
   return n;
 }
 
-export function CabinsContent({ slug: slugProp }: { slug?: string } = {}) {
+export function CabinsContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: CabinsQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
@@ -68,18 +83,35 @@ export function CabinsContent({ slug: slugProp }: { slug?: string } = {}) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // Flash legacy dai redirect (?msg / ?err).
+  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
 
   // Block modal state (mirrors cabins.js showCabinBlockPopup()).
   const [blockModal, setBlockModal] = useState<{
     open: boolean;
     title: string;
     message: string;
-    services: ServiceLink[];
+    services: BlockerItem[];
   }>({ open: false, title: "", message: "", services: [] });
+  const [blockListOpen, setBlockListOpen] = useState(false);
+
+  // showCabinBlockPopup: con prenotazioni il messaggio cambia (senza accenti).
+  function openBlockPopup(title: string, message: string, services: BlockerItem[]) {
+    const msg = services.some((item) => item?.block_kind === "appointment")
+      ? "La cabina e associata a servizi o prenotazioni future. Rimuovi prima i collegamenti o sposta le prenotazioni e poi riprova."
+      : message;
+    setBlockModal({ open: true, title, message: msg, services });
+  }
+
+  function redirectFlash(params: Record<string, string>) {
+    const usp = new URLSearchParams();
+    if (activeLocationId > 0) usp.set("location_id", String(activeLocationId));
+    for (const [k, v] of Object.entries(params)) if (v !== "") usp.set(k, v);
+    window.location.assign(`/${encodeURIComponent(slug)}/cabins${usp.size > 0 ? `?${usp.toString()}` : ""}`);
+  }
 
   const load = useCallback(
     (locationId: number) => {
-      setLoading(true);
       const qs = new URLSearchParams({ slug, section: "cabins" });
       if (locationId > 0) qs.set("location_id", String(locationId));
       fetch(`/api/manage/resources?${qs.toString()}`, {
@@ -97,7 +129,7 @@ export function CabinsContent({ slug: slugProp }: { slug?: string } = {}) {
           const initialRows: CabinRow[] = cabs.map((c) => ({
             id: c.id,
             name: c.name ?? "",
-            services: Array.isArray(c.serviceLinks) ? c.serviceLinks : [],
+            services: Array.isArray(c.blockers) ? c.blockers : [],
           }));
           setRows(initialRows);
           setCount(initialRows.length);
@@ -137,7 +169,7 @@ export function CabinsContent({ slug: slugProp }: { slug?: string } = {}) {
           const fb = initialCabins[i];
           out.push(
             fb
-              ? { id: fb.id, name: fb.name ?? "", services: fb.serviceLinks ?? [] }
+              ? { id: fb.id, name: fb.name ?? "", services: fb.blockers ?? [] }
               : { id: 0, name: "", services: [] },
           );
         }
@@ -159,42 +191,53 @@ export function CabinsContent({ slug: slugProp }: { slug?: string } = {}) {
     return `/${encodeURIComponent(slug)}/${`cabins${suffix}`.replace("&", "?")}`;
   }
 
-  // Delete link target for an existing cabin (legacy fallback action).
-  function deleteHref(id: number): string {
-    let h = href(`&action=delete&id=${encodeURIComponent(String(id))}`);
-    if (activeLocationId) h += `&location_id=${encodeURIComponent(String(activeLocationId))}`;
-    return h;
-  }
-
-  // Mirrors cabins.js cabinConfirmDelete(): if the cabin is linked to
-  // services, show the block modal and cancel navigation.
-  function confirmDelete(row: CabinRow, e: React.MouseEvent<HTMLAnchorElement>) {
+  // cabins.js cabinConfirmDelete + cabins.php action=delete: con blocchi popup,
+  // altrimenti confirm verbatim e POST con flash 'Cabina eliminata'.
+  async function confirmDelete(row: CabinRow) {
     const services = Array.isArray(row.services) ? row.services : [];
     if (services.length > 0) {
-      e.preventDefault();
-      setBlockModal({
-        open: true,
-        title: "Impossibile eliminare la cabina",
-        message:
-          "La cabina è associata ai servizi elencati. Rimuovi prima la cabina dai servizi collegati: finché è presente in un servizio non può essere eliminata.",
+      openBlockPopup(
+        "Impossibile eliminare la cabina",
+        "La cabina è associata ai servizi elencati. Rimuovi prima la cabina dai servizi collegati: finché è presente in un servizio non può essere eliminata.",
         services,
-      });
+      );
       return;
     }
     const name = row.name || "questa cabina";
-    if (
-      !window.confirm(
-        `Eliminare ${name}? La cabina verrà rimossa dalla configurazione, ma lo storico già creato resterà invariato.`,
-      )
-    ) {
-      e.preventDefault();
+    if (!window.confirm(`Eliminare ${name}? La cabina verrà rimossa dalla configurazione, ma lo storico già creato resterà invariato.`)) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/manage/resources?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-tenant-slug": slug },
+        body: JSON.stringify({ action: "cabin_delete", id: String(row.id), location_id: String(activeLocationId || "") }),
+      });
+      const j = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (res.ok && j.ok !== false) {
+        redirectFlash({ msg: String(j.msg ?? "Cabina eliminata") });
+        return;
+      }
+      setError(String(j.error ?? "Cabina non trovata"));
+      if (j.popup) {
+        const popup = j.popup as { title?: string; message?: string; services?: BlockerItem[] };
+        openBlockPopup(String(popup.title ?? "Impossibile eliminare la cabina"), String(popup.message ?? ""), popup.services ?? []);
+      }
+      window.scrollTo(0, 0);
+    } finally {
+      setSaving(false);
     }
   }
 
-  function serviceLabel(service: ServiceLink): string {
-    const serviceName = service?.serviceName ? String(service.serviceName) : "Servizio";
-    const cabinName = selectedLocationName ? "Cabina" : "Cabina";
-    const active = service?.isActive ? "Attivo" : "Disattivo";
+  // serviceLabel di cabins.js: 'Cabina → Servizio (Attivo)' per i servizi,
+  // 'Cabina -> Prenotazione X - dettaglio' per le prenotazioni.
+  function serviceLabel(item: BlockerItem): string {
+    const serviceName = item?.service_name ? String(item.service_name) : "Servizio";
+    const cabinName = item?.cabin_name ? String(item.cabin_name) : "Cabina";
+    if (item?.block_kind === "appointment") {
+      const detail = item.detail ? String(item.detail) : "";
+      return `${cabinName} -> ${serviceName}${detail ? ` - ${detail}` : ""}`;
+    }
+    const active = Number(item?.service_active ?? 1) === 1 ? "Attivo" : "Disattivo";
     return `${cabinName} → ${serviceName} (${active})`;
   }
 
@@ -209,20 +252,18 @@ export function CabinsContent({ slug: slugProp }: { slug?: string } = {}) {
     setError("");
 
     const keptIds = new Set(rows.map((r) => r.id).filter((id) => id > 0));
-    let blocking: ServiceLink[] = [];
+    let blocking: BlockerItem[] = [];
     for (const cabin of initialCabins) {
-      if (cabin.id > 0 && !keptIds.has(cabin.id) && Array.isArray(cabin.serviceLinks) && cabin.serviceLinks.length > 0) {
-        blocking = blocking.concat(cabin.serviceLinks);
+      if (cabin.id > 0 && !keptIds.has(cabin.id) && Array.isArray(cabin.blockers) && cabin.blockers.length > 0) {
+        blocking = blocking.concat(cabin.blockers);
       }
     }
     if (blocking.length > 0) {
-      setBlockModal({
-        open: true,
-        title: "Impossibile eliminare la cabina",
-        message:
-          "Una o più cabine che stai rimuovendo sono associate ai servizi elencati. Rimuovi prima la cabina dai servizi collegati e poi riprova.",
-        services: blocking,
-      });
+      openBlockPopup(
+        "Impossibile eliminare la cabina",
+        "Una o più cabine che stai rimuovendo sono associate ai servizi elencati. Rimuovi prima la cabina dai servizi collegati e poi riprova.",
+        blocking,
+      );
       return;
     }
 
@@ -251,22 +292,21 @@ export function CabinsContent({ slug: slugProp }: { slug?: string } = {}) {
       });
       const j = await res.json();
       if (!res.ok || !j.ok) {
-        if (Array.isArray(j.blockingServices) && j.blockingServices.length > 0) {
-          setBlockModal({
-            open: true,
-            title: "Impossibile eliminare la cabina",
-            message:
-              "Una o più cabine che stai rimuovendo sono associate ai servizi elencati. Rimuovi prima la cabina dai servizi collegati e poi riprova.",
-            services: j.blockingServices as ServiceLink[],
-          });
+        if (j.popup) {
+          const popup = j.popup as { title?: string; message?: string; services?: BlockerItem[] };
+          openBlockPopup(String(popup.title ?? "Impossibile eliminare la cabina"), String(popup.message ?? ""), popup.services ?? []);
+          // Err flash legacy (cabins.php 467) + form ricaricato dallo stato reale.
+          setError("Impostazioni non salvate: una o piu cabine sono associate a servizi o prenotazioni future.");
+          load(activeLocationId);
         } else {
           setError(String(j.error ?? "Errore nel salvataggio delle cabine."));
         }
         setSaving(false);
+        window.scrollTo(0, 0);
         return;
       }
-      setSaving(false);
-      load(activeLocationId);
+      // Redirect flash legacy (cabins.php 510).
+      redirectFlash({ msg: "Impostazioni salvate" });
     } catch {
       setError("Errore nel salvataggio delle cabine.");
       setSaving(false);
@@ -276,6 +316,10 @@ export function CabinsContent({ slug: slugProp }: { slug?: string } = {}) {
   return (
     <div className="container-fluid">
       <link rel="stylesheet" href="/assets/css/pages/cabins.css" />
+
+      {flash.msg ? <div className="alert alert-success">{flash.msg}</div> : null}
+      {flash.err ? <div className="alert alert-danger">{flash.err}</div> : null}
+      {error ? <div className="alert alert-danger">{error}</div> : null}
 
       <div className="bs-page-header">
         <div className="bs-page-heading">
@@ -291,8 +335,6 @@ export function CabinsContent({ slug: slugProp }: { slug?: string } = {}) {
         <div className="col-lg-7">
           <div className="card p-4">
             <div className="h5 fw-bold mb-3">Cabine - {selectedLocationName}</div>
-
-            {error ? <div className="alert alert-danger">{error}</div> : null}
 
             <form method="post" className="row g-3" id="cabinsForm" onSubmit={onSubmit}>
               <input type="hidden" name="location_id" value={activeLocationId || ""} />
@@ -341,16 +383,15 @@ export function CabinsContent({ slug: slugProp }: { slug?: string } = {}) {
                           />
                           <input type="hidden" name="cabin_ids[]" value={String(row.id)} />
                           {row.id > 0 ? (
-                            <a
+                            <button
+                              type="button"
                               className="btn btn-outline-danger"
-                              href={deleteHref(row.id)}
-                              data-cabin-delete="1"
-                              data-cabin-name={row.name || "Cabina"}
                               title="Elimina cabina"
-                              onClick={(e) => confirmDelete(row, e)}
+                              disabled={saving}
+                              onClick={() => void confirmDelete(row)}
                             >
                               <i className="bi bi-trash" />
-                            </a>
+                            </button>
                           ) : (
                             <button
                               type="button"
@@ -434,13 +475,31 @@ export function CabinsContent({ slug: slugProp }: { slug?: string } = {}) {
                   <div className="text-muted small">Sono presenti servizi associati.</div>
                 ) : (
                   <div className="accordion" id="cabinDeleteBlockServiceAccordion">
-                    <ul className="list-group list-group-flush">
-                      {blockModal.services.map((service, i) => (
-                        <li className="list-group-item" key={`${service.serviceId}-${i}`}>
-                          {serviceLabel(service)}
-                        </li>
-                      ))}
-                    </ul>
+                    <div className="accordion-item border rounded-3 overflow-hidden mb-2">
+                      <h3 className="accordion-header">
+                        <button
+                          className={`accordion-button ${blockListOpen ? "" : "collapsed"} bg-white shadow-none py-2`}
+                          type="button"
+                          onClick={() => setBlockListOpen((v) => !v)}
+                        >
+                          <span className="d-flex align-items-center justify-content-between gap-2 w-100 pe-2">
+                            <span className="fw-semibold">Servizi collegati</span>
+                            <span className="badge rounded-pill text-bg-info">{blockModal.services.length}</span>
+                          </span>
+                        </button>
+                      </h3>
+                      <div className={`accordion-collapse collapse ${blockListOpen ? "show" : ""}`}>
+                        <div className="accordion-body py-2">
+                          <div className="list-group list-group-flush">
+                            {blockModal.services.map((service, i) => (
+                              <div className="list-group-item px-0" key={`${service.service_id}-${i}`}>
+                                {serviceLabel(service)}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>

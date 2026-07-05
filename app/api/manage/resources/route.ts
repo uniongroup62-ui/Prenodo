@@ -136,10 +136,17 @@ export async function POST(request: Request) {
       return Response.json(result, { status: result.ok ? 200 : 400 });
     }
 
+    // Eliminazione singola cabina (cabins.php action=delete): flash 'Cabina
+    // eliminata' / err + popup di blocco legacy.
     if (action === "cabin_delete") {
       if (!can(activeUser.perms, "cabins.manage")) return jsonError("Permesso Cabine richiesto.", 403);
-      await deleteCabin(tenantSlug, parseInteger(body.id, 0));
-      return Response.json({ ok: true });
+      try {
+        await deleteCabin(tenantSlug, parseInteger(body.id, 0), parseInteger(body.location_id ?? body.locationId, 0));
+        return Response.json({ ok: true, msg: "Cabina eliminata" });
+      } catch (error) {
+        const popup = error instanceof Error ? (error as Error & { popup?: unknown }).popup : undefined;
+        return Response.json({ ok: false, error: error instanceof Error ? error.message : "Errore cabine.", ...(popup ? { popup } : {}) }, { status: 400 });
+      }
     }
 
     if (action === "staff_save") {
