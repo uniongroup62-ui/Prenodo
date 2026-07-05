@@ -26,25 +26,45 @@ function tenantSlug(): string {
   return window.location.pathname.split("/")[1] || "";
 }
 
-export function ServiceRecommendationsContent({ slug: slugProp }: { slug?: string } = {}) {
+type RecommendationsQuery = { msg?: string; err?: string; action?: string; id?: string; service_id?: string; p?: string };
+
+export function ServiceRecommendationsContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: RecommendationsQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
 
   const [services, setServices] = useState<Service[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filterServiceId, setFilterServiceId] = useState<string>("");
+  // Flash legacy + filtro/pagina dal querystring; ?action=edit&id apre la modale.
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const page = Math.max(1, Number.parseInt(initialQuery?.p ?? "1", 10) || 1);
+  const [filterServiceId, setFilterServiceId] = useState<string>(() => {
+    const raw = Number.parseInt(initialQuery?.service_id ?? "0", 10) || 0;
+    return raw > 0 ? String(raw) : "";
+  });
+  const autoOpenId = initialQuery?.action === "edit" ? Math.max(0, Number.parseInt(initialQuery?.id ?? "0", 10) || 0) : 0;
   const [openModalId, setOpenModalId] = useState<number | null>(null);
+  // Selezione ordinata nella modale aperta (data-rec-order-list del legacy).
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [saving, setSaving] = useState(false);
 
   const load = useCallback(() => {
-    setLoading(true);
     fetch(`/api/manage/services?slug=${encodeURIComponent(slug)}&tab=recommended`, {
       headers: { "x-tenant-slug": slug },
     })
       .then((r) => r.json())
-      .then((j: ServicesContext) => setServices(Array.isArray(j.services) ? j.services : []))
+      .then((j: ServicesContext) => {
+        const list = Array.isArray(j.services) ? j.services : [];
+        setServices(list);
+        if (autoOpenId > 0) {
+          const found = list.find((s) => s.id === autoOpenId);
+          if (found) openManage(found);
+          else setFlash((prev) => ({ ...prev, err: prev.err || "Servizio non trovato" }));
+        }
+      })
       .catch(() => setServices([]))
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
 
   useEffect(() => {
@@ -53,6 +73,52 @@ export function ServiceRecommendationsContent({ slug: slugProp }: { slug?: strin
 
   function tabHref(tab: string): string {
     return `/${encodeURIComponent(slug)}/services?tab=${tab}`;
+  }
+
+  function openManage(service: Service) {
+    setSelectedIds((service.recommendationIds ?? []).map(Number).filter((n) => n > 0));
+    setOpenModalId(service.id);
+  }
+
+  function toggleSelected(id: number, checked: boolean) {
+    setSelectedIds((prev) => {
+      if (checked) return prev.includes(id) ? prev : [...prev, id];
+      return prev.filter((x) => x !== id);
+    });
+  }
+
+  function moveSelected(id: number, direction: -1 | 1) {
+    setSelectedIds((prev) => {
+      const index = prev.indexOf(id);
+      const target = index + direction;
+      if (index < 0 || target < 0 || target >= prev.length) return prev;
+      const next = prev.slice();
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }
+
+  // Salvataggio legacy (services.php 3095-3130): DELETE+reinsert con sort_order
+  // progressivo, poi redirect '&msg=Servizi consigliati aggiornati' conservando
+  // filtro e pagina.
+  async function saveRecommendations(serviceId: number) {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/manage/services?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-tenant-slug": slug },
+        body: JSON.stringify({ action: "recommendations_save", service_id: String(serviceId), recommended_ids: selectedIds.join(",") }),
+      });
+      const j = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      const usp = new URLSearchParams({ tab: "recommended" });
+      if (filterServiceId) usp.set("service_id", filterServiceId);
+      if (page > 1) usp.set("p", String(page));
+      if (res.ok && j.ok !== false) usp.set("msg", String(j.msg ?? "Servizi consigliati aggiornati"));
+      else usp.set("err", String(j.error ?? "Seleziona un servizio valido"));
+      window.location.assign(`/${encodeURIComponent(slug)}/services?${usp.toString()}`);
+    } finally {
+      setSaving(false);
+    }
   }
 
   // Top-of-page service combobox filter data (the PHP page emits these as JSON
@@ -68,10 +134,26 @@ export function ServiceRecommendationsContent({ slug: slugProp }: { slug?: strin
     [services],
   );
 
-  const rows = useMemo(() => {
+  // Filtro + paginazione legacy 20/pagina (services.php 3212-3243).
+  const filtered = useMemo(() => {
     if (!filterServiceId) return services;
     return services.filter((s) => String(s.id) === filterServiceId);
   }, [services, filterServiceId]);
+  const perPage = 20;
+  const filteredTotal = filtered.length;
+  const pages = Math.max(1, Math.ceil(filteredTotal / perPage));
+  const currentPage = Math.min(page, pages);
+  const offset = (currentPage - 1) * perPage;
+  const rows = useMemo(() => filtered.slice(offset, offset + perPage), [filtered, offset]);
+  const pageFrom = filteredTotal > 0 ? offset + 1 : 0;
+  const pageTo = filteredTotal > 0 ? Math.min(filteredTotal, offset + rows.length) : 0;
+  function pageUrl(target: number): string {
+    const usp = new URLSearchParams({ tab: "recommended" });
+    if (filterServiceId) usp.set("service_id", filterServiceId);
+    if (target > 1) usp.set("p", String(target));
+    return `/${encodeURIComponent(slug)}/services?${usp.toString()}`;
+  }
+  const servicesById = useMemo(() => new Map(services.map((s) => [s.id, s])), [services]);
 
   return (
     <div className="container-fluid">
@@ -103,14 +185,19 @@ export function ServiceRecommendationsContent({ slug: slugProp }: { slug?: strin
 
       <link rel="stylesheet" href="/assets/css/pages/services.css" />
 
+      {flash.msg ? <div className="alert alert-success">{flash.msg}</div> : null}
+      {flash.err ? <div className="alert alert-danger">{flash.err}</div> : null}
+
       <div className="card p-3 mb-3">
         <form
           className="row g-2 align-items-end"
-          method="get"
-          onSubmit={(e) => e.preventDefault()}
+          onSubmit={(e) => {
+            e.preventDefault();
+            const usp = new URLSearchParams({ tab: "recommended" });
+            if (filterServiceId) usp.set("service_id", filterServiceId);
+            window.location.assign(`/${encodeURIComponent(slug)}/services?${usp.toString()}`);
+          }}
         >
-          <input type="hidden" name="page" value="services" />
-          <input type="hidden" name="tab" value="recommended" />
           <div className="col-lg-3 col-md-5">
             <label className="form-label">Cerca servizio</label>
             <div className="app-combobox dropdown" data-rec-page-service-combobox>
@@ -192,23 +279,28 @@ export function ServiceRecommendationsContent({ slug: slugProp }: { slug?: strin
                             <span className="badge text-bg-light">{recoCount}</span>
                             {recoCount === 0 ? (
                               <span className="text-muted small">Nessun consigliato</span>
-                            ) : null}
+                            ) : (
+                              <>
+                                {(service.recommendationIds ?? []).slice(0, 3).map((rid) => (
+                                  <span className="badge text-bg-secondary" key={rid}>{servicesById.get(rid)?.name ?? `#${rid}`}</span>
+                                ))}
+                                {recoCount > 3 ? <span className="badge text-bg-secondary">+{recoCount - 3}</span> : null}
+                              </>
+                            )}
                           </div>
                         </td>
                         <td>
                           {isActive ? (
                             <span className="badge text-bg-success">Attivo</span>
                           ) : (
-                            <span className="badge text-bg-secondary">Inattivo</span>
+                            <span className="badge text-bg-secondary">Non attivo</span>
                           )}
                         </td>
                         <td className="text-end">
                           <button
                             className="btn btn-sm btn-outline-secondary"
                             type="button"
-                            data-bs-toggle="modal"
-                            data-bs-target={`#recommendedModal${service.id}`}
-                            onClick={() => setOpenModalId(service.id)}
+                            onClick={() => openManage(service)}
                           >
                             Gestisci
                           </button>
@@ -223,24 +315,38 @@ export function ServiceRecommendationsContent({ slug: slugProp }: { slug?: strin
         </div>
       </div>
 
-      {rows.map((service) => {
+      {pages > 1 ? (
+        <div className="card card-soft mt-3 mb-3">
+          <div className="card-body py-2 d-flex flex-wrap align-items-center justify-content-between gap-2">
+            <div className="text-muted small">
+              Mostro {pageFrom}-{pageTo} di {filteredTotal} servizi
+              <span className="ms-2">Pagina {currentPage} di {pages}</span>
+            </div>
+            <div className="d-flex gap-2">
+              <a className={`btn btn-sm btn-outline-secondary ${currentPage <= 1 ? "disabled" : ""}`} href={pageUrl(Math.max(1, currentPage - 1))}>Precedente</a>
+              <a className={`btn btn-sm btn-outline-secondary ${currentPage >= pages ? "disabled" : ""}`} href={pageUrl(Math.min(pages, currentPage + 1))}>Successiva</a>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {services.filter((service) => openModalId === service.id).map((service) => {
         const candidates = services.filter((s) => s.id !== service.id);
         return (
           <div
             key={service.id}
-            className={`modal fade${openModalId === service.id ? " show d-block" : ""}`}
+            className="modal fade show d-block"
             id={`recommendedModal${service.id}`}
             tabIndex={-1}
-            aria-hidden={openModalId === service.id ? undefined : true}
-            style={openModalId === service.id ? { background: "rgba(0,0,0,.5)" } : undefined}
-            data-rec-modal
-            data-rec-initial-order=""
+            style={{ background: "rgba(0,0,0,.5)" }}
           >
             <div className="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
               <div className="modal-content">
                 <form
-                  method="post"
-                  action={`/${encodeURIComponent(slug)}/services?tab=recommended&action=edit&id=${service.id}`}
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void saveRecommendations(service.id);
+                  }}
                 >
                   <div className="modal-header">
                     <div>
@@ -250,17 +356,11 @@ export function ServiceRecommendationsContent({ slug: slugProp }: { slug?: strin
                     <button
                       type="button"
                       className="btn-close"
-                      data-bs-dismiss="modal"
                       aria-label="Chiudi"
                       onClick={() => setOpenModalId(null)}
                     />
                   </div>
                   <div className="modal-body">
-                    <input type="hidden" name="_csrf" value="" />
-                    <input type="hidden" name="service_id" value={service.id} />
-                    <input type="hidden" name="filter_service_id" value="" />
-                    <input type="hidden" name="p" value="1" />
-                    <div data-rec-hidden-inputs />
 
                     <div className="recommended-filter-grid mb-3">
                       <div>
@@ -301,17 +401,16 @@ export function ServiceRecommendationsContent({ slug: slugProp }: { slug?: strin
                               <input
                                 className="form-check-input"
                                 type="checkbox"
-                                name="recommended_ids[]"
-                                value={c.id}
                                 id={`rec-${service.id}-${c.id}`}
-                                defaultChecked={(service.recommendationIds ?? []).includes(c.id)}
-                                data-rec-picker
+                                checked={selectedIds.includes(c.id)}
+                                onChange={(e) => toggleSelected(c.id, e.target.checked)}
                               />
                               <label className="form-check-label" htmlFor={`rec-${service.id}-${c.id}`}>
                                 {c.name}
                                 {c.categoryName ? (
                                   <span className="text-muted small ms-2">{c.categoryName}</span>
                                 ) : null}
+                                {(c.isActive ?? c.active ?? true) ? null : <span className="badge text-bg-secondary ms-2">Non attivo</span>}
                               </label>
                             </div>
                           ))
@@ -321,18 +420,33 @@ export function ServiceRecommendationsContent({ slug: slugProp }: { slug?: strin
                       <div className="recommended-picker-panel recommended-order-panel">
                         <div className="recommended-order-head">
                           <div className="fw-semibold">Ordine consigliati</div>
-                          <span className="badge text-bg-light" data-rec-count>
-                            {Number(service.recoCount ?? service.recommendationIds?.length ?? 0)} selezionati
+                          <span className="badge text-bg-light">
+                            {selectedIds.length} {selectedIds.length === 1 ? "selezionato" : "selezionati"}
                           </span>
                         </div>
                         <div className="text-muted small mb-2">
                           I servizi selezionati verranno mostrati in questo ordine.
                         </div>
                         <div className="recommended-order-scroll">
-                          <div className="recommended-order-list" data-rec-order-list />
-                          <div className="recommended-order-empty text-muted" data-rec-order-empty>
-                            Nessun servizio selezionato.
-                          </div>
+                          {selectedIds.length === 0 ? (
+                            <div className="recommended-order-empty text-muted">Nessun servizio selezionato.</div>
+                          ) : (
+                            <div className="recommended-order-list">
+                              {selectedIds.map((rid) => (
+                                <div className="d-flex align-items-center justify-content-between gap-2 border rounded-3 px-2 py-1 mb-1" key={rid}>
+                                  <div className="small">{servicesById.get(rid)?.name ?? `#${rid}`}</div>
+                                  <div className="btn-group btn-group-sm" role="group">
+                                    <button type="button" className="btn btn-outline-secondary" title="Sposta su" onClick={() => moveSelected(rid, -1)}>
+                                      <i className="bi bi-chevron-up" />
+                                    </button>
+                                    <button type="button" className="btn btn-outline-secondary" title="Sposta giù" onClick={() => moveSelected(rid, 1)}>
+                                      <i className="bi bi-chevron-down" />
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -341,12 +455,11 @@ export function ServiceRecommendationsContent({ slug: slugProp }: { slug?: strin
                     <button
                       type="button"
                       className="btn btn-outline-secondary btn-pill"
-                      data-bs-dismiss="modal"
                       onClick={() => setOpenModalId(null)}
                     >
                       Annulla
                     </button>
-                    <button className="btn btn-primary btn-pill" type="submit">
+                    <button className="btn btn-primary btn-pill" type="submit" disabled={saving}>
                       <i className="bi bi-check2-circle me-1" />
                       Salva
                     </button>

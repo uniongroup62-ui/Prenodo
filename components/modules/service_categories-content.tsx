@@ -33,6 +33,7 @@ type Service = {
   id: number;
   name: string;
   categoryId?: number;
+  sortOrder?: number;
   isActive?: boolean;
   active?: boolean;
 };
@@ -42,14 +43,16 @@ type ServicesContext = {
   services?: Service[];
 };
 
-type CategoryResult = { ok: boolean; error?: string; categories?: Category[]; services?: Service[] };
+type CategoryResult = { ok: boolean; error?: string; msg?: string; popup?: CategoryBlockPopup; categories?: Category[]; services?: Service[] };
+type CategoriesQuery = { msg?: string; err?: string; action?: string; id?: string; category_id?: string; p?: string };
+type CategoryBlockPopup = { category_name: string; services: Array<{ id: number; name: string; active: boolean }> };
 
 function tenantSlug(): string {
   if (typeof window === "undefined") return "";
   return window.location.pathname.split("/")[1] || "";
 }
 
-export function ServiceCategoriesContent({ slug: slugProp }: { slug?: string } = {}) {
+export function ServiceCategoriesContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: CategoriesQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
@@ -57,9 +60,21 @@ export function ServiceCategoriesContent({ slug: slugProp }: { slug?: string } =
   const [categories, setCategories] = useState<Category[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filterCategoryId, setFilterCategoryId] = useState<string>("");
-  const [editModalId, setEditModalId] = useState<number | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
+  // Flash legacy dal redirect (?msg / ?err) + vista/pagina/filtro dal querystring.
+  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const orderCategoryId = initialQuery?.action === "order" ? Math.max(0, Number.parseInt(initialQuery?.id ?? "0", 10) || 0) : 0;
+  const page = Math.max(1, Number.parseInt(initialQuery?.p ?? "1", 10) || 1);
+  const [filterCategoryId, setFilterCategoryId] = useState<string>(() => {
+    const raw = Number.parseInt(initialQuery?.category_id ?? "0", 10) || 0;
+    return raw > 0 ? String(raw) : "";
+  });
+  const [blockPopup, setBlockPopup] = useState<CategoryBlockPopup | null>(null);
+  const [blockOpenList, setBlockOpenList] = useState(false);
+  // Ordine servizi nella categoria (action=order): base dal server, override
+  // locale quando l'utente sposta le righe.
+  const [orderOverride, setOrderOverride] = useState<number[] | null>(null);
+  const [editModalId, setEditModalId] = useState<number | null>(() => (initialQuery?.action === "edit" ? Math.max(0, Number.parseInt(initialQuery?.id ?? "0", 10) || 0) || null : null));
+  const [createOpen, setCreateOpen] = useState(initialQuery?.action === "new");
   const [createName, setCreateName] = useState("");
   const [editName, setEditName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -71,7 +86,6 @@ export function ServiceCategoriesContent({ slug: slugProp }: { slug?: string } =
   const [editRemoveImage, setEditRemoveImage] = useState(false);
 
   const load = useCallback(() => {
-    setLoading(true);
     fetch(`/api/manage/services?slug=${encodeURIComponent(slug)}&tab=categories`, {
       headers: { "x-tenant-slug": slug },
     })
@@ -91,8 +105,30 @@ export function ServiceCategoriesContent({ slug: slugProp }: { slug?: string } =
     load();
   }, [load]);
 
+  // Ordine base per la vista "Ordina servizi" (services.php 3789-3795:
+  // sort_order ASC, name ASC), sostituito dall'override quando l'utente sposta.
+  const orderIds = useMemo(() => {
+    if (orderOverride) return orderOverride;
+    if (!orderCategoryId) return [];
+    return services
+      .filter((s) => Number(s.categoryId) === orderCategoryId)
+      .sort((a, b) => (Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0)) || a.name.localeCompare(b.name))
+      .map((s) => s.id);
+  }, [orderOverride, services, orderCategoryId]);
+
   function tabHref(tab: string): string {
     return `/${encodeURIComponent(slug)}/services?tab=${tab}`;
+  }
+
+  // Redirect flash legacy (?tab=categories&msg=/err= conservando filtro/pagina).
+  function redirectFlash(params: Record<string, string | number>, keepReturn = false) {
+    const usp = new URLSearchParams({ tab: "categories" });
+    if (keepReturn) {
+      if (filterCategoryId) usp.set("category_id", filterCategoryId);
+      if (page > 1) usp.set("p", String(page));
+    }
+    for (const [k, v] of Object.entries(params)) if (String(v) !== "") usp.set(k, String(v));
+    window.location.assign(`/${encodeURIComponent(slug)}/services?${usp.toString()}`);
   }
 
   // POST a category action to the services API; on success refresh the list with
@@ -147,18 +183,18 @@ export function ServiceCategoriesContent({ slug: slugProp }: { slug?: string } =
   async function onCreateSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError("");
+    // Messaggio legacy senza punto (services.php 3641, mostrato NEL modal).
     if (createName.trim() === "") {
-      setError("Nome categoria obbligatorio.");
+      setError("Nome categoria obbligatorio");
       return;
     }
     setSaving(true);
     const j = await postCategory({ action: "category_save", id: "0", name: createName });
     if (!j.ok) {
       setSaving(false);
-      setError(String(j.error ?? "Errore nel salvataggio della categoria."));
+      setError(String(j.error ?? "Nome categoria obbligatorio"));
       return;
     }
-    applyResult(j);
     // Immagine: la categoria è APPENA creata — risolvo l'id dalla lista
     // restituita (match per nome, id più alto: l'ultima inserita).
     if (createImageFile) {
@@ -167,72 +203,92 @@ export function ServiceCategoriesContent({ slug: slugProp }: { slug?: string } =
         .reduce((max, c) => Math.max(max, c.id), 0);
       const imageError = createdId > 0 ? await uploadCategoryImage(createdId, createImageFile, false) : "categoria creata ma non identificata.";
       if (imageError) {
-        setSaving(false);
-        setError(`Categoria salvata, ma l'immagine non è stata caricata: ${imageError}`);
-        setCreateOpen(false);
-        setCreateName("");
-        setCreateImageFile(null);
-        load();
+        redirectFlash({ err: `Categoria salvata, ma l'immagine non è stata caricata: ${imageError}` });
         return;
       }
-      load(); // ricarica per far arrivare l'imageUrl nella tabella
     }
-    setSaving(false);
-    setCreateOpen(false);
-    setCreateName("");
-    setCreateImageFile(null);
+    // Redirect flash legacy (services.php 3659).
+    redirectFlash({ msg: "Categoria creata" });
   }
 
   async function onEditSubmit(event: React.FormEvent, categoryId: number) {
     event.preventDefault();
     setError("");
     if (editName.trim() === "") {
-      setError("Nome categoria obbligatorio.");
+      setError("Nome categoria obbligatorio");
       return;
     }
     setSaving(true);
     const j = await postCategory({ action: "category_save", id: String(categoryId), name: editName });
     if (!j.ok) {
       setSaving(false);
-      setError(String(j.error ?? "Errore nel salvataggio della categoria."));
+      setError(String(j.error ?? "Nome categoria obbligatorio"));
       return;
     }
-    applyResult(j);
     const imageError = await uploadCategoryImage(categoryId, editImageFile, !editImageFile && editRemoveImage);
-    setSaving(false);
     if (imageError) {
-      setError(`Categoria salvata, ma l'immagine non è stata aggiornata: ${imageError}`);
+      redirectFlash({ err: `Categoria salvata, ma l'immagine non è stata aggiornata: ${imageError}` });
+      return;
     }
-    if (editImageFile || editRemoveImage) load();
-    setEditModalId(null);
-    setEditImageFile(null);
-    setEditRemoveImage(false);
+    // Redirect flash legacy (services.php 3665).
+    redirectFlash({ msg: "Categoria aggiornata" });
   }
 
+  // Spostamento con flash legacy che conserva filtro e pagina (3509-3524).
   async function onMove(categoryId: number, direction: "up" | "down") {
     if (busyMove) return;
     setBusyMove(true);
     const j = await postCategory({ action: "category_move", id: String(categoryId), direction });
     setBusyMove(false);
-    if (j.ok) applyResult(j);
+    if (j.ok) redirectFlash({ msg: "Ordine categorie aggiornato" }, true);
+    else redirectFlash({ err: String(j.error ?? "Impossibile spostare la categoria") }, true);
   }
 
+  // Delete legacy (services.js serviceCategoryConfirmDelete + services.php
+  // 3544-3589): con servizi collegati -> popup 'Categoria non eliminabile';
+  // senza -> confirm verbatim e flash dal server.
   async function onDelete(category: Category) {
     const linked = servicesForCategory(category.id);
     if (linked.length > 0) {
-      // Faithful to services.js: a category with linked services is not
-      // deletable; surface the same guidance instead of attempting the delete.
-      setError(`Categoria "${category.name}" non eliminabile: sono associati ${linked.length} servizi. Sposta o modifica prima i servizi collegati.`);
+      setBlockPopup({
+        category_name: category.name,
+        services: linked.map((s) => ({ id: s.id, name: s.name, active: Boolean(s.isActive ?? s.active ?? true) })),
+      });
+      setBlockOpenList(false);
       return;
     }
-    if (typeof window !== "undefined" && !window.confirm(`Eliminare la categoria "${category.name}"?`)) return;
+    if (typeof window !== "undefined" && !window.confirm("Eliminare definitivamente questa categoria? Verra eliminata solo se non ha servizi associati.")) return;
     setError("");
     const j = await postCategory({ action: "category_delete", id: String(category.id) });
     if (!j.ok) {
-      setError(String(j.error ?? "Errore nell'eliminazione della categoria."));
+      if (j.popup) {
+        setBlockPopup(j.popup);
+        setBlockOpenList(false);
+      }
+      setError(String(j.error ?? "Categoria non eliminabile"));
+      window.scrollTo(0, 0);
       return;
     }
-    applyResult(j);
+    redirectFlash({ msg: "Categoria eliminata" });
+  }
+
+  // Salva ordine servizi della categoria (action=order, services.php 3527-3541).
+  async function onSaveServiceOrder() {
+    if (!orderCategoryId) return;
+    const j = await postCategory({ action: "save_service_order", category_id: String(orderCategoryId), service_order: orderIds.join(",") });
+    const usp = new URLSearchParams({ tab: "categories", action: "order", id: String(orderCategoryId) });
+    usp.set("msg", String((j as CategoryResult & { msg?: string }).msg ?? (j.ok ? "Ordine servizi aggiornato" : "Nessun servizio da ordinare")));
+    window.location.assign(`/${encodeURIComponent(slug)}/services?${usp.toString()}`);
+  }
+
+  function moveOrderId(id: number, direction: -1 | 1) {
+    const prev = orderIds;
+    const index = prev.indexOf(id);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= prev.length) return;
+    const next = prev.slice();
+    [next[index], next[target]] = [next[target], next[index]];
+    setOrderOverride(next);
   }
 
   // Filter combobox data (the PHP page emits these as JSON for the client-side combobox).
@@ -253,14 +309,123 @@ export function ServiceCategoriesContent({ slug: slugProp }: { slug?: string } =
     return found ? found.name : "";
   }, [categories, filterCategoryId]);
 
-  const rows = useMemo(() => {
+  // Filtro + paginazione legacy 20/pagina (services.php 3711-3732).
+  const filteredCats = useMemo(() => {
     if (!filterCategoryId) return categories;
     return categories.filter((c) => String(c.id) === filterCategoryId);
   }, [categories, filterCategoryId]);
+  const perPage = 20;
+  const filteredTotal = filteredCats.length;
+  const pages = Math.max(1, Math.ceil(filteredTotal / perPage));
+  const currentPage = Math.min(page, pages);
+  const offset = (currentPage - 1) * perPage;
+  const rows = useMemo(() => filteredCats.slice(offset, offset + perPage), [filteredCats, offset]);
+  const pageFrom = filteredTotal > 0 ? offset + 1 : 0;
+  const pageTo = filteredTotal > 0 ? Math.min(filteredTotal, offset + rows.length) : 0;
+  function pageUrl(target: number): string {
+    const usp = new URLSearchParams({ tab: "categories" });
+    if (filterCategoryId) usp.set("category_id", filterCategoryId);
+    if (target > 1) usp.set("p", String(target));
+    return `/${encodeURIComponent(slug)}/services?${usp.toString()}`;
+  }
 
   // Services per category drive the delete-block payload (data-category-services).
   function servicesForCategory(categoryId: number): Service[] {
     return services.filter((s) => Number(s.categoryId) === Number(categoryId));
+  }
+
+  // VISTA "Ordina servizi" (services.php action=order, 3775-3856): pagina
+  // dedicata con frecce su/giù e 'Salva ordine'.
+  if (orderCategoryId > 0) {
+    const category = categories.find((c) => c.id === orderCategoryId);
+    const byId = new Map(services.map((s) => [s.id, s]));
+    const orderRows = orderIds.map((id) => byId.get(id)).filter((s): s is Service => Boolean(s));
+    if (!loading && !category) {
+      redirectFlash({ err: "Categoria non trovata" });
+      return null;
+    }
+    return (
+      <div className="container-fluid">
+        <link rel="stylesheet" href="/assets/css/pages/services.css" />
+        <div className="bs-page-header">
+          <div className="bs-page-heading">
+            <div className="bs-page-kicker">Risorse</div>
+            <h1 className="bs-page-title">Ordina servizi</h1>
+            <div className="bs-page-subtitle">Gestisci l&apos;ordine dei servizi in questa categoria.</div>
+          </div>
+          <div className="bs-page-actions">
+            <a className="btn btn-outline-secondary" href={tabHref("categories")}>
+              <i className="bi bi-arrow-left" /> Indietro
+            </a>
+          </div>
+        </div>
+
+        {flash.msg ? (
+          <div className={`alert alert-${flash.msg === "Ordine servizi aggiornato" ? "success" : "danger"}`}>{flash.msg}</div>
+        ) : null}
+        {flash.err ? <div className="alert alert-danger">{flash.err}</div> : null}
+
+        <div className="card card-soft mt-3">
+          <div className="card-body">
+            <div className="d-flex align-items-center justify-content-between">
+              <div>
+                <h3 className="h6 mb-1">Ordine servizi in questa categoria</h3>
+                <div className="text-muted small">Sposta i servizi su/giù: l&apos;ordine verrà usato ovunque (gestionale e booking).</div>
+              </div>
+            </div>
+
+            {orderRows.length === 0 ? (
+              <div className="text-muted mt-3">{loading ? "Caricamento…" : "Nessun servizio associato a questa categoria."}</div>
+            ) : (
+              <div className="mt-3">
+                <div className="table-responsive">
+                  <table className="table align-middle mb-0" id="svcOrderTable">
+                    <thead>
+                      <tr>
+                        <th className="services-order-col">Ordine</th>
+                        <th>Servizio</th>
+                        <th className="services-status-col">Stato</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {orderRows.map((s) => (
+                        <tr key={s.id} data-id={s.id}>
+                          <td>
+                            <div className="btn-group btn-group-sm" role="group">
+                              <button type="button" className="btn btn-outline-secondary svc-up" title="Sposta su" onClick={() => moveOrderId(s.id, -1)}>
+                                <i className="bi bi-chevron-up" />
+                              </button>
+                              <button type="button" className="btn btn-outline-secondary svc-down" title="Sposta giù" onClick={() => moveOrderId(s.id, 1)}>
+                                <i className="bi bi-chevron-down" />
+                              </button>
+                            </div>
+                          </td>
+                          <td>{s.name}</td>
+                          <td>
+                            {(s.isActive ?? s.active ?? true) ? (
+                              <span className="badge text-bg-success">Attivo</span>
+                            ) : (
+                              <span className="badge text-bg-secondary">Disattivo</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="mt-3 d-flex justify-content-end">
+                  <button className="btn btn-primary btn-pill" type="button" onClick={() => void onSaveServiceOrder()}>
+                    <i className="bi bi-check2-circle me-1" />
+                    Salva ordine
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -307,10 +472,20 @@ export function ServiceCategoriesContent({ slug: slugProp }: { slug?: string } =
 
       <link rel="stylesheet" href="/assets/css/pages/services.css" />
 
+      {flash.msg ? <div className="alert alert-success">{flash.msg}</div> : null}
+      {flash.err ? <div className="alert alert-danger">{flash.err}</div> : null}
       {error ? <div className="alert alert-danger">{error}</div> : null}
 
       <div className="card p-3 mb-3">
-        <form className="row g-2 align-items-end" method="get" onSubmit={(e) => e.preventDefault()}>
+        <form
+          className="row g-2 align-items-end"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const usp = new URLSearchParams({ tab: "categories" });
+            if (filterCategoryId) usp.set("category_id", filterCategoryId);
+            window.location.assign(`/${encodeURIComponent(slug)}/services?${usp.toString()}`);
+          }}
+        >
           <input type="hidden" name="page" value="services" />
           <input type="hidden" name="tab" value="categories" />
           <div className="col-lg-3 col-md-5">
@@ -379,8 +554,10 @@ export function ServiceCategoriesContent({ slug: slugProp }: { slug?: string } =
               <tbody>
                 {rows.length === 0 ? (
                   <tr>
-                    <td colSpan={3} className="text-muted small p-3">
-                      {loading ? "Caricamento…" : "Nessuna categoria."}
+                    <td colSpan={3} className="text-muted p-3">
+                      {loading ? "Caricamento…" : filterCategoryId ? "Nessuna categoria trovata." : (
+                        <>Nessuna categoria configurata. Usa <strong>Nuova categoria</strong> per organizzare i servizi.</>
+                      )}
                     </td>
                   </tr>
                 ) : (
@@ -433,6 +610,12 @@ export function ServiceCategoriesContent({ slug: slugProp }: { slug?: string } =
                           >
                             Modifica
                           </button>{" "}
+                          <a
+                            className="btn btn-sm btn-outline-secondary"
+                            href={`/${encodeURIComponent(slug)}/services?tab=categories&action=order&id=${category.id}`}
+                          >
+                            Ordina servizi
+                          </a>{" "}
                           <button
                             className="btn btn-sm btn-outline-danger"
                             type="button"
@@ -450,6 +633,80 @@ export function ServiceCategoriesContent({ slug: slugProp }: { slug?: string } =
           </div>
         </div>
       </div>
+
+      {pages > 1 ? (
+        <div className="card card-soft mt-3 mb-3">
+          <div className="card-body py-2 d-flex flex-wrap align-items-center justify-content-between gap-2">
+            <div className="text-muted small">
+              Mostro {pageFrom}-{pageTo} di {filteredTotal} categorie
+              <span className="ms-2">Pagina {currentPage} di {pages}</span>
+            </div>
+            <div className="d-flex gap-2">
+              <a className={`btn btn-sm btn-outline-secondary ${currentPage <= 1 ? "disabled" : ""}`} href={pageUrl(Math.max(1, currentPage - 1))}>Precedente</a>
+              <a className={`btn btn-sm btn-outline-secondary ${currentPage >= pages ? "disabled" : ""}`} href={pageUrl(Math.min(pages, currentPage + 1))}>Successiva</a>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* MODALE 'Categoria non eliminabile' (#categoryDeleteBlockModal). */}
+      {blockPopup ? (
+        <>
+          <div className="modal fade show d-block" id="categoryDeleteBlockModal" tabIndex={-1}>
+            <div className="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+              <div className="modal-content">
+                <div className="modal-header">
+                  <div>
+                    <h5 className="modal-title mb-1">Categoria non eliminabile</h5>
+                    <div className="text-muted small" id="categoryDeleteBlockSubtitle">Categoria: {blockPopup.category_name}</div>
+                  </div>
+                  <button type="button" className="btn-close" aria-label="Chiudi" onClick={() => setBlockPopup(null)} />
+                </div>
+                <div className="modal-body">
+                  <div className="alert alert-warning">
+                    Non è possibile eliminare la categoria perché sono associati dei servizi.
+                    Sposta o modifica prima i servizi collegati, poi riprova.
+                  </div>
+                  <div id="categoryDeleteBlockList">
+                    <div className="accordion">
+                      <div className="accordion-item border rounded-3 overflow-hidden mb-2">
+                        <h3 className="accordion-header">
+                          <button
+                            className={`accordion-button ${blockOpenList ? "" : "collapsed"} bg-white shadow-none py-2`}
+                            type="button"
+                            onClick={() => setBlockOpenList((v) => !v)}
+                          >
+                            <span className="d-flex align-items-center justify-content-between gap-2 w-100 pe-2">
+                              <span className="fw-semibold">Servizi collegati</span>
+                              <span className="badge rounded-pill text-bg-info">{blockPopup.services.length}</span>
+                            </span>
+                          </button>
+                        </h3>
+                        <div className={`accordion-collapse collapse ${blockOpenList ? "show" : ""}`}>
+                          <div className="accordion-body py-2">
+                            <div className="list-group list-group-flush">
+                              {blockPopup.services.map((svc) => (
+                                <div className="list-group-item px-0 d-flex align-items-center justify-content-between gap-2" key={svc.id}>
+                                  <div className="fw-semibold">{svc.name}</div>
+                                  <span className={`badge ${svc.active ? "text-bg-success" : "text-bg-secondary"}`}>{svc.active ? "Attivo" : "Disattivo"}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button type="button" className="btn btn-outline-secondary btn-pill" onClick={() => setBlockPopup(null)}>Chiudi</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="modal-backdrop fade show" />
+        </>
+      ) : null}
 
       {/* Edit modals (one per category, pre-filled with current name). */}
       {categories.map((category) => {

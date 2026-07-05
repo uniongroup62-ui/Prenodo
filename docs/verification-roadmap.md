@@ -5212,3 +5212,61 @@ riduzione con popup in sessione IDENTICO campo per campo/invariata/aumento/
 delete bloccata e pulita/id inesistente: redirect e payload identici) +
 regressioni condivise endpoint (cabins 14, hours 4, staff-availability 16,
 staff-for-service 6) + 36/36 marker bundle + typecheck/lint puliti.
+
+## Servizi — AUDIT FUNZIONALE COMPLETO (services.php, 3 tab) — 2026-07-06
+Primo audit funzionale della pagina piu grande del legacy (5653 righe +
+services.js 775; la parita grafica era gia stata verificata in B6, upload
+immagine categoria in un audit precedente). Letto tutto il legacy (parte via
+3 subagenti con estrazione verbatim). Il Next aveva un port PARZIALE: save
+senza i flussi di conferma, delete con messaggi inventati, modale consigliati
+MORTA (form senza handler), niente flash/paginazione, guardie divergenti.
+RISCRITTURA/PORT:
+1. NUOVO lib/manage-services-impacts.ts: pipeline legacy 1:1 —
+   svc_fetch_impacted_appointments (4 stati con sinonimi IT), name_update_
+   impacts (9 gruppi), delete_blockers (10 gruppi attivi/aperti),
+   deactivation_blockers (campagne con Validita), price_update_impacts,
+   APPLY nome (colonna+snapshot json su 7 famiglie di tabelle, walk json
+   ricorsivo su gifts.reward_items_json) e APPLY prezzo (package_items con
+   line_total, fallback packages.service_id, ricalcolo package_pricing,
+   promotion_services price-mode riallineato), FREEZE snapshot storici
+   (payload version 3, riempie solo campi vuoti, refresh json incompleti,
+   INSERT righe mancanti; sold: prepagati nome/prezzo bloccati, righe
+   pacchetto, giftbox items).
+2. SAVE orchestrato come services.php 4212-4583: validazioni VERBATIM in
+   ordine (cabina con accento, sede con accento, guardie cabina/staff per
+   sede SENZA accenti e risorse CON, byte-verificati), diff stato db/post e
+   CATENA DI CONFERME con confirm_* accumulati (blocco disattivazione ->
+   disattivazione con prenotazioni -> nome -> prezzo anche a 0 impatti ->
+   modifica non retroattiva con changedFields); freeze PRIMA dell update;
+   messaggi con suffissi conteggio nome/prezzo.
+3. DELETE legacy: Servizio non trovato / Servizio non eliminabile + popup
+   verbatim + freeze + cleanup mapping incluse raccomandazioni bidirezionali.
+4. ROUTE: pending/popup/msg + GET action=delete_blockers.
+5. COMPONENTI: form con i 5 pannelli di conferma verbatim e re-submit coi
+   flag + redirect flash; lista con flash, paginazione 20/pg, filtro
+   ?service_id, empty-state cabine, delete con popup accordion o confirm
+   verbatim; CATEGORIE con flash legacy, popup Categoria non eliminabile
+   (Servizi collegati + badge Attivo/Disattivo), confirm verbatim, vista
+   ORDINA SERVIZI (?action=order&id) prima ASSENTE, paginazione, auto-open
+   modali; CONSIGLIATI: la modale ora SALVA (dedup, no-self, sort_order ->
+   Servizi consigliati aggiornati), badge primi 3 + +N, Non attivo (era
+   Inattivo), pannello ordine funzionante, flash/filtri/paginazione,
+   auto-open con Servizio non trovato. page.tsx: routing tab con
+   initialQuery + fix del branch form che catturava anche
+   tab=categories&action=edit.
+DIVERGENZA DELIBERATA (bug legacy verificato sul LIVE): l apply del cambio
+nome legacy fallisce SILENZIOSAMENTE sugli UPDATE con JOIN (il rewriter
+multi-tenant di Db::q li rompe: ROW_COUNT 0 via PHP, 1 con lo stesso SQL
+raw) -> sul live la colonna service_name resta vecchia e il suffisso
+conteggi non appare mai, mentre gli update semplici per-riga (snapshot
+json) funzionano. Il Next applica l INTENTO del pannello di conferma
+(colonna + json + conteggio). Altri residui: compressione immagine
+categoria (gia documentata), filtro Tutte le sedi (mono-sede).
+Verifica: battery NUOVA e2e-services 40/40 (validazioni, create+links,
+catena conferme completa con snapshot congelato, disattivazione bloccata
+da promo attiva poi confermata, delete blockers+popup+404, categorie
+crea/aggiorna/404/default/popup/ordina/elimina, consigliati dedup+
+sort_order+guardia, ripristino) + LIVE PHP (create, guardie nell HTML,
+pannello conferma nome coi medesimi testi, redirect identici, popup delete
+di sessione IDENTICO campo per campo) + 60/60 marker su 4 viste +
+regressioni 45/45 + typecheck/lint puliti.

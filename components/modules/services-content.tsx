@@ -42,6 +42,10 @@ type ServicesData = {
   cabins?: Cabin[];
 };
 
+type ServicesQuery = { msg?: string; err?: string; p?: string; service_id?: string };
+type DeleteBlocker = { group: string; title: string; detail: string };
+type DeletePopup = { title: string; service_name: string; message: string; blockers: DeleteBlocker[] };
+
 function tenantSlug(): string {
   if (typeof window === "undefined") return "";
   return window.location.pathname.split("/")[1] || "";
@@ -60,16 +64,26 @@ type Group = {
   items: Service[];
 };
 
-export function ServicesContent({ slug: slugProp }: { slug?: string } = {}) {
+export function ServicesContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: ServicesQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
   const [data, setData] = useState<ServicesData>({});
   const [loading, setLoading] = useState(true);
-  const [filterId, setFilterId] = useState("");
+  // Filtro e pagina dal querystring come nel form GET legacy.
+  const [filterId, setFilterId] = useState(() => {
+    const raw = Number.parseInt(initialQuery?.service_id ?? "0", 10) || 0;
+    return raw > 0 ? String(raw) : "";
+  });
+  const page = Math.max(1, Number.parseInt(initialQuery?.p ?? "1", 10) || 1);
+  // Flash legacy dal redirect (?msg / ?err) + errori delle azioni in pagina.
+  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [deletePopup, setDeletePopup] = useState<DeletePopup | null>(null);
+  const [popupOpenGroups, setPopupOpenGroups] = useState<Record<string, boolean>>({});
 
   const load = useCallback(() => {
-    setLoading(true);
     fetch(`/api/manage/services?slug=${encodeURIComponent(slug)}`, {
       headers: { "x-tenant-slug": slug },
     })
@@ -128,11 +142,27 @@ export function ServicesContent({ slug: slugProp }: { slug?: string } = {}) {
     [cabinName],
   );
 
-  // Apply the single-service filter (combobox) on the client.
+  // Filtro singolo servizio + PAGINAZIONE legacy (20/pagina sull'elenco piatto
+  // ordinato per categoria, services.php 4628-4662).
   const filtered = useMemo(() => {
     if (!filterId) return services;
     return services.filter((s) => String(s.id) === filterId);
   }, [services, filterId]);
+
+  const perPage = 20;
+  const filteredTotal = filtered.length;
+  const pages = Math.max(1, Math.ceil(filteredTotal / perPage));
+  const currentPage = Math.min(page, pages);
+  const offset = (currentPage - 1) * perPage;
+  const visible = useMemo(() => filtered.slice(offset, offset + perPage), [filtered, offset]);
+  const pageFrom = filteredTotal > 0 ? offset + 1 : 0;
+  const pageTo = filteredTotal > 0 ? Math.min(filteredTotal, offset + visible.length) : 0;
+
+  function pageUrl(target: number): string {
+    const usp = new URLSearchParams({ tab: "services", p: String(Math.max(1, target)) });
+    if (filterId) usp.set("service_id", filterId);
+    return `/${encodeURIComponent(slug)}/services?${usp.toString()}`;
+  }
 
   // Group services by category, preserving category order.
   const grouped = useMemo<Group[]>(() => {
@@ -141,13 +171,13 @@ export function ServicesContent({ slug: slugProp }: { slug?: string } = {}) {
     for (const cat of catOrder) {
       byCat.set(String(cat.id), { id: cat.id, label: cat.name, image: cat.imageUrl ?? "", items: [] });
     }
-    for (const svc of filtered) {
+    for (const svc of visible) {
       const key = svc.categoryId != null ? String(svc.categoryId) : "__none";
       let g = byCat.get(key);
       if (!g) {
         g = {
           id: svc.categoryId ?? null,
-          label: svc.categoryName ?? "Senza categoria",
+          label: svc.categoryName ?? "Non categorizzato",
           image: svc.categoryImageUrl ?? "",
           items: [],
         };
@@ -156,7 +186,54 @@ export function ServicesContent({ slug: slugProp }: { slug?: string } = {}) {
       g.items.push(svc);
     }
     return Array.from(byCat.values()).filter((g) => g.items.length > 0);
-  }, [filtered, categories]);
+  }, [visible, categories]);
+
+  function redirectFlash(params: Record<string, string>) {
+    const usp = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v !== "") usp.set(k, v);
+    window.location.assign(`/${encodeURIComponent(slug)}/services${usp.size > 0 ? `?${usp.toString()}` : ""}`);
+  }
+
+  // Delete legacy (services.js servicesConfirmDelete + services.php 4173-4200):
+  // con blocchi -> popup #serviceDeleteBlockModal; senza -> confirm verbatim.
+  async function removeService(svc: Service) {
+    setBusy(true);
+    try {
+      const check = await fetch(`/api/manage/services?slug=${encodeURIComponent(slug)}&action=delete_blockers&id=${svc.id}`, { headers: { "x-tenant-slug": slug } })
+        .then((r) => r.json())
+        .catch(() => ({ blockers: [] }));
+      const blockers: DeleteBlocker[] = Array.isArray(check.blockers) ? check.blockers : [];
+      if (blockers.length > 0) {
+        setDeletePopup({
+          title: "Impossibile eliminare il servizio",
+          service_name: svc.name ?? "Servizio",
+          message: "Il servizio non può essere eliminato perché è associato a elementi attivi o ancora da eseguire. Rimuovi o chiudi prima le associazioni elencate.",
+          blockers,
+        });
+        setPopupOpenGroups({});
+        return;
+      }
+      if (!window.confirm("Eliminare definitivamente questo servizio? Lo storico gia creato rimarra invariato.")) return;
+      const res = await fetch(`/api/manage/services?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-tenant-slug": slug },
+        body: JSON.stringify({ action: "delete", id: String(svc.id) }),
+      });
+      const j = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (res.ok && j.ok !== false) {
+        redirectFlash({ msg: String(j.msg ?? "Servizio eliminato") });
+        return;
+      }
+      setErr(String(j.error ?? "Servizio non eliminabile"));
+      if (j.popup) {
+        setDeletePopup(j.popup as DeletePopup);
+        setPopupOpenGroups({});
+      }
+      window.scrollTo(0, 0);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const filterItems: FilterItem[] = useMemo(
     () =>
@@ -209,35 +286,64 @@ export function ServicesContent({ slug: slugProp }: { slug?: string } = {}) {
 
       <link rel="stylesheet" href="/assets/css/pages/services.css" />
 
+      {flash.msg ? <div className="alert alert-success">{flash.msg}</div> : null}
+      {flash.err ? <div className="alert alert-danger">{flash.err}</div> : null}
+      {err ? <div className="alert alert-danger">{err}</div> : null}
+
       {initialEmpty ? (
         <div className="card card-soft services-empty-card">
           <div className="services-empty-state">
             <div className="services-empty-icon" aria-hidden="true">
               <i className="bi bi-stars" />
             </div>
-            <h2>Nessun servizio configurato</h2>
-            <p>
-              I servizi sono il catalogo principale usato da prenotazioni, pagamenti, pacchetti, GiftBox, promozioni e
-              commissioni.
-            </p>
-            <div className="d-flex flex-wrap gap-2 justify-content-center">
-              <a className="btn btn-primary btn-pill" href={listHref("&action=new")}>
-                <i className="bi bi-plus-lg me-1" />
-                Nuovo servizio
-              </a>
-              <a className="btn btn-outline-secondary btn-pill" href={listHref("&tab=categories")}>
-                <i className="bi bi-tags me-1" />
-                Categorie
-              </a>
-            </div>
+            {cabins.filter((c) => c.isActive !== false).length === 0 ? (
+              <>
+                <h2>Prima configura una cabina</h2>
+                <p>Per creare un servizio serve almeno una cabina attiva. Configura le cabine della sede e poi torna qui per costruire il catalogo servizi.</p>
+                <div className="d-flex flex-wrap gap-2 justify-content-center">
+                  <a className="btn btn-primary btn-pill" href={`/${encodeURIComponent(slug)}/cabins`}>
+                    <i className="bi bi-door-open me-1" />
+                    Configura cabine
+                  </a>
+                  <a className="btn btn-outline-secondary btn-pill" href={listHref("&tab=categories")}>
+                    <i className="bi bi-tags me-1" />
+                    Categorie
+                  </a>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2>Nessun servizio configurato</h2>
+                <p>
+                  I servizi sono il catalogo principale usato da prenotazioni, pagamenti, pacchetti, GiftBox, promozioni e
+                  commissioni.
+                </p>
+                <div className="d-flex flex-wrap gap-2 justify-content-center">
+                  <a className="btn btn-primary btn-pill" href={listHref("&action=new")}>
+                    <i className="bi bi-plus-lg me-1" />
+                    Nuovo servizio
+                  </a>
+                  <a className="btn btn-outline-secondary btn-pill" href={listHref("&tab=categories")}>
+                    <i className="bi bi-tags me-1" />
+                    Categorie
+                  </a>
+                </div>
+              </>
+            )}
           </div>
         </div>
       ) : (
         <>
           <div className="card p-3 mb-3">
-            <form className="row g-2 align-items-end" method="get">
-              <input type="hidden" name="page" value="services" />
-              <input type="hidden" name="tab" value="services" />
+            <form
+              className="row g-2 align-items-end"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const usp = new URLSearchParams({ tab: "services" });
+                if (filterId) usp.set("service_id", filterId);
+                window.location.assign(`/${encodeURIComponent(slug)}/services?${usp.toString()}`);
+              }}
+            >
               <div className="col-lg-3 col-md-5">
                 <label className="form-label">Cerca servizio</label>
                 <div className="app-combobox dropdown" data-service-list-service-filter-combobox>
@@ -288,11 +394,13 @@ export function ServicesContent({ slug: slugProp }: { slug?: string } = {}) {
 
           {noResults ? (
             <div className="card card-soft">
-              <div className="card-body text-muted">Nessun servizio trovato con i filtri selezionati.</div>
+              <div className="card-body text-muted">
+                {filterId ? "Nessun servizio trovato con i filtri selezionati." : "Nessun servizio abilitato per la sede selezionata."}
+              </div>
             </div>
           ) : grouped.length === 0 ? (
             <div className="card card-soft">
-              <div className="card-body text-muted">{loading ? "Caricamento…" : "Nessun servizio."}</div>
+              <div className="card-body text-muted">{loading ? "Caricamento…" : "Nessun servizio abilitato per la sede selezionata."}</div>
             </div>
           ) : (
             grouped.map((g) => (
@@ -346,15 +454,14 @@ export function ServicesContent({ slug: slugProp }: { slug?: string } = {}) {
                                 >
                                   Modifica
                                 </a>{" "}
-                                <a
+                                <button
                                   className="btn btn-sm btn-outline-danger"
-                                  href={listHref(`&action=delete&id=${x.id}`)}
-                                  data-service-name={x.name ?? "Servizio"}
-                                  data-service-delete-blockers="[]"
-                                  data-service-delete="1"
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() => void removeService(x)}
                                 >
                                   Elimina
-                                </a>
+                                </button>
                               </td>
                             </tr>
                           );
@@ -366,34 +473,102 @@ export function ServicesContent({ slug: slugProp }: { slug?: string } = {}) {
               </div>
             ))
           )}
+
+          {pages > 1 ? (
+            <div className="card card-soft mb-3">
+              <div className="card-body py-2 d-flex flex-wrap align-items-center justify-content-between gap-2">
+                <div className="text-muted small">
+                  Mostro {pageFrom}-{pageTo} di {filteredTotal} servizi
+                  <span className="ms-2">Pagina {currentPage} di {pages}</span>
+                </div>
+                <div className="d-flex gap-2">
+                  <a className={`btn btn-sm btn-outline-secondary ${currentPage <= 1 ? "disabled" : ""}`} href={pageUrl(Math.max(1, currentPage - 1))}>Precedente</a>
+                  <a className={`btn btn-sm btn-outline-secondary ${currentPage >= pages ? "disabled" : ""}`} href={pageUrl(Math.min(pages, currentPage + 1))}>Successiva</a>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </>
       )}
 
-      <div className="modal fade" id="serviceDeleteBlockModal" tabIndex={-1} aria-hidden="true">
-        <div className="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
-          <div className="modal-content">
-            <div className="modal-header">
-              <div>
-                <h5 className="modal-title mb-1">Servizio non eliminabile</h5>
-                <div className="text-muted small" id="serviceDeleteBlockSubtitle" />
+      {/* MODALE "Servizio non eliminabile" (#serviceDeleteBlockModal). */}
+      {deletePopup ? (
+        <>
+          <div className="modal fade show d-block" id="serviceDeleteBlockModal" tabIndex={-1}>
+            <div className="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+              <div className="modal-content">
+                <div className="modal-header">
+                  <div>
+                    <h5 className="modal-title mb-1">Servizio non eliminabile</h5>
+                    <div className="text-muted small" id="serviceDeleteBlockSubtitle">Servizio: {deletePopup.service_name}</div>
+                  </div>
+                  <button type="button" className="btn-close" aria-label="Chiudi" onClick={() => setDeletePopup(null)} />
+                </div>
+                <div className="modal-body">
+                  <div className="alert alert-warning">
+                    Non è possibile eliminare il servizio perché è ancora collegato agli elementi sotto indicati.
+                    Rimuovi o completa le associazioni operative prima di riprovare.
+                  </div>
+                  <div id="serviceDeleteBlockList">
+                    {deletePopup.blockers.length === 0 ? (
+                      <div className="text-muted">Nessuna associazione rilevata.</div>
+                    ) : (
+                      <div className="accordion" id="serviceDeleteBlockAccordion">
+                        {groupBlockers(deletePopup.blockers).map(([group, rows]) => (
+                          <div className="accordion-item border rounded-3 overflow-hidden mb-2" key={group}>
+                            <h3 className="accordion-header">
+                              <button
+                                className={`accordion-button ${popupOpenGroups[group] ? "" : "collapsed"} bg-white shadow-none py-2`}
+                                type="button"
+                                onClick={() => setPopupOpenGroups((prev) => ({ ...prev, [group]: !prev[group] }))}
+                              >
+                                <span className="d-flex align-items-center justify-content-between gap-2 w-100 pe-2">
+                                  <span className="fw-semibold">{group}</span>
+                                  <span className="badge rounded-pill text-bg-info">{rows.length}</span>
+                                </span>
+                              </button>
+                            </h3>
+                            <div className={`accordion-collapse collapse ${popupOpenGroups[group] ? "show" : ""}`}>
+                              <div className="accordion-body py-2">
+                                <div className="list-group list-group-flush">
+                                  {rows.map((row, index) => (
+                                    <div className="list-group-item px-0" key={index}>
+                                      <div className="fw-semibold">{row.title || "Elemento collegato"}</div>
+                                      {row.detail ? <div className="small text-muted">{row.detail}</div> : null}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button type="button" className="btn btn-outline-secondary btn-pill" onClick={() => setDeletePopup(null)}>
+                    Chiudi
+                  </button>
+                </div>
               </div>
-              <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Chiudi" />
-            </div>
-            <div className="modal-body">
-              <div className="alert alert-warning">
-                Non è possibile eliminare il servizio perché è ancora collegato agli elementi sotto indicati. Rimuovi o
-                completa le associazioni operative prima di riprovare.
-              </div>
-              <div id="serviceDeleteBlockList" />
-            </div>
-            <div className="modal-footer">
-              <button type="button" className="btn btn-outline-secondary btn-pill" data-bs-dismiss="modal">
-                Chiudi
-              </button>
             </div>
           </div>
-        </div>
-      </div>
+          <div className="modal-backdrop fade show" />
+        </>
+      ) : null}
     </div>
   );
+}
+
+// groupItems di services.js: raggruppa i blocchi per 'group' (default 'Associazioni').
+function groupBlockers(items: DeleteBlocker[]): Array<[string, DeleteBlocker[]]> {
+  const groups = new Map<string, DeleteBlocker[]>();
+  for (const item of items) {
+    const key = String(item.group ?? "").trim() || "Associazioni";
+    const list = groups.get(key) ?? [];
+    list.push(item);
+    groups.set(key, list);
+  }
+  return [...groups.entries()];
 }

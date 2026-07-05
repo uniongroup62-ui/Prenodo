@@ -18,6 +18,56 @@ import { useEffect, useMemo, useState } from "react";
 // / _impacted_appointments) are server-side popups not yet ported here — see TODO.
 
 type Category = { id: number; name: string };
+
+// Pannelli di conferma legacy (pendingService*Review di services.php 4393-4439).
+type PendingImpact = { group: string; title: string; detail: string };
+type PendingAppointment = {
+  id: number;
+  publicCode: string;
+  startsAt: string;
+  status: string;
+  clientName: string;
+  serviceName: string;
+  statusMeta: { class: string; label: string };
+};
+type PendingReview = {
+  kind: "deactivation_block" | "deactivation_appointments" | "name_update" | "price_update" | "impacted_appointments";
+  serviceId: number;
+  serviceName: string;
+  serviceNameBefore: string;
+  count: number;
+  blockers?: PendingImpact[];
+  impacts?: PendingImpact[];
+  appointments?: PendingAppointment[];
+  changedFields?: string[];
+  oldPrice?: number;
+  newPrice?: number;
+};
+
+// number_format(x, 2, ',', '.') come il legacy.
+function fmtPriceIt(value: number): string {
+  const [int, dec] = Math.abs(value).toFixed(2).split(".");
+  return `${value < 0 ? "-" : ""}${int.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${dec}`;
+}
+
+function pendingDmy(startsAt: string): { date: string; time: string; full: string } {
+  const s = String(startsAt ?? "").replace("T", " ");
+  if (!/^\d{4}-\d{2}-\d{2}/.test(s)) return { date: "—", time: "—", full: "Data non disponibile" };
+  const date = `${s.slice(8, 10)}/${s.slice(5, 7)}/${s.slice(0, 4)}`;
+  const time = s.length >= 16 ? s.slice(11, 16) : "00:00";
+  return { date, time, full: `${date} ${time}` };
+}
+
+function groupPendingImpacts(items: PendingImpact[], fallbackGroup = "Associazioni"): Array<[string, PendingImpact[]]> {
+  const groups = new Map<string, PendingImpact[]>();
+  for (const item of items) {
+    const key = String(item.group ?? "").trim() || fallbackGroup;
+    const list = groups.get(key) ?? [];
+    list.push(item);
+    groups.set(key, list);
+  }
+  return [...groups.entries()];
+}
 type LocationRow = { id: number; name: string; isActive?: boolean };
 type CabinRow = { id: number; name: string; isActive?: boolean; locationId?: number | null };
 type StaffRow = { id: number; fullName: string; isActive?: boolean; locationIds?: number[] };
@@ -85,6 +135,11 @@ export function ServiceFormContent({ slug: slugProp }: { slug?: string } = {}) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // Pannello di conferma legacy restituito dal save (pendingService*Review):
+  // il ri-POST accumula i confirm_* come gli hidden del form PHP (4855-4859).
+  const [pending, setPending] = useState<PendingReview | null>(null);
+  const [confirms, setConfirms] = useState<Record<string, string>>({});
+  const [pendingListOpen, setPendingListOpen] = useState<Record<string, boolean>>({});
 
   // Load the context (categories/locations/cabins/staff/resources), then prefill
   // on edit (action=get) or apply faithful new-service defaults.
@@ -237,6 +292,8 @@ export function ServiceFormContent({ slug: slugProp }: { slug?: string } = {}) {
         staff_ids: form.no_operator ? "" : form.staff_ids.join(","),
         resources_json: JSON.stringify(resourcesJson),
       };
+      // Conferme accumulate (hidden confirm_* del form legacy 4855-4859).
+      for (const [key, value] of Object.entries(confirms)) payload[key] = value;
       const res = await fetch(`/api/manage/services?slug=${encodeURIComponent(slug)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
@@ -246,14 +303,34 @@ export function ServiceFormContent({ slug: slugProp }: { slug?: string } = {}) {
       if (!res.ok || !j.ok) {
         setError(String(j.error ?? "Errore nel salvataggio del servizio."));
         setSaving(false);
+        window.scrollTo(0, 0);
         return;
       }
-      backToList();
+      if (j.pending) {
+        setPending(j.pending as PendingReview);
+        setPendingListOpen({});
+        setSaving(false);
+        return;
+      }
+      // Redirect flash legacy (services.php 4498/4579).
+      window.location.assign(`/${encodeURIComponent(slug)}/services?msg=${encodeURIComponent(String(j.msg ?? "Servizio aggiornato"))}`);
     } catch {
       setError("Errore nel salvataggio del servizio.");
       setSaving(false);
     }
   }
+
+  // Conferma dal pannello pending: ripete il submit col flag accumulato.
+  function confirmPending(field: string) {
+    setConfirms((prev) => ({ ...prev, [field]: "1" }));
+    setPending(null);
+  }
+  useEffect(() => {
+    if (!Object.keys(confirms).length || saving || pending) return;
+    const formEl = document.querySelector<HTMLFormElement>(".services-editor-form");
+    formEl?.requestSubmit();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [confirms]);
 
   const title = action === "new" ? "Nuovo servizio" : "Modifica servizio";
   const hasLocations = locations.length > 0;
@@ -656,6 +733,233 @@ export function ServiceFormContent({ slug: slugProp }: { slug?: string } = {}) {
           </div>
         )}
       </div>
+
+      {/* PANNELLI DI CONFERMA legacy (modali autoshow, services.php 5129-5434). */}
+      {pending ? (
+        <>
+          <div className="modal fade show d-block" tabIndex={-1}>
+            <div className={`modal-dialog ${pending.kind === "deactivation_block" ? "modal-lg" : "modal-xl"} modal-dialog-centered modal-dialog-scrollable`}>
+              <div className="modal-content">
+                <div className="modal-header">
+                  <div>
+                    <h5 className="modal-title mb-1">
+                      {pending.kind === "deactivation_block" ? "Impossibile disattivare il servizio"
+                        : pending.kind === "deactivation_appointments" ? "Conferma disattivazione servizio"
+                        : pending.kind === "name_update" ? "Conferma aggiornamento nome servizio"
+                        : pending.kind === "price_update" ? "Conferma aggiornamento prezzo servizio"
+                        : "Conferma modifica non retroattiva del servizio"}
+                    </h5>
+                    <div className="text-muted small">
+                      {pending.kind === "name_update" ? (
+                        <>Stai modificando il nome da <strong>{pending.serviceNameBefore}</strong> a <strong>{pending.serviceName}</strong>.</>
+                      ) : pending.kind === "price_update" ? (
+                        <>Stai modificando il prezzo di <strong>{pending.serviceNameBefore || pending.serviceName}</strong> da <strong>€ {fmtPriceIt(pending.oldPrice ?? 0)}</strong> a <strong>€ {fmtPriceIt(pending.newPrice ?? 0)}</strong>.</>
+                      ) : pending.kind === "impacted_appointments" ? (
+                        <>Stai modificando impostazioni operative del servizio <strong>{pending.serviceNameBefore || pending.serviceName}</strong>.</>
+                      ) : (
+                        <>Servizio: <strong>{pending.serviceNameBefore || pending.serviceName}</strong></>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="modal-body">
+                  {pending.kind === "deactivation_block" ? (
+                    <>
+                      <div className="alert alert-warning mb-3">
+                        Il servizio non può essere disattivato perché è presente in una o più <strong>Campagne Promozione attive</strong> o <strong>Campagne gift attive</strong>.
+                        Disattiva o modifica prima le campagne indicate, poi riprova.
+                      </div>
+                      <div className="small text-muted mb-3">Associazioni attive rilevate: <strong>{pending.count}</strong>.</div>
+                      {renderPendingGroups(groupPendingImpacts(pending.blockers ?? [], "Campagne attive"))}
+                    </>
+                  ) : pending.kind === "deactivation_appointments" ? (
+                    <>
+                      <div className="alert alert-warning mb-3">
+                        <div className="fw-semibold mb-1">Il servizio verrà disattivato solo per nuovi utilizzi.</div>
+                        <div className="small mb-0">
+                          Sono presenti prenotazioni in stato <strong>In sospeso</strong> o <strong>Prenotato</strong> collegate a questo servizio.
+                          Confermando, il servizio non sarà più selezionabile per nuove prenotazioni/vendite, ma le prenotazioni già collegate resteranno invariate.
+                        </div>
+                      </div>
+                      <div className="small text-muted mb-3">Prenotazioni aperte collegate rilevate: <strong>{pending.count}</strong>.</div>
+                      {renderPendingGroups([["Prenotazioni collegate", (pending.appointments ?? []).map((appt) => ({
+                        group: "Prenotazioni collegate",
+                        title: `Prenotazione ${appt.publicCode || `#${appt.id}`}`,
+                        detail: `Stato: ${appt.statusMeta?.label ?? "Prenotato"} • ${pendingDmy(appt.startsAt).full} • Cliente: ${appt.clientName.trim() || "Cliente non indicato"} • Servizio: ${appt.serviceName.trim() || pending.serviceNameBefore || pending.serviceName}`,
+                      }))]])}
+                    </>
+                  ) : pending.kind === "name_update" ? (
+                    <>
+                      <div className="alert alert-warning mb-3">
+                        <div className="fw-semibold mb-1">Il nome sarà aggiornato nei riferimenti operativi collegati sotto indicati.</div>
+                        <div className="small mb-0">
+                          Prenotazioni aperte, GiftBox, preventivi, pacchetti, catalogo pacchetti, servizi prepagati, omaggi e campagne collegate mostreranno il nuovo nome.
+                          Tutto il resto già creato, come storico vendite e movimenti non inclusi nell&apos;elenco, resterà invariato.
+                        </div>
+                      </div>
+                      <div className="small text-muted mb-3">Elementi rilevati: <strong>{pending.count}</strong>.</div>
+                      {renderPendingGroups(groupPendingImpacts(pending.impacts ?? []))}
+                    </>
+                  ) : pending.kind === "price_update" ? (
+                    <>
+                      <div className="alert alert-warning mb-3">
+                        <div className="fw-semibold mb-1">Il nuovo prezzo sarà aggiornato nei riferimenti operativi collegati sotto indicati.</div>
+                        <div className="small mb-0">
+                          Se collegati, verranno aggiornati il <strong>Catalogo pacchetti</strong> interessato, senza modificare i pacchetti cliente già esistenti, e le <strong>Campagne Promozioni</strong>.
+                          Tutto il resto già creato, come vendite concluse, prenotazioni e storico, resterà invariato.
+                        </div>
+                      </div>
+                      <div className="small text-muted mb-3">Elementi rilevati: <strong>{pending.count}</strong>.</div>
+                      {(pending.impacts ?? []).length > 0 ? renderPendingGroups(groupPendingImpacts(pending.impacts ?? [])) : (
+                        <div className="alert alert-info mb-0">
+                          Nessun Catalogo pacchetti o Campagna Promozioni collegata a questo servizio è stata rilevata.
+                          Confermando verrà aggiornato solo il prezzo anagrafico del servizio.
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <div className="alert alert-warning mb-3">
+                        <div className="fw-semibold mb-1">La modifica sarà valida solo per le nuove prenotazioni.</div>
+                        <div className="small mb-0">
+                          Le modifiche a <strong>Durata</strong>, <strong>Cabine</strong>, <strong>Operatori</strong> o <strong>Risorse necessarie</strong>
+                          {" "}non saranno retroattive: non avranno effetto sulle prenotazioni già presenti in stato
+                          {" "}<strong>In sospeso</strong>, <strong>Prenotato</strong>, <strong>Eseguito</strong> o <strong>Annullato</strong>.
+                        </div>
+                      </div>
+                      {(pending.changedFields ?? []).length > 0 ? (
+                        <div className="mb-3">
+                          <div className="small text-muted mb-1">Campi modificati</div>
+                          <div className="d-flex flex-wrap gap-2">
+                            {(pending.changedFields ?? []).map((field) => (
+                              <span className="badge text-bg-secondary" key={field}>{field}</span>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      {(pending.appointments ?? []).length > 0 ? (
+                        <>
+                          <div className="small text-muted mb-2">Prenotazioni aperte collegate rilevate: <strong>{pending.count}</strong>.</div>
+                          <div className="accordion">
+                            <div className="accordion-item border rounded-3 overflow-hidden mb-2">
+                              <h3 className="accordion-header">
+                                <button className={`accordion-button ${pendingListOpen.appts ? "" : "collapsed"} bg-white shadow-none py-2`} type="button" onClick={() => setPendingListOpen((prev) => ({ ...prev, appts: !prev.appts }))}>
+                                  <span className="d-flex align-items-center justify-content-between gap-2 w-100 pe-2">
+                                    <span className="fw-semibold">Prenotazioni collegate</span>
+                                    <span className="badge rounded-pill text-bg-info">{(pending.appointments ?? []).length}</span>
+                                  </span>
+                                </button>
+                              </h3>
+                              <div className={`accordion-collapse collapse ${pendingListOpen.appts ? "show" : ""}`}>
+                                <div className="accordion-body py-2">
+                                  <div className="table-responsive">
+                                    <table className="table table-sm align-middle mb-0">
+                                      <thead>
+                                        <tr>
+                                          <th>Data</th>
+                                          <th>Ora</th>
+                                          <th>Cliente</th>
+                                          <th>Codice prenotazione</th>
+                                          <th>Servizio</th>
+                                          <th>Stato</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {(pending.appointments ?? []).map((appt) => {
+                                          const when = pendingDmy(appt.startsAt);
+                                          return (
+                                            <tr key={appt.id}>
+                                              <td>{when.date}</td>
+                                              <td>{when.time}</td>
+                                              <td>{appt.clientName || "—"}</td>
+                                              <td><code>{appt.publicCode || `#${appt.id}`}</code></td>
+                                              <td>{appt.serviceName || pending.serviceNameBefore || pending.serviceName || "—"}</td>
+                                              <td><span className={`badge text-bg-${appt.statusMeta?.class ?? "secondary"}`}>{appt.statusMeta?.label ?? "—"}</span></td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="alert alert-info mb-0">
+                          Nessuna prenotazione in stato <strong>In sospeso</strong> o <strong>Prenotato</strong> collegata a questo servizio è stata rilevata.
+                          La modifica rimarrà comunque non retroattiva e sarà usata dalle nuove prenotazioni.
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+                <div className="modal-footer">
+                  {pending.kind === "deactivation_block" ? (
+                    <button className="btn btn-outline-secondary btn-pill" type="button" onClick={() => { setPending(null); set("is_active", true); }}>Chiudi</button>
+                  ) : (
+                    <>
+                      <button className="btn btn-outline-secondary btn-pill" type="button" onClick={() => setPending(null)}>Annulla</button>
+                      <button
+                        className="btn btn-primary btn-pill"
+                        type="button"
+                        onClick={() => confirmPending(
+                          pending.kind === "deactivation_appointments" ? "confirm_service_deactivation_appointments"
+                            : pending.kind === "name_update" ? "confirm_service_name_update"
+                            : pending.kind === "price_update" ? "confirm_service_price_update"
+                            : "confirm_impacted_appointments",
+                        )}
+                      >
+                        <i className="bi bi-check2 me-1" />
+                        {pending.kind === "deactivation_appointments" ? "Continua e disattiva" : pending.kind === "impacted_appointments" ? "Conferma" : "Continua e aggiorna"}
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="modal-backdrop fade show" />
+        </>
+      ) : null}
     </div>
   );
+
+  // svc_render_popup_accordion_groups: accordion per gruppo con badge count.
+  function renderPendingGroups(groups: Array<[string, PendingImpact[]]>) {
+    if (!groups.length) return <div className="text-muted">Nessuna associazione rilevata.</div>;
+    return (
+      <div className="accordion">
+        {groups.map(([group, rows]) => (
+          <div className="accordion-item border rounded-3 overflow-hidden mb-2" key={group}>
+            <h3 className="accordion-header">
+              <button className={`accordion-button ${pendingListOpen[group] ? "" : "collapsed"} bg-white shadow-none py-2`} type="button" onClick={() => setPendingListOpen((prev) => ({ ...prev, [group]: !prev[group] }))}>
+                <span className="d-flex align-items-center justify-content-between gap-2 w-100 pe-2">
+                  <span className="fw-semibold">{group}</span>
+                  <span className="badge rounded-pill text-bg-info">{rows.length}</span>
+                </span>
+              </button>
+            </h3>
+            <div className={`accordion-collapse collapse ${pendingListOpen[group] ? "show" : ""}`}>
+              <div className="accordion-body py-2">
+                {rows.length === 0 ? (
+                  <div className="text-muted small">Nessun dettaglio disponibile.</div>
+                ) : (
+                  <div className="list-group list-group-flush">
+                    {rows.map((row, index) => (
+                      <div className="list-group-item px-0" key={index}>
+                        <div className="fw-semibold">{row.title || "Elemento collegato"}</div>
+                        {row.detail ? <div className="small text-muted">{row.detail}</div> : null}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
 }

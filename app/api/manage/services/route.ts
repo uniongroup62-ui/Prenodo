@@ -13,6 +13,7 @@ import {
   saveServiceCategoryMarketplace,
   saveServiceOrder,
   saveServiceRecommendations,
+  serviceDeleteBlockersLegacy,
 } from "@/lib/manage-services";
 import { can, canAny } from "@/lib/role-permissions";
 
@@ -40,6 +41,16 @@ export async function GET(request: Request) {
       const service = await getManageService(tenantSlug, serviceId);
       if (!service) return jsonError("Servizio non trovato.", 404);
       return Response.json({ ok: true, source: "services?action=get", sourceMode: "database", service });
+    }
+
+    // Blocchi eliminazione per il popup della lista (svc_delete_blockers, il
+    // legacy li embedda nelle righe come data-service-delete-blockers).
+    if (url.searchParams.get("action") === "delete_blockers") {
+      if (!can(session.user.perms, "services.manage")) return jsonError("Permesso Servizi richiesto.", 403);
+      const serviceId = parseInteger(url.searchParams.get("id"), 0);
+      if (serviceId <= 0) return jsonError("ID servizio mancante.");
+      const blockers = await serviceDeleteBlockersLegacy(tenantSlug, serviceId);
+      return Response.json({ ok: true, sourceMode: "database", blockers });
     }
 
     const locationId = await resolveManageLocationId({
@@ -73,40 +84,68 @@ export async function POST(request: Request) {
       case "save":
       case "service_save":
       case "update":
-      case "edit":
+      case "edit": {
         if (!can(session.user.perms, "services.manage")) return jsonError("Permesso Servizi richiesto.", 403);
-        return Response.json(await saveManageService(tenantSlug, body));
+        // Il save legacy puo' rispondere con un pannello di CONFERMA (pending)
+        // invece di salvare; il form ripete il POST con i confirm_* accumulati.
+        const result = await saveManageService(tenantSlug, body);
+        if (result.pending) return Response.json({ ok: true, pending: result.pending });
+        return Response.json({ ...result.context, ok: true, msg: result.msg });
+      }
 
       case "delete":
-      case "service_delete":
+      case "service_delete": {
         if (!can(session.user.perms, "services.manage")) return jsonError("Permesso Servizi richiesto.", 403);
-        return Response.json(await deleteManageService(tenantSlug, parseInteger(body.id ?? body.service_id, 0)));
+        try {
+          const context = await deleteManageService(tenantSlug, parseInteger(body.id ?? body.service_id, 0));
+          return Response.json({ ...context, ok: true, msg: "Servizio eliminato" });
+        } catch (error) {
+          const popup = error instanceof Error ? (error as Error & { popup?: unknown }).popup : undefined;
+          return Response.json({ ok: false, error: error instanceof Error ? error.message : "Errore servizi.", ...(popup ? { popup } : {}) }, { status: 400 });
+        }
+      }
 
       case "category_save":
       case "service_category_save":
       case "category_new":
-      case "category_edit":
+      case "category_edit": {
         if (!can(session.user.perms, "service_categories.manage")) return jsonError("Permesso Categorie servizi richiesto.", 403);
-        return Response.json(await saveServiceCategory(tenantSlug, body));
+        const context = await saveServiceCategory(tenantSlug, body);
+        return Response.json({ ...context, ok: true, msg: parseInteger(body.id, 0) > 0 ? "Categoria aggiornata" : "Categoria creata" });
+      }
 
       case "category_delete":
-      case "service_category_delete":
+      case "service_category_delete": {
         if (!can(session.user.perms, "service_categories.manage")) return jsonError("Permesso Categorie servizi richiesto.", 403);
-        return Response.json(await deleteServiceCategory(tenantSlug, parseInteger(body.id ?? body.category_id, 0)));
+        try {
+          const context = await deleteServiceCategory(tenantSlug, parseInteger(body.id ?? body.category_id, 0));
+          return Response.json({ ...context, ok: true, msg: "Categoria eliminata" });
+        } catch (error) {
+          const popup = error instanceof Error ? (error as Error & { popup?: unknown }).popup : undefined;
+          return Response.json({ ok: false, error: error instanceof Error ? error.message : "Errore categorie.", ...(popup ? { popup } : {}) }, { status: 400 });
+        }
+      }
 
       case "category_move":
-      case "service_category_move":
+      case "service_category_move": {
         if (!can(session.user.perms, "service_categories.manage")) return jsonError("Permesso Categorie servizi richiesto.", 403);
-        return Response.json(await moveServiceCategory(
+        const context = await moveServiceCategory(
           tenantSlug,
           parseInteger(body.id ?? body.category_id, 0),
           body.direction === "down" ? "down" : "up",
-        ));
+        );
+        // services.php 3520-3523.
+        if (!context.moved) return Response.json({ ...context, ok: false, error: "Impossibile spostare la categoria" }, { status: 400 });
+        return Response.json({ ...context, ok: true, msg: "Ordine categorie aggiornato" });
+      }
 
       case "save_service_order":
-      case "service_order_save":
+      case "service_order_save": {
         if (!can(session.user.perms, "service_categories.manage")) return jsonError("Permesso Categorie servizi richiesto.", 403);
-        return Response.json(await saveServiceOrder(tenantSlug, body));
+        const context = await saveServiceOrder(tenantSlug, body);
+        // services.php 3538-3540: entrambi come msg (alert success solo per il primo).
+        return Response.json({ ...context, ok: true, msg: context.ordered ? "Ordine servizi aggiornato" : "Nessun servizio da ordinare" });
+      }
 
       case "category_marketplace_save":
       case "service_category_marketplace_save":
@@ -115,9 +154,11 @@ export async function POST(request: Request) {
 
       case "recommendations_save":
       case "service_recommendations_save":
-      case "recommended_save":
+      case "recommended_save": {
         if (!can(session.user.perms, "service_recommendations.manage")) return jsonError("Permesso Servizi consigliati richiesto.", 403);
-        return Response.json(await saveServiceRecommendations(tenantSlug, body));
+        const context = await saveServiceRecommendations(tenantSlug, body);
+        return Response.json({ ...context, ok: true, msg: "Servizi consigliati aggiornati" });
+      }
 
       default:
         return jsonError("Azione servizi non supportata.", 400);

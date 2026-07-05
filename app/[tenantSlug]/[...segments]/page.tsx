@@ -184,7 +184,7 @@ export default async function TenantPage({
   searchParams,
 }: {
   params: Promise<{ tenantSlug: string; segments?: string[] }>;
-  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string; staff_id?: string; source?: string; detail_staff_id?: string; from?: string; to?: string; q?: string; cat?: string; cat_q?: string; cat_status?: string; category_filter_id?: string; low_stock?: string; supplier?: string; category?: string; code?: string; brand?: string; internal_code?: string; product_id?: string; category_search?: string; edit_id?: string; sku?: string; document_number?: string; number?: string; date?: string; include_canceled?: string; p?: string; category_id?: string; scope?: string; msg?: string; err?: string; type?: string; all_locations?: string; package_name?: string; p_pending?: string; p_list?: string; warn_locked?: string; open_summary?: string; inst_client_id?: string; inst_gift_id?: string; inst_state?: string; inst_p?: string }>;
+  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string; staff_id?: string; source?: string; detail_staff_id?: string; from?: string; to?: string; q?: string; cat?: string; cat_q?: string; cat_status?: string; category_filter_id?: string; low_stock?: string; supplier?: string; category?: string; code?: string; brand?: string; internal_code?: string; product_id?: string; category_search?: string; edit_id?: string; sku?: string; document_number?: string; number?: string; date?: string; include_canceled?: string; p?: string; category_id?: string; scope?: string; msg?: string; err?: string; type?: string; all_locations?: string; package_name?: string; p_pending?: string; p_list?: string; warn_locked?: string; open_summary?: string; inst_client_id?: string; inst_gift_id?: string; inst_state?: string; inst_p?: string; service_id?: string }>;
 }) {
   const { tenantSlug, segments } = await params;
   const query = await searchParams;
@@ -272,10 +272,26 @@ export default async function TenantPage({
   // Faithful service NEW / EDIT form. The services list links to
   // index.php?page=services&action=new|edit; route those to the faithful editor
   // (instead of the Tailwind ManagementApp fallback).
-  if (page === "services" && (query.action === "new" || query.action === "edit")) {
+  if (page === "services" && (!query.tab || query.tab === "services") && (query.action === "new" || query.action === "edit")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
-        <ServiceFormContent />
+        <ServiceFormContent slug={tenantSlug} />
+      </ManageShell>
+    );
+  }
+
+  // Liste Servizi/Categorie/Consigliati (services.php): flash ?msg/?err dai
+  // redirect legacy + filtri/paginazione dal querystring.
+  if (page === "services") {
+    const servicesQuery = { msg: query.msg, err: query.err, action: query.action, id: query.id, p: query.p, service_id: query.service_id, category_id: query.category_id };
+    const inner = query.tab === "categories"
+      ? <ServiceCategoriesContent slug={tenantSlug} initialQuery={servicesQuery} />
+      : query.tab === "recommended"
+        ? <ServiceRecommendationsContent slug={tenantSlug} initialQuery={servicesQuery} />
+        : <ServicesContent slug={tenantSlug} initialQuery={servicesQuery} />;
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={query.tab === "categories" ? "service_categories" : query.tab === "recommended" ? "service_recommendations" : "services"}>
+        {inner}
       </ManageShell>
     );
   }
