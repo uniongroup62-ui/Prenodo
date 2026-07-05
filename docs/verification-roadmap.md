@@ -5149,3 +5149,66 @@ senza insert, edit fid-off active=1 -> 0/1 e active=0 -> 0/0 con redirect
 144/144 + 63/63 marker form + typecheck/lint puliti.
 NOTA: gift_instance (dettaglio) gia' coperto dal primo audit (21 test, verdi
 in regressione oggi); nessun nuovo diff aperto su quella pagina.
+
+## Risorse — SECONDA PASSATA: pagina riscritta (resources.php + resources.js) — 2026-07-06
+Audit su richiesta della pagina Risorse condivise. Letti integralmente
+resources.php (859 righe) e resources.js (177).
+DIVERGENZE TROVATE E CORRETTE:
+1. GUARDIA QTY NON FEDELE (lib): il Next bloccava QUALSIASI salvataggio con
+   qty sotto il richiesto dai servizi, anche invariata o in aumento; il legacy
+   verifica SOLO le riduzioni (newQty < oldQty), PER SEDE (servizi filtrati con
+   app_service_location_allowed via service_locations, peak prenotazioni per
+   sede con a.location_id). Riscritta ensureResourceQtyCanChange con la
+   semantica legacy (oldLocQty dalla riga sede, fallback alla qty globale per
+   righe mancanti; sede disattivata = riduzione a 0) + ramo globale senza
+   config sedi (messaggi CON accento 'Quantità...' vs per-sede senza, come nel
+   sorgente). resourceFuturePeakUsage ora accetta locationId.
+2. POPUP DI BLOCCO (#resourceBlockModal) ASSENTE: il Next usava window.alert;
+   ora gli errori di guardia portano il payload legacy {title, message,
+   services[{service_name, qty_required}]} (session flash del PHP), la route
+   lo propaga nel JSON e il componente rende il modal legacy (header
+   small-muted 'Risorse', alert-warning, accordion 'Servizi collegati' con
+   badge count e righe 'NOME — quantità risorsa nel servizio: N', footer
+   Chiudi btn-pill). Guardie client di resources.js portate: delete con
+   servizi collegati (messaggio client distinto da quello server) e riduzione
+   qty globale in edit sotto il richiesto (popup senza POST).
+3. QTY SEDI DISATTIVE CORROTTA: saveResourceLocations forzava qty>0 col
+   fallback (|| fallbackQty) anche quando la sede era spenta con qty 0; ora la
+   qty postata resta com'è (fallback solo a campo mancante).
+4. FORM SU PAGINA DEDICATA: il Next usava un form inline; ora ?action=new|edit
+   &id= come il legacy (titolo pagina 'Nuova/Modifica risorsa', header
+   'Indietro' btn-pill, card sinistra col-lg-7 con form-text verbatim
+   ('Esempio: "Lettino abbronzante"...', 'La quantità rappresenta il numero
+   massimo...', 'La disponibilità per sede viene usata in prenotazioni,
+   agenda e servizi...'), tabella Sedi abilitate (Attiva + Quantità sede
+   readonly da spenta), Salva/Annulla/Elimina (edit, ms-auto), info-box destro
+   'Come funziona la quantità' con i 3 esempi). Default creazione: SOLO la
+   sede corrente abilitata (prima: tutte).
+5. LISTA: colonna 'Quantità sede' col badge qty (prima 'Sedi / Quantità' con
+   join inventato e badge 'N servizi' inesistente), descrizione troncata a 80
+   (77+'…'), azioni icona matita/cestino, 'Nessuna risorsa abilitata per la
+   sede selezionata.'; empty-state deciso dal TOTALE pre-filtro sede
+   (resourcesTotal nel context, prima una risorsa disabilitata nella sede
+   faceva sparire la lista in favore dell'empty state).
+6. FLASH REDIRECT legacy: 'Risorsa creata/aggiornata/eliminata' e gli err via
+   ?msg/?err con alert View::alert; 'Risorsa non trovata' (senza punto) su
+   edit/delete di id inesistente; nome duplicato -> 'Errore salvataggio:
+   verifica nome duplicato o schema DB (schema aggiornato).' (il vincolo
+   UNIQUE(tenant_id,name) esisteva gia' in PG come nel MySQL).
+7. GET action=get&section=resources nuovo per il prefill edit per id (anche
+   fuori sede corrente), branch page.tsx con initialQuery.
+RESIDUI DELIBERATI: filtro 'Tutte le sedi' non renderizzato (nel legacy è
+di fatto MORTO: $resourceShowAllLocationsFilter usa $hasResourceLocationsTable
+PRIMA della definizione, riga 34 vs 44 -> sempre false); il banner 'tabella
+mancante' non portato (schema PG sempre presente); lock advisory
+shared_resources_acquire_resource_locks non portato (dbQuery singola, niente
+race multi-processo equivalente).
+Verifica: battery NUOVA e2e-resources 25/25 (create con nome collassato e
+qty=max sedi, guardie nome/sedi/duplicato, get 404, filtro sede vs totale,
+riduzione bloccata con popup verbatim, invariata ok, aumento libero, peak con
+2 prenotazioni sovrapposte + riduzione al picco esatto ok, delete con guardia
+popup e pulizia righe, ripristino) + LIVE PHP (create/guardie/duplicato/
+riduzione con popup in sessione IDENTICO campo per campo/invariata/aumento/
+delete bloccata e pulita/id inesistente: redirect e payload identici) +
+regressioni condivise endpoint (cabins 14, hours 4, staff-availability 16,
+staff-for-service 6) + 36/36 marker bundle + typecheck/lint puliti.

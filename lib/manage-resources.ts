@@ -13,6 +13,9 @@ export type ManageResourceContext = {
   locations: ResourceLocation[];
   services: ResourceService[];
   resources: SharedResource[];
+  // Totale risorse PRIMA del filtro sede (resources.php $resourcesTotal):
+  // decide l'empty-state anche quando la sede corrente non ne abilita nessuna.
+  resourcesTotal: number;
   cabins: ResourceCabin[];
   staff: ResourceStaff[];
   hours: BusinessHourRow[];
@@ -20,6 +23,20 @@ export type ManageResourceContext = {
   exceptions: CalendarExceptionRange[];
   availability: StaffAvailabilityEvent[];
 };
+
+// Payload del modal #resourceBlockModal legacy (resources.php
+// resources_flash_block_popup): titolo + messaggio + servizi collegati.
+export type ResourceBlockPopup = {
+  title: string;
+  message: string;
+  services: Array<{ service_name: string; qty_required: number }>;
+};
+
+function resourceBlockError(message: string, popup: ResourceBlockPopup): Error {
+  const err = new Error(message) as Error & { popup?: ResourceBlockPopup };
+  err.popup = popup;
+  return err;
+}
 
 export type ResourceLocation = {
   id: number;
@@ -141,9 +158,9 @@ export async function resourceContext({
   const locations = await listLocations(slug);
   const activeLocationId = normalizeActiveLocation(locationId, locations);
   const range = weekRange(normalizeDate(date) || todayIsoLocal());
-  const [services, resources, cabins, staff, hours, closures, exceptions, availability] = await Promise.all([
+  const [services, resourcesAll, cabins, staff, hours, closures, exceptions, availability] = await Promise.all([
     listServices(slug),
-    listResources(slug, activeLocationId, locations),
+    listResources(slug, 0, locations),
     listCabins(slug, activeLocationId, locations),
     listStaff(slug, activeLocationId, locations),
     listBusinessHours(slug, activeLocationId),
@@ -151,6 +168,9 @@ export async function resourceContext({
     listExceptionRanges(slug, activeLocationId),
     listStaffAvailability(slug, activeLocationId, range.start, range.end),
   ]);
+  // Filtro sede legacy (resources.php 557-576): via le risorse non abilitate
+  // nella sede corrente; il totale pre-filtro decide l'empty-state.
+  const resources = resourcesAll.filter((item) => !activeLocationId || item.locations.length === 0 || item.locations.some((loc) => loc.locationId === activeLocationId && loc.isEnabled));
 
   return {
     sourceMode: "database",
@@ -158,12 +178,31 @@ export async function resourceContext({
     locations,
     services,
     resources,
+    resourcesTotal: resourcesAll.length,
     cabins,
     staff,
     hours,
     closures,
     exceptions,
     availability,
+  };
+}
+
+// Prefill del form Modifica risorsa (resources.php action=edit): legge la riga
+// per id ANCHE se non abilitata nella sede corrente. Null se mancante.
+export async function getSharedResource(slug: string, id: number): Promise<SharedResource | null> {
+  if (!(id > 0)) return null;
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "resources", where: "id = ?", params: [id], limit: 1 }).catch(() => []);
+  if (!rows[0]) return null;
+  const locations = await listLocations(slug);
+  const [locationMap, serviceMap] = await Promise.all([resourceLocations(slug, [id], locations), resourceServiceLinks(slug, [id])]);
+  return {
+    id,
+    name: String(rows[0].name ?? ""),
+    description: String(rows[0].description ?? ""),
+    qtyTotal: Number(rows[0].qty_total ?? 0),
+    locations: locationMap.get(id) ?? [],
+    serviceLinks: serviceMap.get(id) ?? [],
   };
 }
 
@@ -184,23 +223,43 @@ export async function saveSharedResource(slug: string, body: Record<string, stri
 
   if (id > 0) {
     const existing = await tenantSelect<RowDataPacket>({ slug, table: "resources", columns: "id,qty_total", where: "id = ?", params: [id], limit: 1 });
-    if (!existing[0]) throw new Error("Risorsa non trovata.");
-    await ensureResourceQtyCanChange(slug, id, qtyTotal, locations);
-    await tenantUpdate({ slug, table: "resources", id, values: await filterColumns(table.name, { name, description: description || null, qty_total: qtyTotal }) });
-    await saveResourceLocations(slug, id, locations, qtyTotal);
+    // Messaggio legacy senza punto (resources.php 396).
+    if (!existing[0]) throw new Error("Risorsa non trovata");
+    await ensureResourceQtyCanChange(slug, id, qtyTotal, locations, Math.max(0, Number(existing[0].qty_total ?? 0)));
+    try {
+      await tenantUpdate({ slug, table: "resources", id, values: await filterColumns(table.name, { name, description: description || null, qty_total: qtyTotal }) });
+      await saveResourceLocations(slug, id, locations, qtyTotal);
+    } catch {
+      // Nome duplicato o schema non aggiornato (resources.php 486-489).
+      throw new Error("Errore salvataggio: verifica nome duplicato o schema DB (schema aggiornato).");
+    }
     return mustFindResource(slug, id);
   }
 
-  const newId = await tenantInsert(table, await filterColumns(table.name, { name, description: description || null, qty_total: qtyTotal }));
-  await saveResourceLocations(slug, newId, locations, qtyTotal);
-  return mustFindResource(slug, newId);
+  try {
+    const newId = await tenantInsert(table, await filterColumns(table.name, { name, description: description || null, qty_total: qtyTotal }));
+    await saveResourceLocations(slug, newId, locations, qtyTotal);
+    return mustFindResource(slug, newId);
+  } catch {
+    throw new Error("Errore salvataggio: verifica nome duplicato o schema DB (schema aggiornato).");
+  }
 }
 
 export async function deleteSharedResource(slug: string, id: number): Promise<void> {
   const resourceId = Math.max(0, Number(id) || 0);
   if (!resourceId) throw new Error("Risorsa non valida.");
-  const linked = await resourceServiceLinks(slug, [resourceId]);
-  if ((linked.get(resourceId) ?? []).length) throw new Error("Risorsa non eliminata: è associata a uno o più servizi.");
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "resources", columns: "id", where: "id = ?", params: [resourceId], limit: 1 }).catch(() => []);
+  // resources.php 352: id inesistente -> flash 'Risorsa non trovata'.
+  if (!rows[0]) throw new Error("Risorsa non trovata");
+  const linked = (await resourceServiceLinks(slug, [resourceId])).get(resourceId) ?? [];
+  if (linked.length) {
+    // resources.php 338-345: flash err + popup di blocco in sessione.
+    throw resourceBlockError("Risorsa non eliminata: è associata a uno o più servizi.", {
+      title: "Impossibile eliminare la risorsa",
+      message: "La risorsa non può essere eliminata perché è presente nei servizi elencati. Rimuovi prima la risorsa dai servizi collegati.",
+      services: linked.map((l) => ({ service_name: l.serviceName, qty_required: Math.max(1, Number(l.qtyRequired ?? 1) || 1) })),
+    });
+  }
   await deleteByOwner(slug, "resource_locations", "resource_id", resourceId);
   await deleteByOwner(slug, "service_resources", "resource_id", resourceId);
   await tenantDelete({ slug, table: "resources", id: resourceId });
@@ -1116,47 +1175,109 @@ async function saveResourceLocations(slug: string, resourceId: number, configs: 
     await tenantInsert(table, await filterColumns(table.name, {
       resource_id: resourceId,
       location_id: locationId,
-      qty_total: clampInt(config.qtyTotal, 0, 1_000_000) || fallbackQty,
+      // La qty postata resta com'è (anche 0, sede disattiva); il fallback alla
+      // qty globale vale solo quando il campo manca del tutto (legacy 190).
+      qty_total: config.qtyTotal === undefined || config.qtyTotal === null ? fallbackQty : clampInt(config.qtyTotal, 0, 1_000_000),
       is_enabled: truthy(config.isEnabled) ? 1 : 0,
     }));
   }
 }
 
-async function ensureResourceQtyCanChange(slug: string, resourceId: number, qtyTotal: number, configs: Array<Partial<SharedResourceLocation>>): Promise<void> {
-  const links = await resourceServiceLinks(slug, [resourceId]);
-  const maxRequired = Math.max(0, ...(links.get(resourceId) ?? []).map((link) => Number(link.qtyRequired ?? 1)));
-  if (qtyTotal < maxRequired) throw new Error("Quantità non aggiornata: risorsa ancora utilizzata nei servizi.");
-  for (const config of configs) {
-    if (!truthy(config.isEnabled)) continue;
-    const qty = clampInt(config.qtyTotal, 0, 1_000_000);
-    if (qty < maxRequired) throw new Error("Quantita non aggiornata: risorsa ancora utilizzata nei servizi della sede.");
+// Guardie riduzione quantità legacy (resources.php 406-469): SOLO le riduzioni
+// vengono verificate (newQty < oldQty), per sede quando c'è la config sedi.
+// Gli errori portano il payload del popup #resourceBlockModal (session flash).
+async function ensureResourceQtyCanChange(slug: string, resourceId: number, qtyTotal: number, configs: Array<Partial<SharedResourceLocation>>, oldQtyTotal: number): Promise<void> {
+  const allLinks = (await resourceServiceLinks(slug, [resourceId])).get(resourceId) ?? [];
+  const popupServices = (list: LinkedService[]) => list.map((l) => ({ service_name: l.serviceName, qty_required: Math.max(1, Number(l.qtyRequired ?? 1) || 1) }));
+  const oldQty = Math.max(0, oldQtyTotal);
+
+  if (configs.length) {
+    const oldRows = await resourceLocations(slug, [resourceId], await listLocations(slug));
+    const oldByLocation = new Map((oldRows.get(resourceId) ?? []).map((row) => [row.locationId, row]));
+    for (const config of configs) {
+      const locationId = Number(config.locationId ?? 0);
+      if (!locationId) continue;
+      const newLocQty = truthy(config.isEnabled) ? clampInt(config.qtyTotal, 0, 1_000_000) : 0;
+      const oldRow = oldByLocation.get(locationId);
+      const oldLocQty = oldRow ? (oldRow.isEnabled ? Math.max(0, oldRow.qtyTotal) : 0) : oldQty;
+      if (newLocQty >= oldLocQty) continue;
+
+      const locName = String(config.locationName ?? "").trim() || (await listLocations(slug)).find((l) => l.id === locationId)?.name || `Sede #${locationId}`;
+      const locLinks = await filterLinksByServiceLocation(slug, allLinks, locationId);
+      const blocking = locLinks.filter((l) => Math.max(1, Number(l.qtyRequired ?? 1) || 1) > newLocQty);
+      if (blocking.length) {
+        throw resourceBlockError("Quantita non aggiornata: risorsa ancora utilizzata nei servizi della sede.", {
+          title: "Quantita non modificabile",
+          message: `La nuova quantita per ${locName} non puo essere salvata perche una o piu unita sono ancora utilizzate nei servizi collegati a questa sede.`,
+          services: popupServices(blocking),
+        });
+      }
+
+      const peak = await resourceFuturePeakUsage(slug, resourceId, locationId);
+      if (peak > newLocQty) {
+        throw resourceBlockError("Quantita non aggiornata: prenotazioni esistenti oltre il nuovo limite.", {
+          title: "Quantita non modificabile",
+          message: `La nuova quantita per ${locName} non puo essere salvata perche le prenotazioni gia presenti usano fino a ${peak} unita contemporaneamente.`,
+          services: popupServices(locLinks),
+        });
+      }
+    }
+    return;
   }
-  // PEAK-GUARD legacy (resources_resource_peak_usage ~278-314): la riduzione è
-  // bloccata anche quando le prenotazioni FUTURE già presenti usano più unità
-  // contemporanee del nuovo limite.
-  const peak = await resourceFuturePeakUsage(slug, resourceId);
-  if (qtyTotal < peak) throw new Error("Quantita non aggiornata: prenotazioni esistenti oltre il nuovo limite.");
-  for (const config of configs) {
-    if (!truthy(config.isEnabled)) continue;
-    if (clampInt(config.qtyTotal, 0, 1_000_000) < peak) throw new Error("Quantita non aggiornata: prenotazioni esistenti oltre il nuovo limite.");
+
+  // Ramo senza config sedi (resources.php 445-469).
+  if (qtyTotal >= oldQty) return;
+  const blocking = allLinks.filter((l) => Math.max(1, Number(l.qtyRequired ?? 1) || 1) > qtyTotal);
+  if (blocking.length) {
+    throw resourceBlockError("Quantità non aggiornata: risorsa ancora utilizzata nei servizi.", {
+      title: "Quantità non modificabile",
+      message: "La nuova quantità non può essere salvata perché una o più unità sono ancora utilizzate nei servizi collegati. Scala la risorsa dal servizio e rendila disponibile prima di modificare la quantità.",
+      services: popupServices(blocking),
+    });
+  }
+  const peak = await resourceFuturePeakUsage(slug, resourceId, 0);
+  if (peak > qtyTotal) {
+    throw resourceBlockError("Quantita non aggiornata: prenotazioni esistenti oltre il nuovo limite.", {
+      title: "Quantita non modificabile",
+      message: `La nuova quantita non puo essere salvata perche le prenotazioni gia presenti usano fino a ${peak} unita contemporaneamente.`,
+      services: popupServices(allLinks),
+    });
   }
 }
 
+// app_service_location_allowed: nessuna riga in service_locations = servizio
+// valido ovunque; altrimenti valido solo nelle sedi elencate.
+async function filterLinksByServiceLocation(slug: string, links: LinkedService[], locationId: number): Promise<LinkedService[]> {
+  if (!(locationId > 0) || !links.length) return links;
+  const hasTable = await tenantTable(slug, "service_locations").then(() => true).catch(() => false);
+  if (!hasTable) return links;
+  const out: LinkedService[] = [];
+  for (const link of links) {
+    const anyRows = await tenantSelect<RowDataPacket>({ slug, table: "service_locations", columns: "location_id", where: "service_id = ?", params: [link.serviceId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    if (!anyRows[0]) { out.push(link); continue; }
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "service_locations", columns: "location_id", where: "service_id = ? AND location_id = ?", params: [link.serviceId, locationId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    if (rows[0]) out.push(link);
+  }
+  return out;
+}
+
 // Picco di unità concorrenti usate dalla risorsa negli appuntamenti futuri
-// pending/scheduled (righe servizio dei servizi che la richiedono).
-async function resourceFuturePeakUsage(slug: string, resourceId: number): Promise<number> {
+// pending/scheduled (righe servizio dei servizi che la richiedono); con
+// locationId > 0 conta solo la sede (resources_resource_peak_usage legacy).
+async function resourceFuturePeakUsage(slug: string, resourceId: number, locationId = 0): Promise<number> {
   try {
     const apptTable = await tenantTable(slug, "appointments");
     const asTable = await tenantTable(slug, "appointment_services");
     const srTable = await tenantTable(slug, "service_resources");
+    const locationClause = locationId > 0 && (await columnExists(apptTable.name, "location_id")) ? " AND a.location_id = ?" : "";
     const rows = await dbQuery<RowDataPacket[]>(
       `SELECT a.starts_at, a.ends_at, COALESCE(sr.qty_required, 1) AS units
          FROM ${quoteIdentifier(apptTable.name)} a
          JOIN ${quoteIdentifier(asTable.name)} sv ON sv.appointment_id = a.id AND sv.tenant_id = a.tenant_id
          JOIN ${quoteIdentifier(srTable.name)} sr ON sr.service_id = sv.service_id AND sr.tenant_id = a.tenant_id
         WHERE a.tenant_id = ? AND sr.resource_id = ? AND a.ends_at >= NOW()
-          AND LOWER(TRIM(COALESCE(a.status,''))) IN ('pending','scheduled')`,
-      [apptTable.tenantId ?? 0, resourceId],
+          AND LOWER(TRIM(COALESCE(a.status,''))) IN ('pending','scheduled')${locationClause}`,
+      locationClause ? [apptTable.tenantId ?? 0, resourceId, locationId] : [apptTable.tenantId ?? 0, resourceId],
     );
     const blocks = rows
       .map((r) => ({

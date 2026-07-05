@@ -591,6 +591,16 @@ export default async function TenantPage({
     );
   }
 
+  // Risorse condivise (resources.php): lista + form Nuova/Modifica su pagina
+  // dedicata (?action=new|edit&id=) + flash ?msg/?err dei redirect legacy.
+  if (page === "resources") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <ResourcesContent slug={tenantSlug} initialQuery={{ action: query.action, id: query.id, msg: query.msg, err: query.err }} />
+      </ManageShell>
+    );
+  }
+
   // Vista default "Omaggi assegnati" (gifts.php): filtri istanze e paginazione
   // dal querystring (form GET legacy) + flash ?msg/?err dei redirect.
   if (page === "gifts") {

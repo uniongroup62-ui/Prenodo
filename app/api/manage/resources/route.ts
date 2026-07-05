@@ -12,7 +12,9 @@ import {
   deleteStaffMember,
   getManageCabin,
   getManageStaffMember,
+  getSharedResource,
   resourceContext,
+  type ResourceBlockPopup,
   saveAvailabilityEvent,
   saveBusinessHours,
   saveCabin,
@@ -59,6 +61,14 @@ export async function GET(request: Request) {
         if (!cabin) return jsonError("Cabina non trovata.", 404);
         return Response.json({ ok: true, source: "resources?section=cabins&action=get", sourceMode: "database", cabin });
       }
+      // Prefill Modifica risorsa (resources.php action=edit): per id, anche se
+      // non abilitata nella sede corrente; mancante -> 'Risorsa non trovata'.
+      if (section === "resources") {
+        if (!can(activeUser.perms, "resources.manage")) return jsonError("Permesso Risorse richiesto.", 403);
+        const resource = await getSharedResource(tenantSlug, id);
+        if (!resource) return jsonError("Risorsa non trovata", 404);
+        return Response.json({ ok: true, source: "resources?section=resources&action=get", sourceMode: "database", resource });
+      }
       return jsonError("Sezione non supportata per il get.", 400);
     } catch (error) {
       return jsonError(error instanceof Error ? error.message : "Record non disponibile.", 400);
@@ -87,16 +97,28 @@ export async function POST(request: Request) {
   const action = String(body.action ?? url.searchParams.get("action") ?? "");
 
   try {
+    // Le guardie qty/delete legacy allegano il payload del popup di blocco
+    // (#resourceBlockModal via session flash): propagato nel JSON di errore.
     if (action === "resource_save") {
       if (!can(activeUser.perms, "resources.manage")) return jsonError("Permesso Risorse richiesto.", 403);
-      const resource = await saveSharedResource(tenantSlug, body);
-      return Response.json({ ok: true, resource });
+      try {
+        const resource = await saveSharedResource(tenantSlug, body);
+        return Response.json({ ok: true, resource });
+      } catch (error) {
+        const popup = error instanceof Error ? (error as Error & { popup?: ResourceBlockPopup }).popup : undefined;
+        return Response.json({ ok: false, error: error instanceof Error ? error.message : "Errore risorse.", ...(popup ? { popup } : {}) }, { status: 400 });
+      }
     }
 
     if (action === "resource_delete") {
       if (!can(activeUser.perms, "resources.manage")) return jsonError("Permesso Risorse richiesto.", 403);
-      await deleteSharedResource(tenantSlug, parseInteger(body.id, 0));
-      return Response.json({ ok: true });
+      try {
+        await deleteSharedResource(tenantSlug, parseInteger(body.id, 0));
+        return Response.json({ ok: true });
+      } catch (error) {
+        const popup = error instanceof Error ? (error as Error & { popup?: ResourceBlockPopup }).popup : undefined;
+        return Response.json({ ok: false, error: error instanceof Error ? error.message : "Errore risorse.", ...(popup ? { popup } : {}) }, { status: 400 });
+      }
     }
 
     if (action === "cabin_save") {
