@@ -712,6 +712,15 @@ export default async function TenantPage({
     );
   }
 
+  // Faithful Ricariche (recharges.php): flash ?msg/?err via redirect.
+  if (page === "recharges") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <RechargesContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
+      </ManageShell>
+    );
+  }
+
   // fidelity_levels.php: il GET legacy redirige SEMPRE a fidelity_points
   // portando con sé i flash ?msg/?err (l'editor Livelli Card vive lì).
   if (page === "fidelity_levels") {

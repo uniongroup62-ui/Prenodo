@@ -4847,3 +4847,54 @@ livelli azzerati, ripristino businesses e zero residui) + confronto LIVE PHP
 (msg/err flash identici incl. prefisso, JSON persistito identico) + 58/58
 marker bundle + regressione Punti 42/42 + redirect /fidelity_levels 307 con
 flash + typecheck/lint puliti.
+
+## Ricariche (recharges.php) — 2026-07-05
+AUDIT COMPLETO della pagina Ricariche (535 righe: CRUD modelli di ricarica +
+handler dormienti) + recharges.js (100 righe: confirm eliminazione, modal
+prefill, bonus none) vs manage-recharges.ts/RechargesContent. FIX PRINCIPALI:
+1. FLASH LEGACY mancanti: successo via redirect ?msg ('Modello creato.',
+   'Modello aggiornato.', 'Modello eliminato.') con branch page.tsx e alert
+   View::alert — prima la modal si chiudeva in silenzio senza alcun messaggio;
+   gli ERRORI del POST ora chiudono la modal e vanno nell'alert danger a
+   inizio pagina (il POST full-page legacy renderizza $err in alto), prima
+   erano dentro la modal.
+2. MESSAGGI verbatim confermati 1:1 col PHP live: massimali con fmt_money
+   ('Importo ricarica troppo alto. Massimo 99.999.999,99.', 'Valore bonus
+   troppo alto. ...', 'Totale credito troppo alto. ...' — prima senza coda),
+   update con id non valido 'Modello non valido.' (prima un id 0 su
+   update_template CREAVA un nuovo modello!) e id inesistente 'Modello non
+   trovato.'; confirm eliminazione del JS legacy 'Eliminare il modello:
+   TITOLO?' (prima 'Eliminare il modello "TITOLO"?').
+3. parse importi col $nfloat legacy (virgola->punto naive, round 2 — prima un
+   parser "intelligente" delle migliaia non legacy); formati tabella con i
+   port fmt_money (punto migliaia/virgola decimali, trappola toLocaleString
+   1000-9999) e fmt_points per il bonus percentuale (troncamento intero);
+   prefill modal edit con importi a 2 decimali come i data-* legacy.
+4. Modal fedele al JS: cambio bonus a 'none' DISABILITA E AZZERA il valore
+   (prima manteneva il vecchio); avviso earn_points con Fidelity off verbatim
+   ('Disponibile solo con la Fidelity generale attiva. Con Fidelity
+   disattivata i nuovi modelli non possono attivare questa opzione.' — prima
+   assente); etichetta punti dinamica ($fidLabel) nel help e nell'info box;
+   markup hidden/_mode/id legacy; value="1" sulle checkbox.
+5. Header: campagna attiva oggi con la selezione di Fidelity::campaignForDate
+   (ordine legacy via listFidelityCampaigns) e fallback nome 'Campagna punti';
+   stub create_recharge portato ('Le ricariche credito si registrano dalla
+   pagina Pagamenti.').
+GIA FEDELI: tabella modelli (colonne, riga table-light + 'Disattivo',
+'Importo + bonus'/'Solo importo', 'Nessun modello.'), ordinamento is_active
+DESC/sort_order ASC/id DESC, cap titolo 120/sort ±1000000, earn_points gated
+dalla Fidelity generale (create forzato 0, update mantiene l'esistente),
+info box, permesso fidelity.recharges.
+RESIDUI DELIBERATI: void_recharge non portato — nel legacy NESSUNA UI posta
+quel _mode (handler raggiungibile solo con POST manuale; lo storno ricariche
+del flusso reale è già coperto dal void vendita di Pagamenti,
+reverseIssuedSaleRecharges); la card 'DB non aggiornato' senza tabelle non è
+portata (schema Next completo); il ramo header 'Step attuale: 1 Punti ogni
+€ X' è irraggiungibile (compare solo senza schema campagne).
+Verifica: battery e2e 23/23 (contesto, 5 guardie verbatim coi massimali,
+create con calcoli percent/fixed, parse virgola + bonus none azzerato, update
+guardie+ok, ordinamento lista, earn_points con Fidelity off su create/update,
+header campagna attiva/spenta, stub create_recharge, delete, ripristino
+businesses e zero residui) + confronto LIVE PHP (flash msg e testi errore
+identici, incl. 'Modello non valido./non trovato.' e massimali) + 63/63
+marker bundle + typecheck/lint puliti.

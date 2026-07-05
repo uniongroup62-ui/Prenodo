@@ -53,14 +53,23 @@ export async function POST(request: Request) {
     const action = String(body.action ?? body._mode ?? url.searchParams.get("action") ?? "save");
 
     switch (action) {
-      case "save":
       case "create_template":
+        return Response.json(await saveManageRechargeTemplate(tenantSlug, body, "create"));
+
       case "update_template":
-        return Response.json(await saveManageRechargeTemplate(tenantSlug, body));
+        return Response.json(await saveManageRechargeTemplate(tenantSlug, body, "update"));
+
+      // Compat: il vecchio verbo unico distingue per id.
+      case "save":
+        return Response.json(await saveManageRechargeTemplate(tenantSlug, body, parseInteger(body.template_id ?? body.id, 0) > 0 ? "update" : "create"));
 
       case "delete":
       case "delete_template":
         return Response.json(await deleteManageRechargeTemplate(tenantSlug, parseInteger(body.template_id ?? body.id, 0)));
+
+      // Stub legacy: le ricariche si registrano dalla cassa (recharges.php ~178).
+      case "create_recharge":
+        return Response.json({ ok: true, message: "Le ricariche credito si registrano dalla pagina Pagamenti.", type: "info" });
 
       default:
         return jsonError("Azione ricariche non supportata.", 400);

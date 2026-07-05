@@ -35,7 +35,10 @@ export type ManageRechargesContext = {
   // the active fidelity points campaign for today, if any, plus the flat earn step.
   activeCampaignName: string;
   earnStep: number;
+  // Etichetta punti configurabile ($fidLabel, default 'Punti').
+  label: string;
   templates: RechargeTemplateRow[];
+  message?: string;
 };
 
 function normalizeBonusKind(value: unknown): "none" | "percent" | "fixed" {
@@ -53,19 +56,19 @@ function roundMoney(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
-// number_format-tolerant money parse (accepts "1.234,56" / "1234.56" / "100").
+// Port del $nfloat legacy: virgola->punto naive + round 2 (nessun parsing
+// intelligente delle migliaia, come recharges.php).
 function parseMoney(value: unknown): number {
-  let raw = String(value ?? "").trim().replace(/\s/g, "");
-  if (!raw) return 0;
-  const comma = raw.lastIndexOf(",");
-  const dot = raw.lastIndexOf(".");
-  if (comma >= 0 && dot >= 0) {
-    raw = comma > dot ? raw.replace(/\./g, "").replace(",", ".") : raw.replace(/,/g, "");
-  } else if (comma >= 0) {
-    raw = raw.replace(",", ".");
-  }
+  const raw = String(value ?? "").replace(",", ".");
   const parsed = Number.parseFloat(raw);
   return Number.isFinite(parsed) ? roundMoney(parsed) : 0;
+}
+
+// Port di fmt_money (number_format 2, ',', '.') per i messaggi coi massimali.
+function fmtMoneyIt(value: number): string {
+  const v = Number(value || 0);
+  const [int, dec] = Math.abs(v).toFixed(2).split(".");
+  return `${v < 0 ? "-" : ""}${int.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${dec}`;
 }
 
 function truthy(value: unknown): boolean {
@@ -109,7 +112,7 @@ async function isFidelityEnabled(slug: string): Promise<boolean> {
 }
 
 export async function getManageRechargesContext(slug: string): Promise<ManageRechargesContext> {
-  const [rows, settings, campaigns] = await Promise.all([
+  const [rows, settings, campaigns, labelRows] = await Promise.all([
     tenantSelect<RowDataPacket>({
       slug,
       table: "recharge_templates",
@@ -118,23 +121,26 @@ export async function getManageRechargesContext(slug: string): Promise<ManageRec
     }).catch(() => []),
     getFidelityPointsSettings(slug).catch(() => null),
     listFidelityCampaigns(slug).catch(() => []),
+    tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_points_label", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]),
   ]);
   const fidelityEnabled = settings ? settings.globalEnabled : await isFidelityEnabled(slug);
   const earnStep = settings && settings.earnStepEuro > 0 ? settings.earnStepEuro : 10;
+  const label = String(labelRows[0]?.fidelity_points_label ?? "").trim() || "Punti";
 
-  // Active fidelity points campaign for today (same rule as the POS campaign earn):
-  // active + today within [starts_at, ends_at] (empty bounds = open-ended).
+  // Campagna attiva oggi (Fidelity::campaignForDate): active + oggi dentro
+  // [starts_at, ends_at]; listFidelityCampaigns è già nell'ordine legacy, quindi
+  // il primo match coincide con la ORDER BY di campaignForDate. Nome vuoto ->
+  // fallback legacy 'Campagna punti'.
   const today = new Date().toISOString().slice(0, 10);
-  const activeCampaign = fidelityEnabled
-    ? campaigns.find((c) => c.active && (c.startsAt === "" || c.startsAt <= today) && (c.endsAt === "" || c.endsAt >= today))
-    : undefined;
+  const activeCampaign = campaigns.find((c) => c.active && (c.startsAt === "" || c.startsAt <= today) && (c.endsAt === "" || c.endsAt >= today));
 
   return {
     ok: true,
     sourceMode: "database",
     fidelityEnabled,
-    activeCampaignName: activeCampaign ? activeCampaign.name : "",
+    activeCampaignName: activeCampaign ? (activeCampaign.name.trim() !== "" ? activeCampaign.name : "Campagna punti") : "",
     earnStep,
+    label,
     templates: rows.map(mapTemplate),
   };
 }
@@ -148,14 +154,17 @@ export async function getManageRechargeTemplate(slug: string, templateId: number
   return mapTemplate(rows[0]);
 }
 
-// Port of recharges.php _mode=create_template|update_template. id=0 creates,
-// id>0 updates. Validation mirrors the legacy POST (title required, base>0,
-// money caps, earn_points gated by fidelity).
-export async function saveManageRechargeTemplate(slug: string, body: Record<string, string>): Promise<ManageRechargesContext> {
+// Port of recharges.php _mode=create_template|update_template. La modalità è
+// esplicita come il legacy: update con id<=0 -> 'Modello non valido.', id
+// inesistente -> 'Modello non trovato.'. Validazioni e messaggi verbatim
+// (massimali con fmt_money), earn_points gated dalla Fidelity generale
+// (create: forzato 0; update: mantiene il valore esistente).
+export async function saveManageRechargeTemplate(slug: string, body: Record<string, string>, mode: "create" | "update"): Promise<ManageRechargesContext> {
   const id = parseInteger(body.template_id ?? body.id, 0);
 
   let existing: RechargeTemplateRow | null = null;
-  if (id > 0) {
+  if (mode === "update") {
+    if (id <= 0) throw new Error("Modello non valido.");
     existing = await getManageRechargeTemplate(slug, id);
     if (!existing) throw new Error("Modello non trovato.");
   }
@@ -166,22 +175,22 @@ export async function saveManageRechargeTemplate(slug: string, body: Record<stri
 
   const baseAmount = parseMoney(body.base_amount);
   if (baseAmount <= 0) throw new Error("Inserisci un importo ricarica valido.");
-  if (baseAmount > RECHARGE_MONEY_MAX) throw new Error("Importo ricarica troppo alto.");
+  if (baseAmount > RECHARGE_MONEY_MAX) throw new Error(`Importo ricarica troppo alto. Massimo ${fmtMoneyIt(RECHARGE_MONEY_MAX)}.`);
 
   const bonusKind = normalizeBonusKind(body.bonus_kind);
   let bonusValue = parseMoney(body.bonus_value);
   if (bonusValue < 0) bonusValue = 0;
-  if (bonusValue > RECHARGE_MONEY_MAX) throw new Error("Valore bonus troppo alto.");
+  if (bonusValue > RECHARGE_MONEY_MAX) throw new Error(`Valore bonus troppo alto. Massimo ${fmtMoneyIt(RECHARGE_MONEY_MAX)}.`);
   if (bonusKind === "none") bonusValue = 0;
   const bonus = bonusAmount(baseAmount, bonusKind, bonusValue);
   const total = roundMoney(baseAmount + bonus);
-  if (bonus > RECHARGE_MONEY_MAX || total > RECHARGE_MONEY_MAX) throw new Error("Totale credito troppo alto.");
+  if (bonus > RECHARGE_MONEY_MAX || total > RECHARGE_MONEY_MAX) throw new Error(`Totale credito troppo alto. Massimo ${fmtMoneyIt(RECHARGE_MONEY_MAX)}.`);
 
   const fidelityEnabled = await isFidelityEnabled(slug);
   let earnPoints = truthy(body.earn_points) ? 1 : 0;
   if (!fidelityEnabled) {
     // Without fidelity, new templates never earn; existing keep their value.
-    earnPoints = id > 0 && existing ? (existing.earnPoints ? 1 : 0) : 0;
+    earnPoints = mode === "update" && existing ? (existing.earnPoints ? 1 : 0) : 0;
   }
   const isActive = truthy(body.is_active) ? 1 : 0;
   let sortOrder = parseInteger(body.sort_order, 0);
@@ -198,17 +207,17 @@ export async function saveManageRechargeTemplate(slug: string, body: Record<stri
   };
   if (await columnExists(table.name, "sort_order")) values.sort_order = sortOrder;
 
-  if (id > 0) {
+  if (mode === "update") {
     await tenantUpdate({ slug, table: "recharge_templates", id, values });
   } else {
     await tenantInsert(table, values);
   }
-  return getManageRechargesContext(slug);
+  return { ...(await getManageRechargesContext(slug)), message: mode === "update" ? "Modello aggiornato." : "Modello creato." };
 }
 
 // Port of recharges.php _mode=delete_template.
 export async function deleteManageRechargeTemplate(slug: string, templateId: number): Promise<ManageRechargesContext> {
   if (templateId <= 0) throw new Error("Modello non valido.");
   await tenantDelete({ slug, table: "recharge_templates", id: templateId });
-  return getManageRechargesContext(slug);
+  return { ...(await getManageRechargesContext(slug)), message: "Modello eliminato." };
 }
