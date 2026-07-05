@@ -676,7 +676,7 @@ export default async function TenantPage({
   if (page === "giftbox" && (query.action === "view" || query.action === "edit_instance")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
-        <GiftBoxInstanceDetailContent slug={tenantSlug} />
+        <GiftBoxInstanceDetailContent slug={tenantSlug} initialQuery={{ id: query.id, msg: query.msg, err: query.err }} />
       </ManageShell>
     );
   }
@@ -687,7 +687,28 @@ export default async function TenantPage({
   if (page === "giftbox" && (query.action === "new" || query.action === "edit")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
-        <GiftBoxFormContent slug={tenantSlug} />
+        <GiftBoxFormContent slug={tenantSlug} initialQuery={{ action: query.action, id: query.id, msg: query.msg, err: query.err }} />
+      </ManageShell>
+    );
+  }
+
+  // Faithful giftbox LIST (giftbox.php): filtri server-side dalla querystring
+  // (tab=instances/boxes) + flash ?msg/?err.
+  if (page === "giftbox") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <GiftboxContent
+          slug={tenantSlug}
+          initialQuery={{
+            tab: query.tab,
+            q: query.q,
+            status: query.status,
+            client_id: query.client_id,
+            all_locations: query.all_locations,
+            msg: query.msg,
+            err: query.err,
+          }}
+        />
       </ManageShell>
     );
   }

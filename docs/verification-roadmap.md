@@ -4143,3 +4143,120 @@ con normalizzazione https e flash senza punto, condizioni con troncamento e
 NULL, metodi strutturati con limiti server e ricostruzione righe dal raw,
 vuoto->NULL, ripristino businesses) + 37/37 marker bundle + regressione
 package_settings 6/6 e Preventivi 80/80 + typecheck/lint puliti.
+
+## GiftBox (giftbox.php) — 2026-07-05
+AUDIT COMPLETO del monolite giftbox.php (3127 righe: tab instances + boxes,
+edit_instance con movimenti virtuali, riscatto parziale, riserve
+prenotazioni, invio email) + GiftBox.php (4962 righe) +
+GiftBoxAvailability.php + GiftLoyaltyAttribution + giftbox.js vs i moduli
+Next, con capture live (lista con 2 istanze reali, dettaglio, boxes, form).
+FIX PRINCIPALI:
+1. Lista istanze riscritta su filtri SERVER-SIDE legacy: Mittente (combobox
+   app-combobox ricercabile con TUTTI i clienti, non solo quelli in lista),
+   Cerca (LIKE su codice/destinatario/email — NON sul mittente), Stato,
+   "Tutte le sedi" multi-sede con filtro sede STRETTO (gi.location_id = ?,
+   le istanze senza sede spariscono come nel PHP); JOIN giftboxes con
+   deleted_at IS NULL (le istanze di template eliminati escono dalla lista);
+   ORDER gi.id DESC LIMIT 200; AUTO-EXPIRE stampato sul DB a ogni load
+   (GiftBox::expireDueInstances); colonna Sede con giftbox_page_location_label
+   ('Sede1'/'Sede #N'/'-'); date RAW YYYY-MM-DD ('—' se vuote) con Emessa =
+   created_at fallback issued_at; badge `bg-<colore>`; voucher link legacy
+   ?id=N&embed=1 (shim token) al posto del link pubblico col token; header
+   gated (Impostazioni giftbox.settings, Crea GiftBox pos.manage e nascosto
+   sull'empty state); flash ?msg/?err.
+2. Dettaglio istanza: MOVIMENTI rifatti fedeli — transazioni REALI
+   giftbox_transactions (prima assenti: cambio destinatario, modifica
+   scadenza, storni POS) + virtuali legacy (emissione con la NOTA CLIENTE
+   come nota e amount +unità totali, "In sospeso su prenotazione #CODICE"
+   solo per prenotazioni APERTE con public_code e data creazione
+   appuntamento, coppia sospeso+annullato/no-show per le prenotazioni chiuse
+   senza storico reale, riscatti con voci "×q" e nota normalizzata
+   'Riscatto su prenotazione #COD' anche da [appt_deleted:#], annullamento
+   con la riga [ANNULLATA ...] della vendita, scadenza) ordinati desc con
+   Sede e Operatore risolti; QUANTITÀ col colore +/-; date d/m/Y H:i.
+3. Contatori legacy: disponibili = rimanenti − riserve prenotazioni APERTE
+   (pending/scheduled non riscattate; prima contava anche le annullate) e
+   NON azzerati su annullata/riscattata; hint 'N in sospeso su prenotazione
+   #COD'; badge esaurito/in sospeso (text-bg-light); PARZIALE solo su issued.
+4. Riscatto parziale: chiavi redeem_qty per giftbox_item_id come i name
+   legacy; CHECKBOX quando resta 1 unità; guardia pagina 'Quantità non
+   disponibile per "X". N già in sospeso su prenotazioni.'; guardie
+   GiftBox::redeemInstanceItems verbatim (Istanza non riscattabile /
+   GiftBox non ancora valida / GiftBox scaduta con stampa expired /
+   Elemento non valido (id=N) / Servizio GiftBox non disponibile nella sede
+   selezionata / Seleziona almeno un elemento da riscattare.); SCALA LO
+   STOCK dei prodotti sulla sede corrente ('Prodotto non abbinato alla sede
+   selezionata: X.' / 'Stock insufficiente per il prodotto "X" nella sede
+   selezionata.'); layout Operazioni legacy (bordered form, bottoni
+   outline-primary/outline-secondary/outline-light, confirm 'Registrare il
+   riscatto selezionato?'); redeemed_source_type manual al completamento.
+5. Scadenza: modale con min = max(oggi, inizio validità), valore clampato,
+   frase condizionale sull'inizio validità; guardie verbatim ('Seleziona una
+   nuova data di scadenza valida.' / '...non può essere precedente a oggi.'
+   / "...precedente all'inizio validità della GiftBox." / annullata /
+   RISCATTATA ANCHE PARZIALE via isInstanceRedeemedForExpiry); riattivazione
+   da Scaduta BLOCCATA se contenuti eliminati (GiftBoxAvailability port con
+   messaggio composito 'Non sarà possibile riattivare la GiftBox perché ...
+   Elimina o sostituisci gli elementi indicati prima di riattivarla.') e
+   pencil/modale disabilitati; MOVIMENTO 'Modifica scadenza GiftBox:
+   <vecchia|nessuna scadenza> -> <nuova> (GiftBox riattivata)'; alert
+   'Contenuti eliminati/disattivati nella GiftBox' sulle istanze scadute.
+6. Dati GiftBox: LOCK DESTINATARIO (recipientEditLockInfo) con messaggi
+   verbatim (annullata / riscattata / 'anche solo parzialmente' / scaduta),
+   campi readonly + toggle/remove disabilitati + alert warning, enforcement
+   anche server-side (lo snapshot resta quello corrente); ricerca cliente
+   SERVER-SIDE (port api_clients action=search: LIKE ESCAPE '!' su
+   nome/email/telefono + variante solo-cifre, LIMIT 50) con debounce 250ms,
+   risultati '#id • email • telefono' e 'Nessun cliente trovato.';
+   selezione: nome readonly, email readonly solo se presente in anagrafica;
+   MOVIMENTO 'Cambio destinatario: X -> Y' (adjust + meta);
+   update consentito anche su annullate (come il legacy — bloccata è solo la
+   scadenza); evento default 'giftbox' con la mappa eventi GiftBox verbatim
+   (prima usava la lista GiftCard con default 'giftcard'); 'Seleziona un
+   cliente' / 'Cliente destinatario non trovato.'; Sede emissione sempre
+   visibile; flash 'Istanza aggiornata' e redirect legacy (?msg/?err).
+7. Invio email: guardie in ordine legacy (email non valida -> mail fn
+   mancante -> stato non valido -> scaduta con stampa expired) e CORPO EMAIL
+   legacy completo (hero evento con emoji+titolo+immagine, 'Hai ricevuto una
+   GiftBox acquistata da X.', box dedica, tabella Dettagli GiftBox
+   GiftBox/Mittente/Destinatario/Valida dal/al, Contenuto con '(Contenuto
+   non mostrato. Per scoprirlo, mostra il codice in cassa.)', Codice di
+   riscatto, Vedi Voucher, Condizioni con default legacy e {BUSINESS_NAME},
+   subject evento + codice + attività, nomi template POS mascherati);
+   salvataggio gift_message + last_email_* + azzeramento
+   email_send_claimed_at; 'Ultimo invio: <raw> (<email>)'; 'Email inviata a
+   X' / 'Invio email fallito.'.
+8. Dettaglio header: 'Dettagli vendita' dal lookup sale_items legacy
+   (item_name LIKE 'GiftBox%' + codice; prima cercava 'Vendita #N' nella
+   nota), Voucher ?id=&embed=1, Impostazioni/Crea GiftBox gated; redirect
+   'Istanza non trovata' alla lista.
+9. Template (tab boxes): ordine legacy sort_order ASC id DESC; Costo punti
+   '0' quando zero (prima '—'); niente sottoriga descrizione; Modifica
+   btn-outline-primary; Elimina come link con confirm + flash 'GiftBox
+   eliminata' (redirect legacy che torna alle istanze); form con i 3
+   selettori riga sempre in DOM (d-none), rimozione righe senza minimo,
+   validazione client SOLO alert 'Seleziona almeno un livello Punti.'
+   (le altre guardie restano al server come il PHP), livelli richiesti con
+   fidelity_only SENZA whitelist sui livelli configurati (fedele a
+   normalizeLevelKeys), redirect post-save su action=edit&id con flash
+   'GiftBox salvata', 'GiftBox non trovata' -> redirect lista.
+10. Fix date PG in gift-issue-details: i timestamp "without time zone" erano
+    formattati con toISOString (shift UTC) — ora formatter locali.
+RESIDUI DELIBERATI: GiftLoyaltyAttribution::syncAnonymousSaleClientByRecipient
+(riassegnazione cliente sulla vendita anonima al cambio destinatario) non
+portato — viene salvato recipient_client_id come il fallback legacy senza la
+classe; i nomi storici servizio da snapshot appuntamenti usano
+service_snapshot_json delle righe istanza (non il decode degli snapshot
+appuntamento); activeUsageLinkCounts approssimato a prenotazioni aperte +
+riscatti (il conteggio sales del legacy non è replicato); con SES non
+configurato l'invio email risponde con la guardia 'mail_send_html mancante'
+(stesso ordine guardie del PHP); giftbox_settings è pagina separata (già
+fedele da audit precedente, non inclusa).
+Verifica: battery e2e 63/63 (template save/list/delete con messaggi e soft
+delete, lista con filtri e auto-expire su DB, dettaglio con contatori/labels/
+movimenti/operatore, update con log cambio destinatario e guardie, scadenza
+con guardie+movimento+riattivazione bloccata e ok, riserve da prenotazione
+aperta con blocco doppio riscatto e coppia virtuale annullato, riscatto
+parziale/completo con stock prodotti e lock conseguenti, nota interna, email
+guardie, ricerca clienti, cleanup CLEAN) + 101/101 marker bundle +
+regressioni Preventivi 80/80 e Pacchetti 48/48 + typecheck/lint puliti.

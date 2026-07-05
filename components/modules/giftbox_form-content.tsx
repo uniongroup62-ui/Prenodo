@@ -67,16 +67,10 @@ function emptyForm(): GiftBoxForm {
   };
 }
 
-function resolveAction(): "new" | "edit" {
-  if (typeof window === "undefined") return "new";
-  return new URLSearchParams(window.location.search).get("action") === "edit" ? "edit" : "new";
-}
-
-export function GiftBoxFormContent({ slug: slugProp }: { slug?: string } = {}) {
+export function GiftBoxFormContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: { action?: string; id?: string; msg?: string; err?: string } } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
-  const [action] = useState<"new" | "edit">(resolveAction);
   const [form, setForm] = useState<GiftBoxForm>(emptyForm());
   const [services, setServices] = useState<CatalogItem[]>([]);
   const [products, setProducts] = useState<CatalogItem[]>([]);
@@ -84,14 +78,22 @@ export function GiftBoxFormContent({ slug: slugProp }: { slug?: string } = {}) {
   // "Solo clienti con Fidelity" attivo la selezione è OBBLIGATORIA.
   const [levels, setLevels] = useState<{ key: string; name: string }[]>([]);
   const [eligibleLevels, setEligibleLevels] = useState<string[]>([]);
+  const [perms, setPerms] = useState({ canSettings: false, canCreate: false });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // Flash legacy (View::alert): ?msg= dal redirect post-salvataggio.
+  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const act = params.get("action") === "edit" ? "edit" : "new";
-    const id = Number.parseInt(params.get("id") ?? "", 10);
+    const act = (initialQuery?.action ?? params.get("action")) === "edit" ? "edit" : "new";
+    const id = Number.parseInt(String(initialQuery?.id ?? params.get("id") ?? ""), 10);
+
+    fetch(`/api/manage/giftboxes?slug=${encodeURIComponent(slug)}&action=perms`, { headers: { "x-tenant-slug": slug } })
+      .then((r) => r.json())
+      .then((j) => setPerms({ canSettings: j?.canSettings === true, canCreate: j?.canCreate === true }))
+      .catch(() => setPerms({ canSettings: false, canCreate: false }));
 
     const ctxPromise = fetch(`/api/manage/giftboxes?slug=${encodeURIComponent(slug)}&action=context`, {
       headers: { "x-tenant-slug": slug },
@@ -122,7 +124,8 @@ export function GiftBoxFormContent({ slug: slugProp }: { slug?: string } = {}) {
       ])
         .then(([, j]) => {
           if (!j.ok || !j.template) {
-            setError(String(j.error ?? "GiftBox non trovata."));
+            // Legacy: redirect alla pagina GiftBox con "GiftBox non trovata".
+            window.location.href = `/${encodeURIComponent(slug)}/giftbox?err=${encodeURIComponent("GiftBox non trovata")}`;
             return;
           }
           const t = j.template;
@@ -153,6 +156,7 @@ export function GiftBoxFormContent({ slug: slugProp }: { slug?: string } = {}) {
     } else {
       ctxPromise.finally(() => setLoading(false));
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
 
   function set<K extends keyof GiftBoxForm>(key: K, value: GiftBoxForm[K]) {
@@ -171,39 +175,19 @@ export function GiftBoxFormContent({ slug: slugProp }: { slug?: string } = {}) {
     setForm((prev) => ({ ...prev, items: [...prev.items, emptyItem()] }));
   }
 
+  // Il legacy consente di rimuovere anche l'ultima riga (removeItemRow).
   function removeItem(index: number) {
-    setForm((prev) => {
-      if (prev.items.length <= 1) return prev;
-      return { ...prev, items: prev.items.filter((_, i) => i !== index) };
-    });
-  }
-
-  function backToList() {
-    window.location.href = `/${encodeURIComponent(slug)}/giftbox`;
+    setForm((prev) => ({ ...prev, items: prev.items.filter((_, i) => i !== index) }));
   }
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError("");
 
-    const name = form.name.trim();
-    if (name === "") {
-      setError("Nome GiftBox obbligatorio.");
-      return;
-    }
-    if (form.valid_from && form.valid_to && form.valid_from > form.valid_to) {
-      setError('La data "Validità al" deve essere successiva a "Validità dal".');
-      return;
-    }
-    const hasContent = form.items.some((it) =>
-      it.item_type === "service" ? it.service_id > 0 : it.item_type === "product" ? it.product_id > 0 : it.custom_label.trim() !== "",
-    );
-    if (!hasContent) {
-      setError("Aggiungi almeno un contenuto alla GiftBox.");
-      return;
-    }
+    // Unica validazione client legacy (giftbox.js validateGiftboxForm):
+    // fidelity_only richiede almeno un livello Punti (alert bloccante).
     if (form.fidelity_only && levels.length > 0 && eligibleLevels.length === 0) {
-      setError("Errore: seleziona almeno un livello Punti.");
+      window.alert("Seleziona almeno un livello Punti.");
       return;
     }
 
@@ -220,7 +204,7 @@ export function GiftBoxFormContent({ slug: slugProp }: { slug?: string } = {}) {
       const payload: Record<string, unknown> = {
         action: "save",
         id: String(form.id),
-        name,
+        name: form.name,
         description: form.description,
         fidelity_only: form.fidelity_only ? "1" : "0",
         points_cost: form.points_cost,
@@ -238,14 +222,19 @@ export function GiftBoxFormContent({ slug: slugProp }: { slug?: string } = {}) {
       });
       const j = await res.json();
       if (!res.ok || !j.ok) {
+        // Errori pagina legacy (View::alert danger, senza redirect).
         setError(String(j.error ?? "Errore: impossibile salvare la GiftBox. Verifica nome, livelli e contenuti."));
         setSaving(false);
+        window.scrollTo(0, 0);
         return;
       }
-      backToList();
+      // Redirect legacy: resta sull'editor della GiftBox salvata con flash.
+      const savedId = Number(j?.template?.id ?? form.id) || form.id;
+      window.location.href = `/${encodeURIComponent(slug)}/giftbox?action=edit&id=${savedId}&msg=${encodeURIComponent("GiftBox salvata")}`;
     } catch {
       setError("Errore: impossibile salvare la GiftBox. Verifica nome, livelli e contenuti.");
       setSaving(false);
+      window.scrollTo(0, 0);
     }
   }
 
@@ -265,14 +254,18 @@ export function GiftBoxFormContent({ slug: slugProp }: { slug?: string } = {}) {
               <i className="bi bi-arrow-left me-1" />
               Fidelity
             </a>
-            <a className="btn btn-outline-secondary btn-pill" href={`/${encodeURIComponent(slug)}/giftbox_settings`}>
-              <i className="bi bi-gear me-1" />
-              Impostazioni
-            </a>
-            <a className="btn btn-primary btn-pill" href={`/${encodeURIComponent(slug)}/pos`}>
-              <i className="bi bi-plus-lg me-1" />
-              Crea GiftBox
-            </a>
+            {perms.canSettings ? (
+              <a className="btn btn-outline-secondary btn-pill" href={`/${encodeURIComponent(slug)}/giftbox_settings`}>
+                <i className="bi bi-gear me-1" />
+                Impostazioni
+              </a>
+            ) : null}
+            {perms.canCreate ? (
+              <a className="btn btn-primary btn-pill" href={`/${encodeURIComponent(slug)}/pos`}>
+                <i className="bi bi-plus-lg me-1" />
+                Crea GiftBox
+              </a>
+            ) : null}
           </div>
         </div>
       </div>
@@ -287,7 +280,24 @@ export function GiftBoxFormContent({ slug: slugProp }: { slug?: string } = {}) {
         </div>
       </div>
 
-      {error ? <div className="alert alert-danger">{error}</div> : null}
+      {flash.msg ? (
+        <div className="alert alert-success d-flex align-items-start gap-2" role="alert">
+          <div><i className="bi bi-info-circle" /></div>
+          <div>{flash.msg}</div>
+        </div>
+      ) : null}
+      {flash.err ? (
+        <div className="alert alert-danger d-flex align-items-start gap-2" role="alert">
+          <div><i className="bi bi-info-circle" /></div>
+          <div>{flash.err}</div>
+        </div>
+      ) : null}
+      {error ? (
+        <div className="alert alert-danger d-flex align-items-start gap-2" role="alert">
+          <div><i className="bi bi-info-circle" /></div>
+          <div>{error}</div>
+        </div>
+      ) : null}
 
       {loading ? (
         <div className="card p-3 text-muted small">Caricamento…</div>
@@ -345,43 +355,43 @@ export function GiftBoxFormContent({ slug: slugProp }: { slug?: string } = {}) {
                 <div className="form-text">Se &gt; 0, in fase di emissione puoi scegliere se scalare i punti.</div>
               </div>
 
-              {form.fidelity_only ? (
-                <div className="col-12" id="gbLevelsWrap">
-                  <hr />
-                  <div className="fw-semibold">Livelli Card (obbligatorio)</div>
-                  <div className="text-muted small">
-                    Visibile solo se <strong>Solo clienti con Fidelity</strong> e attivo. Seleziona almeno un livello Punti.
-                  </div>
+              {/* Markup legacy: il blocco resta in DOM, toggle d-none + checkbox disabilitate (giftbox.js toggleGiftboxLevels). */}
+              <div className={`col-12 ${form.fidelity_only ? "" : "d-none"}`} id="gbLevelsWrap">
+                <hr />
+                <div className="fw-semibold">Livelli Card (obbligatorio)</div>
+                <div className="text-muted small">
+                  Visibile solo se <strong>Solo clienti con Fidelity</strong> e attivo. Seleziona almeno un livello Punti.
+                </div>
 
-                  <div className="row g-3 mt-1">
-                    <div className="col-md-12">
-                      <div className="text-muted small fw-semibold">Livelli Punti</div>
-                      {levels.length === 0 ? (
-                        <div className="text-muted small mt-2">Nessun livello Punti configurato.</div>
-                      ) : (
-                        <div className="d-flex flex-wrap gap-2 mt-2">
-                          {levels.map((l) => (
-                            <div className="form-check" key={l.key}>
-                              <input
-                                className="form-check-input"
-                                type="checkbox"
-                                id={`gb_lvl_pts_${l.key}`}
-                                checked={eligibleLevels.includes(l.key)}
-                                onChange={(e) =>
-                                  setEligibleLevels((prev) => (e.target.checked ? Array.from(new Set([...prev, l.key])) : prev.filter((k) => k !== l.key)))
-                                }
-                              />
-                              <label className="form-check-label" htmlFor={`gb_lvl_pts_${l.key}`}>
-                                {l.name || l.key}
-                              </label>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+                <div className="row g-3 mt-1">
+                  <div className="col-md-12">
+                    <div className="text-muted small fw-semibold">Livelli Punti</div>
+                    {levels.length === 0 ? (
+                      <div className="text-muted small">Nessun livello Punti configurato.</div>
+                    ) : (
+                      <div className="d-flex flex-wrap gap-2 mt-2">
+                        {levels.map((l) => (
+                          <div className="form-check" key={l.key}>
+                            <input
+                              className="form-check-input"
+                              type="checkbox"
+                              id={`gb_lvl_pts_${l.key}`}
+                              checked={eligibleLevels.includes(l.key)}
+                              disabled={!form.fidelity_only}
+                              onChange={(e) =>
+                                setEligibleLevels((prev) => (e.target.checked ? Array.from(new Set([...prev, l.key])) : prev.filter((k) => k !== l.key)))
+                              }
+                            />
+                            <label className="form-check-label" htmlFor={`gb_lvl_pts_${l.key}`}>
+                              {l.name || l.key}
+                            </label>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
-              ) : null}
+              </div>
 
               <div className="col-md-3">
                 <label className="form-label">Ordine</label>
@@ -445,48 +455,47 @@ export function GiftBoxFormContent({ slug: slugProp }: { slug?: string } = {}) {
                           </select>
                         </td>
                         <td>
-                          {it.item_type === "service" ? (
-                            <select
-                              className="form-select form-select-sm item-service"
-                              value={it.service_id || ""}
-                              onChange={(e) => setItem(index, { service_id: Number(e.target.value) || 0 })}
-                            >
-                              <option value="">—</option>
-                              {services.map((s) => (
-                                <option key={s.id} value={s.id}>{s.name}</option>
-                              ))}
-                            </select>
-                          ) : it.item_type === "product" ? (
-                            <select
-                              className="form-select form-select-sm item-product"
-                              value={it.product_id || ""}
-                              onChange={(e) => setItem(index, { product_id: Number(e.target.value) || 0 })}
-                            >
-                              <option value="">—</option>
-                              {products.map((p) => (
-                                <option key={p.id} value={p.id}>{p.name}</option>
-                              ))}
-                            </select>
-                          ) : (
-                            <div className="row g-2 item-custom">
-                              <div className="col-md-4">
-                                <input
-                                  className="form-control form-control-sm"
-                                  placeholder="Titolo"
-                                  value={it.custom_label}
-                                  onChange={(e) => setItem(index, { custom_label: e.target.value })}
-                                />
-                              </div>
-                              <div className="col-md-8">
-                                <input
-                                  className="form-control form-control-sm"
-                                  placeholder="Dettagli (opzionale)"
-                                  value={it.custom_details}
-                                  onChange={(e) => setItem(index, { custom_details: e.target.value })}
-                                />
-                              </div>
+                          {/* Markup legacy: i 3 selettori sempre in DOM, toggle d-none (giftbox.js refreshItemRow). */}
+                          <select
+                            className={`form-select form-select-sm item-service ${it.item_type !== "service" ? "d-none" : ""}`}
+                            value={it.service_id || ""}
+                            onChange={(e) => setItem(index, { service_id: Number(e.target.value) || 0 })}
+                          >
+                            <option value="">—</option>
+                            {services.map((s) => (
+                              <option key={s.id} value={s.id}>{s.name}</option>
+                            ))}
+                          </select>
+
+                          <select
+                            className={`form-select form-select-sm item-product mt-1 ${it.item_type !== "product" ? "d-none" : ""}`}
+                            value={it.product_id || ""}
+                            onChange={(e) => setItem(index, { product_id: Number(e.target.value) || 0 })}
+                          >
+                            <option value="">—</option>
+                            {products.map((p) => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                          </select>
+
+                          <div className={`row g-2 mt-1 item-custom ${it.item_type !== "custom" ? "d-none" : ""}`}>
+                            <div className="col-md-4">
+                              <input
+                                className="form-control form-control-sm"
+                                placeholder="Titolo"
+                                value={it.custom_label}
+                                onChange={(e) => setItem(index, { custom_label: e.target.value })}
+                              />
                             </div>
-                          )}
+                            <div className="col-md-8">
+                              <input
+                                className="form-control form-control-sm"
+                                placeholder="Dettagli (opzionale)"
+                                value={it.custom_details}
+                                onChange={(e) => setItem(index, { custom_details: e.target.value })}
+                              />
+                            </div>
+                          </div>
                         </td>
                         <td className="text-center">
                           <input
@@ -499,12 +508,7 @@ export function GiftBoxFormContent({ slug: slugProp }: { slug?: string } = {}) {
                           />
                         </td>
                         <td className="text-end">
-                          <button
-                            className="btn btn-sm btn-outline-danger"
-                            type="button"
-                            disabled={form.items.length <= 1}
-                            onClick={() => removeItem(index)}
-                          >
+                          <button className="btn btn-sm btn-outline-danger" type="button" onClick={() => removeItem(index)}>
                             ✕
                           </button>
                         </td>

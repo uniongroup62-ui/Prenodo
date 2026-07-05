@@ -7,13 +7,24 @@ import {
   issueDbGiftBox,
   listDbClients,
   listDbGiftBoxes,
-  listManageGiftboxRows,
   listManageGiftBoxTemplates,
   redeemDbGiftBox,
   redeemManageGiftBoxInstanceFull,
   saveManageGiftBoxTemplate,
 } from "@/lib/db-repositories";
-import { GIFT_EVENT_OPTIONS, getGiftBoxInstanceFull, redeemGiftBoxInstancePartial, sendGiftBoxInstanceEmail, updateGiftBoxInstanceData, updateGiftBoxInstanceExpiry, updateGiftBoxInstanceInternalNote } from "@/lib/gift-issue-details";
+import {
+  GIFTBOX_EVENT_OPTIONS,
+  expireDueGiftBoxInstances,
+  getGiftBoxInstanceFull,
+  hasAnyGiftBoxInstances,
+  listGiftBoxInstancesManage,
+  redeemGiftBoxInstancePartial,
+  searchGiftRecipientClients,
+  sendGiftBoxInstanceEmail,
+  updateGiftBoxInstanceData,
+  updateGiftBoxInstanceExpiry,
+  updateGiftBoxInstanceInternalNote,
+} from "@/lib/gift-issue-details";
 import { currentManageSession } from "@/lib/manage-auth";
 import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -35,9 +46,19 @@ export async function GET(request: Request) {
     const action = url.searchParams.get("action");
 
     // Template grid (giftbox.php tab=boxes). The box catalog the POS issues from.
+    if (action === "perms") {
+      return Response.json({ ok: true, canSettings: can(session.user.perms, "giftbox.settings"), canCreate: can(session.user.perms, "pos.manage") });
+    }
+
     if (action === "templates") {
       if (!can(session.user.perms, "giftbox.manage")) return jsonError("Permesso GiftBox mancante.", 403);
-      return Response.json({ ok: true, sourceMode: "database", templates: await listManageGiftBoxTemplates(tenantSlug) });
+      return Response.json({
+        ok: true,
+        sourceMode: "database",
+        templates: await listManageGiftBoxTemplates(tenantSlug),
+        canSettings: can(session.user.perms, "giftbox.settings"),
+        canCreate: can(session.user.perms, "pos.manage"),
+      });
     }
 
     // Template editor catalog (services/products for the items dropdowns).
@@ -60,21 +81,53 @@ export async function GET(request: Request) {
     // Instance DETAIL (tab=instances action=view/edit_instance): vista legacy
     // completa (riepilogo, dati, riscatto per-item, movimenti con sede/operatore).
     if (action === "view" || action === "edit_instance") {
+      await expireDueGiftBoxInstances(tenantSlug);
       const detail = await getGiftBoxInstanceFull(tenantSlug, parseInteger(url.searchParams.get("id"), 0));
-      if (!detail) return jsonError("GiftBox non trovata.", 404);
+      if (!detail) return jsonError("Istanza non trovata", 404);
       const clients = (await listDbClients({ slug: tenantSlug })).map((c) => ({ id: c.id, name: c.name }));
-      return Response.json({ ok: true, sourceMode: "database", detail, clients, events: GIFT_EVENT_OPTIONS });
+      return Response.json({
+        ok: true,
+        sourceMode: "database",
+        detail,
+        clients,
+        events: GIFTBOX_EVENT_OPTIONS,
+        canSettings: can(session.user.perms, "giftbox.settings"),
+        canCreate: can(session.user.perms, "pos.manage"),
+      });
     }
 
-    // Lista MANAGE legacy (giftbox.php tab=instances): righe con Mittente/Sede/
-    // badge/Riscatto, filtrate sulla sede corrente salvo all_locations=1.
+    // Ricerca clienti per il destinatario (api_clients.php action=search).
+    if (action === "client_search") {
+      const clients = await searchGiftRecipientClients(tenantSlug, url.searchParams.get("q") ?? "");
+      return Response.json({ ok: true, clients });
+    }
+
+    // Lista MANAGE legacy (giftbox.php tab=instances): filtri server-side
+    // Mittente/Cerca/Stato (+ sede corrente salvo all_locations=1), auto-expire
+    // al load, righe con Sede/badge/date raw come il PHP.
     if (action === "manage_list") {
-      const allRows = await listManageGiftboxRows(tenantSlug);
+      await expireDueGiftBoxInstances(tenantSlug);
       const allLocations = ["1", "true", "on", "yes", "all"].includes(String(url.searchParams.get("all_locations") ?? "").trim().toLowerCase());
       const locationContext = await getManageLocationContext(tenantSlug).catch(() => null);
       const filterLocationId = allLocations ? 0 : (locationContext?.currentLocationId ?? 0);
-      const rows = filterLocationId > 0 ? allRows.filter((r) => r.locationId === 0 || r.locationId === filterLocationId) : allRows;
-      return Response.json({ ok: true, sourceMode: "database", rows, totalCount: allRows.length, locationsCount: locationContext?.locations.length ?? 0 });
+      const rows = await listGiftBoxInstancesManage(tenantSlug, {
+        q: url.searchParams.get("q") ?? "",
+        status: url.searchParams.get("status") ?? "",
+        clientId: parseInteger(url.searchParams.get("client_id"), 0),
+        locationId: filterLocationId,
+      }, 200);
+      const hasAny = await hasAnyGiftBoxInstances(tenantSlug);
+      const clientRows = (await listDbClients({ slug: tenantSlug })).map((c) => ({ id: String(c.id), label: c.name }));
+      return Response.json({
+        ok: true,
+        sourceMode: "database",
+        rows,
+        hasAnyInstances: hasAny,
+        clientItems: clientRows,
+        showAllLocationsFilter: (locationContext?.locations.length ?? 0) > 1,
+        canSettings: can(session.user.perms, "giftbox.settings"),
+        canCreate: can(session.user.perms, "pos.manage"),
+      });
     }
 
     return Response.json({
@@ -140,76 +193,92 @@ export async function POST(request: Request) {
     }
 
     // "Dati GiftBox" (port of _mode=update_instance): mittente/evento/nascondi
-    // importo/destinatario/nota/dedica.
+    // importo/destinatario/nota/dedica. Errori flash legacy "Errore: <msg>".
     if (action === "update_instance") {
       const id = parseInteger(body.instance_id ?? body.id, 0);
-      const result = await updateGiftBoxInstanceData(tenantSlug, id, {
-        senderClientId: parseInteger(body.client_id, 0),
-        eventType: body.event_type,
-        voucherHideAmount: ["1", "true", "on", "yes"].includes(String(body.voucher_hide_amount ?? "").toLowerCase()),
-        recipientClientId: parseInteger(body.recipient_client_id, 0),
-        recipientName: body.recipient_name,
-        recipientEmail: body.recipient_email,
-        note: body.note,
-        giftMessage: body.gift_message,
-      });
-      const detail = await getGiftBoxInstanceFull(tenantSlug, id);
-      return Response.json({ ok: true, source: "giftbox?action=update_instance", sourceMode: "database", message: result.message, detail });
+      try {
+        const result = await updateGiftBoxInstanceData(tenantSlug, id, {
+          senderClientId: parseInteger(body.client_id, 0),
+          eventType: body.event_type,
+          voucherHideAmount: ["1", "true", "on", "yes"].includes(String(body.voucher_hide_amount ?? "").toLowerCase()),
+          recipientClientId: parseInteger(body.recipient_client_id, 0),
+          recipientName: body.recipient_name,
+          recipientEmail: body.recipient_email,
+          note: body.note,
+          giftMessage: body.gift_message,
+        }, session.user.id);
+        return Response.json({ ok: true, source: "giftbox?action=update_instance", sourceMode: "database", message: result.message });
+      } catch (error) {
+        return Response.json({ ok: false, error: `Errore: ${error instanceof Error ? error.message : ""}` });
+      }
     }
 
     // Modale scadenza (port of _mode=update_instance_expiry).
     if (action === "update_instance_expiry") {
       const id = parseInteger(body.instance_id ?? body.id, 0);
-      const result = await updateGiftBoxInstanceExpiry(tenantSlug, id, String(body.expires_at ?? ""));
-      const detail = await getGiftBoxInstanceFull(tenantSlug, id);
-      return Response.json({ ok: true, source: "giftbox?action=update_instance_expiry", sourceMode: "database", message: result.message, detail });
+      try {
+        const result = await updateGiftBoxInstanceExpiry(tenantSlug, id, String(body.expires_at ?? ""), session.user.id);
+        return Response.json({ ok: true, source: "giftbox?action=update_instance_expiry", sourceMode: "database", message: result.message });
+      } catch (error) {
+        return Response.json({ ok: false, error: `Errore: ${error instanceof Error ? error.message : "Errore aggiornamento scadenza"}` });
+      }
     }
 
     // Riscatto PARZIALE per-item (port of _mode=redeem_instance_partial):
-    // redeem_qty_json = {"<instance_item_row_id>": qty} (stringa JSON:
-    // parseRequestBody appiattisce i valori non-stringa).
+    // redeem_qty_json = {"<giftbox_item_id>": qty} come i name legacy
+    // redeem_qty[<id>] (stringa JSON: parseRequestBody appiattisce gli oggetti).
     if (action === "redeem_instance_partial") {
       const id = parseInteger(body.instance_id ?? body.id, 0);
-      const qtyByRowId: Record<number, number> = {};
+      const qtyByItemId: Record<number, number> = {};
       try {
         const raw = JSON.parse(String(body.redeem_qty_json ?? body.redeem_qty ?? "{}"));
         if (raw && typeof raw === "object") {
           for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-            const rowId = parseInteger(k, 0);
+            const itemId = parseInteger(k, 0);
             const qty = parseInteger(v, 0);
-            if (rowId > 0 && qty > 0) qtyByRowId[rowId] = qty;
+            if (itemId > 0 && qty > 0) qtyByItemId[itemId] = qty;
           }
         }
       } catch { /* selezione vuota -> errore legacy sotto */ }
       const locationContext = await getManageLocationContext(tenantSlug).catch(() => null);
       const currentLocation = locationContext?.locations.find((l) => l.id === locationContext.currentLocationId) ?? null;
-      const result = await redeemGiftBoxInstancePartial(
-        tenantSlug,
-        id,
-        qtyByRowId,
-        String(body.redeem_note ?? ""),
-        session.user.id,
-        locationContext ? { id: locationContext.currentLocationId, name: currentLocation?.name ?? "" } : null,
-      );
-      const detail = await getGiftBoxInstanceFull(tenantSlug, id);
-      return Response.json({ ok: true, source: "giftbox?action=redeem_instance_partial", sourceMode: "database", message: result.message, detail });
+      try {
+        const result = await redeemGiftBoxInstancePartial(
+          tenantSlug,
+          id,
+          qtyByItemId,
+          String(body.redeem_note ?? ""),
+          session.user.id,
+          locationContext ? { id: locationContext.currentLocationId, name: currentLocation?.name ?? "" } : null,
+        );
+        return Response.json({ ok: true, source: "giftbox?action=redeem_instance_partial", sourceMode: "database", message: result.message });
+      } catch (error) {
+        return Response.json({ ok: false, error: `Errore: ${error instanceof Error ? error.message : ""}` });
+      }
     }
 
     // Nota interna (port of _mode=update_instance_internal_note).
     if (action === "update_instance_internal_note") {
       const id = parseInteger(body.instance_id ?? body.id, 0);
-      const result = await updateGiftBoxInstanceInternalNote(tenantSlug, id, String(body.internal_note ?? body.note ?? ""));
-      const detail = await getGiftBoxInstanceFull(tenantSlug, id);
-      return Response.json({ ok: true, source: "giftbox?action=update_instance_internal_note", sourceMode: "database", message: result.message, detail });
+      try {
+        const result = await updateGiftBoxInstanceInternalNote(tenantSlug, id, String(body.internal_note ?? body.note ?? ""));
+        return Response.json({ ok: true, source: "giftbox?action=update_instance_internal_note", sourceMode: "database", message: result.message });
+      } catch (error) {
+        return Response.json({ ok: false, error: `Errore: ${error instanceof Error ? error.message : ""}` });
+      }
     }
 
-    // Invio email voucher (port of _mode=send_email).
+    // Invio email voucher (port of _mode=send_email): err flash legacy senza
+    // prefisso (fallback 'Errore invio email').
     if (action === "send_email") {
       const id = parseInteger(body.instance_id ?? body.id, 0);
       const showDetails = ["1", "true", "on", "yes"].includes(String(body.show_details ?? "").toLowerCase());
-      const result = await sendGiftBoxInstanceEmail(tenantSlug, id, String(body.send_to ?? ""), showDetails, String(body.send_gift_message ?? ""));
-      const detail = await getGiftBoxInstanceFull(tenantSlug, id);
-      return Response.json({ ok: true, source: "giftbox?action=send_email", sourceMode: "database", message: result.message, detail });
+      try {
+        const result = await sendGiftBoxInstanceEmail(tenantSlug, id, String(body.send_to ?? ""), showDetails, String(body.send_gift_message ?? ""));
+        return Response.json({ ok: true, source: "giftbox?action=send_email", sourceMode: "database", message: result.message });
+      } catch (error) {
+        return Response.json({ ok: false, error: (error instanceof Error ? error.message : "") || "Errore invio email" });
+      }
     }
 
     // Cancel an instance (port of cancel / GiftBox::cancelInstance).

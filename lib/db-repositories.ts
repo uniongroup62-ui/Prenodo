@@ -18029,7 +18029,8 @@ export async function listManageGiftBoxTemplates(slug: string): Promise<Array<{ 
     slug,
     table: "giftboxes",
     where: "deleted_at IS NULL",
-    orderBy: "sort_order ASC, id ASC",
+    // Ordine legacy GiftBox::listGiftBoxes: sort_order ASC, id DESC.
+    orderBy: "COALESCE(sort_order,0) ASC, id DESC",
   }).catch(() => [] as RowDataPacket[]);
   return Promise.all(rows.map(async (row) => {
     const id = Number(row.id ?? 0);
@@ -18120,17 +18121,16 @@ export async function saveManageGiftBoxTemplate(slug: string, body: Record<strin
   const fidelityOnly = String(body.fidelity_only ?? "") === "1";
   const active = String(body.active ?? "") === "1";
 
-  // Livelli Punti (giftbox.php gbLevelsWrap): whitelist dai livelli configurati,
-  // obbligatori con fidelity_only, azzerati con all_clients.
+  // Livelli Punti (GiftBox::saveGiftBox/normalizeLevelKeys): normalizzati
+  // (lowercase, dedupe) e OBBLIGATORI con fidelity_only — il legacy non
+  // whitelist-a contro i livelli configurati e fallisce sempre senza selezione.
   let eligibleLevels: string[] = [];
   if (fidelityOnly) {
-    const levelsCfg = await getFidelityLevelsSettings(slug).catch(() => ({ enabled: false, pointsEnabled: false, levels: [] as Array<{ key: string }> }));
-    const whitelist = new Set(levelsCfg.levels.map((l) => String(l.key ?? "").trim().toLowerCase()).filter(Boolean));
     try {
       const parsed = JSON.parse(String(body.eligible_levels_points_json ?? body.eligible_levels_points ?? "[]"));
-      if (Array.isArray(parsed)) eligibleLevels = [...new Set(parsed.map((k) => String(k ?? "").trim().toLowerCase()).filter((k) => whitelist.has(k)))];
+      if (Array.isArray(parsed)) eligibleLevels = [...new Set(parsed.map((k) => String(k ?? "").trim().toLowerCase()).filter(Boolean))];
     } catch { eligibleLevels = []; }
-    if (eligibleLevels.length === 0 && whitelist.size > 0) throw new Error("Errore: seleziona almeno un livello Punti.");
+    if (eligibleLevels.length === 0) throw new Error("Errore: seleziona almeno un livello Punti.");
   }
   const pointsCost = roundMoney(Math.max(0, Number(String(body.points_cost ?? "0").replace(",", ".")) || 0));
   const sortOrder = Number.parseInt(String(body.sort_order ?? "0"), 10) || 0;

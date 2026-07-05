@@ -1,38 +1,56 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-// Faithful port of the PHP giftbox page (app/pages/giftbox.php):
-// - tab default (instances): filtri Mittente / Cerca / Stato (+ Tutte le sedi
-//   multi-sede), tabella Codice | Mittente | Destinatario | [Sede] | Stato |
-//   Emessa | Scadenza | Riscatto | Azioni con badge legacy e Codice → voucher.
+// Port fedele della pagina GiftBox (app/pages/giftbox.php):
+// - tab default (instances): filtri SERVER-SIDE Mittente (combobox ricercabile
+//   con tutti i clienti) / Cerca (codice, destinatario, email) / Stato
+//   (+ Tutte le sedi multi-sede), auto-expire al load, tabella Codice |
+//   Mittente | Destinatario | Sede | Stato | Emessa | Scadenza | Riscatto |
+//   Azioni con date raw (YYYY-MM-DD) e Codice -> voucher (?id=&embed=1).
 // - tab=boxes: barra "Template GiftBox (contenuti + regole base)" + card
-//   "GiftBox / N totali" con colonne Nome | Stato | Costo punti | Livello |
-//   Contenuti | Istanze | Validità | azioni (Modifica / Elimina con confirm
-//   legacy "Eliminare questa GiftBox?").
-// Header comune: [← Fidelity][Impostazioni][Crea GiftBox → pos (se non vuota)].
+//   "GiftBox / N totali" (Nome | Stato | Costo punti | Livello | Contenuti |
+//   Istanze | Validità | Modifica/Elimina con confirm legacy).
+// Header comune gated: [← Fidelity][Impostazioni giftbox.settings]
+// [Crea GiftBox pos.manage → pos] + flash ?msg/?err.
+
+type GiftboxQuery = {
+  tab?: string;
+  q?: string;
+  status?: string;
+  client_id?: string;
+  all_locations?: string;
+  msg?: string;
+  err?: string;
+};
 
 type InstanceRow = {
   id: number;
   code: string;
-  publicToken: string;
-  senderId: number;
   senderName: string;
-  recipientName: string;
-  recipientEmail: string;
-  locationName: string;
+  recipientLabel: string;
+  locationLabel: string;
   status: string;
   statusLabel: string;
   statusBadge: string;
-  issuedAt: string;
-  expiresAt: string;
-  redeemedAt: string;
+  issuedDate: string;
+  expiresDate: string;
+  redeemedDate: string;
+};
+
+type ListPayload = {
+  ok?: boolean;
+  rows?: InstanceRow[];
+  hasAnyInstances?: boolean;
+  clientItems?: Array<{ id: string; label: string }>;
+  showAllLocationsFilter?: boolean;
+  canSettings?: boolean;
+  canCreate?: boolean;
 };
 
 type Template = {
   id: number;
   name: string;
-  description: string;
   active: boolean;
   pointsCost: number;
   itemsCount: number;
@@ -47,114 +65,199 @@ function tenantSlug(): string {
   return window.location.pathname.split("/")[1] || "";
 }
 
-function currentTab(): string {
-  if (typeof window === "undefined") return "";
-  return new URLSearchParams(window.location.search).get("tab") ?? "";
+// fmt_points legacy: intero con separatore migliaia.
+function fmtPoints(v: number): string {
+  const n = Math.trunc(Number(v) || 0);
+  return String(Math.abs(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ".").replace(/^/, n < 0 ? "-" : "");
 }
 
+// giftbox_page_dt_display d/m/Y per la colonna Validità dei template.
 function fmtDmy(iso: string): string {
   const [y, m, d] = iso.slice(0, 10).split("-");
   return y && m && d ? `${d}/${m}/${y}` : "—";
 }
 
-export function GiftboxContent({ slug: slugProp }: { slug?: string } = {}) {
+// norm() di giftbox.js: lowercase + rimozione accenti.
+function normSearch(s: string): string {
+  return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+}
+
+// Combobox filtro Mittente (gbInitFilterCombobox: dropdown-item + "Nessun
+// risultato", voce "Tutti").
+function SenderFilterCombobox({
+  items,
+  value,
+  onChange,
+}: {
+  items: Array<{ id: string; label: string }>;
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    function onDoc(e: MouseEvent) {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+  const data = [{ id: "0", label: "Tutti" }, ...items];
+  const q = normSearch(search);
+  const shown = data.filter((it) => !q || normSearch(it.label).includes(q));
+  const selected = data.find((it) => it.id === value);
+  const hasSelection = value !== "" && value !== "0" && selected;
+  return (
+    <div className={`app-combobox dropdown ${open ? "show" : ""}`} id="giftboxClientFilterBox" ref={boxRef}>
+      <button
+        className="btn btn-outline-secondary dropdown-toggle w-100 app-combobox-toggle"
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className={`app-combobox-text ${hasSelection ? "" : "d-none"}`}>{hasSelection ? selected?.label : ""}</span>
+        <span className={`text-muted app-combobox-placeholder ${hasSelection ? "d-none" : ""}`}>Tutti</span>
+      </button>
+      <div className={`dropdown-menu p-2 w-100 ${open ? "show" : ""}`}>
+        <input
+          type="text"
+          className="form-control form-control-sm app-combobox-search"
+          placeholder="Cerca…"
+          autoComplete="off"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <div className="app-combobox-list mt-2" style={{ maxHeight: "14rem", overflowY: "auto" }}>
+          {shown.length === 0 ? (
+            <div className="text-muted small px-2 py-1">Nessun risultato</div>
+          ) : (
+            shown.map((it) => (
+              <button
+                key={it.id}
+                type="button"
+                className="dropdown-item d-flex justify-content-between align-items-center"
+                onClick={() => {
+                  onChange(it.id);
+                  setSearch("");
+                  setOpen(false);
+                }}
+              >
+                {it.label}
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+      <input type="hidden" name="client_id" value={value} readOnly />
+    </div>
+  );
+}
+
+export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: GiftboxQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
-  const [tab] = useState<string>(currentTab);
-  const [rows, setRows] = useState<InstanceRow[]>([]);
-  const [totalCount, setTotalCount] = useState(0);
-  const [locationsCount, setLocationsCount] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [tab] = useState<string>(() => {
+    const t = String(initialQuery?.tab ?? (typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("tab") ?? "" : ""));
+    return t === "boxes" ? "boxes" : "instances";
+  });
+
+  // Filtri applicati (form GET legacy: il submit naviga con i parametri).
+  const [applied] = useState(() => ({
+    clientId: String(initialQuery?.client_id ?? "0") || "0",
+    q: String(initialQuery?.q ?? ""),
+    status: String(initialQuery?.status ?? ""),
+    allLocations: ["1", "true", "on", "yes", "all"].includes(String(initialQuery?.all_locations ?? "").toLowerCase()),
+  }));
+
+  const [data, setData] = useState<ListPayload | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
-  const [loadingTemplates, setLoadingTemplates] = useState(true);
+  const [templatePerms, setTemplatePerms] = useState({ canSettings: false, canCreate: false });
+  const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState(0);
-  // Filtri legacy (form GET): applicati al submit "Filtra".
-  const [clientFilter, setClientFilter] = useState(0);
-  const [q, setQ] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
-  const [allLocations, setAllLocations] = useState(false);
-  const [applied, setApplied] = useState({ clientFilter: 0, q: "", statusFilter: "" });
 
-  const loadTemplates = useCallback(() => {
-    fetch(`/api/manage/giftboxes?slug=${encodeURIComponent(slug)}&action=templates`, { headers: { "x-tenant-slug": slug } })
-      .then((r) => r.json())
-      .then((j) => setTemplates(Array.isArray(j.templates) ? j.templates : []))
-      .catch(() => setTemplates([]))
-      .finally(() => setLoadingTemplates(false));
-  }, [slug]);
+  const [clientFilter, setClientFilter] = useState(applied.clientId);
+  const [q, setQ] = useState(applied.q);
+  const [statusFilter, setStatusFilter] = useState(applied.status);
+  const [allLocations, setAllLocations] = useState(applied.allLocations);
 
-  const loadInstances = useCallback((all?: boolean) => {
-    setLoading(true);
-    fetch(`/api/manage/giftboxes?slug=${encodeURIComponent(slug)}&action=manage_list${all ? "&all_locations=1" : ""}`, { headers: { "x-tenant-slug": slug } })
+  // Flash legacy (View::alert): ?msg= success + ?err= danger dal redirect.
+  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+
+  useEffect(() => {
+    if (tab === "boxes") {
+      fetch(`/api/manage/giftboxes?slug=${encodeURIComponent(slug)}&action=templates`, { headers: { "x-tenant-slug": slug } })
+        .then((r) => r.json())
+        .then((j) => {
+          setTemplates(Array.isArray(j.templates) ? j.templates : []);
+          setTemplatePerms({ canSettings: j.canSettings === true, canCreate: j.canCreate === true });
+        })
+        .catch(() => setTemplates([]))
+        .finally(() => setLoading(false));
+      return;
+    }
+    const params = new URLSearchParams({ slug, action: "manage_list" });
+    if (applied.clientId !== "0") params.set("client_id", applied.clientId);
+    if (applied.q !== "") params.set("q", applied.q);
+    if (applied.status !== "") params.set("status", applied.status);
+    if (applied.allLocations) params.set("all_locations", "1");
+    fetch(`/api/manage/giftboxes?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
-      .then((j) => {
-        setRows(Array.isArray(j.rows) ? j.rows : []);
-        setTotalCount(Number(j.totalCount ?? 0));
-        setLocationsCount(Number(j.locationsCount ?? 0));
-      })
-      .catch(() => setRows([]))
+      .then((j: ListPayload) => setData(j))
+      .catch(() => setData({ rows: [], hasAnyInstances: false, clientItems: [] }))
       .finally(() => setLoading(false));
-  }, [slug]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slug, tab]);
 
-  // Soft-delete a giftbox template via POST (issued instances keep their snapshot).
+  function href(qs: string): string {
+    return `/${encodeURIComponent(slug)}/${qs}`;
+  }
+  function listUrl(params?: URLSearchParams): string {
+    const usable = params ?? new URLSearchParams();
+    usable.set("tab", "instances");
+    return href(`giftbox?${usable.toString()}`);
+  }
+
+  function applyFilters(e: React.FormEvent) {
+    e.preventDefault();
+    const params = new URLSearchParams();
+    if (clientFilter !== "" && clientFilter !== "0") params.set("client_id", clientFilter);
+    if (q !== "") params.set("q", q);
+    if (statusFilter !== "") params.set("status", statusFilter);
+    if (allLocations) params.set("all_locations", "1");
+    window.location.href = listUrl(params);
+  }
+
+  // Elimina template (soft): confirm legacy + redirect flash 'GiftBox eliminata'
+  // (il redirect legacy perde tab=boxes e torna alle istanze).
   async function deleteTemplate(t: Template) {
     if (busyId) return;
-    if (typeof window !== "undefined" && !window.confirm("Eliminare questa GiftBox?")) return;
+    if (!window.confirm("Eliminare questa GiftBox?")) return;
     setBusyId(t.id);
     try {
       const res = await fetch(`/api/manage/giftboxes?slug=${encodeURIComponent(slug)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-        body: JSON.stringify({ action: "delete", id: t.id }),
+        body: JSON.stringify({ action: "delete", id: String(t.id) }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j?.error) {
-        if (typeof window !== "undefined") window.alert(j?.error || "Impossibile eliminare la GiftBox.");
-      } else {
-        loadTemplates();
+        window.location.href = href(`giftbox?err=${encodeURIComponent(String(j?.error ?? "Errore GiftBox."))}`);
+        return;
       }
+      window.location.href = href(`giftbox?msg=${encodeURIComponent("GiftBox eliminata")}`);
     } finally {
       setBusyId(0);
     }
   }
 
-  useEffect(() => {
-    if (tab === "boxes") {
-      loadTemplates();
-      return;
-    }
-    loadInstances();
-  }, [tab, loadTemplates, loadInstances]);
-
-  function href(suffix: string): string {
-    return `/${encodeURIComponent(slug)}/${suffix.replace("&", "?")}`;
-  }
-  function voucherHref(r: InstanceRow): string {
-    return `/${encodeURIComponent(slug)}/giftbox_voucher?public=1&embed=1&token=${encodeURIComponent(r.publicToken)}`;
-  }
-
-  const senderOptions = useMemo(() => {
-    const seen = new Map<number, string>();
-    for (const r of rows) if (r.senderId > 0 && !seen.has(r.senderId)) seen.set(r.senderId, r.senderName);
-    return Array.from(seen.entries()).sort((a, b) => a[1].localeCompare(b[1]));
-  }, [rows]);
-
-  const filtered = useMemo(() => {
-    const needle = applied.q.trim().toLowerCase();
-    return rows.filter((r) => {
-      if (applied.clientFilter > 0 && r.senderId !== applied.clientFilter) return false;
-      // Il filtro Stato legacy usa "issued" come Attiva.
-      if (applied.statusFilter !== "" && r.status !== applied.statusFilter) return false;
-      if (needle !== "" && !`${r.code} ${r.recipientName} ${r.recipientEmail} ${r.senderName}`.toLowerCase().includes(needle)) return false;
-      return true;
-    });
-  }, [rows, applied]);
-
-  const hasAny = totalCount > 0;
-  const showEmptyState = tab !== "boxes" && !loading && !hasAny;
-  const showLocationCol = rows.some((r) => r.locationName !== "") || locationsCount > 1;
-  const colCount = showLocationCol ? 9 : 8;
+  const rows = data?.rows ?? [];
+  const hasAny = data?.hasAnyInstances ?? false;
+  const showEmptyState = tab === "instances" && !loading && !hasAny;
+  const canSettings = tab === "boxes" ? templatePerms.canSettings : data?.canSettings ?? false;
+  const canCreate = tab === "boxes" ? templatePerms.canCreate : data?.canCreate ?? false;
+  const showAllLocationsFilter = data?.showAllLocationsFilter ?? false;
 
   const header = (
     <div className="bs-page-header">
@@ -169,11 +272,13 @@ export function GiftboxContent({ slug: slugProp }: { slug?: string } = {}) {
             <i className="bi bi-arrow-left me-1" />
             Fidelity
           </a>
-          <a className="btn btn-outline-secondary btn-pill" href={href("giftbox_settings")}>
-            <i className="bi bi-gear me-1" />
-            Impostazioni
-          </a>
-          {(tab === "boxes" || hasAny) && !showEmptyState ? (
+          {canSettings ? (
+            <a className="btn btn-outline-secondary btn-pill" href={href("giftbox_settings")}>
+              <i className="bi bi-gear me-1" />
+              Impostazioni
+            </a>
+          ) : null}
+          {canCreate && !showEmptyState ? (
             <a className="btn btn-primary btn-pill" href={href("pos")}>
               <i className="bi bi-plus-lg me-1" />
               Crea GiftBox
@@ -184,17 +289,35 @@ export function GiftboxContent({ slug: slugProp }: { slug?: string } = {}) {
     </div>
   );
 
+  const flashAlerts = (
+    <>
+      {flash.msg ? (
+        <div className="alert alert-success d-flex align-items-start gap-2" role="alert">
+          <div><i className="bi bi-info-circle" /></div>
+          <div>{flash.msg}</div>
+        </div>
+      ) : null}
+      {flash.err ? (
+        <div className="alert alert-danger d-flex align-items-start gap-2" role="alert">
+          <div><i className="bi bi-info-circle" /></div>
+          <div>{flash.err}</div>
+        </div>
+      ) : null}
+    </>
+  );
+
   // Template grid (giftbox.php tab=boxes).
   if (tab === "boxes") {
     return (
       <div className="container-fluid">
         <link rel="stylesheet" href="/assets/css/pages/giftbox.css" />
         {header}
+        {flashAlerts}
 
         <div className="d-flex justify-content-between align-items-center mb-3">
           <div className="text-muted small">Template GiftBox (contenuti + regole base)</div>
           <div className="d-flex gap-2">
-            <a className="btn btn-primary btn-pill" href={href("giftbox&action=new")}>
+            <a className="btn btn-primary btn-pill" href={href("giftbox?action=new")}>
               <i className="bi bi-plus-circle me-1" />
               Nuova GiftBox
             </a>
@@ -206,6 +329,7 @@ export function GiftboxContent({ slug: slugProp }: { slug?: string } = {}) {
             <div className="fw-semibold">GiftBox</div>
             <div className="text-muted small">{templates.length} totali</div>
           </div>
+
           <div className="table-responsive">
             <table className="table mb-0 align-middle">
               <thead>
@@ -221,45 +345,54 @@ export function GiftboxContent({ slug: slugProp }: { slug?: string } = {}) {
                 </tr>
               </thead>
               <tbody>
-                {loadingTemplates ? (
+                {loading ? (
                   <tr>
                     <td colSpan={8} className="text-muted small p-3">
                       Caricamento…
                     </td>
                   </tr>
-                ) : templates.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="text-muted p-3">
-                      Nessuna GiftBox.
-                    </td>
-                  </tr>
                 ) : (
-                  templates.map((t) => (
-                    <tr key={t.id}>
-                      <td className="fw-semibold">
-                        {t.name}
-                        {t.description !== "" ? <div className="text-muted small fw-normal">{t.description}</div> : null}
-                      </td>
-                      <td>
-                        <span className={`badge ${t.active ? "text-bg-success" : "text-bg-secondary"}`}>{t.active ? "Attiva" : "Disattiva"}</span>
-                      </td>
-                      <td className="text-end">{t.pointsCost > 0 ? t.pointsCost : "—"}</td>
-                      <td className="text-muted">{t.levelLabel}</td>
-                      <td className="text-center">{t.itemsCount}</td>
-                      <td className="text-center">{t.instancesCount}</td>
-                      <td className="text-muted">
-                        {t.validFrom !== "" || t.validTo !== "" ? `${t.validFrom !== "" ? fmtDmy(t.validFrom) : "—"} → ${t.validTo !== "" ? fmtDmy(t.validTo) : "—"}` : "—"}
-                      </td>
-                      <td className="text-end">
-                        <a className="btn btn-sm btn-outline-secondary" href={href(`giftbox&action=edit&id=${t.id}`)}>
-                          Modifica
-                        </a>{" "}
-                        <button type="button" className="btn btn-sm btn-outline-danger" disabled={busyId === t.id} onClick={() => deleteTemplate(t)}>
-                          Elimina
-                        </button>
-                      </td>
-                    </tr>
-                  ))
+                  <>
+                    {templates.map((t) => (
+                      <tr key={t.id}>
+                        <td className="fw-semibold">{t.name}</td>
+                        <td>
+                          <span className={`badge text-bg-${t.active ? "success" : "secondary"}`}>{t.active ? "Attiva" : "Disattiva"}</span>
+                        </td>
+                        <td className="text-end">{t.pointsCost > 0 ? fmtPoints(t.pointsCost) : "0"}</td>
+                        <td className="text-muted small">{t.levelLabel || "—"}</td>
+                        <td className="text-center">{t.itemsCount}</td>
+                        <td className="text-center">{t.instancesCount}</td>
+                        <td className="text-muted small">
+                          {t.validFrom !== "" || t.validTo !== "" ? `${t.validFrom !== "" ? fmtDmy(t.validFrom) : "—"} → ${t.validTo !== "" ? fmtDmy(t.validTo) : "—"}` : "—"}
+                        </td>
+                        <td className="text-end">
+                          <a className="btn btn-sm btn-outline-primary" href={href(`giftbox?action=edit&id=${t.id}`)}>
+                            Modifica
+                          </a>{" "}
+                          <a
+                            className="btn btn-sm btn-outline-danger"
+                            href={href(`giftbox?action=delete&id=${t.id}`)}
+                            data-confirm="Eliminare questa GiftBox?"
+                            aria-disabled={busyId === t.id}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              deleteTemplate(t);
+                            }}
+                          >
+                            Elimina
+                          </a>
+                        </td>
+                      </tr>
+                    ))}
+                    {templates.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="text-muted p-3">
+                          Nessuna GiftBox.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </>
                 )}
               </tbody>
             </table>
@@ -274,8 +407,11 @@ export function GiftboxContent({ slug: slugProp }: { slug?: string } = {}) {
     <div className="container-fluid">
       <link rel="stylesheet" href="/assets/css/pages/giftbox.css" />
       {header}
+      {flashAlerts}
 
-      {showEmptyState ? (
+      {loading ? (
+        <div className="card p-3 text-muted small">Caricamento…</div>
+      ) : showEmptyState ? (
         <div className="card border-0 shadow-sm giftbox-empty-card">
           <div className="giftbox-empty-state">
             <div className="giftbox-empty-icon" aria-hidden="true">
@@ -284,45 +420,38 @@ export function GiftboxContent({ slug: slugProp }: { slug?: string } = {}) {
             <h2>Nessuna GiftBox presente</h2>
             <p>Le GiftBox emesse da Pagamenti compariranno qui. Potrai monitorare mittente, destinatario, scadenze, riscatti e sede di emissione.</p>
             <div className="d-flex justify-content-center gap-2 flex-wrap">
-              <a className="btn btn-primary" href={href("pos")}>
-                <i className="bi bi-plus-lg me-1" />
-                Crea GiftBox
-              </a>
-              <a className="btn btn-outline-secondary" href={href("giftbox_settings")}>
-                <i className="bi bi-gear me-1" />
-                Impostazioni
-              </a>
+              {canCreate ? (
+                <a className="btn btn-primary" href={href("pos")}>
+                  <i className="bi bi-plus-lg me-1" />
+                  Crea GiftBox
+                </a>
+              ) : null}
+              {canSettings ? (
+                <a className="btn btn-outline-secondary" href={href("giftbox_settings")}>
+                  <i className="bi bi-gear me-1" />
+                  Impostazioni
+                </a>
+              ) : null}
             </div>
           </div>
         </div>
       ) : (
         <>
+          {/* Lista istanze: filtri allineati alla pagina Pacchetti */}
           <div className="card p-3 mb-3">
-            <form
-              className="row g-2 align-items-end"
-              onSubmit={(e) => {
-                e.preventDefault();
-                setApplied({ clientFilter, q, statusFilter });
-                loadInstances(allLocations);
-              }}
-            >
+            <form className="row g-2 align-items-end" method="get" onSubmit={applyFilters}>
               <div className="col-lg-3">
-                <label className="form-label small">Mittente</label>
-                <select className="form-select" value={String(clientFilter)} onChange={(e) => setClientFilter(Number(e.target.value) || 0)}>
-                  <option value="0">Tutti</option>
-                  {senderOptions.map(([id, name]) => (
-                    <option value={id} key={id}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
+                <label className="form-label">Mittente</label>
+                <SenderFilterCombobox items={data?.clientItems ?? []} value={clientFilter} onChange={setClientFilter} />
               </div>
-              <div className="col-lg-3">
-                <label className="form-label small">Cerca</label>
+
+              <div className={showAllLocationsFilter ? "col-lg-3" : "col-lg-4"}>
+                <label className="form-label">Cerca</label>
                 <input className="form-control" name="q" placeholder="Codice, destinatario..." value={q} onChange={(e) => setQ(e.target.value)} />
               </div>
-              <div className="col-lg-2">
-                <label className="form-label small">Stato</label>
+
+              <div className={showAllLocationsFilter ? "col-lg-2" : "col-lg-3"}>
+                <label className="form-label">Stato</label>
                 <select className="form-select" name="status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                   <option value="">Tutti</option>
                   <option value="issued">Attiva</option>
@@ -331,13 +460,16 @@ export function GiftboxContent({ slug: slugProp }: { slug?: string } = {}) {
                   <option value="cancelled">Annullata</option>
                 </select>
               </div>
-              {locationsCount > 1 ? (
-                <div className="col-lg-2 d-flex align-items-center">
+
+              {showAllLocationsFilter ? (
+                <div className="col-lg-2 d-flex align-items-center justify-content-start">
                   <div className="form-check mb-2">
                     <input
                       className="form-check-input"
                       type="checkbox"
                       id="giftboxAllLocations"
+                      name="all_locations"
+                      value="1"
                       checked={allLocations}
                       onChange={(e) => setAllLocations(e.target.checked)}
                     />
@@ -347,7 +479,8 @@ export function GiftboxContent({ slug: slugProp }: { slug?: string } = {}) {
                   </div>
                 </div>
               ) : null}
-              <div className="col-lg-2 d-flex align-items-end gap-2">
+
+              <div className="col-lg-2 d-grid">
                 <button className="btn btn-outline-primary" type="submit">
                   <i className="bi bi-search me-1" />
                   Filtra
@@ -364,7 +497,7 @@ export function GiftboxContent({ slug: slugProp }: { slug?: string } = {}) {
                     <th>Codice</th>
                     <th>Mittente</th>
                     <th>Destinatario</th>
-                    {showLocationCol ? <th>Sede</th> : null}
+                    <th>Sede</th>
                     <th>Stato</th>
                     <th>Emessa</th>
                     <th>Scadenza</th>
@@ -373,46 +506,45 @@ export function GiftboxContent({ slug: slugProp }: { slug?: string } = {}) {
                   </tr>
                 </thead>
                 <tbody>
-                  {loading ? (
-                    <tr>
-                      <td colSpan={colCount} className="text-muted small p-3">
-                        Caricamento…
+                  {rows.map((r) => (
+                    <tr key={r.id}>
+                      <td className="fw-semibold">
+                        <a className="text-decoration-none" target="_blank" rel="noopener" href={href(`giftbox_voucher?id=${r.id}&embed=1`)} title="Apri voucher / stampa">
+                          {r.code}
+                        </a>
+                      </td>
+                      <td>{r.senderName}</td>
+                      <td className="text-muted">{r.recipientLabel}</td>
+                      <td className="text-muted">{r.locationLabel}</td>
+                      <td>
+                        <span className={`badge bg-${r.statusBadge}`}>{r.statusLabel}</span>
+                      </td>
+                      <td className="text-muted">{r.issuedDate}</td>
+                      <td className="text-muted">{r.expiresDate}</td>
+                      <td className="text-muted">{r.redeemedDate}</td>
+                      <td className="text-end">
+                        <a
+                          className="btn btn-sm btn-outline-secondary me-1"
+                          target="_blank"
+                          rel="noopener"
+                          href={href(`giftbox_voucher?id=${r.id}&embed=1`)}
+                          title="Voucher / stampa"
+                        >
+                          <i className="bi bi-printer" />
+                        </a>
+                        <a className="btn btn-sm btn-outline-secondary" href={href(`giftbox?tab=instances&action=edit_instance&id=${r.id}`)}>
+                          Dettaglio
+                        </a>
                       </td>
                     </tr>
-                  ) : filtered.length === 0 ? (
+                  ))}
+                  {rows.length === 0 ? (
                     <tr>
-                      <td colSpan={colCount} className="text-muted p-3">
+                      <td colSpan={9} className="text-muted p-3">
                         Nessuna GiftBox trovata con i filtri selezionati.
                       </td>
                     </tr>
-                  ) : (
-                    filtered.map((r) => (
-                      <tr key={r.id}>
-                        <td className="fw-semibold">
-                          <a href={voucherHref(r)} target="_blank" rel="noopener">
-                            {r.code || `#${r.id}`}
-                          </a>
-                        </td>
-                        <td className="text-muted">{r.senderName}</td>
-                        <td className="text-muted">{r.recipientName}</td>
-                        {showLocationCol ? <td className="text-muted">{r.locationName || "—"}</td> : null}
-                        <td>
-                          <span className={`badge ${r.statusBadge}`}>{r.statusLabel}</span>
-                        </td>
-                        <td className="text-muted">{r.issuedAt || "—"}</td>
-                        <td className="text-muted">{r.expiresAt || "—"}</td>
-                        <td className="text-muted">{r.redeemedAt || "—"}</td>
-                        <td className="text-end">
-                          <a className="btn btn-sm btn-outline-secondary" title="Voucher" target="_blank" rel="noopener" href={voucherHref(r)}>
-                            <i className="bi bi-printer" />
-                          </a>{" "}
-                          <a className="btn btn-sm btn-outline-secondary" href={href(`giftbox&action=edit_instance&id=${r.id}`)}>
-                            Dettaglio
-                          </a>
-                        </td>
-                      </tr>
-                    ))
-                  )}
+                  ) : null}
                 </tbody>
               </table>
             </div>
