@@ -184,7 +184,7 @@ export default async function TenantPage({
   searchParams,
 }: {
   params: Promise<{ tenantSlug: string; segments?: string[] }>;
-  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string; staff_id?: string; source?: string; detail_staff_id?: string; from?: string; to?: string; q?: string; cat?: string; cat_q?: string; cat_status?: string; category_filter_id?: string; low_stock?: string; supplier?: string; category?: string; code?: string; brand?: string; internal_code?: string; product_id?: string; category_search?: string; edit_id?: string; sku?: string; document_number?: string; number?: string; date?: string; include_canceled?: string; p?: string; category_id?: string; scope?: string; msg?: string; err?: string; type?: string; all_locations?: string; package_name?: string; p_pending?: string; p_list?: string; warn_locked?: string }>;
+  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string; staff_id?: string; source?: string; detail_staff_id?: string; from?: string; to?: string; q?: string; cat?: string; cat_q?: string; cat_status?: string; category_filter_id?: string; low_stock?: string; supplier?: string; category?: string; code?: string; brand?: string; internal_code?: string; product_id?: string; category_search?: string; edit_id?: string; sku?: string; document_number?: string; number?: string; date?: string; include_canceled?: string; p?: string; category_id?: string; scope?: string; msg?: string; err?: string; type?: string; all_locations?: string; package_name?: string; p_pending?: string; p_list?: string; warn_locked?: string; open_summary?: string }>;
 }) {
   const { tenantSlug, segments } = await params;
   const query = await searchParams;
@@ -538,13 +538,23 @@ export default async function TenantPage({
     );
   }
 
-  // Faithful promotion NEW / EDIT form. The promotions list links to
-  // index.php?page=promotions&action=new|edit; route those to the faithful
-  // editor (instead of the Tailwind ManagementApp fallback).
-  if (page === "promotions" && (query.action === "new" || query.action === "edit")) {
+  // Faithful promotion NEW / EDIT / DUPLICATE form. The promotions list links to
+  // index.php?page=promotions&action=new|edit|duplicate; route those to the
+  // faithful editor.
+  if (page === "promotions" && (query.action === "new" || query.action === "edit" || query.action === "duplicate")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
         <PromotionFormContent slug={tenantSlug} />
+      </ManageShell>
+    );
+  }
+
+  // Faithful promotions LIST (promotions.php action=list): flash ?msg/?err +
+  // auto-apertura del Riepilogo via ?open_summary.
+  if (page === "promotions") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <PromotionsContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err, open_summary: query.open_summary }} />
       </ManageShell>
     );
   }

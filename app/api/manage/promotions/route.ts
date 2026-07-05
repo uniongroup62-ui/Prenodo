@@ -1,5 +1,5 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
-import { deleteManagePromotion, evaluatePromotionsForCart, getManagePromotion, listDbPromotions, previewDbPromotion, promotionFormContext, saveManagePromotion, toggleManagePromotion, type PromoCartLine } from "@/lib/db-repositories";
+import { addManagePromotionExcludedClient, deleteManagePromotion, evaluatePromotionsForCart, getManagePromotion, listDbPromotions, listManagePromotionPage, previewDbPromotion, promotionFormContext, promotionStructuralBlockReason, removeManagePromotionExcludedClient, saveManagePromotion, toggleManagePromotion, updateManagePromotionConditions, type PromoCartLine } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can, canAny } from "@/lib/role-permissions";
@@ -15,6 +15,21 @@ export async function GET(request: Request) {
 
   try {
     const url = new URL(request.url);
+
+    // Lista fedele (promotions.php action=list): righe con badge/riepilogo/
+    // conferme + payload dei modal Riepilogo per campagna.
+    if (url.searchParams.get("action") === "page") {
+      if (!can(session.user.perms, "promotions.manage")) return jsonError("Permesso promozioni mancante.", 403);
+      return Response.json({ ok: true, sourceMode: "database", ...(await listManagePromotionPage(tenantSlug)) });
+    }
+
+    // Guardia lock strutturale del form edit (promotions.php action=edit 999-1004):
+    // con utilizzi collegati il form NON si apre e si torna alla lista con l'errore.
+    if (url.searchParams.get("action") === "edit_guard") {
+      if (!can(session.user.perms, "promotions.manage")) return jsonError("Permesso promozioni mancante.", 403);
+      const reason = await promotionStructuralBlockReason(tenantSlug, parseInteger(url.searchParams.get("id"), 0));
+      return Response.json({ ok: true, reason });
+    }
 
     // Editor form catalogs (services/products/locations/fidelity levels/clients).
     if (url.searchParams.get("action") === "context") {
@@ -92,6 +107,41 @@ export async function POST(request: Request) {
         ...result,
         promotions: await listDbPromotions(tenantSlug),
       });
+    }
+
+    // Condizioni booking dal riepilogo (promotions.php _mode=promotion_conditions_update).
+    if (action === "conditions_update" || action === "promotion_conditions_update") {
+      if (!can(session.user.perms, "promotions.manage")) return jsonError("Permesso promozioni mancante.", 403);
+      const promotionId = parseInteger(body.promotion_id ?? body.id, 0);
+      try {
+        const enabled = ["1", "true", "yes", "on"].includes(String(body.promo_conditions_enabled ?? "").toLowerCase());
+        await updateManagePromotionConditions(tenantSlug, promotionId, enabled, String(body.promo_conditions ?? ""), session.user.id);
+        return Response.json({ ok: true, message: "Condizioni promozionali aggiornate", promotionId });
+      } catch (error) {
+        return jsonError(error instanceof Error ? error.message : "Errore aggiornamento condizioni promozionali");
+      }
+    }
+
+    // Esclusioni clienti dal riepilogo (promotion_exclusion_add / _remove).
+    if (action === "exclusion_add" || action === "promotion_exclusion_add") {
+      if (!can(session.user.perms, "promotions.manage")) return jsonError("Permesso promozioni mancante.", 403);
+      const promotionId = parseInteger(body.promotion_id ?? body.id, 0);
+      try {
+        await addManagePromotionExcludedClient(tenantSlug, promotionId, parseInteger(body.client_id, 0), session.user.id);
+        return Response.json({ ok: true, message: "Cliente aggiunto all'esclusione", promotionId });
+      } catch (error) {
+        return jsonError(error instanceof Error ? error.message : "Errore aggiornamento esclusioni promozione");
+      }
+    }
+    if (action === "exclusion_remove" || action === "promotion_exclusion_remove") {
+      if (!can(session.user.perms, "promotions.manage")) return jsonError("Permesso promozioni mancante.", 403);
+      const promotionId = parseInteger(body.promotion_id ?? body.id, 0);
+      try {
+        await removeManagePromotionExcludedClient(tenantSlug, promotionId, parseInteger(body.client_id, 0), session.user.id);
+        return Response.json({ ok: true, message: "Cliente rimosso dall'esclusione", promotionId });
+      } catch (error) {
+        return jsonError(error instanceof Error ? error.message : "Errore aggiornamento esclusioni promozione");
+      }
     }
 
     // Faithful promotion editor save (port of promotions.php POST action=new|edit).

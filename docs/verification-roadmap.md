@@ -4938,3 +4938,76 @@ markup inerte.
 Verifica: payload wallet con expireEnabled/expireDays/label senza cliente +
 battery e2e 29/29 + 72/72 marker rieseguiti dopo i ritocchi + typecheck/lint
 puliti.
+
+## Promozioni — SECONDA PASSATA: LISTA riscritta (promotions.php action=list) — 2026-07-05
+Ri-audit su richiesta. BASELINE: la battery motore del primo audit (38 test,
+save/engine/toggle/delete/clone/per_customer_limit) era ancora verde, MA la
+LISTA Next era il vecchio prototipo non fedele: colonne inventate (Canale!),
+badge 'Sospesa' per le disattivate, toggle/delete con messaggi inventati e
+confirm non legacy, NESSUN modal Riepilogo, nessuna conferma con prenotazioni
+interessate, nessuna gestione condizioni/esclusioni, niente flash redirect.
+RISCRITTURA COMPLETA:
+1. LISTA legacy: colonne Nome/Sconto/Validità/Target/Scope/Sedi/Stato/Azioni;
+   badge stato port di promotions_page_status_meta (Attiva success, Programmata
+   info, Disattivata secondary, Sospesa warning con Fidelity off+target
+   fidelity+auto_disabled, Completata dark non riattivabile); label sconto port
+   di Promotions::formatDiscountLabel (percent zeri trimmati, fixed fmt_money,
+   ereditarietà prodotti, compat coupon v1, fallback 'Per elementi
+   selezionati'); validità 'Sempre'/'Da d/m/Y'/'Fino al d/m/Y'/'X → Y'; target
+   labels legacy; scope 'Servizi: Tutti • Prodotti: Selezionati'; sedi; ordine
+   is_active DESC, starts_at DESC, id DESC (cap 500); header 'Nuova promozione'
+   nascosto nello stato vuoto; 'Nessuna promozione trovata per la sede
+   selezionata.'; btn-group Riepilogo · Modifica|'Clona campagna' (lock
+   strutturale) · Disattiva/Attiva/'Riattiva con Fidelity' disabled/label
+   disabled · Elimina.
+2. MODAL 'Conferma operazione' (promotions.js): titolo 'Elimina promozione - X'
+   / 'Disattiva promozione - X', avvisi verbatim ('Eliminazione definitiva...',
+   'Conferma disattivazione...'), accordion 'Prenotazioni interessate' con
+   count, 'N prenotazione aperta perdera/prenotazioni aperte perderanno la
+   promozione.'/'Non risultano prenotazioni aperte collegate alla promozione.',
+   voci 'Prenotazione #ID - d/m/Y H:i • stato' (set stati ESTESO della pagina,
+   16 sinonimi) e 'Altre N prenotazioni non mostrate.', footer Annulla/Continua.
+3. MODAL RIEPILOGO per campagna (auto-open via ?open_summary, anche post-save):
+   Configurazione (stato/validità/target/livelli Fidelity/sconto/scope/sedi/
+   'Cumulabile con' dal bitmask/clienti esclusi/creata/aggiornata/descrizione),
+   Statistiche da promotion_redemptions (clienti coinvolti/utilizzi/sconto
+   totale fmt_money/primo/ultimo utilizzo), Servizi-Prodotti con righe
+   'NOME — sconto • q.tà min. N' (prodotti con SKU), Validità dettagliata
+   (fasce 'Lun 09:00–12:00'/'Tutti i giorni / orari', 'Nessuna'), Limiti
+   ('Senza limiti'), alert 'Promozione non riattivabile' con lista voci.
+4. CONDIZIONI BOOKING nel riepilogo (updatePromotionConditions port): switch
+   'Mostra testo nel booking' + textarea, guardia 'Inserisci il testo delle
+   condizioni promozionali oppure disattiva il flag.', flash 'Condizioni
+   promozionali aggiornate' con redirect ?open_summary, testo NULL a flag off.
+5. ESCLUSIONI CLIENTI nel riepilogo (add/remove port con guardie verbatim:
+   'Cliente non trovato', 'Il cliente non rientra nel target attuale della
+   promozione.' per target fidelity via snapshot adesione+livello punti, 'Il
+   cliente ha già una prenotazione o vendita associata a questa promozione.'
+   su redemption/appuntamenti non annullati/vendite non annullate); candidati
+   filtrati; esclusi con meta 'Fidelity attiva • Punti: X'/'No Fidelity';
+   flash "Cliente aggiunto all'esclusione"/"Cliente rimosso dall'esclusione".
+6. FIX sul toggle esistente: virgolette tipografiche nella guardia Fidelity
+   ('...target “Solo clienti con Fidelity”.'), azzeramento
+   auto_disabled_by_fidelity a toggle riuscito (prima assente), nomi legacy
+   nei blocchi riattivazione ('Servizio "NOME (SKU)" è stato disattivato',
+   fallback 'Servizio #N' sugli eliminati).
+7. FORM: modalità CLONA CAMPAGNA (action=duplicate, prima ASSENTE nel
+   componente — il link legacy 404ava di fatto): prefill dalla sorgente con
+   replace_source_id, titolo 'Clona campagna', submit 'Salva clone';
+   GUARDIA lock strutturale su action=edit (nuovo endpoint edit_guard con la
+   reason verbatim 'Questa promozione ha gia prenotazioni, vendite o utilizzi
+   collegati: puoi clonare la campagna, ma non modificare direttamente la
+   regola esistente.') con redirect lista ?open_summary&err; submit label
+   'Aggiorna' in modifica; post-save redirect flash ?msg&open_summary=ID
+   (confermato identico al live).
+RESIDUI DELIBERATI: filtro 'Tutte le sedi' non renderizzato (tenant mono-sede:
+il legacy lo nasconde e locationScopeSql è no-op con sede attiva unica; per
+multi-sede va aggiunto il filtro server); stats del riepilogo senza filtro
+sede corrente (sede unica: identiche); il fallback lista per-nome-sede di
+promotions.php 1112-1128 non portato (stesso motivo).
+Verifica: battery LISTA 30/30 (payload page con tutti i label/badge/pending/
+canEdit/activation items, toggle verbatim + reset flag, condizioni, esclusioni
+con tutte le guardie, edit_guard, clone con anti-duplicato rispettato, delete,
+ripristino) + regressione motore 38/38 + 80/80 marker bundle + LIVE PHP
+(create->'Promozione salvata'+open_summary, toggle on/off e delete flash
+identici) + typecheck/lint puliti.

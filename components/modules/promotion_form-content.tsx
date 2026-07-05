@@ -74,9 +74,10 @@ function emptyForm(): PromotionForm {
   };
 }
 
-function resolveAction(): "new" | "edit" {
+function resolveAction(): "new" | "edit" | "duplicate" {
   if (typeof window === "undefined") return "new";
-  return new URLSearchParams(window.location.search).get("action") === "edit" ? "edit" : "new";
+  const a = new URLSearchParams(window.location.search).get("action");
+  return a === "edit" ? "edit" : a === "duplicate" ? "duplicate" : "new";
 }
 
 type ItemRow = { id: number; discountType: DiscountType; discountValue: string; minQty: string };
@@ -95,7 +96,10 @@ const DAY_LABELS = ["", "Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"];
 export function PromotionFormContent({ slug: slugProp }: { slug?: string } = {}) {
   // Prop dal server preferita (SSR-safe, come PromotionsContent).
   const slug = slugProp || tenantSlug();
-  const [action] = useState<"new" | "edit">(resolveAction);
+  const [action] = useState<"new" | "edit" | "duplicate">(resolveAction);
+  // Clona campagna (action=duplicate): il salvataggio crea una NUOVA promo con
+  // replace_source_id (la sorgente viene ritirata dal writer legacy).
+  const [replaceSourceId, setReplaceSourceId] = useState(0);
   const [form, setForm] = useState<PromotionForm>(emptyForm());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -137,12 +141,31 @@ export function PromotionFormContent({ slug: slugProp }: { slug?: string } = {})
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const act = params.get("action") === "edit" ? "edit" : "new";
+    const actRaw = params.get("action");
+    const act = actRaw === "edit" ? "edit" : actRaw === "duplicate" ? "duplicate" : "new";
     const id = Number.parseInt(params.get("id") ?? "", 10);
 
     const editPromise =
-      act === "edit" && Number.isFinite(id) && id > 0
-        ? fetch(`/api/manage/promotions?slug=${encodeURIComponent(slug)}&action=get&id=${id}`, {
+      (act === "edit" || act === "duplicate") && Number.isFinite(id) && id > 0
+        ? (act === "edit"
+            // Guardia lock strutturale legacy (promotions.php 999-1004): con
+            // utilizzi collegati il form NON si apre — redirect alla lista con
+            // open_summary + errore.
+            ? fetch(`/api/manage/promotions?slug=${encodeURIComponent(slug)}&action=edit_guard&id=${id}`, { headers: { "x-tenant-slug": slug } })
+                .then((r) => r.json())
+                .then((g) => {
+                  const reason = String(g?.reason ?? "");
+                  if (reason !== "") {
+                    window.location.href = `/${encodeURIComponent(slug)}/promotions?open_summary=${id}&err=${encodeURIComponent(reason)}`;
+                    return null;
+                  }
+                  return true;
+                })
+                .catch(() => true)
+            : Promise.resolve(true)
+          ).then((proceed) => {
+            if (proceed === null) return Promise.resolve();
+            return fetch(`/api/manage/promotions?slug=${encodeURIComponent(slug)}&action=get&id=${id}`, {
             headers: { "x-tenant-slug": slug },
           })
             .then((r) => r.json())
@@ -152,8 +175,9 @@ export function PromotionFormContent({ slug: slugProp }: { slug?: string } = {})
                 return;
               }
               const p = j.promotion;
+              if (act === "duplicate") setReplaceSourceId(id);
               setForm({
-                id: Number(p.id ?? id),
+                id: act === "duplicate" ? 0 : Number(p.id ?? id),
                 title: String(p.name ?? ""),
                 description: String(p.description ?? ""),
                 promo_conditions_enabled: Boolean(p.promoConditionsEnabled ?? false),
@@ -186,9 +210,10 @@ export function PromotionFormContent({ slug: slugProp }: { slug?: string } = {})
               setStackableFidelity(Boolean(p.stackableFidelity));
               setStackableCoupon(Boolean(p.stackableCoupon));
               setStackableMaster(Boolean(p.stackableFidelity) || Boolean(p.stackableCoupon));
-              setMarketplaceVisibility(p.marketplaceVisibility === "hidden" ? "hidden" : "auto");
+              setMarketplaceVisibility(act === "duplicate" ? "auto" : p.marketplaceVisibility === "hidden" ? "hidden" : "auto");
             })
-            .catch(() => setError("Errore nel caricamento della promozione."))
+            .catch(() => setError("Errore nel caricamento della promozione."));
+          })
         : Promise.resolve();
 
     editPromise.finally(() => setLoading(false));
@@ -279,6 +304,7 @@ export function PromotionFormContent({ slug: slugProp }: { slug?: string } = {})
       const payload: Record<string, unknown> = {
         action: "save",
         id: String(form.id),
+        replace_source_id: replaceSourceId > 0 ? String(replaceSourceId) : "0",
         title: form.title,
         description: form.description,
         promo_conditions_enabled: form.promo_conditions_enabled ? "1" : "0",
@@ -323,14 +349,17 @@ export function PromotionFormContent({ slug: slugProp }: { slug?: string } = {})
         setSaving(false);
         return;
       }
-      backToList();
+      // Redirect flash legacy: lista con msg + open_summary della promo salvata.
+      const savedId = Number(j?.promotion?.id ?? 0);
+      const msg = String(j?.message ?? "Promozione salvata");
+      window.location.href = `/${encodeURIComponent(slug)}/promotions?msg=${encodeURIComponent(msg)}${savedId > 0 ? `&open_summary=${savedId}` : ""}`;
     } catch {
       setError("Errore nel salvataggio della promozione.");
       setSaving(false);
     }
   }
 
-  const title = action === "new" ? "Nuova promozione" : "Modifica promozione";
+  const title = action === "edit" ? "Modifica promozione" : action === "duplicate" ? "Clona campagna" : "Nuova promozione";
   const filteredServices = useMemo(() => ctx.services.filter((s) => s.name.toLowerCase().includes(svcFilter.toLowerCase())), [ctx.services, svcFilter]);
   const filteredProducts = useMemo(() => ctx.products.filter((p) => `${p.name} ${p.sku ?? ""}`.toLowerCase().includes(prdFilter.toLowerCase())), [ctx.products, prdFilter]);
   const excludeCandidates = useMemo(() => ctx.clients.filter((c) => !excludedClients.includes(c.id)), [ctx.clients, excludedClients]);
@@ -401,11 +430,13 @@ export function PromotionFormContent({ slug: slugProp }: { slug?: string } = {})
     );
   };
 
+  // Label submit legacy: 'Aggiorna' in modifica, 'Salva clone' sul clone.
+  const submitLabel = action === "edit" ? "Aggiorna" : action === "duplicate" ? "Salva clone" : "Salva";
   const saveButtons = (
     <div className="d-flex gap-2">
       <button className="btn btn-primary" type="submit" disabled={saving}>
         <i className="bi bi-check2-circle me-1" />
-        Salva
+        {submitLabel}
       </button>
       <button className="btn btn-outline-secondary" type="button" onClick={backToList}>
         Annulla
@@ -840,7 +871,7 @@ export function PromotionFormContent({ slug: slugProp }: { slug?: string } = {})
             <div className="d-flex gap-2 mt-3">
               <button className="btn btn-primary" type="submit" disabled={saving}>
                 <i className="bi bi-check2-circle me-1" />
-                Salva
+                {submitLabel}
               </button>
               <button className="btn btn-outline-secondary" type="button" onClick={backToList}>
                 Annulla

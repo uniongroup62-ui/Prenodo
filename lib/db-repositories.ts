@@ -14061,9 +14061,17 @@ async function promotionActivationContentIssues(slug: string, id: number): Promi
     for (const r of refs) {
       const refId = Number(r.ref ?? 0);
       if (refId <= 0) continue;
-      const cat = await tenantSelect<RowDataPacket>({ slug, table: catalog, columns: "id, name, is_active", where: "id = ?", params: [refId], limit: 1 }).catch(() => [] as RowDataPacket[]);
-      if (!cat[0]) issues.push(`${typeLabel} "#${refId}" è stato eliminato`);
-      else if (Number(cat[0].is_active ?? 1) !== 1) issues.push(`${typeLabel} "${String(cat[0].name ?? `#${refId}`)}" è stato disattivato`);
+      const hasSku = catalog === "products" && (await columnExists((await tenantTable(slug, catalog)).name, "sku"));
+      const cat = await tenantSelect<RowDataPacket>({ slug, table: catalog, columns: `id, name, is_active${hasSku ? ", sku" : ""}`, where: "id = ?", params: [refId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+      // Nome fallback legacy: 'Servizio #N' / 'Prodotto #N'; prodotti con '(SKU)'.
+      if (!cat[0]) {
+        issues.push(`${typeLabel} "${typeLabel} #${refId}" è stato eliminato`);
+        continue;
+      }
+      let name = String(cat[0].name ?? "").trim() || `${typeLabel} #${refId}`;
+      const sku = String(cat[0].sku ?? "").trim();
+      if (catalog === "products" && sku !== "" && !name.includes(`(${sku})`)) name += ` (${sku})`;
+      if (Number(cat[0].is_active ?? 1) !== 1) issues.push(`${typeLabel} "${name}" è stato disattivato`);
     }
   };
 
@@ -14146,7 +14154,8 @@ export async function toggleManagePromotion(slug: string, id: number, active: bo
     if (String(rows[0].target_type ?? "").toLowerCase() === "fidelity") {
       const biz = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_enabled", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
       if (Number(biz[0]?.fidelity_enabled ?? 0) !== 1) {
-        throw new Error('Attiva prima la Fidelity per riattivare una promozione con target "Solo clienti con Fidelity".');
+        // Virgolette tipografiche come il flash legacy (promotions.php 563).
+        throw new Error("Attiva prima la Fidelity per riattivare una promozione con target “Solo clienti con Fidelity”.");
       }
     }
     const issues = await promotionActivationContentIssues(slug, id);
@@ -14155,6 +14164,9 @@ export async function toggleManagePromotion(slug: string, id: number, active: bo
     }
   }
   await tenantUpdate({ slug, table: "promotions", id, values: { is_active: active ? 1 : 0, updated_by: by > 0 ? by : null, updated_at: new Date() } });
+  // Toggle riuscito: il flag di sospensione Fidelity viene sempre azzerato
+  // (promotions_page_set_auto_disabled_by_fidelity(id, false)).
+  await tenantUpdate({ slug, table: "promotions", id, values: { auto_disabled_by_fidelity: 0 } }).catch(() => 0);
   if (!active) await clearPendingAppointmentsForPromotion(slug, id);
   const updated = await tenantSelect<RowDataPacket>({ slug, table: "promotions", where: "id = ?", params: [id], limit: 1 });
   return mapPromotion(updated[0]);
@@ -14181,6 +14193,523 @@ export async function deleteManagePromotion(slug: string, id: number): Promise<{
 function normalizePromoMode(value: string, fallback: "all" | "none"): "none" | "all" | "selected" {
   const mode = value.trim().toLowerCase();
   return mode === "none" || mode === "all" || mode === "selected" ? mode : fallback;
+}
+
+// ==========================================================================
+// Promotions LIST page (promotions.php action=list): righe con badge stato,
+// riepilogo per-campagna (modal), conferme disattiva/elimina con prenotazioni
+// interessate, condizioni booking ed esclusioni clienti.
+// ==========================================================================
+
+function promoPageDmy(value: unknown): string {
+  const s = String(value ?? "").trim();
+  if (s === "") return "—";
+  const iso = s.length >= 10 ? toIso(s) : "";
+  if (!/^\d{4}-\d{2}-\d{2}/.test(iso)) return "—";
+  return `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
+}
+
+function promoPageDmyHm(value: unknown): string {
+  const s = String(value ?? "").trim();
+  if (s === "") return "—";
+  const iso = toIso(s);
+  if (!/^\d{4}-\d{2}-\d{2}/.test(iso)) return "—";
+  const hm = iso.length >= 16 ? iso.slice(11, 16) : "00:00";
+  return `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)} ${hm}`;
+}
+
+// Port di fmt_money (number_format 2, ',', '.') per le label sconto.
+function promoPageMoney(value: number): string {
+  const v = Number(value || 0);
+  const [int, dec] = Math.abs(v).toFixed(2).split(".");
+  return `${v < 0 ? "-" : ""}${int.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${dec}`;
+}
+
+// Promotions::formatDiscountLabelDefinition: percent con zeri trimmati, fixed '€ X'.
+function promoDiscountLabelDefinition(dtype: string, dval: number): string {
+  const t = dtype.trim().toLowerCase();
+  if (t === "percent") {
+    const p = dval.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+    return `${p}%`;
+  }
+  if (t === "fixed") return `€ ${promoPageMoney(dval)}`;
+  return "";
+}
+
+// Promotions::formatDiscountLabel: label sconto per la lista (servizi/prodotti
+// con ereditarietà, compat v1 dal coupon collegato, '' con scope solo-selezionati).
+async function promoFormatDiscountLabel(slug: string, row: RowDataPacket): Promise<string> {
+  const svcMode = normalizePromoMode(String(row.apply_services_mode ?? "all"), "all");
+  const prdMode = normalizePromoMode(String(row.apply_products_mode ?? "none"), "none");
+
+  let svcType = String(row.discount_type ?? "").trim().toLowerCase();
+  if (svcType !== "percent" && svcType !== "fixed") svcType = "percent";
+  let svcVal = Math.max(0, Number(row.discount_value ?? 0) || 0);
+
+  const code = String(row.coupon_code ?? "").trim();
+  if (svcVal <= 0.00001 && code !== "") {
+    const c = await tenantSelect<RowDataPacket>({ slug, table: "coupons", columns: "discount_type, discount_value", where: "code = ? AND is_active = 1", params: [code.toUpperCase()], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    if (c[0]) {
+      svcType = String(c[0].discount_type ?? "percent").trim().toLowerCase();
+      if (svcType !== "percent" && svcType !== "fixed") svcType = "percent";
+      svcVal = Math.max(0, Number(c[0].discount_value ?? 0) || 0);
+    } else {
+      svcType = "";
+    }
+  }
+  if (svcType === "percent" && svcVal > 100) svcVal = 100;
+
+  let prdType = String(row.products_discount_type ?? "").trim().toLowerCase();
+  if (prdType !== "percent" && prdType !== "fixed") prdType = "";
+  const prdValRaw = row.products_discount_value;
+  let prdVal: number;
+  if (prdValRaw === null || prdValRaw === undefined || String(prdValRaw) === "") {
+    prdType = svcType;
+    prdVal = svcVal;
+  } else {
+    if (prdType === "") prdType = svcType;
+    prdVal = Math.max(0, Number(prdValRaw) || 0);
+    if (prdType === "percent" && prdVal > 100) prdVal = 100;
+  }
+
+  const svcLabel = promoDiscountLabelDefinition(svcType, svcVal);
+  const prdLabel = promoDiscountLabelDefinition(prdType, prdVal);
+
+  if (svcMode === "all" && prdMode === "all") {
+    if (svcLabel !== "" && svcLabel === prdLabel) return svcLabel;
+    const parts: string[] = [];
+    if (svcLabel !== "") parts.push(`Servizi: ${svcLabel}`);
+    if (prdLabel !== "") parts.push(`Prodotti: ${prdLabel}`);
+    return parts.join(" • ");
+  }
+  if (svcMode === "all") return svcLabel;
+  if (prdMode === "all") return prdLabel;
+  return "";
+}
+
+// promotions_page_status_meta: badge di stato legacy.
+function promoStatusMeta(row: RowDataPacket, fidGlobEnabled: boolean): { code: string; label: string; badge: string; canToggle: boolean } {
+  const today = todayIso();
+  const target = String(row.target_type ?? "all").trim().toLowerCase();
+  const end = row.ends_at ? toIso(row.ends_at).slice(0, 10) : "";
+  const start = row.starts_at ? toIso(row.starts_at).slice(0, 10) : "";
+  const suspendedByFidelity = !fidGlobEnabled && target === "fidelity" && Number(row.auto_disabled_by_fidelity ?? 0) === 1;
+
+  if (end !== "" && end < today) return { code: "completed", label: "Completata", badge: "dark", canToggle: false };
+  if (suspendedByFidelity) return { code: "suspended", label: "Sospesa", badge: "warning", canToggle: false };
+  if (Number(row.is_active ?? 0) !== 1) return { code: "inactive", label: "Disattivata", badge: "secondary", canToggle: true };
+  if (start !== "" && start > today) return { code: "scheduled", label: "Programmata", badge: "info", canToggle: true };
+  return { code: "active", label: "Attiva", badge: "success", canToggle: true };
+}
+
+// promotions_page_pending_appointments_for_promotion: prenotazioni aperte
+// collegate (set stati ESTESO della pagina, count + prime 20 voci).
+const PROMO_PAGE_PENDING_STATUSES = [
+  "pending", "in sospeso", "in_sospeso", "scheduled", "schedulato", "prenotato", "prenotata",
+  "booked", "booking", "reserved", "in attesa", "in_attesa", "attesa", "confirmed", "confermato", "confermata",
+];
+async function promoPendingAppointmentsFor(slug: string, promotionId: number): Promise<{ count: number; items: { label: string; detail: string }[] }> {
+  const out = { count: 0, items: [] as { label: string; detail: string }[] };
+  if (promotionId <= 0) return out;
+  const appt = await tenantTable(slug, "appointments").catch(() => null);
+  if (!appt) return out;
+  const ph = PROMO_PAGE_PENDING_STATUSES.map(() => "?").join(",");
+  const scope = appt.mode === "shared" ? "tenant_id = ? AND " : "";
+  const scopeParams = appt.mode === "shared" ? [appt.tenantId ?? 0] : [];
+  const cntRows = await dbQuery<RowDataPacket[]>(
+    `SELECT COUNT(*) AS c FROM ${quoteIdentifier(appt.name)} WHERE ${scope}promotion_id = ? AND LOWER(TRIM(COALESCE(status,''))) IN (${ph})`,
+    [...scopeParams, promotionId, ...PROMO_PAGE_PENDING_STATUSES],
+  ).catch(() => [] as RowDataPacket[]);
+  out.count = Number(cntRows[0]?.c ?? 0);
+  if (out.count <= 0) return out;
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT id, starts_at, status FROM ${quoteIdentifier(appt.name)} WHERE ${scope}promotion_id = ? AND LOWER(TRIM(COALESCE(status,''))) IN (${ph}) ORDER BY starts_at ASC, id ASC LIMIT 20`,
+    [...scopeParams, promotionId, ...PROMO_PAGE_PENDING_STATUSES],
+  ).catch(() => [] as RowDataPacket[]);
+  for (const r of rows) {
+    const idn = Number(r.id ?? 0);
+    const when = promoPageDmyHm(r.starts_at);
+    const status = String(r.status ?? "").trim();
+    const detail: string[] = [];
+    if (when !== "—") detail.push(when);
+    if (status !== "") detail.push(status);
+    out.items.push({ label: `Prenotazione #${idn > 0 ? idn : "?"}`, detail: detail.join(" • ") });
+  }
+  return out;
+}
+
+// Snapshot idoneità clienti (Promotions::clientEligibilitySnapshots): adesione
+// tessera + livello a punti corrente (solo per aderenti).
+async function promoClientSnapshots(slug: string, clientIds: number[] | null = null): Promise<{ id: number; fullName: string; adhering: boolean; pointsLevel: string }[]> {
+  let rows: RowDataPacket[];
+  if (clientIds !== null) {
+    const ids = [...new Set(clientIds.map((n) => Math.trunc(Number(n)) || 0).filter((n) => n > 0))];
+    if (ids.length === 0) return [];
+    rows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, full_name", where: `id IN (${ids.map(() => "?").join(",")})`, params: ids, orderBy: "full_name ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
+  } else {
+    rows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, full_name", orderBy: "full_name ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
+  }
+  const adheringRows = await tenantSelect<RowDataPacket>({ slug, table: "cards", columns: "DISTINCT client_id", where: "status = 'active' AND (expires_at IS NULL OR expires_at >= ?)", params: [todayIso()] }).catch(() => [] as RowDataPacket[]);
+  const adhering = new Set(adheringRows.map((r) => Number(r.client_id ?? 0)));
+  const levels = await fidelityClientsLevelSnapshot(slug).catch(() => new Map<number, string>());
+  return rows
+    .map((r) => {
+      const cid = Number(r.id ?? 0);
+      const isAdhering = adhering.has(cid);
+      return {
+        id: cid,
+        fullName: String(r.full_name ?? "").trim() || `Cliente #${cid}`,
+        adhering: isAdhering,
+        pointsLevel: isAdhering ? String(levels.get(cid) ?? "").trim().toLowerCase() : "",
+      };
+    })
+    .filter((s) => s.id > 0);
+}
+
+// promotions_page_client_snapshot_meta: 'Fidelity attiva • Punti: X' / 'No Fidelity'.
+function promoSnapshotMeta(snapshot: { adhering: boolean; pointsLevel: string }, pointLabels: Map<string, string>): string {
+  const parts: string[] = [snapshot.adhering ? "Fidelity attiva" : "No Fidelity"];
+  if (snapshot.pointsLevel !== "") parts.push(`Punti: ${pointLabels.get(snapshot.pointsLevel) ?? snapshot.pointsLevel}`);
+  return parts.join(" • ");
+}
+
+// clientSnapshotMatchesPromotionTarget: per target fidelity solo aderenti (e
+// livello combaciante quando configurato); gli altri target sono blacklist libere.
+function promoSnapshotMatchesTarget(snapshot: { adhering: boolean; pointsLevel: string }, row: RowDataPacket): boolean {
+  let target = String(row.target_type ?? "all").trim().toLowerCase();
+  if (!["all", "new", "inactive", "birthday", "fidelity"].includes(target)) target = "all";
+  if (target !== "fidelity") return true;
+  if (!snapshot.adhering) return false;
+  const levels = parsePromoStringList(row.target_fidelity_levels)
+    .map((l) => String(l).trim().toLowerCase())
+    .map((l) => (l.startsWith("points:") ? l : l.includes(":") ? "" : `points:${l}`))
+    .filter((l) => l !== "");
+  if (levels.length === 0) return true;
+  return snapshot.pointsLevel !== "" && levels.includes(`points:${snapshot.pointsLevel}`);
+}
+
+// clientHasPromotionAssociationForExclusion: redemption / prenotazione non
+// annullata / vendita non annullata collegate alla promo.
+async function promoClientHasAssociation(slug: string, promotionId: number, clientId: number): Promise<boolean> {
+  if (promotionId <= 0 || clientId <= 0) return false;
+  const red = await tenantSelect<RowDataPacket>({ slug, table: "promotion_redemptions", columns: "COUNT(*) AS c", where: "promotion_id = ? AND client_id = ?", params: [promotionId, clientId] }).catch(() => [] as RowDataPacket[]);
+  if (Number(red[0]?.c ?? 0) > 0) return true;
+  const apptCancel = ["cancelled", "canceled", "annullato", "rejected", "rifiutato"];
+  const appts = await tenantSelect<RowDataPacket>({ slug, table: "appointments", columns: "COUNT(*) AS c", where: `promotion_id = ? AND client_id = ? AND (status IS NULL OR status NOT IN (${apptCancel.map(() => "?").join(",")}))`, params: [promotionId, clientId, ...apptCancel] }).catch(() => [] as RowDataPacket[]);
+  if (Number(appts[0]?.c ?? 0) > 0) return true;
+  const salesT = await tenantTable(slug, "sales").catch(() => null);
+  if (salesT && (await columnExists(salesT.name, "promotion_applied_id"))) {
+    const saleCancel = ["cancelled", "canceled", "annullato", "void", "stornato"];
+    const hasStatus = await columnExists(salesT.name, "status");
+    const sales = await tenantSelect<RowDataPacket>({ slug, table: "sales", columns: "COUNT(*) AS c", where: `promotion_applied_id = ? AND client_id = ?${hasStatus ? ` AND (status IS NULL OR status NOT IN (${saleCancel.map(() => "?").join(",")}))` : ""}`, params: hasStatus ? [promotionId, clientId, ...saleCancel] : [promotionId, clientId] }).catch(() => [] as RowDataPacket[]);
+    if (Number(sales[0]?.c ?? 0) > 0) return true;
+  }
+  return false;
+}
+
+function promoExcludedIdsFromRow(row: RowDataPacket): number[] {
+  return parsePromoStringList(row.excluded_client_ids)
+    .map((v) => Math.trunc(Number(v)) || 0)
+    .filter((n) => n > 0);
+}
+
+export type PromotionListPageRow = {
+  id: number;
+  title: string;
+  description: string;
+  isActive: boolean;
+  targetType: string;
+  discountLabel: string;
+  validityLabel: string;
+  targetLabel: string;
+  scopeLabel: string;
+  locationLabel: string;
+  status: { code: string; label: string; badge: string; canToggle: boolean };
+  canEdit: boolean;
+  pending: { count: number; items: { label: string; detail: string }[] };
+  activationBlockMsg: string;
+  activationIssueItems: { type: string; name: string; label: string }[];
+  stats: { clientsTotal: number; redemptionsTotal: number; discountTotal: string; firstRedeemedAt: string; lastRedeemedAt: string };
+  levelsLabel: string;
+  discountSummary: string;
+  svcModeLabel: string;
+  prdModeLabel: string;
+  svcMode: string;
+  prdMode: string;
+  svcLines: string[];
+  prdLines: string[];
+  svcAllLine: string;
+  prdAllLine: string;
+  timeWindowsLabel: string;
+  blackoutsLabel: string;
+  stackLabel: string;
+  excludedCount: number;
+  excludedClients: { id: number; name: string; meta: string }[];
+  exclusionCandidates: { id: number; name: string }[];
+  perCustomerLimitLabel: string;
+  conditionsEnabled: boolean;
+  conditionsText: string;
+  createdLabel: string;
+  updatedLabel: string;
+};
+
+// Riga per riga (lista + dati modal Riepilogo) — ordine legacy
+// is_active DESC, COALESCE(starts_at,'0000-00-00') DESC, id DESC.
+export async function listManagePromotionPage(slug: string): Promise<{ rows: PromotionListPageRow[]; hasAny: boolean; fidelityEnabled: boolean; showAllLocationsFilter: boolean }> {
+  const biz = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_enabled", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const fidGlobEnabled = Number(biz[0]?.fidelity_enabled ?? 0) === 1;
+
+  const locRows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "id, name, is_active", orderBy: "id ASC" }).catch(() => [] as RowDataPacket[]);
+  const locationNames = new Map(locRows.map((r) => [Number(r.id ?? 0), String(r.name ?? `Sede #${Number(r.id ?? 0)}`)]));
+  const showAllLocationsFilter = locRows.length > 1;
+
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "promotions", orderBy: "is_active DESC, COALESCE(starts_at,'0001-01-01') DESC, id DESC", limit: 500 }).catch(() => [] as RowDataPacket[]);
+  const hasAny = rows.length > 0;
+
+  // Mappe nomi catalogo (con SKU prodotti) per le righe 'selezionati'.
+  const svcRows = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, name", orderBy: "id ASC" }).catch(() => [] as RowDataPacket[]);
+  const prdRows = await tenantSelect<RowDataPacket>({ slug, table: "products", columns: "id, name, sku", orderBy: "id ASC" }).catch(() => [] as RowDataPacket[]);
+  const svcNames = new Map(svcRows.map((r) => [Number(r.id ?? 0), String(r.name ?? `#${Number(r.id ?? 0)}`)]));
+  const prdNames = new Map(prdRows.map((r) => {
+    const idn = Number(r.id ?? 0);
+    let name = String(r.name ?? `#${idn}`);
+    const sku = String(r.sku ?? "").trim();
+    if (sku !== "" && !name.includes(`(${sku})`)) name += ` (${sku})`;
+    return [idn, name];
+  }));
+
+  // Livelli fidelity: label 'Punti: X' per key.
+  const levelsCfg = await getFidelityLevelsSettings(slug).catch(() => ({ enabled: false, pointsEnabled: false, levels: [] as FidelityLevel[] }));
+  const pointLabels = new Map(levelsCfg.levels.map((l) => [l.key.toLowerCase(), l.name || l.key]));
+
+  const snapshots = await promoClientSnapshots(slug);
+
+  const out: PromotionListPageRow[] = [];
+  for (const row of rows) {
+    const pid = Number(row.id ?? 0);
+    if (pid <= 0) continue;
+    const meta = await getManagePromotion(slug, pid);
+    if (!meta) continue;
+    const status = promoStatusMeta(row, fidGlobEnabled);
+    const svcMode = meta.applyServicesMode;
+    const prdMode = meta.applyProductsMode;
+
+    // Label sconto lista (fallback 'Per elementi selezionati').
+    let discountLabel = await promoFormatDiscountLabel(slug, row);
+    if (discountLabel.trim() === "") discountLabel = "Per elementi selezionati";
+    // Riepilogo: fallback diverso ('Configurato per elementi selezionati').
+    let discountSummary = await promoFormatDiscountLabel(slug, row);
+    if (discountSummary.trim() === "") discountSummary = "Configurato per elementi selezionati";
+
+    const startsAt = row.starts_at ? toIso(row.starts_at).slice(0, 10) : "";
+    const endsAt = row.ends_at ? toIso(row.ends_at).slice(0, 10) : "";
+    const validityLabel = startsAt !== "" && endsAt !== ""
+      ? `${promoPageDmy(startsAt)} → ${promoPageDmy(endsAt)}`
+      : startsAt !== ""
+        ? `Da ${promoPageDmy(startsAt)}`
+        : endsAt !== ""
+          ? `Fino al ${promoPageDmy(endsAt)}`
+          : "Sempre";
+
+    const targetMap: Record<string, string> = { all: "Tutti i clienti", new: "Nuovi clienti", inactive: "Clienti inattivi", birthday: "Clienti con compleanno", fidelity: "Solo clienti con Fidelity" };
+    const target = String(row.target_type ?? "all").trim().toLowerCase();
+    const targetLabel = targetMap[target] ?? (target !== "" ? target : "Tutti i clienti");
+
+    const scopeParts: string[] = [];
+    if (svcMode !== "none") scopeParts.push(`Servizi: ${svcMode === "selected" ? "Selezionati" : "Tutti"}`);
+    if (prdMode !== "none") scopeParts.push(`Prodotti: ${prdMode === "selected" ? "Selezionati" : "Tutti"}`);
+    const scopeLabel = scopeParts.length > 0 ? scopeParts.join(" • ") : "—";
+
+    const locationLabel = meta.locationIds.length > 0
+      ? meta.locationIds.map((idn) => locationNames.get(idn) ?? `Sede #${idn}`).join(", ")
+      : "Nessuna sede";
+
+    const usage = await promotionUsageCount(slug, pid).catch(() => 0);
+    const canEdit = usage <= 0;
+    const pending = await promoPendingAppointmentsFor(slug, pid);
+
+    let activationBlockMsg = "";
+    let activationIssueItems: { type: string; name: string; label: string }[] = [];
+    if (Number(row.is_active ?? 0) !== 1) {
+      const issues = await promotionActivationContentIssues(slug, pid).catch(() => [] as string[]);
+      if (issues.length > 0) {
+        activationBlockMsg = `Non è possibile riattivare la promozione perché ${issues.join("; ")}. Attiva o ripristina gli elementi indicati per continuare.`;
+        // Voci per la lista puntata del riepilogo: 'Tipo: NOME — stato'.
+        activationIssueItems = issues.map((s) => {
+          const m = s.match(/^(Servizio|Prodotto) "(.+)" è stato (eliminato|disattivato)$/);
+          return m ? { type: m[1], name: m[2], label: m[3] } : { type: "Elemento", name: s, label: "non disponibile" };
+        });
+      }
+    }
+
+    // Statistiche (promotion_redemptions) — la pagina legacy filtra sulla sede
+    // corrente; con sede unica il filtro non cambia i totali (location unica).
+    const statRows = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "promotion_redemptions",
+      columns: "COUNT(*) AS redemptions_total, COUNT(DISTINCT CASE WHEN client_id IS NOT NULL AND client_id > 0 THEN client_id END) AS clients_total, COALESCE(SUM(discount_amount),0) AS discount_total, MIN(redeemed_at) AS first_redeemed_at, MAX(redeemed_at) AS last_redeemed_at",
+      where: "promotion_id = ?",
+      params: [pid],
+    }).catch(() => [] as RowDataPacket[]);
+    const st = statRows[0] ?? ({} as RowDataPacket);
+
+    // Livelli fidelity (riepilogo): 'Punti: NAME, ...' o 'Tutti i livelli Fidelity'.
+    let levelsLabel = "—";
+    if (target === "fidelity") {
+      const expanded = meta.targetFidelityLevels
+        .map((l) => l.trim().toLowerCase())
+        .map((l) => (l.startsWith("points:") ? l : l.includes(":") ? "" : pointLabels.has(l) ? `points:${l}` : l))
+        .filter((l) => l !== "");
+      const labels = expanded.map((k) => (k.startsWith("points:") ? `Punti: ${pointLabels.get(k.slice(7)) ?? k.slice(7)}` : k));
+      levelsLabel = labels.length > 0 ? labels.join(", ") : "Tutti i livelli Fidelity";
+    }
+
+    const itemLine = (name: string, def: PromoItemRow): string =>
+      `${name} — ${promoDiscountLabelDefinition(def.discountType, def.discountValue)} • q.tà min. ${def.minQty}`;
+    const svcLines = svcMode === "selected" ? meta.selectedServices.map((d) => itemLine(svcNames.get(d.id) ?? `#${d.id}`, d)) : [];
+    const prdLines = prdMode === "selected" ? meta.selectedProducts.map((d) => itemLine(prdNames.get(d.id) ?? `#${d.id}`, d)) : [];
+
+    const svcAllLine = svcMode === "all"
+      ? `${promoDiscountLabelDefinition(String(row.discount_type ?? "percent"), Math.max(0, Number(row.discount_value ?? 0) || 0))}|${Math.max(1, Number(row.min_qty ?? 1) || 1)}`
+      : "";
+    const prdTypeForModal = String(row.products_discount_type ?? "").trim() || String(row.discount_type ?? "percent");
+    const prdValForModal = row.products_discount_value === null || row.products_discount_value === undefined || String(row.products_discount_value) === ""
+      ? Math.max(0, Number(row.discount_value ?? 0) || 0)
+      : Math.max(0, Number(row.products_discount_value ?? 0) || 0);
+    const prdMinForModal = row.products_min_qty === null || row.products_min_qty === undefined || String(row.products_min_qty) === ""
+      ? Math.max(1, Number(row.min_qty ?? 1) || 1)
+      : Math.max(1, Number(row.products_min_qty ?? 1) || 1);
+    const prdAllLine = prdMode === "all" ? `${promoDiscountLabelDefinition(prdTypeForModal, prdValForModal)}|${prdMinForModal}` : "";
+
+    const dayNames: Record<number, string> = { 1: "Lun", 2: "Mar", 3: "Mer", 4: "Gio", 5: "Ven", 6: "Sab", 7: "Dom" };
+    const twParts = meta.timeWindows
+      .filter((tw) => tw.day > 0 && tw.start !== "" && tw.end !== "")
+      .map((tw) => `${dayNames[tw.day] ?? String(tw.day)} ${tw.start}–${tw.end}`);
+    const timeWindowsLabel = twParts.length > 0 ? twParts.join(" • ") : "Tutti i giorni / orari";
+    const blackoutsLabel = meta.blackoutDates.length > 0 ? meta.blackoutDates.map((d) => promoPageDmy(d)).join(", ") : "Nessuna";
+
+    const mask = Math.trunc(Number(row.stackable ?? 0)) || 0;
+    const stackParts: string[] = [];
+    if ((mask & 4) !== 0) stackParts.push("Sconto punti Fidelity");
+    if ((mask & 8) !== 0) stackParts.push("Coupon");
+    const stackLabel = mask === 0 || stackParts.length === 0 ? "Non cumulabile" : stackParts.join(", ");
+
+    // Esclusioni: esclusi (ordinati per nome) + candidati (target-compatibili,
+    // senza associazioni collegate alla promo).
+    const excludedIds = promoExcludedIdsFromRow(row);
+    const snapById = new Map(snapshots.map((s) => [s.id, s]));
+    const excludedClients = excludedIds
+      .map((cid) => snapById.get(cid) ?? { id: cid, fullName: `Cliente #${cid}`, adhering: false, pointsLevel: "" })
+      .sort((a, b) => a.fullName.toLowerCase().localeCompare(b.fullName.toLowerCase()) || a.id - b.id)
+      .map((s) => ({ id: s.id, name: s.fullName, meta: promoSnapshotMeta(s, pointLabels) }));
+    const exclusionCandidates: { id: number; name: string }[] = [];
+    for (const snap of snapshots) {
+      if (excludedIds.includes(snap.id)) continue;
+      if (!promoSnapshotMatchesTarget(snap, row)) continue;
+      if (await promoClientHasAssociation(slug, pid, snap.id)) continue;
+      exclusionCandidates.push({ id: snap.id, name: snap.fullName });
+    }
+
+    out.push({
+      id: pid,
+      title: String(row.title ?? ""),
+      description: String(row.description ?? "").trim(),
+      isActive: Number(row.is_active ?? 0) === 1,
+      targetType: target,
+      discountLabel,
+      validityLabel,
+      targetLabel,
+      scopeLabel,
+      locationLabel,
+      status,
+      canEdit,
+      pending,
+      activationBlockMsg,
+      activationIssueItems,
+      stats: {
+        clientsTotal: Number(st.clients_total ?? 0),
+        redemptionsTotal: Number(st.redemptions_total ?? 0),
+        discountTotal: promoPageMoney(Number(st.discount_total ?? 0)),
+        firstRedeemedAt: promoPageDmyHm(st.first_redeemed_at),
+        lastRedeemedAt: promoPageDmyHm(st.last_redeemed_at),
+      },
+      levelsLabel,
+      discountSummary,
+      svcModeLabel: svcMode === "all" ? "Tutti i servizi" : svcMode === "selected" ? "Solo servizi selezionati" : "Nessun servizio",
+      prdModeLabel: prdMode === "all" ? "Tutti i prodotti" : prdMode === "selected" ? "Solo prodotti selezionati" : "Nessun prodotto",
+      svcMode,
+      prdMode,
+      svcLines,
+      prdLines,
+      svcAllLine,
+      prdAllLine,
+      timeWindowsLabel,
+      blackoutsLabel,
+      stackLabel,
+      excludedCount: excludedIds.length,
+      excludedClients,
+      exclusionCandidates,
+      perCustomerLimitLabel: Number(row.per_customer_limit ?? 0) > 0 ? String(Math.trunc(Number(row.per_customer_limit))) : "Senza limiti",
+      conditionsEnabled: Number(row.promo_conditions_enabled ?? 0) === 1,
+      conditionsText: String(row.promo_conditions ?? "").trim(),
+      createdLabel: promoPageDmyHm(row.created_at),
+      updatedLabel: promoPageDmyHm(row.updated_at),
+    });
+  }
+
+  return { rows: out, hasAny, fidelityEnabled: fidGlobEnabled, showAllLocationsFilter };
+}
+
+// Port di Promotions::updatePromotionConditions (guardie/messaggi verbatim).
+export async function updateManagePromotionConditions(slug: string, promotionId: number, enabled: boolean, conditionsText: string, by: number): Promise<void> {
+  if (promotionId <= 0) throw new Error("Promozione non valida");
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "promotions", columns: "id", where: "id = ?", params: [promotionId], limit: 1 });
+  if (!rows[0]) throw new Error("Promozione non trovata");
+  let text: string | null = String(conditionsText ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (text.length > 12000) text = text.slice(0, 12000);
+  if (enabled && text === "") throw new Error("Inserisci il testo delle condizioni promozionali oppure disattiva il flag.");
+  if (!enabled) text = null;
+  await tenantUpdate({ slug, table: "promotions", id: promotionId, values: { promo_conditions_enabled: enabled ? 1 : 0, promo_conditions: text, updated_by: by > 0 ? by : null, updated_at: new Date() } });
+}
+
+// Port di Promotions::addPromotionExcludedClient (guardie verbatim).
+export async function addManagePromotionExcludedClient(slug: string, promotionId: number, clientId: number, by: number): Promise<void> {
+  if (promotionId <= 0 || clientId <= 0) throw new Error("Dati non validi");
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "promotions", where: "id = ?", params: [promotionId], limit: 1 });
+  if (!rows[0]) throw new Error("Promozione non trovata");
+  const clientRows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id", where: "id = ?", params: [clientId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  if (!clientRows[0]) throw new Error("Cliente non trovato");
+
+  const snapshots = await promoClientSnapshots(slug, [clientId]);
+  const snapshot = snapshots[0] ?? { id: clientId, fullName: `Cliente #${clientId}`, adhering: false, pointsLevel: "" };
+  if (!promoSnapshotMatchesTarget(snapshot, rows[0])) throw new Error("Il cliente non rientra nel target attuale della promozione.");
+  if (await promoClientHasAssociation(slug, promotionId, clientId)) throw new Error("Il cliente ha già una prenotazione o vendita associata a questa promozione.");
+
+  const excludedIds = promoExcludedIdsFromRow(rows[0]);
+  if (excludedIds.includes(clientId)) return;
+  excludedIds.push(clientId);
+  await tenantUpdate({ slug, table: "promotions", id: promotionId, values: { excluded_client_ids: JSON.stringify([...new Set(excludedIds)].sort((a, b) => a - b)), updated_by: by > 0 ? by : null, updated_at: new Date() } });
+}
+
+// Port di Promotions::removePromotionExcludedClient.
+export async function removeManagePromotionExcludedClient(slug: string, promotionId: number, clientId: number, by: number): Promise<void> {
+  if (promotionId <= 0 || clientId <= 0) throw new Error("Dati non validi");
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "promotions", where: "id = ?", params: [promotionId], limit: 1 });
+  if (!rows[0]) throw new Error("Promozione non trovata");
+  const excludedIds = promoExcludedIdsFromRow(rows[0]);
+  if (!excludedIds.includes(clientId)) return;
+  const next = excludedIds.filter((idn) => idn !== clientId);
+  await tenantUpdate({ slug, table: "promotions", id: promotionId, values: { excluded_client_ids: JSON.stringify(next), updated_by: by > 0 ? by : null, updated_at: new Date() } });
+}
+
+// Port di Promotions::structuralEditBlockReason (per il redirect di action=edit).
+export async function promotionStructuralBlockReason(slug: string, promotionId: number): Promise<string> {
+  if (promotionId <= 0) return "Promozione non valida.";
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "promotions", columns: "id", where: "id = ?", params: [promotionId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  if (!rows[0]) return "Promozione non trovata.";
+  const usage = await promotionUsageCount(slug, promotionId).catch(() => 0);
+  if (usage <= 0) return "";
+  return "Questa promozione ha gia prenotazioni, vendite o utilizzi collegati: puoi clonare la campagna, ma non modificare direttamente la regola esistente.";
 }
 
 function nullableInt(value: unknown): number | null {
