@@ -3782,3 +3782,101 @@ cancel doppio "già disattivato.", delete hard/soft/bloccata da appt aperto
 con redirectEdit, soft-delete audit + esclusione lista, cleanup CLEAN) +
 70/70 marker bundle + typecheck/lint puliti (warning no-css-tags
 pre-esistenti).
+
+## Clienti (clients.php) — 2026-07-05
+AUDIT COMPLETO del monolite clients.php (3897 righe: lista, view, storico,
+form new/edit, delete_confirm/delete, block/unblock, tag) vs i 4 moduli Next +
+route + lib, con capture live (lista, view id=17, history, edit, delete_confirm
+su MySQL legacy — solo lettura). Riscritti lista/detail/history/form + NUOVA
+pagina delete_confirm.
+FIX PRINCIPALI:
+1. mapClient: birth_date/registration_date DATE -> node-pg Date local-midnight
+   (String() dava "Sat Jul 05"); created_at/blocked_at in wall-clock locale;
+   split_full_name ("Cognome, Nome") per i record con solo full_name (port
+   client_profile_defaults). Aggiunti blockedAt/blockedInternalNote al tipo.
+2. Lista: ordine legacy created_at DESC LIMIT 200 (era full_name ASC);
+   filtro "Sconosciuto" auto-creato; filtro sede STRETTO (i clienti senza sede
+   sono esclusi con sede attiva — verificato live; prima inclusi); blocked
+   INCLUSI con badge "Disattivato" (prima nascosti); ricerca estesa
+   phone_home/phone2 con escape legacy ('!'); empty state "Nessun cliente
+   presente" + gating hasAnyClients del bottone "Nuovo"; citta/provincia
+   sotto il nome (prima "—" statico); badge compleanno legacy ("Oggi è il suo
+   compleanno" pill rossa / "Tra N giorni|giorno" badge-soft); Iscrizione da
+   registration_date con fallback created_at; flash ?msg/?err; colonna Sede
+   con '-'; via i tag inventati dalle righe. Vincoli legacy opt-in
+   (legacyList) per non toccare i consumer fidelity/gift/QB.
+3. Permessi come il legacy: pagina accessibile con ANY di clients/schede/
+   consensi (prima solo clients.manage bloccava anche la lista); history/get/
+   delete_summary gated clients.manage ("Permessi insufficienti per questa
+   azione sui clienti."); perms nel payload per il gating di header/azioni
+   (Configura schede, Nuovo, Modifica, Moduli consenso, Compilazioni, Storico,
+   Nuovo appuntamento, Apri per sezione, Gestisci movimenti).
+4. Scheda (view): RIMOSSE le invenzioni (alert blocked+Riattiva, card Azioni
+   con Blocca/Elimina, card Documenti — la view legacy non li ha; blocca/
+   elimina vivono nella pagina Modifica), aggiunta la stats row "Iscritto da/
+   Età/Compleanno" (since_human/age_years/birthday_label portati server-side),
+   card Fidelity SOLO se aderente (tessera attiva, gate
+   fidelityIsClientAdhering) con label/enabled dal profilo + scadenza punti +
+   "Gestisci movimenti" DENTRO Fidelity (prima in Credito), card Credito senza
+   bottone, Tag card fedele (placeholder "Es. VIP, Allergie, Promo", bottone
+   "Aggiungi", rimozione "×" con title Rimuovi, flash "Tag aggiunto"/"Tag
+   rimosso"), label header verbatim ("Moduli consenso", "Compilazioni",
+   "Storico", "Nuovo appuntamento" — prima "Consensi / GDPR"/"Schede
+   tecniche"), "Nessun dato" senza punto, Sede '-' quando manca, errori di
+   accesso -> redirect lista con ?err= come client_load_accessible.
+5. Storico: riscrittura fedele — summary nel card-header dei "fissati"
+   (Appuntamenti: N • Ultimo • Prossimo [• Vendite: € X]), bucket status
+   legacy (client_history_appt_status_sql: prenotato/in sospeso/eseguito/
+   executed/annullato/rifiutato; no_show FUORI da elenchi e conteggi — prima
+   contato negli annullati), label/badge legacy (In attesa warning, Prenotato
+   primary, Eseguito success, Annullato secondary, No show dark), fallback
+   servizio da appointments.service_id, tabelle Pacchetti/GiftBox/GiftCard
+   attive (destinatario, con emissione/codice/importi e status meta legacy),
+   Preventivi con stato effettivo (sent+scaduto -> "Scaduto"), Storico vendite
+   (Data/Totale/Elemento acquistato), empty rows verbatim, date d/m/Y H:i
+   locali (niente shift UTC).
+6. Form: card "Azioni cliente" su edit (badge Attivo/Disattivato,
+   "Disattivato il d/m/Y H:i" + nota, "Riattiva cliente" con confirm
+   "Riattivare questo cliente?", "Disattiva cliente" con modale verbatim e
+   nota obbligatoria, "Elimina" -> delete_confirm); combobox Regione→
+   Provincia→Città (app-combobox + italy-geo.js iniettato post-mount, submit
+   legge gli hidden gestiti dallo script); redirect legacy (new -> view
+   "Cliente creato", edit -> view "Cliente aggiornato", block/unblock ->
+   edit con i flash verbatim "Cliente disattivato. Nessun dato associato e
+   stato eliminato e potrai riattivarlo in qualsiasi momento." / "Cliente
+   riattivato. Tutti i dati associati sono rimasti disponibili."); default
+   sede NEW = sede corrente di sessione (non la prima); "Salva" fisso +
+   Annulla anchor; validazioni server verbatim (Nome e cognome obbligatori /
+   Email non valida. / PEC non valida. / Data di nascita non valida. / Data
+   iscrizione non valida. / Seleziona una sede valida.).
+7. NUOVA pagina "Rimozione cliente" (delete_confirm): subtitle "<nome>
+   (email) ID: N", alert conferma verbatim, card "Cosa verrà eliminato" con le
+   26 voci legacy nell'ordine live (incluso il quirk "gifts" minuscolo e
+   Punti in fmt_money "12,40"), Motivazione (500) + Conferma testuale
+   "Scrivi ELIMINA", stock_restore_mode=no_restore hidden (la scelta radio
+   inventata è stata rimossa col vecchio modale), esito -> lista con
+   "Clienti eliminati definitivamente: N[ - Stock ripristinato: N pezzi]".
+8. Delete summary esteso alle chiavi legacy complete (righe_vendita, rate,
+   piani_rate, commissioni via VEN#/APP#/#public_code, gifts, preventivi,
+   tessere, account_booking, movimenti_fidelity, ricariche, rettifiche,
+   riferimenti_campagne da excluded_client_ids, prodotti scalati/ordinati,
+   documenti_magazzino via nota "Vendita #id", file_allegati) con punti/
+   credito RAW (non arrotondati); giftcard/giftbox contate sent+received come
+   il legacy. Guardie delete della route: "La motivazione e obbligatoria."
+   (senza accento) e "Per confermare scrivi ELIMINA.".
+RESIDUI DELIBERATI: livelli-punti Fidelity nella scheda (badge livello +
+progress verso il prossimo livello + earnedPointsInLastDays) non portati — il
+profilo test ha levels disattivi e 0 tessere; il ramo base (punti, label,
+"Punti disattivati", scadenza) è fedele. account_cliente_attivita = 0 (il
+registro globale Marketplace non è migrato). I POST GDPR/documenti/
+update_profile della view legacy non hanno UI nella pagina (il markup live
+non li renderizza): l'upload documenti resta disponibile via client_consents
+e l'API client-document.
+Verifica: battery e2e 50/50 (validazioni verbatim, create/update completi,
+date senza shift, split_full_name, lista ordine/filtri/blocked/perms,
+ricerca phone_home, block/unblock con DB audit, detail stats "10 maggio"/età/
+since, fidelity gate con tessera vera, tag add/remove, history con fixture
+reali su 4 status + vendita + preventivo scaduto + pacchetto con snapshot +
+giftcard/giftbox destinatario, delete_summary conteggi + saldi raw, cascade
+con guardie e 0 residui) + 113/113 marker bundle + regression coupons 52/52 +
+typecheck/lint puliti (warning no-css-tags pre-esistenti).

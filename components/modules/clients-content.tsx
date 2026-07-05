@@ -2,8 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-// Faithful port of the PHP clients list page (app/pages/clients.php), fed by
-// the existing DB-backed /api/manage/clients.
+// Faithful port of the PHP clients list page (app/pages/clients.php, action=list),
+// fed by the DB-backed /api/manage/clients (legacy ordering created_at DESC LIMIT
+// 200, unknown-client filter, strict sede filter, blocked INCLUDED with the
+// "Disattivato" badge). Renders the legacy empty state, the redirect flash
+// (?msg=&err=), the birthday badge and the permission-gated header/row actions.
 
 type Client = {
   id: number;
@@ -11,9 +14,24 @@ type Client = {
   email?: string;
   phone?: string;
   locationId?: number;
-  tags?: string[];
+  archived?: boolean;
   createdAt?: string;
-  birthday?: string;
+  registrationDate?: string;
+  birthDate?: string;
+  city?: string;
+  province?: string;
+};
+
+type ClientsPerms = {
+  clientsManage: boolean;
+  clientSheetsManage: boolean;
+};
+
+export type ClientsQuery = {
+  q?: string;
+  all_locations?: string;
+  msg?: string;
+  err?: string;
 };
 
 function tenantSlug(): string {
@@ -21,30 +39,81 @@ function tenantSlug(): string {
   return window.location.pathname.split("/")[1] || "";
 }
 
+// d/m/Y from an ISO date/datetime prefix.
 function fmtDate(iso?: string): string {
-  if (!iso) return "—";
-  const d = iso.slice(0, 10);
-  const [y, m, day] = d.split("-");
-  return day && m && y ? `${day}/${m}/${y}` : "—";
+  const m = String(iso ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : "—";
 }
 
-export function ClientsContent({ slug: slugProp }: { slug?: string } = {}) {
+// Port of client_birthday_badge_meta(): today -> red pill, else "Tra N giorni"
+// soft badge; no/invalid date -> muted "—" (days null).
+function birthdayBadge(birthDate?: string): { label: string; className: string; days: number | null } {
+  const m = String(birthDate ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return { label: "—", className: "text-muted small", days: null };
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const make = (year: number): Date | null => {
+    const dt = new Date(year, month - 1, day);
+    if (dt.getMonth() !== month - 1) {
+      // 29/02 in un anno non bisestile -> 28/02 (fallback legacy).
+      if (month === 2 && day === 29) return new Date(year, 1, 28);
+      return null;
+    }
+    return dt;
+  };
+  let next = make(today.getFullYear());
+  if (!next) return { label: "—", className: "text-muted small", days: null };
+  if (next < today) next = make(today.getFullYear() + 1);
+  if (!next) return { label: "—", className: "text-muted small", days: null };
+  const days = Math.round((next.getTime() - today.getTime()) / 86400000);
+  if (days <= 0) return { label: "Oggi è il suo compleanno", className: "badge rounded-pill text-bg-danger", days: 0 };
+  return { label: `Tra ${days} ${days === 1 ? "giorno" : "giorni"}`, className: "badge badge-soft", days };
+}
+
+// Iscrizione column: registration_date, else created_at (d/m/Y).
+function iscrizioneLabel(c: Client): string {
+  if (c.registrationDate && c.registrationDate !== "") return fmtDate(c.registrationDate);
+  if (c.createdAt) return fmtDate(c.createdAt);
+  return "—";
+}
+
+export function ClientsContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: ClientsQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
   const [clients, setClients] = useState<Client[]>([]);
   const [locations, setLocations] = useState<Record<number, string>>({});
-  const [q, setQ] = useState("");
+  const [locationsCount, setLocationsCount] = useState(0);
+  const [hasAnyClients, setHasAnyClients] = useState(true);
+  const [perms, setPerms] = useState<ClientsPerms>({ clientsManage: true, clientSheetsManage: true });
+  const [q, setQ] = useState(() => initialQuery?.q ?? "");
+  const [allLocations, setAllLocations] = useState(() =>
+    ["1", "true", "on", "yes", "all"].includes(String(initialQuery?.all_locations ?? "").trim().toLowerCase()),
+  );
   const [loading, setLoading] = useState(true);
+  // Flash legacy (View::alert): ?msg= success + ?err= danger dal redirect.
+  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
 
-  const load = useCallback(
-    (query: string) => {
-      setLoading(true);
-      fetch(`/api/manage/clients?slug=${encodeURIComponent(slug)}&q=${encodeURIComponent(query)}`, {
-        headers: { "x-tenant-slug": slug },
-      })
+  // Fetch puro (setState nei callback della Promise; loading gia' true di default).
+  const fetchData = useCallback(
+    (query: string, all: boolean) => {
+      fetch(
+        `/api/manage/clients?slug=${encodeURIComponent(slug)}&q=${encodeURIComponent(query)}${all ? "&all_locations=1" : ""}`,
+        { headers: { "x-tenant-slug": slug } },
+      )
         .then((r) => r.json())
-        .then((j) => setClients(Array.isArray(j.clients) ? j.clients : []))
+        .then((j) => {
+          setClients(Array.isArray(j.clients) ? j.clients : []);
+          setHasAnyClients(Boolean(j.hasAnyClients ?? (Array.isArray(j.clients) && j.clients.length > 0)));
+          if (j.perms) {
+            setPerms({
+              clientsManage: Boolean(j.perms.clientsManage),
+              clientSheetsManage: Boolean(j.perms.clientSheetsManage),
+            });
+          }
+        })
         .catch(() => setClients([]))
         .finally(() => setLoading(false));
     },
@@ -52,24 +121,71 @@ export function ClientsContent({ slug: slugProp }: { slug?: string } = {}) {
   );
 
   useEffect(() => {
-    load("");
+    fetchData(initialQuery?.q ?? "", ["1", "true", "on", "yes", "all"].includes(String(initialQuery?.all_locations ?? "").trim().toLowerCase()));
     fetch(`/api/manage/locations?slug=${encodeURIComponent(slug)}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
       .then((j) => {
         const map: Record<number, string> = {};
-        for (const loc of j.locations ?? []) map[Number(loc.id)] = String(loc.name ?? "");
+        const rows = Array.isArray(j.locations) ? j.locations : [];
+        for (const loc of rows) map[Number(loc.id)] = String(loc.name ?? "");
         setLocations(map);
+        setLocationsCount(rows.length);
       })
       .catch(() => {});
-  }, [load, slug]);
+    // initialQuery è il GET del primo render (parity col server PHP): il refetch
+    // avviene solo dal submit "Cerca".
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchData, slug]);
+
+  const load = useCallback(
+    (query: string, all: boolean) => {
+      setLoading(true);
+      fetchData(query, all);
+    },
+    [fetchData],
+  );
 
   function href(suffix: string): string {
     return `/${encodeURIComponent(slug)}/${`clients${suffix}`.replace("&", "?")}`;
   }
 
+  // Mantiene l'URL allineato (il form legacy è un GET con ?q=&all_locations=).
+  function syncUrl(query: string, all: boolean) {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("msg");
+    url.searchParams.delete("err");
+    if (query !== "") url.searchParams.set("q", query);
+    else url.searchParams.delete("q");
+    if (all) url.searchParams.set("all_locations", "1");
+    else url.searchParams.delete("all_locations");
+    window.history.replaceState(null, "", url.toString());
+  }
+
+  const showEmptyState = !loading && !hasAnyClients;
+  // Legacy: il filtro "Tutte le sedi" esiste solo per i tenant multi-sede.
+  const showAllLocationsFilter = locationsCount > 1;
+
   return (
     <div className="container-fluid">
       <link rel="stylesheet" href="/assets/css/pages/clients.css" />
+
+      {flash.msg ? (
+        <div className="alert alert-success d-flex align-items-start gap-2">
+          <div>
+            <i className="bi bi-info-circle" />
+          </div>
+          <div>{flash.msg}</div>
+        </div>
+      ) : null}
+      {flash.err ? (
+        <div className="alert alert-danger d-flex align-items-start gap-2">
+          <div>
+            <i className="bi bi-info-circle" />
+          </div>
+          <div>{flash.err}</div>
+        </div>
+      ) : null}
 
       <div className="bs-page-header">
         <div className="bs-page-heading">
@@ -78,106 +194,157 @@ export function ClientsContent({ slug: slugProp }: { slug?: string } = {}) {
           <div className="bs-page-subtitle">Anagrafiche clienti, contatti, schede e storico.</div>
         </div>
         <div className="bs-page-actions">
-          <a className="btn btn-outline-primary" href={`/${encodeURIComponent(slug)}/client_sheet_templates`}>
-            <i className="bi bi-sliders me-1" />
-            Configura schede
-          </a>
-          <a className="btn btn-primary" href={href("&action=new")}>
-            <i className="bi bi-plus-lg me-1" />
-            Nuovo
-          </a>
+          {perms.clientSheetsManage ? (
+            <a className="btn btn-outline-primary" href={`/${encodeURIComponent(slug)}/client_sheet_templates`}>
+              <i className="bi bi-sliders me-1" />
+              Configura schede
+            </a>
+          ) : null}
+          {perms.clientsManage && hasAnyClients ? (
+            <a className="btn btn-primary" href={href("&action=new")}>
+              <i className="bi bi-plus-lg me-1" />
+              Nuovo
+            </a>
+          ) : null}
         </div>
       </div>
 
-      <div className="card p-3 mb-3">
-        <form
-          className="row g-2 align-items-end"
-          onSubmit={(e) => {
-            e.preventDefault();
-            load(q);
-          }}
-        >
-          <div className="col-lg-10">
-            <label className="form-label">Cerca</label>
-            <input
-              className="form-control"
-              name="q"
-              placeholder="Cerca per nome/telefono/email"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
+      {showEmptyState ? (
+        <div className="card border-0 shadow-sm clients-empty-card">
+          <div className="clients-empty-state">
+            <div className="clients-empty-icon" aria-hidden="true">
+              <i className="bi bi-people" />
+            </div>
+            <h2>Nessun cliente presente</h2>
+            <p>Crea il primo cliente per iniziare a registrare prenotazioni, vendite, pacchetti e consensi.</p>
+            {perms.clientsManage ? (
+              <div className="d-flex justify-content-center gap-2 flex-wrap">
+                <a className="btn btn-primary" href={href("&action=new")}>
+                  <i className="bi bi-plus-lg me-1" />
+                  Nuovo cliente
+                </a>
+              </div>
+            ) : null}
           </div>
-          <div className="col-lg-2 d-grid">
-            <button className="btn btn-outline-primary" type="submit">
-              <i className="bi bi-search me-1" />
-              Cerca
-            </button>
+        </div>
+      ) : (
+        <>
+          <div className="card p-3 mb-3">
+            <form
+              className="row g-2 align-items-end"
+              onSubmit={(e) => {
+                e.preventDefault();
+                syncUrl(q, allLocations);
+                load(q, allLocations);
+              }}
+            >
+              <div className={showAllLocationsFilter ? "col-lg-8" : "col-lg-10"}>
+                <label className="form-label">Cerca</label>
+                <input
+                  className="form-control"
+                  name="q"
+                  placeholder="Cerca per nome/telefono/email"
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                />
+              </div>
+              {showAllLocationsFilter ? (
+                <div className="col-lg-2 d-flex align-items-center justify-content-start">
+                  <div className="form-check mb-2">
+                    <input
+                      className="form-check-input"
+                      type="checkbox"
+                      id="clientsAllLocations"
+                      name="all_locations"
+                      value="1"
+                      checked={allLocations}
+                      onChange={(e) => setAllLocations(e.target.checked)}
+                    />
+                    <label className="form-check-label" htmlFor="clientsAllLocations">
+                      Tutte le sedi
+                    </label>
+                  </div>
+                </div>
+              ) : null}
+              <div className="col-lg-2 d-grid">
+                <button className="btn btn-outline-primary" type="submit">
+                  <i className="bi bi-search me-1" />
+                  Cerca
+                </button>
+              </div>
+            </form>
           </div>
-        </form>
-      </div>
 
-      <div className="card">
-        <div className="table-responsive">
-          <table className="table mb-0 align-middle">
-            <thead>
-              <tr>
-                <th>Cliente</th>
-                <th>Contatti</th>
-                <th>Sede</th>
-                <th>Iscrizione</th>
-                <th>Compleanno</th>
-                <th className="text-end">Azioni</th>
-              </tr>
-            </thead>
-            <tbody>
-              {clients.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="text-muted small p-3">
-                    {loading ? "Caricamento…" : "Nessun cliente."}
-                  </td>
-                </tr>
-              ) : (
-                clients.map((client) => (
-                  <tr key={client.id}>
-                    <td>
-                      <div className="fw-semibold d-flex align-items-center gap-2 flex-wrap">
-                        <span>{client.name}</span>
-                        {(client.tags ?? []).map((tag) => (
-                          <span className="badge bg-light text-dark" key={tag}>
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
-                      <div className="text-muted small">— </div>
-                    </td>
-                    <td className="text-muted">
-                      {client.phone ? (
-                        <>
-                          {client.phone} <br />
-                        </>
-                      ) : null}
-                      {client.email}
-                    </td>
-                    <td className="text-muted small">{client.locationId ? locations[client.locationId] ?? "" : ""}</td>
-                    <td className="text-muted small">{fmtDate(client.createdAt)}</td>
-                    <td>
-                      <span className="text-muted small">{fmtDate(client.birthday)}</span>
-                    </td>
-                    <td className="text-end">
-                      <a className="btn btn-sm btn-primary" href={href(`&action=view&id=${client.id}`)}>
-                        Apri
-                      </a>{" "}
-                      <a className="btn btn-sm btn-outline-secondary" href={href(`&action=edit&id=${client.id}`)}>
-                        Modifica
-                      </a>
-                    </td>
+          <div className="card">
+            <div className="table-responsive">
+              <table className="table mb-0 align-middle">
+                <thead>
+                  <tr>
+                    <th>Cliente</th>
+                    <th>Contatti</th>
+                    <th>Sede</th>
+                    <th>Iscrizione</th>
+                    <th>Compleanno</th>
+                    <th className="text-end">Azioni</th>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+                </thead>
+                <tbody>
+                  {clients.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="text-muted p-3">
+                        {loading ? "Caricamento…" : "Nessun cliente trovato con i filtri selezionati."}
+                      </td>
+                    </tr>
+                  ) : (
+                    clients.map((client) => {
+                      const bday = birthdayBadge(client.birthDate);
+                      return (
+                        <tr key={client.id}>
+                          <td>
+                            <div className="fw-semibold d-flex align-items-center gap-2 flex-wrap">
+                              <span>{client.name}</span>
+                              {client.archived ? <span className="badge text-bg-warning">Disattivato</span> : null}
+                            </div>
+                            <div className="text-muted small">
+                              {(client.city ?? "") !== "" ? client.city : "—"}{" "}
+                              {(client.province ?? "") !== "" ? `• ${client.province}` : ""}
+                            </div>
+                          </td>
+                          <td className="text-muted">
+                            {(client.phone ?? "") !== "" ? client.phone : "—"} <br />
+                            {(client.email ?? "") !== "" ? client.email : "—"}
+                          </td>
+                          <td className="text-muted small">
+                            {client.locationId && locations[client.locationId] ? locations[client.locationId] : "-"}
+                          </td>
+                          <td className="text-muted small">{iscrizioneLabel(client)}</td>
+                          <td>
+                            {bday.days === null ? (
+                              <span className="text-muted small">—</span>
+                            ) : (
+                              <span className={bday.className}>{bday.label}</span>
+                            )}
+                          </td>
+                          <td className="text-end">
+                            <a className="btn btn-sm btn-primary" href={href(`&action=view&id=${client.id}`)}>
+                              Apri
+                            </a>{" "}
+                            {perms.clientsManage ? (
+                              <a className="btn btn-sm btn-outline-secondary" href={href(`&action=edit&id=${client.id}`)}>
+                                Modifica
+                              </a>
+                            ) : null}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

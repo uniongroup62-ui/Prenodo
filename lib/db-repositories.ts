@@ -77,37 +77,55 @@ export async function listDbLocations(slug: string): Promise<Location[]> {
   return rows.map((row) => mapLocation(slug, row));
 }
 
+// Legacy filter: hide the auto-created "sconosciuto" placeholder client
+// (giftbox/giftcard sales without a client).
+const CLIENTS_UNKNOWN_FILTER_SQL =
+  "NOT (LOWER(TRIM(COALESCE(full_name,'')))='sconosciuto' AND LOWER(TRIM(COALESCE(notes,''))) LIKE 'creato automaticamente (vendite giftbox/giftcard senza cliente).%')";
+
 export async function listDbClients({
   slug,
   query = "",
   locationId = 0,
   includeArchived = false,
+  legacyList = false,
 }: {
   slug: string;
   query?: string;
   locationId?: number;
   includeArchived?: boolean;
+  // TRUE only for the faithful clients LIST page: legacy ordering
+  // (created_at DESC LIMIT 200), strict sede filter (NO-location clients
+  // excluded — verified live) and blocked clients INCLUDED (badge in list).
+  // Other consumers (fidelity/gift selects, QB) keep the permissive defaults.
+  legacyList?: boolean;
 }): Promise<ManagedClient[]> {
-  const clauses: string[] = [];
+  const clauses: string[] = [CLIENTS_UNKNOWN_FILTER_SQL];
   const params: unknown[] = [];
-  const normalizedQuery = query.trim().toLowerCase();
+  const normalizedQuery = query.trim();
 
   if (normalizedQuery) {
-    clauses.push("(LOWER(full_name) LIKE ? OR LOWER(email) LIKE ? OR phone LIKE ?)");
-    params.push(`%${normalizedQuery}%`, `%${normalizedQuery}%`, `%${normalizedQuery}%`);
+    // Legacy LIKE with '!' escaping over full_name/phone/email + phone_home/phone2.
+    const like = `%${normalizedQuery.replace(/!/g, "!!").replace(/%/g, "!%").replace(/_/g, "!_")}%`;
+    clauses.push("(full_name ILIKE ? ESCAPE '!' OR phone ILIKE ? ESCAPE '!' OR email ILIKE ? ESCAPE '!' OR phone_home ILIKE ? ESCAPE '!' OR phone2 ILIKE ? ESCAPE '!')");
+    params.push(like, like, like, like, like);
   }
   if (locationId > 0) {
-    clauses.push("(location_id IS NULL OR location_id = ?)");
+    if (legacyList) {
+      clauses.push("location_id = ?");
+    } else {
+      clauses.push("(location_id IS NULL OR location_id = ?)");
+    }
     params.push(locationId);
   }
-  if (!includeArchived) clauses.push("COALESCE(is_blocked, 0) = 0");
+  if (!legacyList && !includeArchived) clauses.push("COALESCE(is_blocked, 0) = 0");
 
   const rows = await tenantSelect<RowDataPacket>({
     slug,
     table: "clients",
     where: clauses.join(" AND "),
     params,
-    orderBy: "full_name ASC, id DESC",
+    orderBy: legacyList ? "created_at DESC" : "full_name ASC, id DESC",
+    limit: legacyList ? 200 : undefined,
   });
 
   return rows.map(mapClient);
@@ -709,22 +727,39 @@ async function clientRowCount(slug: string, table: string, column: string, clien
   }
 }
 
+// Chiavi del summary legacy (client_delete_collect_related + la pagina
+// "Cosa verrà eliminato" — visibleSummary). prenotazioni = appuntamenti.
 export type ManageClientDeleteSummary = {
+  clienti: number;
   vendite: number;
-  appuntamenti: number;
-  pacchetti: number;
+  righe_vendita: number;
+  prenotazioni: number;
+  rate: number;
+  piani_rate: number;
+  commissioni: number;
   prepagati: number;
+  pacchetti: number;
   giftcard: number;
   giftbox: number;
+  gifts: number;
+  preventivi: number;
+  tessere: number;
   documenti: number;
   consensi: number;
   schede_cliente: number;
+  account_booking: number;
+  account_cliente_attivita: number;
   movimenti_fidelity: number;
-  rettifiche_credito: number;
   ricariche: number;
+  rettifiche_credito: number;
   credito_cliente: number;
   punti: number;
   saldo_giftcard: number;
+  riferimenti_campagne: number;
+  prodotti_scalati_stock: number;
+  prodotti_ordinati_non_scalati: number;
+  documenti_magazzino: number;
+  file_allegati: number;
 };
 
 // Delete-cascade SUMMARY — faithful port of the clients.php delete-confirm summary
@@ -735,95 +770,208 @@ export type ManageClientDeleteSummary = {
 // permission gated by the route.
 export async function getManageClientDeleteSummary(slug: string, clientId: number): Promise<ManageClientDeleteSummary> {
   if (clientId <= 0) throw new Error("ID cliente mancante.");
+  const clientIds = [clientId];
 
-  const [vendite, appuntamenti, pacchetti, prepagati, documenti, consensi, schedeRecords, txCount, eventCount, rettifiche, ricariche] =
-    await Promise.all([
-      clientRowCount(slug, "sales", "client_id", clientId),
-      clientRowCount(slug, "appointments", "client_id", clientId),
-      clientRowCount(slug, "client_packages", "client_id", clientId),
-      clientRowCount(slug, "client_prepaid_services", "client_id", clientId),
-      clientRowCount(slug, "customer_documents", "client_id", clientId),
-      clientRowCount(slug, "client_consent_records", "client_id", clientId),
-      clientRowCount(slug, "client_sheet_records", "client_id", clientId),
-      clientRowCount(slug, "transactions", "client_id", clientId),
-      clientRowCount(slug, "events", "client_id", clientId),
-      clientRowCount(slug, "credit_adjustments", "client_id", clientId),
-      clientRowCount(slug, "recharges", "client_id", clientId),
-    ]);
+  // Guarded id-collector over OR'd columns (read-only twin of the cascade's
+  // collectIds, running on the pool instead of the tx).
+  const collect = async (base: string, idColumn: string, columnIds: Record<string, number[]>): Promise<number[]> => {
+    try {
+      const t = await tenantTable(slug, base);
+      if (!(await tableExists(t.name)) || !(await columnExists(t.name, idColumn))) return [];
+      const parts: string[] = [];
+      const params: unknown[] = [];
+      for (const [column, rawIds] of Object.entries(columnIds)) {
+        const ids = Array.from(new Set(rawIds.map((v) => Math.trunc(Number(v)) || 0).filter((n) => n > 0)));
+        if (ids.length === 0) continue;
+        if (!(await columnExists(t.name, column))) continue;
+        parts.push(`${quoteIdentifier(column)} IN (${ids.map(() => "?").join(",")})`);
+        params.push(...ids);
+      }
+      if (parts.length === 0) return [];
+      const scoped = t.mode === "shared" && (await columnExists(t.name, "tenant_id"));
+      const where = [`(${parts.join(" OR ")})`, scoped ? "tenant_id = ?" : ""].filter(Boolean).join(" AND ");
+      if (scoped) params.push(t.tenantId ?? 0);
+      const rows = await dbQuery<RowDataPacket[]>(`SELECT DISTINCT ${quoteIdentifier(idColumn)} FROM ${quoteIdentifier(t.name)} WHERE ${where}`, params);
+      return Array.from(new Set(rows.map((r) => Math.trunc(Number(r[idColumn])) || 0).filter((n) => n > 0)));
+    } catch {
+      return [];
+    }
+  };
+  const saleIds = await collect("sales", "id", { client_id: clientIds });
+  const appointmentIds = await collect("appointments", "id", { client_id: clientIds });
+  const giftcardIds = await collect("giftcards", "id", { client_id: clientIds, recipient_client_id: clientIds });
+  const giftboxInstanceIds = await collect("giftbox_instances", "id", { client_id: clientIds, recipient_client_id: clientIds });
+  const giftInstanceIds = await collect("gift_instances", "id", { client_id: clientIds });
+  const clientPackageIds = await collect("client_packages", "id", { client_id: clientIds });
+  const clientPrepaidIds = await collect("client_prepaid_services", "id", { client_id: clientIds });
+  const cardIds = await collect("cards", "id", { client_id: clientIds });
+  const quoteIds = await collect("quotes", "id", { client_id: clientIds });
+  const saleItemIds = await collect("sale_items", "id", { sale_id: saleIds });
+  const installmentPlanIds = await collect("sale_installment_plans", "id", { client_id: clientIds, sale_id: saleIds });
+  const installmentIds = await collect("sale_installments", "id", { client_id: clientIds, sale_id: saleIds, plan_id: installmentPlanIds });
 
-  // GiftCard / GiftBox counts: count instances where the client is the recipient
-  // (the legacy collects both sent + received via client_delete_collect_ids; the
-  // detail view + this summary use the recipient relation, which is the rows a
-  // delete would remove for the holder). Guarded.
-  let giftcard = 0;
+  const [documenti, consensi, schedeRecords, schedeTemplates, txCount, eventCount, rettifiche, ricariche, accountBooking] = await Promise.all([
+    clientRowCount(slug, "customer_documents", "client_id", clientId),
+    clientRowCount(slug, "client_consent_records", "client_id", clientId),
+    clientRowCount(slug, "client_sheet_records", "client_id", clientId),
+    clientRowCount(slug, "client_sheet_templates", "client_id", clientId),
+    clientRowCount(slug, "transactions", "client_id", clientId),
+    clientRowCount(slug, "events", "client_id", clientId),
+    clientRowCount(slug, "credit_adjustments", "client_id", clientId),
+    clientRowCount(slug, "recharges", "client_id", clientId),
+    clientRowCount(slug, "booking_users", "client_id", clientId),
+  ]);
+
+  // Commissioni: staff_commission_payments con source_reference 'VEN#<id>' /
+  // 'APP#<id>' (+ '#<public_code>' degli appuntamenti, come il legacy).
+  let commissioni = 0;
+  try {
+    const t = await tenantTable(slug, "staff_commission_payments");
+    if ((await tableExists(t.name)) && (await columnExists(t.name, "source_reference")) && (await columnExists(t.name, "source_group"))) {
+      const scoped = t.mode === "shared" && (await columnExists(t.name, "tenant_id"));
+      const refsFor = async (group: string, refs: string[]): Promise<number> => {
+        if (refs.length === 0) return 0;
+        const params: unknown[] = [group, ...refs];
+        let where = `source_group = ? AND source_reference IN (${refs.map(() => "?").join(",")})`;
+        if (scoped) {
+          where += " AND tenant_id = ?";
+          params.push(t.tenantId ?? 0);
+        }
+        const rows = await dbQuery<RowDataPacket[]>(`SELECT COUNT(*) AS c FROM ${quoteIdentifier(t.name)} WHERE ${where}`, params);
+        return Math.max(0, Number(rows[0]?.c ?? 0) || 0);
+      };
+      const apptRefs = appointmentIds.map((id) => `APP#${id}`);
+      try {
+        const at = await tenantTable(slug, "appointments");
+        if (appointmentIds.length > 0 && (await columnExists(at.name, "public_code"))) {
+          const rows = await tenantSelect<RowDataPacket>({ slug, table: "appointments", columns: "public_code", where: `id IN (${appointmentIds.map(() => "?").join(",")})`, params: appointmentIds });
+          for (const r of rows) {
+            const code = String(r.public_code ?? "").trim();
+            if (code !== "") apptRefs.push(`#${code.replace(/^#+/, "")}`);
+          }
+        }
+      } catch { /* best-effort */ }
+      commissioni = (await refsFor("pos", saleIds.map((id) => `VEN#${id}`))) + (await refsFor("appointments", Array.from(new Set(apptRefs))));
+    }
+  } catch {
+    commissioni = 0;
+  }
+
+  // Saldo giftcard (tutte le istanze coinvolte, sent+received come il legacy).
   let saldoGiftcard = 0;
-  try {
-    const gcTable = await tenantTable(slug, "giftcards");
-    if (await tableExists(gcTable.name)) {
-      const hasRecipient = await columnExists(gcTable.name, "recipient_client_id");
-      const target = hasRecipient ? "recipient_client_id = ?" : "client_id = ?";
-      const rows = await tenantSelect<RowDataPacket>({
-        slug,
-        table: "giftcards",
-        columns: "COUNT(*) AS c, COALESCE(SUM(balance), 0) AS bal",
-        where: target,
-        params: [clientId],
-      });
-      giftcard = Math.max(0, Number(rows[0]?.c ?? 0) || 0);
+  if (giftcardIds.length > 0) {
+    try {
+      const rows = await tenantSelect<RowDataPacket>({ slug, table: "giftcards", columns: "COALESCE(SUM(balance),0) AS bal", where: `id IN (${giftcardIds.map(() => "?").join(",")})`, params: giftcardIds });
       saldoGiftcard = roundMoney(Number(rows[0]?.bal ?? 0));
+    } catch {
+      saldoGiftcard = 0;
     }
-  } catch {
-    giftcard = 0;
-    saldoGiftcard = 0;
   }
 
-  let giftbox = 0;
-  try {
-    const gbTable = await tenantTable(slug, "giftbox_instances");
-    if (await tableExists(gbTable.name)) {
-      const hasRecipient = await columnExists(gbTable.name, "recipient_client_id");
-      const target = hasRecipient ? "recipient_client_id = ?" : "client_id = ?";
-      const rows = await tenantSelect<RowDataPacket>({
-        slug,
-        table: "giftbox_instances",
-        columns: "COUNT(*) AS c",
-        where: target,
-        params: [clientId],
-      });
-      giftbox = Math.max(0, Number(rows[0]?.c ?? 0) || 0);
-    }
-  } catch {
-    giftbox = 0;
-  }
-
-  // Credito / punti — the client-row balances that would be wiped.
+  // Credito / punti — the client-row balances that would be wiped. RAW values
+  // (legacy SUM(points) float, formattato fmt_money "12,40" — non interi).
   let credito = 0;
   let punti = 0;
   try {
-    const bal = await dbWalletBalance(clientId, slug);
-    credito = roundMoney(bal.credit);
-    punti = bal.points;
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "COALESCE(credit_balance,0) AS cb, COALESCE(points,0) AS pt", where: "id = ?", params: [clientId], limit: 1 });
+    credito = roundMoney(Number(rows[0]?.cb ?? 0));
+    punti = roundMoney(Number(rows[0]?.pt ?? 0));
   } catch {
     credito = 0;
     punti = 0;
   }
 
+  // Riferimenti campagne: excluded_client_ids JSON/CSV di promotions + gifts.
+  const idListRefs = async (base: string): Promise<number> => {
+    try {
+      const t = await tenantTable(slug, base);
+      if (!(await tableExists(t.name)) || !(await columnExists(t.name, "excluded_client_ids"))) return 0;
+      const rows = await tenantSelect<RowDataPacket>({ slug, table: base, columns: "id, excluded_client_ids", where: "COALESCE(excluded_client_ids,'') <> ''" });
+      let n = 0;
+      for (const r of rows) {
+        const ids = parseCouponIdList(r.excluded_client_ids);
+        if (ids.includes(clientId)) n++;
+      }
+      return n;
+    } catch {
+      return 0;
+    }
+  };
+  const riferimentiCampagne = (await idListRefs("promotions")) + (await idListRefs("gifts"));
+
+  // Documenti magazzino: stock_docs con nota "Vendita #<id>" (regex legacy).
+  const stockDocIds = await collectStockDocIdsForSales(slug, saleIds, dbQuery);
+
+  // Prodotti scalati/ordinati: righe prodotto delle vendite (item_status
+  // 'ordered' = non scalato; il resto = qty ripristinabile).
+  let prodottiScalati = 0;
+  let prodottiOrdinati = 0;
+  if (saleIds.length > 0) {
+    try {
+      const t = await tenantTable(slug, "sale_items");
+      if ((await tableExists(t.name)) && (await columnExists(t.name, "item_type"))) {
+        const hasStatus = await columnExists(t.name, "item_status");
+        const rows = await tenantSelect<RowDataPacket>({
+          slug,
+          table: "sale_items",
+          columns: `qty, ${hasStatus ? "LOWER(TRIM(COALESCE(item_status,'')))" : "''"} AS st`,
+          where: `sale_id IN (${saleIds.map(() => "?").join(",")}) AND LOWER(TRIM(COALESCE(item_type,''))) = 'product' AND item_id IS NOT NULL`,
+          params: saleIds,
+        });
+        for (const r of rows) {
+          const qty = Math.max(0, Number(r.qty ?? 0));
+          if (String(r.st ?? "") === "ordered") prodottiOrdinati += qty;
+          else prodottiScalati += qty;
+        }
+      }
+    } catch { /* guarded */ }
+  }
+
+  // File allegati: documenti cliente con un file collegato (R2/percorso).
+  let fileAllegati = 0;
+  try {
+    const t = await tenantTable(slug, "customer_documents");
+    if (await tableExists(t.name)) {
+      const rows = await tenantSelect<RowDataPacket>({ slug, table: "customer_documents", columns: "COUNT(*) AS c", where: "client_id = ? AND COALESCE(file_path,'') <> ''", params: [clientId] });
+      fileAllegati = Math.max(0, Number(rows[0]?.c ?? 0) || 0);
+    }
+  } catch {
+    fileAllegati = 0;
+  }
+
   return {
-    vendite,
-    appuntamenti,
-    pacchetti,
-    prepagati,
-    giftcard,
-    giftbox,
+    clienti: 1,
+    vendite: saleIds.length,
+    righe_vendita: saleItemIds.length,
+    prenotazioni: appointmentIds.length,
+    rate: installmentIds.length,
+    piani_rate: installmentPlanIds.length,
+    commissioni,
+    prepagati: clientPrepaidIds.length,
+    pacchetti: clientPackageIds.length,
+    giftcard: giftcardIds.length,
+    giftbox: giftboxInstanceIds.length,
+    gifts: giftInstanceIds.length,
+    preventivi: quoteIds.length,
+    tessere: cardIds.length,
     documenti,
     consensi,
-    schede_cliente: schedeRecords,
+    schede_cliente: schedeRecords + schedeTemplates,
+    account_booking: accountBooking,
+    // Marketplace global-customer links (legacy Marketplace::count...): il
+    // registro globale non è migrato — 0.
+    account_cliente_attivita: 0,
     movimenti_fidelity: txCount + eventCount,
-    rettifiche_credito: rettifiche,
     ricariche,
+    rettifiche_credito: rettifiche,
     credito_cliente: credito,
     punti,
     saldo_giftcard: saldoGiftcard,
+    riferimenti_campagne: riferimentiCampagne,
+    prodotti_scalati_stock: prodottiScalati,
+    prodotti_ordinati_non_scalati: prodottiOrdinati,
+    documenti_magazzino: stockDocIds.length,
+    file_allegati: fileAllegati,
   };
 }
 
@@ -907,38 +1055,114 @@ export type ClientHistoryAppt = {
   totalNet: number;
 };
 export type ClientHistorySale = { id: number; saleDate: string; total: number; purchasedItem: string };
-export type ClientHistoryQuote = { id: number; number: string; quoteDate: string; validUntil: string; total: number; status: string };
+export type ClientHistoryQuote = { id: number; number: string; quoteDate: string; validUntil: string; total: number; status: string; statusLabel: string; statusBadge: string };
+export type ClientHistoryPackage = { id: number; purchaseDate: string; packageName: string; serviceName: string; preview: string; sessionsRemaining: number; sessionsTotal: number; expiresAt: string; statusLabel: string; statusBadge: string };
+export type ClientHistoryGiftbox = { id: number; issuedAt: string; name: string; code: string; expiresAt: string; statusLabel: string; statusBadge: string };
+export type ClientHistoryGiftcard = { id: number; issuedAt: string; code: string; initialAmount: number; balance: number; expiresAt: string; statusLabel: string; statusBadge: string };
 export type ManageClientHistory = {
   client: ManagedClient;
   summary: { total: number; done: number; scheduled: number; pending: number; canceled: number; lastVisit: string | null; nextVisit: string | null };
   scheduledAppts: ClientHistoryAppt[];
   doneAppts: ClientHistoryAppt[];
   canceledAppts: ClientHistoryAppt[];
-  packages: QuickBookResidualPackageDetail[];
-  giftboxes: QuickBookResidualGiftboxDetail[];
-  giftcards: QuickBookResidualGiftcardDetail[];
+  packages: ClientHistoryPackage[];
+  giftboxes: ClientHistoryGiftbox[];
+  giftcards: ClientHistoryGiftcard[];
   quotes: ClientHistoryQuote[];
   sales: ClientHistorySale[];
   salesTotal: number;
 };
 
-// Normalize an appointment status to the legacy history buckets (client_history_appt_status_sql).
-function clientHistoryStatusKey(raw: unknown): "done" | "scheduled" | "pending" | "canceled" | "no_show" {
+// Normalize an appointment status to the legacy history buckets — exact port of
+// client_history_appt_status_sql (unknown statuses pass through and land in no
+// bucket; no_show is its own bucket and is NOT counted as canceled).
+function clientHistoryStatusKey(raw: unknown): string {
   const s = String(raw ?? "").trim().toLowerCase();
-  if (["done", "completato", "completed", "concluso"].includes(s)) return "done";
-  if (["canceled", "cancelled", "annullato"].includes(s)) return "canceled";
-  if (["no_show", "no show", "noshow"].includes(s)) return "no_show";
-  if (["scheduled", "confermato", "confirmed", "prenotato"].includes(s)) return "scheduled";
-  return "pending";
+  if (s === "prenotato") return "scheduled";
+  if (s === "in sospeso") return "pending";
+  if (s === "eseguito" || s === "executed") return "done";
+  if (["cancelled", "annullato", "rifiutato", "rejected"].includes(s)) return "canceled";
+  return s;
 }
+// Port of client_history_appointment_status_meta (labels + text-bg-* badges).
 function clientHistoryStatusMeta(key: string): { label: string; badge: string } {
   switch (key) {
-    case "done": return { label: "Completato", badge: "bg-success" };
-    case "scheduled": return { label: "Confermato", badge: "bg-primary" };
-    case "canceled": return { label: "Annullato", badge: "bg-danger" };
-    case "no_show": return { label: "No show", badge: "bg-secondary" };
-    default: return { label: "In attesa", badge: "bg-warning text-dark" };
+    case "pending": return { label: "In attesa", badge: "warning" };
+    case "scheduled": return { label: "Prenotato", badge: "primary" };
+    case "done": return { label: "Eseguito", badge: "success" };
+    case "canceled": return { label: "Annullato", badge: "secondary" };
+    case "no_show": return { label: "No show", badge: "dark" };
+    default: return { label: key !== "" ? key.charAt(0).toUpperCase() + key.slice(1) : "—", badge: "secondary" };
   }
+}
+// Port of client_history_package_status_meta.
+function clientHistoryPackageStatusMeta(status: string): { label: string; badge: string } {
+  const code = status.trim().toLowerCase();
+  switch (code) {
+    case "active": return { label: "Attivo", badge: "success" };
+    case "completed": return { label: "Completato", badge: "secondary" };
+    case "expired": return { label: "Scaduto", badge: "warning" };
+    case "canceled":
+    case "cancelled": return { label: "Annullato", badge: "danger" };
+    default: return { label: code !== "" ? code.charAt(0).toUpperCase() + code.slice(1) : "—", badge: "secondary" };
+  }
+}
+// Port of client_history_giftbox_status_meta / client_history_giftcard_status_meta.
+function clientHistoryGiftStatusMeta(status: string): { label: string; badge: string } {
+  const code = status.trim().toLowerCase();
+  switch (code) {
+    case "issued":
+    case "active": return { label: "Attiva", badge: "success" };
+    case "redeemed": return { label: "Riscattata", badge: "secondary" };
+    case "expired": return { label: "Scaduta", badge: "warning" };
+    case "cancelled":
+    case "canceled": return { label: "Annullata", badge: "danger" };
+    default: return { label: code !== "" ? code.toUpperCase() : "—", badge: "secondary" };
+  }
+}
+// Port of client_history_quote_status_meta (+ the effective expired state).
+function clientHistoryQuoteStatusMeta(status: string, validUntil: string): { code: string; label: string; badge: string } {
+  let code = status.trim().toLowerCase();
+  if (code === "cancelled") code = "canceled";
+  if (["draft", "sent"].includes(code) && /^\d{4}-\d{2}-\d{2}/.test(validUntil) && validUntil.slice(0, 10) < todayIso()) code = "expired";
+  if (code === "") code = "draft";
+  switch (code) {
+    case "draft": return { code, label: "Bozza", badge: "secondary" };
+    case "sent": return { code, label: "Inviato", badge: "primary" };
+    case "expired": return { code, label: "Scaduto", badge: "warning" };
+    case "accepted": return { code, label: "Accettato", badge: "success" };
+    case "paid": return { code, label: "Pagato", badge: "success" };
+    case "canceled": return { code, label: "Annullato", badge: "dark" };
+    default: return { code, label: code.charAt(0).toUpperCase() + code.slice(1), badge: "secondary" };
+  }
+}
+// Port of client_package_snapshot_preview_text: item names (+SKU for products,
+// via product_display_name) with ×qty, joined by ', '.
+async function clientPackagePreviewMap(slug: string, packageIds: number[]): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  if (packageIds.length === 0) return out;
+  const ph = packageIds.map(() => "?").join(",");
+  const rows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "client_package_items",
+    columns: "client_package_id, item_type, item_name_snapshot, qty, id",
+    where: `client_package_id IN (${ph})`,
+    params: packageIds,
+    orderBy: "id ASC",
+  }).catch(() => [] as RowDataPacket[]);
+  const parts = new Map<number, string[]>();
+  for (const r of rows) {
+    const cpId = Number(r.client_package_id ?? 0);
+    if (cpId <= 0) continue;
+    const name = String(r.item_name_snapshot ?? "").trim();
+    if (name === "") continue;
+    const qty = Math.max(1, Number(r.qty ?? 1));
+    const arr = parts.get(cpId) ?? [];
+    arr.push(name + (qty > 1 ? ` ×${qty}` : ""));
+    parts.set(cpId, arr);
+  }
+  for (const [cpId, arr] of parts) out.set(cpId, arr.join(", "));
+  return out;
 }
 
 // Full client STORICO (port of clients.php action=history): per-status appointment
@@ -1000,6 +1224,18 @@ export async function getManageClientHistory(slug: string, clientId: number): Pr
     for (const r of rows) staffName.set(Number(r.id ?? 0), String(r.full_name ?? ""));
   }
 
+  // Fallback service (appointments.service_id) for appts without service rows —
+  // legacy COALESCE(..., s2.name, '(nessun servizio)') + COALESCE(s2.price,0).
+  const fallbackSvcIds = Array.from(new Set(
+    apptRows.filter((r) => !svcByAppt.has(Number(r.id ?? 0))).map((r) => Number(r.service_id ?? 0)).filter((n) => n > 0),
+  ));
+  const fallbackSvc = new Map<number, { name: string; price: number }>();
+  if (fallbackSvcIds.length > 0) {
+    const ph = fallbackSvcIds.map(() => "?").join(",");
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, name, price", where: `id IN (${ph})`, params: fallbackSvcIds }).catch(() => [] as RowDataPacket[]);
+    for (const r of rows) fallbackSvc.set(Number(r.id ?? 0), { name: String(r.name ?? ""), price: Number(r.price ?? 0) });
+  }
+
   const now = Date.now();
   let done = 0, scheduled = 0, pending = 0, canceled = 0;
   let lastVisit: string | null = null;
@@ -1010,21 +1246,24 @@ export async function getManageClientHistory(slug: string, clientId: number): Pr
 
   for (const r of apptRows) {
     const id = Number(r.id ?? 0);
-    const startsAt = toIso(r.starts_at);
+    const startsAt = pgDateTimeLocal(r.starts_at);
     const key = clientHistoryStatusKey(r.status);
+    // Legacy summary CASE buckets: no_show / unknown statuses count in none.
     if (key === "done") done++;
     else if (key === "scheduled") scheduled++;
     else if (key === "pending") pending++;
-    else if (key === "canceled" || key === "no_show") canceled++;
+    else if (key === "canceled") canceled++;
 
-    const startMs = new Date(startsAt).getTime();
+    const startMs = new Date(startsAt.replace(" ", "T")).getTime();
     if (Number.isFinite(startMs)) {
-      if (startMs < now && (lastVisit === null || startMs > new Date(lastVisit).getTime())) lastVisit = startsAt;
-      if (startMs >= now && (key === "pending" || key === "scheduled") && (nextVisit === null || startMs < new Date(nextVisit).getTime())) nextVisit = startsAt;
+      if (startMs < now && (lastVisit === null || startMs > new Date(lastVisit.replace(" ", "T")).getTime())) lastVisit = startsAt;
+      if (startMs >= now && (key === "pending" || key === "scheduled") && (nextVisit === null || startMs < new Date(nextVisit.replace(" ", "T")).getTime())) nextVisit = startsAt;
     }
 
-    const svc = svcByAppt.get(id) ?? { names: [], subtotal: 0 };
-    const subtotal = roundMoney(svc.subtotal);
+    const svc = svcByAppt.get(id);
+    const fb = !svc ? fallbackSvc.get(Number(r.service_id ?? 0)) : undefined;
+    const names = svc ? svc.names : fb && fb.name !== "" ? [fb.name] : [];
+    const subtotal = roundMoney(svc ? svc.subtotal : Math.max(0, fb?.price ?? 0));
     let discountAmount = 0;
     const dtype = String(r.discount_type ?? "");
     const dval = Number(r.discount_value ?? 0);
@@ -1033,7 +1272,7 @@ export async function getManageClientHistory(slug: string, clientId: number): Pr
       else if (dtype === "fixed") discountAmount = dval;
       discountAmount = Math.min(Math.max(0, discountAmount), subtotal);
     }
-    const staffNames = Array.from(staffIdByAppt.get(id) ?? []).map((sid) => staffName.get(sid) ?? "").filter((n) => n !== "").join(", ");
+    const staffNames = Array.from(staffIdByAppt.get(id) ?? []).map((sid) => staffName.get(sid) ?? "").filter((n) => n !== "").sort().join(", ");
     const meta = clientHistoryStatusMeta(key);
     const row: ClientHistoryAppt = {
       id,
@@ -1041,19 +1280,106 @@ export async function getManageClientHistory(slug: string, clientId: number): Pr
       statusKey: key,
       statusLabel: meta.label,
       statusBadge: meta.badge,
-      serviceNames: svc.names.length > 0 ? svc.names.join(", ") : "(nessun servizio)",
+      serviceNames: names.length > 0 ? names.join(", ") : "(nessun servizio)",
       staffNames,
       subtotal,
       discountAmount: roundMoney(discountAmount),
       totalNet: roundMoney(Math.max(0, subtotal - discountAmount)),
     };
+    // Legacy per-status lists: fissati = pending+scheduled, eseguiti = done,
+    // cancellati = canceled ONLY (no_show appears in none).
     if (key === "done" && doneAppts.length < SECTION_LIMIT) doneAppts.push(row);
     else if ((key === "pending" || key === "scheduled") && scheduledAppts.length < SECTION_LIMIT) scheduledAppts.push(row);
-    else if ((key === "canceled" || key === "no_show") && canceledAppts.length < SECTION_LIMIT) canceledAppts.push(row);
+    else if (key === "canceled" && canceledAppts.length < SECTION_LIMIT) canceledAppts.push(row);
   }
 
-  // --- Active packages/giftboxes/giftcards (reuse the residuals detail) ---
-  const residuals = await quickBookClientResidualsDetail(slug, clientId).catch(() => null);
+  // --- Pacchetti attivi (legacy: status='active' + sessioni residue + non scaduti) ---
+  const pkgRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "client_packages",
+    columns: "id, package_name, service_id, purchase_date, start_date, created_at, expires_at, status, sessions_remaining, sessions_total",
+    where: "client_id = ? AND status = 'active' AND sessions_remaining > 0 AND (expires_at IS NULL OR expires_at >= ?)",
+    params: [clientId, todayIso()],
+    orderBy: "COALESCE(purchase_date, start_date, DATE(created_at)) DESC, id DESC",
+    limit: SECTION_LIMIT,
+  }).catch(() => [] as RowDataPacket[]);
+  const pkgSvcIds = Array.from(new Set(pkgRows.map((r) => Number(r.service_id ?? 0)).filter((n) => n > 0)));
+  const pkgSvcName = new Map<number, string>();
+  if (pkgSvcIds.length > 0) {
+    const ph = pkgSvcIds.map(() => "?").join(",");
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, name", where: `id IN (${ph})`, params: pkgSvcIds }).catch(() => [] as RowDataPacket[]);
+    for (const r of rows) pkgSvcName.set(Number(r.id ?? 0), String(r.name ?? ""));
+  }
+  const previewById = await clientPackagePreviewMap(slug, pkgRows.map((r) => Number(r.id ?? 0)).filter((n) => n > 0));
+  const packages: ClientHistoryPackage[] = pkgRows.map((r) => {
+    const meta = clientHistoryPackageStatusMeta(String(r.status ?? ""));
+    return {
+      id: Number(r.id ?? 0),
+      purchaseDate: r.purchase_date ? pgDateOnly(r.purchase_date) : "",
+      packageName: String(r.package_name ?? "").trim() || "Pacchetto",
+      serviceName: pkgSvcName.get(Number(r.service_id ?? 0)) ?? "",
+      preview: previewById.get(Number(r.id ?? 0)) ?? "",
+      sessionsRemaining: Number(r.sessions_remaining ?? 0),
+      sessionsTotal: Number(r.sessions_total ?? 0),
+      expiresAt: r.expires_at ? pgDateOnly(r.expires_at) : "",
+      statusLabel: meta.label,
+      statusBadge: meta.badge,
+    };
+  });
+
+  // --- GiftBox attive come DESTINATARIO (mittente escluso) ---
+  const gbRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "giftbox_instances",
+    columns: "id, giftbox_id, code, status, expires_at, issued_at, created_at, client_id",
+    where: "recipient_client_id = ? AND (client_id IS NULL OR client_id <> ?) AND status IN ('issued','active') AND (expires_at IS NULL OR expires_at >= ?)",
+    params: [clientId, clientId, `${todayIso()} 00:00:00`],
+    orderBy: "COALESCE(issued_at, created_at) DESC, id DESC",
+    limit: SECTION_LIMIT,
+  }).catch(() => [] as RowDataPacket[]);
+  const gbIds = Array.from(new Set(gbRows.map((r) => Number(r.giftbox_id ?? 0)).filter((n) => n > 0)));
+  const gbName = new Map<number, string>();
+  if (gbIds.length > 0) {
+    const ph = gbIds.map(() => "?").join(",");
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "giftboxes", columns: "id, name", where: `id IN (${ph}) AND deleted_at IS NULL`, params: gbIds }).catch(() => [] as RowDataPacket[]);
+    for (const r of rows) gbName.set(Number(r.id ?? 0), String(r.name ?? ""));
+  }
+  const giftboxes: ClientHistoryGiftbox[] = gbRows.map((r) => {
+    const meta = clientHistoryGiftStatusMeta(String(r.status ?? ""));
+    return {
+      id: Number(r.id ?? 0),
+      issuedAt: r.issued_at ? pgDateTimeLocal(r.issued_at) : "",
+      name: gbName.get(Number(r.giftbox_id ?? 0)) || "GiftBox",
+      code: String(r.code ?? "").trim() || "—",
+      expiresAt: r.expires_at ? pgDateOnly(r.expires_at) : "",
+      statusLabel: meta.label,
+      statusBadge: meta.badge,
+    };
+  });
+
+  // --- GiftCard attive come DESTINATARIO (mittente escluso) ---
+  const gcRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "giftcards",
+    columns: "id, code, status, initial_amount, balance, expires_at, issued_at, created_at",
+    where: "recipient_client_id = ? AND (client_id IS NULL OR client_id <> ?) AND status = 'active' AND balance > 0 AND (expires_at IS NULL OR expires_at >= ?)",
+    params: [clientId, clientId, todayIso()],
+    orderBy: "COALESCE(issued_at, created_at) DESC, id DESC",
+    limit: SECTION_LIMIT,
+  }).catch(() => [] as RowDataPacket[]);
+  const giftcards: ClientHistoryGiftcard[] = gcRows.map((r) => {
+    const meta = clientHistoryGiftStatusMeta(String(r.status ?? ""));
+    return {
+      id: Number(r.id ?? 0),
+      issuedAt: r.issued_at ? pgDateTimeLocal(r.issued_at) : "",
+      code: String(r.code ?? "").trim() || "—",
+      initialAmount: roundMoney(Number(r.initial_amount ?? 0)),
+      balance: roundMoney(Number(r.balance ?? 0)),
+      expiresAt: r.expires_at ? pgDateOnly(r.expires_at) : "",
+      statusLabel: meta.label,
+      statusBadge: meta.badge,
+    };
+  });
 
   // --- Sales (last 10, non-cancelled) + purchased-item summary + total ---
   const saleRows = await tenantSelect<RowDataPacket>({
@@ -1084,7 +1410,7 @@ export async function getManageClientHistory(slug: string, clientId: number): Pr
     const id = Number(r.id ?? 0);
     const items = itemsBySale.get(id) ?? [];
     const fallback = String(r.notes ?? "").trim();
-    return { id, saleDate: toIso(r.sale_date), total: roundMoney(Number(r.total ?? 0)), purchasedItem: items.length > 0 ? items.join(", ") : fallback !== "" ? fallback : "—" };
+    return { id, saleDate: pgDateTimeLocal(r.sale_date), total: roundMoney(Number(r.total ?? 0)), purchasedItem: items.length > 0 ? items.join(", ") : fallback !== "" ? fallback : "—" };
   });
   const salesTotalRows = await tenantSelect<RowDataPacket>({ slug, table: "sales", columns: "total", where: "client_id = ? AND (status IS NULL OR status NOT IN ('cancelled','canceled'))", params: [clientId] }).catch(() => [] as RowDataPacket[]);
   const salesTotal = roundMoney(salesTotalRows.reduce((sum, r) => sum + Number(r.total ?? 0), 0));
@@ -1099,14 +1425,20 @@ export async function getManageClientHistory(slug: string, clientId: number): Pr
     orderBy: "quote_date DESC, id DESC",
     limit: SECTION_LIMIT,
   }).catch(() => [] as RowDataPacket[]);
-  const quotes: ClientHistoryQuote[] = quoteRows.map((r) => ({
-    id: Number(r.id ?? 0),
-    number: String(r.number ?? ""),
-    quoteDate: r.quote_date ? toIso(r.quote_date) : "",
-    validUntil: r.valid_until ? toIso(r.valid_until) : "",
-    total: roundMoney(Number(r.total ?? 0)),
-    status: String(r.status ?? ""),
-  }));
+  const quotes: ClientHistoryQuote[] = quoteRows.map((r) => {
+    const validUntil = r.valid_until ? pgDateOnly(r.valid_until) : "";
+    const meta = clientHistoryQuoteStatusMeta(String(r.status ?? ""), validUntil);
+    return {
+      id: Number(r.id ?? 0),
+      number: String(r.number ?? ""),
+      quoteDate: r.quote_date ? pgDateOnly(r.quote_date) : "",
+      validUntil,
+      total: roundMoney(Number(r.total ?? 0)),
+      status: meta.code,
+      statusLabel: meta.label,
+      statusBadge: meta.badge,
+    };
+  });
 
   return {
     client,
@@ -1114,9 +1446,9 @@ export async function getManageClientHistory(slug: string, clientId: number): Pr
     scheduledAppts,
     doneAppts,
     canceledAppts,
-    packages: residuals?.packages ?? [],
-    giftboxes: residuals?.giftboxes ?? [],
-    giftcards: residuals?.giftcards ?? [],
+    packages,
+    giftboxes,
+    giftcards,
     quotes,
     sales,
     salesTotal,
@@ -1125,12 +1457,93 @@ export async function getManageClientHistory(slug: string, clientId: number): Pr
 
 export type ManageClientDetail = {
   client: ManagedClient;
-  fidelity: { points: number; creditBalance: number };
+  fidelity: {
+    points: number;
+    creditBalance: number;
+    // Card Fidelity legacy: visibile SOLO se il cliente aderisce (tessera attiva).
+    adhering: boolean;
+    enabled: boolean;
+    label: string;
+    expireEnabled: boolean;
+    expireDays: number;
+    expireWarnDays: number;
+    expiringSoon: number;
+  };
+  // Stats card legacy sotto l'avatar: "Iscritto da" / "Età" / "Compleanno".
+  stats: { sinceValue: number; sinceUnit: string; age: string; birthday: string };
   tags: Array<{ id: number; name: string }>;
   block: { isBlocked: boolean; blockedAt: string | null; blockedInternalNote: string };
   history: QuickBookClientHistorySummary;
   residuals: QuickBookClientResidualsSummary;
 };
+
+// Port of since_human(): smart-unit duration from a datetime anchor.
+function sinceHuman(anchor: string | null): [number, string] {
+  if (!anchor) return [0, "Minuti"];
+  const from = new Date(anchor.replace(" ", "T"));
+  if (Number.isNaN(from.getTime())) return [0, "Minuti"];
+  const to = new Date();
+  if (from > to) return [0, "Minuti"];
+  // DateInterval-like split (calendar years/months, then days/hours/minutes).
+  let years = to.getFullYear() - from.getFullYear();
+  let months = to.getMonth() - from.getMonth();
+  let days = to.getDate() - from.getDate();
+  if (days < 0) {
+    months -= 1;
+    const prevMonthDays = new Date(to.getFullYear(), to.getMonth(), 0).getDate();
+    days += prevMonthDays;
+  }
+  if (months < 0) {
+    years -= 1;
+    months += 12;
+  }
+  if (years >= 1) return [years, years === 1 ? "Anno" : "Anni"];
+  if (months >= 1) return [months, months === 1 ? "Mese" : "Mesi"];
+  // Sub-month: use the wall-clock delta for days/hours/minutes.
+  const deltaMs = to.getTime() - from.getTime();
+  const dd = Math.floor(deltaMs / 86400000);
+  if (dd >= 1) return [dd, dd === 1 ? "Giorno" : "Giorni"];
+  const hh = Math.floor(deltaMs / 3600000);
+  if (hh >= 1) return [hh, hh === 1 ? "Ora" : "Ore"];
+  const mm = Math.floor(deltaMs / 60000);
+  if (mm >= 1) return [mm, mm === 1 ? "Minuto" : "Minuti"];
+  return deltaMs > 999 ? [1, "Minuto"] : [0, "Minuti"];
+}
+
+// Port of client_registration_anchor(): created_at when it matches (or there is
+// no) registration_date, else registration_date at midnight.
+function clientRegistrationAnchor(client: ManagedClient): string | null {
+  const reg = /^\d{4}-\d{2}-\d{2}$/.test(String(client.registrationDate ?? "")) ? String(client.registrationDate) : null;
+  const created = String(client.createdAt ?? "").trim();
+  if (created !== "") {
+    const createdDate = created.slice(0, 10);
+    if (reg) return createdDate === reg ? created : `${reg} 00:00:00`;
+    return created;
+  }
+  return reg ? `${reg} 00:00:00` : null;
+}
+
+// Port of age_years() / birthday_label(): "—" fallbacks, Italian month names.
+function clientAgeYears(birthDate: string): string {
+  const s = String(birthDate ?? "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return "—";
+  const from = new Date(`${s}T00:00:00`);
+  const to = new Date();
+  if (Number.isNaN(from.getTime()) || from > to) return "—";
+  let years = to.getFullYear() - from.getFullYear();
+  const beforeBirthday = to.getMonth() < from.getMonth() || (to.getMonth() === from.getMonth() && to.getDate() < from.getDate());
+  if (beforeBirthday) years -= 1;
+  return String(Math.max(0, years));
+}
+function clientBirthdayLabel(birthDate: string): string {
+  const s = String(birthDate ?? "").slice(0, 10);
+  const m = s.match(/^\d{4}-(\d{2})-(\d{2})$/);
+  if (!m) return "—";
+  const months = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"];
+  const name = months[Number(m[1]) - 1];
+  if (!name) return "—";
+  return `${Number(m[2])} ${name}`;
+}
 
 // Full client DETAIL payload for the faithful "Apri" (action=view) page. Port of
 // clients.php action=view (client_load_accessible + client_profile_defaults + the
@@ -1154,20 +1567,50 @@ export async function getManageClientDetail(slug: string, clientId: number): Pro
   const row = rows[0];
   const client = mapClient(row);
 
-  const [bal, tags, history, residuals] = await Promise.all([
+  const [bal, tags, history, residuals, adhering, lotsSettings] = await Promise.all([
     dbWalletBalance(clientId, slug).catch(() => ({ credit: 0, points: 0 })),
     getDbClientTags(slug, clientId),
     quickBookClientHistorySummary(slug, clientId),
     quickBookClientResidualsSummary(slug, clientId),
+    fidelityIsClientAdhering(slug, clientId).catch(() => false),
+    fidelityLotsSettings(slug).catch(() => ({ expireEnabled: false, expireDays: 0, expireWarnDays: 30 })),
   ]);
+
+  // Card Fidelity legacy: label + enabled dal profilo business, punti in
+  // scadenza se la scadenza è attiva.
+  const biz = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_enabled, fidelity_points_label", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const fidelityEnabled = Number(biz[0]?.fidelity_enabled ?? 0) === 1;
+  const fidelityLabel = String(biz[0]?.fidelity_points_label ?? "").trim() || "Punti";
+  const expiringSoon = adhering && lotsSettings.expireEnabled && lotsSettings.expireWarnDays > 0
+    ? await expiringSoonPoints(slug, clientId).catch(() => 0)
+    : 0;
+
+  const anchor = clientRegistrationAnchor(client);
+  const [sinceValue, sinceUnit] = sinceHuman(anchor);
 
   return {
     client,
-    fidelity: { points: bal.points, creditBalance: bal.credit },
+    fidelity: {
+      points: bal.points,
+      creditBalance: bal.credit,
+      adhering,
+      enabled: fidelityEnabled,
+      label: fidelityLabel,
+      expireEnabled: Boolean(lotsSettings.expireEnabled),
+      expireDays: Number(lotsSettings.expireDays ?? 0),
+      expireWarnDays: Number(lotsSettings.expireWarnDays ?? 0),
+      expiringSoon,
+    },
+    stats: {
+      sinceValue,
+      sinceUnit,
+      age: clientAgeYears(String(client.birthDate ?? "")),
+      birthday: clientBirthdayLabel(String(client.birthDate ?? "")),
+    },
     tags,
     block: {
       isBlocked: Number(row.is_blocked ?? 0) === 1,
-      blockedAt: row.blocked_at ? String(row.blocked_at) : null,
+      blockedAt: row.blocked_at ? pgDateTimeLocal(row.blocked_at) : null,
       blockedInternalNote: String(row.blocked_internal_note ?? ""),
     },
     history,
@@ -16587,8 +17030,46 @@ async function getSingleProduct(slug: string, id: number): Promise<ManagedProduc
   return mapProduct(rows[0]);
 }
 
+// Postgres DATE/TIMESTAMP columns arrive as Date objects: String() would yield
+// "Sat Jul 05 ..." and toISOString() shifts to UTC — format locally instead.
+function pgDateOnly(value: unknown): string {
+  if (!value) return "";
+  if (value instanceof Date) return dateIsoLocal(value);
+  return String(value).slice(0, 10);
+}
+function pgDateTimeLocal(value: unknown): string {
+  if (!value) return "";
+  if (value instanceof Date) {
+    const hh = String(value.getHours()).padStart(2, "0");
+    const mi = String(value.getMinutes()).padStart(2, "0");
+    const ss = String(value.getSeconds()).padStart(2, "0");
+    return `${dateIsoLocal(value)} ${hh}:${mi}:${ss}`;
+  }
+  return String(value).slice(0, 19).replace("T", " ");
+}
+
+// Port of split_full_name(): "Cognome, Nome" or "Nome Cognome..." -> [first, last].
+function splitFullName(full: string): [string, string] {
+  const s = full.replace(/\s+/g, " ").trim();
+  if (s === "") return ["", ""];
+  if (s.includes(",")) {
+    const [last = "", first = ""] = s.split(",", 2).map((p) => p.trim());
+    return [first, last];
+  }
+  const parts = s.split(" ");
+  if (parts.length === 1) return [parts[0], ""];
+  const first = parts.shift() ?? "";
+  return [first, parts.join(" ").trim()];
+}
+
 function mapClient(row: RowDataPacket): ManagedClient {
   const value = Number(row.credit_balance ?? 0);
+  // client_profile_defaults: derive first/last from full_name when both are empty.
+  let firstName = String(row.first_name ?? "").trim();
+  let lastName = String(row.last_name ?? "").trim();
+  if (firstName === "" && lastName === "") {
+    [firstName, lastName] = splitFullName(String(row.full_name ?? ""));
+  }
   return {
     id: Number(row.id ?? 0),
     name: String(row.full_name ?? ([row.first_name, row.last_name].filter(Boolean).join(" ") || row.email || "Cliente")),
@@ -16597,16 +17078,17 @@ function mapClient(row: RowDataPacket): ManagedClient {
     locationId: Number(row.location_id ?? 0),
     tags: [],
     archived: Number(row.is_blocked ?? 0) === 1,
-    createdAt: toIso(row.created_at),
-    updatedAt: toIso(row.created_at),
-    lastVisit: row.registration_date ? String(row.registration_date).slice(0, 10) : "-",
+    // Local wall-clock (the legacy list "Iscrizione" fallback + since_human anchor).
+    createdAt: pgDateTimeLocal(row.created_at),
+    updatedAt: pgDateTimeLocal(row.created_at),
+    lastVisit: row.registration_date ? pgDateOnly(row.registration_date) : "-",
     value: `${roundMoney(value)} euro`,
     next: "-",
     note: String(row.notes ?? ""),
     // Full anagrafica (port of clients.php client_profile_defaults + the columns
     // edited by the new/edit form). Empty strings keep the edit-form prefill simple.
-    firstName: String(row.first_name ?? ""),
-    lastName: String(row.last_name ?? ""),
+    firstName,
+    lastName,
     companyName: String(row.company_name ?? ""),
     vatNumber: String(row.vat_number ?? ""),
     taxCode: String(row.tax_code ?? ""),
@@ -16615,15 +17097,17 @@ function mapClient(row: RowDataPacket): ManagedClient {
     phoneHome: String(row.phone_home ?? ""),
     phone2: String(row.phone2 ?? ""),
     gender: String(row.gender ?? ""),
-    birthDate: row.birth_date ? String(row.birth_date).slice(0, 10) : "",
+    birthDate: pgDateOnly(row.birth_date),
     birthPlace: String(row.birth_place ?? ""),
-    registrationDate: row.registration_date ? String(row.registration_date).slice(0, 10) : "",
+    registrationDate: pgDateOnly(row.registration_date),
     region: String(row.region ?? ""),
     province: String(row.province ?? ""),
     city: String(row.city ?? ""),
     address: String(row.address ?? ""),
     cap: String(row.cap ?? ""),
     jobTitle: String(row.job_title ?? ""),
+    blockedAt: row.blocked_at ? pgDateTimeLocal(row.blocked_at) : null,
+    blockedInternalNote: String(row.blocked_internal_note ?? ""),
   };
 }
 

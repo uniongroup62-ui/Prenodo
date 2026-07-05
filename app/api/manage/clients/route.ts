@@ -21,18 +21,29 @@ import {
 import { currentManageSession } from "@/lib/manage-auth";
 import { resolveManageLocationId } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
-import { can } from "@/lib/role-permissions";
+import { can, canAny } from "@/lib/role-permissions";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+// Legacy page access: clients.php richiede ANY di questi tre permessi; le azioni
+// new/edit/delete/history restano gated clients.manage (vedi sotto).
+const CLIENTS_PAGE_PERMS = ["clients.manage", "client_sheets.manage", "client_consents.manage"];
 
 export async function GET(request: Request) {
   const tenantSlug = manageTenantSlugFromRequest(request);
   const session = await currentManageSession(tenantSlug);
   if (!session) return jsonError("Sessione scaduta o non valida.", 401);
-  if (!can(session.user.perms, "clients.manage")) return jsonError("Permesso clienti mancante.", 403);
+  if (!canAny(session.user.perms, CLIENTS_PAGE_PERMS)) return jsonError("Permesso clienti mancante.", 403);
 
   const url = new URL(request.url);
+  // Azioni riservate a clients.manage (legacy: redirect "Permessi insufficienti
+  // per questa azione sui clienti.").
+  const guardedActions = ["history", "delete_summary", "get"];
+  const requestedAction = url.searchParams.get("action") ?? "";
+  if (guardedActions.includes(requestedAction) && !can(session.user.perms, "clients.manage")) {
+    return jsonError("Permessi insufficienti per questa azione sui clienti.", 403);
+  }
   const locationId = await resolveManageLocationId({
     slug: tenantSlug,
     raw: url.searchParams.get("location_id"),
@@ -132,8 +143,20 @@ export async function GET(request: Request) {
     if (clientId <= 0) return jsonError("ID cliente mancante.");
     try {
       const detail = await getManageClientDetail(tenantSlug, clientId);
-      if (!detail) return jsonError("Cliente non trovato.", 404);
-      return Response.json({ ok: true, sourceMode: "database", ...detail });
+      if (!detail) return jsonError("Cliente non trovato o non disponibile per le tue sedi.", 404);
+      return Response.json({
+        ok: true,
+        sourceMode: "database",
+        ...detail,
+        // Gating header/azioni della scheda legacy.
+        perms: {
+          clientsManage: can(session.user.perms, "clients.manage"),
+          clientSheetsManage: can(session.user.perms, "client_sheets.manage"),
+          clientConsentsManage: can(session.user.perms, "client_consents.manage"),
+          createAppointments: can(session.user.perms, "calendar.view") && can(session.user.perms, "appointments.quick_booking"),
+          openCreditMovements: can(session.user.perms, "credit_movements.manage"),
+        },
+      });
     } catch (error) {
       return jsonError(error instanceof Error ? error.message : "Errore dettaglio cliente.");
     }
@@ -147,8 +170,23 @@ export async function GET(request: Request) {
     if (clientId <= 0) return jsonError("ID cliente mancante.");
     try {
       const history = await getManageClientHistory(tenantSlug, clientId);
-      if (!history) return jsonError("Cliente non trovato.", 404);
-      return Response.json({ ok: true, sourceMode: "database", ...history });
+      if (!history) return jsonError("Cliente non trovato o non disponibile per le tue sedi.", 404);
+      return Response.json({
+        ok: true,
+        sourceMode: "database",
+        ...history,
+        // Gating dei bottoni "Apri" per sezione + header (legacy canOpen*).
+        perms: {
+          clientSheetsManage: can(session.user.perms, "client_sheets.manage"),
+          createAppointments: can(session.user.perms, "calendar.view") && can(session.user.perms, "appointments.quick_booking"),
+          openAppointments: can(session.user.perms, "appointments.manage"),
+          openPackages: can(session.user.perms, "packages.clients"),
+          openGiftbox: can(session.user.perms, "giftbox.manage"),
+          openGiftcard: can(session.user.perms, "giftcard.manage"),
+          openQuotes: can(session.user.perms, "quotes.manage"),
+          openSales: canAny(session.user.perms, ["pos.manage", "pos.movements", "pos.prepaids", "pos.preorders"]),
+        },
+      });
     } catch (error) {
       return jsonError(error instanceof Error ? error.message : "Errore storico cliente.");
     }
@@ -182,22 +220,64 @@ export async function GET(request: Request) {
     }
   }
 
-  const args = {
-    slug: tenantSlug,
-    query: url.searchParams.get("q") ?? "",
-    locationId,
-    includeArchived: ["1", "true", "yes"].includes((url.searchParams.get("include_archived") ?? "").toLowerCase()),
-  };
-
+  // LIST (default). Faithful clients list: legacy ordering (created_at DESC
+  // LIMIT 200), unknown-client filter, strict sede filter (all_locations=1
+  // disables it), blocked INCLUDED (badge "Disattivato"). The payload also
+  // carries hasAnyClients (unfiltered — empty state + header "Nuovo" gate) and
+  // the caller's permessi for the header/actions gating.
   try {
+    const allLocations = ["1", "true", "on", "yes", "all"].includes(String(url.searchParams.get("all_locations") ?? "").trim().toLowerCase());
+    const filterLocationId = allLocations ? 0 : locationId;
+    const clients = await listDbClients({
+      slug: tenantSlug,
+      query: url.searchParams.get("q") ?? "",
+      locationId: filterLocationId,
+      legacyList: true,
+    });
+    const anyRows = await listDbClients({ slug: tenantSlug, legacyList: true });
     return Response.json({
       ok: true,
       sourceMode: "database",
-      clients: await listDbClients(args),
+      clients,
+      hasAnyClients: anyRows.length > 0,
+      perms: {
+        clientsManage: can(session.user.perms, "clients.manage"),
+        clientSheetsManage: can(session.user.perms, "client_sheets.manage"),
+        clientConsentsManage: can(session.user.perms, "client_consents.manage"),
+        openCalendar: can(session.user.perms, "calendar.view"),
+        quickBooking: can(session.user.perms, "appointments.quick_booking"),
+        openAppointments: can(session.user.perms, "appointments.manage"),
+        openPackages: can(session.user.perms, "packages.clients"),
+        openGiftbox: can(session.user.perms, "giftbox.manage"),
+        openGiftcard: can(session.user.perms, "giftcard.manage"),
+        openQuotes: can(session.user.perms, "quotes.manage"),
+        openSales: canAny(session.user.perms, ["pos.manage", "pos.movements", "pos.prepaids", "pos.preorders"]),
+        openCreditMovements: can(session.user.perms, "credit_movements.manage"),
+      },
     });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Errore clienti.");
   }
+}
+
+// Validazioni server verbatim di clients.php POST new/edit (ordine legacy):
+// nome, email, PEC, date. Ritorna il messaggio d'errore o null.
+function legacyClientValidationError(body: Record<string, string>): string | null {
+  const first = String(body.first_name ?? "").trim();
+  const last = String(body.last_name ?? "").trim();
+  const full = `${first} ${last}`.trim() || String(body.full_name ?? "").trim();
+  if (full === "") return "Nome e cognome obbligatori";
+  const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+  const email = String(body.email ?? "").trim();
+  if (email !== "" && !emailRe.test(email)) return "Email non valida.";
+  const pec = String(body.pec ?? "").trim();
+  if (pec !== "" && !emailRe.test(pec)) return "PEC non valida.";
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  const birth = String(body.birth_date ?? "").trim();
+  if (birth !== "" && !dateRe.test(birth)) return "Data di nascita non valida.";
+  const reg = String(body.registration_date ?? "").trim();
+  if (reg !== "" && !dateRe.test(reg)) return "Data iscrizione non valida.";
+  return null;
 }
 
 export async function POST(request: Request) {
@@ -212,7 +292,10 @@ export async function POST(request: Request) {
 
   try {
     if (action === "create") {
+      const invalid = legacyClientValidationError(body);
+      if (invalid) return jsonError(invalid);
       const input = await clientInputFromBody(body, tenantSlug);
+      if (!input.locationId || input.locationId <= 0) return jsonError("Seleziona una sede valida.");
       const client = await createDbClient(input, tenantSlug);
       return Response.json({ ok: true, source: "clients?action=create", sourceMode: "database", client, clients: await listDbClients({ slug: tenantSlug }) });
     }
@@ -221,7 +304,10 @@ export async function POST(request: Request) {
     if (id <= 0) return jsonError("ID cliente mancante.");
 
     if (action === "update") {
+      const invalid = legacyClientValidationError(body);
+      if (invalid) return jsonError(invalid);
       const input = await clientInputFromBody(body, tenantSlug);
+      if (!input.locationId || input.locationId <= 0) return jsonError("Seleziona una sede valida.");
       const client = await updateDbClient(id, input, tenantSlug);
       return Response.json({ ok: true, source: "clients?action=update", sourceMode: "database", client, clients: await listDbClients({ slug: tenantSlug }) });
     }
@@ -261,12 +347,15 @@ export async function POST(request: Request) {
     }
 
     if (action === "delete") {
-      // Faithful, ATOMIC cascade (port of clients.php client_delete_execute). The
-      // reason is REQUIRED (legacy guard) — reject an empty one. stock_restore_mode
-      // selects whether the sales' product stock is restored ('restore_stock') or
-      // left ('no_restore', default). deleteDbClientCascade throws on an empty reason.
+      // Faithful, ATOMIC cascade (port of clients.php client_delete_execute).
+      // Guardie legacy verbatim: motivazione obbligatoria (msg senza accento) e
+      // conferma testuale ELIMINA. stock_restore_mode seleziona il ripristino
+      // magazzino ('restore_stock') o il default 'no_restore' (la pagina legacy
+      // invia sempre no_restore via hidden input).
       const reason = String(body.delete_reason ?? body.reason ?? "").trim();
-      if (reason === "") return jsonError("La motivazione è obbligatoria.");
+      if (reason === "") return jsonError("La motivazione e obbligatoria.");
+      const confirmText = String(body.delete_confirm_text ?? "").trim();
+      if (confirmText !== "ELIMINA") return jsonError("Per confermare scrivi ELIMINA.");
       const stockRestoreMode = String(body.stock_restore_mode ?? "") === "restore_stock" ? "restore_stock" : "no_restore";
       const result = await deleteDbClientCascade(tenantSlug, id, { reason, stockRestoreMode });
       return Response.json({ ok: true, source: "clients?action=delete", sourceMode: "database", ...result, clients: await listDbClients({ slug: tenantSlug }) });

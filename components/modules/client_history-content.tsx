@@ -3,14 +3,10 @@
 import { useEffect, useState } from "react";
 
 // Faithful port of the PHP client STORICO page (app/pages/clients.php
-// action=history), fed by /api/manage/clients?action=history&id=<id>:
-//   - summary counts (totale / completati / prenotati / in attesa / annullati)
-//     + ultima/prossima visita
-//   - appointment lists per status (Prenotati / Completati / Annullati), ≤10
-//     each, with servizi + staff + subtotale/sconto/netto + status badge + an
-//     "Apri" link to the appointment editor
-//   - active Pacchetti / GiftBox / GiftCard (from the residuals detail)
-//   - last 10 Preventivi + Storico vendite
+// action=history): card "Appuntamenti fissati" con il riepilogo nel card-header
+// (Appuntamenti: N • Ultimo • Prossimo [• Vendite]), poi Eseguiti / Cancellati,
+// Pacchetti attivi, GiftBox/GiftCard attive (solo destinatario), Preventivi e
+// Storico vendite — tabelle e testi verbatim, bottoni "Apri" gated dai permessi.
 
 type Appt = {
   id: number;
@@ -25,10 +21,10 @@ type Appt = {
   totalNet: number;
 };
 type Sale = { id: number; saleDate: string; total: number; purchasedItem: string };
-type Quote = { id: number; number: string; quoteDate: string; validUntil: string; total: number; status: string };
-type Package = { package_name: string; sessions_remaining: number; sessions_total: number; expires_at: string | null; breakdown: string };
-type Giftbox = { giftbox_name: string; code: string; remaining_qty: number; total_qty: number; expires_at: string | null };
-type Giftcard = { code: string; balance: number; expires_at: string | null };
+type Quote = { id: number; number: string; quoteDate: string; validUntil: string; total: number; statusLabel: string; statusBadge: string };
+type Pkg = { id: number; purchaseDate: string; packageName: string; serviceName: string; preview: string; sessionsRemaining: number; sessionsTotal: number; expiresAt: string; statusLabel: string; statusBadge: string };
+type Gbox = { id: number; issuedAt: string; name: string; code: string; expiresAt: string; statusLabel: string; statusBadge: string };
+type Gcard = { id: number; issuedAt: string; code: string; initialAmount: number; balance: number; expiresAt: string; statusLabel: string; statusBadge: string };
 
 type HistoryPayload = {
   ok?: boolean;
@@ -38,12 +34,22 @@ type HistoryPayload = {
   scheduledAppts?: Appt[];
   doneAppts?: Appt[];
   canceledAppts?: Appt[];
-  packages?: Package[];
-  giftboxes?: Giftbox[];
-  giftcards?: Giftcard[];
+  packages?: Pkg[];
+  giftboxes?: Gbox[];
+  giftcards?: Gcard[];
   quotes?: Quote[];
   sales?: Sale[];
   salesTotal?: number;
+  perms?: {
+    clientSheetsManage?: boolean;
+    createAppointments?: boolean;
+    openAppointments?: boolean;
+    openPackages?: boolean;
+    openGiftbox?: boolean;
+    openGiftcard?: boolean;
+    openQuotes?: boolean;
+    openSales?: boolean;
+  };
 };
 
 function tenantSlug(): string {
@@ -57,69 +63,28 @@ function clientIdFromUrl(): number {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
+// Port of fmt_money(): number_format(n, 2, ',', '.').
 function fmtMoney(n: number): string {
-  return Number(n || 0).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const v = Number(n || 0);
+  const [int, dec] = Math.abs(v).toFixed(2).split(".");
+  return `${v < 0 ? "-" : ""}${int.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${dec}`;
 }
+// d/m/Y H:i from "YYYY-MM-DD HH:MM[:SS]".
 function fmtDateTime(v: string | null): string {
-  const s = (v ?? "").trim();
-  if (s === "") return "—";
-  return s.slice(0, 16).replace("T", " ");
+  const m = String(v ?? "").match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}` : "—";
 }
+// d/m/Y from an ISO date prefix.
 function fmtDate(v: string | null): string {
-  const s = (v ?? "").trim();
-  return s !== "" ? s.slice(0, 10) : "—";
+  const m = String(v ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : "—";
 }
 
-function ApptTable({ title, rows }: { title: string; rows: Appt[] }) {
-  const slug = tenantSlug();
+function OpenBtn({ href }: { href: string }) {
   return (
-    <div className="card mt-3">
-      <div className="card-header fw-semibold">{title}</div>
-      <div className="table-responsive">
-        <table className="table mb-0 align-middle">
-          <thead>
-            <tr>
-              <th>Data</th>
-              <th>Servizi</th>
-              <th>Operatore</th>
-              <th className="text-end">Subtotale</th>
-              <th className="text-end">Sconto</th>
-              <th className="text-end">Netto</th>
-              <th>Stato</th>
-              <th className="text-end">Azioni</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="text-muted p-3">
-                  Nessun appuntamento.
-                </td>
-              </tr>
-            ) : (
-              rows.map((a) => (
-                <tr key={a.id}>
-                  <td className="text-muted">{fmtDateTime(a.startsAt)}</td>
-                  <td>{a.serviceNames}</td>
-                  <td className="text-muted">{a.staffNames !== "" ? a.staffNames : "—"}</td>
-                  <td className="text-end text-muted">€ {fmtMoney(a.subtotal)}</td>
-                  <td className="text-end text-muted">{a.discountAmount > 0 ? <>- € {fmtMoney(a.discountAmount)}</> : "—"}</td>
-                  <td className="text-end fw-semibold">€ {fmtMoney(a.totalNet)}</td>
-                  <td>
-                    <span className={`badge ${a.statusBadge}`}>{a.statusLabel}</span>
-                  </td>
-                  <td className="text-end">
-                    <a className="btn btn-sm btn-outline-secondary" href={`/${encodeURIComponent(slug)}/appointments?action=edit&id=${a.id}`}>
-                      Apri
-                    </a>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
+    <a className="btn btn-sm btn-outline-primary" href={href}>
+      <i className="bi bi-box-arrow-up-right" /> Apri
+    </a>
   );
 }
 
@@ -132,13 +97,16 @@ export function ClientHistoryContent({ slug: slugProp }: { slug?: string } = {})
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  // Microtask: evita il setState sincrono nell'effect (primo paint invariato).
   useEffect(() => {
-    const id = clientIdFromUrl();
-    if (id > 0) setClientId(id);
-    else {
-      setError("Cliente non valido.");
-      setLoading(false);
-    }
+    void Promise.resolve().then(() => {
+      const id = clientIdFromUrl();
+      if (id > 0) setClientId(id);
+      else {
+        setError("Cliente non valido.");
+        setLoading(false);
+      }
+    });
   }, []);
 
   useEffect(() => {
@@ -152,7 +120,9 @@ export function ClientHistoryContent({ slug: slugProp }: { slug?: string } = {})
           setData(j);
           setError("");
         } else {
-          setError(j?.error || "Cliente non trovato.");
+          // Legacy: client_load_accessible fa redirect alla lista con l'errore.
+          const msg = String(j?.error || "Cliente non trovato o non disponibile per le tue sedi.");
+          window.location.href = `/${encodeURIComponent(slug)}/clients?err=${encodeURIComponent(msg)}`;
         }
       })
       .catch(() => {
@@ -166,7 +136,44 @@ export function ClientHistoryContent({ slug: slugProp }: { slug?: string } = {})
     };
   }, [clientId, slug]);
 
+  function page(suffix: string): string {
+    return `/${encodeURIComponent(slug)}/${`${suffix}`.replace("&", "?")}`;
+  }
+
   const s = data?.summary;
+  const perms = data?.perms ?? {};
+  const lastV = s?.lastVisit ? fmtDateTime(s.lastVisit) : "—";
+  const nextV = s?.nextVisit ? fmtDateTime(s.nextVisit) : "—";
+  const salesTotal = Number(data?.salesTotal ?? 0);
+
+  // Le tre tabelle appuntamenti legacy: fissati/cancellati con Totale, eseguiti senza.
+  function apptRows(rows: Appt[], withTotal: boolean, emptyText: string, colSpan: number) {
+    if (rows.length === 0) {
+      return (
+        <tr>
+          <td colSpan={colSpan} className="text-muted p-3">
+            {emptyText}
+          </td>
+        </tr>
+      );
+    }
+    return rows.map((a) => (
+      <tr key={a.id}>
+        <td>{fmtDateTime(a.startsAt)}</td>
+        <td>
+          <div className="fw-semibold">{a.serviceNames || "—"}</div>
+        </td>
+        <td className="text-muted">{a.staffNames !== "" ? a.staffNames : "—"}</td>
+        {withTotal ? <td className="text-end fw-semibold">€ {fmtMoney(a.totalNet)}</td> : null}
+        <td>
+          <div className="d-flex align-items-center gap-2 flex-wrap">
+            <span className={`badge text-bg-${a.statusBadge}`}>{a.statusLabel}</span>
+            {perms.openAppointments !== false ? <OpenBtn href={page(`appointments&action=edit&id=${a.id}`)} /> : null}
+          </div>
+        </td>
+      </tr>
+    ));
+  }
 
   return (
     <div className="container-fluid">
@@ -177,14 +184,26 @@ export function ClientHistoryContent({ slug: slugProp }: { slug?: string } = {})
           <div className="bs-page-kicker">Scheda cliente</div>
           <h1 className="bs-page-title">Storico</h1>
           <div className="bs-page-subtitle">
-            {data?.client ? `${data.client.name}${data.client.email ? ` · ${data.client.email}` : ""}` : "Storico appuntamenti, vendite e residui del cliente."}
+            {data?.client ? `${data.client.name} - ${data.client.email || "-"}` : "-"}
           </div>
         </div>
         <div className="bs-page-actions">
-          <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/clients?action=view&id=${clientId}`}>
+          <a className="btn btn-outline-secondary" href={page(`clients&action=view&id=${clientId}`)}>
             <i className="bi bi-arrow-left me-1" />
             Indietro
           </a>
+          {perms.clientSheetsManage !== false ? (
+            <a className="btn btn-outline-primary" href={page(`client_sheets&client_id=${clientId}`)}>
+              <i className="bi bi-journals me-1" />
+              Compilazioni
+            </a>
+          ) : null}
+          {perms.createAppointments !== false ? (
+            <a className="btn btn-primary" href={page("calendar")}>
+              <i className="bi bi-calendar-plus me-1" />
+              Nuovo appuntamento
+            </a>
+          ) : null}
         </div>
       </div>
 
@@ -194,154 +213,126 @@ export function ClientHistoryContent({ slug: slugProp }: { slug?: string } = {})
         <div className="card p-3 text-muted small">Caricamento…</div>
       ) : data ? (
         <>
-          {/* Summary */}
-          <div className="row g-3">
-            <div className="col-6 col-lg">
-              <div className="card p-3 h-100">
-                <div className="text-muted small">Totale appuntamenti</div>
-                <div className="h4 mb-0 fw-bold">{s?.total ?? 0}</div>
+          <div className="card">
+            <div className="card-header">
+              <div className="fw-semibold">
+                <i className="bi bi-calendar-check me-2" />
+                Appuntamenti fissati
               </div>
-            </div>
-            <div className="col-6 col-lg">
-              <div className="card p-3 h-100">
-                <div className="text-muted small">Completati</div>
-                <div className="h4 mb-0 fw-bold text-success">{s?.done ?? 0}</div>
+              <div className="small text-muted mt-1">
+                Appuntamenti: {s?.total ?? 0} • Ultimo: {lastV} • Prossimo: {nextV}
+                {salesTotal > 0 ? (
+                  <>
+                    {" "}
+                    • Vendite: <span className="fw-semibold">€ {fmtMoney(salesTotal)}</span>
+                  </>
+                ) : null}
               </div>
-            </div>
-            <div className="col-6 col-lg">
-              <div className="card p-3 h-100">
-                <div className="text-muted small">Prenotati</div>
-                <div className="h4 mb-0 fw-bold text-primary">{(s?.scheduled ?? 0) + (s?.pending ?? 0)}</div>
-              </div>
-            </div>
-            <div className="col-6 col-lg">
-              <div className="card p-3 h-100">
-                <div className="text-muted small">Annullati</div>
-                <div className="h4 mb-0 fw-bold text-danger">{s?.canceled ?? 0}</div>
-              </div>
-            </div>
-            <div className="col-12 col-lg">
-              <div className="card p-3 h-100">
-                <div className="text-muted small">Ultima / Prossima visita</div>
-                <div className="small">
-                  <div>Ultima: {fmtDateTime(s?.lastVisit ?? null)}</div>
-                  <div>Prossima: {fmtDateTime(s?.nextVisit ?? null)}</div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Appointments per status */}
-          <ApptTable title="Prenotati" rows={data.scheduledAppts ?? []} />
-          <ApptTable title="Completati" rows={data.doneAppts ?? []} />
-          <ApptTable title="Annullati" rows={data.canceledAppts ?? []} />
-
-          {/* Residui attivi */}
-          <div className="row g-3 mt-1">
-            <div className="col-lg-4">
-              <div className="card h-100">
-                <div className="card-header fw-semibold">
-                  <i className="bi bi-box-seam me-2" />
-                  Pacchetti attivi
-                </div>
-                <div className="card-body">
-                  {(data.packages ?? []).length === 0 ? (
-                    <div className="text-muted small">Nessun pacchetto attivo.</div>
-                  ) : (
-                    (data.packages ?? []).map((p, i) => (
-                      <div key={i} className="border rounded p-2 mb-2">
-                        <div className="fw-semibold">{p.package_name}</div>
-                        <div className="small text-muted">
-                          Sessioni: {p.sessions_remaining}/{p.sessions_total}
-                          {p.expires_at ? ` · scade ${fmtDate(p.expires_at)}` : ""}
-                        </div>
-                        {p.breakdown ? <div className="small text-muted">{p.breakdown}</div> : null}
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-            <div className="col-lg-4">
-              <div className="card h-100">
-                <div className="card-header fw-semibold">
-                  <i className="bi bi-gift me-2" />
-                  GiftBox attive
-                </div>
-                <div className="card-body">
-                  {(data.giftboxes ?? []).length === 0 ? (
-                    <div className="text-muted small">Nessuna GiftBox attiva.</div>
-                  ) : (
-                    (data.giftboxes ?? []).map((g, i) => (
-                      <div key={i} className="border rounded p-2 mb-2">
-                        <div className="fw-semibold">{g.giftbox_name}</div>
-                        <div className="small text-muted">
-                          {g.code} · {g.remaining_qty}/{g.total_qty}
-                          {g.expires_at ? ` · scade ${fmtDate(g.expires_at)}` : ""}
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-            <div className="col-lg-4">
-              <div className="card h-100">
-                <div className="card-header fw-semibold">
-                  <i className="bi bi-credit-card me-2" />
-                  GiftCard attive
-                </div>
-                <div className="card-body">
-                  {(data.giftcards ?? []).length === 0 ? (
-                    <div className="text-muted small">Nessuna GiftCard attiva.</div>
-                  ) : (
-                    (data.giftcards ?? []).map((g, i) => (
-                      <div key={i} className="border rounded p-2 mb-2">
-                        <div className="fw-semibold">{g.code}</div>
-                        <div className="small text-muted">
-                          Saldo € {fmtMoney(g.balance)}
-                          {g.expires_at ? ` · scade ${fmtDate(g.expires_at)}` : ""}
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Preventivi */}
-          <div className="card mt-3">
-            <div className="card-header fw-semibold">
-              <i className="bi bi-file-earmark-text me-2" />
-              Preventivi
             </div>
             <div className="table-responsive">
-              <table className="table mb-0 align-middle">
+              <table className="table mb-0">
                 <thead>
                   <tr>
-                    <th>Numero</th>
                     <th>Data</th>
-                    <th>Valido fino</th>
+                    <th>Servizi</th>
+                    <th>Operatore</th>
                     <th className="text-end">Totale</th>
                     <th>Stato</th>
                   </tr>
                 </thead>
+                <tbody>{apptRows(data.scheduledAppts ?? [], true, "Nessun appuntamento fissato.", 5)}</tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="card mt-3">
+            <div className="card-header fw-semibold">
+              <i className="bi bi-calendar2-check me-2" />
+              Appuntamenti eseguiti
+            </div>
+            <div className="table-responsive">
+              <table className="table mb-0">
+                <thead>
+                  <tr>
+                    <th>Data</th>
+                    <th>Servizi</th>
+                    <th>Operatore</th>
+                    <th>Stato</th>
+                  </tr>
+                </thead>
+                <tbody>{apptRows(data.doneAppts ?? [], false, "Nessun appuntamento eseguito.", 4)}</tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="card mt-3">
+            <div className="card-header fw-semibold">
+              <i className="bi bi-calendar-x me-2" />
+              Appuntamenti cancellati
+            </div>
+            <div className="table-responsive">
+              <table className="table mb-0">
+                <thead>
+                  <tr>
+                    <th>Data</th>
+                    <th>Servizi</th>
+                    <th>Operatore</th>
+                    <th className="text-end">Totale</th>
+                    <th>Stato</th>
+                  </tr>
+                </thead>
+                <tbody>{apptRows(data.canceledAppts ?? [], true, "Nessun appuntamento cancellato.", 5)}</tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="card mt-3">
+            <div className="card-header fw-semibold">
+              <i className="bi bi-box-seam me-2" />
+              Pacchetti attivi
+            </div>
+            <div className="table-responsive">
+              <table className="table mb-0">
+                <thead>
+                  <tr>
+                    <th>Acquisto</th>
+                    <th>Pacchetto</th>
+                    <th className="text-center">Residue</th>
+                    <th>Scadenza</th>
+                    <th>Stato</th>
+                  </tr>
+                </thead>
                 <tbody>
-                  {(data.quotes ?? []).length === 0 ? (
+                  {(data.packages ?? []).length === 0 ? (
                     <tr>
                       <td colSpan={5} className="text-muted p-3">
-                        Nessun preventivo.
+                        Nessun pacchetto attivo.
                       </td>
                     </tr>
                   ) : (
-                    (data.quotes ?? []).map((q) => (
-                      <tr key={q.id}>
-                        <td className="fw-semibold">{q.number || `#${q.id}`}</td>
-                        <td className="text-muted">{fmtDate(q.quoteDate)}</td>
-                        <td className="text-muted">{fmtDate(q.validUntil)}</td>
-                        <td className="text-end">€ {fmtMoney(q.total)}</td>
-                        <td className="text-muted">{q.status || "—"}</td>
+                    (data.packages ?? []).map((cp) => (
+                      <tr key={cp.id}>
+                        <td>{fmtDate(cp.purchaseDate)}</td>
+                        <td>
+                          <div className="fw-semibold">{cp.packageName}</div>
+                          {cp.preview !== "" ? (
+                            <div className="small text-muted">{cp.preview}</div>
+                          ) : cp.serviceName !== "" ? (
+                            <div className="small text-muted">{cp.serviceName}</div>
+                          ) : null}
+                        </td>
+                        <td className="text-center fw-semibold">
+                          {cp.sessionsRemaining} / {cp.sessionsTotal}
+                        </td>
+                        <td>{fmtDate(cp.expiresAt)}</td>
+                        <td>
+                          <div className="d-flex align-items-center gap-2 flex-wrap">
+                            <span className={`badge text-bg-${cp.statusBadge}`}>{cp.statusLabel}</span>
+                            {perms.openPackages !== false ? (
+                              <OpenBtn href={page(`packages&tab=clients&action=client_view&id=${cp.id}`)} />
+                            ) : null}
+                          </div>
+                        </td>
                       </tr>
                     ))
                   )}
@@ -350,23 +341,160 @@ export function ClientHistoryContent({ slug: slugProp }: { slug?: string } = {})
             </div>
           </div>
 
-          {/* Storico vendite */}
-          <div className="card mt-3 mb-4">
-            <div className="card-header d-flex align-items-center justify-content-between">
-              <div className="fw-semibold">
-                <i className="bi bi-receipt me-2" />
-                Storico vendite
-              </div>
-              <div className="text-muted small">Totale: € {fmtMoney(data.salesTotal ?? 0)}</div>
+          <div className="card mt-3">
+            <div className="card-header fw-semibold">
+              <i className="bi bi-gift me-2" />
+              GiftBox attive
             </div>
             <div className="table-responsive">
-              <table className="table mb-0 align-middle">
+              <table className="table mb-0">
+                <thead>
+                  <tr>
+                    <th>Emissione</th>
+                    <th>GiftBox</th>
+                    <th>Codice</th>
+                    <th>Scadenza</th>
+                    <th>Stato</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data.giftboxes ?? []).length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="text-muted p-3">
+                        Nessuna GiftBox attiva come destinatario.
+                      </td>
+                    </tr>
+                  ) : (
+                    (data.giftboxes ?? []).map((gb) => (
+                      <tr key={gb.id}>
+                        <td>{fmtDateTime(gb.issuedAt)}</td>
+                        <td className="fw-semibold">{gb.name}</td>
+                        <td>{gb.code}</td>
+                        <td>{fmtDate(gb.expiresAt)}</td>
+                        <td>
+                          <div className="d-flex align-items-center gap-2 flex-wrap">
+                            <span className={`badge text-bg-${gb.statusBadge}`}>{gb.statusLabel}</span>
+                            {perms.openGiftbox !== false ? (
+                              <OpenBtn href={page(`giftbox&tab=instances&action=edit_instance&id=${gb.id}`)} />
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="card mt-3">
+            <div className="card-header fw-semibold">
+              <i className="bi bi-credit-card-2-front me-2" />
+              GiftCard attive
+            </div>
+            <div className="table-responsive">
+              <table className="table mb-0">
+                <thead>
+                  <tr>
+                    <th>Emissione</th>
+                    <th>Codice</th>
+                    <th className="text-end">Importo</th>
+                    <th className="text-end">Saldo</th>
+                    <th>Scadenza</th>
+                    <th>Stato</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data.giftcards ?? []).length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="text-muted p-3">
+                        Nessuna GiftCard attiva come destinatario.
+                      </td>
+                    </tr>
+                  ) : (
+                    (data.giftcards ?? []).map((gc) => (
+                      <tr key={gc.id}>
+                        <td>{fmtDateTime(gc.issuedAt)}</td>
+                        <td className="fw-semibold">{gc.code}</td>
+                        <td className="text-end">€ {fmtMoney(gc.initialAmount)}</td>
+                        <td className="text-end fw-semibold">€ {fmtMoney(gc.balance)}</td>
+                        <td>{fmtDate(gc.expiresAt)}</td>
+                        <td>
+                          <div className="d-flex align-items-center gap-2 flex-wrap">
+                            <span className={`badge text-bg-${gc.statusBadge}`}>{gc.statusLabel}</span>
+                            {perms.openGiftcard !== false ? <OpenBtn href={page(`giftcard&action=edit&id=${gc.id}`)} /> : null}
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="card mt-3">
+            <div className="card-header fw-semibold">
+              <i className="bi bi-file-earmark-text me-2" />
+              Preventivi
+            </div>
+            <div className="table-responsive">
+              <table className="table mb-0">
                 <thead>
                   <tr>
                     <th>Data</th>
-                    <th>Acquistato</th>
+                    <th>Preventivo</th>
+                    <th>Validità</th>
                     <th className="text-end">Totale</th>
-                    <th className="text-end">Azioni</th>
+                    <th>Stato</th>
+                    <th>Azioni</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data.quotes ?? []).length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="text-muted p-3">
+                        Nessun preventivo.
+                      </td>
+                    </tr>
+                  ) : (
+                    (data.quotes ?? []).map((qt) => (
+                      <tr key={qt.id}>
+                        <td>{fmtDate(qt.quoteDate)}</td>
+                        <td className="fw-semibold">{qt.number !== "" ? qt.number : `#${qt.id}`}</td>
+                        <td>{fmtDate(qt.validUntil)}</td>
+                        <td className="text-end fw-semibold">€ {fmtMoney(qt.total)}</td>
+                        <td>
+                          <span className={`badge text-bg-${qt.statusBadge}`}>{qt.statusLabel}</span>
+                        </td>
+                        <td>
+                          {perms.openQuotes !== false ? (
+                            <OpenBtn href={page(`quotes&action=view&id=${qt.id}`)} />
+                          ) : (
+                            <span className="text-muted small">-</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="card mt-3">
+            <div className="card-header fw-semibold">
+              <i className="bi bi-receipt me-2" />
+              Storico vendite
+            </div>
+            <div className="table-responsive">
+              <table className="table mb-0">
+                <thead>
+                  <tr>
+                    <th>Data</th>
+                    <th className="text-end">Totale</th>
+                    <th>Elemento acquistato</th>
+                    <th>Azioni</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -379,13 +507,15 @@ export function ClientHistoryContent({ slug: slugProp }: { slug?: string } = {})
                   ) : (
                     (data.sales ?? []).map((sale) => (
                       <tr key={sale.id}>
-                        <td className="text-muted">{fmtDateTime(sale.saleDate)}</td>
-                        <td>{sale.purchasedItem}</td>
+                        <td>{fmtDateTime(sale.saleDate)}</td>
                         <td className="text-end fw-semibold">€ {fmtMoney(sale.total)}</td>
-                        <td className="text-end">
-                          <a className="btn btn-sm btn-outline-secondary" href={`/${encodeURIComponent(slug)}/pos_sale_detail?id=${sale.id}`}>
-                            Dettaglio
-                          </a>
+                        <td className="text-muted">{sale.purchasedItem !== "" ? sale.purchasedItem : "—"}</td>
+                        <td>
+                          {perms.openSales !== false ? (
+                            <OpenBtn href={page(`pos_sale_detail&id=${sale.id}`)} />
+                          ) : (
+                            <span className="text-muted small">-</span>
+                          )}
                         </td>
                       </tr>
                     ))

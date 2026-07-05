@@ -41,6 +41,10 @@ export type ManagedClient = Client & {
   address?: string;
   cap?: string;
   jobTitle?: string;
+  // Blocco cliente (is_blocked/blocked_at/blocked_internal_note) — la lista
+  // legacy mostra il badge "Disattivato" e l'edit il pannello Azioni cliente.
+  blockedAt?: string | null;
+  blockedInternalNote?: string;
 };
 
 export type ManagedService = Service & {

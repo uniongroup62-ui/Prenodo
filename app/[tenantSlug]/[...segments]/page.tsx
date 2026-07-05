@@ -3,6 +3,7 @@ import { ManageOnboardingApp } from "@/components/manage-onboarding-app";
 import { ManageShell } from "@/components/manage-shell";
 import { ClientsContent } from "@/components/modules/clients-content";
 import { ClientFormContent } from "@/components/modules/client_form-content";
+import { ClientDeleteConfirmContent } from "@/components/modules/client_delete_confirm-content";
 import { ClientDetailContent } from "@/components/modules/client_detail-content";
 import { ClientHistoryContent } from "@/components/modules/client_history-content";
 import { CommissionsContent } from "@/components/modules/commissions-content";
@@ -248,11 +249,21 @@ export default async function TenantPage({
 
   // Faithful client NEW / EDIT form. The clients list links to
   // index.php?page=clients&action=new|edit; route those to the faithful form
-  // (instead of the Tailwind ManagementApp fallback).
+  // (instead of the Tailwind ManagementApp fallback). initialQuery = flash legacy.
   if (page === "clients" && (query.action === "new" || query.action === "edit")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
-        <ClientFormContent />
+        <ClientFormContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
+      </ManageShell>
+    );
+  }
+
+  // Faithful client DELETE-CONFIRM page (clients.php action=delete_confirm):
+  // riepilogo "Cosa verrà eliminato" + motivazione + conferma testuale ELIMINA.
+  if (page === "clients" && query.action === "delete_confirm") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <ClientDeleteConfirmContent slug={tenantSlug} />
       </ManageShell>
     );
   }
@@ -594,7 +605,20 @@ export default async function TenantPage({
   if (page === "clients" && query.action === "view") {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
-        <ClientDetailContent />
+        <ClientDetailContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
+      </ManageShell>
+    );
+  }
+
+  // Faithful clients LIST: la pagina legacy legge ?q=&all_locations= (form GET)
+  // e il flash ?msg=&err= dei redirect delle azioni.
+  if (page === "clients") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <ClientsContent
+          slug={tenantSlug}
+          initialQuery={{ q: query.q, all_locations: query.all_locations, msg: query.msg, err: query.err }}
+        />
       </ManageShell>
     );
   }
