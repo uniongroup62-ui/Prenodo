@@ -72,6 +72,10 @@ export async function GET(request: Request) {
       records: moduleState.records,
       // quote_settings.php gates i bottoni header su quotes.manage.
       ...(moduleId === "quote_settings" ? { canQuotesManage: can(session.user.perms, "quotes.manage") } : {}),
+      // giftbox_settings.php gates: GiftBox su giftbox.manage, Crea su pos.manage.
+      ...(moduleId === "giftbox_settings"
+        ? { canGiftboxManage: can(session.user.perms, "giftbox.manage"), canCreate: can(session.user.perms, "pos.manage") }
+        : {}),
     });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Errore configurazione.");
@@ -167,9 +171,34 @@ async function saveFeatureSettings(
     return null;
   }
   if (moduleId === "giftbox_settings") {
-    if (action === "save_giftbox_validity_default") return { message: "Impostazioni scadenza GiftBox salvate.", module: await saveGiftboxValidityDefault(slug, body) };
-    if (action === "save" || action === "save_giftbox_terms") return { message: "Condizioni GiftBox salvate.", module: await saveGiftboxTerms(slug, body) };
-    if (action === "reset_giftbox_terms") return { message: "Condizioni GiftBox ripristinate.", module: await resetGiftboxTerms(slug) };
+    // Messaggi flash e wrapper errori verbatim di giftbox_settings.php.
+    if (action === "save_giftbox_validity_default") {
+      try {
+        return { message: "Impostazioni scadenza GiftBox salvate. Le GiftBox già presenti rimarranno invariate.", module: await saveGiftboxValidityDefault(slug, body) };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (/unknown column|column .* does not exist/i.test(msg)) throw new Error("Colonne mancanti: aggiorna il DB con il dump SQL completo aggiornato (scadenza GiftBox).");
+        throw new Error(`Errore salvataggio impostazioni scadenza GiftBox: ${msg}`);
+      }
+    }
+    if (action === "save" || action === "save_giftbox_terms") {
+      try {
+        return { message: "Condizioni GiftBox salvate", module: await saveGiftboxTerms(slug, body) };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (/unknown column|column .* does not exist/i.test(msg)) throw new Error("Colonna mancante: aggiorna il DB con il dump SQL completo aggiornato (GiftBox condizioni).");
+        throw new Error(`Errore salvataggio condizioni GiftBox: ${msg}`);
+      }
+    }
+    if (action === "reset_giftbox_terms") {
+      try {
+        return { message: "Condizioni GiftBox ripristinate", module: await resetGiftboxTerms(slug) };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (/unknown column|column .* does not exist/i.test(msg)) throw new Error("Colonna mancante: aggiorna il DB con il dump SQL completo aggiornato (GiftBox condizioni).");
+        throw new Error(`Errore ripristino condizioni GiftBox: ${msg}`);
+      }
+    }
     return null;
   }
   if (moduleId === "package_settings") {

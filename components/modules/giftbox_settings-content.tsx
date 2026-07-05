@@ -9,20 +9,13 @@ import { useCallback, useEffect, useState } from "react";
 // predefinita" detail = "<value> <unit>", record 2 "Termini GiftBox"
 // detail = raw terms text).
 
-type ConfigRecord = {
-  id: number;
-  module: string;
-  title: string;
-  detail: string;
-  value: string;
-  active: boolean;
-  updatedAt?: string;
-};
+type GiftboxSettingsQuery = { msg?: string; err?: string };
 
 type ConfigResponse = {
   ok?: boolean;
-  records?: ConfigRecord[];
-  module?: { records?: ConfigRecord[] };
+  module?: { settings?: Record<string, unknown> };
+  canGiftboxManage?: boolean;
+  canCreate?: boolean;
 };
 
 function tenantSlug(): string {
@@ -36,7 +29,7 @@ Ad ogni utilizzo verranno scalati i singoli servizi/prodotti (riscatto parziale)
 Non convertibile in denaro e non rimborsabile.
 Presentare il codice (QR) o il codice alfanumerico in cassa per il riscatto.`;
 
-export function GiftboxSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
+export function GiftboxSettingsContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: GiftboxSettingsQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
@@ -44,7 +37,10 @@ export function GiftboxSettingsContent({ slug: slugProp }: { slug?: string } = {
   const [validityValue, setValidityValue] = useState("0");
   const [validityUnit, setValidityUnit] = useState("days");
   const [terms, setTerms] = useState(DEFAULT_TERMS);
-  const [feedback, setFeedback] = useState<{ type: "success" | "danger"; text: string } | null>(null);
+  const [perms, setPerms] = useState({ canGiftboxManage: false, canCreate: false });
+  // Flash legacy (View::alert): ?msg= success dal redirect + errore in pagina.
+  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [error, setError] = useState("");
 
   const load = useCallback(() => {
     fetch(`/api/manage/configuration?module=giftbox_settings&slug=${encodeURIComponent(slug)}`, {
@@ -52,22 +48,14 @@ export function GiftboxSettingsContent({ slug: slugProp }: { slug?: string } = {
     })
       .then((r) => r.json())
       .then((j: ConfigResponse) => {
-        const records = j.records ?? j.module?.records ?? [];
-        const validity = records.find((rec) => rec.id === 1);
-        const termsRec = records.find((rec) => rec.id === 2);
-
-        if (validity && typeof validity.detail === "string") {
-          // detail is "<value> <unit>" e.g. "0 days".
-          const parts = validity.detail.trim().split(/\s+/);
-          const rawValue = parts[0] ?? "0";
-          const rawUnit = parts[1] ?? "days";
-          if (/^\d+$/.test(rawValue)) setValidityValue(rawValue);
-          if (rawUnit === "days" || rawUnit === "months" || rawUnit === "years") {
-            setValidityUnit(rawUnit);
-          }
-        }
-
-        setTerms(termsRec && typeof termsRec.detail === "string" && termsRec.detail.trim() !== "" ? termsRec.detail : DEFAULT_TERMS);
+        const s = (j.module?.settings ?? {}) as Record<string, unknown>;
+        setPerms({ canGiftboxManage: j.canGiftboxManage === true, canCreate: j.canCreate === true });
+        const rawValue = String(s.giftbox_default_validity_value ?? "0");
+        if (/^\d+$/.test(rawValue)) setValidityValue(rawValue);
+        const rawUnit = String(s.giftbox_default_validity_unit ?? "days");
+        if (rawUnit === "days" || rawUnit === "months" || rawUnit === "years") setValidityUnit(rawUnit);
+        const rawTerms = String(s.giftbox_terms ?? "");
+        setTerms(rawTerms.trim() !== "" ? rawTerms : DEFAULT_TERMS);
       })
       .catch(() => {});
   }, [slug]);
@@ -76,8 +64,12 @@ export function GiftboxSettingsContent({ slug: slugProp }: { slug?: string } = {
     load();
   }, [load]);
 
-  async function postAction(payload: Record<string, unknown>, successText: string): Promise<void> {
-    setFeedback(null);
+  const pageBase = `/${encodeURIComponent(slug)}/giftbox_settings`;
+
+  // Salvataggio: successo -> redirect flash legacy (?msg=), errore -> alert
+  // in pagina (il legacy non fa redirect e mantiene i valori inseriti).
+  async function postAction(payload: Record<string, unknown>): Promise<void> {
+    setError("");
     try {
       const res = await fetch(`/api/manage/configuration?module=giftbox_settings&slug=${encodeURIComponent(slug)}`, {
         method: "POST",
@@ -86,17 +78,16 @@ export function GiftboxSettingsContent({ slug: slugProp }: { slug?: string } = {
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j?.ok === false) {
-        setFeedback({ type: "danger", text: String(j?.error ?? j?.message ?? "Errore.") });
+        setError(String(j?.error ?? j?.message ?? "Errore."));
+        window.scrollTo(0, 0);
         return;
       }
-      setFeedback({ type: "success", text: String(j?.message ?? successText) });
-      load();
+      window.location.href = `${pageBase}?msg=${encodeURIComponent(String(j?.message ?? ""))}`;
     } catch {
-      setFeedback({ type: "danger", text: "Errore di rete." });
+      setError("Errore di rete.");
+      window.scrollTo(0, 0);
     }
   }
-
-  const pageBase = `/${encodeURIComponent(slug)}/giftbox_settings`;
 
   return (
     <div className="container-fluid">
@@ -110,21 +101,38 @@ export function GiftboxSettingsContent({ slug: slugProp }: { slug?: string } = {
         </div>
         <div className="bs-page-actions">
           <div className="d-flex gap-2">
-            <a className="btn btn-outline-secondary btn-pill" href={`/${encodeURIComponent(slug)}/giftbox`}>
-              <i className="bi bi-arrow-left me-1" />
-              GiftBox
-            </a>
-            <a className="btn btn-primary btn-pill" href={`/${encodeURIComponent(slug)}/pos`}>
-              <i className="bi bi-plus-lg me-1" />
-              Crea GiftBox
-            </a>
+            {perms.canGiftboxManage ? (
+              <a className="btn btn-outline-secondary btn-pill" href={`/${encodeURIComponent(slug)}/giftbox`}>
+                <i className="bi bi-arrow-left me-1" />
+                GiftBox
+              </a>
+            ) : null}
+            {perms.canCreate ? (
+              <a className="btn btn-primary btn-pill" href={`/${encodeURIComponent(slug)}/pos`}>
+                <i className="bi bi-plus-lg me-1" />
+                Crea GiftBox
+              </a>
+            ) : null}
           </div>
         </div>
       </div>
 
-      {feedback ? (
-        <div className={`alert alert-${feedback.type}`} role="alert">
-          {feedback.text}
+      {flash.msg ? (
+        <div className="alert alert-success d-flex align-items-start gap-2" role="alert">
+          <div><i className="bi bi-info-circle" /></div>
+          <div>{flash.msg}</div>
+        </div>
+      ) : null}
+      {flash.err ? (
+        <div className="alert alert-danger d-flex align-items-start gap-2" role="alert">
+          <div><i className="bi bi-info-circle" /></div>
+          <div>{flash.err}</div>
+        </div>
+      ) : null}
+      {error ? (
+        <div className="alert alert-danger d-flex align-items-start gap-2" role="alert">
+          <div><i className="bi bi-info-circle" /></div>
+          <div>{error}</div>
         </div>
       ) : null}
 
@@ -143,14 +151,11 @@ export function GiftboxSettingsContent({ slug: slugProp }: { slug?: string } = {
               className="border rounded-3 p-3 bg-light"
               onSubmit={(e) => {
                 e.preventDefault();
-                postAction(
-                  {
-                    action: "save_giftbox_validity_default",
-                    giftbox_default_validity_value: validityValue,
-                    giftbox_default_validity_unit: validityUnit,
-                  },
-                  "Impostazioni scadenza GiftBox salvate.",
-                );
+                void postAction({
+                  action: "save_giftbox_validity_default",
+                  giftbox_default_validity_value: validityValue,
+                  giftbox_default_validity_unit: validityUnit,
+                });
               }}
             >
               <input type="hidden" name="action" value="save_giftbox_validity_default" />
@@ -227,7 +232,7 @@ export function GiftboxSettingsContent({ slug: slugProp }: { slug?: string } = {
               className="row g-3"
               onSubmit={(e) => {
                 e.preventDefault();
-                postAction({ action: "save_giftbox_terms", giftbox_terms: terms }, "Condizioni GiftBox salvate.");
+                void postAction({ action: "save_giftbox_terms", giftbox_terms: terms });
               }}
             >
               <div className="col-12">
@@ -256,7 +261,7 @@ export function GiftboxSettingsContent({ slug: slugProp }: { slug?: string } = {
                   data-giftbox-settings-confirm="Ripristinare il testo predefinito delle condizioni GiftBox?"
                   onClick={() => {
                     if (!window.confirm("Ripristinare il testo predefinito delle condizioni GiftBox?")) return;
-                    postAction({ action: "reset_giftbox_terms" }, "Condizioni GiftBox ripristinate.");
+                    void postAction({ action: "reset_giftbox_terms" });
                   }}
                 >
                   <i className="bi bi-arrow-counterclockwise me-1" />

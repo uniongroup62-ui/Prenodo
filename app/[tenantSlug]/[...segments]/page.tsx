@@ -692,6 +692,15 @@ export default async function TenantPage({
     );
   }
 
+  // Faithful GiftBox / Impostazioni (giftbox_settings.php): flash ?msg/?err.
+  if (page === "giftbox_settings") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <GiftboxSettingsContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
+      </ManageShell>
+    );
+  }
+
   // Faithful giftbox LIST (giftbox.php): filtri server-side dalla querystring
   // (tab=instances/boxes) + flash ?msg/?err.
   if (page === "giftbox") {

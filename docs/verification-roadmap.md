@@ -4260,3 +4260,29 @@ aperta con blocco doppio riscatto e coppia virtuale annullato, riscatto
 parziale/completo con stock prodotti e lock conseguenti, nota interna, email
 guardie, ricerca clienti, cleanup CLEAN) + 101/101 marker bundle +
 regressioni Preventivi 80/80 e Pacchetti 48/48 + typecheck/lint puliti.
+
+## GiftBox / Impostazioni (giftbox_settings.php) — 2026-07-05
+Audit della pagina impostazioni GiftBox (234 righe: scadenza predefinita +
+condizioni) + giftbox_settings.js vs il modulo Next, con POST live sul PHP a
+conferma dei flash. Il markup era gia fedele; fix su messaggi e comportamenti:
+1. Flash redirect legacy verbatim: 'Impostazioni scadenza GiftBox salvate. Le
+   GiftBox già presenti rimarranno invariate.' (prima mancava la coda),
+   'Condizioni GiftBox salvate' e 'Condizioni GiftBox ripristinate' SENZA
+   punto finale (prima col punto); salvataggi con redirect ?msg= e markup
+   View::alert con icona (prima feedback in pagina senza reload).
+2. Wrapper errori verbatim nella route ('Errore salvataggio impostazioni
+   scadenza GiftBox: X' / 'Colonne mancanti: ... (scadenza GiftBox).' /
+   'Errore salvataggio condizioni GiftBox: X' / 'Errore ripristino condizioni
+   GiftBox: X' / 'Colonna mancante: ... (GiftBox condizioni).').
+3. Header actions gated come Auth::can legacy (GiftBox su giftbox.manage,
+   Crea GiftBox su pos.manage — la route configuration espone
+   canGiftboxManage/canCreate per il modulo giftbox_settings).
+4. Prefill dal payload settings (value/unit/terms raw) invece del parsing dei
+   record aggregati; testo default mostrato quando le condizioni sono vuote.
+Gia fedeli: clamp 0..36500 + unit whitelist con fallback days, condizioni
+troncate a 12000 con newline normalizzati e vuoto/reset -> NULL, confirm
+'Ripristinare il testo predefinito delle condizioni GiftBox?'.
+Verifica: battery e2e 15/15 (flash verbatim, clamp/fallback, troncamento,
+vuoto->NULL, reset, prefill, ripristino businesses) + 23/23 marker bundle +
+regressioni GiftBox 63/63, package_settings 6/6, quote_settings 20/20 +
+typecheck/lint puliti.
