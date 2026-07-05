@@ -17456,6 +17456,10 @@ export type FidelityWalletData = {
   fidelityEnabled: boolean;
   pointsEnabled: boolean;
   hasTxLocation: boolean;
+  expireEnabled: boolean;
+  expireDays: number;
+  // Etichetta punti configurabile ($s['label'], default 'Punti').
+  label: string;
   clients: FidelityWalletClient[];
   detail: FidelityWalletDetail | null;
 };
@@ -17677,11 +17681,17 @@ export async function getFidelityWallet(slug: string, clientId: number, txPage =
   }
   const tT = await tenantTable(slug, "transactions").catch(() => null);
   const hasTxLocation = tT ? await columnExists(tT.name, "location_id") : false;
+  const labelRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_points_label", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
 
   return {
     fidelityEnabled: settings.globalEnabled,
     pointsEnabled: settings.pointsEnabled,
     hasTxLocation,
+    // Nota scadenza sotto "Operazione manuale": il legacy la mostra dalle
+    // impostazioni GLOBALI anche senza cliente selezionato.
+    expireEnabled: settings.expireEnabled,
+    expireDays: settings.expireDays,
+    label: String(labelRows[0]?.fidelity_points_label ?? "").trim() || "Punti",
     clients,
     detail: clientId > 0 ? await getFidelityWalletDetail(slug, clientId, txPage) : null,
   };
@@ -17702,6 +17712,10 @@ export async function fidelityWalletManualMove(
   const settings = await getFidelityPointsSettings(slug);
   if (!settings.globalEnabled) throw new Error('Fidelity è disattivata. Attiva la funzione in "Impostazione generale" per utilizzare il Portafoglio.');
   if (!settings.pointsEnabled) throw new Error('Punti Fidelity sono disattivati. Attiva "Abilita Punti Fidelity" per utilizzare il Portafoglio punti.');
+
+  // Etichetta punti configurabile nei messaggi ($s['label'] legacy).
+  const labelRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_points_label", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const fidLabel = String(labelRows[0]?.fidelity_points_label ?? "").trim() || "Punti";
 
   let op = String(opRaw ?? "add").trim().toLowerCase();
   if (!["add", "remove"].includes(op)) op = "add";
@@ -17735,14 +17749,14 @@ export async function fidelityWalletManualMove(
     pts = removable;
 
     if (pts <= 0) {
-      if (curPts <= 0) throw new Error(`Impossibile rimuovere ${reqPts} Punti: saldo insufficiente (disponibili 0).`);
+      if (curPts <= 0) throw new Error(`Impossibile rimuovere ${reqPts} ${fidLabel}: saldo insufficiente (disponibili 0).`);
       if (free <= 0 && reserved > 0) {
         // Il flusso legacy allega warn_locked=N al redirect: marcatore per il componente.
-        const e = new Error(`Impossibile rimuovere ${reqPts} Punti: i punti disponibili sono già prenotati su appuntamenti in sospeso/prenotati.`) as Error & { warnLocked?: number };
+        const e = new Error(`Impossibile rimuovere ${reqPts} ${fidLabel}: i punti disponibili sono già prenotati su appuntamenti in sospeso/prenotati.`) as Error & { warnLocked?: number };
         e.warnLocked = lockedReserved;
         throw e;
       }
-      throw new Error(`Impossibile rimuovere ${reqPts} Punti: saldo insufficiente (disponibili ${free}).`);
+      throw new Error(`Impossibile rimuovere ${reqPts} ${fidLabel}: saldo insufficiente (disponibili ${free}).`);
     }
   }
 
@@ -17767,11 +17781,11 @@ export async function fidelityWalletManualMove(
   await applyLotsDelta(slug, { clientId, transactionId: manualTxId, kind: manualKind, sourceType: "manual", delta }).catch(() => undefined);
   await reconcilePointLots(slug, clientId).catch(() => false);
 
-  let message = delta > 0 ? `Aggiunti ${pts} Punti` : `Rimossi ${pts} Punti`;
+  let message = delta > 0 ? `Aggiunti ${pts} ${fidLabel}` : `Rimossi ${pts} ${fidLabel}`;
   if (op === "remove") {
     const parts: string[] = [];
-    if (lockedReserved > 0) parts.push(`${lockedReserved} Punti non rimossi perché prenotati su appuntamenti in sospeso/prenotati.`);
-    if (missing > 0) parts.push(`${missing} Punti non rimossi per saldo insufficiente.`);
+    if (lockedReserved > 0) parts.push(`${lockedReserved} ${fidLabel} non rimossi perché prenotati su appuntamenti in sospeso/prenotati.`);
+    if (missing > 0) parts.push(`${missing} ${fidLabel} non rimossi per saldo insufficiente.`);
     if (parts.length > 0) message += `. ${parts.join(" ")}`;
   }
 

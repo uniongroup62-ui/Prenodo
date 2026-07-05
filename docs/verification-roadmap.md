@@ -4898,3 +4898,43 @@ header campagna attiva/spenta, stub create_recharge, delete, ripristino
 businesses e zero residui) + confronto LIVE PHP (flash msg e testi errore
 identici, incl. 'Modello non valido./non trovato.' e massimali) + 63/63
 marker bundle + typecheck/lint puliti.
+
+## Portafoglio — SECONDA PASSATA di verifica (fidelity_wallet.php) — 2026-07-05
+Ri-audit completo su richiesta: riletto l'intero legacy (1288 righe + js) e
+riconfrontato riga per riga col port F5 (commit a951253). BASELINE CONFERMATA:
+battery e2e 29/29 e 72/72 marker ancora verdi prima dei ritocchi. Verificati
+fedeli: guardie POST disabilitato coi due messaggi accentati ('Fidelity è
+disattivata...' / 'Punti Fidelity sono disattivati...'), stati disabilitati
+early-return con header 'Portafoglio'->wallet e alert-info variantati, tutte
+le guardie del movimento manuale (intero>=1, cliente, adesione tessera, i TRE
+errori di rimozione con e senza warn_locked, code successo '. N non rimossi
+perché prenotati... N non rimossi per saldo insufficiente.', warn_locked anche
+sul redirect di successo), clamp remove su liberi=saldo-prenotati, kind
+adjust/manual, alert warn_locked con tabella prenotazioni (Data/Stato/Sconto/
+gift/Totale/Codice/Apri) e 'Nessun appuntamento trovato.', KPI 4 card,
+'Disponibile negativo', 'Punti già scaduti (cron non eseguito)', 'scaduti ma
+vincolati' con link #points-pending, calendario per giorno con badge
+'vincolati'/righe table-info/table-warning/'ore HH:MM'/'Vincolati su:'+title/
+'Da rimuovere (cron):'/'Prossima scadenza:', movimenti con badge kind/
+'scadenza'/'kind • source #id'/paginazione che preserva p_pending, punti in
+sospeso con badge riepilogo e paginazione che preserva p, lista clienti con
+paginazione p_list e nota footer, filtro combobox, form Operazione manuale.
+DUE RITOCCHI TROVATI E APPLICATI:
+1. La nota sotto 'Operazione manuale' ('La scadenza dei punti viene calcolata
+   dalla data del movimento/accredito: N giorni, con validità fino alle
+   23:59...') nel legacy viene dalle impostazioni GLOBALI e compare anche
+   SENZA cliente selezionato; il Next la legava a detail (solo con cliente).
+   Ora expireEnabled/expireDays sono esposti a livello wallet.
+2. Etichetta punti DINAMICA ($s['label'], businesses.fidelity_points_label):
+   era la costante 'Punti' sia nel componente sia nei messaggi del movimento
+   manuale ('Impossibile rimuovere N {label}...', 'Aggiunti/Rimossi N
+   {label}', code non-rimossi) — ora letta dal DB con fallback 'Punti'
+   (per il tenant il rendering resta identico).
+NON-GAP verificati: la colonna Sede di 'Punti in sospeso' è condizionale nel
+legacy solo per compat colonna (schema Next completo -> sempre presente come
+sul live); l'alert 'Fidelity disattivata' a riga 724 del legacy è codice morto
+(irraggiungibile dopo l'early-return); la select nascosta client_id_legacy è
+markup inerte.
+Verifica: payload wallet con expireEnabled/expireDays/label senza cliente +
+battery e2e 29/29 + 72/72 marker rieseguiti dopo i ritocchi + typecheck/lint
+puliti.

@@ -54,9 +54,7 @@ type WalletDetail = {
   nextExpiryAt: string;
   nextExpiryPoints: number;
 };
-type Wallet = { fidelityEnabled: boolean; pointsEnabled: boolean; hasTxLocation: boolean; clients: WalletClient[]; detail: WalletDetail | null };
-
-const FID_LABEL = "Punti";
+type Wallet = { fidelityEnabled: boolean; pointsEnabled: boolean; hasTxLocation: boolean; expireEnabled?: boolean; expireDays?: number; label?: string; clients: WalletClient[]; detail: WalletDetail | null };
 
 function tenantSlug(): string {
   if (typeof window === "undefined") return "";
@@ -197,6 +195,8 @@ export function FidelityWalletContent({ slug: slugProp, initialQuery }: { slug?:
   const detail = wallet?.detail ?? null;
   const disabled = wallet !== null && (!wallet.fidelityEnabled || !wallet.pointsEnabled);
   const hasTxLocation = wallet?.hasTxLocation ?? false;
+  // Etichetta punti configurabile ($s['label'] legacy, default 'Punti').
+  const FID_LABEL = wallet?.label?.trim() || "Punti";
 
   // Punti in sospeso: paginazione legacy 20/pagina via ?p_pending.
   const pendingPages = detail ? Math.max(1, Math.ceil(detail.pendingCount / 20)) : 1;
@@ -821,10 +821,11 @@ export function FidelityWalletContent({ slug: slugProp, initialQuery }: { slug?:
                 <div>
                   Nota: in caso di rimozione, il sistema non rimuove punti <strong>già prenotati</strong> su appuntamenti in sospeso/prenotati.
                 </div>
-                {detail?.expireEnabled && detail.expireDays > 0 ? (
+                {/* Nota legacy dalle impostazioni GLOBALI: visibile anche senza cliente selezionato. */}
+                {(wallet?.expireEnabled ?? detail?.expireEnabled) && (wallet?.expireDays ?? detail?.expireDays ?? 0) > 0 ? (
                   <div className="mt-2">
-                    La scadenza dei punti viene calcolata dalla data del movimento/accredito: <strong>{detail.expireDays} giorni</strong>, con validità fino alle{" "}
-                    <strong>23:59</strong> del giorno di scadenza.
+                    La scadenza dei punti viene calcolata dalla data del movimento/accredito: <strong>{wallet?.expireDays ?? detail?.expireDays} giorni</strong>, con
+                    validità fino alle <strong>23:59</strong> del giorno di scadenza.
                   </div>
                 ) : null}
               </div>
