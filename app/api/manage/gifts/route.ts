@@ -26,7 +26,9 @@ export async function GET(request: Request) {
     // dropdowns). Port of the SELECTs in gifts.php action=new|edit.
     if (action === "context") {
       if (!can(session.user.perms, "gifts.manage")) return jsonError("Permesso omaggi mancante.", 403);
-      return Response.json({ ok: true, sourceMode: "database", ...(await giftFormCatalog(tenantSlug)) });
+      // Sede corrente per il default "Sedi abilitate" in creazione (gifts.php 811-813).
+      const locationContext = await getManageLocationContext(tenantSlug).catch(() => null);
+      return Response.json({ ok: true, sourceMode: "database", currentLocationId: locationContext?.currentLocationId ?? 0, ...(await giftFormCatalog(tenantSlug)) });
     }
 
     // Edit-form prefill: ONE gift campaign's editable fields. Port of gifts.php

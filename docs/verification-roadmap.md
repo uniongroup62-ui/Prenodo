@@ -5104,3 +5104,48 @@ smoke SSR flash + typecheck/lint puliti.
 RESIDUI DELIBERATI: filtri istanze con select semplici (il combobox ricerca
 legacy e solo UI); filtro 'Tutte le sedi' non renderizzato (tenant mono-sede);
 GiftLoyaltyAttribution non portato (residuo standing).
+
+## Omaggi — SECONDA PASSATA (parte 2): FORM campagna riscritto (gifts.php new/edit/clone) — 2026-07-05
+Continuazione dell'audit Omaggi: diff campo-per-campo del form (gifts.php
+720-1147 + validazioni pagina 444-549) contro gift_form-content.
+DIVERGENZE TROVATE E CORRETTE:
+1. BUG TZ nel prefill (getManageGift): valid_from/valid_to resi con toIso (UTC)
+   scalavano di -1 giorno le date a mezzanotte locale; ora sqlDateTimePrefix.
+2. GUARDIE Fidelity-off del save (gifts.php 489-521) ASSENTI in saveManageGift:
+   - nuova campagna (o switch di eligibility) fidelity_only a Fidelity spenta ->
+     'Attiva prima la Fidelity per poter usare “Solo clienti con Fidelity”.'
+     (virgolette curve U+201C/201D verificate sui byte del sorgente);
+   - campagna GIA' fidelity_only -> salvata SOSPESA: active forzato 0,
+     auto_disabled_by_fidelity=1 se Attivo=Si' desiderato (riattivazione
+     automatica al ritorno della Fidelity), 0 con Attivo=No; il flag viene
+     azzerato sui salvataggi normali; conflitto campagne e marker usano
+     l'active effettivo.
+   - messaggio livelli allineato al display legacy ('Errore: seleziona almeno
+     un livello Punti.', gifts.php 548).
+3. CONTEXT esteso: fidelityEnabled, snapshot clienti (adhering + pointsLevel,
+   port di giftClientEligibilitySnapshots) e currentLocationId.
+4. COMPONENTE form riscritto sul markup legacy: header interno card con
+   sottotitoli clone/edit; alert clone VERBATIM (il testo Next era inventato);
+   ordine campi legacy (Nome | fidelity_only -> Descrizione -> Livelli ->
+   Esclusioni -> Attivo -> Sedi -> Premio -> Date); sezione Livelli Punti
+   con testi legacy + 'Nessun livello Punti configurato.'; picker 'Escludi
+   clienti dalla campagna (opzionale)' con select candidati FILTRATI per
+   snapshot (adesione+livelli selezionati), lock 'Seleziona prima almeno un
+   Livello Punti' + help dinamico, lista 'Clienti esclusi selezionati';
+   checkbox fidelity_only disabled a Fidelity spenta (con alert warning e
+   form-text sospensione verbatim); 'Attivo' con nota sospensione e
+   giftDesiredActive (sospesa con auto_disabled mostra Si'); default sede
+   corrente in creazione (gifts.php 811-813); min 'Valido dal' anche in CLONE
+   (prima solo new) e min 'Valido al' = giorno successivo; form-text delle
+   date verbatim; help regola completo (3 frasi) + hint sotto i select
+   servizio/prodotto; rimossi i testi inventati ('Nessun elemento specifico
+   richiesto.', validazioni client-side custom, alert clone divergente);
+   titolo pagina 'Fidelity / Omaggi' come il legacy.
+Verifica: battery NUOVA e2e-gifts-form 17/17 (context, prefill senza shift,
+guardie fid-off nuova/switch/esistente con entrambi i rami del flag, livelli,
+anti-retroattivo, azzeramento flag, ripristino) + LIVE PHP (guardia verbatim
+senza insert, edit fid-off active=1 -> 0/1 e active=0 -> 0/0 con redirect
+'Campagna salvata&open_summary' IDENTICI) + regressioni 7 battery gift
+144/144 + 63/63 marker form + typecheck/lint puliti.
+NOTA: gift_instance (dettaglio) gia' coperto dal primo audit (21 test, verdi
+in regressione oggi); nessun nuovo diff aperto su quella pagina.

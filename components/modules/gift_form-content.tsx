@@ -3,29 +3,25 @@
 import { useEffect, useMemo, useState } from "react";
 
 // Faithful port of the PHP gift CAMPAIGN editor (app/pages/gifts.php,
-// action=new|edit — "Nuova/Modifica campagna"). This is the campaign TEMPLATE
-// editor (the `gifts` row + a single unlock rule + enabled sedi + reward items),
-// distinct from the issued gift INSTANCES list (gifts-content.tsx). Bootstrap
-// markup mirrors the legacy form:
-//   - Nome, "Solo clienti con Fidelity" (fidelity_only), Descrizione, Attivo
-//   - Sedi abilitate: per-location checkboxes (gift_location_ids[])
-//   - "Cosa viene regalato": repeatable reward items (type service/product/custom,
-//     service/product select, custom label/details, qty)
-//   - Valido dal / Valido al (required) + Scadenza dopo sblocco (giorni)
-//   - Regola di sblocco: ONE rule (service_qty/product_qty/appointments_count/
-//     total_spend/first_visit + target service/product + threshold)
-//   - Condizioni gift: terms_enabled switch + terms_text textarea
-// Submits to /api/manage/gifts (action=save; create when no id, update with id).
-//
-// TODO: the legacy editor also renders the advanced Fidelity targeting — the
-// "Livelli Punti" checkboxes (eligible_levels_points[], required when
-// fidelity_only) and the "Escludi clienti" picker (excluded_client_ids[]). Those
-// depend on the Fidelity card-levels config and the per-client eligibility
-// snapshots (Gifts::clientEligibilitySnapshots), which are not part of the
-// current gift save pipeline, so they are not yet ported here. The clone mode
-// (action=clone) and the impacted-instances reconciliation are also not ported.
+// action=new|edit|clone — "Nuova/Modifica/Clona campagna"): the campaign
+// TEMPLATE editor (gifts row + single unlock rule + enabled sedi + reward
+// items + Livelli Punti + Escludi clienti), distinct from the instances list
+// (gifts-content.tsx). Bootstrap markup mirrors the legacy form (837-1146):
+//   - Nome | "Solo clienti con Fidelity" (con alert/warning a Fidelity spenta)
+//   - Descrizione (opzionale)
+//   - Livelli Punti (obbligatorio con fidelity_only, gifts.php 887-923)
+//   - Escludi clienti dalla campagna (select candidati filtrati per snapshot
+//     eligibility, lock senza Livelli Punti, gifts.php 925-947 + gifts.js)
+//   - Attivo (con nota sospensione fid-off) | Sedi abilitate
+//   - "Cosa viene regalato" (righe ripetibili service/product/custom + qty)
+//   - Valido dal/al (min legacy) + Scadenza dopo sblocco (giorni)
+//   - Regola di sblocco (una sola, hint per servizio/prodotto)
+//   - Condizioni gift (switch + textarea)
+// Submits to /api/manage/gifts action=save; post-save redirect flash legacy
+// ('Campagna salvata'/'Clone campagna creato' + open_summary, gifts.php 533-539).
 
 type CatalogItem = { id: number; name: string };
+type ClientSnapshot = { id: number; name: string; adhering: boolean; pointsLevel: string };
 
 type RewardItem = {
   type: "service" | "product" | "custom";
@@ -103,6 +99,14 @@ function resolveAction(): "new" | "edit" | "clone" {
   return a === "edit" || a === "clone" ? a : "new";
 }
 
+// gifts_page_next_day_value: giorno successivo di una data Y-m-d.
+function nextDay(ymd: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return "";
+  const d = new Date(`${ymd}T12:00:00`);
+  d.setDate(d.getDate() + 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
@@ -113,8 +117,9 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
   const [products, setProducts] = useState<CatalogItem[]>([]);
   const [locations, setLocations] = useState<CatalogItem[]>([]);
   const [levels, setLevels] = useState<Array<{ key: string; label: string }>>([]);
-  const [clients, setClients] = useState<CatalogItem[]>([]);
-  const [cloneSourceName, setCloneSourceName] = useState("");
+  const [clients, setClients] = useState<ClientSnapshot[]>([]);
+  const [fidelityEnabled, setFidelityEnabled] = useState(true);
+  const [wasFidelityOnly, setWasFidelityOnly] = useState(false);
   const [excludeCandidate, setExcludeCandidate] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -135,7 +140,11 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
         setProducts(Array.isArray(j.products) ? j.products : []);
         setLocations(Array.isArray(j.locations) ? j.locations : []);
         setLevels(Array.isArray(j.levels) ? j.levels : []);
-        setClients(Array.isArray(j.clients) ? j.clients : []);
+        setClients(Array.isArray(j.clients) ? j.clients.map((c: Record<string, unknown>) => ({ id: Number(c.id ?? 0), name: String(c.name ?? ""), adhering: Boolean(c.adhering), pointsLevel: String(c.pointsLevel ?? "") })) : []);
+        setFidelityEnabled(j.fidelityEnabled !== false);
+        // Default "Sedi abilitate" in creazione: sede corrente (gifts.php 811-813).
+        const curLoc = Number(j.currentLocationId ?? 0) || 0;
+        if (act === "new" && curLoc > 0) setForm((prev) => (prev.location_ids.length === 0 ? { ...prev, location_ids: [curLoc] } : prev));
         return j;
       })
       .catch(() => ({}));
@@ -155,7 +164,7 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
         }).then((r) => r.json()),
         guardPromise,
       ])
-        .then(([, j, guard]) => {
+        .then(([ctx, j, guard]) => {
           if (!j.ok || !j.gift) {
             // gifts.php 629-631 / 646-648: campagna inesistente -> redirect lista.
             window.location.href = `/${encodeURIComponent(slug)}/gifts?action=campaigns&err=${encodeURIComponent("Campagna non trovata")}`;
@@ -170,23 +179,28 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
           // Modalità CLONE (gifts.php ~643-665): id azzerato, clone_source_id
           // valorizzato, date ricalcolate se nel passato (from=oggi, to=domani).
           const today = new Date().toISOString().slice(0, 10);
-          const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
           let vFrom = String(g.validFrom ?? "").slice(0, 10);
           let vTo = String(g.validTo ?? "").slice(0, 10);
           if (act === "clone") {
             if (!vFrom || vFrom < today) vFrom = today;
-            if (!vTo || vTo <= vFrom) vTo = vFrom === today ? tomorrow : vFrom;
-            setCloneSourceName(String(g.name ?? ""));
+            if (!vTo || vTo <= vFrom) vTo = nextDay(vFrom);
           }
-          setForm({
+          const fidOnly = Boolean(g.fidelityOnly);
+          setWasFidelityOnly(fidOnly);
+          // giftDesiredActive (gifts.php 765-767): a Fidelity spenta una campagna
+          // fidelity_only sospesa con auto_disabled mostra "Attivo = Sì".
+          const ctxFidEnabled = (ctx as Record<string, unknown>)?.fidelityEnabled !== false;
+          const desiredActive = fidOnly && !ctxFidEnabled && Boolean(g.autoDisabledByFidelity) ? true : Boolean(g.active);
+          setForm((prev) => ({
+            ...prev,
             id: act === "clone" ? 0 : Number(g.id ?? id),
             clone_source_id: act === "clone" ? Number(g.id ?? id) : 0,
             name: String(g.name ?? ""),
             description: String(g.description ?? ""),
-            fidelity_only: Boolean(g.fidelityOnly),
+            fidelity_only: fidOnly,
             eligible_levels: Array.isArray(g.eligibleLevelsPoints) ? g.eligibleLevelsPoints.map(String) : [],
             excluded_client_ids: Array.isArray(g.excludedClientIds) ? g.excludedClientIds.map(Number).filter((n: number) => n > 0) : [],
-            active: Boolean(g.active),
+            active: desiredActive,
             terms_enabled: Boolean(g.termsEnabled),
             terms_text: String(g.termsText ?? "") || DEFAULT_TERMS,
             valid_from: vFrom,
@@ -205,7 +219,7 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
             rule_service_id: Number(g.rule?.targetServiceId ?? 0) || 0,
             rule_product_id: Number(g.rule?.targetProductId ?? 0) || 0,
             rule_threshold: String(g.rule?.threshold ?? "1"),
-          });
+          }));
         })
         .catch(() => setError("Errore nel caricamento della campagna."))
         .finally(() => setLoading(false));
@@ -246,41 +260,27 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
     });
   }
 
-  const minValidFrom = useMemo(() => (action === "new" ? new Date().toISOString().slice(0, 10) : ""), [action]);
+  // min "Valido dal" (gifts.php 816-819): in creazione E in clone niente passato.
+  const minValidFrom = useMemo(() => (action === "new" || action === "clone" ? new Date().toISOString().slice(0, 10) : ""), [action]);
+  // min "Valido al" (gifts.php 822): giorno successivo di "Valido dal".
+  const minValidTo = form.valid_from ? nextDay(form.valid_from) : "";
+
+  // Lock esclusioni (gifts.php 805 + gifts.js): con fidelity_only senza Livelli
+  // Punti selezionati il picker resta bloccato.
+  const excludeSelectionLocked = form.fidelity_only && form.eligible_levels.length === 0;
+  // Candidati coerenti con le impostazioni correnti (giftClientEligibilitySnapshots).
+  const excludeCandidates = useMemo(() => {
+    return clients.filter((c) => {
+      if (form.excluded_client_ids.includes(c.id)) return false;
+      if (!form.fidelity_only) return true;
+      if (!c.adhering) return false;
+      return c.pointsLevel !== "" && form.eligible_levels.includes(c.pointsLevel);
+    });
+  }, [clients, form.excluded_client_ids, form.fidelity_only, form.eligible_levels]);
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError("");
-
-    const name = form.name.trim();
-    if (name === "") {
-      setError("Nome campagna obbligatorio.");
-      return;
-    }
-    if (!form.valid_from) {
-      setError('Inserisci una data "Valido dal".');
-      return;
-    }
-    if (!form.valid_to) {
-      setError('Inserisci una data "Valido al".');
-      return;
-    }
-    if (form.valid_from > form.valid_to) {
-      setError('La data "Valido al" deve essere successiva a "Valido dal".');
-      return;
-    }
-    const validReward = form.reward_items.some((it) =>
-      it.type === "custom" ? it.custom_label.trim() !== "" : it.type === "service" ? it.service_id > 0 : it.product_id > 0,
-    );
-    if (!validReward) {
-      setError("Aggiungi almeno un elemento da regalare.");
-      return;
-    }
-    if (form.fidelity_only && levels.length > 0 && form.eligible_levels.length === 0) {
-      setError("Seleziona almeno un livello Punti.");
-      return;
-    }
-
     setSaving(true);
     try {
       const rewardItemsJson = form.reward_items.map((it) => ({
@@ -295,7 +295,7 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
         action: "save",
         id: String(form.id),
         clone_source_id: String(form.clone_source_id),
-        name,
+        name: form.name.trim(),
         description: form.description,
         fidelity_only: form.fidelity_only ? "1" : "0",
         eligible_levels_points_json: JSON.stringify(form.eligible_levels),
@@ -334,7 +334,11 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
     }
   }
 
-  const title = action === "new" ? "Nuova campagna" : action === "clone" ? "Clona campagna" : "Modifica campagna";
+  const isClone = action === "clone";
+  const isEdit = action === "edit";
+  const title = isClone ? "Clona campagna" : isEdit ? "Modifica campagna" : "Nuova campagna";
+  const submitLabel = isClone ? "Salva clone" : isEdit ? "Salva modifiche" : "Salva";
+  const fidelityCheckboxDisabled = !fidelityEnabled && !form.fidelity_only && !wasFidelityOnly;
 
   return (
     <div className="container-fluid">
@@ -343,8 +347,8 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Fidelity</div>
-          <h1 className="bs-page-title">{title}</h1>
-          <div className="bs-page-subtitle">Gestisci campagne, premi, sedi e stati.</div>
+          <h1 className="bs-page-title">Fidelity / Omaggi</h1>
+          <div className="bs-page-subtitle">Omaggi avanzati con regole e tracking automatico.</div>
         </div>
         <div className="bs-page-actions">
           <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/gifts?action=campaigns`}>
@@ -354,12 +358,10 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
         </div>
       </div>
 
-      {error ? <div className="alert alert-danger">{error}</div> : null}
-
-      {action === "clone" && cloneSourceName ? (
-        <div className="alert alert-info">
-          Al salvataggio verrà creato un <strong>clone</strong> di &quot;{cloneSourceName}&quot;: la campagna precedente sarà
-          disattivata automaticamente e i progressi dei clienti ripartiranno dalla nuova campagna.
+      {error ? (
+        <div className="alert alert-danger d-flex align-items-start gap-2" role="alert">
+          <div><i className="bi bi-info-circle" /></div>
+          <div>{error}</div>
         </div>
       ) : null}
 
@@ -367,6 +369,22 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
         <div className="card p-3 text-muted small">Caricamento…</div>
       ) : (
         <div className="card p-3 mb-3">
+          <div className="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+            <div>
+              <h2 className="h5 fw-semibold mb-1">{title}</h2>
+              {isClone ? (
+                <div className="text-muted small">Configura regole, premio e validità del clone.</div>
+              ) : isEdit ? (
+                <div className="text-muted small">Modifica consentita solo perché questa campagna non ha ancora dati operativi.</div>
+              ) : null}
+            </div>
+          </div>
+          {isClone ? (
+            <div className="alert alert-info">
+              <div className="fw-semibold mb-1">Clona campagna</div>
+              <div>Al salvataggio verrà creato un clone della campagna omaggio e la campagna precedente sarà disattivata. Omaggi già assegnati, prenotazioni e vendite già collegate manterranno condizioni storiche.</div>
+            </div>
+          ) : null}
           <form method="post" id="giftForm" onSubmit={onSubmit}>
             <input type="hidden" name="id" value={form.id} />
             <input type="hidden" name="clone_source_id" value={form.clone_source_id} />
@@ -383,97 +401,136 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
                     type="checkbox"
                     name="fidelity_only"
                     id="giftFidelityOnly"
+                    value="1"
                     checked={form.fidelity_only}
+                    disabled={fidelityCheckboxDisabled}
                     onChange={(e) => set("fidelity_only", e.target.checked)}
                   />
                   <label className="form-check-label" htmlFor="giftFidelityOnly">Solo clienti con Fidelity</label>
                 </div>
-                <div className="form-text">Se disabilitato, tutti i clienti possono usufruire dell&apos;omaggio.</div>
-              </div>
-
-              {/* LIVELLI PUNTI idonei (gifts.php ~887-923): richiesti con fidelity_only. */}
-              {form.fidelity_only && levels.length > 0 ? (
-                <div className="col-12">
-                  <label className="form-label">Livelli Punti</label>
-                  <div className="border rounded p-2 d-flex gap-3 flex-wrap">
-                    {levels.map((lvl) => (
-                      <div className="form-check" key={lvl.key}>
-                        <input
-                          className="form-check-input"
-                          type="checkbox"
-                          id={`gift_lvl_${lvl.key}`}
-                          checked={form.eligible_levels.includes(lvl.key)}
-                          onChange={(e) => {
-                            setForm((prev) => {
-                              const cur = new Set(prev.eligible_levels);
-                              if (e.target.checked) cur.add(lvl.key);
-                              else cur.delete(lvl.key);
-                              return { ...prev, eligible_levels: [...cur] };
-                            });
-                          }}
-                        />
-                        <label className="form-check-label" htmlFor={`gift_lvl_${lvl.key}`}>{lvl.label || lvl.key}</label>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="form-text">Seleziona i livelli Punti che possono maturare questo omaggio (obbligatorio con &quot;Solo clienti con Fidelity&quot;).</div>
-                </div>
-              ) : null}
-
-              {/* ESCLUDI CLIENTI (gifts.php ~925-947): picker aggiungi/rimuovi. */}
-              <div className="col-12">
-                <label className="form-label">Escludi clienti</label>
-                <div className="d-flex gap-2 align-items-start flex-wrap">
-                  <input
-                    className="form-control"
-                    style={{ maxWidth: 320 }}
-                    list="giftExcludeCandidates"
-                    value={excludeCandidate}
-                    onChange={(e) => setExcludeCandidate(e.target.value)}
-                    placeholder="Cerca cliente…"
-                  />
-                  <datalist id="giftExcludeCandidates">
-                    {clients.filter((c) => !form.excluded_client_ids.includes(c.id)).map((c) => (
-                      <option key={c.id} value={`${c.name} #${c.id}`} />
-                    ))}
-                  </datalist>
-                  <button
-                    className="btn btn-outline-secondary"
-                    type="button"
-                    onClick={() => {
-                      const m = /#(\d+)\s*$/.exec(excludeCandidate);
-                      const cid = m ? Number.parseInt(m[1], 10) : 0;
-                      if (cid > 0 && !form.excluded_client_ids.includes(cid)) {
-                        setForm((prev) => ({ ...prev, excluded_client_ids: [...prev.excluded_client_ids, cid] }));
-                      }
-                      setExcludeCandidate("");
-                    }}
-                  >
-                    Aggiungi
-                  </button>
-                </div>
-                {form.excluded_client_ids.length > 0 ? (
-                  <div className="d-flex gap-2 flex-wrap mt-2">
-                    {form.excluded_client_ids.map((cid) => (
-                      <span key={cid} className="badge text-bg-secondary">
-                        {clients.find((c) => c.id === cid)?.name ?? `#${cid}`}
-                        <button
-                          type="button"
-                          className="btn-close btn-close-white ms-1"
-                          style={{ fontSize: "0.6em" }}
-                          aria-label="Rimuovi"
-                          onClick={() => setForm((prev) => ({ ...prev, excluded_client_ids: prev.excluded_client_ids.filter((x) => x !== cid) }))}
-                        />
-                      </span>
-                    ))}
+                {!fidelityEnabled ? (
+                  <div className="alert alert-warning py-2 px-3 mt-2 mb-0 small">
+                    La Fidelity risulta <strong>disattivata</strong>. Non puoi attivare nuove campagne con opzione <strong>Solo clienti con Fidelity</strong>.
+                    Le campagne già sospese verranno riattivate quando la Fidelity tornerà attiva, mentre gli omaggi già disponibili e quelli già collegati a prenotazioni in stato <strong>In attesa</strong> / <strong>Prenotato</strong> restano utilizzabili.
                   </div>
                 ) : null}
-                <div className="form-text">I clienti esclusi non maturano né riscattano questo omaggio.</div>
+                {!fidelityEnabled && form.fidelity_only ? (
+                  <div className="form-text text-warning">Questo gift resta sospeso finché la Fidelity generale rimane disattivata. Puoi lasciarlo così oppure togliere la spunta per renderlo disponibile a tutti i clienti.</div>
+                ) : fidelityEnabled ? (
+                  <div className="form-text">Se disabilitato, tutti i clienti possono usufruire dell&apos;omaggio.</div>
+                ) : null}
               </div>
 
               <div className="col-md-6">
                 <label className="form-label">Descrizione (opzionale)</label>
                 <input className="form-control" name="description" value={form.description} onChange={(e) => set("description", e.target.value)} />
+              </div>
+
+              {/* LIVELLI PUNTI idonei (gifts.php 887-923): visibili con fidelity_only. */}
+              {form.fidelity_only ? (
+                <div className="col-12" id="giftLevelsWrap">
+                  <hr />
+                  <div className="fw-semibold">Livelli Punti (obbligatorio)</div>
+                  <div className="text-muted small">Visibile solo se <strong>Solo clienti con Fidelity</strong> e attivo. Seleziona almeno un livello Punti.</div>
+
+                  <div className="row g-3 mt-1">
+                    <div className="col-md-12">
+                      <div className="text-muted small fw-semibold">Livelli Punti</div>
+                      {levels.length > 0 ? (
+                        <div className="d-flex flex-wrap gap-2 mt-2">
+                          {levels.map((lvl) => (
+                            <div className="form-check" key={lvl.key}>
+                              <input
+                                className="form-check-input"
+                                type="checkbox"
+                                id={`gift_lvl_pts_${lvl.key}`}
+                                value={lvl.key}
+                                checked={form.eligible_levels.includes(lvl.key)}
+                                onChange={(e) => {
+                                  setForm((prev) => {
+                                    const cur = new Set(prev.eligible_levels);
+                                    if (e.target.checked) cur.add(lvl.key);
+                                    else cur.delete(lvl.key);
+                                    return { ...prev, eligible_levels: [...cur] };
+                                  });
+                                }}
+                              />
+                              <label className="form-check-label" htmlFor={`gift_lvl_pts_${lvl.key}`}>{lvl.label || lvl.key}</label>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-muted small">Nessun livello Punti configurato.</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {/* ESCLUDI CLIENTI (gifts.php 925-947): candidati coerenti con le impostazioni. */}
+              <div className="col-12" id="giftExcludedClientsWrap">
+                <hr />
+                <div className="fw-semibold">Escludi clienti dalla campagna (opzionale)</div>
+                <div className="text-muted small">La lista mostra solo i clienti coerenti con le impostazioni attuali di <strong>Solo clienti con Fidelity</strong> e <strong>Livelli Punti</strong>.</div>
+
+                <div className="row g-3 mt-1">
+                  <div className="col-lg-7">
+                    <label className="form-label">Cliente da escludere</label>
+                    <div className="input-group">
+                      <select
+                        className="form-select"
+                        id="giftExcludeCandidateSelect"
+                        value={excludeCandidate}
+                        disabled={excludeSelectionLocked}
+                        onChange={(e) => setExcludeCandidate(e.target.value)}
+                      >
+                        <option value="">{excludeSelectionLocked ? "Seleziona prima almeno un Livello Punti" : "— seleziona cliente —"}</option>
+                        {!excludeSelectionLocked
+                          ? excludeCandidates.map((c) => (
+                              <option key={c.id} value={c.id}>{c.name || `Cliente #${c.id}`}</option>
+                            ))
+                          : null}
+                      </select>
+                      <button
+                        className="btn btn-outline-primary"
+                        type="button"
+                        id="giftExcludeAddBtn"
+                        disabled={excludeSelectionLocked}
+                        onClick={() => {
+                          const cid = Number.parseInt(excludeCandidate, 10) || 0;
+                          if (cid > 0 && !form.excluded_client_ids.includes(cid)) {
+                            setForm((prev) => ({ ...prev, excluded_client_ids: [...prev.excluded_client_ids, cid] }));
+                          }
+                          setExcludeCandidate("");
+                        }}
+                      >
+                        Aggiungi
+                      </button>
+                    </div>
+                    <div className="form-text" id="giftExcludeCandidatesHelp">
+                      {excludeSelectionLocked
+                        ? 'Con "Solo clienti con Fidelity" attivo devi selezionare almeno un Livello Punti per sbloccare questo campo.'
+                        : "I clienti già selezionati non compaiono nella lista."}
+                    </div>
+                  </div>
+                  <div className="col-lg-5">
+                    <div className="small text-muted fw-semibold mb-2">Clienti esclusi selezionati</div>
+                    <div id="giftExcludedClientsList" className="d-flex flex-column gap-2">
+                      {form.excluded_client_ids.map((cid) => (
+                        <div className="border rounded-3 px-3 py-2 d-flex justify-content-between align-items-center gap-2" key={cid}>
+                          <div className="fw-semibold">{clients.find((c) => c.id === cid)?.name ?? `Cliente #${cid}`}</div>
+                          <button
+                            className="btn btn-sm btn-outline-danger"
+                            type="button"
+                            onClick={() => setForm((prev) => ({ ...prev, excluded_client_ids: prev.excluded_client_ids.filter((x) => x !== cid) }))}
+                          >
+                            Rimuovi
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div className="col-md-3">
@@ -482,6 +539,13 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
                   <option value="1">Sì</option>
                   <option value="0">No</option>
                 </select>
+                {!fidelityEnabled && form.fidelity_only ? (
+                  <div className="form-text text-warning">
+                    La campagna è sospesa dalla Fidelity generale.
+                    Se lasci <strong>Attivo = Sì</strong>, tornerà attiva automaticamente quando la Fidelity verrà riattivata.
+                    Se imposti <strong>No</strong>, resterà disattivata anche dopo la riattivazione generale.
+                  </div>
+                ) : null}
               </div>
 
               <div className="col-12">
@@ -635,6 +699,7 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
                   value={form.valid_from}
                   onChange={(e) => set("valid_from", e.target.value)}
                 />
+                <div className="form-text small">La soglia viene calcolata considerando solo gli acquisti in questo periodo. Se selezioni oggi, l&apos;omaggio parte dal momento del salvataggio; con una data futura parte dalle 00:00 di quel giorno.</div>
               </div>
               <div className="col-md-4">
                 <label className="form-label">Valido al</label>
@@ -643,9 +708,11 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
                   type="date"
                   name="valid_to"
                   required
+                  min={minValidTo || undefined}
                   value={form.valid_to}
                   onChange={(e) => set("valid_to", e.target.value)}
                 />
+                <div className="form-text small">La data selezionata resta valida fino alle 23:59 della giornata scelta e deve essere almeno il giorno successivo a &quot;Valido dal&quot;.</div>
               </div>
               <div className="col-md-4">
                 <label className="form-label">Scadenza dopo sblocco (giorni)</label>
@@ -663,7 +730,11 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
             <hr className="my-4" />
 
             <h2 className="h6 fw-semibold mb-2">Regola di sblocco</h2>
-            <div className="text-muted small mb-2">Ogni campagna può avere una sola regola di sblocco.</div>
+            <div className="text-muted small mb-2">
+              Ogni campagna può avere <strong>una sola regola di sblocco</strong>.
+              Per <strong>Quantità servizio</strong> / <strong>Quantità prodotto</strong> il conteggio avanza di <strong>1</strong> per ogni <strong>vendita</strong> o <strong>appuntamento eseguito</strong> che contiene quell&apos;elemento.
+              Se nella stessa vendita ci sono più quantità dello stesso servizio/prodotto, conta comunque <strong>una sola volta</strong>.
+            </div>
             <div className="table-responsive">
               <table className="table table-sm align-middle" id="rulesTable">
                 <thead>
@@ -686,30 +757,34 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
                     </td>
                     <td>
                       {form.rule_type === "service_qty" ? (
-                        <select
-                          className="form-select form-select-sm rule-service"
-                          value={form.rule_service_id || ""}
-                          onChange={(e) => set("rule_service_id", Number(e.target.value) || 0)}
-                        >
-                          <option value="">— seleziona servizio —</option>
-                          {services.map((s) => (
-                            <option key={s.id} value={s.id}>{s.name}</option>
-                          ))}
-                        </select>
+                        <>
+                          <select
+                            className="form-select form-select-sm rule-service"
+                            value={form.rule_service_id || ""}
+                            onChange={(e) => set("rule_service_id", Number(e.target.value) || 0)}
+                          >
+                            <option value="">— seleziona servizio —</option>
+                            {services.map((s) => (
+                              <option key={s.id} value={s.id}>{s.name}</option>
+                            ))}
+                          </select>
+                          <div className="small text-muted mt-1 rule-hint rule-hint-service">Servizio da conteggiare (acquistato dal cliente).</div>
+                        </>
                       ) : form.rule_type === "product_qty" ? (
-                        <select
-                          className="form-select form-select-sm rule-product"
-                          value={form.rule_product_id || ""}
-                          onChange={(e) => set("rule_product_id", Number(e.target.value) || 0)}
-                        >
-                          <option value="">— seleziona prodotto —</option>
-                          {products.map((p) => (
-                            <option key={p.id} value={p.id}>{p.name}</option>
-                          ))}
-                        </select>
-                      ) : (
-                        <span className="text-muted small">Nessun elemento specifico richiesto.</span>
-                      )}
+                        <>
+                          <select
+                            className="form-select form-select-sm rule-product"
+                            value={form.rule_product_id || ""}
+                            onChange={(e) => set("rule_product_id", Number(e.target.value) || 0)}
+                          >
+                            <option value="">— seleziona prodotto —</option>
+                            {products.map((p) => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                          </select>
+                          <div className="small text-muted mt-1 rule-hint rule-hint-product">Prodotto da conteggiare (acquistato dal cliente).</div>
+                        </>
+                      ) : null}
                     </td>
                     <td>
                       <input
@@ -756,7 +831,7 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
             <div className="mt-4 d-flex gap-2">
               <button className="btn btn-primary" type="submit" disabled={saving}>
                 <i className="bi bi-check2-circle me-1" />
-                {saving ? "Salvataggio…" : action === "edit" ? "Salva modifiche" : action === "clone" ? "Salva clone" : "Salva"}
+                {saving ? "Salvataggio…" : submitLabel}
               </button>
               <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/gifts`}>
                 Annulla
