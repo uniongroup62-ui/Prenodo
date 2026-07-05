@@ -714,6 +714,15 @@ export default async function TenantPage({
     );
   }
 
+  // Faithful GiftCard / Impostazioni (giftcard_settings.php): flash ?msg/?err.
+  if (page === "giftcard_settings") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <GiftcardSettingsContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
+      </ManageShell>
+    );
+  }
+
   // Faithful GiftBox / Impostazioni (giftbox_settings.php): flash ?msg/?err.
   if (page === "giftbox_settings") {
     return (

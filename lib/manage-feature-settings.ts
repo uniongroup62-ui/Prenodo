@@ -80,6 +80,9 @@ export async function getGiftcardSettings(slug: string): Promise<ConfigModuleSta
   const value = normalizeValidityValue(row.giftcard_default_validity_value);
   const unit = normalizeUnit(row.giftcard_default_validity_unit);
   const terms = String(row.giftcard_terms ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  // La pagina legacy interpola il nome attività nell'ultima riga del testo
+  // condizioni predefinito ("In caso di smarrimento, contatta X ...").
+  const businessName = String(row.name ?? "").trim() || "La mia attività";
   return {
     id: "giftcard_settings",
     title: "Impostazioni GiftCard",
@@ -88,7 +91,7 @@ export async function getGiftcardSettings(slug: string): Promise<ConfigModuleSta
       record("giftcard_settings", 2, "Termini GiftCard", terms, terms.trim() ? "Configurati" : "Da configurare", true, created(row)),
       record("giftcard_settings", 3, "Voucher pubblico", "Token pubblico, importo nascosto e invio email", "Gestito da giftcard.php", true, created(row)),
     ],
-    settings: { giftcard_default_validity_value: value, giftcard_default_validity_unit: unit, giftcard_terms: terms },
+    settings: { giftcard_default_validity_value: value, giftcard_default_validity_unit: unit, giftcard_terms: terms, business_name: businessName },
     updatedAt: dateTimeString(created(row)),
   };
 }

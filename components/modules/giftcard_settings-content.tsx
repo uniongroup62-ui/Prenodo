@@ -2,65 +2,52 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-// Faithful port of the PHP GiftCard settings page
-// (app/pages/giftcard_settings.php, ?page=giftcard_settings).
-// Configures the default GiftCard validity duration and the GiftCard terms
-// text. Pre-filled from the existing DB-backed
-// /api/manage/configuration?module=giftcard_settings route, whose "records"
-// expose:
-//   - record 1 "Validita predefinita" -> detail "<value> <unit>" (e.g. "0 days")
-//   - record 2 "Termini GiftCard"      -> detail = raw terms text
-// When the stored terms text is empty the PHP page shows a built-in default,
-// reproduced here verbatim so the textarea matches the legacy markup.
+// Port fedele della pagina impostazioni GiftCard
+// (app/pages/giftcard_settings.php): scadenza predefinita (durata + unità) e
+// condizioni GiftCard su businesses. Prefill dal payload settings della route
+// /api/manage/configuration?module=giftcard_settings; il testo condizioni
+// predefinito interpola il NOME ATTIVITÀ nell'ultima riga come il PHP.
+// Salvataggi con redirect flash legacy (?msg=), errori in pagina; header
+// gated (GiftCard su giftcard.manage, Crea GiftCard su pos.manage); confirm
+// legacy sul ripristino.
 
-type ConfigRecord = {
-  id: number;
-  module: string;
-  title: string;
-  detail: string;
-  value: string;
-  active: boolean;
-  updatedAt?: string;
-};
+type GiftcardSettingsQuery = { msg?: string; err?: string };
 
 type ConfigResponse = {
   ok?: boolean;
-  records?: ConfigRecord[];
-  module?: { records?: ConfigRecord[] };
+  module?: { settings?: Record<string, unknown> };
+  canGiftcardManage?: boolean;
+  canCreate?: boolean;
 };
-
-const VALIDITY_UNITS = ["days", "months", "years"] as const;
-
-// Default GiftCard terms text rendered by the PHP page when none is stored.
-const DEFAULT_GIFTCARD_TERMS = `La GiftCard è utilizzabile fino a esaurimento credito e/o fino all'utilizzo dei servizi/prodotti inclusi, oppure fino alla data di scadenza (se presente).
-Non convertibile in denaro e non rimborsabile.
-Presentare il codice (QR) o il codice alfanumerico in cassa per l'utilizzo.
-In caso di smarrimento, contatta elite indicando il codice GiftCard.`;
 
 function tenantSlug(): string {
   if (typeof window === "undefined") return "";
   return window.location.pathname.split("/")[1] || "";
 }
 
-// Parse a "<number> <unit>" detail string (e.g. "0 days") into value + unit.
-function parseValidityDetail(detail: string): { value: string; unit: string } {
-  const trimmed = (detail || "").trim();
-  const match = trimmed.match(/^(\d+)\s*([a-zA-Z]+)?/);
-  const value = match?.[1] ?? "0";
-  const unitRaw = (match?.[2] ?? "days").toLowerCase();
-  const unit = (VALIDITY_UNITS as readonly string[]).includes(unitRaw) ? unitRaw : "days";
-  return { value, unit };
+// Testo condizioni predefinito legacy: l'ultima riga interpola il nome
+// dell'attività (biz.name, fallback 'La mia attività').
+function defaultTerms(bizName: string): string {
+  return [
+    "La GiftCard è utilizzabile fino a esaurimento credito e/o fino all'utilizzo dei servizi/prodotti inclusi, oppure fino alla data di scadenza (se presente).",
+    "Non convertibile in denaro e non rimborsabile.",
+    "Presentare il codice (QR) o il codice alfanumerico in cassa per l'utilizzo.",
+    `In caso di smarrimento, contatta ${bizName} indicando il codice GiftCard.`,
+  ].join("\n");
 }
 
-export function GiftcardSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
+export function GiftcardSettingsContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: GiftcardSettingsQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
 
   const [validityValue, setValidityValue] = useState("0");
   const [validityUnit, setValidityUnit] = useState("days");
-  const [terms, setTerms] = useState(DEFAULT_GIFTCARD_TERMS);
-  const [feedback, setFeedback] = useState<{ type: "success" | "danger"; text: string } | null>(null);
+  const [terms, setTerms] = useState("");
+  const [perms, setPerms] = useState({ canGiftcardManage: false, canCreate: false });
+  // Flash legacy (View::alert): ?msg= success dal redirect + errore in pagina.
+  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [error, setError] = useState("");
 
   const load = useCallback(() => {
     fetch(`/api/manage/configuration?module=giftcard_settings&slug=${encodeURIComponent(slug)}`, {
@@ -68,17 +55,15 @@ export function GiftcardSettingsContent({ slug: slugProp }: { slug?: string } = 
     })
       .then((r) => r.json())
       .then((j: ConfigResponse) => {
-        const records = j.records ?? j.module?.records ?? [];
-        const validityRec = records.find((rec) => rec.id === 1 || /validit/i.test(rec.title));
-        const termsRec = records.find((rec) => rec.id === 2 || /termini/i.test(rec.title));
-        if (validityRec) {
-          const { value, unit } = parseValidityDetail(validityRec.detail);
-          setValidityValue(value);
-          setValidityUnit(unit);
-        }
-        // PHP pre-fills the stored terms; falls back to the default text when empty.
-        const storedTerms = (termsRec?.detail ?? "").trim();
-        setTerms(storedTerms ? (termsRec?.detail ?? "") : DEFAULT_GIFTCARD_TERMS);
+        const s = (j.module?.settings ?? {}) as Record<string, unknown>;
+        setPerms({ canGiftcardManage: j.canGiftcardManage === true, canCreate: j.canCreate === true });
+        const rawValue = String(s.giftcard_default_validity_value ?? "0");
+        if (/^\d+$/.test(rawValue)) setValidityValue(rawValue);
+        const rawUnit = String(s.giftcard_default_validity_unit ?? "days");
+        if (rawUnit === "days" || rawUnit === "months" || rawUnit === "years") setValidityUnit(rawUnit);
+        const bizName = String(s.business_name ?? "").trim() || "La mia attività";
+        const rawTerms = String(s.giftcard_terms ?? "");
+        setTerms(rawTerms.trim() !== "" ? rawTerms : defaultTerms(bizName));
       })
       .catch(() => {});
   }, [slug]);
@@ -87,8 +72,12 @@ export function GiftcardSettingsContent({ slug: slugProp }: { slug?: string } = 
     load();
   }, [load]);
 
-  async function postAction(payload: Record<string, unknown>, successText: string): Promise<void> {
-    setFeedback(null);
+  const pageBase = `/${encodeURIComponent(slug)}/giftcard_settings`;
+
+  // Salvataggio: successo -> redirect flash legacy (?msg=), errore -> alert
+  // in pagina (il legacy non fa redirect e mantiene i valori inseriti).
+  async function postAction(payload: Record<string, unknown>): Promise<void> {
+    setError("");
     try {
       const res = await fetch(`/api/manage/configuration?module=giftcard_settings&slug=${encodeURIComponent(slug)}`, {
         method: "POST",
@@ -97,17 +86,16 @@ export function GiftcardSettingsContent({ slug: slugProp }: { slug?: string } = 
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j?.ok === false) {
-        setFeedback({ type: "danger", text: String(j?.error ?? j?.message ?? "Errore.") });
+        setError(String(j?.error ?? j?.message ?? "Errore."));
+        window.scrollTo(0, 0);
         return;
       }
-      setFeedback({ type: "success", text: String(j?.message ?? successText) });
-      load();
+      window.location.href = `${pageBase}?msg=${encodeURIComponent(String(j?.message ?? ""))}`;
     } catch {
-      setFeedback({ type: "danger", text: "Errore di rete." });
+      setError("Errore di rete.");
+      window.scrollTo(0, 0);
     }
   }
-
-  const page = (p: string) => `/${encodeURIComponent(slug)}/${`${p}`.replace("&", "?")}`;
 
   return (
     <div className="container-fluid">
@@ -121,21 +109,38 @@ export function GiftcardSettingsContent({ slug: slugProp }: { slug?: string } = 
         </div>
         <div className="bs-page-actions">
           <div className="d-flex gap-2">
-            <a className="btn btn-outline-secondary btn-pill" href={page("giftcard")}>
-              <i className="bi bi-arrow-left me-1" />
-              GiftCard
-            </a>
-            <a className="btn btn-primary btn-pill" href={page("pos")}>
-              <i className="bi bi-plus-lg me-1" />
-              Crea GiftCard
-            </a>
+            {perms.canGiftcardManage ? (
+              <a className="btn btn-outline-secondary btn-pill" href={`/${encodeURIComponent(slug)}/giftcard`}>
+                <i className="bi bi-arrow-left me-1" />
+                GiftCard
+              </a>
+            ) : null}
+            {perms.canCreate ? (
+              <a className="btn btn-primary btn-pill" href={`/${encodeURIComponent(slug)}/pos`}>
+                <i className="bi bi-plus-lg me-1" />
+                Crea GiftCard
+              </a>
+            ) : null}
           </div>
         </div>
       </div>
 
-      {feedback ? (
-        <div className={`alert alert-${feedback.type}`} role="alert">
-          {feedback.text}
+      {flash.msg ? (
+        <div className="alert alert-success d-flex align-items-start gap-2" role="alert">
+          <div><i className="bi bi-info-circle" /></div>
+          <div>{flash.msg}</div>
+        </div>
+      ) : null}
+      {flash.err ? (
+        <div className="alert alert-danger d-flex align-items-start gap-2" role="alert">
+          <div><i className="bi bi-info-circle" /></div>
+          <div>{flash.err}</div>
+        </div>
+      ) : null}
+      {error ? (
+        <div className="alert alert-danger d-flex align-items-start gap-2" role="alert">
+          <div><i className="bi bi-info-circle" /></div>
+          <div>{error}</div>
         </div>
       ) : null}
 
@@ -144,9 +149,9 @@ export function GiftcardSettingsContent({ slug: slugProp }: { slug?: string } = 
           <div className="card p-4">
             <div className="h5 fw-bold mb-3">GiftCard — Scadenza predefinita</div>
             <div className="text-muted small mb-3">
-              Quando emetti una <strong>GiftCard</strong> e lasci vuoto il campo <em>“Valida al”</em>,
-              la scadenza viene calcolata automaticamente partendo da <em>“Validità dal”</em>.
-              Imposta qui la durata predefinita: <strong>0</strong> significa nessuna scadenza automatica.
+              Quando emetti una <strong>GiftCard</strong> e lasci vuoto il campo <em>“Valida al”</em>, la scadenza viene
+              calcolata automaticamente partendo da <em>“Validità dal”</em>. Imposta qui la durata predefinita:{" "}
+              <strong>0</strong> significa nessuna scadenza automatica.
             </div>
 
             <form
@@ -154,14 +159,11 @@ export function GiftcardSettingsContent({ slug: slugProp }: { slug?: string } = 
               className="border rounded-3 p-3 bg-light"
               onSubmit={(e) => {
                 e.preventDefault();
-                postAction(
-                  {
-                    action: "save_giftcard_validity_default",
-                    giftcard_default_validity_value: validityValue,
-                    giftcard_default_validity_unit: validityUnit,
-                  },
-                  "Impostazioni scadenza GiftCard salvate.",
-                );
+                void postAction({
+                  action: "save_giftcard_validity_default",
+                  giftcard_default_validity_value: validityValue,
+                  giftcard_default_validity_unit: validityUnit,
+                });
               }}
             >
               <input type="hidden" name="action" value="save_giftcard_validity_default" />
@@ -211,8 +213,12 @@ export function GiftcardSettingsContent({ slug: slugProp }: { slug?: string } = 
             <div className="h6 fw-bold mb-2">Come funziona</div>
             <div className="text-muted small">
               <ul className="mb-0">
-                <li><strong>Validità dal</strong> resta modificabile in fase di emissione.</li>
-                <li>Se <strong>Valida al</strong> è vuoto, viene calcolata usando questa durata.</li>
+                <li>
+                  <strong>Validità dal</strong> resta modificabile in fase di emissione.
+                </li>
+                <li>
+                  Se <strong>Valida al</strong> è vuoto, viene calcolata usando questa durata.
+                </li>
                 <li>Le GiftCard già emesse non vengono modificate.</li>
               </ul>
             </div>
@@ -234,7 +240,7 @@ export function GiftcardSettingsContent({ slug: slugProp }: { slug?: string } = 
               className="row g-3"
               onSubmit={(e) => {
                 e.preventDefault();
-                postAction({ action: "save_giftcard_terms", giftcard_terms: terms }, "Condizioni GiftCard salvate.");
+                void postAction({ action: "save_giftcard_terms", giftcard_terms: terms });
               }}
             >
               <div className="col-12">
@@ -263,13 +269,13 @@ export function GiftcardSettingsContent({ slug: slugProp }: { slug?: string } = 
                   data-giftcard-settings-confirm="Ripristinare il testo predefinito delle condizioni GiftCard?"
                   onClick={() => {
                     if (!window.confirm("Ripristinare il testo predefinito delle condizioni GiftCard?")) return;
-                    postAction({ action: "reset_giftcard_terms" }, "Condizioni GiftCard ripristinate.");
+                    void postAction({ action: "reset_giftcard_terms" });
                   }}
                 >
                   <i className="bi bi-arrow-counterclockwise me-1" />
                   Ripristina testo predefinito
                 </button>
-                <a className="btn btn-outline-secondary btn-pill" href={page("giftcard_settings")}>
+                <a className="btn btn-outline-secondary btn-pill" href={pageBase}>
                   Annulla
                 </a>
               </div>
@@ -281,8 +287,8 @@ export function GiftcardSettingsContent({ slug: slugProp }: { slug?: string } = 
           <div className="card p-4">
             <div className="h6 fw-bold mb-2">Suggerimento</div>
             <div className="text-muted small">
-              Personalizza qui le condizioni mostrate nel voucher e nella mail GiftCard.
-              Per tornare al testo standard usa <strong>Ripristina testo predefinito</strong>.
+              Personalizza qui le condizioni mostrate nel voucher e nella mail GiftCard. Per tornare al testo standard usa{" "}
+              <strong>Ripristina testo predefinito</strong>.
             </div>
           </div>
         </div>

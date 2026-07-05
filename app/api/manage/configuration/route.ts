@@ -76,6 +76,10 @@ export async function GET(request: Request) {
       ...(moduleId === "giftbox_settings"
         ? { canGiftboxManage: can(session.user.perms, "giftbox.manage"), canCreate: can(session.user.perms, "pos.manage") }
         : {}),
+      // giftcard_settings.php gates: GiftCard su giftcard.manage, Crea su pos.manage.
+      ...(moduleId === "giftcard_settings"
+        ? { canGiftcardManage: can(session.user.perms, "giftcard.manage"), canCreate: can(session.user.perms, "pos.manage") }
+        : {}),
     });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Errore configurazione.");
@@ -165,9 +169,35 @@ async function saveFeatureSettings(
   body: Record<string, string>,
 ): Promise<FeatureSaveResult | null> {
   if (moduleId === "giftcard_settings") {
-    if (action === "save_giftcard_validity_default") return { message: "Impostazioni scadenza GiftCard salvate.", module: await saveGiftcardValidityDefault(slug, body) };
-    if (action === "save" || action === "save_giftcard_terms") return { message: "Condizioni GiftCard salvate.", module: await saveGiftcardTerms(slug, body) };
-    if (action === "reset_giftcard_terms") return { message: "Condizioni GiftCard ripristinate.", module: await resetGiftcardTerms(slug) };
+    // Messaggi flash e wrapper errori verbatim di giftcard_settings.php
+    // (i msg condizioni sono senza punto finale).
+    if (action === "save_giftcard_validity_default") {
+      try {
+        return { message: "Impostazioni scadenza GiftCard salvate. Le GiftCard già presenti rimarranno invariate.", module: await saveGiftcardValidityDefault(slug, body) };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (/unknown column|column .* does not exist/i.test(msg)) throw new Error("Colonne mancanti: aggiorna il DB con il dump SQL completo aggiornato (scadenza GiftCard).");
+        throw new Error(`Errore salvataggio impostazioni scadenza GiftCard: ${msg}`);
+      }
+    }
+    if (action === "save" || action === "save_giftcard_terms") {
+      try {
+        return { message: "Condizioni GiftCard salvate", module: await saveGiftcardTerms(slug, body) };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (/unknown column|column .* does not exist/i.test(msg)) throw new Error("Colonna mancante: aggiorna il DB con il dump SQL completo aggiornato (GiftCard condizioni).");
+        throw new Error(`Errore salvataggio condizioni GiftCard: ${msg}`);
+      }
+    }
+    if (action === "reset_giftcard_terms") {
+      try {
+        return { message: "Condizioni GiftCard ripristinate", module: await resetGiftcardTerms(slug) };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (/unknown column|column .* does not exist/i.test(msg)) throw new Error("Colonna mancante: aggiorna il DB con il dump SQL completo aggiornato (GiftCard condizioni).");
+        throw new Error(`Errore ripristino condizioni GiftCard: ${msg}`);
+      }
+    }
     return null;
   }
   if (moduleId === "giftbox_settings") {

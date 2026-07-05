@@ -4395,3 +4395,34 @@ nota interna, movimenti pending/redeem da prenotazione con data prenotazione,
 link vendita, invii programmati con claim reset, ricerca clienti, cleanup
 CLEAN) + 92/92 marker bundle + regressioni GiftBox 63/63 e giftbox_settings
 15/15 + typecheck/lint puliti.
+
+## GiftCard / Impostazioni (giftcard_settings.php) — 2026-07-05
+Audit della pagina impostazioni GiftCard (237 righe: scadenza predefinita +
+condizioni) + giftcard_settings.js vs il modulo Next, con capture live sul
+PHP. Il markup era gia fedele; fix su messaggi e comportamenti:
+1. Flash redirect legacy verbatim: 'Impostazioni scadenza GiftCard salvate.
+   Le GiftCard già presenti rimarranno invariate.' (prima mancava la coda),
+   'Condizioni GiftCard salvate' e 'Condizioni GiftCard ripristinate' SENZA
+   punto finale (prima col punto); salvataggi con redirect ?msg= e markup
+   View::alert con icona (prima feedback in pagina senza reload); errori in
+   pagina con scrollTo come le altre settings.
+2. Wrapper errori verbatim nella route ('Errore salvataggio impostazioni
+   scadenza GiftCard: X' / 'Colonne mancanti: ... (scadenza GiftCard).' /
+   'Errore salvataggio condizioni GiftCard: X' / 'Errore ripristino
+   condizioni GiftCard: X' / 'Colonna mancante: ... (GiftCard condizioni).').
+3. Header actions gated come Auth::can legacy (GiftCard su giftcard.manage,
+   Crea GiftCard su pos.manage — la route configuration espone
+   canGiftcardManage/canCreate per il modulo giftcard_settings).
+4. Testo condizioni predefinito con il NOME ATTIVITÀ interpolato nell'ultima
+   riga ('In caso di smarrimento, contatta <nome> indicando il codice
+   GiftCard.') dal payload settings.business_name (biz.name, fallback 'La
+   mia attività') — prima era hardcoded 'elite'.
+5. Prefill dal payload settings (value/unit/terms raw) invece del parsing dei
+   record aggregati; branch page.tsx dedicato con initialQuery ?msg/?err.
+Gia fedeli: clamp 0..36500 + unit whitelist con fallback days, condizioni
+troncate a 12000 con newline normalizzati e vuoto/reset -> NULL, confirm
+'Ripristinare il testo predefinito delle condizioni GiftCard?'.
+Verifica: battery e2e 16/16 (flash verbatim, clamp/fallback, troncamento,
+vuoto->NULL, reset, prefill con business_name, ripristino businesses) +
+36/36 marker bundle + regressioni giftbox_settings 15/15 e GiftCard 93/93 +
+typecheck/lint puliti.
