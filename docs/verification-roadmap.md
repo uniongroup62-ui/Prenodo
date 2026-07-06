@@ -6775,3 +6775,18 @@ Prezzo Totale "€ 0,00", step Vantaggi saltato. typecheck pulito. RESIDUO: la
 RIGA per-servizio del recap step 7 (pre-conferma) mostra ancora il prezzo pieno
 sul singolo servizio (il totale è corretto) — parte del residuo cost-breakdown
 recap; la CONFERMA invece mostra già 0€ + badge residuo.
+
+
+---
+
+## Wizard booking: auto-advance del flusso "prenota da residuo" (2026-07-06)
+
+Chiuso il finding MEDIUM step-skip-divergence-residual. Con un deep-link redeem
+(book_package/prepaid/giftbox/omaggio) il Next preselezionava solo servizio+
+categoria e RESTAVA sullo step iniziale; il legacy (advanceResidualBookingFlow)
+salta Sede/Categoria/Servizi (servizio precompilato) e va direttamente a
+Data/Ora (staff auto-assegnato).
+
+Fix: nel ctx-load con redeem risolto, setOperatorId('any') + setStep(5 se
+chooseStaffEnabled=false, altrimenti 4). Verifica live (book_prepaid&service_id=9):
+il wizard atterra su "Data e ora". typecheck pulito.

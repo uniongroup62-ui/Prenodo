@@ -329,16 +329,22 @@ export function BookingFaithful({
         setCategoryId(catsAtEntryLoc.length === 1 ? catsAtEntryLoc[0]?.id ?? null : null);
         // Deep-link prefill: preselect the covered service (and its category) so
         // the customer lands with the redeem's service already in the cart.
-        if (redeemPrefill && redeemPrefill.serviceId > 0) {
-          const svc = ctx.services.find((s) => s.id === redeemPrefill.serviceId);
-          if (svc) {
-            setServiceIds([svc.id]);
-            if (svc.categoryId) setCategoryId(svc.categoryId);
-          }
+        const redeemSvc = redeemPrefill && redeemPrefill.serviceId > 0 ? ctx.services.find((s) => s.id === redeemPrefill.serviceId) : undefined;
+        if (redeemSvc) {
+          setServiceIds([redeemSvc.id]);
+          if (redeemSvc.categoryId) setCategoryId(redeemSvc.categoryId);
         }
         // shouldSkipLocationStep: con una sola sede il legacy parte dallo step
         // Categoria (salta "Scegli la sede"). Avanza solo se siamo ancora al primo.
         if (ctx.locations.length === 1) setStep((s) => (s === 1 ? 2 : s));
+        // Flusso "prenota da residuo" (advanceResidualBookingFlow): con il
+        // servizio già risolto, salta Sede/Categoria/Servizi e va a Data/Ora
+        // (staff auto-assegnato). Se la scelta operatore è attiva, ferma allo step
+        // Professionista.
+        if (redeemSvc) {
+          setOperatorId("any");
+          setStep(ctx.chooseStaffEnabled === false ? 5 : 4);
+        }
         setError("");
       })
       .catch((caught) => {
