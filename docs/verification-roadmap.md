@@ -6565,3 +6565,16 @@ Due finding MEDIUM step Categoria/Servizi:
 Verifica live (sede+categoria uniche): 'genera' auto-selected, Continua abilitato.
 typecheck pulito. (data-shown-categories: filtro categorie per sede/non-vuote —
 backend, in coda.)
+
+
+---
+
+## Wizard booking: formato migliaia + accento verbatim (2026-07-06)
+
+- **[LOW] Formato migliaia**: fmtMoney (toLocaleString it-IT) non inseriva il
+  separatore migliaia per 1000-9999 (limite ICU/Node); il PHP number_format sì.
+  Fix: formatter manuale ('.' migliaia + ',' decimali) — 1234.5 -> "1.234,50".
+- **[LOW] Accento**: "l'appuntamento sarà eseguito" -> "sara" (senza accento)
+  come il legacy (booking.php 13224).
+
+typecheck pulito.

@@ -1513,7 +1513,7 @@ export function BookingFaithful({
                         <span className="booking-benefit-choice__copy">
                           <span className="giftcard-choice__name">Usa sconto Punti Fidelity</span>
                           <span className="giftcard-choice__meta">
-                            I punti verranno scalati quando l&apos;appuntamento sarà eseguito.
+                            I punti verranno scalati quando l&apos;appuntamento sara eseguito.
                           </span>
                         </span>
                       </span>
@@ -2085,10 +2085,13 @@ function estimateDiscount(benefit: BookingBenefit | null, total: number): number
 }
 
 function fmtMoney(value: number): string {
-  return (Math.round(value * 100) / 100).toLocaleString("it-IT", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
+  // number_format PHP: separatore migliaia '.' SEMPRE (anche 1000-9999, dove
+  // toLocaleString/ICU non lo inserisce) e decimale ',' — es. 1234.5 -> "1.234,50".
+  const rounded = Math.round((value + Number.EPSILON) * 100) / 100;
+  const sign = rounded < 0 ? "-" : "";
+  const [intPart, decPart] = Math.abs(rounded).toFixed(2).split(".");
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return `${sign}${grouped},${decPart}`;
 }
 
 function initialsOf(name: string): string {
