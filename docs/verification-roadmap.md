@@ -5582,3 +5582,62 @@ live ripulito) + 119/119 marker + regressioni (locations 18 e branding-r2
 12 con aspettative aggiornate ai wrapper, booking-settings 12,
 business-profile 25, shim /settings e flash ?msg= verificati) +
 typecheck/lint puliti.
+
+## AUDIT COMPLETO — Moduli consenso (consent_modules.php) (2026-07-06)
+
+Audit funzionale completo di consent_modules.php (426 righe) +
+assets/js/pages/consent_modules.js (70) + ConsentModules.php vs
+consent_modules-content.tsx + consent_module_form-content.tsx +
+manage-consent-modules.ts + route configuration. Bug/divergenze corrette:
+1. ELIMINA SENZA CONFERMA (lista): il link Elimina puntava a ?action=delete
+   mai gestito (click a vuoto) e il markup del modale era decorativo senza
+   handler. Portato il MODALE legacy funzionante (consent_modules.js):
+   titolo 'Eliminare il modulo "NAME"?', body diverso con/senza
+   associazioni ('Questo modulo e associato a N cliente/i. Se prosegui,
+   saranno rimosse le associazioni non firmate...'), bottone 'Elimina
+   definitivamente' → delete + flash legacy ('Modulo consenso eliminato.' /
+   '... Rimosse anche N associazione/i non firmate dai clienti.'). Stesso
+   modale nel form (prima un window.confirm con testo inventato).
+2. FLASH legacy assenti: lista e form ora leggono ?msg/?err (branch
+   page.tsx con initialQuery, alert sotto il page header come il PHP);
+   il save NON tornava alla lista ma nel legacy resta sull'EDIT col flash
+   'Modulo consenso salvato con successo.' → redirect fedele (anche su
+   NEW: action=edit&id=nuovo).
+3. PAGE HEADER del form: il legacy usa SEMPRE 'Moduli consenso' con
+   subtitle fisso e i bottoni [Lista moduli][Nuovo modulo]; il Next metteva
+   il titolo del modulo nell'header e mancava 'Nuovo modulo'.
+4. COLONNA DESTRA dell'editor (prima assente, dichiarata TODO):
+   - 'Chiusura automatica del PDF' con consent_module_system_preview_text
+     (informed: 'Data: {{data}}' + 'Firma cliente: ...'; sistema GDPR:
+     '[ ] label' per ogni consenso privacy + data/firma, dal GET);
+   - 'Anteprima contenuto' con 'Apri anteprima PDF': NUOVO endpoint
+     action=preview_pdf che porta il preview legacy (dati demo Mario
+     Rossi, fallback del blocco 'Beauty Suite S.r.l....' per
+     {{dati_sede}}/{{Dati anagrafici}} vuote, snapshot + renderPrivacyPdf
+     con footer del tipo, filename safe) e lo mostra nel modale iframe
+     legacy 'Anteprima template PDF' via blob URL — funziona anche sui
+     valori NON salvati del form come il legacy;
+   - 'Variabili disponibili' (8 voci verbatim) + 'Workflow cliente'.
+5. LISTA: 'Associato a N cliente/i' sotto lo slug (associationCounts nel
+   GET, consent_module_count_associations); ensure del modulo di sistema
+   (consent_module_ensure_system_gdpr: creazione al primo accesso col
+   template del tenant + riparazione campi chiave) su lista e get;
+   ordinamento legacy is_system DESC nel repo config; tipo fallback
+   'Modulo consenso' (via le voci inventate 'Firma cliente'/'Modulo
+   personalizzato'); date senza new Date() (niente shift TZ).
+6. Rimossa la validazione client inventata 'Inserisci il nome del modulo.'
+   (il legacy ha solo required browser; name vuoto via API → default
+   'Modulo consenso', verificato).
+Verifica: battery NUOVA e2e-consent-modules 18/18 (lista con sistema in
+cima + counts, get con systemPreviewText/8 variabili, save con slug unici
+-2/newline normalizzate/footer meta, name vuoto → default, body vuoto e
+clone GDPR verbatim, sistema con forzature type/nome/attivo + mirror
+businesses.gdpr_template_body, delete: sistema bloccato/draft rimossi con
+count/firmati bloccati/inesistente, preview PDF %PDF sia informed sia
+sistema; restore CLEAN con body GDPR 958 byte ripristinato ovunque) +
+LIVE PHP byte-per-byte (redirect edit&msg=salvato, err inline body vuoto,
+delete sistema/draft con suffisso count/firmato bloccato — con tenant_id
+25 nei record manuali: anche il MySQL live è schema-shared —, preview=pdf
+200 application/pdf, live ripulito) + 88/88 marker + regressioni
+configuration verdi (quote/giftcard/giftbox/package settings 20/16/15/6,
+client-sheets 26) + typecheck/lint puliti.

@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 // Faithful port of the PHP "Moduli consenso" settings page
-// (app/pages/consent_modules.php), fed by the existing DB-backed
-// /api/manage/configuration?module=consent_modules.
+// (app/pages/consent_modules.php + assets/js/pages/consent_modules.js), fed by
+// the DB-backed /api/manage/configuration?module=consent_modules: flash legacy
+// (?msg/?err sotto il page header), 'Associato a N cliente/i', e il MODALE di
+// conferma eliminazione legacy (titolo col nome modulo, body diverso con/senza
+// associazioni, 'Elimina definitivamente').
 
 type ConsentRecord = {
   id: number;
@@ -22,13 +25,10 @@ function tenantSlug(): string {
   return window.location.pathname.split("/")[1] || "";
 }
 
-// Map the consent-module "type" key (first segment of `detail`) to the label
-// shown in the PHP "Tipo" badge.
+// consent_module_type_label (ConsentModules.php): due tipi legacy.
 const TYPE_LABELS: Record<string, string> = {
   privacy_gdpr: "PDF privacy GDPR",
   informed_consent: "Consenso informato",
-  signature: "Firma cliente",
-  custom: "Modulo personalizzato",
 };
 
 // The system module ("PDF privacy GDPR") is unique, editable but not deletable.
@@ -42,39 +42,90 @@ function parseDetail(detail?: string): { typeKey: string; slug: string } {
 
 function fmtDate(iso?: string): string {
   if (!iso) return "—";
-  const d = iso.slice(0, 10);
+  const d = String(iso).slice(0, 10);
   const [y, m, day] = d.split("-");
   return day && m && y ? `${day}/${m}/${y}` : "—";
 }
 
 function fmtDateTime(iso?: string): string {
   if (!iso) return "—";
-  const dt = new Date(iso);
-  if (Number.isNaN(dt.getTime())) return fmtDate(iso);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(dt.getDate())}/${pad(dt.getMonth() + 1)}/${dt.getFullYear()} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  if (m) return `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`;
+  return fmtDate(iso);
 }
 
-export function ConsentModulesContent({ slug: slugProp }: { slug?: string } = {}) {
+type Flash = { text: string; type: "success" | "danger" };
+
+export function ConsentModulesContent({
+  slug: slugProp,
+  initialQuery,
+}: { slug?: string; initialQuery?: { msg?: string; err?: string } } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
   const [records, setRecords] = useState<ConsentRecord[]>([]);
+  const [associationCounts, setAssociationCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
+  const [flash, setFlash] = useState<Flash | null>(() => {
+    if (initialQuery?.err) return { text: String(initialQuery.err), type: "danger" };
+    if (initialQuery?.msg) return { text: String(initialQuery.msg), type: "success" };
+    return null;
+  });
+  // Modale conferma eliminazione (consent_modules.js): record in eliminazione.
+  const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string; associationCount: number } | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
-  useEffect(() => {
-    setLoading(true);
-    fetch(`/api/manage/configuration?module=consent_modules&slug=${encodeURIComponent(slug)}`, {
+  const load = useCallback(() => {
+    return fetch(`/api/manage/configuration?module=consent_modules&slug=${encodeURIComponent(slug)}`, {
       headers: { "x-tenant-slug": slug },
     })
       .then((r) => r.json())
-      .then((j) => setRecords(Array.isArray(j.records) ? j.records : []))
+      .then((j) => {
+        setRecords(Array.isArray(j.records) ? j.records : []);
+        setAssociationCounts(j.associationCounts && typeof j.associationCounts === "object" ? j.associationCounts : {});
+      })
       .catch(() => setRecords([]))
       .finally(() => setLoading(false));
   }, [slug]);
 
+  useEffect(() => {
+    load();
+  }, [load]);
+
   function href(suffix: string): string {
     return `/${encodeURIComponent(slug)}/${`consent_modules${suffix}`.replace("&", "?")}`;
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/manage/configuration?module=consent_modules&slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+        body: JSON.stringify({ module: "consent_modules", action: "delete_module", id: String(deleteTarget.id) }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j.ok) {
+        setFlash({ text: String(j.error ?? "Errore configurazione."), type: "danger" });
+      } else {
+        // Flash del redirect legacy (consent_modules.php 127-131).
+        const removed = Number(j.associationCount ?? 0);
+        setFlash({
+          text: removed > 0
+            ? `Modulo consenso eliminato. Rimosse anche ${removed} associazione/i non firmate dai clienti.`
+            : "Modulo consenso eliminato.",
+          type: "success",
+        });
+        await load();
+      }
+    } catch {
+      setFlash({ text: "Errore configurazione.", type: "danger" });
+    } finally {
+      setDeleting(false);
+      setDeleteTarget(null);
+      if (typeof window !== "undefined") window.scrollTo({ top: 0 });
+    }
   }
 
   const count = records.length;
@@ -100,6 +151,15 @@ export function ConsentModulesContent({ slug: slugProp }: { slug?: string } = {}
           </div>
         </div>
       </div>
+
+      {flash ? (
+        <div className={`alert alert-${flash.type} d-flex align-items-start gap-2`}>
+          <div>
+            <i className="bi bi-info-circle" />
+          </div>
+          <div>{flash.text}</div>
+        </div>
+      ) : null}
 
       <div className="card p-3 p-lg-4">
         <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
@@ -136,7 +196,8 @@ export function ConsentModulesContent({ slug: slugProp }: { slug?: string } = {}
                 records.map((rec) => {
                   const { typeKey, slug: moduleSlug } = parseDetail(rec.detail);
                   const isSystem = typeKey === SYSTEM_TYPE;
-                  const typeLabel = TYPE_LABELS[typeKey] ?? rec.title ?? "—";
+                  const typeLabel = TYPE_LABELS[typeKey] ?? "Modulo consenso";
+                  const associationCount = isSystem ? 0 : Number(associationCounts[String(rec.id)] ?? 0);
                   return (
                     <tr key={rec.id}>
                       <td>
@@ -149,6 +210,9 @@ export function ConsentModulesContent({ slug: slugProp }: { slug?: string } = {}
                           ) : null}
                         </div>
                         <div className="text-muted small">Slug: {moduleSlug || "—"}</div>
+                        {!isSystem && associationCount > 0 ? (
+                          <div className="text-muted small">Associato a {associationCount} cliente/i</div>
+                        ) : null}
                       </td>
                       <td>
                         <span className="badge text-bg-light border consent-module-type-badge">{typeLabel}</span>
@@ -173,13 +237,14 @@ export function ConsentModulesContent({ slug: slugProp }: { slug?: string } = {}
                               Protetto
                             </button>
                           ) : (
-                            <a
-                              className="btn btn-sm btn-outline-danger"
-                              href={href(`&action=delete&id=${rec.id}`)}
+                            <button
+                              className="btn btn-sm btn-outline-danger js-consent-module-delete"
+                              type="button"
+                              onClick={() => setDeleteTarget({ id: rec.id, name: String(rec.title ?? "questo modulo").trim(), associationCount })}
                             >
                               <i className="bi bi-trash me-1" />
                               Elimina
-                            </a>
+                            </button>
                           )}
                         </div>
                       </td>
@@ -192,33 +257,43 @@ export function ConsentModulesContent({ slug: slugProp }: { slug?: string } = {}
         </div>
       </div>
 
-      <div className="modal fade" id="consentModuleDeleteModal" tabIndex={-1} aria-hidden="true">
-        <div className="modal-dialog modal-dialog-centered">
-          <div className="modal-content">
-            <div className="modal-header">
-              <h2 className="modal-title fs-5">Conferma eliminazione modulo</h2>
-              <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Chiudi" />
-            </div>
-            <div className="modal-body">
-              <div className="fw-semibold mb-2" id="consentModuleDeleteTitle">
-                Eliminare questo modulo consenso?
+      {/* Modale conferma eliminazione (consentModuleDeleteModal + consent_modules.js) */}
+      {deleteTarget ? (
+        <div className="modal fade show d-block" style={{ background: "rgba(0,0,0,.5)" }} onClick={() => setDeleteTarget(null)}>
+          <div className="modal-dialog modal-dialog-centered" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-content">
+              <div className="modal-header">
+                <h2 className="modal-title fs-5">Conferma eliminazione modulo</h2>
+                <button type="button" className="btn-close" aria-label="Chiudi" onClick={() => setDeleteTarget(null)} />
               </div>
-              <div className="text-muted small" id="consentModuleDeleteBody">
-                Questa operazione e definitiva.
+              <div className="modal-body">
+                <div className="fw-semibold mb-2" id="consentModuleDeleteTitle">
+                  Eliminare il modulo &quot;{deleteTarget.name}&quot;?
+                </div>
+                <div className="text-muted small" id="consentModuleDeleteBody">
+                  {deleteTarget.associationCount > 0 ? (
+                    <>
+                      Questo modulo e associato a <strong>{deleteTarget.associationCount} cliente/i</strong>.<br />
+                      Se prosegui, saranno rimosse le associazioni non firmate. Se esistono PDF firmati, l&apos;eliminazione verra bloccata per conservare lo storico.
+                    </>
+                  ) : (
+                    "Questa operazione eliminera definitivamente il modulo consenso selezionato."
+                  )}
+                </div>
               </div>
-            </div>
-            <div className="modal-footer">
-              <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal">
-                Annulla
-              </button>
-              <a href="#" className="btn btn-danger" id="consentModuleDeleteConfirm">
-                <i className="bi bi-trash me-1" />
-                Elimina definitivamente
-              </a>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-outline-secondary" onClick={() => setDeleteTarget(null)}>
+                  Annulla
+                </button>
+                <button type="button" className="btn btn-danger" id="consentModuleDeleteConfirm" disabled={deleting} onClick={confirmDelete}>
+                  <i className="bi bi-trash me-1" />
+                  Elimina definitivamente
+                </button>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }

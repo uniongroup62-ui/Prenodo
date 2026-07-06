@@ -2,7 +2,16 @@ import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import { currentManageSession } from "@/lib/manage-auth";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { listDbConfigModule, toggleDbConfigRecord, touchDbConfigModule } from "@/lib/db-repositories";
-import { deleteManageConsentModule, getManageConsentModule, saveManageConsentModule } from "@/lib/manage-consent-modules";
+import {
+  buildConsentModulePreviewPdf,
+  consentModuleAvailableVariables,
+  consentModuleSystemPreviewText,
+  deleteManageConsentModule,
+  ensureSystemGdprModule,
+  getManageConsentModule,
+  listConsentModuleAssociationCounts,
+  saveManageConsentModule,
+} from "@/lib/manage-consent-modules";
 import { applyExistingPreorders, applyExistingPrepaids, getManagePosSettings, saveManagePosSettings } from "@/lib/manage-pos-settings";
 import {
   getFidelityMembershipSettings,
@@ -52,9 +61,32 @@ export async function GET(request: Request) {
     if (moduleId === "consent_modules" && url.searchParams.get("action") === "get") {
       const recordId = parseInteger(url.searchParams.get("id"), 0);
       if (recordId <= 0) return jsonError("ID modulo mancante.");
+      await ensureSystemGdprModule(tenantSlug).catch(() => undefined);
       const consentModule = await getManageConsentModule(tenantSlug, recordId);
       if (!consentModule) return jsonError("Modulo consenso non trovato.", 404);
-      return Response.json({ ok: true, source: "consent_modules?action=get", sourceMode: "database", consentModule });
+      return Response.json({
+        ok: true,
+        source: "consent_modules?action=get",
+        sourceMode: "database",
+        consentModule: { ...consentModule, systemPreviewText: consentModuleSystemPreviewText(consentModule) },
+        availableVariables: consentModuleAvailableVariables(),
+      });
+    }
+
+    // Lista Moduli consenso: come consent_modules.php la pagina garantisce il
+    // modulo di sistema (consent_module_ensure_system_gdpr) e mostra
+    // 'Associato a N cliente/i' per i moduli non di sistema.
+    if (moduleId === "consent_modules") {
+      await ensureSystemGdprModule(tenantSlug).catch(() => undefined);
+      const moduleState = await listDbConfigModule(moduleId, tenantSlug);
+      return Response.json({
+        ok: true,
+        source: `app/pages/${moduleState.source}`,
+        sourceMode: "database",
+        module: moduleState,
+        records: moduleState.records,
+        associationCounts: await listConsentModuleAssociationCounts(tenantSlug),
+      });
     }
 
     const featureGetter = FEATURE_SETTINGS_GET[moduleId];
@@ -138,6 +170,19 @@ export async function POST(request: Request) {
     // _mode=save_module / action=delete). Backed by the dedicated reader/saver
     // over the consent_modules table; the generic config listing reflects the
     // change on the next list load.
+    // Anteprima PDF del template (consent_modules.php preview=pdf): accetta i
+    // valori NON salvati del form e streamma il PDF con i dati demo legacy.
+    if (moduleId === "consent_modules" && action === "preview_pdf") {
+      const pdf = await buildConsentModulePreviewPdf(tenantSlug, body);
+      return new Response(new Uint8Array(pdf.bytes), {
+        headers: {
+          "Content-Type": "application/pdf",
+          "Content-Disposition": `inline; filename="${pdf.filename}"`,
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
     if (moduleId === "consent_modules" && (action === "save" || action === "save_module")) {
       const consentModule = await saveManageConsentModule(tenantSlug, body);
       const moduleState = await listDbConfigModule(moduleId, tenantSlug);

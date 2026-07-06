@@ -3,6 +3,16 @@ import "server-only";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { parseInteger } from "@/lib/api-utils";
 import { columnExists, dbQuery, quoteIdentifier, tenantDelete, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
+import {
+  privacyConsentLabels,
+  privacyDefaultTemplate,
+  privacyPdfSafeFilename,
+  privacyRenderTemplateText,
+  privacyTemplateBody,
+  privacyTemplateVariables,
+} from "@/lib/privacy-consent";
+import { renderPrivacyPdf } from "@/lib/privacy-pdf";
+import { consentModuleSnapshotCreate } from "@/lib/consent-records";
 
 // DB-backed port of the consent-module editor save/get/delete from
 // app/pages/consent_modules.php + app/lib/ConsentModules.php. The list itself is
@@ -167,6 +177,148 @@ export async function getManageConsentModule(slug: string, moduleId: number): Pr
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "consent_modules", where: "id=?", params: [moduleId], limit: 1 }).catch(() => []);
   if (!rows[0]) return null;
   return mapModule(rows[0], await countAssociations(slug, moduleId));
+}
+
+// consent_module_ensure_system_gdpr: il modulo di sistema 'PDF privacy GDPR'
+// esiste sempre (creato al primo accesso con il template del tenant) e i suoi
+// campi chiave vengono riparati se vuoti/divergenti.
+export async function ensureSystemGdprModule(slug: string): Promise<void> {
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "consent_modules", where: "system_key='privacy_gdpr'", limit: 1 }).catch(() => []);
+  const row = rows[0];
+  if (!row) {
+    const bizRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "*", orderBy: "id ASC", limit: 1 }).catch(() => []);
+    const legacyTemplate = bizRows[0] ? await privacyTemplateBody(slug, bizRows[0]).catch(() => privacyDefaultTemplate()) : privacyDefaultTemplate();
+    const table = await tenantTable(slug, "consent_modules");
+    await tenantInsert(table, {
+      system_key: "privacy_gdpr",
+      slug: SYSTEM_SLUG,
+      name: "PDF privacy GDPR",
+      type: "privacy_gdpr",
+      body_template: legacyTemplate,
+      footer_mode: "gdpr_consents",
+      footer_title: "Consenso dell'interessato",
+      is_system: 1,
+      is_active: 1,
+      sort_order: 0,
+    });
+    return;
+  }
+  const values: Record<string, unknown> = {};
+  if (String(row.slug ?? "").trim() === "") values.slug = SYSTEM_SLUG;
+  if (String(row.name ?? "").trim() === "") values.name = "PDF privacy GDPR";
+  if (String(row.type ?? "").trim() !== "privacy_gdpr") values.type = "privacy_gdpr";
+  if (Number(row.is_system ?? 0) !== 1) values.is_system = 1;
+  if (String(row.footer_mode ?? "").trim() === "") values.footer_mode = "gdpr_consents";
+  if (String(row.footer_title ?? "").trim() === "") values.footer_title = "Consenso dell'interessato";
+  if (Object.keys(values).length) {
+    await tenantUpdate({ slug, table: "consent_modules", id: Number(row.id), values }).catch(() => undefined);
+  }
+}
+
+// Conteggi 'Associato a N cliente/i' per la lista (consent_module_count_associations).
+export async function listConsentModuleAssociationCounts(slug: string): Promise<Record<number, number>> {
+  const table = await tenantTable(slug, "client_consent_records").catch(() => null);
+  if (!table) return {};
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (table.mode === "shared" && (await columnExists(table.name, "tenant_id"))) {
+    clauses.push("tenant_id=?");
+    params.push(table.tenantId ?? 0);
+  }
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT module_id, COUNT(*) AS c FROM ${quoteIdentifier(table.name)}${clauses.length ? ` WHERE ${clauses.join(" AND ")}` : ""} GROUP BY module_id`,
+    params,
+  ).catch(() => []);
+  const out: Record<number, number> = {};
+  for (const row of rows) out[Number(row.module_id ?? 0)] = Number(row.c ?? 0) || 0;
+  return out;
+}
+
+// consent_module_system_preview_text: la "Chiusura automatica del PDF" della
+// colonna destra dell'editor.
+export function consentModuleSystemPreviewText(consentModule: { footerMode: string }): string {
+  if (consentModule.footerMode === "gdpr_consents") {
+    const rows = Object.values(privacyConsentLabels()).map((label) => `[ ] ${label}`);
+    rows.push("Data: {{data}}", "Firma cliente: ____________________________");
+    return rows.join("\n");
+  }
+  return ["Data: {{data}}", "Firma cliente: ____________________________"].join("\n");
+}
+
+// consent_module_available_variables (privacy_consent_available_variables).
+export function consentModuleAvailableVariables(): Array<{ variable: string; description: string }> {
+  return [
+    { variable: "{{nome}}", description: "Nome del cliente" },
+    { variable: "{{cognome}}", description: "Cognome del cliente" },
+    { variable: "{{cliente}}", description: "Nome completo del cliente" },
+    { variable: "{{email}}", description: "Email del cliente" },
+    { variable: "{{telefono}}", description: "Telefono del cliente" },
+    { variable: "{{data}}", description: "Data documento" },
+    { variable: "{{dati_sede}}", description: "Dati operativi della sede collegata" },
+    { variable: "{{Dati anagrafici}}", description: "Dati anagrafici dell'attivita (ragione sociale, P. IVA, CF, SDI, PEC, indirizzo e contatti)" },
+  ];
+}
+
+// Port dell'anteprima PDF (consent_modules.php preview=pdf): dati demo Mario
+// Rossi, fallback del blocco sede/anagrafica quando le variabili sono vuote,
+// snapshot + render con footer del tipo. Accetta i valori NON salvati del form.
+export async function buildConsentModulePreviewPdf(
+  slug: string,
+  body: Record<string, string>,
+): Promise<{ bytes: Buffer; filename: string }> {
+  const id = parseInteger(body.id, 0);
+  const existing = id > 0 ? await getManageConsentModule(slug, id) : null;
+
+  let type = String(body.type ?? existing?.type ?? "informed_consent").trim();
+  if (type !== "privacy_gdpr") type = "informed_consent";
+  const isSystem = (existing?.isSystem ?? false) || type === "privacy_gdpr";
+  if (isSystem) type = "privacy_gdpr";
+  const meta = typeMeta(type);
+
+  let name = String(body.name ?? existing?.name ?? "").trim() || "Nuovo modulo consenso";
+  let bodyTemplate = String(body.body_template ?? "").replace(/\r\n|\r/g, "\n").trim();
+  if (bodyTemplate === "") {
+    bodyTemplate = String(existing?.bodyTemplate ?? "").trim()
+      || (type === "privacy_gdpr" ? privacyDefaultTemplate() : DEFAULT_INFORMED_TEMPLATE);
+  }
+  if (isSystem) name = "PDF privacy GDPR";
+
+  const previewClient = {
+    first_name: "Mario",
+    last_name: "Rossi",
+    email: "mario.rossi@example.com",
+    phone: "+39 333 1234567",
+  } as RowDataPacket;
+  const bizRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "*", orderBy: "id ASC", limit: 1 }).catch(() => []);
+  const biz = (bizRows[0] ?? {}) as RowDataPacket;
+
+  const moduleInfo = {
+    id: existing?.id ?? 0,
+    name,
+    slug: existing?.slug ?? "",
+    type,
+    footerMode: meta.footerMode,
+    footerTitle: meta.footerTitle,
+    isActive: true,
+    bodyTemplate,
+  };
+  const snapshot = consentModuleSnapshotCreate(moduleInfo, previewClient, biz);
+
+  const previewFallbackBusinessBlock = [
+    "Beauty Suite S.r.l.",
+    "P. IVA: IT12345678901 | Codice Fiscale: RSSMRA80A01F205X | SDI: ABCD123 | PEC: info@pec.example.com",
+    "Via Roma 1 - 20100 Milano (MI - Lombardia)",
+    "Tel: 02 000000 | Email: info@example.com | Sito web: www.example.com",
+  ].join("\n");
+  const vars = privacyTemplateVariables(previewClient, biz, snapshot.document_date_display);
+  for (const key of ["{{dati_sede}}", "{{dati anagrafici}}", "{{dati_anagrafici}}", "{{Dati anagrafici}}"]) {
+    if (String(vars[key] ?? "").trim() === "") vars[key] = previewFallbackBusinessBlock;
+  }
+  snapshot.body_text = privacyRenderTemplateText(bodyTemplate, vars);
+  snapshot.filename = privacyPdfSafeFilename(String(snapshot.filename ?? "ANTEPRIMA_MODULO.pdf"));
+
+  const bytes = await renderPrivacyPdf(snapshot, { footerMode: meta.footerMode, footerTitle: meta.footerTitle });
+  return { bytes, filename: snapshot.filename };
 }
 
 // Port of consent_module_save + consent_module_validate_payload. id<=0 creates

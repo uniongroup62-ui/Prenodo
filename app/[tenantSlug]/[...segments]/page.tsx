@@ -521,10 +521,21 @@ export default async function TenantPage({
   // Faithful consent-module NEW / EDIT editor. The consent_modules list links
   // to index.php?page=consent_modules&action=new|edit; route those to the
   // faithful editor (instead of the Tailwind ManagementApp fallback).
+  // initialQuery = flash del redirect legacy post-save.
   if (page === "consent_modules" && (query.action === "new" || query.action === "edit")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
-        <ConsentModuleFormContent />
+        <ConsentModuleFormContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
+      </ManageShell>
+    );
+  }
+
+  // Lista Moduli consenso (consent_modules.php action=list): flash ?msg/?err
+  // dai redirect legacy (salvato/eliminato/non trovato).
+  if (page === "consent_modules") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <ConsentModulesContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
       </ManageShell>
     );
   }

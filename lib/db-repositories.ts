@@ -20793,7 +20793,8 @@ const configDefinitions: Record<string, ConfigDef> = {
     detailColumns: ["type", "slug"],
     valueColumn: "footer_mode",
     activeColumn: "is_active",
-    orderBy: "sort_order ASC, name ASC",
+    // Ordine legacy consent_modules_all: il modulo di sistema sempre in cima.
+    orderBy: "is_system DESC, sort_order ASC, name ASC, id ASC",
   },
   resources: {
     title: "Risorse",

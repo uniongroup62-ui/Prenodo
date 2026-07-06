@@ -1,29 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // Faithful port of the PHP consent-module NEW / EDIT editor
-// (app/pages/consent_modules.php, action=new|edit). The core form mirrors the
-// legacy markup:
-//   - Nome modulo (name; readonly on the system PDF privacy GDPR module)
-//   - Stato (is_active switch; the system module is "Sempre attivo")
-//   - Contenuto modulo (body_template textarea)
-//   - hidden type (privacy_gdpr for the system module, else informed_consent)
-// Submits to /api/manage/configuration?module=consent_modules (action=save_module;
-// create when id=0, update with id). System module stays type=privacy_gdpr,
-// active, and is not deletable.
-//
-// TODO: the legacy editor also offers a server-rendered PDF PREVIEW (preview=pdf
-// into an <iframe>), the "Chiusura automatica del PDF" footer preview, and the
-// "Variabili disponibili" reference panel. Those depend on the PHP PDF generator
-// (consent_module_system_preview_text / privacy PDF) which is not part of this
-// migration slice, so the right-column preview/variables widgets are not ported.
+// (app/pages/consent_modules.php, action=new|edit + consent_modules.js):
+// page header SEMPRE 'Moduli consenso' con [Lista moduli][Nuovo modulo],
+// flash ?msg dei redirect legacy, form (Nome/Stato/Contenuto) e la colonna
+// destra legacy: 'Chiusura automatica del PDF', 'Anteprima contenuto' (modale
+// iframe con il PDF demo renderizzato server-side via action=preview_pdf),
+// 'Variabili disponibili' e 'Workflow cliente'. Delete con il modale legacy.
+// Save: redirect a action=edit&id=N&msg='Modulo consenso salvato con successo.'
 
 const TYPE_LABELS: Record<string, string> = {
   privacy_gdpr: "PDF privacy GDPR",
   informed_consent: "Consenso informato",
 };
 
+// consent_module_default_template('informed_consent') verbatim.
 const DEFAULT_INFORMED_TEMPLATE = [
   "MODULO DI CONSENSO INFORMATO",
   "Cliente: {{cliente}}",
@@ -48,6 +41,21 @@ const DEFAULT_INFORMED_TEMPLATE = [
   "Dichiaro di aver letto e compreso le informazioni sopra riportate, di aver potuto fare domande e di prestare il mio consenso al trattamento descritto.",
 ].join("\n");
 
+// consent_module_system_preview_text per i moduli non GDPR (statico).
+const SIGNATURE_ONLY_PREVIEW = ["Data: {{data}}", "Firma cliente: ____________________________"].join("\n");
+
+// privacy_consent_available_variables verbatim.
+const AVAILABLE_VARIABLES: Array<{ variable: string; description: string }> = [
+  { variable: "{{nome}}", description: "Nome del cliente" },
+  { variable: "{{cognome}}", description: "Cognome del cliente" },
+  { variable: "{{cliente}}", description: "Nome completo del cliente" },
+  { variable: "{{email}}", description: "Email del cliente" },
+  { variable: "{{telefono}}", description: "Telefono del cliente" },
+  { variable: "{{data}}", description: "Data documento" },
+  { variable: "{{dati_sede}}", description: "Dati operativi della sede collegata" },
+  { variable: "{{Dati anagrafici}}", description: "Dati anagrafici dell'attivita (ragione sociale, P. IVA, CF, SDI, PEC, indirizzo e contatti)" },
+];
+
 type ConsentForm = {
   id: number;
   name: string;
@@ -56,6 +64,7 @@ type ConsentForm = {
   is_active: boolean;
   is_system: boolean;
   association_count: number;
+  system_preview_text: string;
 };
 
 function tenantSlug(): string {
@@ -66,16 +75,20 @@ function tenantSlug(): string {
 function emptyForm(): ConsentForm {
   return {
     id: 0,
-    name: "",
+    name: "Nuovo modulo consenso",
     type: "informed_consent",
     body_template: DEFAULT_INFORMED_TEMPLATE,
     is_active: true,
     is_system: false,
     association_count: 0,
+    system_preview_text: SIGNATURE_ONLY_PREVIEW,
   };
 }
 
-export function ConsentModuleFormContent({ slug: slugProp }: { slug?: string } = {}) {
+export function ConsentModuleFormContent({
+  slug: slugProp,
+  initialQuery,
+}: { slug?: string; initialQuery?: { msg?: string; err?: string } } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
@@ -83,6 +96,14 @@ export function ConsentModuleFormContent({ slug: slugProp }: { slug?: string } =
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [flashMsg] = useState(() => String(initialQuery?.msg ?? ""));
+  // Modale anteprima PDF (consentTemplatePreviewModal): blob URL nell'iframe.
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState("");
+  const previewUrlRef = useRef("");
+  // Modale conferma eliminazione (consent_modules.js).
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -108,36 +129,34 @@ export function ConsentModuleFormContent({ slug: slugProp }: { slug?: string } =
             is_active: Boolean(m.isActive),
             is_system: Boolean(m.isSystem),
             association_count: Number(m.associationCount ?? 0) || 0,
+            system_preview_text: String(m.systemPreviewText ?? SIGNATURE_ONLY_PREVIEW),
           });
         })
         .catch(() => setError("Errore nel caricamento del modulo."))
         .finally(() => setLoading(false));
     } else {
-      setLoading(false);
+      // Microtask: niente setState sincrono nell'effect.
+      void Promise.resolve().then(() => setLoading(false));
     }
   }, [slug]);
+
+  useEffect(() => {
+    return () => {
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    };
+  }, []);
 
   function set<K extends keyof ConsentForm>(key: K, value: ConsentForm[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
-  function backToList() {
-    window.location.href = `/${encodeURIComponent(slug)}/consent_modules`;
+  function listHref(suffix = ""): string {
+    return `/${encodeURIComponent(slug)}/consent_modules${suffix}`;
   }
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError("");
-
-    if (!form.is_system && form.name.trim() === "") {
-      setError("Inserisci il nome del modulo.");
-      return;
-    }
-    if (form.body_template.trim() === "") {
-      setError("Il template del modulo non puo essere vuoto.");
-      return;
-    }
-
     setSaving(true);
     try {
       const payload: Record<string, unknown> = {
@@ -156,21 +175,24 @@ export function ConsentModuleFormContent({ slug: slugProp }: { slug?: string } =
       });
       const j = await res.json();
       if (!res.ok || !j.ok) {
-        setError(String(j.error ?? "Errore nel salvataggio del modulo."));
+        // Come il legacy: errore inline, si resta sul form coi valori postati.
+        setError(String(j.error ?? "Errore configurazione."));
         setSaving(false);
+        if (typeof window !== "undefined") window.scrollTo({ top: 0 });
         return;
       }
-      backToList();
+      // Redirect legacy: si resta sull'EDIT del modulo col flash verde.
+      const newId = Number(j.consentModule?.id ?? form.id);
+      window.location.assign(listHref(`?action=edit&id=${newId}&msg=${encodeURIComponent("Modulo consenso salvato con successo.")}`));
     } catch {
-      setError("Errore nel salvataggio del modulo.");
+      setError("Errore configurazione.");
       setSaving(false);
     }
   }
 
-  async function onDelete() {
-    if (form.is_system || form.id <= 0) return;
-    if (typeof window !== "undefined" && !window.confirm("Eliminare questo modulo consenso? Questa operazione e definitiva.")) return;
-    setError("");
+  async function confirmDelete() {
+    if (form.is_system || form.id <= 0 || deleting) return;
+    setDeleting(true);
     try {
       const res = await fetch(`/api/manage/configuration?module=consent_modules&slug=${encodeURIComponent(slug)}`, {
         method: "POST",
@@ -179,12 +201,56 @@ export function ConsentModuleFormContent({ slug: slugProp }: { slug?: string } =
       });
       const j = await res.json();
       if (!res.ok || !j.ok) {
-        setError(String(j.error ?? "Errore nell'eliminazione del modulo."));
+        setDeleteOpen(false);
+        setDeleting(false);
+        setError(String(j.error ?? "Errore configurazione."));
+        if (typeof window !== "undefined") window.scrollTo({ top: 0 });
         return;
       }
-      backToList();
+      const removed = Number(j.associationCount ?? 0);
+      const message = removed > 0
+        ? `Modulo consenso eliminato. Rimosse anche ${removed} associazione/i non firmate dai clienti.`
+        : "Modulo consenso eliminato.";
+      window.location.assign(listHref(`?msg=${encodeURIComponent(message)}`));
     } catch {
-      setError("Errore nell'eliminazione del modulo.");
+      setDeleteOpen(false);
+      setDeleting(false);
+      setError("Errore configurazione.");
+    }
+  }
+
+  // Bottone 'Apri anteprima PDF' (consent_modules.js): manda i valori CORRENTI
+  // del form al renderer server e mostra il PDF nell'iframe del modale.
+  async function openPreview() {
+    setPreviewOpen(true);
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = "";
+    }
+    setPreviewUrl("");
+    try {
+      const res = await fetch(`/api/manage/configuration?module=consent_modules&slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+        body: JSON.stringify({
+          module: "consent_modules",
+          action: "preview_pdf",
+          id: String(form.id),
+          type: form.type,
+          name: form.name,
+          body_template: form.body_template,
+          is_active: form.is_active ? "1" : "0",
+        }),
+      });
+      if (!res.ok) throw new Error("preview");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      previewUrlRef.current = url;
+      setPreviewUrl(url);
+    } catch {
+      setPreviewOpen(false);
+      setError("Errore configurazione.");
+      if (typeof window !== "undefined") window.scrollTo({ top: 0 });
     }
   }
 
@@ -205,18 +271,41 @@ export function ConsentModuleFormContent({ slug: slugProp }: { slug?: string } =
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Impostazioni</div>
-          <h1 className="bs-page-title">{moduleTitle}</h1>
-          <div className="bs-page-subtitle">{moduleSubtitle}</div>
+          <h1 className="bs-page-title">Moduli consenso</h1>
+          <div className="bs-page-subtitle">
+            Gestisci il modulo PDF privacy GDPR e i moduli aggiuntivi per consensi informati e firme cliente.
+          </div>
         </div>
         <div className="bs-page-actions">
-          <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/consent_modules`}>
-            <i className="bi bi-arrow-left me-1" />
-            Lista moduli
-          </a>
+          <div className="d-flex gap-2 flex-wrap">
+            <a className="btn btn-outline-secondary" href={listHref()}>
+              <i className="bi bi-arrow-left me-1" />
+              Lista moduli
+            </a>
+            <a className="btn btn-primary" href={listHref("?action=new")}>
+              <i className="bi bi-plus-circle me-1" />
+              Nuovo modulo
+            </a>
+          </div>
         </div>
       </div>
 
-      {error ? <div className="alert alert-danger">{error}</div> : null}
+      {flashMsg ? (
+        <div className="alert alert-success d-flex align-items-start gap-2">
+          <div>
+            <i className="bi bi-info-circle" />
+          </div>
+          <div>{flashMsg}</div>
+        </div>
+      ) : null}
+      {error ? (
+        <div className="alert alert-danger d-flex align-items-start gap-2">
+          <div>
+            <i className="bi bi-info-circle" />
+          </div>
+          <div>{error}</div>
+        </div>
+      ) : null}
 
       {loading ? (
         <div className="card p-3 text-muted small">Caricamento…</div>
@@ -315,12 +404,12 @@ export function ConsentModuleFormContent({ slug: slugProp }: { slug?: string } =
                 ) : null}
 
                 <div className="d-flex flex-wrap gap-2 mt-3">
-                  <button className="btn btn-primary" type="submit" disabled={saving}>
+                  <button className="btn btn-primary" disabled={saving}>
                     <i className="bi bi-check2-circle me-1" />
-                    {saving ? "Salvataggio…" : "Salva modulo"}
+                    Salva modulo
                   </button>
                   {!form.is_system && form.id > 0 ? (
-                    <button className="btn btn-outline-danger" type="button" onClick={onDelete}>
+                    <button className="btn btn-outline-danger js-consent-module-delete" type="button" onClick={() => setDeleteOpen(true)}>
                       <i className="bi bi-trash me-1" />
                       Elimina
                     </button>
@@ -331,6 +420,35 @@ export function ConsentModuleFormContent({ slug: slugProp }: { slug?: string } =
           </div>
 
           <div className="col-12 col-xl-4">
+            <div className="card p-3 mb-3">
+              <div className="fw-semibold mb-2">Chiusura automatica del PDF</div>
+              <div className="small text-muted mb-2">Questa parte viene aggiunta dal sistema e non va inserita nel template:</div>
+              <div className="consent-system-preview">{form.system_preview_text}</div>
+            </div>
+
+            <div className="card p-3 mb-3">
+              <div className="fw-semibold mb-2">Anteprima contenuto</div>
+              <div className="small text-muted mb-3">
+                Apri una preview PDF del template con dati demo. La preview include anche la sezione finale automatica.
+              </div>
+              <button className="btn btn-outline-primary" type="button" id="openConsentTemplatePreview" onClick={openPreview}>
+                <i className="bi bi-file-earmark-pdf me-1" />
+                Apri anteprima PDF
+              </button>
+            </div>
+
+            <div className="card p-3 mb-3">
+              <div className="fw-semibold mb-2">Variabili disponibili</div>
+              <div className="d-flex flex-column gap-2 small">
+                {AVAILABLE_VARIABLES.map((item) => (
+                  <div className="d-flex justify-content-between gap-3 border rounded p-2" key={item.variable}>
+                    <code>{item.variable}</code>
+                    <span className="text-muted text-end">{item.description}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
             <div className="card p-3">
               <div className="fw-semibold mb-2">Workflow cliente</div>
               <div className="small text-muted">
@@ -342,6 +460,67 @@ export function ConsentModuleFormContent({ slug: slugProp }: { slug?: string } =
           </div>
         </div>
       )}
+
+      {/* Modale anteprima PDF (consentTemplatePreviewModal) */}
+      {previewOpen ? (
+        <div className="modal fade show d-block" style={{ background: "rgba(0,0,0,.5)" }} onClick={() => setPreviewOpen(false)}>
+          <div className="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-content">
+              <div className="modal-header">
+                <h2 className="modal-title fs-5">Anteprima template PDF</h2>
+                <button type="button" className="btn-close" aria-label="Chiudi" onClick={() => setPreviewOpen(false)} />
+              </div>
+              <div className="modal-body p-0 bg-body-tertiary">
+                <iframe
+                  id="consentTemplatePreviewFrame"
+                  name="consentTemplatePreviewFrame"
+                  title="Anteprima template PDF"
+                  className="consent-template-preview-frame"
+                  src={previewUrl || "about:blank"}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Modale conferma eliminazione (consentModuleDeleteModal + consent_modules.js) */}
+      {deleteOpen ? (
+        <div className="modal fade show d-block" style={{ background: "rgba(0,0,0,.5)" }} onClick={() => setDeleteOpen(false)}>
+          <div className="modal-dialog modal-dialog-centered" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-content">
+              <div className="modal-header">
+                <h2 className="modal-title fs-5">Conferma eliminazione modulo</h2>
+                <button type="button" className="btn-close" aria-label="Chiudi" onClick={() => setDeleteOpen(false)} />
+              </div>
+              <div className="modal-body">
+                <div className="fw-semibold mb-2" id="consentModuleDeleteTitle">
+                  Eliminare il modulo &quot;{form.name.trim() || "questo modulo"}&quot;?
+                </div>
+                <div className="text-muted small" id="consentModuleDeleteBody">
+                  {form.association_count > 0 ? (
+                    <>
+                      Questo modulo e associato a <strong>{form.association_count} cliente/i</strong>.<br />
+                      Se prosegui, saranno rimosse le associazioni non firmate. Se esistono PDF firmati, l&apos;eliminazione verra bloccata per conservare lo storico.
+                    </>
+                  ) : (
+                    "Questa operazione eliminera definitivamente il modulo consenso selezionato."
+                  )}
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-outline-secondary" onClick={() => setDeleteOpen(false)}>
+                  Annulla
+                </button>
+                <button type="button" className="btn btn-danger" id="consentModuleDeleteConfirm" disabled={deleting} onClick={confirmDelete}>
+                  <i className="bi bi-trash me-1" />
+                  Elimina definitivamente
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
