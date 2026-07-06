@@ -6329,3 +6329,34 @@ Prepagati/Preordini (Totale pagato/Prenotati/Sede/Codice) non tutti mostrati;
 [LOW] messaggio landing 'no sedi' non varia per booking_public_allowed;
 lo styling delle card di sezione resta Tailwind (residuo pre-esistente).
 Refutati (2): filtro tenant e altri due presunti difetti non confermati.
+
+
+---
+
+## Hub cliente: fallback per-email al tenant corrente (2026-07-06)
+
+Chiuso il residuo [MEDIUM] "appuntamenti/preventivi visibili solo per i tenant
+COLLEGATI". Il legacy (adoptGlobalSession + my_appointments/my_quotes) risolve il
+cliente PER EMAIL presso il tenant corrente anche senza link, quindi un cliente
+creato offline (staff/walk-in) che poi si registra sul marketplace vede comunque
+i suoi appuntamenti/preventivi presso quel centro.
+
+- listPublicCustomerAppointments/Quotes accettano extraTenantSlug/extraTenantName:
+  se il tenant corrente non è tra le attività collegate, viene aggiunto come
+  attività "sintetica" (clientId=0) così resta solo il ramo email della query
+  (scoping tenant_id invariato — nessun leak cross-tenant).
+- /api/account (appointments/quotes + refresh di cancel/quote_decision) passa
+  body.tenant/tenantName; PerTenantHub li invia in ogni fetch di sezione.
+  L'account CENTRALE (/account/*) non usa queste azioni, quindi resta aggregato.
+
+Verifica live (ZZ: account marketplace + cliente offline stessa email SENZA link
++ appuntamento, mint→test→cleanup→RESTORE): POST appointments SENZA tenant → 0
+(bug); CON tenant → 1 (ZZFB0001, "In attesa", 16/07/2026); l'hub ?my=1 lo mostra
+(Playwright). Residue DB = 0. typecheck/lint puliti.
+
+Residuo ancora aperto: deep-link 'Prenota' book_omaggio nella sezione Omaggi —
+richiede il port del sottosistema reward-item + redemption/riserve (Gifts::
+instanceRewardItemsState), e il cliente di riferimento (client 9) NON ha gift
+instances, quindi un port sarebbe non verificabile su dati reali. La rotta di
+consumo book_omaggio è già pronta (gate + wizard + re-validazione server);
+manca solo l'entry-point, deliberatamente rimandato per mancanza di dati di test.

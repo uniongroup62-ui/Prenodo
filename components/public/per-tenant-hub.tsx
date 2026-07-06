@@ -231,7 +231,9 @@ export function PerTenantHub({
       void fetch("/api/account", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
+        // tenant/tenantName: l'API rende visibili appuntamenti/preventivi del
+        // tenant corrente anche per email (senza link), come il legacy.
+        body: JSON.stringify({ action, tenant: slug, tenantName }),
       })
         .then((r) => r.json() as Promise<AccountResponse>)
         .then((data) => {
@@ -275,7 +277,7 @@ export function PerTenantHub({
       default:
         break;
     }
-  }, [user, section, slug, appointments, packages, quotes, credit, giftcards, prepaids, gifts, fidelity, preorders]);
+  }, [user, section, slug, tenantName, appointments, packages, quotes, credit, giftcards, prepaids, gifts, fidelity, preorders]);
 
   // Chiusura del menu account (click fuori / Escape).
   useEffect(() => {
@@ -317,7 +319,7 @@ export function PerTenantHub({
       const res = await fetch("/api/account", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "cancel_appointment", tenant_slug: appt.tenantSlug, appointment_id: appt.id }),
+        body: JSON.stringify({ action: "cancel_appointment", tenant_slug: appt.tenantSlug, appointment_id: appt.id, tenantName }),
       });
       const data = (await res.json()) as AccountResponse;
       if (!data.ok) {
@@ -343,7 +345,7 @@ export function PerTenantHub({
       const res = await fetch("/api/account", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "quote_decision", tenant_slug: quote.tenantSlug, quote_id: quote.id, decision }),
+        body: JSON.stringify({ action: "quote_decision", tenant_slug: quote.tenantSlug, quote_id: quote.id, decision, tenantName }),
       });
       const data = (await res.json()) as AccountResponse;
       if (!data.ok) {

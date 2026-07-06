@@ -188,11 +188,36 @@ async function appointmentCustomerDetail(slug: string, appt: RowDataPacket): Pro
   return { services, operators, locationName, totalPrice };
 }
 
+// Attività "sintetica" per il tenant CORRENTE dell'hub quando l'account non ha
+// ancora un link (public_customer_tenant_links) verso quel centro: il legacy
+// (adoptGlobalSession/my_appointments) risolve comunque il cliente PER EMAIL
+// presso il tenant corrente, quindi appuntamenti/preventivi restano visibili
+// anche per i clienti creati offline (staff/walk-in) senza link. clientId=0 →
+// nella query resta solo il ramo email.
+function syntheticCurrentTenantActivity(tenantSlug: string, tenantName: string): PublicCustomerActivity {
+  const name = tenantName.trim() || tenantSlug;
+  return {
+    tenantSlug, tenantName: name, title: name, subtitle: "", city: "", province: "",
+    address: "", phone: "", email: "", bookingUrl: "", linkedAt: null, lastSeenAt: null,
+    clientId: 0, referenceLocationId: 0, locations: [],
+  };
+}
+
+// Aggiunge il tenant corrente alla lista delle attività se non già collegato,
+// così il ramo email lo interroga (parità con adoptGlobalSession del legacy).
+function withCurrentTenant(activities: PublicCustomerActivity[], extraTenantSlug: string, extraTenantName: string): PublicCustomerActivity[] {
+  const slugLc = String(extraTenantSlug ?? "").trim().toLowerCase();
+  if (!slugLc || activities.some((a) => a.tenantSlug === slugLc)) return activities;
+  return [...activities, syntheticCurrentTenantActivity(slugLc, String(extraTenantName ?? ""))];
+}
+
 // mode=my_appointments: the account's appointments across every linked activity
 // (per activity: client_id OR same-email clients, newest first, LIMIT 200 like
 // the legacy single-tenant query), each with the legacy payload + can_cancel.
-export async function listPublicCustomerAppointments(accountId: number, email: string): Promise<PublicCustomerAppointment[]> {
-  const activities = await publicCustomerActivities(accountId).catch(() => [] as PublicCustomerActivity[]);
+// extraTenantSlug: hub per-sede corrente (visibile per email anche senza link).
+export async function listPublicCustomerAppointments(accountId: number, email: string, extraTenantSlug = "", extraTenantName = ""): Promise<PublicCustomerAppointment[]> {
+  const linked = await publicCustomerActivities(accountId).catch(() => [] as PublicCustomerActivity[]);
+  const activities = withCurrentTenant(linked, extraTenantSlug, extraTenantName);
   const normalizedEmail = String(email ?? "").trim().toLowerCase();
   const out: PublicCustomerAppointment[] = [];
 
@@ -471,8 +496,10 @@ export type PublicCustomerQuote = {
 
 // mode=my_quotes: the linked clients' quotes (non-draft), with the legacy
 // expired override on 'sent' past valid_until and the can_respond gate.
-export async function listPublicCustomerQuotes(accountId: number, email: string): Promise<PublicCustomerQuote[]> {
-  const activities = await publicCustomerActivities(accountId).catch(() => [] as PublicCustomerActivity[]);
+// extraTenantSlug: hub per-sede corrente (visibile per email anche senza link).
+export async function listPublicCustomerQuotes(accountId: number, email: string, extraTenantSlug = "", extraTenantName = ""): Promise<PublicCustomerQuote[]> {
+  const linked = await publicCustomerActivities(accountId).catch(() => [] as PublicCustomerActivity[]);
+  const activities = withCurrentTenant(linked, extraTenantSlug, extraTenantName);
   const normalizedEmail = String(email ?? "").trim().toLowerCase();
   const today = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");

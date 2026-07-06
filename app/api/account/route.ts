@@ -188,7 +188,11 @@ export async function POST(request: Request) {
     // Area cliente — le mie prenotazioni (port of booking.php mode=my_appointments):
     // the account's appointments across every linked activity, with can_cancel.
     if (action === "appointments" || action === "my_appointments") {
-      const appointments = await listPublicCustomerAppointments(account.id, account.email);
+      // tenant/tenantName: hub per-sede corrente → appuntamenti visibili per
+      // email anche senza link (parità adoptGlobalSession legacy).
+      const hubTenant = String(body.tenant ?? "").trim().toLowerCase();
+      const hubTenantName = String(body.tenantName ?? "");
+      const appointments = await listPublicCustomerAppointments(account.id, account.email, hubTenant, hubTenantName);
       return Response.json({ ok: true, appointments });
     }
 
@@ -205,7 +209,7 @@ export async function POST(request: Request) {
         tenantSlug,
         appointmentId,
       });
-      return Response.json({ ok: true, appointments: await listPublicCustomerAppointments(account.id, account.email) });
+      return Response.json({ ok: true, appointments: await listPublicCustomerAppointments(account.id, account.email, tenantSlug, String(body.tenantName ?? "")) });
     }
 
     // I miei pacchetti (port of booking.php mode=my_packages).
@@ -237,7 +241,9 @@ export async function POST(request: Request) {
 
     // I miei preventivi (port of mode=my_quotes).
     if (action === "quotes" || action === "my_quotes") {
-      const quotes = await listPublicCustomerQuotes(account.id, account.email);
+      const hubTenant = String(body.tenant ?? "").trim().toLowerCase();
+      const hubTenantName = String(body.tenantName ?? "");
+      const quotes = await listPublicCustomerQuotes(account.id, account.email, hubTenant, hubTenantName);
       return Response.json({ ok: true, quotes });
     }
 
@@ -257,7 +263,7 @@ export async function POST(request: Request) {
         quoteId,
         decision,
       });
-      return Response.json({ ok: true, quotes: await listPublicCustomerQuotes(account.id, account.email) });
+      return Response.json({ ok: true, quotes: await listPublicCustomerQuotes(account.id, account.email, tenantSlug, String(body.tenantName ?? "")) });
     }
 
     if (action === "toggle_favorite") {
