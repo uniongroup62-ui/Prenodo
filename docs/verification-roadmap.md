@@ -6993,3 +6993,23 @@ totale € 10,80). Promo di test rimossa (residuo 0). typecheck pulito.
 RESIDUO UNICO rimasto: nota omaggio Fidelity ("Puoi ottenere in gift...") — richiede
 fidelity_gifts_json configurato + il sottosistema gift-matching (bestFidelityGift
 ForRemaining + conflitto sconto/gift), niente sul tenant. Sub-feature a sé.
+
+
+---
+
+## Nota di completamento wizard (2026-07-07)
+
+Verificato che la nota "omaggio Fidelity" ("Puoi ottenere in gift...") NON è un
+residuo di copy ma dipende dal sottosistema **Gifts v2 (istanze omaggio dinamiche
+per cliente)**: nel legacy la lista statica degli omaggi è stata RIMOSSA
+(Fidelity.php 631: "legacy list rimossa: gli omaggi sono dinamici per cliente
+(istanze v2)"); `Fidelity::settings()['gifts']` = [] e `gift_enabled =
+Gifts::hasActiveGifts()`. La nota si popola solo da `fidelityPreview.gifts`
+alimentato da Gifts v2. È quindi un SOTTOSISTEMA a sé (come GiftBox, già documentato
+come non portato), non una riga di testo aggiungibile. Resta l'unico elemento del
+wizard non portato, per dipendenza da un sottosistema maggiore non ancora migrato.
+
+Tutto il resto del wizard di prenotazione pubblica è ora portato 1:1 e verificato
+live (sede/categoria/servizi/professionista-per-servizio/data-ora/vantaggi/conferma,
+promo di catalogo, chiusure, fidelity/credito/giftcard, redeem, condizioni promo,
+slot segment-aware multi-operatore).
