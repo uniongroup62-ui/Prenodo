@@ -6720,3 +6720,20 @@ Cinque finding chiusi:
 
 Verifica live: slotDateLabel "07 luglio 2026", summary "test • 60 min", Servizi
 "test". typecheck/lint puliti.
+
+
+---
+
+## Wizard booking: testo slot vuoto/errore in loco + LOW documentati (2026-07-06)
+
+- **[LOW] verbatim-text-empty-error**: #slotEmpty ora dice "Nessuna disponibilità
+  per questo giorno." (non "per questa data") e mostra l'errore di disponibilità
+  IN LOCO ("Errore nel caricamento delle disponibilità. Ricarica la pagina.")
+  invece che nel banner globale (nuovo stato slotError).
+
+RESIDUI LOW DOCUMENTATI (non modificati, deliberati):
+- **initial-step-divergence-wizardstep**: il Next non onora ?wizard_step= — ma i
+  link del Next non emettono MAI wizard_step≠1, quindi è irraggiungibile.
+- **entry-auth-redirect-params**: il redirect al login propaga location_id +
+  next=start — miglioria additiva (preserva la sede attraverso il login), non un
+  bug; il PHP droppa location_id al guest-gate ma lo ri-onora post-login.

@@ -208,6 +208,8 @@ export function BookingFaithful({
   const [slot, setSlot] = useState("");
   const [availableSlots, setAvailableSlots] = useState<BookingSlot[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
+  // Errore disponibilità mostrato IN LOCO in #slotEmpty (non nel banner), come il legacy.
+  const [slotError, setSlotError] = useState("");
   // Ore espanse (toggle "Mostra tutti") nella vista slot raggruppata.
   const [expandedHours, setExpandedHours] = useState<Set<string>>(new Set());
   const [hold, setHold] = useState<BookingHold | null>(null);
@@ -371,14 +373,15 @@ export function BookingFaithful({
       .then((response) => response.json())
       .then((data) => {
         if (!active) return;
-        if (!data.ok) throw new Error(data.error || "Disponibilità non disponibile.");
+        if (!data.ok) throw new Error(data.error || "Errore nel caricamento delle disponibilità. Ricarica la pagina.");
         setAvailableSlots((data.slots ?? []) as BookingSlot[]);
-        setError("");
+        setSlotError("");
       })
       .catch((caught) => {
         if (active) {
           setAvailableSlots([]);
-          setError(caught instanceof Error ? caught.message : "Disponibilità non disponibile.");
+          // Errore in loco in #slotEmpty (non nel banner globale).
+          setSlotError(caught instanceof Error ? caught.message : "Errore nel caricamento delle disponibilità. Ricarica la pagina.");
         }
       })
       .finally(() => {
@@ -1576,9 +1579,9 @@ export function BookingFaithful({
                   </div>
                   <div
                     id="slotEmpty"
-                    className={`text-muted small mt-2${slotsLoading || freeSlots.length ? " d-none" : ""}`}
+                    className={`text-muted small mt-2${slotsLoading || (freeSlots.length && !slotError) ? " d-none" : ""}`}
                   >
-                    Nessuna disponibilità per questa data.
+                    {slotError || "Nessuna disponibilità per questo giorno."}
                   </div>
                 </div>
               </div>
