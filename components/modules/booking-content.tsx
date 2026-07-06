@@ -4,27 +4,17 @@ import { useEffect, useState } from "react";
 
 // Faithful port of the PHP booking settings page (app/pages/booking.php — admin
 // view, ?page=booking). Two-column layout: a settings form (choose-staff toggle,
-// customer-cancel toggle + minimum-cancel time) and a "Link prenotazione online"
-// card. Values are pre-filled from the existing DB-backed APIs:
-//   - /api/manage/configuration?module=business_profile -> "Booking staff" record
-//     drives booking_choose_staff_enabled.
-//   - /api/manage/business-settings -> business name + public booking URL.
+// customer-cancel toggle + minimum-cancel time, campi disabilitati come
+// booking.js syncCustomerCancelFields) and a "Link prenotazione online" card.
+// Prefill da /api/manage/business-settings?section=booking (businesses row);
+// save via action=booking_settings_save con flash legacy sopra l'header.
 
 function tenantSlug(): string {
   if (typeof window === "undefined") return "";
   return window.location.pathname.split("/")[1] || "";
 }
 
-type ConfigRecord = {
-  id: number;
-  module: string;
-  title: string;
-  detail: string;
-  value: string;
-  active: boolean;
-};
-
-export function BookingSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
+export function BookingSettingsContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: { msg?: string } } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
@@ -35,14 +25,17 @@ export function BookingSettingsContent({ slug: slugProp }: { slug?: string } = {
   const [cancelBeforeValue, setCancelBeforeValue] = useState("24");
   const [cancelBeforeUnit, setCancelBeforeUnit] = useState("hours");
   const [saving, setSaving] = useState(false);
-  const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  // Flash legacy: View::alert PRIMA del pageHeader; danger se il messaggio
+  // contiene 'non' o 'chiusi', altrimenti success (booking.php 8742-8744).
+  const [flash, setFlash] = useState<string>(initialQuery?.msg ?? "");
+  const flashType = flash && (flash.includes("non") || flash.includes("chiusi")) ? "danger" : "success";
 
   // Save (port of the legacy booking.php admin POST): the 4 settings land on
-  // the businesses row via action=booking_settings_save.
+  // the businesses row via action=booking_settings_save; il legacy fa redirect
+  // a ?msg=Impostazioni booking salvate con flash sopra l'header.
   async function saveSettings(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaving(true);
-    setSaveMsg(null);
     try {
       const res = await fetch(`/api/manage/business-settings?slug=${encodeURIComponent(slug)}`, {
         method: "POST",
@@ -57,7 +50,8 @@ export function BookingSettingsContent({ slug: slugProp }: { slug?: string } = {
       });
       const data = await res.json().catch(() => null) as { ok?: boolean; error?: string; message?: string; settings?: { booking_customer_cancel_before_value?: number; booking_customer_cancel_before_unit?: string } } | null;
       if (!res.ok || !data?.ok) {
-        setSaveMsg({ ok: false, text: String(data?.error || "Errore salvataggio impostazioni booking") });
+        setFlash(String(data?.error || "Errore salvataggio impostazioni booking: Operazione non riuscita (verifica schema o permessi ALTER TABLE)"));
+        window.scrollTo({ top: 0 });
         return;
       }
       // Reflect the server clamps (e.g. hours > 8760).
@@ -65,9 +59,14 @@ export function BookingSettingsContent({ slug: slugProp }: { slug?: string } = {
         setCancelBeforeValue(String(data.settings.booking_customer_cancel_before_value ?? cancelBeforeValue));
         if (data.settings.booking_customer_cancel_before_unit) setCancelBeforeUnit(data.settings.booking_customer_cancel_before_unit);
       }
-      setSaveMsg({ ok: true, text: data.message || "Impostazioni booking salvate" });
+      const msg = data.message || "Impostazioni booking salvate";
+      setFlash(msg);
+      // Deep-link come il redirect legacy index.php?page=booking&msg=...
+      window.history.replaceState(null, "", `/${encodeURIComponent(slug)}/booking?msg=${encodeURIComponent(msg)}`);
+      window.scrollTo({ top: 0 });
     } catch {
-      setSaveMsg({ ok: false, text: "Errore di rete durante il salvataggio." });
+      setFlash("Errore salvataggio impostazioni booking: errore di rete (verifica schema o permessi ALTER TABLE)");
+      window.scrollTo({ top: 0 });
     } finally {
       setSaving(false);
     }
@@ -123,6 +122,13 @@ export function BookingSettingsContent({ slug: slugProp }: { slug?: string } = {
   return (
     <div className="container-fluid">
       <link rel="stylesheet" href="/assets/css/pages/booking.css" />
+
+      {flash ? (
+        <div className={`alert alert-${flashType} d-flex align-items-start gap-2`}>
+          <div><i className="bi bi-info-circle" /></div>
+          <div>{flash}</div>
+        </div>
+      ) : null}
 
       <div className="bs-page-header">
         <div className="bs-page-heading">
@@ -189,6 +195,8 @@ export function BookingSettingsContent({ slug: slugProp }: { slug?: string } = {
                   Tempo minimo per annullare
                 </label>
                 <div className="input-group">
+                  {/* booking.js syncCustomerCancelFields: i campi del tempo
+                      minimo sono disabilitati quando l'annullamento è spento. */}
                   <input
                     className="form-control"
                     type="number"
@@ -197,6 +205,7 @@ export function BookingSettingsContent({ slug: slugProp }: { slug?: string } = {
                     name="booking_customer_cancel_before_value"
                     id="bookingCancelBeforeValue"
                     value={cancelBeforeValue}
+                    disabled={!customerCancelEnabled}
                     onChange={(e) => setCancelBeforeValue(e.target.value)}
                   />
                   <select
@@ -204,6 +213,7 @@ export function BookingSettingsContent({ slug: slugProp }: { slug?: string } = {
                     name="booking_customer_cancel_before_unit"
                     id="bookingCancelBeforeUnit"
                     value={cancelBeforeUnit}
+                    disabled={!customerCancelEnabled}
                     onChange={(e) => setCancelBeforeUnit(e.target.value)}
                   >
                     <option value="hours">Ore</option>
@@ -216,11 +226,6 @@ export function BookingSettingsContent({ slug: slugProp }: { slug?: string } = {
                 </div>
               </div>
 
-              {saveMsg ? (
-                <div className="col-12">
-                  <div className={`alert py-2 small mb-0 ${saveMsg.ok ? "alert-success" : "alert-danger"}`}>{saveMsg.text}</div>
-                </div>
-              ) : null}
               <div className="col-12 d-flex gap-2">
                 <button className="btn btn-primary btn-pill" type="submit" disabled={saving}>
                   <i className="bi bi-check2-circle me-1" />
@@ -237,7 +242,8 @@ export function BookingSettingsContent({ slug: slugProp }: { slug?: string } = {
         <div className="col-lg-5">
           <div className="card card-soft p-4">
             <div className="h6 fw-bold mb-2">Link prenotazione online</div>
-            <div className="small-muted">{businessName || "—"}</div>
+            {/* setting_get('name','La mia attività') legacy: fallback verbatim. */}
+            <div className="small-muted">{businessName || "La mia attività"}</div>
             <div className="text-muted small">Condividi questo link con i clienti per prenotare online.</div>
             <div className="mt-3 p-2 bg-light border rounded-3 booking-break-word">
               <code>{publicHref}</code>

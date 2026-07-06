@@ -145,7 +145,13 @@ export async function POST(request: Request) {
       // choose-staff step + customer cancel policy on the businesses row.
       case "booking_settings_save":
         if (!canAny(session.user.perms, ["booking.manage", "settings.general"])) return jsonError("Permesso Prenotazioni online richiesto.", 403);
-        return Response.json(await saveBookingSettings(tenantSlug, body));
+        // Wrapper errore verbatim di booking.php 2926.
+        try {
+          return Response.json(await saveBookingSettings(tenantSlug, body));
+        } catch (error) {
+          const inner = error instanceof Error ? error.message : "Operazione non riuscita.";
+          return jsonError(`Errore salvataggio impostazioni booking: ${inner} (verifica schema o permessi ALTER TABLE)`);
+        }
 
       case "location_save":
         if (!can(session.user.perms, "settings.location")) return jsonError("Permesso Sedi richiesto.", 403);

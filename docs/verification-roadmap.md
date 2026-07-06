@@ -5856,3 +5856,37 @@ Battery: e2e-reports-page.mjs 15/15 (sede default/all_locations/label,
 tipologie per nome, comparison costi+serie, deep-link SSR) + regressione
 e2e-reports.mjs 20/20, baseline CLEAN; live MySQL ripristinato (0 residui);
 114/114 marker bundle; typecheck/lint puliti.
+
+## AUDIT COMPLETO — Booking admin (booking.php manage mode) (2026-07-06)
+Verificato contro booking.php (modalità manage, righe 2860-2940 POST +
+8740-8830 markup) + booking.js (syncCustomerCancelFields) + PHP live
+(POST reale con clamp e flash, poi ripristinato). Bug reali corretti:
+- **Sidebar "Booking" apriva il wizard PUBBLICO**: la route dedicata
+  app/[tenantSlug]/booking/page.tsx rendeva sempre BookingFaithful; nel
+  legacy page=booking SENZA public=1 è la pagina ADMIN delle impostazioni
+  (requirePerm booking.manage). Ora il /slug/booking "nudo" con sessione
+  gestionale rende ManageShell+BookingSettingsContent; senza sessione →
+  redirect al login manage; i link pubblici (public=1/start/hub/confirmed/
+  mode/service_ids/location_id/book_*) continuano a servire il wizard.
+- **Campi "Tempo minimo per annullare" sempre attivi**: booking.js li
+  disabilita quando l'annullamento cliente è spento → disabled legato al
+  checkbox.
+- **Flash legacy**: il salvataggio mostrava un alert inline nel form; il
+  legacy fa redirect a ?msg=Impostazioni booking salvate con View::alert
+  SOPRA il pageHeader (danger se il msg contiene 'non'/'chiusi', quirk
+  incluso). Ora flash top + replaceState ?msg= + scroll, e deep-link ?msg=
+  letto dalla route (initialQuery) per i redirect legacy proxati.
+- **Wrapper errore verbatim**: 'Errore salvataggio impostazioni booking:
+  {inner} (verifica schema o permessi ALTER TABLE)' nella route API.
+- **Fallback nome**: card link con setting_get('name','La mia attività')
+  → 'La mia attività' invece di '—'.
+Già fedeli (confermati): clamp legacy (>=0, hours<=8760, days<=365, unit
+fallback hours), permesso booking.manage|settings.general, prefill da
+businesses, markup form (id, btn-pill, form-text con strong).
+Battery: e2e-booking-admin.mjs 9/9 (prefill, clamp/checkbox off, 401,
+flash SSR sopra header success/danger, markup, link ?public=1) + regressione
+e2e-booking-settings.mjs 12/12, RESTORE CLEAN; live PHP: POST 99999 ore →
+302 ?msg=Impostazioni booking salvate + DB 8760 + flash alert-success
+sopra bs-page-header, poi ripristinato (0/1/24/hours); wizard pubblico
+verificato raggiungibile (public=1/start/hub/book_prepaid) e /booking nudo
+anonimo → 307 login; 31/31 marker bundle; typecheck/lint puliti.

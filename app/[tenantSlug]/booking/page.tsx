@@ -1,5 +1,9 @@
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 import { BookingFaithful } from "@/components/public/booking-faithful";
+import { BookingSettingsContent } from "@/components/modules/booking-content";
+import { ManageShell } from "@/components/manage-shell";
+import { currentManageSession } from "@/lib/manage-auth";
 
 export const metadata: Metadata = {
   title: "Prenotazione online - BeautySuite",
@@ -14,6 +18,35 @@ export default async function TenantBookingPage({
 }) {
   const { tenantSlug } = await params;
   const query = (await searchParams) ?? {};
+  const qs = (key: string): string => {
+    const raw = query[key];
+    return String(Array.isArray(raw) ? raw[0] ?? "" : raw ?? "");
+  };
+
+  // Come il legacy booking.php: SENZA public=1 la pagina è l'ADMIN delle
+  // impostazioni booking (requirePerm booking.manage). I link pubblici del
+  // Next (area cliente, marketplace, hub) usano sempre parametri espliciti
+  // (public=1 / start / hub / book_*), quindi il wizard resta raggiungibile;
+  // il /slug/booking "nudo" della sidebar manage rende le impostazioni.
+  const isPublicRequest = qs("public") === "1"
+    || qs("start") !== "" || qs("hub") !== "" || qs("confirmed") !== "" || qs("mode") !== ""
+    || qs("service_ids") !== "" || qs("location_id") !== "" || qs("service_id") !== ""
+    || qs("book_package") !== "" || qs("book_prepaid") !== "" || qs("book_giftbox") !== "" || qs("book_omaggio") !== "";
+  if (!isPublicRequest) {
+    const session = await currentManageSession(tenantSlug);
+    if (session) {
+      return (
+        <ManageShell slug={tenantSlug} userName={session.user.name} currentPage="booking">
+          <BookingSettingsContent slug={tenantSlug} initialQuery={{ msg: qs("msg") || undefined }} />
+        </ManageShell>
+      );
+    }
+    // Nessuna sessione gestionale: il legacy manderebbe al login del manage.
+    // I clienti arrivano sempre con parametri pubblici, quindi qui è un
+    // operatore sloggato.
+    redirect(`/manage/login?slug=${encodeURIComponent(tenantSlug)}`);
+  }
+
   const qp = (key: string): number => {
     const raw = query[key];
     const parsed = Number.parseInt(String(Array.isArray(raw) ? raw[0] : raw ?? "0"), 10);
