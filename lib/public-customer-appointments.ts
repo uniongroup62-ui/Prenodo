@@ -952,6 +952,8 @@ const GIFT_STATE_LABELS: Record<string, string> = {
   scaduto: "Scaduto",
   annullato: "Annullato",
 };
+// Reward servizio prenotabile di un omaggio (per il deep-link book_omaggio).
+export type PublicCustomerGiftBookableService = { serviceId: number; serviceName: string; rewardItemIndex: number };
 export type PublicCustomerGift = {
   tenantSlug: string;
   tenantName: string;
@@ -959,7 +961,136 @@ export type PublicCustomerGift = {
   name: string;
   stateLabel: string;
   expiresAt: string | null;
+  // Reward di tipo servizio ancora prenotabili (residuo>0): alimentano il
+  // pulsante "Prenota" (index.php?...&book_omaggio=instanceId&service_id&reward_item_index).
+  bookableServices: PublicCustomerGiftBookableService[];
 };
+
+// Stati appuntamento "attivi" (booking_active_appointment_status_sql): una
+// riserva conta solo se legata a un appuntamento non annullato/no-show.
+const GIFT_ACTIVE_APPT_STATUSES = [
+  "pending", "scheduled", "done", "prenotato", "prenotata", "confirmed", "confermato", "confermata",
+  "approved", "booked", "in sospeso", "in attesa", "attesa", "eseguito", "eseguita", "executed",
+  "completed", "completato", "completata",
+];
+
+// Reward-item di tipo SERVIZIO di un omaggio (port di Gifts::rewardItemsFromRow
+// + normalizeRewardItems): reward_items_json se valorizzato (normalizzato e
+// re-indicizzato: reward_item_index = posizione nell'array filtrato), altrimenti
+// i campi legacy reward_type/reward_service_id (singolo item all'indice 0).
+type GiftServiceRewardItem = { rewardItemIndex: number; serviceId: number; qty: number };
+function giftServiceRewardItems(giftRow: RowDataPacket): GiftServiceRewardItem[] {
+  const raw = giftRow.reward_items_json;
+  let items: Array<Record<string, unknown>> = [];
+  if (typeof raw === "string" && raw.trim() !== "") {
+    try {
+      const decoded = JSON.parse(raw);
+      if (Array.isArray(decoded)) items = decoded.filter((x) => x && typeof x === "object") as Array<Record<string, unknown>>;
+    } catch { items = []; }
+  } else if (Array.isArray(raw)) {
+    items = raw.filter((x) => x && typeof x === "object") as Array<Record<string, unknown>>;
+  }
+  if (items.length) {
+    // Costruisce la lista normalizzata (tutti i tipi validi) per gli indici
+    // corretti, poi tiene solo i servizi mantenendo la loro posizione.
+    const full: Array<{ type: string; serviceId: number; qty: number }> = [];
+    for (const it of items) {
+      let type = String(it.type ?? it.reward_type ?? "custom").trim().toLowerCase();
+      if (type !== "service" && type !== "product" && type !== "custom") type = "custom";
+      let qty = Number(it.qty ?? it.reward_qty ?? it.quantity ?? 1);
+      if (!Number.isFinite(qty) || qty <= 0) qty = 1;
+      if (qty > 1000000) qty = 1000000;
+      if (type === "service") {
+        const sid = Number(it.service_id ?? it.reward_service_id ?? 0);
+        if (sid > 0) full.push({ type, serviceId: sid, qty });
+      } else if (type === "product") {
+        const pid = Number(it.product_id ?? it.reward_product_id ?? 0);
+        if (pid > 0) full.push({ type, serviceId: 0, qty });
+      } else {
+        const label = String(it.custom_label ?? it.reward_custom_label ?? "").trim();
+        if (label !== "") full.push({ type: "custom", serviceId: 0, qty });
+      }
+    }
+    return full
+      .map((x, i) => ({ ...x, idx: i }))
+      .filter((x) => x.type === "service" && x.serviceId > 0)
+      .map((x) => ({ rewardItemIndex: x.idx, serviceId: x.serviceId, qty: x.qty }));
+  }
+  // Fallback legacy: singolo reward all'indice 0.
+  const type = String(giftRow.reward_type ?? "custom").trim().toLowerCase();
+  if (type === "service") {
+    const sid = Number(giftRow.reward_service_id ?? 0);
+    if (sid > 0) return [{ rewardItemIndex: 0, serviceId: sid, qty: 1 }];
+  }
+  return [];
+}
+
+// Qty riscattata per reward-item di un'istanza (port di
+// redeemedRewardQtyByInstance): net delle gift_transactions redeem/cancel +
+// appointment_gift_items con redeemed_at, deduplicando gli appuntamenti già
+// coperti dalle transazioni. Tenant-scoped.
+async function giftRedeemedQtyByInstance(slug: string, instanceId: number): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const covered = new Set<string>();
+  const gt = await tenantTable(slug, "gift_transactions").catch(() => null);
+  if (gt) {
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT appointment_id, reward_item_index, service_id,
+              SUM(CASE WHEN type='redeem' THEN qty WHEN type='cancel' THEN -qty ELSE 0 END) AS net_qty,
+              SUM(CASE WHEN type IN ('redeem','cancel') THEN 1 ELSE 0 END) AS tx_count
+         FROM ${quoteIdentifier(gt.name)}
+        WHERE tenant_id = ? AND instance_id = ? AND type IN ('redeem','cancel')
+        GROUP BY appointment_id, reward_item_index, service_id`,
+      [gt.tenantId ?? 0, instanceId],
+    ).catch(() => [] as RowDataPacket[]);
+    for (const r of rows) {
+      const key = `${Number(r.reward_item_index ?? 0)}:${Number(r.service_id ?? 0)}`;
+      const apptId = Number(r.appointment_id ?? 0);
+      if (apptId > 0 && Number(r.tx_count ?? 0) > 0) covered.add(`${apptId}:${key}`);
+      const net = Number(r.net_qty ?? 0);
+      if (net > 0) out.set(key, (out.get(key) ?? 0) + net);
+    }
+  }
+  const agi = await tenantTable(slug, "appointment_gift_items").catch(() => null);
+  if (agi) {
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT appointment_id, reward_item_index, service_id, SUM(qty) AS redeemed_qty
+         FROM ${quoteIdentifier(agi.name)}
+        WHERE tenant_id = ? AND instance_id = ? AND redeemed_at IS NOT NULL
+        GROUP BY appointment_id, reward_item_index, service_id`,
+      [agi.tenantId ?? 0, instanceId],
+    ).catch(() => [] as RowDataPacket[]);
+    for (const r of rows) {
+      const net = Number(r.redeemed_qty ?? 0);
+      if (net <= 0) continue;
+      const key = `${Number(r.reward_item_index ?? 0)}:${Number(r.service_id ?? 0)}`;
+      const apptId = Number(r.appointment_id ?? 0);
+      if (apptId > 0 && covered.has(`${apptId}:${key}`)) continue;
+      out.set(key, (out.get(key) ?? 0) + net);
+    }
+  }
+  return out;
+}
+
+// Qty riservata (appuntamento attivo non ancora riscattato) di un reward-item
+// (port di booking_public_active_gift_reserved_qty). Tenant-scoped.
+async function giftReservedQty(slug: string, instanceId: number, rewardItemIndex: number, serviceId: number): Promise<number> {
+  const agi = await tenantTable(slug, "appointment_gift_items").catch(() => null);
+  const appts = await tenantTable(slug, "appointments").catch(() => null);
+  if (!agi || !appts) return 0;
+  const placeholders = GIFT_ACTIVE_APPT_STATUSES.map(() => "?").join(",");
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT COALESCE(SUM(COALESCE(agi.qty,1)),0) AS q
+       FROM ${quoteIdentifier(agi.name)} agi
+       JOIN ${quoteIdentifier(appts.name)} a ON a.id = agi.appointment_id AND a.tenant_id = agi.tenant_id
+      WHERE agi.tenant_id = ? AND agi.instance_id = ? AND agi.reward_item_index = ? AND agi.service_id = ?
+        AND agi.redeemed_at IS NULL
+        AND LOWER(TRIM(COALESCE(a.status,''))) IN (${placeholders})`,
+    [agi.tenantId ?? 0, instanceId, rewardItemIndex, serviceId, ...GIFT_ACTIVE_APPT_STATUSES],
+  ).catch(() => [] as RowDataPacket[]);
+  return Math.max(0, Number(rows[0]?.q ?? 0));
+}
+
 export async function listPublicCustomerGifts(accountId: number): Promise<PublicCustomerGift[]> {
   const activities = await publicCustomerActivities(accountId).catch(() => [] as PublicCustomerActivity[]);
   const out: PublicCustomerGift[] = [];
@@ -969,9 +1100,7 @@ export async function listPublicCustomerGifts(accountId: number): Promise<Public
     try {
       // Come Gifts::clientAvailableInstances (booking.php sezione omaggi):
       // la sezione mostra SOLO gli omaggi 'disponibile', non accumulo/
-      // riscattato/scaduto/annullato. (Residuo: il deep-link 'Prenota'
-      // book_omaggio e il badge "Prenotato" dipendono dai reward-item +
-      // riserve, non ancora portati.)
+      // riscattato/scaduto/annullato.
       const rows = await tenantSelect<RowDataPacket>({
         slug,
         table: "gift_instances",
@@ -983,21 +1112,58 @@ export async function listPublicCustomerGifts(accountId: number): Promise<Public
       }).catch(() => [] as RowDataPacket[]);
       if (!rows.length) continue;
       const giftIds = Array.from(new Set(rows.map((r) => Number(r.gift_id ?? 0)).filter((n) => n > 0)));
-      const nameById = new Map<number, string>();
+      const giftById = new Map<number, RowDataPacket>();
+      const serviceIds = new Set<number>();
       if (giftIds.length) {
         const ph = giftIds.map(() => "?").join(", ");
-        const gifts = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "id, name", where: `id IN (${ph})`, params: giftIds }).catch(() => [] as RowDataPacket[]);
-        for (const g of gifts) nameById.set(Number(g.id ?? 0), String(g.name ?? ""));
+        const gifts = await tenantSelect<RowDataPacket>({
+          slug, table: "gifts",
+          columns: "id, name, reward_type, reward_service_id, reward_items_json",
+          where: `id IN (${ph})`, params: giftIds,
+        }).catch(() => [] as RowDataPacket[]);
+        for (const g of gifts) {
+          giftById.set(Number(g.id ?? 0), g);
+          for (const item of giftServiceRewardItems(g)) serviceIds.add(item.serviceId);
+        }
+      }
+      // Nomi servizio (batch) per le etichette dei pulsanti "Prenota".
+      const serviceNameById = new Map<number, string>();
+      if (serviceIds.size) {
+        const ids = Array.from(serviceIds);
+        const ph = ids.map(() => "?").join(", ");
+        const svcs = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, name", where: `id IN (${ph})`, params: ids }).catch(() => [] as RowDataPacket[]);
+        for (const s of svcs) serviceNameById.set(Number(s.id ?? 0), String(s.name ?? "").trim());
       }
       for (const row of rows) {
         const state = String(row.state ?? "").trim().toLowerCase();
+        const instanceId = Number(row.id ?? 0);
+        const giftRow = giftById.get(Number(row.gift_id ?? 0));
+        const bookableServices: PublicCustomerGiftBookableService[] = [];
+        if (giftRow && instanceId > 0) {
+          const items = giftServiceRewardItems(giftRow);
+          if (items.length) {
+            const redeemed = await giftRedeemedQtyByInstance(slug, instanceId);
+            for (const item of items) {
+              const key = `${item.rewardItemIndex}:${item.serviceId}`;
+              const reserved = await giftReservedQty(slug, instanceId, item.rewardItemIndex, item.serviceId);
+              const remaining = item.qty - (redeemed.get(key) ?? 0) - reserved;
+              if (remaining <= 0) continue;
+              bookableServices.push({
+                serviceId: item.serviceId,
+                serviceName: serviceNameById.get(item.serviceId) || "Servizio",
+                rewardItemIndex: item.rewardItemIndex,
+              });
+            }
+          }
+        }
         out.push({
           tenantSlug: slug,
           tenantName: activity.tenantName,
-          id: Number(row.id ?? 0),
-          name: nameById.get(Number(row.gift_id ?? 0)) || "Omaggio",
+          id: instanceId,
+          name: String(giftRow?.name ?? "").trim() || "Omaggio",
           stateLabel: GIFT_STATE_LABELS[state] ?? (state || "—"),
           expiresAt: ymdLocal(row.expires_at),
+          bookableServices,
         });
       }
     } catch {

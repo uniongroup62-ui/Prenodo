@@ -6360,3 +6360,34 @@ instanceRewardItemsState), e il cliente di riferimento (client 9) NON ha gift
 instances, quindi un port sarebbe non verificabile su dati reali. La rotta di
 consumo book_omaggio è già pronta (gate + wizard + re-validazione server);
 manca solo l'entry-point, deliberatamente rimandato per mancanza di dati di test.
+
+
+---
+
+## Hub cliente: deep-link "Prenota" degli Omaggi (book_omaggio) (2026-07-06)
+
+Chiuso l'ultimo residuo MEDIUM funzionale: la sezione Omaggi ora espone il
+pulsante "Prenota" per i reward di tipo SERVIZIO ancora prenotabili, come il
+legacy (booking.php 11708-11785).
+
+- listPublicCustomerGifts calcola bookableServices per ogni omaggio 'disponibile':
+  port di Gifts::rewardItemsFromRow/normalizeRewardItems (reward_items_json o
+  fallback legacy reward_type/reward_service_id, reward_item_index = posizione
+  nell'array normalizzato) + redeemedRewardQtyByInstance (gift_transactions net
+  + appointment_gift_items redeemed, deduplicati) + booking_public_active_gift_
+  reserved_qty (appuntamenti attivi non riscattati). remaining = qty - riscattato
+  - riservato; tutte le query tenant-scoped (tenant_id, nessun leak).
+- GiftsView rende il pulsante con /<slug>/booking?book_omaggio=instanceId&
+  service_id&reward_item_index; la rotta di consumo (gate → wizard gift_redeem
+  {instance_id,reward_item_index,service_id}) era già pronta e re-valida al confirm.
+
+Verifica live (ZZ: account linkato + cliente + omaggio 'disponibile' reward
+servizio, mint→test→cleanup→RESTORE): API gifts → bookableServices
+[{serviceId:9,serviceName:'test',rewardItemIndex:0}]; hub ?gifts=1 mostra
+"Prenota" con deep-link book_omaggio=81&service_id=9&reward_item_index=0;
+visita loggata → 200 wizard (servizio prefill), anonima → 307 /account/login
+next=start. Residue DB=0. typecheck/lint puliti.
+
+Residuo residuo (badge "Prenotato" per omaggi già riservati): minore, la lista
+mostra solo i 'disponibile' e i reward riservati non espongono più il pulsante
+(reserved sottratto), quindi nessuna doppia-prenotazione offerta.

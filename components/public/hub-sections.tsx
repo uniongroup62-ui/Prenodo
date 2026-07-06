@@ -103,6 +103,7 @@ export type CustomerPrepaid = {
   expiresAt: string | null;
   statusLabel: string;
 };
+export type CustomerGiftBookableService = { serviceId: number; serviceName: string; rewardItemIndex: number };
 export type CustomerGift = {
   tenantSlug: string;
   tenantName: string;
@@ -110,6 +111,8 @@ export type CustomerGift = {
   name: string;
   stateLabel: string;
   expiresAt: string | null;
+  // Reward servizio ancora prenotabili: pulsante "Prenota" (deep-link book_omaggio).
+  bookableServices?: CustomerGiftBookableService[];
 };
 export type CustomerFidelitySection = {
   tenantSlug: string;
@@ -441,18 +444,34 @@ export function GiftsView({ items }: { items?: CustomerGift[] }) {
       <h2 className="text-2xl font-semibold">I miei omaggi</h2>
       <div className="mt-4 grid gap-3">
         {items === undefined ? <SectionLoading text="Caricamento omaggi..." /> : null}
-        {(items ?? []).map((item) => (
-          <article className="rounded-lg border border-zinc-200 p-4" key={`${item.tenantSlug}:${item.id}`}>
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-lg font-semibold">{item.name}</h3>
-              <SectionBadge label={item.stateLabel} />
-            </div>
-            <p className="mt-1 text-sm text-zinc-600">
-              {item.tenantName}
-              {item.expiresAt ? ` • Scade il ${fmtYmdShared(item.expiresAt)}` : ""}
-            </p>
-          </article>
-        ))}
+        {(items ?? []).map((item) => {
+          const bookable = item.bookableServices ?? [];
+          return (
+            <article className="rounded-lg border border-zinc-200 p-4" key={`${item.tenantSlug}:${item.id}`}>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="text-lg font-semibold">{item.name}</h3>
+                <SectionBadge label={item.stateLabel} />
+              </div>
+              <p className="mt-1 text-sm text-zinc-600">
+                {item.tenantName}
+                {item.expiresAt ? ` • Scade il ${fmtYmdShared(item.expiresAt)}` : ""}
+              </p>
+              {bookable.length ? (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {bookable.map((svc) => (
+                    <Link
+                      key={`${svc.rewardItemIndex}:${svc.serviceId}`}
+                      className="inline-flex items-center gap-1 rounded-full bg-emerald-600 px-3 py-1 text-sm font-semibold text-white hover:bg-emerald-700"
+                      href={`/${encodeURIComponent(item.tenantSlug)}/booking?book_omaggio=${item.id}&service_id=${svc.serviceId}&reward_item_index=${svc.rewardItemIndex}`}
+                    >
+                      <CalendarDays className="h-4 w-4" /> {bookable.length === 1 ? "Prenota" : `Prenota ${svc.serviceName}`}
+                    </Link>
+                  ))}
+                </div>
+              ) : null}
+            </article>
+          );
+        })}
         {items !== undefined && !items.length ? (
           <EmptyState icon={Gift} title="Nessun omaggio" text="Gli omaggi maturati nei centri collegati appariranno qui." />
         ) : null}
