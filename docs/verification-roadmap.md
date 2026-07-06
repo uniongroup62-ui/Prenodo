@@ -6163,3 +6163,23 @@ Battery: e2e-marketplace-layout.mjs 3/3 (parità larghezze) + regressioni
 e2e-marketplace 28/28, e2e-account-faithful 15/15, e2e-public-area 14/14,
 e2e-booking-marketplace 26/26 + 100/100 e 46/46 marker; typecheck pulito;
 manage login/app verificati non regrediti (usano wrapper propri).
+
+## MARKETPLACE — OTTAVA PASSATA: freccia .salon-action-arrow scentrata (line-height) (2026-07-06)
+L'utente ha notato che la freccia circolare a destra di "Servizi" non era
+centrata nel cerchio. Diagnosi Playwright (posizione del glifo nel cerchio
+34px): markup e CSS identici al PHP (&rsaquo; + place-items:center;
+font-size:24px), ma:
+- PHP: .salon-action-arrow line-height 'normal' → glifo centrato (1px sopra,
+  1px sotto).
+- Next: line-height 36px (24px×1.5) ereditato dal preflight di Tailwind
+  (html{line-height:1.5}) → glifo scentrato (2px sopra, 0 sotto).
+Nessun CSS (app/public_marketplace/public_account/globals) impostava una
+line-height sul body; il PHP usa quindi 'normal' ovunque, il Next 1.5.
+FIX: app/globals.css body{line-height:normal} — riallinea il default al PHP.
+I componenti che richiedono interlinea specifica la impostano da sé
+(Bootstrap del gestionale, .salon-*/.result-*/... del marketplace), quindi
+nessuna regressione; anzi il body del gestionale ora combacia col PHP.
+Verifica Playwright: freccia centrata (1px/1px) e line-height 'normal' come
+il PHP; manage body line-height ora 'normal' (era 1.5). Battery
+e2e-marketplace-arrow.mjs PASS + e2e-marketplace-layout 3/3 + regressioni
+28/28, 15/15, 14/14, 26/26 + 100/100 marker; typecheck pulito.

@@ -16,6 +16,13 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+  /* Il preflight di Tailwind imposta html{line-height:1.5}, ma il PHP usa
+     line-height:normal ovunque (nessun CSS lo imposta). L'1.5 ereditato
+     scentrava elementi centrati verticalmente (es. la freccia circolare
+     .salon-action-arrow). Riallineo il default a 'normal' come il PHP: i
+     componenti che richiedono un'interlinea specifica la impostano da sé
+     (Bootstrap del gestionale, .salon-* del marketplace). */
+  line-height: normal;
 }
 
 * {
@@ -40,3 +47,4 @@ button {
 img {
   object-fit: cover;
 }
+
