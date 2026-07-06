@@ -206,6 +206,8 @@ export function BookingFaithful({
   const [slot, setSlot] = useState("");
   const [availableSlots, setAvailableSlots] = useState<BookingSlot[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
+  // Ore espanse (toggle "Mostra tutti") nella vista slot raggruppata.
+  const [expandedHours, setExpandedHours] = useState<Set<string>>(new Set());
   const [hold, setHold] = useState<BookingHold | null>(null);
   const [benefitId, setBenefitId] = useState("none");
   // COUPON free-text (port of the legacy Step 6 coupon box -> mode=coupon):
@@ -340,6 +342,7 @@ export function BookingFaithful({
     setSlotsLoading(true);
     setSlot("");
     setHold(null);
+    setExpandedHours(new Set());
     fetch(`/api/booking?${params.toString()}`)
       .then((response) => response.json())
       .then((data) => {
@@ -788,6 +791,15 @@ export function BookingFaithful({
   // Come il legacy: lo slot endpoint/render mostra SOLO gli orari liberi
   // (booking.php $slots contiene solo i disponibili; nessun pulsante disabilitato).
   const freeSlots = availableSlots.filter((item) => item.available);
+  const slotGroups = useMemo(() => buildSlotGroups(freeSlots.map((s) => s.time)), [freeSlots]);
+  const slotByTime = useMemo(() => new Map(freeSlots.map((s) => [s.time, s])), [freeSlots]);
+  const toggleHour = (key: string) =>
+    setExpandedHours((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   const businessInitial = (ctx?.business.name ?? "").trim().charAt(0).toUpperCase() || "B";
   const dateStripDays = useMemo(
     () => Array.from({ length: 7 }, (_, index) => addDays(stripStart, index)),
@@ -1338,19 +1350,79 @@ export function BookingFaithful({
                   <div className="fw-semibold">
                     Scegli uno slot per <span id="slotDateLabel" className="text-success">{formatDateIt(date)}</span>
                   </div>
-                  <div className="slot-grid" id="slotGrid">
+                  <div
+                    className={`slot-grid${!slotsLoading && freeSlots.length > SLOT_GROUP_THRESHOLD ? " has-groups" : ""}`}
+                    id="slotGrid"
+                  >
                     {slotsLoading ? <div className="text-muted small">Caricamento orari…</div> : null}
-                    {!slotsLoading &&
-                      freeSlots.map((item) => (
-                        <button
-                          key={item.time}
-                          type="button"
-                          className={`slot-btn available${slot === item.time ? " selected" : ""}`}
-                          onClick={() => chooseSlot(item)}
-                        >
-                          {item.time}
-                        </button>
-                      ))}
+                    {/* <=12 slot: griglia piatta; >12: raggruppati per periodo/ora
+                        (renderGroupedSlots legacy). */}
+                    {!slotsLoading && freeSlots.length <= SLOT_GROUP_THRESHOLD
+                      ? freeSlots.map((item) => (
+                          <button
+                            key={item.time}
+                            type="button"
+                            className={`slot-btn available${slot === item.time ? " selected" : ""}`}
+                            onClick={() => chooseSlot(item)}
+                          >
+                            {item.time}
+                          </button>
+                        ))
+                      : null}
+                    {!slotsLoading && freeSlots.length > SLOT_GROUP_THRESHOLD
+                      ? slotGroups.map((period) => (
+                          <section className="slot-period" key={period.label}>
+                            <div className="slot-period__head">
+                              <div className="slot-period__title">{period.label}</div>
+                              <div className="slot-period__count">
+                                {period.slots.length === 1 ? "1 orario" : `${period.slots.length} orari`}
+                              </div>
+                            </div>
+                            {period.hours.map(([hour, hourSlots]) => {
+                              const key = `${period.label}:${hour}`;
+                              const expanded = expandedHours.has(key);
+                              const initial = getInitialHourSlots(hourSlots);
+                              const hasHidden = initial.length < hourSlots.length;
+                              let visible = expanded ? hourSlots : initial;
+                              if (!expanded && slot && hourSlots.includes(slot) && !visible.includes(slot)) {
+                                visible = [...visible, slot].sort((a, b) => slotMinutes(a) - slotMinutes(b));
+                              }
+                              return (
+                                <div className="slot-hour-card" key={hour}>
+                                  <div className="slot-hour-card__head">
+                                    <div>
+                                      <div className="slot-hour-card__title">{hour}:00</div>
+                                      <div className="slot-hour-card__meta">
+                                        {hourSlots.length === 1 ? "1 disponibilita" : `${hourSlots.length} disponibilita`}
+                                      </div>
+                                    </div>
+                                    {hasHidden ? (
+                                      <button type="button" className="slot-hour-toggle" onClick={() => toggleHour(key)}>
+                                        {expanded ? "Nascondi" : "Mostra tutti"}
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                  <div className="slot-hour-card__times">
+                                    {visible.map((t) => {
+                                      const item = slotByTime.get(t);
+                                      return (
+                                        <button
+                                          key={t}
+                                          type="button"
+                                          className={`slot-btn available${slot === t ? " selected" : ""}`}
+                                          onClick={() => item && chooseSlot(item)}
+                                        >
+                                          {t}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </section>
+                        ))
+                      : null}
                   </div>
                   <div
                     id="slotEmpty"
@@ -2082,6 +2154,60 @@ function estimateDiscount(benefit: BookingBenefit | null, total: number): number
   const value = benefit.discountValue ?? 0;
   const amount = benefit.discountType === "fixed" ? value : total * (value / 100);
   return Math.max(0, Math.min(total, Math.round(amount * 100) / 100));
+}
+
+// --- Raggruppamento slot (booking-wizard.js 3800-3964): sopra 12 slot il legacy
+//     raggruppa in periodi Mattina/Pomeriggio/Sera e card per-ora, con
+//     "N disponibilita"/"N orari" e toggle Mostra tutti/Nascondi. ---
+const SLOT_GROUP_THRESHOLD = 12;
+const SLOT_RECOMMENDED_INTERVAL = 15;
+function slotMinutes(time: string): number {
+  const [h, m] = String(time || "").split(":");
+  const hh = parseInt(h || "0", 10);
+  const mm = parseInt(m || "0", 10);
+  return (Number.isNaN(hh) ? 0 : hh) * 60 + (Number.isNaN(mm) ? 0 : mm);
+}
+function slotHour(time: string): number {
+  const h = parseInt(String(time || "").split(":")[0] || "0", 10);
+  return Number.isNaN(h) ? 0 : h;
+}
+function slotPeriodLabel(time: string): string {
+  const h = slotHour(time);
+  if (h < 12) return "Mattina";
+  if (h < 18) return "Pomeriggio";
+  return "Sera";
+}
+function isRecommendedSlot(time: string): boolean {
+  return slotMinutes(time) % SLOT_RECOMMENDED_INTERVAL === 0;
+}
+function getInitialHourSlots(hourSlots: string[]): string[] {
+  const recommended = hourSlots.filter(isRecommendedSlot);
+  if (recommended.length) return recommended;
+  return hourSlots.slice(0, Math.min(3, hourSlots.length));
+}
+type SlotPeriod = { label: string; slots: string[]; hours: Array<[string, string[]]> };
+function buildSlotGroups(times: string[]): SlotPeriod[] {
+  const sorted = [...times].sort((a, b) => slotMinutes(a) - slotMinutes(b));
+  const periods: SlotPeriod[] = [];
+  const pmap = new Map<string, SlotPeriod>();
+  const hmap = new Map<string, Map<string, string[]>>();
+  for (const time of sorted) {
+    const pl = slotPeriodLabel(time);
+    if (!pmap.has(pl)) {
+      const period: SlotPeriod = { label: pl, slots: [], hours: [] };
+      pmap.set(pl, period);
+      hmap.set(pl, new Map());
+      periods.push(period);
+    }
+    const period = pmap.get(pl)!;
+    const hours = hmap.get(pl)!;
+    const hour = String(time).slice(0, 2);
+    period.slots.push(time);
+    if (!hours.has(hour)) hours.set(hour, []);
+    hours.get(hour)!.push(time);
+  }
+  for (const period of periods) period.hours = [...(hmap.get(period.label) ?? new Map())];
+  return periods;
 }
 
 function fmtMoney(value: number): string {

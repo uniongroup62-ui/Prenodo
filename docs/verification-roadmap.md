@@ -6578,3 +6578,20 @@ backend, in coda.)
   come il legacy (booking.php 13224).
 
 typecheck pulito.
+
+
+---
+
+## Wizard booking: raggruppamento slot Mattina/Pomeriggio/Sera (2026-07-06) [HIGH]
+
+Chiuso il finding HIGH slot-grouping. Sopra 12 slot il legacy (renderGroupedSlots,
+booking-wizard.js 3800-3964) raggruppa gli orari in periodi (Mattina<12/
+Pomeriggio<18/Sera) con "N orari", e in card per-ora con "N disponibilita",
+mostrando di default gli orari consigliati (minuti multipli di 15, o i primi 3) +
+toggle "Mostra tutti"/"Nascondi"; il Next rendeva una griglia piatta (es. 109
+pulsanti). Portati SLOT_GROUP_THRESHOLD=12, periodi/ore, getInitialHourSlots,
+expand per-ora e la classe has-groups.
+
+Verifica live (giorno con 109 slot): has-groups; periodi Mattina(36 orari)/
+Pomeriggio(72)/Sera(1); 10 card ora con "12 disponibilita" + "Mostra tutti";
+09:00 mostra 09:00/09:15/09:30/09:45 (consigliati). typecheck pulito.
