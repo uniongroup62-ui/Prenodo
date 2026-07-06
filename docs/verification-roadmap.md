@@ -7013,3 +7013,40 @@ Tutto il resto del wizard di prenotazione pubblica è ora portato 1:1 e verifica
 live (sede/categoria/servizi/professionista-per-servizio/data-ora/vantaggi/conferma,
 promo di catalogo, chiusure, fidelity/credito/giftcard, redeem, condizioni promo,
 slot segment-aware multi-operatore).
+
+
+---
+
+## Wizard booking: audit Conferma/recap vs legacy — divergenze corrette (2026-07-07)
+
+Dopo il fix "Cliente in sola lettura" e "formato data", audit sistematico del recap
+(step 6 Vantaggi + step 7 Conferma + riepilogo laterale) contro booking.php
+13160-13330 + booking-wizard.js updateSummary. Divergenze CORRETTE + verificate:
+
+- **Simbolo € DOPO l'importo nel recap** ("12,00 €", legacy euro() = Intl currency),
+  distinto dalle CARD servizio che usano "€ 12,00" (euroCard). Applicato a
+  recCostLines, recTotal, recFidelityDiscountAmount, recCreditAvail, giftcard,
+  sumCostLines, sumTotal (helper euroRecap). Verificato live: Conferma "12,00 €".
+- **Etichetta sconto Fidelity**: "Sconto Fidelity (N <label>)" con i punti usati e
+  l'etichetta configurabile (era "Sconto Punti Fidelity" fisso).
+- **Ordine righe sconto**: Fidelity → Credito → GiftCard (era Fidelity → GiftCard →
+  Credito). Aggiunta classe summary-row--success.
+- **Etichetta operatore recap**: nomi unici assegnati per servizio (join ", ", " …"
+  se indeterminato) o "Qualsiasi" (era "Qualsiasi professionista" / "Più
+  professionisti", stringhe inesistenti nel legacy).
+- **Dettaglio operatore per-servizio** (recStaffDetails/sumStaffDetails): con più
+  servizi rende "Servizio → Operatore" per riga (era vuoto).
+- **Riepilogo laterale**: mostra gli sconti + totale scontato SOLO al riepilogo
+  finale (step 7); fino ad allora prezzi di listino e totale = subtotale
+  (sideSummaryDisableDiscounts legacy).
+- **Box "Nessun vantaggio disponibile"**: nascosto quando ci sono benefit
+  fidelity/credito/giftcard (hasBenefitsAvailable), non solo coupon.
+- **Servizio a residuo** (redeem): riga costo a 0€ nel recap.
+
+RESIDUI (documentati, richiedono dati/porting maggiore):
+- Prezzi PER-SERVIZIO barrati+badge nel recap quando c'è una promo (renderPriceHtml
+  per-servizio invece della riga sconto aggregata) — richiede il breakdown per-
+  servizio da autoPromo/coupon nel recap PRE-conferma.
+- Nota Fidelity earn ("Se questa prenotazione sarà eseguita, guadagnerai N Punti.")
+  + saldo negativo + credito in sospeso — richiede l'esposizione dei punti maturati/
+  saldo nella preview; la nota omaggio resta legata a Gifts v2 (non portato).

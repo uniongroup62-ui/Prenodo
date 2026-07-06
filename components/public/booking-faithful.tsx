@@ -649,15 +649,40 @@ export function BookingFaithful({
         (finalTotal > 0.00001 && custBenefits.logged && custBenefits.creditAvailable > 0.00001)),
   );
   // Nome operatore per il riepilogo: con staff_map mostra l'unico assegnato o
-  // "Più professionisti" (multi-operatore); altrimenti l'operatore dello slot.
+  // Etichetta operatore del recap (getSelectedStaffLabel 2008-2062): nomi unici
+  // assegnati per servizio (auto o scelti), "… " se qualcuno è indeterminato,
+  // "Qualsiasi" se nessuno è determinato. NON "Qualsiasi professionista".
   const staffName = (() => {
-    const assignedOps = Array.from(new Set(selectedStaffGroups.map((group) => Number(staffByService[group.serviceId] ?? 0)).filter((op) => op > 0)));
-    if (staffMapJson && assignedOps.length === 1) {
-      return staffGroups.flatMap((group) => group.staff).find((member) => member.id === assignedOps[0])?.name || "Professionista";
+    if (serviceIds.length === 0) return "—";
+    const names: string[] = [];
+    let hasUndetermined = false;
+    for (const group of selectedStaffGroups) {
+      const chosen = Number(staffByService[group.serviceId] ?? 0);
+      if (chosen > 0) {
+        const n = group.staff.find((member) => member.id === chosen)?.name ?? "";
+        if (n) names.push(n);
+      } else if (group.staff.length === 1) {
+        names.push(group.staff[0].name);
+      } else {
+        hasUndetermined = true;
+      }
     }
-    if (staffMapJson && assignedOps.length > 1) return "Più professionisti";
-    return hold?.staffName || selectedSlot?.staffName || "Qualsiasi professionista";
+    const uniq = Array.from(new Set(names.filter(Boolean)));
+    if (uniq.length) return hasUndetermined ? `${uniq.join(", ")} …` : uniq.join(", ");
+    return "Qualsiasi";
   })();
+  // Dettaglio operatore PER SERVIZIO nel recap (getSelectedStaffDetailsHtml
+  // 2064-2090): solo con più servizi, "Servizio → Operatore" per riga.
+  const staffDetails = serviceIds.length > 1
+    ? selectedStaffGroups.map((group) => {
+        const chosen = Number(staffByService[group.serviceId] ?? 0);
+        let label = "—";
+        if (chosen > 0) label = group.staff.find((member) => member.id === chosen)?.name ?? "—";
+        else if (group.staff.length === 1) label = group.staff[0].name;
+        else if (group.staff.length >= 2) label = "Qualsiasi";
+        return { service: group.name || "Servizio", label };
+      })
+    : [];
   const clientFullName = `${firstName} ${lastName}`.trim();
   // Condizioni promozionali (recPromoConditions): testo della promo applicata
   // (coupon-code o automatica), reso nel recap se presente (booking-wizard.js 2772).
@@ -1764,7 +1789,7 @@ export function BookingFaithful({
 
                 <div
                   id="benefitsEmptyBox"
-                  className={`alert alert-light border small booking-alert-rounded-sm${ctx?.benefits.length ? " d-none" : ""}`}
+                  className={`alert alert-light border small booking-alert-rounded-sm${hasBenefitsAvailable || (ctx?.benefits.length ?? 0) > 0 ? " d-none" : ""}`}
                 >
                   Nessun vantaggio disponibile per questa prenotazione.
                 </div>
@@ -1917,7 +1942,7 @@ export function BookingFaithful({
                         </span>
                       </span>
                       <span className="giftcard-choice__amount" id="recFidelityDiscountAmount">
-                        - € {fmtMoney(custBenefits?.suggestedDiscount ?? 0)}
+                        - {euroRecap(custBenefits?.suggestedDiscount ?? 0)}
                       </span>
                     </label>
                   </div>
@@ -1949,7 +1974,7 @@ export function BookingFaithful({
                         </span>
                       </span>
                       <strong className="giftcard-choice__amount" id="recCreditAvail">
-                        € {fmtMoney(custBenefits?.creditAvailable ?? 0)}
+                        {euroRecap(custBenefits?.creditAvailable ?? 0)}
                       </strong>
                     </label>
                   </div>
@@ -1983,7 +2008,7 @@ export function BookingFaithful({
                             <span className="giftcard-choice__meta">Saldo disponibile</span>
                           </span>
                         </span>
-                        <strong className="giftcard-choice__amount">€ {fmtMoney(card.balance)}</strong>
+                        <strong className="giftcard-choice__amount">{euroRecap(card.balance)}</strong>
                       </label>
                     ))}
                   </div>
@@ -2018,7 +2043,14 @@ export function BookingFaithful({
                         <div className="fw-semibold" id="recStaffName">
                           {staffName}
                         </div>
-                        <div className="small text-muted" id="recStaffDetails" />
+                        <div className="small text-muted" id="recStaffDetails">
+                          {staffDetails.map((row, idx) => (
+                            <span key={row.service}>
+                              {idx > 0 ? <br /> : null}
+                              {row.service} → {row.label}
+                            </span>
+                          ))}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -2057,38 +2089,40 @@ export function BookingFaithful({
                   {selectedServices.map((service) => (
                     <div key={service.id} className="summary-row summary-row--no-border">
                       <div className="label">{service.name}</div>
-                      <div className="fw-semibold">€ {fmtMoney(service.price)}</div>
+                      <div className="fw-semibold text-end">{euroRecap(service.id === redeemedServiceId ? 0 : service.price)}</div>
                     </div>
                   ))}
                   {discount > 0 ? (
-                    <div className="summary-row summary-row--no-border">
+                    <div className="summary-row summary-row--no-border summary-row--success">
                       <div className="label">{couponApplied ? (couponApplied.isPromotion ? `Promozione ${couponApplied.promotionTitle || couponApplied.code}` : `Coupon ${couponApplied.code}`) : autoPromo ? `Promozione ${autoPromo.title}` : selectedBenefit?.label ?? "Sconto"}</div>
-                      <div className="fw-semibold text-success">- € {fmtMoney(discount)}</div>
+                      <div className="fw-semibold">- {euroRecap(discount)}</div>
                     </div>
                   ) : null}
+                  {/* Fidelity -> Credito -> GiftCard (ordine legacy updateSummary
+                      2735/2747/2756); etichetta "Sconto Fidelity (N <label>)". */}
                   {fidelityDiscountApplied > 0 ? (
-                    <div className="summary-row summary-row--no-border">
-                      <div className="label">Sconto Punti Fidelity</div>
-                      <div className="fw-semibold text-success">- € {fmtMoney(fidelityDiscountApplied)}</div>
-                    </div>
-                  ) : null}
-                  {giftcardAppliedAmount > 0 ? (
-                    <div className="summary-row summary-row--no-border">
-                      <div className="label">GiftCard {chosenGiftcard?.code ?? ""}</div>
-                      <div className="fw-semibold text-success">- € {fmtMoney(giftcardAppliedAmount)}</div>
+                    <div className="summary-row summary-row--no-border summary-row--success">
+                      <div className="label">Sconto Fidelity{(custBenefits?.suggestedPoints ?? 0) > 0 ? ` (${custBenefits?.suggestedPoints ?? 0} ${custBenefits?.pointsLabel ?? "Punti"})` : ""}</div>
+                      <div className="fw-semibold">- {euroRecap(fidelityDiscountApplied)}</div>
                     </div>
                   ) : null}
                   {creditAppliedAmount > 0 ? (
-                    <div className="summary-row summary-row--no-border">
+                    <div className="summary-row summary-row--no-border summary-row--success">
                       <div className="label">Credito</div>
-                      <div className="fw-semibold text-success">- € {fmtMoney(creditAppliedAmount)}</div>
+                      <div className="fw-semibold">- {euroRecap(creditAppliedAmount)}</div>
+                    </div>
+                  ) : null}
+                  {giftcardAppliedAmount > 0 ? (
+                    <div className="summary-row summary-row--no-border summary-row--success">
+                      <div className="label">GiftCard {chosenGiftcard?.code ?? ""}</div>
+                      <div className="fw-semibold">- {euroRecap(giftcardAppliedAmount)}</div>
                     </div>
                   ) : null}
                 </div>
 
                 <div className="summary-total summary-total--compact">
                   <div>Prezzo Totale</div>
-                  <div id="recTotal">€ {fmtMoney(payableTotal)}</div>
+                  <div id="recTotal">{euroRecap(payableTotal)}</div>
                 </div>
 
                 {/* Nota punti Fidelity (legacy #recFidelityNote, booking.php 13313):
@@ -2193,7 +2227,14 @@ export function BookingFaithful({
               </div>
               <div className="summary-row summary-row--staff-detail">
                 <div className="label" />
-                <div className="small text-muted text-end" id="sumStaffDetails" />
+                <div className="small text-muted text-end" id="sumStaffDetails">
+                  {staffDetails.map((row, idx) => (
+                    <span key={row.service}>
+                      {idx > 0 ? <br /> : null}
+                      {row.service} → {row.label}
+                    </span>
+                  ))}
+                </div>
               </div>
               <div className="summary-row">
                 <div className="label">Posizione</div>
@@ -2227,20 +2268,23 @@ export function BookingFaithful({
                 {selectedServices.map((service) => (
                   <div key={service.id} className="summary-row summary-row--no-border">
                     <div className="label">{service.name}</div>
-                    <div className="fw-semibold">€ {fmtMoney(service.price)}</div>
+                    <div className="fw-semibold text-end">{euroRecap(service.price)}</div>
                   </div>
                 ))}
-                {discount > 0 ? (
-                  <div className="summary-row summary-row--no-border">
+                {/* Il riepilogo LATERALE mostra gli sconti SOLO al riepilogo finale
+                    (sideSummaryDisableDiscounts = step < 7, updateSummary 2390): fino
+                    ad allora prezzi di listino e totale = subtotale. */}
+                {discount > 0 && step === 7 ? (
+                  <div className="summary-row summary-row--no-border summary-row--success">
                     <div className="label">{couponApplied ? (couponApplied.isPromotion ? `Promozione ${couponApplied.promotionTitle || couponApplied.code}` : `Coupon ${couponApplied.code}`) : autoPromo ? `Promozione ${autoPromo.title}` : selectedBenefit?.label ?? "Sconto"}</div>
-                    <div className="fw-semibold text-success">- € {fmtMoney(discount)}</div>
+                    <div className="fw-semibold">- {euroRecap(discount)}</div>
                   </div>
                 ) : null}
               </div>
               <div id="sumFidelityNote" className="alert alert-info p-2 mt-2 d-none" />
               <div className="summary-total">
                 <div>Prezzo Totale</div>
-                <div id="sumTotal">€ {fmtMoney(payableTotal)}</div>
+                <div id="sumTotal">{euroRecap(step === 7 ? payableTotal : subtotal)}</div>
               </div>
             </div>
 
@@ -2501,6 +2545,12 @@ function fmtMoney(value: number): string {
   const [intPart, decPart] = Math.abs(rounded).toFixed(2).split(".");
   const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
   return `${sign}${grouped},${decPart}`;
+}
+
+// Importo del RECAP col simbolo DOPO ("12,50 €"), come il legacy euro() (Intl
+// currency it-IT). Le CARD servizio usano invece "€ 12,50" (legacy euroCard).
+function euroRecap(value: number): string {
+  return `${fmtMoney(value)} €`;
 }
 
 function initialsOf(name: string): string {
