@@ -5641,3 +5641,62 @@ delete sistema/draft con suffisso count/firmato bloccato — con tenant_id
 200 application/pdf, live ripulito) + 88/88 marker + regressioni
 configuration verdi (quote/giftcard/giftbox/package settings 20/16/15/6,
 client-sheets 26) + typecheck/lint puliti.
+
+## AUDIT COMPLETO — Accessibilità (accessibility.php) (2026-07-06)
+
+Audit funzionale completo di accessibility.php (539 righe) +
+assets/js/pages/accessibility.js (38) vs accessibility-content.tsx +
+manage-accessibility.ts + route accessibility. Era marcata "verificata già
+completa": la seconda passata ha trovato DUE bug bloccanti e vari verbatim.
+1. TZ PENDING (GRAVE, scoperto dalla battery): expires_at/created_at delle
+   verifiche email erano scritti con NOW() del DB (UTC su Supabase) ma
+   riletti in ora locale → i codici risultavano GIA' SCADUTI alla nascita
+   (verifica email impossibile) e il cooldown dei 60s non scattava mai.
+   Fix: timestamp espliciti in ora locale del server Node (come date() in
+   PHP) in storeAndReturnCode e sendStaffInviteEmailCode.
+2. EMAIL DEL CODICE MAI INVIATA: i flussi verify/change/resend salvavano il
+   codice senza spedirlo (in produzione l'utente non l'avrebbe mai
+   ricevuto; l'invito staff invece lo spediva). Fix: invio con subject/
+   intro legacy per flusso ('Conferma email account' / 'Conferma cambio
+   email', intro nuove per il resend), mittente businesses name/email,
+   template moderno; su fallimento pending rimossa + flash legacy 'Invio
+   codice fallito (controlla mail() del server)'. Con SES non configurato
+   (dev) il codice resta esposto nel payload per i test.
+3. MESSAGGI VERBATIM (il legacy NON ha il punto finale su quasi tutti):
+   'Codice inviato alla tua email/alla nuova email', 'Codice reinviato',
+   'Email verificata', 'Password aggiornata', 'Email non valida', 'L email
+   e gia questa', 'Password attuale non corretta', 'Email gia utilizzata da
+   un altro account o operatore', 'Inserisci il codice', 'Nessuna richiesta
+   di cambio email attiva', 'Codice scaduto: richiedi un nuovo codice',
+   'Codice non valido', 'Compila tutti i campi password', 'Le nuove
+   password non coincidono', 'La nuova password deve avere almeno 8
+   caratteri' — con la sottigliezza legacy: 'Email non valida: richiedi un
+   nuovo codice' senza punto nel confirm (316) e CON punto nel resend (264).
+4. ORDINE GUARDIE: il cooldown va controllato PRIMA delle validazioni
+   (accessibility_enforce_code_cooldown in testa) — prima 'Email non
+   valida' vinceva sul 'Attendi N secondi'; change_password con l'ordine
+   legacy campi-vuoti → coincidenza → lunghezza (mb_strlen) → password
+   attuale (prima la lunghezza era dopo il check password).
+5. 5° TENTATIVO: al raggiungimento del limite il flash legacy è 'Troppi
+   tentativi non validi. Richiedi un nuovo codice.' — prima usciva sempre
+   'Codice non valido.' anche quando la pending veniva azzerata.
+6. COMPONENT: port di accessibility.js (countdown 'Reinvia tra Ns' che
+   scala e riabilita il bottone; avviso 'Il codice e scaduto. Reinvia un
+   nuovo codice.' allo scadere del TTL — prima markup statico morto);
+   flash View::alert SOPRA il page header + initialQuery {msg, err}
+   (branch page.tsx); pending expiresAt/createdAt normalizzati server-side
+   in ora locale e display d/m/Y H:i senza Date.parse.
+Verifica: battery NUOVA e2e-accessibility 34/34 su UTENTE ZZ DEDICATO
+(l'account reale mai toccato): GET, cooldown sui 3 flussi con ordine
+guardie, 4 tentativi 'Codice non valido' + 5° con messaggio dedicato e
+pending rimossa, confirm/resend/codice vuoto senza pending, verifica
+completata con email_verified_at + needsEmailVerification false (cookie
+riscritto: verificato con nuova sessione), guardie cambio email in ordine
+(invalida/uguale/password vuota/errata/email di un altro account), codice
+scaduto con cleanup in GET, resend dopo cooldown che invalida il codice
+precedente, cambio email applicato, cambio password con 4 errori in ordine
++ login con nuove credenziali; RESTORE CLEAN (utente ZZ e verifiche
+rimossi, account reale intatto) + LIVE PHP byte-per-byte (10 redirect err
+identici + 'Invio codice fallito (controlla mail() del server)' con
+pending auto-ripulita, live pulito) + 40/40 marker + regressioni
+(auth-roles 16, staff-page 27) + typecheck/lint puliti.

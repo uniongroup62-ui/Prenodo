@@ -306,7 +306,8 @@ export async function changeManagePassword({
   });
   const user = users[0];
   if (!user || !await verifyPhpPassword(currentPassword, String(user.password_hash ?? ""))) {
-    throw new Error("Password attuale non corretta.");
+    // Flash legacy di accessibility.php (senza punto finale).
+    throw new Error("Password attuale non corretta");
   }
 
   const passwordHash = await bcrypt.hash(newPassword, 10);

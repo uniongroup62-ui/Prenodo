@@ -36,16 +36,19 @@ function tenantSlug(): string {
   return window.location.pathname.split("/")[1] || "";
 }
 
+// d/m/Y H:i dal timestamp SQL locale del server (niente Date.parse: eviterebbe
+// solo di reintrodurre shift di timezone).
 function fmtDateTime(iso?: string): string {
   if (!iso) return "—";
-  const ms = Date.parse(iso);
-  if (!Number.isFinite(ms)) return iso;
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  if (m) return `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`;
+  return String(iso);
 }
 
-export function AccessibilityContent({ slug: slugProp }: { slug?: string } = {}) {
+export function AccessibilityContent({
+  slug: slugProp,
+  initialQuery,
+}: { slug?: string; initialQuery?: { msg?: string; err?: string } } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
@@ -54,7 +57,17 @@ export function AccessibilityContent({ slug: slugProp }: { slug?: string } = {})
   const [pending, setPending] = useState<PendingVerification | null>(null);
   const [minLength, setMinLength] = useState(8);
   const [loading, setLoading] = useState(true);
-  const [feedback, setFeedback] = useState<{ type: "success" | "danger"; text: string } | null>(null);
+  // Flash legacy (View::alert msg/err SOPRA il page header).
+  const [feedback, setFeedback] = useState<{ type: "success" | "danger"; text: string } | null>(() => {
+    if (initialQuery?.err) return { type: "danger", text: String(initialQuery.err) };
+    if (initialQuery?.msg) return { type: "success", text: String(initialQuery.msg) };
+    return null;
+  });
+  // Port di accessibility.js: countdown 'Reinvia tra Ns' e avviso di codice
+  // scaduto allo scadere del TTL (inizializzati nel callback di load).
+  const [resendWaitLeft, setResendWaitLeft] = useState(0);
+  const [codeExpired, setCodeExpired] = useState(false);
+  const [remainingMsAtLoad, setRemainingMsAtLoad] = useState(0);
 
   // Email change form
   const [newEmail, setNewEmail] = useState("");
@@ -67,14 +80,23 @@ export function AccessibilityContent({ slug: slugProp }: { slug?: string } = {})
   const [newPasswordConfirm, setNewPasswordConfirm] = useState("");
 
   const load = useCallback(() => {
-    setLoading(true);
+    // `loading` parte true e viene azzerato solo nel .finally: niente setState
+    // sincroni nel percorso chiamato dall'effect.
     fetch(`/api/manage/accessibility?slug=${encodeURIComponent(slug)}`, {
       headers: { "x-tenant-slug": slug },
     })
       .then((r) => r.json())
       .then((j: AccessibilityData) => {
         setUser(j.user ?? null);
-        setPending(j.pendingEmailVerification ?? null);
+        const p = (j.pendingEmailVerification ?? null) as PendingVerification | null;
+        setPending(p);
+        // Port di accessibility.js: countdown reinvio e avviso scadenza sono
+        // inizializzati QUI (callback async, non nell'effect) e poi scanditi
+        // dai timer sottostanti.
+        setResendWaitLeft(Math.max(0, Number(p?.resendWaitSeconds ?? 0)));
+        const remaining = p ? Math.max(0, (Date.parse(String(p.expiresAt).replace(" ", "T")) || 0) - Date.now()) : 0;
+        setRemainingMsAtLoad(remaining);
+        setCodeExpired(p ? remaining <= 0 : false);
         setMinLength(Number(j.password?.minLength ?? 8));
       })
       .catch(() => {
@@ -88,9 +110,27 @@ export function AccessibilityContent({ slug: slugProp }: { slug?: string } = {})
     load();
   }, [load]);
 
-  function href(suffix: string): string {
-    return `/${encodeURIComponent(slug)}/${`accessibility${suffix}`.replace("&", "?")}`;
-  }
+  // Countdown 'Reinvia tra Ns' (accessibility.js 30-37): tick da timer.
+  useEffect(() => {
+    if (resendWaitLeft <= 0) return;
+    const timer = window.setInterval(() => {
+      setResendWaitLeft((prev) => (prev <= 1 ? 0 : prev - 1));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [resendWaitLeft > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Avviso di scadenza codice (accessibility.js 6-12): allo scadere del TTL
+  // mostra 'Il codice e scaduto. Reinvia un nuovo codice.'
+  useEffect(() => {
+    if (!pending || codeExpired || remainingMsAtLoad <= 0) return;
+    const timer = window.setTimeout(() => setCodeExpired(true), remainingMsAtLoad + 50);
+    return () => window.clearTimeout(timer);
+  }, [pending, codeExpired, remainingMsAtLoad]);
+
+  const showFlash = useCallback((next: { type: "success" | "danger"; text: string } | null) => {
+    setFeedback(next);
+    if (next && typeof window !== "undefined") window.scrollTo({ top: 0 });
+  }, []);
 
   async function postAction(payload: Record<string, unknown>): Promise<void> {
     setFeedback(null);
@@ -102,27 +142,34 @@ export function AccessibilityContent({ slug: slugProp }: { slug?: string } = {})
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j?.ok === false) {
-        setFeedback({ type: "danger", text: String(j?.error ?? j?.message ?? "Errore.") });
+        showFlash({ type: "danger", text: String(j?.error ?? j?.message ?? "Errore accessibilita.") });
         return;
       }
-      setFeedback({ type: "success", text: String(j?.message ?? "Operazione completata.") });
+      showFlash({ type: "success", text: String(j?.message ?? "Operazione completata.") });
       // Refresh state (pending verification / verified flag may have changed).
       load();
     } catch {
-      setFeedback({ type: "danger", text: "Errore di rete." });
+      showFlash({ type: "danger", text: "Errore di rete." });
     }
   }
 
   const currentEmail = user?.email ?? "—";
   const isVerified = user ? !user.needsEmailVerification : false;
   const expLabel = pending ? fmtDateTime(pending.expiresAt) : "";
-  const resendWait = pending?.resendWaitSeconds ?? 0;
-  const remainingMs = pending
-    ? Math.max(0, (Date.parse(pending.expiresAt) || 0) - Date.now())
-    : 0;
+  const resendWait = resendWaitLeft;
+  const remainingMs = remainingMsAtLoad;
 
   return (
     <div className="container-fluid">
+      {feedback ? (
+        <div className={`alert alert-${feedback.type} d-flex align-items-start gap-2`}>
+          <div>
+            <i className="bi bi-info-circle" />
+          </div>
+          <div>{feedback.text}</div>
+        </div>
+      ) : null}
+
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Impostazioni</div>
@@ -130,12 +177,6 @@ export function AccessibilityContent({ slug: slugProp }: { slug?: string } = {})
           <div className="bs-page-subtitle">Gestisci email di accesso, verifica e password.</div>
         </div>
       </div>
-
-      {feedback ? (
-        <div className={`alert alert-${feedback.type}`} role="alert">
-          {feedback.text}
-        </div>
-      ) : null}
 
       <div className="row g-3">
         <div className="col-lg-7">
@@ -265,7 +306,7 @@ export function AccessibilityContent({ slug: slugProp }: { slug?: string } = {})
                       </div>
                     </div>
                   </form>
-                  <div className="small text-warning mt-2 d-none" data-email-code-expired>
+                  <div className={`small text-warning mt-2${codeExpired ? "" : " d-none"}`} data-email-code-expired>
                     Il codice e scaduto. Reinvia un nuovo codice.
                   </div>
                   <form
@@ -290,7 +331,7 @@ export function AccessibilityContent({ slug: slugProp }: { slug?: string } = {})
                         {resendWait > 0 ? `Reinvia tra ${resendWait}s` : "Reinvia codice"}
                       </span>
                     </button>
-                    <span className="small text-muted">Usalo se non hai ricevuto l'email o il codice e scaduto.</span>
+                    <span className="small text-muted">{"Usalo se non hai ricevuto l'email o il codice e scaduto."}</span>
                   </form>
                 </div>
               ) : null}

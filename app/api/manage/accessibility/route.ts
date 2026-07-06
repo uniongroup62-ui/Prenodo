@@ -92,18 +92,26 @@ export async function POST(request: Request) {
     }
 
     if (action === "change_password") {
+      // Ordine e flash verbatim di accessibility.php action=change_password
+      // (campi vuoti -> coincidenza -> lunghezza min 8 -> password attuale).
+      const currentPassword = String(body.current_password ?? "");
       const newPassword = String(body.new_password ?? body.password ?? "");
       const newPasswordConfirm = String(body.new_password_confirm ?? body.password_confirm ?? "");
-      if (!newPassword || !newPasswordConfirm) return jsonError("Compila tutti i campi password.", 400);
-      if (newPassword !== newPasswordConfirm) return jsonError("Le nuove password non coincidono.", 400);
+      if (!currentPassword.trim() || !newPassword.trim() || !newPasswordConfirm.trim()) {
+        return jsonError("Compila tutti i campi password", 400);
+      }
+      if (newPassword !== newPasswordConfirm) return jsonError("Le nuove password non coincidono", 400);
+      if (Array.from(newPassword).length < 8) {
+        return jsonError("La nuova password deve avere almeno 8 caratteri", 400);
+      }
 
       await changeManagePassword({
         slug: tenantSlug,
         userId: session.user.id,
-        currentPassword: String(body.current_password ?? ""),
+        currentPassword,
         newPassword,
       });
-      return Response.json({ ok: true, message: "Password aggiornata." });
+      return Response.json({ ok: true, message: "Password aggiornata" });
     }
 
     return jsonError("Azione accessibilita non supportata.", 400);

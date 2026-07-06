@@ -55,6 +55,9 @@ export async function getEmailVerificationPending(
   return mapPending(row);
 }
 
+// Ordine guardie e messaggi verbatim di accessibility.php: il cooldown viene
+// controllato PRIMA delle validazioni (come accessibility_enforce_code_cooldown
+// in testa alle action) e i flash legacy sono SENZA punto finale.
 export async function requestCurrentEmailVerification({
   slug,
   userId,
@@ -64,10 +67,17 @@ export async function requestCurrentEmailVerification({
   userId: number;
   email: string;
 }): Promise<EmailCodeResult> {
-  const normalizedEmail = normalizeEmail(email);
-  if (!isValidEmail(normalizedEmail)) throw new Error("Email non valida.");
   await ensureEmailCodeCooldown(slug, userId);
-  return storeAndReturnCode({ slug, userId, email: normalizedEmail, message: "Codice inviato alla tua email." });
+  const normalizedEmail = normalizeEmail(email);
+  if (!isValidEmail(normalizedEmail)) throw new Error("Email non valida");
+  return storeAndReturnCode({
+    slug,
+    userId,
+    email: normalizedEmail,
+    message: "Codice inviato alla tua email",
+    subject: "Conferma email account",
+    intro: "per completare l'attivazione del tuo account inserisci questo codice:",
+  });
 }
 
 export async function requestEmailChange({
@@ -83,14 +93,21 @@ export async function requestEmailChange({
   newEmail: string;
   currentPassword: string;
 }): Promise<EmailCodeResult> {
+  await ensureEmailCodeCooldown(slug, userId);
   const normalizedCurrent = normalizeEmail(currentEmail);
   const normalizedNew = normalizeEmail(newEmail);
-  if (!isValidEmail(normalizedNew)) throw new Error("Email non valida.");
-  if (normalizedCurrent === normalizedNew) throw new Error("L email e gia questa.");
+  if (!isValidEmail(normalizedNew)) throw new Error("Email non valida");
+  if (normalizedCurrent === normalizedNew) throw new Error("L email e gia questa");
   await assertCurrentPassword(slug, userId, currentPassword, "Inserisci la password attuale per cambiare email.");
   await ensureEmailAvailable(slug, userId, normalizedNew, normalizedCurrent);
-  await ensureEmailCodeCooldown(slug, userId);
-  return storeAndReturnCode({ slug, userId, email: normalizedNew, message: "Codice inviato alla nuova email." });
+  return storeAndReturnCode({
+    slug,
+    userId,
+    email: normalizedNew,
+    message: "Codice inviato alla nuova email",
+    subject: "Conferma cambio email",
+    intro: "hai richiesto di cambiare l'email di accesso.<br>Il tuo codice di conferma e:",
+  });
 }
 
 export async function resendEmailCode({
@@ -115,11 +132,21 @@ export async function resendEmailCode({
   }
 
   const normalizedCurrent = normalizeEmail(currentEmail);
-  if (targetEmail !== normalizedCurrent) {
+  const isEmailChange = targetEmail !== normalizedCurrent;
+  if (isEmailChange) {
     await ensureEmailAvailable(slug, userId, targetEmail, normalizedCurrent);
   }
 
-  return storeAndReturnCode({ slug, userId, email: targetEmail, message: "Codice reinviato." });
+  return storeAndReturnCode({
+    slug,
+    userId,
+    email: targetEmail,
+    message: "Codice reinviato",
+    subject: isEmailChange ? "Conferma cambio email" : "Conferma email account",
+    intro: isEmailChange
+      ? "hai richiesto di cambiare l'email di accesso.<br>Il tuo nuovo codice di conferma e:"
+      : "per completare l'attivazione del tuo account inserisci questo nuovo codice:",
+  });
 }
 
 export async function confirmEmailCode({
@@ -135,27 +162,30 @@ export async function confirmEmailCode({
 }): Promise<{ ok: true; email: string; verifiedAt: string; message: string }> {
   const tenantSlug = normalizeTenantSlug(slug) ?? "";
   const normalizedCode = code.trim();
-  if (!normalizedCode) throw new Error("Inserisci il codice.");
+  if (!normalizedCode) throw new Error("Inserisci il codice");
   const pending = await rawPendingRow(tenantSlug, userId);
-  if (!pending) throw new Error("Nessuna richiesta di cambio email attiva.");
+  if (!pending) throw new Error("Nessuna richiesta di cambio email attiva");
   if (isExpired(pending.expires_at)) {
     await deletePendingEmailVerification(tenantSlug, userId);
-    throw new Error("Codice scaduto: richiedi un nuovo codice.");
+    throw new Error("Codice scaduto: richiedi un nuovo codice");
   }
   if (Number(pending.attempt_count ?? 0) >= EMAIL_CODE_MAX_ATTEMPTS) {
     await deletePendingEmailVerification(tenantSlug, userId);
     throw new Error("Troppi tentativi non validi. Richiedi un nuovo codice.");
   }
   if (String(pending.code_hash ?? "") !== codeHash(normalizedCode)) {
-    await badEmailCodeAttempt(tenantSlug, userId, pending);
-    throw new Error("Codice non valido.");
+    // accessibility_bad_code_attempt: al raggiungimento del limite la pending
+    // viene rimossa e il flash è quello dei troppi tentativi.
+    const maxReached = await badEmailCodeAttempt(tenantSlug, userId, pending);
+    throw new Error(maxReached ? "Troppi tentativi non validi. Richiedi un nuovo codice." : "Codice non valido");
   }
 
   const newEmail = normalizeEmail(String(pending.new_email ?? ""));
   const normalizedCurrent = normalizeEmail(currentEmail);
   if (!isValidEmail(newEmail)) {
     await deletePendingEmailVerification(tenantSlug, userId);
-    throw new Error("Email non valida: richiedi un nuovo codice.");
+    // Nel confirm il flash legacy è SENZA punto (316), nel resend CON (264).
+    throw new Error("Email non valida: richiedi un nuovo codice");
   }
   if (newEmail !== normalizedCurrent) await ensureEmailAvailable(tenantSlug, userId, newEmail, normalizedCurrent);
 
@@ -177,7 +207,7 @@ export async function confirmEmailCode({
   }
   await deletePendingEmailVerification(tenantSlug, userId);
   await invalidateManagePasswordResets(tenantSlug, userId);
-  return { ok: true, email: newEmail, verifiedAt, message: "Email verificata." };
+  return { ok: true, email: newEmail, verifiedAt, message: "Email verificata" };
 }
 
 async function storeAndReturnCode({
@@ -185,17 +215,24 @@ async function storeAndReturnCode({
   userId,
   email,
   message,
+  subject,
+  intro,
 }: {
   slug: string;
   userId: number;
   email: string;
   message: string;
+  subject: string;
+  intro: string;
 }): Promise<EmailCodeResult> {
   const tenantSlug = normalizeTenantSlug(slug) ?? "";
   const code = String(randomInt(100000, 1000000));
   const table = await ensureEmailVerificationTable(tenantSlug);
   await deletePendingEmailVerification(tenantSlug, userId);
   const includeTenant = table.mode === "shared" && await columnExists(table.name, "tenant_id");
+  // TZ trap: expires_at/created_at ESPLICITI in ora locale del server Node
+  // (come date() in PHP). Con NOW() del DB (UTC su Supabase) la rilettura
+  // locale vedeva i codici già scaduti e il cooldown non scattava mai.
   await dbExecute(
     `INSERT INTO \`${table.name}\` (${[
       includeTenant ? "`tenant_id`" : "",
@@ -203,17 +240,57 @@ async function storeAndReturnCode({
       "`new_email`",
       "`code_hash`",
       "`expires_at`",
+      "`created_at`",
       "`attempt_count`",
     ].filter(Boolean).join(",")}) VALUES (${[
       includeTenant ? "?" : "",
       "?",
       "?",
       "?",
-      `NOW() + (${EMAIL_CODE_TTL_SECONDS} * interval '1 second')`,
+      "?",
+      "?",
       "0",
     ].filter(Boolean).join(",")})`,
-    [...(includeTenant ? [table.tenantId ?? 0] : []), userId, email, codeHash(code)],
+    [
+      ...(includeTenant ? [table.tenantId ?? 0] : []),
+      userId,
+      email,
+      codeHash(code),
+      sqlDateTimeFromMs(Date.now() + EMAIL_CODE_TTL_SECONDS * 1000),
+      sqlDateTimeFromMs(Date.now()),
+    ],
   );
+
+  // accessibility_send_email_code: il codice viene EMAILATO col template
+  // legacy (mittente = businesses name/email); se l'invio fallisce la pending
+  // viene rimossa e l'errore è il flash legacy. Con SES non configurato (dev)
+  // il codice resta consultabile nel payload (verificationCode) per i test.
+  if (emailConfigured()) {
+    const branding = await staffInviteBranding(tenantSlug);
+    const bizName = branding.name.trim() || "La mia attivita";
+    const body =
+      "Ciao,<br><br>" + intro + "<br><br>"
+      + `<div style="font-size:28px;font-weight:800;letter-spacing:2px">${escapeInviteHtml(code)}</div>`
+      + "<br>Il codice scade tra 15 minuti.<br><br>Se non sei stato tu, ignora questa email.";
+    const { html, text } = buildModernEmailTemplate(subject, body, {
+      business_name: bizName,
+      business_email: branding.email,
+      business_logo_url: branding.logoUrl,
+    });
+    const sent = await sendEmail({
+      to: email,
+      subject,
+      html,
+      text,
+      fromEmail: branding.email.trim() || undefined,
+      fromName: bizName || undefined,
+    }).catch(() => ({ ok: false as const, error: "send" }));
+    if (!sent.ok) {
+      await deletePendingEmailVerification(tenantSlug, userId);
+      throw new Error("Invio codice fallito (controlla mail() del server)");
+    }
+  }
+
   return {
     ok: true,
     message,
@@ -327,6 +404,7 @@ export async function sendStaffInviteEmailCode(args: {
     const table = await ensureEmailVerificationTable(tenantSlug);
     await deletePendingEmailVerification(tenantSlug, args.userId);
     const includeTenant = table.mode === "shared" && await columnExists(table.name, "tenant_id");
+    // Stessa TZ trap di storeAndReturnCode: timestamp espliciti locali.
     await dbExecute(
       `INSERT INTO \`${table.name}\` (${[
         includeTenant ? "`tenant_id`" : "",
@@ -334,16 +412,25 @@ export async function sendStaffInviteEmailCode(args: {
         "`new_email`",
         "`code_hash`",
         "`expires_at`",
+        "`created_at`",
         "`attempt_count`",
       ].filter(Boolean).join(",")}) VALUES (${[
         includeTenant ? "?" : "",
         "?",
         "?",
         "?",
-        `NOW() + (${EMAIL_CODE_TTL_SECONDS} * interval '1 second')`,
+        "?",
+        "?",
         "0",
       ].filter(Boolean).join(",")})`,
-      [...(includeTenant ? [table.tenantId ?? 0] : []), args.userId, to, codeHash(code)],
+      [
+        ...(includeTenant ? [table.tenantId ?? 0] : []),
+        args.userId,
+        to,
+        codeHash(code),
+        sqlDateTimeFromMs(Date.now() + EMAIL_CODE_TTL_SECONDS * 1000),
+        sqlDateTimeFromMs(Date.now()),
+      ],
     );
 
     const branding = await staffInviteBranding(tenantSlug);
@@ -427,7 +514,8 @@ async function deletePendingEmailVerification(slug: string, userId: number): Pro
   await dbExecute(`DELETE FROM \`${table.name}\` WHERE ${clauses.join(" AND ")}`, params).catch(() => undefined);
 }
 
-async function badEmailCodeAttempt(slug: string, userId: number, row: RowDataPacket): Promise<void> {
+// Ritorna true se col tentativo si raggiunge il limite (pending rimossa).
+async function badEmailCodeAttempt(slug: string, userId: number, row: RowDataPacket): Promise<boolean> {
   const table = await ensureEmailVerificationTable(slug);
   const rowId = Number(row.id ?? 0);
   const clauses = ["id = ?", "user_id = ?"];
@@ -442,7 +530,9 @@ async function badEmailCodeAttempt(slug: string, userId: number, row: RowDataPac
   ).catch(() => undefined);
   if (Number(row.attempt_count ?? 0) + 1 >= EMAIL_CODE_MAX_ATTEMPTS) {
     await deletePendingEmailVerification(slug, userId);
+    return true;
   }
+  return false;
 }
 
 async function assertCurrentPassword(slug: string, userId: number, password: string, emptyMessage: string): Promise<void> {
@@ -457,7 +547,7 @@ async function assertCurrentPassword(slug: string, userId: number, password: str
   });
   const user = rows[0];
   if (!user || !await verifyPhpPassword(password, String(user.password_hash ?? ""))) {
-    throw new Error("Password attuale non corretta.");
+    throw new Error("Password attuale non corretta");
   }
 }
 
@@ -471,7 +561,7 @@ async function ensureEmailAvailable(slug: string, userId: number, email: string,
     limit: 1,
   }).catch(() => []);
   if (rows.length > 0 || await staffEmailInUse(slug, email, currentEmail)) {
-    throw new Error("Email gia utilizzata da un altro account o operatore.");
+    throw new Error("Email gia utilizzata da un altro account o operatore");
   }
 }
 
@@ -507,15 +597,29 @@ async function syncStaffEmail(slug: string, oldEmail: string, newEmail: string):
 }
 
 function mapPending(row: RowDataPacket): EmailVerificationPending {
-  const createdAt = String(row.created_at ?? "");
+  // I timestamp del driver pg sono Date: resi in ORA LOCALE (mai toISOString,
+  // che scala di -2h) così il display d/m/Y H:i del client resta corretto.
+  const createdAt = sqlDateTime(row.created_at);
   return {
     id: Number(row.id ?? 0),
     email: String(row.new_email ?? ""),
-    expiresAt: String(row.expires_at ?? ""),
+    expiresAt: sqlDateTime(row.expires_at),
     createdAt,
     attemptCount: Number(row.attempt_count ?? 0),
     resendWaitSeconds: resendWaitSeconds(createdAt),
   };
+}
+
+function sqlDateTime(value: unknown): string {
+  if (value instanceof Date) {
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())} ${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}`;
+  }
+  return String(value ?? "");
+}
+
+function sqlDateTimeFromMs(ms: number): string {
+  return sqlDateTime(new Date(ms));
 }
 
 function resendWaitSeconds(createdAt: string): number {

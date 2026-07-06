@@ -1000,6 +1000,16 @@ export default async function TenantPage({
     );
   }
 
+  // Accessibilità (accessibility.php): flash ?msg/?err dai redirect legacy
+  // (Codice inviato / Email verificata / Password aggiornata / errori).
+  if (page === "accessibility") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <AccessibilityContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
+      </ManageShell>
+    );
+  }
+
   // Sedi (locations.php; page=settings è lo shim legacy che la richiama):
   // flash ?msg=/?err= dai redirect + deep-link action=delete_preview&id=N.
   if (page === "locations" || page === "settings") {
