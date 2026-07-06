@@ -791,15 +791,35 @@ export async function listPublicCustomerGiftcards(accountId: number): Promise<Pu
     if (activity.clientId <= 0) continue;
     const slug = activity.tenantSlug;
     try {
-      const rows = await tenantSelect<RowDataPacket>({
+      // Ownership come il legacy (booking_public_list_client_giftcards,
+      // booking.php 318-343): carte con recipient_client_id = client OPPURE,
+      // quando l'intestatario è vuoto (NULL/0), quelle acquistate dal client
+      // stesso (client_id). view='all' => tutti gli stati. Fallback a
+      // client_id solo se la colonna recipient_client_id non esiste.
+      const gcOwnerWhere =
+        "(recipient_client_id IS NOT NULL AND recipient_client_id > 0 AND recipient_client_id = ?) OR ((recipient_client_id IS NULL OR recipient_client_id = 0) AND client_id = ?)";
+      const gcOrderBy =
+        "CASE WHEN status='active' THEN 0 ELSE 1 END ASC, CASE WHEN expires_at IS NULL THEN 1 ELSE 0 END ASC, expires_at ASC, id DESC";
+      let rows = await tenantSelect<RowDataPacket>({
         slug,
         table: "giftcards",
         columns: "id, code, balance, status, expires_at",
-        where: "recipient_client_id = ?",
-        params: [activity.clientId],
-        orderBy: "id DESC",
-        limit: 50,
-      }).catch(() => [] as RowDataPacket[]);
+        where: gcOwnerWhere,
+        params: [activity.clientId, activity.clientId],
+        orderBy: gcOrderBy,
+        limit: 200,
+      }).catch(() => null);
+      if (rows === null) {
+        rows = await tenantSelect<RowDataPacket>({
+          slug,
+          table: "giftcards",
+          columns: "id, code, balance, status, expires_at",
+          where: "client_id = ?",
+          params: [activity.clientId],
+          orderBy: gcOrderBy,
+          limit: 200,
+        }).catch(() => [] as RowDataPacket[]);
+      }
       for (const row of rows) {
         const balance = Math.round((Math.max(0, Number(row.balance ?? 0) || 0) + Number.EPSILON) * 100) / 100;
         const status = String(row.status ?? "").trim().toLowerCase();
@@ -920,11 +940,16 @@ export async function listPublicCustomerGifts(accountId: number): Promise<Public
     if (activity.clientId <= 0) continue;
     const slug = activity.tenantSlug;
     try {
+      // Come Gifts::clientAvailableInstances (booking.php sezione omaggi):
+      // la sezione mostra SOLO gli omaggi 'disponibile', non accumulo/
+      // riscattato/scaduto/annullato. (Residuo: il deep-link 'Prenota'
+      // book_omaggio e il badge "Prenotato" dipendono dai reward-item +
+      // riserve, non ancora portati.)
       const rows = await tenantSelect<RowDataPacket>({
         slug,
         table: "gift_instances",
         columns: "id, gift_id, state, expires_at",
-        where: "client_id = ?",
+        where: "client_id = ? AND state = 'disponibile'",
         params: [activity.clientId],
         orderBy: "id DESC",
         limit: 50,

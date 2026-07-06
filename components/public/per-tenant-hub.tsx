@@ -13,7 +13,6 @@ import {
   FidelityView,
   PreordersView,
   QuotesView,
-  EmptyState,
   type CustomerAppointment,
   type CustomerPackage,
   type CustomerQuote,
@@ -24,7 +23,6 @@ import {
   type CustomerFidelitySection,
   type CustomerPreorder,
 } from "@/components/public/hub-sections";
-import { Package } from "lucide-react";
 
 // Port fedele dell'HUB PER-SEDE dell'area cliente legacy
 // (booking.php?public=1&hub=1 + sezioni my/credit/giftcards/packs/prepaids/
@@ -42,7 +40,6 @@ export type HubSection =
   | "giftcards"
   | "packs"
   | "prepaids"
-  | "giftboxes"
   | "preorders"
   | "quotes"
   | "fidelity"
@@ -82,7 +79,6 @@ const HUB_MENU: Array<{ key: HubSection; label: string; icon: string }> = [
   { key: "giftcards", label: "GiftCard", icon: "bi-credit-card-2-front" },
   { key: "packs", label: "Pacchetti", icon: "bi-box-seam" },
   { key: "prepaids", label: "Prepagati", icon: "bi-ticket-perforated" },
-  { key: "giftboxes", label: "GiftBox", icon: "bi-box2-heart" },
   { key: "preorders", label: "Preordini", icon: "bi-bag-check" },
   { key: "quotes", label: "Preventivi", icon: "bi-file-earmark-text" },
   { key: "fidelity", label: "Fidelity", icon: "bi-stars" },
@@ -97,7 +93,6 @@ const SECTION_META: Record<HubSection, { title: string; subtitle: string }> = {
   giftcards: { title: "GiftCard", subtitle: "Le GiftCard a te intestate presso il centro." },
   packs: { title: "Pacchetti", subtitle: "I pacchetti acquistati presso il centro." },
   prepaids: { title: "Prepagati", subtitle: "I servizi prepagati acquistati presso il centro." },
-  giftboxes: { title: "GiftBox", subtitle: "Le GiftBox a te intestate presso il centro." },
   preorders: { title: "Preordini", subtitle: "I prodotti ordinati presso il centro." },
   quotes: { title: "Preventivi", subtitle: "I preventivi ricevuti dal centro." },
   fidelity: { title: "Fidelity", subtitle: "I punti Fidelity maturati presso il centro." },
@@ -116,7 +111,7 @@ const HUB_SHELL_STYLE = `
 .booking-public-account__frame{width:100%;max-width:var(--marketplace-page-max);min-height:0;margin:0 auto;background:#fff;border:0;border-radius:0;overflow:visible;box-shadow:none;display:grid;grid-template-columns:220px minmax(0,1fr);grid-template-rows:auto 1fr;align-items:start;}
 .booking-public-account.has-marketplace-header .booking-public-account__frame{min-height:0;}
 .booking-public-account__sidebar{grid-column:1;grid-row:1 / 3;position:sticky;top:0;z-index:6;height:auto;max-height:100vh;overflow-y:auto;overscroll-behavior:contain;border-right:0;background:#fff;align-self:start;}
-.booking-public-account.has-marketplace-header .booking-public-account__sidebar{top:68px;height:auto;max-height:calc(100vh - 68px);}
+.booking-public-account.has-marketplace-header .booking-public-account__sidebar{top:96px;height:auto;max-height:calc(100vh - 96px);}
 .booking-public-account__header{padding:26px 12px 18px 24px;border-right:0;border-bottom:0;display:grid;grid-template-columns:minmax(0,1fr);gap:14px;align-content:start;align-items:start;background:#fff;}
 .booking-public-account__brand{display:block;min-width:0;}
 .booking-public-account__brandmark,.booking-public-account__brandmeta{display:none;}
@@ -171,13 +166,17 @@ export function PerTenantHub({
   section,
   tenantName,
   hasBookableLocations,
+  initialUser = null,
 }: {
   slug: string;
   section: HubSection;
   tenantName: string;
   hasBookableLocations: boolean;
+  // Cliente noto lato server (dal gate): idrata il chip account in SSR come il
+  // PHP, che server-renderizza il widget account (BookingPublicUi.php 296-313).
+  initialUser?: PublicCustomer | null;
 }) {
-  const [user, setUser] = useState<PublicCustomer | null>(null);
+  const [user, setUser] = useState<PublicCustomer | null>(initialUser);
   const [menuOpen, setMenuOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<{ ok: boolean; text: string } | null>(null);
@@ -198,6 +197,9 @@ export function PerTenantHub({
   const profileUrl = `/attivita/${encodeURIComponent(slug)}`;
   const dashboardUrl = `/${encodeURIComponent(slug)}/booking?hub=1`;
   const homeUrl = "/attivita";
+  // Il brand della topbar punta alla ROOT del marketplace (BookingPublicUi.php
+  // 110-111 strippa /attivita -> "/"), NON alla lista /attivita.
+  const marketplaceRootUrl = "/";
 
   // Utente loggato (GET /api/account). Il gate lato server garantisce già la
   // sessione; qui è difensivo (redirect al login se scaduta).
@@ -371,6 +373,11 @@ export function PerTenantHub({
     <>
       {/* eslint-disable-next-line @next/next/no-css-tags */}
       <link rel="stylesheet" href="/assets/css/app.css" />
+      {/* public_account.css: stili del chip/menu account marketplace della
+          topbar (marketplace-account-chip/wrap/menu) — come l'area account
+          centrale. app.css/TOPBAR_STYLE non li definiscono. */}
+      {/* eslint-disable-next-line @next/next/no-css-tags */}
+      <link rel="stylesheet" href="/assets/css/pages/public_account.css" />
       <style dangerouslySetInnerHTML={{ __html: TOKEN_STYLE }} />
       <style dangerouslySetInnerHTML={{ __html: TOPBAR_STYLE }} />
       <style dangerouslySetInnerHTML={{ __html: FOOTER_STYLE }} />
@@ -389,7 +396,7 @@ export function PerTenantHub({
         }
       >
         <div className="marketplace-topbar__inner">
-          <a className="marketplace-topbar__brand" href={homeUrl}>
+          <a className="marketplace-topbar__brand" href={marketplaceRootUrl}>
             <span className="marketplace-topbar__brand-mark">B</span>
             <span>BeautySuite</span>
           </a>
@@ -538,7 +545,7 @@ export function PerTenantHub({
       {/* ===================== SHELL booking-public-account ===================== */}
       <div className="booking-public-bleed booking-public-account has-marketplace-header">
         <nav className="booking-bottom-nav" aria-label="Navigazione booking">
-          <a className="booking-bottom-nav__item" href={homeUrl}>
+          <a className="booking-bottom-nav__item" href={profileUrl}>
             <i className="bi bi-house"></i>
             <span>Home</span>
           </a>
@@ -626,14 +633,6 @@ export function PerTenantHub({
                 {section === "gifts" ? <GiftsView items={gifts} /> : null}
                 {section === "fidelity" ? <FidelityView items={fidelity} /> : null}
                 {section === "preorders" ? <PreordersView items={preorders} /> : null}
-                {section === "giftboxes" ? (
-                  <section className="rounded-lg border border-zinc-200 bg-white p-5">
-                    <h2 className="text-2xl font-semibold">Le mie GiftBox</h2>
-                    <div className="mt-4 grid gap-3">
-                      <EmptyState icon={Package} title="Nessuna GiftBox" text="Le GiftBox a te intestate presso il centro appariranno qui." />
-                    </div>
-                  </section>
-                ) : null}
               </>
             )}
           </div>
@@ -667,11 +666,11 @@ export function PerTenantHub({
                 <p>Prenota il tuo prossimo trattamento di bellezza quando e dove vuoi.</p>
               </div>
               <div className="marketplace-footer__stores" aria-label="Link app">
-                <a className="marketplace-footer__store" href="/account/login?return=%2Fattivita">
+                <a className="marketplace-footer__store" href="/account/login">
                   <small>Scarica su</small>
                   <strong>App Store</strong>
                 </a>
-                <a className="marketplace-footer__store" href="/account/login?return=%2Fattivita">
+                <a className="marketplace-footer__store" href="/account/login">
                   <small>Disponibile su</small>
                   <strong>Google Play</strong>
                 </a>

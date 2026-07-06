@@ -6274,3 +6274,58 @@ Tailwind estratti (dati/testi fedeli) dentro la shell corretta — non ancora
 allineato pixel al booking-account-card legacy; [MEDIUM] sezione GiftBox senza
 sorgente dati in /api/account (mai portata nell'aggregato) -> empty-state;
 [LOW] profile/settings dell'hub -> /account/profile centrale (scelta di port).
+
+
+---
+
+## Hub cliente per-sede: verifica avversariale (workflow) + fix dei difetti (2026-07-06)
+
+Lanciato un workflow di verifica avversariale (5 dimensioni × review+verify, 28
+subagent) confrontando l'hub Next col PHP legacy: 23 finding, 21 CONFERMATI, 2
+refutati. Corretti in questo giro:
+
+- **[HIGH] Ownership GiftCard**: listPublicCustomerGiftcards filtrava solo
+  `recipient_client_id = client`, nascondendo le carte auto-acquistate
+  (recipient NULL/0, ownership su client_id) — il caso tipico. Ora replica il
+  legacy (booking_public_list_client_giftcards): `recipient_client_id=? OR
+  ((recipient NULL/0) AND client_id=?)`, LIMIT 200, ORDER attive-first/scadenza/
+  id DESC, con fallback a client_id se la colonna recipient manca.
+- **[MEDIUM] Chip account in SSR**: l'hub è client-side (user=null iniziale) →
+  in SSR/no-JS mostrava il bottone "Accedi" invece del chip cliente. Ora il gate
+  passa `initialUser` (cliente noto lato server) → il chip è renderizzato al
+  primo paint come nel PHP (BookingPublicUi 296-313). Inoltre caricato
+  public_account.css: le classi marketplace-account-chip/wrap/menu non erano in
+  app.css/TOPBAR_STYLE, quindi il chip/menu erano di fatto NON stilizzati.
+- **[MEDIUM] auth-destination**: giftcards/giftboxes non sono nell'allow-list
+  PHP account_next_key → post-login collassano su 'start' (wizard); rimossi da
+  HUB_KEYS. Corretto anche il commento (profile/settings → account centrale è una
+  deviazione deliberata, non ciò che fa il PHP).
+- **[MEDIUM] GiftBox**: la sezione era un empty-state fisso (nessuna sorgente in
+  /api/account) → mostrava "Nessuna GiftBox" anche a chi ne possiede. Una lista
+  fedele richiede GiftBox::getInstanceFull + redemption + riserve (sottosistema a
+  sé, rischio conteggi errati). Scelta: RIMOSSA la voce/sezione GiftBox dall'hub
+  (voce sempre-vuota = peggio dell'assenza) — il riscatto resta dal wizard
+  (deep-link book_giftbox). ?giftboxes=1 → fallback showcase /attivita/<slug>.
+- **[MEDIUM] Omaggi**: listPublicCustomerGifts elencava tutti gli stati; il PHP
+  (Gifts::clientAvailableInstances) mostra solo 'disponibile'. Ora filtra
+  `state='disponibile'`.
+- **[LOW] Link/CSS shell**: bottom-nav Home → profilo tenant /attivita/<slug>
+  (era /attivita); brand topbar → root "/" (era /attivita); sidebar sticky
+  top:96px (era 68px); footer store link senza ?return=%2Fattivita.
+
+Verifica live (sessione ZZ mint+cleanup+RESTORE): hub SSR con chip account (0
+"Accedi"), sidebar 10 voci senza GiftBox, brand href="/", bottom-nav Home →
+/attivita/<slug>, store link puliti, ?giftboxes=1 → 307 /attivita/<slug>;
+typecheck pulito; screenshot chip/menu stilizzati.
+
+RESIDUI DELIBERATI (documentati): [MEDIUM] deep-link 'Prenota' book_omaggio +
+badge "Prenotato" nella sezione Omaggi (dipende dai reward-item + riserve, non
+portati); [MEDIUM] appuntamenti/preventivi visibili solo per i tenant COLLEGATI
+(no fallback per-email al tenant corrente come adoptGlobalSession); [LOW] payload
+/api/account aggregato multi-centro filtrato lato client; [LOW] profile/settings
+dell'hub → /account/profile centrale (email read-only, no 'Sede di riferimento');
+[LOW] enablement-gating sidebar giftcards (schema-based, dormiente); [LOW] campi
+Prepagati/Preordini (Totale pagato/Prenotati/Sede/Codice) non tutti mostrati;
+[LOW] messaggio landing 'no sedi' non varia per booking_public_allowed;
+lo styling delle card di sezione resta Tailwind (residuo pre-esistente).
+Refutati (2): filtro tenant e altri due presunti difetti non confermati.

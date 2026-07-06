@@ -13,8 +13,14 @@ import { publicBookingContext } from "@/lib/public-booking-db";
 // (dashboard residui del cliente presso QUESTA attività). profile/settings
 // vanno all'account CENTRALE (/account/profile). L'account cliente vero e
 // proprio (attività/preferiti/profilo) resta /account/*.
+// NB: "giftboxes" NON è nell'hub del port (sezione non ancora portata: la
+// lista GiftBox del cliente dipende da GiftBox::getInstanceFull + redemption +
+// riserve, un sottosistema a sé). ?giftboxes=1 resta una richiesta pubblica
+// (isPublicRequest) ma, non essendo in HUB_SECTIONS, ricade nel fallback
+// showcase (/attivita/<slug>). Il riscatto GiftBox resta possibile dal wizard
+// (deep-link book_giftbox).
 const HUB_SECTIONS = new Set<HubSection>([
-  "hub", "my", "credit", "giftcards", "packs", "prepaids", "giftboxes", "preorders", "quotes", "fidelity", "gifts",
+  "hub", "my", "credit", "giftcards", "packs", "prepaids", "preorders", "quotes", "fidelity", "gifts",
 ]);
 
 export const metadata: Metadata = {
@@ -126,6 +132,14 @@ export default async function TenantBookingPage({
           section={requestedTarget as HubSection}
           tenantName={tenantName}
           hasBookableLocations={hasBookableLocations}
+          initialUser={{
+            id: customer.id,
+            email: customer.email,
+            fullName: customer.fullName,
+            firstName: customer.firstName,
+            lastName: customer.lastName,
+            phone: customer.phone,
+          }}
         />
       );
     }
