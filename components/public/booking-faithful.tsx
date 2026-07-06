@@ -103,6 +103,17 @@ type BookingContext = {
   // booking_choose_staff_enabled: se false lo step Professionista viene
   // SALTATO e l'operatore è assegnato automaticamente (legacy CHOOSE_STAFF_ENABLED).
   chooseStaffEnabled?: boolean;
+  // Badge promo di catalogo per-servizio (booking.php serviceCatalogPromotions):
+  // reso sulle card servizio finché non è scelto uno slot.
+  serviceCatalogPromotions?: Record<string, {
+    promotion_id: number;
+    display_mode: "discounted_price" | "badge";
+    badge_title: string;
+    badge_detail: string;
+    discount_label: string;
+    old_price: number;
+    new_price: number;
+  }>;
 };
 
 type BookingSlot = {
@@ -1367,6 +1378,12 @@ export function BookingFaithful({
                 <div className="d-grid gap-3" id="serviceList">
                   {visibleServices.map((service) => {
                     const active = serviceIds.includes(service.id);
+                    // Badge promo di catalogo (booking.php updateServiceCardsPrices,
+                    // ramo catalogo): mostrato solo finché non è scelto uno slot
+                    // (canUseCatalogPromotionFallback) e mai sul servizio a residuo.
+                    const catalogPromo = (!slot && service.id !== redeemedServiceId
+                      ? ctx?.serviceCatalogPromotions?.[String(service.id)]
+                      : undefined) ?? null;
                     return (
                       <div
                         key={service.id}
@@ -1388,7 +1405,28 @@ export function BookingFaithful({
                             </div>
                           </div>
                           <div className="d-flex align-items-center gap-3">
-                            <div className="service-price">€ {fmtMoney(service.price)}</div>
+                            <div className="service-price">
+                              {catalogPromo && catalogPromo.display_mode === "discounted_price" && catalogPromo.old_price > catalogPromo.new_price ? (
+                                <>
+                                  <div className="price-row">
+                                    <span className="price-old">€ {fmtMoney(catalogPromo.old_price)}</span>
+                                    <span className={`discount-badge${catalogPromo.badge_detail ? " discount-badge--promo" : ""}`}>{catalogPromo.badge_title}</span>
+                                  </div>
+                                  <div className="price-now">€ {fmtMoney(catalogPromo.new_price)}</div>
+                                  {catalogPromo.badge_detail ? <div className="service-promo-detail">{catalogPromo.badge_detail}</div> : null}
+                                </>
+                              ) : catalogPromo && (catalogPromo.badge_title || catalogPromo.badge_detail) ? (
+                                <>
+                                  € {fmtMoney(service.price)}
+                                  <div className="service-promo-note">
+                                    {catalogPromo.badge_title ? <span className="service-promo-note__title">{catalogPromo.badge_title}</span> : null}
+                                    {catalogPromo.badge_detail ? <span className="service-promo-note__detail">{catalogPromo.badge_detail}</span> : null}
+                                  </div>
+                                </>
+                              ) : (
+                                <>€ {fmtMoney(service.price)}</>
+                              )}
+                            </div>
                             <div className="service-card__action" aria-hidden="true">
                               +
                             </div>

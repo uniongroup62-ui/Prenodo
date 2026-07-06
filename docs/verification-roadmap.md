@@ -6850,3 +6850,38 @@ VERIFICA LIVE (Playwright, step "Data e ora", 5 chiusure di test su tenant 25):
 - 20-08 "ZZ Chiuso" (gap) → riga separata.
 Notice visibile (no d-none), heading "Chiusura negozio". Dati di test poi
 ELIMINATI (residuo=0). typecheck pulito.
+
+
+---
+
+## Wizard booking: badge promo di catalogo sulle card servizio (prices-promo-badge) — CHIUSO (2026-07-06)
+
+Chiuso il residuo prices-promo-badge (prima deliberato per assenza dati). Le card
+servizio dello step 3 non mostravano il prezzo promo barrato + badge. Port fedele
+di booking.php serviceCatalogPromotions (3081-3126, Promotions::marketplaceBadges
+ForItems) + updateServiceCardsPrices/renderPriceHtml (booking-wizard.js 1498-1594).
+
+- **Backend** (db-repositories publicBookingServiceCatalogPromos): per ogni
+  servizio prenotabile valuta la MIGLIOR promo automatica su un carrello di UNA
+  unità RIUSANDO lo stesso motore del carrello (evaluateOnePromotion), così i
+  prezzi restano coerenti con la conferma. Esclude promo su coupon_code e con
+  condizioni manuali; senza cliente esclude quelle a limite per-cliente. Calcola
+  display_mode ('discounted_price' vs 'badge'), badge_title (target label:
+  Promo/Nuovi clienti/Bentornato/Compleanno/Fidelity), badge_detail
+  (discount_label + "fino al gg/mm/aaaa"), old_price/new_price.
+- **API** action=context: popola context.serviceCatalogPromotions col cliente
+  loggato (publicSessionClientId) + sede di default.
+- **Wizard**: sulle card, finché non è scelto uno slot (canUseCatalogPromotion
+  Fallback) e mai sul servizio a residuo, rende price-old barrato + discount-badge
+  + price-now + service-promo-detail (o service-promo-note per display_mode badge).
+
+VERIFICA LIVE (Playwright, promo test -20% su tenant 25, scadenza 31/12/2026):
+- context API: svc 9 => display_mode 'discounted_price', badge_title 'Promo',
+  badge_detail '-20% fino al 31/12/2026', old 12, new 9.6;
+- step "Servizi": card "test" con € 12,00 barrato + badge "Promo" + € 9,60 +
+  "-20% fino al 31/12/2026". Promo di test poi ELIMINATA (residuo 0). typecheck pulito.
+
+RESIDUO minore: promo in modalità 'badge' pura (time-windowed / min_qty>1) — il
+motore Next valuta su 1 unità al tempo corrente, quindi rende badge solo per le
+promo attive-ora; le promo min_qty>1 (che nel legacy darebbero un badge senza
+prezzo) non emettono badge. Non tocca il caso prezzo-barrato (il cuore del finding).

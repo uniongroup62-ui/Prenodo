@@ -71,6 +71,18 @@ export type PublicBookingContext = {
   // businesses.booking_choose_staff_enabled (booking.php $choose_staff_step):
   // se false il wizard SALTA lo step Professionista e auto-assegna l'operatore.
   chooseStaffEnabled: boolean;
+  // Badge promo di catalogo per-servizio (booking.php serviceCatalogPromotions):
+  // popolato dalla route action=context (dipende da cliente/sede della richiesta),
+  // reso sulle card servizio prima che sia scelta una data.
+  serviceCatalogPromotions?: Record<string, {
+    promotion_id: number;
+    display_mode: "discounted_price" | "badge";
+    badge_title: string;
+    badge_detail: string;
+    discount_label: string;
+    old_price: number;
+    new_price: number;
+  }>;
 };
 
 export type PublicBookingSlot = {

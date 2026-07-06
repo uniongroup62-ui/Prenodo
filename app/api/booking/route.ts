@@ -6,6 +6,7 @@ import {
   applyAppointmentPackageRedeems,
   applyAppointmentPrepaidRedeems,
   evalBestPromotionForAppointment,
+  publicBookingServiceCatalogPromos,
   type AppointmentGiftRedeem,
   type AppointmentGiftboxRedeem,
   type AppointmentPackageRedeem,
@@ -200,6 +201,18 @@ export async function GET(request: Request) {
     }
 
     const context = await publicBookingContext(slug);
+
+    // serviceCatalogPromotions (booking.php 3081-3126): badge promo di catalogo
+    // per-servizio, calcolati una volta col cliente loggato + la sede di default
+    // (o quella richiesta). Resi sulle card prima della scelta di una data.
+    const catalogClientId = await publicSessionClientId(slug).catch(() => 0);
+    const catalogLocationId = parseOptionalId(url.searchParams.get("location_id")) || Number(context.locations[0]?.id ?? 0) || 0;
+    context.serviceCatalogPromotions = await publicBookingServiceCatalogPromos(
+      slug,
+      context.services.map((s) => s.id),
+      catalogClientId,
+      catalogLocationId,
+    ).catch(() => ({}));
 
     return Response.json({
       ok: true,

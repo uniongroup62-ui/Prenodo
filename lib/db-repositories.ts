@@ -13817,6 +13817,152 @@ export async function evaluateCatalogTilePromos(
   return out;
 }
 
+// Badge promo di catalogo per le card del wizard di prenotazione (booking.php
+// 3081-3126 -> serviceCatalogPromotions, tramite Promotions::marketplaceBadges
+// ForItems('service', ...)). Per ogni servizio prenotabile: la MIGLIOR promo
+// automatica (no coupon_code, no condizioni manuali) valutata su un carrello di
+// UNA unità; solo display_mode='discounted_price' porta prezzo vecchio/nuovo, il
+// resto è un badge testuale. Riusa lo stesso motore del carrello
+// (evaluateOnePromotion), così i prezzi restano coerenti con la conferma.
+export type ServiceCatalogPromo = {
+  promotion_id: number;
+  display_mode: "discounted_price" | "badge";
+  badge_title: string;
+  badge_detail: string;
+  discount_label: string;
+  old_price: number;
+  new_price: number;
+};
+
+export async function publicBookingServiceCatalogPromos(
+  slug: string,
+  serviceIds: number[],
+  clientId: number,
+  locationId: number,
+): Promise<Record<string, ServiceCatalogPromo>> {
+  const out: Record<string, ServiceCatalogPromo> = {};
+  const wanted = Array.from(new Set(serviceIds.map((n) => Number(n)).filter((n) => n > 0))).slice(0, 80);
+  if (!wanted.length) return out;
+
+  const day = todayIso();
+  const now = new Date();
+  const t = promoNormTime(`${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`);
+
+  let promos = await tenantSelect<RowDataPacket>({ slug, table: "promotions", where: "COALESCE(is_active,0) = 1", orderBy: "priority DESC, id ASC" }).catch(() => [] as RowDataPacket[]);
+  // Solo promo AUTOMATICHE (no coupon_code). Le promo con condizioni manuali NON
+  // danno badge (marketplacePromotionHasManualConditions -> continue). Senza
+  // cliente saltano quelle con limite per-cliente.
+  promos = promos.filter((p) => String(p.coupon_code ?? "").trim() === "");
+  promos = promos.filter((p) => !(Number(p.promo_conditions_enabled ?? 0) === 1 && String(p.promo_conditions ?? "").trim() !== ""));
+  if (clientId <= 0) promos = promos.filter((p) => (Math.trunc(Number(p.per_customer_limit ?? 0)) || 0) <= 0);
+  if (!promos.length) return out;
+
+  const ids = promos.map((p) => Number(p.id));
+  const inList = ids.map(() => "?").join(",");
+  const grab = async (table: string): Promise<Map<number, RowDataPacket[]>> => {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table, where: `promotion_id IN (${inList})`, params: ids }).catch(() => [] as RowDataPacket[]);
+    const map = new Map<number, RowDataPacket[]>();
+    for (const r of rows) { const pid = Number(r.promotion_id ?? 0); if (!map.has(pid)) map.set(pid, []); map.get(pid)!.push(r); }
+    return map;
+  };
+  const [boMap, twMap, svcMap, prdMap, locMap] = await Promise.all([grab("promotion_blackout_dates"), grab("promotion_time_windows"), grab("promotion_services"), grab("promotion_products"), grab("promotion_locations")]);
+  const ctx = clientId > 0 ? await loadPromoClientCtx(slug, clientId, day, t) : null;
+
+  const children = new Map<number, PromoChildren>();
+  for (const promo of promos) {
+    const pid = Number(promo.id);
+    const defMap = (rows: RowDataPacket[] | undefined, refCol: string) => {
+      const m = new Map<number, { type: "percent" | "fixed"; value: number; minQty: number }>();
+      for (const r of rows ?? []) { const t2 = String(r.discount_type ?? "percent").toLowerCase() === "fixed" ? "fixed" : "percent"; m.set(Number(r[refCol] ?? 0), { type: t2 as "percent" | "fixed", value: Math.max(0, Number(r.discount_value ?? 0) || 0), minQty: Math.max(1, Number(r.min_qty ?? 1) || 1) }); }
+      return m;
+    };
+    children.set(pid, {
+      blackouts: new Set((boMap.get(pid) ?? []).map((r) => (typeof r.blackout_date === "string" ? r.blackout_date.slice(0, 10) : r.blackout_date ? toIso(r.blackout_date).slice(0, 10) : "")).filter(Boolean)),
+      windows: (twMap.get(pid) ?? []).map((r) => ({ day: Number(r.day_of_week ?? 0), start: String(r.start_time ?? "").slice(0, 5), end: String(r.end_time ?? "").slice(0, 5) })),
+      serviceDefs: defMap(svcMap.get(pid), "service_id"),
+      productDefs: defMap(prdMap.get(pid), "product_id"),
+      locationIds: new Set((locMap.get(pid) ?? []).map((r) => Number(r.location_id ?? 0)).filter((n) => n > 0)),
+    });
+  }
+
+  const blockedByLimit = new Set<number>();
+  if (clientId > 0) {
+    for (const promo of promos) {
+      const limit = Math.trunc(Number(promo.per_customer_limit ?? 0)) || 0;
+      if (limit <= 0) continue;
+      const used = await promotionUsageCount(slug, Number(promo.id), { clientId });
+      if (used >= limit) blockedByLimit.add(Number(promo.id));
+    }
+  }
+
+  // Prezzi correnti da DB (anti-tampering, come il legacy).
+  const priceOf = new Map<number, number>();
+  {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, price", where: `id IN (${wanted.map(() => "?").join(",")}) AND COALESCE(is_active,1) = 1`, params: wanted }).catch(() => [] as RowDataPacket[]);
+    for (const r of rows) priceOf.set(Number(r.id), roundMoney(Math.max(0, Number(r.price ?? 0))));
+  }
+
+  const targetLabel = (target: string): string => {
+    switch (target) {
+      case "fidelity": return "Fidelity";
+      case "birthday": return "Compleanno";
+      case "new": return "Nuovi clienti";
+      case "inactive": return "Bentornato";
+      default: return "Promo";
+    }
+  };
+  const endLabel = (promo: RowDataPacket): string => {
+    const end = String(promo.ends_at ?? "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) return "";
+    const [y, m, d] = end.split("-");
+    return `${d}/${m}/${y}`;
+  };
+
+  for (const sid of wanted) {
+    const price = priceOf.get(sid) ?? 0;
+    if (price <= 0.00001) continue;
+    const cart: PromoCartLine[] = [{ type: "service", id: sid, qty: 1, unitPrice: price }];
+    let best: { ev: PromoEvalResult; promo: RowDataPacket; score: number } | null = null;
+    for (const promo of promos) {
+      const pid = Number(promo.id);
+      if (blockedByLimit.has(pid)) continue;
+      const ev = evaluateOnePromotion(promo, children.get(pid)!, cart, day, t, clientId, locationId, ctx);
+      if (!ev.eligible || ev.discount <= 0.00001) continue;
+      const bd = ev.breakdownServices[sid];
+      if (!bd || bd.old <= bd.now + 0.00001) continue;
+      // Punteggio: sconto, con priorità al prezzo mostrabile (legacy _score).
+      const needsTime = children.get(pid)!.windows.length > 0;
+      const hasLimit = (Math.trunc(Number(promo.per_customer_limit ?? 0)) || 0) > 0;
+      const showPrice = !needsTime && !(clientId <= 0 && hasLimit);
+      const score = ev.discount + (showPrice ? 0.0001 : 0);
+      if (!best || score > best.score) best = { ev, promo, score };
+    }
+    if (!best) continue;
+    const bd = best.ev.breakdownServices[sid];
+    const discountLabel = String(bd.badge ?? "").trim();
+    if (!discountLabel) continue;
+    let target = String(best.promo.target_type ?? "all").toLowerCase();
+    if (!["all", "new", "inactive", "birthday", "fidelity"].includes(target)) target = "all";
+    const needsTime = children.get(Number(best.promo.id))!.windows.length > 0;
+    const hasLimit = (Math.trunc(Number(best.promo.per_customer_limit ?? 0)) || 0) > 0;
+    const showPrice = !needsTime && !(clientId <= 0 && hasLimit);
+    const detailParts = [discountLabel];
+    if (needsTime) detailParts.push("giorni/orari selezionati");
+    const until = endLabel(best.promo);
+    if (until) detailParts.push(`fino al ${until}`);
+    out[String(sid)] = {
+      promotion_id: Number(best.promo.id ?? 0),
+      display_mode: showPrice ? "discounted_price" : "badge",
+      badge_title: targetLabel(target) || "Promo",
+      badge_detail: detailParts.join(" ").trim(),
+      discount_label: discountLabel,
+      old_price: roundMoney(bd.old),
+      new_price: roundMoney(bd.now),
+    };
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // PROMOZIONI nel quick booking — port of the legacy drawer auto-detection
 // (api_appointments.php action=promotion_preview -> appt_eval_best_promotion_
