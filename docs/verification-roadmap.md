@@ -6545,3 +6545,23 @@ VERBATIM (quirk preservati: 'piu' senza accento, "l'orario"):
 
 Verifica live: step 2 "Scegli da dove iniziare il percorso."/"Continua"; step 3
 "Servizi"/"Seleziona uno o piu trattamenti..."/"Avanti". typecheck pulito.
+
+
+---
+
+## Wizard booking: preselezione categoria + reset servizi al cambio categoria (2026-07-06)
+
+Due finding MEDIUM step Categoria/Servizi:
+- **Preselezione categoria**: il Next preselezionava sempre la prima categoria
+  (card 'active' + Avanti abilitato); il legacy non seleziona nulla con più
+  categorie (validateStep step 2 richiede la scelta). Fix: auto-select SOLO con
+  una categoria (come lo screenshot 'genera'), altrimenti null; computeCanContinue
+  step 2 → categoryId != null.
+- **Reset servizi al cambio categoria**: il Next non azzerava i servizi cambiando
+  categoria (restavano nel carrello/prenotazione); il legacy applyCategorySelection
+  svuota il carrello + reset data/ora. Fix: al cambio categoria azzera
+  serviceIds/slot/hold.
+
+Verifica live (sede+categoria uniche): 'genera' auto-selected, Continua abilitato.
+typecheck pulito. (data-shown-categories: filtro categorie per sede/non-vuote —
+backend, in coda.)

@@ -296,7 +296,9 @@ export function BookingFaithful({
           ? initialLocationId
           : ctx.locations[0]?.id ?? 0;
         setLocationId(entryLoc);
-        setCategoryId(ctx.categories[0]?.id ?? null);
+        // Il legacy NON preseleziona una categoria con più categorie (validateStep
+        // step 2 richiede una scelta); con UNA sola categoria la auto-seleziona.
+        setCategoryId(ctx.categories.length === 1 ? ctx.categories[0]?.id ?? null : null);
         // Deep-link prefill: preselect the covered service (and its category) so
         // the customer lands with the redeem's service already in the cart.
         if (redeemPrefill && redeemPrefill.serviceId > 0) {
@@ -628,6 +630,7 @@ export function BookingFaithful({
   function computeCanContinue(): boolean {
     if (submitting) return false;
     if (step === 1) return locationId > 0;
+    if (step === 2) return categoryId != null;
     if (step === 3) return serviceIds.length > 0;
     if (step === 5) return Boolean(slot) && !slotsLoading;
     if (step === 7) return Boolean(firstName.trim()) && Boolean(email.trim()) && Boolean(slot);
@@ -1133,6 +1136,13 @@ export function BookingFaithful({
                       role="button"
                       tabIndex={0}
                       onClick={() => {
+                        // applyCategorySelection (booking-wizard.js 3431): cambiare
+                        // categoria svuota il carrello servizi e resetta data/ora.
+                        if (cat.id !== categoryId) {
+                          setServiceIds([]);
+                          setSlot("");
+                          setHold(null);
+                        }
                         setCategoryId(cat.id);
                         setStep(3);
                       }}
