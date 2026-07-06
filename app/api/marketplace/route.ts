@@ -18,6 +18,11 @@ type MarketplaceProfile = {
     city: string;
     area: string;
     address: string;
+    // Categorie attività marketplace della sede (legacy category_text della
+    // tenant_directory_locations, es. 'Unghie'): la card lista le mostra al
+    // posto delle categorie servizi.
+    activityCategories: string[];
+    categoryText: string;
   }>;
 };
 
@@ -75,11 +80,35 @@ async function marketplaceProfiles(): Promise<{ profiles: MarketplaceProfile[]; 
   `);
 
   const categories = await marketplaceDbCategories(rows);
-  const profiles = await Promise.all(rows.map((row) => profileFromRow(row)));
+  const locationCategories = await marketplaceLocationCategories();
+  const profiles = await Promise.all(rows.map((row) => profileFromRow(row, locationCategories)));
   return { profiles, categories };
 }
 
-async function profileFromRow(row: RowDataPacket): Promise<MarketplaceProfile> {
+// Categorie attività per SEDE (marketplace_location_activity_categories):
+// alimentano la meta della card lista e il 'Categorie:' delle result-card,
+// come il category_text legacy della tenant_directory_locations.
+async function marketplaceLocationCategories(): Promise<Map<number, string[]>> {
+  const rows = await dbQuery<RowDataPacket[]>(`
+    SELECT lac.location_id, mac.name
+    FROM marketplace_location_activity_categories lac
+    JOIN marketplace_activity_categories mac ON mac.id = lac.marketplace_category_id
+    WHERE COALESCE(mac.is_active, 1) = 1
+    ORDER BY lac.is_primary DESC, lac.sort_order ASC, mac.name ASC
+  `).catch(() => [] as RowDataPacket[]);
+  const map = new Map<number, string[]>();
+  for (const row of rows) {
+    const id = Number(row.location_id ?? 0);
+    const name = String(row.name ?? "").trim();
+    if (id <= 0 || !name) continue;
+    const list = map.get(id) ?? [];
+    if (!list.includes(name)) list.push(name);
+    map.set(id, list);
+  }
+  return map;
+}
+
+async function profileFromRow(row: RowDataPacket, locationCategories: Map<number, string[]> = new Map()): Promise<MarketplaceProfile> {
   const tenantId = Number(row.tenant_id ?? 0);
   const slug = String(row.slug ?? "");
   const locationRows = tenantId > 0
@@ -107,13 +136,19 @@ async function profileFromRow(row: RowDataPacket): Promise<MarketplaceProfile> {
     priceFrom: price > 0 ? `Da ${roundMoney(price)} euro` : DEFAULT_PRICE_FROM,
     image: DEFAULT_IMAGE,
     services: services.length ? services : DEFAULT_SERVICES,
-    locations: (locationRows.length ? locationRows : [row]).map((location) => ({
-      id: Number(location.id ?? row.first_location_id ?? 0),
-      name: String(location.name ?? row.first_location_name ?? "Sede principale"),
-      city: String(location.legal_city ?? city),
-      area: String(location.legal_province ?? area),
-      address: String(location.address ?? row.first_address ?? ""),
-    })),
+    locations: (locationRows.length ? locationRows : [row]).map((location) => {
+      const locationId = Number(location.id ?? row.first_location_id ?? 0);
+      const activityCategories = locationCategories.get(locationId) ?? [];
+      return {
+        id: locationId,
+        name: String(location.name ?? row.first_location_name ?? "Sede principale"),
+        city: String(location.legal_city ?? city),
+        area: String(location.legal_province ?? area),
+        address: String(location.address ?? row.first_address ?? ""),
+        activityCategories,
+        categoryText: activityCategories.join(", "),
+      };
+    }),
   };
 }
 

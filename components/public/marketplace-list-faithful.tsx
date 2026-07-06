@@ -53,6 +53,10 @@ type MarketplaceLocation = {
   city: string;
   area: string;
   address: string;
+  // Categorie attività marketplace della sede (category_text legacy): la
+  // meta della card mostra QUESTE (es. 'Unghie'), non le categorie servizi.
+  activityCategories?: string[];
+  categoryText?: string;
 };
 
 type MarketplaceProfile = {
@@ -646,7 +650,8 @@ export function MarketplaceListFaithful() {
         <div className="grid">
           {filteredCards.map((card) => {
             const { profile, location, favoriteKey, locationSlug } = card;
-            const schedaHref = `/attivita/${profile.slug}`;
+            // Legacy: la card sede linka la SCHEDA SEDE /attivita/<slug>/sedi/<loc-slug>.
+            const schedaHref = `/attivita/${profile.slug}/sedi/${encodeURIComponent(locationSlug)}`;
             const prenotaHref = `/account/login?tenant=${encodeURIComponent(profile.slug)}&next=start&location_id=${location.id}`;
             const addressBits = [location.address, location.city].filter(Boolean).join(" ");
             return (
@@ -679,9 +684,9 @@ export function MarketplaceListFaithful() {
                   </div>
                   <div className="meta">
                     {addressBits ? <span>{addressBits}</span> : null}
-                    {profile.services.slice(0, 1).map((service) => (
-                      <span key={service}>{service}</span>
-                    ))}
+                    {/* Legacy: categoria ATTIVITÀ della sede (es. 'Unghie'),
+                        non la categoria servizi. */}
+                    {location.categoryText ? <span>{location.categoryText}</span> : null}
                   </div>
                   <div className="card-actions">
                     <a className="btn btn-primary" href={prenotaHref}>

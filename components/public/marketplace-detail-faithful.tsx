@@ -90,7 +90,7 @@ type MarketplaceProfile = {
 
 // Reproduced VERBATIM from the captured <head> inline <style> blocks of
 // http://localhost/attivita/centroesteticoelite (topbar block + footer block).
-const TOPBAR_STYLE = `.marketplace-topbar{--marketplace-topbar-brand:#4e6da6;--marketplace-topbar-brand-dark:#365287;--marketplace-topbar-ink:#0f172a;--marketplace-topbar-muted:#64748b;--marketplace-topbar-line:#dbe3ef;--marketplace-topbar-soft:#eef4ff;--marketplace-topbar-pad:clamp(18px,5vw,72px);--marketplace-topbar-max:none;--marketplace-topbar-search-width:900px;--marketplace-topbar-search-reserve:560px;height:68px;background:#fff;border-bottom:1px solid var(--marketplace-topbar-line);padding:0 var(--marketplace-topbar-pad);position:sticky;top:0;z-index:30;color:var(--marketplace-topbar-ink)}
+export const TOPBAR_STYLE = `.marketplace-topbar{--marketplace-topbar-brand:#4e6da6;--marketplace-topbar-brand-dark:#365287;--marketplace-topbar-ink:#0f172a;--marketplace-topbar-muted:#64748b;--marketplace-topbar-line:#dbe3ef;--marketplace-topbar-soft:#eef4ff;--marketplace-topbar-pad:clamp(18px,5vw,72px);--marketplace-topbar-max:none;--marketplace-topbar-search-width:900px;--marketplace-topbar-search-reserve:560px;height:68px;background:#fff;border-bottom:1px solid var(--marketplace-topbar-line);padding:0 var(--marketplace-topbar-pad);position:sticky;top:0;z-index:30;color:var(--marketplace-topbar-ink)}
 .marketplace-topbar__inner{position:relative;width:100%;max-width:var(--marketplace-topbar-max);height:100%;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:18px}
 .marketplace-topbar__brand{height:68px;display:flex;gap:12px;align-items:center;justify-self:start;padding:0;background:transparent;color:inherit;text-decoration:none;font-size:18px;line-height:1;font-weight:600;min-width:0}
 .marketplace-topbar__brand:hover,.marketplace-topbar__brand:focus,.marketplace-topbar__brand:active,.marketplace-topbar__brand:visited{background:transparent;color:inherit;text-decoration:none;box-shadow:none}
@@ -142,7 +142,7 @@ const TOPBAR_STYLE = `.marketplace-topbar{--marketplace-topbar-brand:#4e6da6;--m
 @media (max-width:900px){.marketplace-topbar{position:static;height:auto;min-height:68px;padding-top:12px;padding-bottom:12px}.marketplace-topbar__inner{height:auto;display:flex;flex-wrap:wrap;gap:12px}.marketplace-topbar__brand{height:auto;padding:0;background:transparent}.marketplace-topbar-search{position:static;left:auto;top:auto;transform:none;order:3;flex:1 1 100%;width:auto;max-width:none}.marketplace-topbar__actions,.marketplace-topbar .header-actions,.marketplace-topbar .booking-marketplace-actions{flex-wrap:wrap;margin-left:auto}}
 @media (max-width:560px){.marketplace-topbar-search{grid-template-columns:1fr 38px;height:auto;border-radius:18px}.marketplace-topbar-search__field + .marketplace-topbar-search__field{border-left:0;border-top:1px solid var(--marketplace-topbar-line)}.marketplace-topbar-search__field:nth-child(2){grid-column:1/2}.marketplace-topbar-search > button[type="submit"]{grid-column:2;grid-row:1/3;width:38px;height:38px;margin-right:5px}.marketplace-topbar-city-suggestions{left:0;right:46px}}`;
 
-const FOOTER_STYLE = `.marketplace-footer{border-top:1px solid var(--line,#dbe3ef);background:#f3f5f8;color:#475569;padding:56px var(--marketplace-page-pad,clamp(18px,2.8vw,40px)) 34px}
+export const FOOTER_STYLE = `.marketplace-footer{border-top:1px solid var(--line,#dbe3ef);background:#f3f5f8;color:#475569;padding:56px var(--marketplace-page-pad,clamp(18px,2.8vw,40px)) 34px}
 body.embed-body footer.marketplace-footer,footer.marketplace-footer{display:block!important}
 .marketplace-footer__inner{max-width:var(--marketplace-page-max,1440px);margin:0 auto}
 .marketplace-footer__grid{display:grid;grid-template-columns:1.1fr 1.2fr 1fr 1fr;gap:54px;align-items:start}
@@ -173,11 +173,11 @@ body.embed-body footer.marketplace-footer,footer.marketplace-footer{display:bloc
 // :root tokens normally live in the linked public_marketplace.css. We re-declare
 // the handful the topbar/footer markup depends on so the component renders
 // faithfully even before/without that file (it is also loaded via <link>).
-const TOKEN_STYLE = `:root{--brand:#4e6da6;--brand-dark:#365287;--ink:#0f172a;--muted:#64748b;--line:#dbe3ef;--bg:#f4f7fb;--card:#fff;--soft:#eef4ff;--marketplace-page-max:1440px;--marketplace-page-pad:clamp(18px,2.8vw,40px);--marketplace-shell-max:calc(var(--marketplace-page-max) + var(--marketplace-page-pad) + var(--marketplace-page-pad))}`;
+export const TOKEN_STYLE = `:root{--brand:#4e6da6;--brand-dark:#365287;--ink:#0f172a;--muted:#64748b;--line:#dbe3ef;--bg:#f4f7fb;--card:#fff;--soft:#eef4ff;--marketplace-page-max:1440px;--marketplace-page-pad:clamp(18px,2.8vw,40px);--marketplace-shell-max:calc(var(--marketplace-page-max) + var(--marketplace-page-pad) + var(--marketplace-page-pad))}`;
 
 // The legacy topbar category dropdown (verbatim category list + Bootstrap-icon
 // names, exactly as emitted by the PHP page).
-const TOPBAR_CATEGORIES: Array<{ category: string; icon: string; label: string; slug: string }> = [
+export const TOPBAR_CATEGORIES: Array<{ category: string; icon: string; label: string; slug: string }> = [
   { category: "Parrucchiere", icon: "bi-scissors", label: "Parrucchiere", slug: "parrucchiere" },
   { category: "Salone di bellezza", icon: "bi-shop", label: "Salone di bellezza", slug: "salone-bellezza" },
   { category: "Estetista", icon: "bi-stars", label: "Estetista", slug: "estetista" },
@@ -216,7 +216,7 @@ function readSlugFromPath(): string {
   return (parts[2] || "").trim();
 }
 
-export function MarketplaceDetailFaithful({ slug: slugProp }: { slug?: string } = {}) {
+export function MarketplaceDetailFaithful({ slug: slugProp, locationId: locationIdProp }: { slug?: string; locationId?: number } = {}) {
   const [slug, setSlug] = useState<string>(slugProp ?? "");
   const [context, setContext] = useState<BookingContext | null>(null);
   const [profile, setProfile] = useState<MarketplaceProfile | null>(null);
@@ -258,10 +258,15 @@ export function MarketplaceDetailFaithful({ slug: slugProp }: { slug?: string } 
   const locations = context?.locations ?? [];
   const services = context?.services ?? [];
   const categories = context?.categories ?? [];
-  const primaryLocation = locations[0];
+  // Scheda SEDE (/attivita/<slug>/sedi/<loc-slug>): la sede richiesta guida
+  // booking link/indirizzo/preferiti; fallback alla prima come il legacy.
+  const primaryLocation = (locationIdProp ? locations.find((loc) => loc.id === locationIdProp) : undefined) ?? locations[0];
 
   const businessName = business?.name || profile?.name || "Attivita";
-  const locationId = primaryLocation?.id ?? profile?.locations?.[0]?.id ?? 0;
+  const locationId = primaryLocation?.id
+    ?? (locationIdProp && profile?.locations?.some((loc) => loc.id === locationIdProp) ? locationIdProp : undefined)
+    ?? profile?.locations?.[0]?.id
+    ?? 0;
 
   // Group services by category (mirrors the PHP salon-service-group layout).
   const serviceGroups = useMemo(() => {

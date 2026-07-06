@@ -102,6 +102,18 @@ export function AccountLoginFaithful() {
     setReturnTarget(params.get("return") ?? "/attivita");
     setTenant(params.get("tenant") ?? "");
     setLocationId(params.get("location_id") ?? "");
+    // Legacy (public_account.php 213): GET login da GIÀ loggato ->
+    // redirect immediato alla destinazione post-auth (niente form).
+    fetch("/api/account")
+      .then((r) => r.json())
+      .then((j: { ok?: boolean; user?: { email?: string } | null }) => {
+        if (j?.ok && j.user?.email) {
+          window.location.replace(
+            accountAuthDestination(params.get("tenant") ?? "", params.get("next") ?? "start", params.get("return") ?? "/attivita", params.get("location_id") ?? ""),
+          );
+        }
+      })
+      .catch(() => undefined);
   }, []);
 
   // Build the destination once login succeeds, mirroring the PHP

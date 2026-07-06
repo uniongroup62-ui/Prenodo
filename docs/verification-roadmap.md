@@ -5951,3 +5951,46 @@ redirect catturati 1:1 (302 /attivita, 302 login centrale con tenant+next,
 post-login 302 wizard con customer_handoff, wizard loggato 'Step 1 di 6');
 account ZZ live rimosso; 64/64 marker bundle; typecheck/lint puliti
 (8 errori lint pre-esistenti nel wizard, invariati).
+
+## AUDIT COMPLETO — MARKETPLACE pubblico (public_marketplace.php, seconda passata) (2026-07-06)
+Verificato contro public_marketplace.php (2099 righe: routing 15-50, vista
+ricerca 1720-1892, card 1836-1885) + snapshot live di lista/ricerca/
+dettaglio/sede. Bug reali corretti:
+- **Pagina RICERCA inesistente**: /attivita/ricerca?city=... (target della
+  search bar, delle city-card e dei filtri) finiva nel dettaglio attività
+  "ricerca" (inesistente). Nuova route app/attivita/ricerca + alias legacy
+  cerca|risultati (public_marketplace.php 30) + componente
+  marketplace-search-faithful: breadcrumb 'Home > Ricerca', titoli dinamici
+  con precedenza legacy (city 'Attività disponibili a X' > service
+  'Attività per "Y"' > q 'Risultati per "Z"' > category 'Attività per C' >
+  'Tutte le attività disponibili'), sottotitoli, toolbar 'N risultato/i
+  trovato/i|disponibili.', bottone Filtri con modale (form GET
+  q/città/categoria + service hidden, datalist città, Cerca/Reset), empty
+  'Nessuna attività trovata', results-grid di result-card per SEDE
+  (preferiti, cover/logo initial, Dove:/Categorie:, Prenota via login
+  centrale, Scheda alla pagina sede). Titoli confermati 1:1 col live
+  (&quot; incluse).
+- **Scheda SEDE 404**: /attivita/<slug>/sedi/<citta-nome-id> (link 'Scheda'
+  e media delle card legacy) cadeva nel catch-all manage (307 login!).
+  Nuova route con estrazione dell'id dal suffisso; MarketplaceDetailFaithful
+  accetta locationId e la sede selezionata guida booking link, indirizzo e
+  preferiti (fallback prima sede).
+- **Card lista non fedele**: 'Scheda' e il media linkavano /attivita/<slug>
+  invece della scheda sede; la meta mostrava la categoria SERVIZI ('genera')
+  invece della categoria ATTIVITÀ della sede ('Unghie'). API /api/marketplace
+  estesa con activityCategories/categoryText per sede (join
+  marketplace_location_activity_categories + marketplace_activity_categories,
+  is_primary/sort_order).
+- **Login/register da GIÀ loggato mostravano il form**: il legacy
+  (public_account.php 213) redirige subito alla destinazione post-auth.
+  Ora al mount /api/account -> user -> replace(accountAuthDestination(...)).
+RESIDUO DELIBERATO: i risultati/card sono client-side (SSR mostra 0 e i
+conteggi con i commenti React) come le altre pagine marketplace del port;
+cover/logo reali delle card usano il fallback initial (branding live
+per-card legacy marketplace_profile_with_live_branding non portato).
+Battery: e2e-marketplace.mjs 15/15 (API categorie sede, directory, titoli
+dinamici e precedenza, filtri, alias, scheda sede) + regressioni
+e2e-public-area 14/14 e e2e-booking-marketplace 26/26 CLEAN; live PHP
+confrontato (titoli h1 verbatim, '1 risultato/i trovato/i.', card 'Unghie',
+link /sedi/altino-sede1-21); 88/88 marker bundle su lista+ricerca+sede;
+typecheck pulito, lint con i soli pattern-fedeli pre-esistenti (<a> verbatim).

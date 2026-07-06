@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import { accountAuthDestination } from "@/components/public/account-auth-destination";
 
 // Pixel-faithful port of the legacy PHP public CUSTOMER ACCOUNT register page
 // served at http://localhost/account/register (public_customer_accounts /
@@ -101,6 +102,18 @@ export function AccountRegisterFaithful() {
     setReturnTarget(params.get("return") ?? "/attivita");
     setTenant(params.get("tenant") ?? "");
     setLocationId(params.get("location_id") ?? "");
+    // Legacy (public_account.php 213): GET register da GIÀ loggato ->
+    // redirect immediato alla destinazione post-auth (niente form).
+    fetch("/api/account")
+      .then((r) => r.json())
+      .then((j: { ok?: boolean; user?: { email?: string } | null }) => {
+        if (j?.ok && j.user?.email) {
+          window.location.replace(
+            accountAuthDestination(params.get("tenant") ?? "", params.get("next") ?? "start", params.get("return") ?? "/attivita", params.get("location_id") ?? ""),
+          );
+        }
+      })
+      .catch(() => undefined);
   }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
