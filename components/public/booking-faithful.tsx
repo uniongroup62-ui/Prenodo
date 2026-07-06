@@ -148,14 +148,16 @@ const PROGRESS = [
   { key: "confirm", label: "Conferma" },
 ];
 
+// Titoli/descrizioni VERBATIM dal runtime del legacy (booking-wizard.js
+// showStep, 3241-3285) — quirk preservati ('piu' senza accento, "l'orario").
 const STEP_HEAD: Record<number, { title: string; desc: string }> = {
   1: { title: "Scegli la sede", desc: "Seleziona il centro in cui vuoi prenotare." },
-  2: { title: "Scegli una categoria", desc: "Apri i servizi disponibili in questa categoria." },
-  3: { title: "Scegli i servizi", desc: "Seleziona uno o più servizi e premi Avanti." },
-  4: { title: "Scegli l'operatore", desc: "Scegli l'operatore per il tuo servizio." },
-  5: { title: "Scegli data e ora", desc: "Scegli un giorno dalla lista e seleziona uno slot disponibile." },
-  6: { title: "Vantaggi cliente", desc: "Se disponibili, puoi applicare Punti Fidelity, credito o GiftCard prima della conferma." },
-  7: { title: "Conferma", desc: "Controlla i dettagli del tuo appuntamento e premi su Invia per confermare." },
+  2: { title: "Scegli una categoria", desc: "Scegli da dove iniziare il percorso." },
+  3: { title: "Servizi", desc: "Seleziona uno o piu trattamenti e continua quando sei pronto." },
+  4: { title: "Professionista", desc: "Scegli il professionista per ogni servizio selezionato." },
+  5: { title: "Data e ora", desc: "Scegli la data e poi l'orario che preferisci." },
+  6: { title: "Vantaggi", desc: "Applica Punti Fidelity, credito o GiftCard disponibili prima della conferma." },
+  7: { title: "Conferma", desc: "Controlla tutti i dettagli e invia la prenotazione." },
 };
 
 const WEEKDAYS_SHORT = ["dom", "lun", "mar", "mer", "gio", "ven", "sab"];
@@ -786,7 +788,9 @@ export function BookingFaithful({
     () => Array.from({ length: 7 }, (_, index) => addDays(stripStart, index)),
     [stripStart],
   );
-  const nextLabel = isFinalStep ? "Invia" : step === 5 ? "Continua" : "Avanti";
+  // Etichetta #btnNext come il legacy (booking-wizard.js showStep 3245-3288):
+  // step 1-2 "Continua", step 3-6 "Avanti", step 7 "Invia".
+  const nextLabel = isFinalStep ? "Invia" : step <= 2 ? "Continua" : "Avanti";
   const nextIcon = isFinalStep ? "bi-send" : "bi-arrow-right";
 
   // --- Schermata di conferma post-book (booking.php ?confirmed=1, 8889-9152):

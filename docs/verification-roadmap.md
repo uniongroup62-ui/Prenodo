@@ -6525,3 +6525,23 @@ Due finding sui Vantaggi (step 6) chiusi:
 
 typecheck/lint puliti. (benefit-apply-order credito↔giftcard rimandato: il
 totale pagato è già corretto, cambia solo l'asset consumato per primo.)
+
+
+---
+
+## Wizard booking: testi step VERBATIM dal runtime legacy (2026-07-06)
+
+Chiusi 4 finding testi (verbatim-text-step-title/description/cta + text-step-headers):
+i titoli/descrizioni di STEP_HEAD e l'etichetta #btnNext divergevano dai testi
+che il legacy imposta a runtime (booking-wizard.js showStep 3241-3288). Allineati
+VERBATIM (quirk preservati: 'piu' senza accento, "l'orario"):
+- 2 desc "Scegli da dove iniziare il percorso."; 3 "Servizi"/"Seleziona uno o piu
+  trattamenti e continua quando sei pronto."; 4 "Professionista"/"Scegli il
+  professionista per ogni servizio selezionato."; 5 "Data e ora"/"Scegli la data
+  e poi l'orario che preferisci."; 6 "Vantaggi"/"Applica Punti Fidelity, credito
+  o GiftCard disponibili prima della conferma."; 7 desc "Controlla tutti i
+  dettagli e invia la prenotazione."
+- #btnNext: step 1-2 "Continua", 3-6 "Avanti", 7 "Invia".
+
+Verifica live: step 2 "Scegli da dove iniziare il percorso."/"Continua"; step 3
+"Servizi"/"Seleziona uno o piu trattamenti..."/"Avanti". typecheck pulito.
