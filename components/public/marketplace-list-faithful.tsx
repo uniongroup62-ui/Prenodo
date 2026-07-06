@@ -593,7 +593,9 @@ export function MarketplaceListFaithful() {
             const { profile, location, favoriteKey, locationSlug } = card;
             // Legacy: la card sede linka la SCHEDA SEDE /attivita/<slug>/sedi/<loc-slug>.
             const schedaHref = `/attivita/${profile.slug}/sedi/${encodeURIComponent(locationSlug)}`;
-            const prenotaHref = `/account/login?tenant=${encodeURIComponent(profile.slug)}&next=start&location_id=${location.id}`;
+            // Gate-driven come il PHP: non loggato -> /account/login CLIENTE,
+            // loggato -> wizard (senza hop dal login).
+            const prenotaHref = `/${encodeURIComponent(profile.slug)}/booking?start=1&location_id=${location.id}`;
             const addressBits = [location.address, location.city].filter(Boolean).join(" ");
             return (
               <article className="tenant-card" key={favoriteKey}>

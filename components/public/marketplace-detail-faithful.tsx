@@ -56,14 +56,22 @@ type BookingService = {
 
 type BookingCategory = { id: number; name: string };
 
+type WeekHourItem = { label: string; hours: string; closed: boolean; today: boolean };
 type BookingLocation = {
   id: number;
   name: string;
   address: string;
+  city?: string;
+  region?: string;
   email: string;
   phone: string;
+  whatsapp?: string;
+  facebook?: string;
+  instagram?: string;
+  tiktok?: string;
   bookingEnabled: boolean;
   hoursToday: string;
+  hoursWeek?: WeekHourItem[];
 };
 
 type BookingContext = {
@@ -197,7 +205,6 @@ export const TOPBAR_CATEGORIES: Array<{ category: string; icon: string; label: s
   { category: "Toelettatura animali", icon: "bi-gem", label: "Toelettatura animali", slug: "toelettatura-animali" },
 ];
 
-const WEEK_DAYS = ["lunedi", "martedi", "mercoledi", "giovedi", "venerdi", "sabato", "domenica"];
 
 function formatPrice(value: number): string {
   // Mirrors the PHP "€ 12,00" formatting.
@@ -264,6 +271,7 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
   const primaryLocation = (locationIdProp ? locations.find((loc) => loc.id === locationIdProp) : undefined) ?? locations[0];
 
   const businessName = business?.name || profile?.name || "Attivita";
+  const aboutText = (business?.about ?? "").trim();
   // Legacy: il <title> della scheda è il NOME attività (es. "elite"), non lo
   // slug. Il nome arriva client-side dal context, quindi aggiorno il titolo.
   useEffect(() => {
@@ -291,8 +299,21 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
   const serviceCount = services.length;
   const serviceCountLabel = `${serviceCount} ${serviceCount === 1 ? "servizio disponibile" : "servizi disponibili"}`;
 
-  // Booking CTA target in the Next app (route /<slug>/booking).
-  const bookHref = `/${slug}/booking`;
+  // CTA prenotazione: SEMPRE ?start=1&location_id=... così il gate replica il
+  // PHP (non loggato -> /account/login CLIENTE?tenant=..&next=start; loggato ->
+  // wizard). La URL "nuda" /<slug>/booking è la pagina ADMIN e manderebbe al
+  // login GESTIONALE — bug segnalato su "Prenota ora".
+  const bookHref = `/${slug}/booking?start=1${locationId > 0 ? `&location_id=${locationId}` : ""}`;
+  // URL canonico per la condivisione (data-share-url del legaco): scheda sede
+  // se si sta guardando una sede specifica, altrimenti la scheda attività.
+  const shareLocSlug = (() => {
+    if (!locationIdProp || !primaryLocation) return "";
+    const base = [primaryLocation.city, primaryLocation.name].filter(Boolean).join(" ").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    return `${base}-${primaryLocation.id}`;
+  })();
+  const shareUrl = typeof window !== "undefined"
+    ? `${window.location.origin}/attivita/${encodeURIComponent(slug)}${shareLocSlug ? `/sedi/${shareLocSlug}` : ""}`
+    : `/attivita/${encodeURIComponent(slug)}${shareLocSlug ? `/sedi/${shareLocSlug}` : ""}`;
   function bookServiceHref(serviceId: number): string {
     return `/${slug}/booking?start=1&location_id=${locationId}&service_ids=${serviceId}`;
   }
@@ -302,16 +323,23 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
     || [profile?.locations?.[0]?.address, profile?.area].filter(Boolean).join(", ")
     || "";
   const phone = primaryLocation?.phone || business?.phone || "";
+  // tel: normalizzato a [^\d+] come sidebarPhoneHref legacy.
+  const phoneHref = phone.replace(/[^\d+]/g, "");
+  // Contatti social della sede + numero WhatsApp per wa.me (solo cifre).
+  const whatsappNum = (primaryLocation?.whatsapp ?? "").replace(/\D/g, "");
+  const facebookUrl = (primaryLocation?.facebook ?? "").trim();
+  const instagramUrl = (primaryLocation?.instagram ?? "").trim();
+  const tiktokUrl = (primaryLocation?.tiktok ?? "").trim();
 
-  // Today's index (0 = Monday) for the weekly hours "is-today" highlight.
-  const todayIndex = (() => {
-    const jsDay = new Date().getDay(); // 0 Sun..6 Sat
-    return (jsDay + 6) % 7; // 0 Mon..6 Sun
-  })();
-  const todayRange = (() => {
-    const raw = primaryLocation?.hoursToday || "";
-    // hoursToday looks like "Oggi 09:00 - 19:00"; strip the leading "Oggi".
-    return raw.replace(/^Oggi\s*/i, "").trim() || "09:00 - 19:00";
+  // Orari settimanali REALI (hoursWeek dall'API). Fallback fabbricato solo se
+  // l'API non li fornisce (compatibilità), come prima.
+  const weekHours: WeekHourItem[] = (() => {
+    if (primaryLocation?.hoursWeek?.length) return primaryLocation.hoursWeek;
+    const todayDow = new Date().getDay();
+    const fallbackRange = (primaryLocation?.hoursToday || "").replace(/^Oggi\s*/i, "").trim() || "09:00 - 19:00";
+    return [
+      [1, "lunedi"], [2, "martedi"], [3, "mercoledi"], [4, "giovedi"], [5, "venerdi"], [6, "sabato"], [0, "domenica"],
+    ].map(([dow, label]) => ({ label: label as string, hours: dow === 0 ? "Chiuso" : fallbackRange, closed: dow === 0, today: dow === todayDow }));
   })();
 
   // Effetti legacy: treatment picker della topbar, suggerimenti/validazione
@@ -505,6 +533,7 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
                   className="favorite-button share-button salon-share-button"
                   type="button"
                   data-share-button
+                  data-share-url={shareUrl}
                   data-share-title={businessName}
                   data-share-text={`Scopri la scheda di ${businessName} su BeautySuite.`}
                   aria-label="Condividi scheda"
@@ -620,6 +649,21 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
                 </div>
               </div>
             </div>
+
+            {/* Chi siamo (public_marketplace.php 1526-1531): descrizione attività. */}
+            {aboutText ? (
+              <section className="salon-section">
+                <h2 className="salon-section-title">Chi siamo</h2>
+                <div className="salon-box">
+                  {aboutText.split("\n").map((linea, i, arr) => (
+                    <span key={i}>
+                      {linea}
+                      {i < arr.length - 1 ? <br /> : null}
+                    </span>
+                  ))}
+                </div>
+              </section>
+            ) : null}
           </div>
 
           <aside className="salon-booking-side" aria-label="Prenotazione e informazioni sede">
@@ -632,17 +676,15 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
             <section className="salon-side-block">
               <div className="salon-side-heading">Orari</div>
               <div className="salon-week-list">
-                {WEEK_DAYS.map((day, index) => {
-                  const isToday = index === todayIndex;
-                  const isClosed = index === 6; // domenica closed in the captured page
-                  return (
-                    <div key={day} className={`salon-week-row${isToday ? " is-today" : ""}`}>
-                      <span className={`salon-week-dot${isClosed ? " is-closed" : ""}`} aria-hidden="true"></span>
-                      <span className="salon-week-day">{day}</span>
-                      <span className="salon-week-time">{isClosed ? "Chiuso" : todayRange}</span>
-                    </div>
-                  );
-                })}
+                {/* Orari settimanali REALI dalla sede (hoursWeek), non fabbricati:
+                    label/ore/chiuso/today come marketplace_location_week_hours. */}
+                {weekHours.map((day) => (
+                  <div key={day.label} className={`salon-week-row${day.today ? " is-today" : ""}`}>
+                    <span className={`salon-week-dot${day.closed ? " is-closed" : ""}`} aria-hidden="true"></span>
+                    <span className="salon-week-day">{day.label}</span>
+                    <span className="salon-week-time">{day.hours}</span>
+                  </div>
+                ))}
               </div>
             </section>
 
@@ -660,14 +702,40 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
               </section>
             ) : null}
 
-            {phone ? (
+            {phone || whatsappNum || facebookUrl || instagramUrl || tiktokUrl ? (
               <section className="salon-contact-actions" aria-label="Contatti sede">
-                <a className="salon-contact-phone" href={`tel:${phone}`} aria-label={`Chiama ${phone}`} title="Telefono">
-                  <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="currentColor">
-                    <path d="M3.654 1.328a.678.678 0 0 0-1.015-.063L1.605 2.3c-.483.484-.661 1.169-.45 1.77a17.568 17.568 0 0 0 4.168 6.608 17.569 17.569 0 0 0 6.608 4.168c.601.211 1.286.033 1.77-.45l1.034-1.034a.678.678 0 0 0-.063-1.015l-2.307-1.794a.678.678 0 0 0-.58-.122l-2.19.547a1.745 1.745 0 0 1-1.657-.459L5.482 8.062a1.745 1.745 0 0 1-.46-1.657l.548-2.19a.678.678 0 0 0-.122-.58L3.654 1.328Z" />
-                  </svg>
-                  <span>{phone}</span>
-                </a>
+                {phone ? (
+                  <a className="salon-contact-phone" href={`tel:${phoneHref}`} aria-label={`Chiama ${phone}`} title="Telefono">
+                    <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="currentColor">
+                      <path d="M3.654 1.328a.678.678 0 0 0-1.015-.063L1.605 2.3c-.483.484-.661 1.169-.45 1.77a17.568 17.568 0 0 0 4.168 6.608 17.569 17.569 0 0 0 6.608 4.168c.601.211 1.286.033 1.77-.45l1.034-1.034a.678.678 0 0 0-.063-1.015l-2.307-1.794a.678.678 0 0 0-.58-.122l-2.19.547a1.745 1.745 0 0 1-1.657-.459L5.482 8.062a1.745 1.745 0 0 1-.46-1.657l.548-2.19a.678.678 0 0 0-.122-.58L3.654 1.328Z" />
+                    </svg>
+                    <span>{phone}</span>
+                  </a>
+                ) : null}
+                {whatsappNum || facebookUrl || instagramUrl || tiktokUrl ? (
+                  <div className="salon-social-actions">
+                    {whatsappNum ? (
+                      <a className="salon-contact-icon is-whatsapp" href={`https://wa.me/${whatsappNum}`} target="_blank" rel="noopener" aria-label={`Apri WhatsApp ${primaryLocation?.whatsapp ?? ""}`} title="WhatsApp">
+                        <svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="currentColor"><path d="M13.601 2.326A7.854 7.854 0 0 0 7.994 0C3.627 0 .068 3.558.064 7.926c0 1.399.366 2.76 1.057 3.965L0 16l4.204-1.102a7.933 7.933 0 0 0 3.79.965h.004c4.368 0 7.926-3.558 7.93-7.93a7.898 7.898 0 0 0-2.327-5.607ZM7.994 14.521a6.573 6.573 0 0 1-3.356-.92l-.24-.144-2.494.654.666-2.433-.156-.25a6.56 6.56 0 0 1-1.007-3.505c0-3.626 2.954-6.58 6.591-6.58a6.56 6.56 0 0 1 4.66 1.932 6.557 6.557 0 0 1 1.928 4.66c-.004 3.639-2.958 6.586-6.592 6.586Zm3.615-4.934c-.197-.099-1.17-.578-1.353-.646-.182-.065-.315-.099-.445.099-.133.197-.513.646-.627.775-.114.133-.232.148-.43.05-.197-.1-.836-.308-1.592-.985-.59-.525-.985-1.175-1.103-1.372-.114-.198-.011-.304.088-.403.087-.088.197-.232.296-.346.1-.114.133-.198.198-.33.065-.134.034-.248-.015-.347-.05-.099-.445-1.076-.612-1.47-.16-.389-.323-.335-.445-.34-.114-.007-.247-.007-.38-.007a.729.729 0 0 0-.529.247c-.182.198-.691.677-.691 1.654 0 .977.71 1.916.81 2.049.098.133 1.394 2.132 3.383 2.992.474.205.842.327 1.13.418.475.152.904.129 1.246.08.38-.058 1.171-.48 1.338-.943.163-.464.163-.86.114-.943-.049-.084-.182-.133-.38-.232Z" /></svg>
+                      </a>
+                    ) : null}
+                    {facebookUrl ? (
+                      <a className="salon-contact-icon is-facebook" href={facebookUrl} target="_blank" rel="noopener" aria-label="Apri Facebook" title="Facebook">
+                        <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="currentColor"><path d="M14 8h2.4V5H14c-2.3 0-4 1.7-4 4v2H8v3h2v7h3v-7h2.5l.5-3h-3V9c0-.6.4-1 1-1Z" /></svg>
+                      </a>
+                    ) : null}
+                    {instagramUrl ? (
+                      <a className="salon-contact-icon is-instagram" href={instagramUrl} target="_blank" rel="noopener" aria-label="Apri Instagram" title="Instagram">
+                        <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="4" width="16" height="16" rx="4" /><circle cx="12" cy="12" r="3.6" /><path d="M16.8 7.2h.01" /></svg>
+                      </a>
+                    ) : null}
+                    {tiktokUrl ? (
+                      <a className="salon-contact-icon is-tiktok" href={tiktokUrl} target="_blank" rel="noopener" aria-label="Apri TikTok" title="TikTok">
+                        <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="currentColor"><path d="M15.7 4c.4 2 1.6 3.4 3.8 3.7v3.1c-1.3 0-2.6-.4-3.7-1.2v5.5c0 3.1-2 5.1-5 5.1-2.7 0-4.8-1.8-4.8-4.4 0-2.8 2.3-4.6 5.2-4.3v3.2c-1.2-.3-2.1.3-2.1 1.3 0 .8.7 1.4 1.6 1.4 1 0 1.7-.6 1.7-1.9V4h3.3Z" /></svg>
+                      </a>
+                    ) : null}
+                  </div>
+                ) : null}
               </section>
             ) : null}
           </aside>

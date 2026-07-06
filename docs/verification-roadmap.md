@@ -6183,3 +6183,47 @@ Verifica Playwright: freccia centrata (1px/1px) e line-height 'normal' come
 il PHP; manage body line-height ora 'normal' (era 1.5). Battery
 e2e-marketplace-arrow.mjs PASS + e2e-marketplace-layout 3/3 + regressioni
 28/28, 15/15, 14/14, 26/26 + 100/100 marker; typecheck pulito.
+
+## MARKETPLACE — NONA PASSATA: audit funzionale con workflow (bug "Prenota ora" + funzioni dettaglio) (2026-07-06)
+Segnalazione utente: "Prenota ora" nella scheda attività, da NON loggato,
+portava al login GESTIONALE (/manage/login) invece del login CLIENTE.
+Lanciato un workflow di audit (5 agenti Review + verifica avversariale,
+17 subagent): 10 finding confermati. Corretti:
+- **[HIGH] CTA prenotazione -> login gestionale**: bookHref della scheda era
+  /<slug>/booking "nudo" (= pagina admin -> /manage/login). Ora TUTTE le CTA
+  Prenota (Prenota ora, per-servizio, card home, card ricerca, preferiti)
+  usano /<slug>/booking?start=1&location_id=X: il gate replica il PHP
+  (anonimo -> /account/login CLIENTE?tenant=..&next=start&location_id; loggato
+  -> wizard). Verificato con curl: 307 -> /account/login (mai /manage).
+- **[HIGH] Modale Servizi inerte**: il bottone "Servizi" non apriva nulla
+  (nessun handler; .salon-modal restava display:none). Aggiunto
+  initSalonModals in marketplace-shared (port di wireSalonModal: .is-open su
+  open, rimozione su close/Escape) invocato da useMarketplacePageEffects.
+- **[MEDIUM] Orari settimanali fabbricati**: il Next usava lo stesso range
+  lun-sab + domenica hardcoded chiusa. Ora orari REALI per giorno via API
+  (locationWeekHours in public-booking-db: weekly business_hours con
+  opens/closes/opens2/closes2/is_closed, flag today/closed), port di
+  marketplace_location_week_hours. NB: venerdì differisce (Supabase 16:00 vs
+  MySQL 19:00) — drift dati tra i due DB, non un bug di codice.
+- **[MEDIUM] Contatti social assenti**: reso solo il telefono. Ora
+  salon-social-actions con WhatsApp (wa.me), Facebook, Instagram, TikTok
+  (icone SVG legacy) quando valorizzati; tel: normalizzato a [^\d+]. Campi
+  esposti dall'API context (whatsapp/facebook/instagram/tiktok).
+- **[MEDIUM] Tab "Servizi" del picker vuota**: aggiunto serviceSuggestions
+  a /api/marketplace (nomi servizio pubblicati + 'categoria - N attività') e
+  initServiceOptions in shared; ora la tab è popolata in ricerca/dettaglio/
+  account.
+- **[MEDIUM] Chi siamo assente**: aggiunta la sezione salon-section "Chi
+  siamo" (business.about) quando valorizzata.
+- **[LOW] share senza data-share-url**: aggiunto l'URL canonico
+  /attivita/<slug>[/sedi/<loc-slug>].
+RESIDUI DELIBERATI (documentati): [HIGH] showcase Prodotti (bottone+modale+
+dettaglio prodotto: porta grande, nessun tenant demo ha prodotti); [MEDIUM]
+carosello "Altre sedi" (profili demo con 1 sede); [LOW] tab salons/services
+non cliccabili nel picker della HOME (react-wired; categorie ok); [LOW]
+subtitle salon con provincia invece di regione; [LOW] /account/login da già
+loggato senza tenant -> /attivita invece del messaggio "già connesso".
+Battery: e2e-marketplace-detail-fn.mjs 5/5 (Playwright: modale Servizi,
+orari reali ven/sab/dom, tab Servizi, Prenota->login cliente, share url) +
+regressioni e2e-marketplace 28/28, e2e-booking-marketplace 26/26,
+e2e-public-area 14/14, layout 3/3, 100/100 marker; typecheck/lint puliti.

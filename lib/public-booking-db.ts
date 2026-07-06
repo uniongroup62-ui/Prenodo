@@ -176,10 +176,18 @@ export async function publicBookingContext(slug: string): Promise<PublicBookingC
     id: Number(row.id ?? 0),
     name: String(row.name ?? "Sede"),
     address: [row.address, row.legal_city].map((value) => String(value ?? "").trim()).filter(Boolean).join(", "),
+    city: String(row.legal_city ?? "").trim(),
+    region: String(row.legal_region ?? "").trim(),
     email: String(row.email ?? ""),
-    phone: String(row.phone ?? row.whatsapp ?? ""),
+    phone: String(row.phone ?? "").trim(),
+    // Contatti social della sede (salon-social-actions legacy).
+    whatsapp: String(row.whatsapp ?? "").trim(),
+    facebook: String(row.facebook_url ?? "").trim(),
+    instagram: String(row.instagram_url ?? "").trim(),
+    tiktok: String(row.tiktok_url ?? "").trim(),
     bookingEnabled: Number(row.booking_enabled ?? 1) === 1,
     hoursToday: await hoursLabel(slug, nullableNumber(row.id), today),
+    hoursWeek: await locationWeekHours(slug, nullableNumber(row.id)),
   })));
 
   return {
@@ -1359,6 +1367,38 @@ async function hoursLabel(slug: string, locationId: number | null, date: string)
   const intervals = await businessIntervals(slug, locationId, date);
   if (!intervals.length) return "Oggi chiuso";
   return `Oggi ${intervals.map(([start, end]) => `${minutesToTime(start)} - ${minutesToTime(end)}`).join(" / ")}`;
+}
+
+// Port di marketplace_location_week_hours (public_marketplace.php 323-395):
+// orari settimanali REALI per sede dal weekly business_hours (opens/closes/
+// opens2/closes2/is_closed), non fabbricati. Ordine lun→dom, flag today/closed.
+export type WeekHourItem = { label: string; hours: string; closed: boolean; today: boolean };
+async function locationWeekHours(slug: string, locationId: number | null): Promise<WeekHourItem[]> {
+  const days: Array<[number, string]> = [
+    [1, "lunedi"], [2, "martedi"], [3, "mercoledi"], [4, "giovedi"], [5, "venerdi"], [6, "sabato"], [0, "domenica"],
+  ];
+  const todayDow = new Date().getDay(); // 0=domenica..6=sabato, come date('w')
+  const items: WeekHourItem[] = [];
+  for (const [dow, label] of days) {
+    const rows = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "business_hours",
+      where: locationId ? "dow = ? AND (location_id = ? OR location_id IS NULL)" : "dow = ? AND location_id IS NULL",
+      params: locationId ? [dow, locationId] : [dow],
+      orderBy: "location_id DESC, id ASC",
+      limit: 2,
+    }).catch(() => [] as RowDataPacket[]);
+    const row = preferredLocationRow(rows, locationId);
+    const closed = row != null && Number(row.is_closed ?? 0) === 1;
+    let hours = "Su appuntamento";
+    if (row != null && !closed) {
+      const intervals = intervalsFromHoursRow(row);
+      if (intervals.length) hours = intervals.map(([s, e]) => `${minutesToTime(s)} - ${minutesToTime(e)}`).join(" / ");
+    }
+    if (closed) hours = "Chiuso";
+    items.push({ label, hours, closed, today: dow === todayDow });
+  }
+  return items;
 }
 
 // Gather the busy ranges for a date. Optional exclusions let a manage save check

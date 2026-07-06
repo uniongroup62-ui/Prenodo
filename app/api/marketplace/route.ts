@@ -41,7 +41,8 @@ const DEFAULT_SERVICES = ["Viso", "Corpo", "Benessere"];
 export async function GET() {
   try {
     const value = await marketplaceProfiles();
-    return Response.json({ ok: true, sourceMode: "database", ...value });
+    const serviceSuggestions = await marketplaceServiceSuggestions();
+    return Response.json({ ok: true, sourceMode: "database", ...value, serviceSuggestions });
   } catch (error) {
     return Response.json(
       { ok: false, error: error instanceof Error ? error.message : "Marketplace non disponibile." },
@@ -83,6 +84,34 @@ async function marketplaceProfiles(): Promise<{ profiles: MarketplaceProfile[]; 
   const locationCategories = await marketplaceLocationCategories();
   const profiles = await Promise.all(rows.map((row) => profileFromRow(row, locationCategories)));
   return { profiles, categories };
+}
+
+// Suggerimenti "Servizi" del picker (publicSearchServiceSuggestions): nomi
+// servizio distinti pubblicati+booking_enabled, con subtitle 'categoria - N
+// attività' e conteggio attività, per popolare la tab "Servizi".
+async function marketplaceServiceSuggestions(): Promise<Array<{ name: string; subtitle: string; service: string }>> {
+  const rows = await dbQuery<RowDataPacket[]>(`
+    SELECT
+      MIN(s.name) AS service_name,
+      MIN(COALESCE(NULLIF(sc.name, ''), '')) AS category_name,
+      COUNT(DISTINCT s.tenant_id) AS tenant_count
+    FROM services s
+    JOIN saas_tenants t ON t.id = s.tenant_id
+      AND COALESCE(t.is_active, 1) = 1 AND t.deleted_at IS NULL AND t.status = 'active'
+      AND COALESCE(t.marketplace_public_allowed, 1) = 1
+    LEFT JOIN service_categories sc ON sc.tenant_id = s.tenant_id AND sc.id = s.category_id
+    WHERE COALESCE(s.is_active, 1) = 1 AND COALESCE(s.booking_enabled, 1) = 1 AND TRIM(COALESCE(s.name, '')) <> ''
+    GROUP BY LOWER(TRIM(s.name))
+    ORDER BY tenant_count DESC, service_name ASC
+    LIMIT 120
+  `).catch(() => [] as RowDataPacket[]);
+  return rows.map((row) => {
+    const name = String(row.service_name ?? "").trim();
+    const category = String(row.category_name ?? "").trim();
+    const count = Number(row.tenant_count ?? 0);
+    const subtitle = [category, count > 0 ? `${count} attività` : ""].filter(Boolean).join(" - ");
+    return { name, subtitle, service: name };
+  }).filter((s) => s.name);
 }
 
 // Categorie attività per SEDE (marketplace_location_activity_categories):

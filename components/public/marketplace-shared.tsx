@@ -161,10 +161,11 @@ function escapeHtml(value: string): string {
 const PREFERRED_CITIES = ["Roma", "Milano", "Napoli", "Torino", "Palermo", "Genova", "Bologna", "Firenze", "Bari", "Catania"];
 
 type SalonOption = { name: string; meta: string; initial: string };
+type ServiceOption = { name: string; subtitle: string; service: string };
 
 // Opzioni "Attività" del picker (marketplace_topbar_search_data.salons):
 // una voce per attività pubblicata, con meta 'categoria - città - provincia'.
-async function loadMarketplaceData(): Promise<{ cities: string[]; salons: SalonOption[] }> {
+async function loadMarketplaceData(): Promise<{ cities: string[]; salons: SalonOption[]; services: ServiceOption[] }> {
   const cities: string[] = [];
   const seenCity = new Set<string>();
   const addCity = (value: unknown) => {
@@ -176,6 +177,7 @@ async function loadMarketplaceData(): Promise<{ cities: string[]; salons: SalonO
     cities.push(city);
   };
   const salons: SalonOption[] = [];
+  const services: ServiceOption[] = [];
   try {
     const j = await (await fetch("/api/marketplace")).json();
     for (const profile of j?.profiles ?? []) {
@@ -189,6 +191,10 @@ async function loadMarketplaceData(): Promise<{ cities: string[]; salons: SalonO
         salons.push({ name, meta, initial: name.charAt(0).toUpperCase() || "B" });
       }
     }
+    for (const s of j?.serviceSuggestions ?? []) {
+      const name = String(s.name ?? "").trim();
+      if (name) services.push({ name, subtitle: String(s.subtitle ?? "").trim(), service: String(s.service ?? name).trim() });
+    }
   } catch { /* come il catch legacy */ }
   try {
     const geo = await (await fetch("/assets/data/italy_geo.json")).json();
@@ -201,7 +207,34 @@ async function loadMarketplaceData(): Promise<{ cities: string[]; salons: SalonO
     for (const city of geoCities) addCity(city);
   } catch { /* senza dataset restano le città delle sedi */ }
   for (const city of PREFERRED_CITIES) addCity(city);
-  return { cities, salons };
+  return { cities, salons, services };
+}
+
+// Popola la tab "Servizi" (services) del picker: un option per servizio, con
+// name/subtitle e data-treatment-service (svuota category/query), se vuota.
+function initServiceOptions(root: Document, services: ServiceOption[]) {
+  if (!services.length) return;
+  root.querySelectorAll<HTMLElement>('[data-marketplace-treatment-list="services"]').forEach((list) => {
+    if (list.querySelector("[data-marketplace-treatment-option]")) return;
+    list.innerHTML = services
+      .map((s) => {
+        const name = escapeHtml(s.name);
+        const subtitle = escapeHtml(s.subtitle);
+        const service = escapeHtml(s.service);
+        const search = escapeHtml(`${s.name} ${s.subtitle} ${s.service}`.trim());
+        return (
+          `<button class="marketplace-topbar-treatment-option" type="button" role="option" aria-selected="false"` +
+          ` data-marketplace-treatment-option data-treatment-category="" data-treatment-query=""` +
+          ` data-treatment-service="${service}" data-treatment-label="${name}" data-treatment-search="${search}">` +
+          `<span class="marketplace-topbar-treatment-icon"><svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m16 16 4 4"></path></svg></span>` +
+          `<span class="marketplace-topbar-treatment-copy">` +
+          `<span class="marketplace-topbar-treatment-name">${name}</span>` +
+          (subtitle ? `<span class="marketplace-topbar-treatment-meta">${subtitle}</span>` : "") +
+          `</span></button>`
+        );
+      })
+      .join("");
+  });
 }
 
 // Categorie del picker (marketplace_topbar_treatment_picker_html): stesse 16
@@ -562,6 +595,41 @@ function initShareButtons(root: Document) {
   });
 }
 
+// Port di wireSalonModal (public_marketplace.js 210-241): apre/chiude le
+// modali della scheda attività (Servizi/Prodotti) aggiungendo .is-open al
+// modale su [data-salon-*-open], rimuovendola su [data-salon-*-close]/Escape.
+// Senza questo, il bottone "Servizi" era inerte e i servizi inaccessibili.
+function wireSalonModal(root: Document, modalId: string, openSelector: string, closeSelector: string, bodyClass: string) {
+  const modal = root.getElementById(modalId);
+  if (!modal || modal.getAttribute("data-salon-modal-ready") === "1") return;
+  modal.setAttribute("data-salon-modal-ready", "1");
+  let lastFocus: HTMLElement | null = null;
+  const open = () => {
+    lastFocus = root.activeElement instanceof HTMLElement ? root.activeElement : null;
+    modal.classList.add("is-open");
+    modal.setAttribute("aria-hidden", "false");
+    root.body.classList.add(bodyClass);
+    const closeButton = modal.querySelector<HTMLElement>(closeSelector);
+    if (closeButton) closeButton.focus();
+  };
+  const close = () => {
+    modal.classList.remove("is-open");
+    modal.setAttribute("aria-hidden", "true");
+    root.body.classList.remove(bodyClass);
+    if (lastFocus) lastFocus.focus();
+  };
+  root.querySelectorAll<HTMLElement>(openSelector).forEach((btn) => btn.addEventListener("click", open));
+  modal.querySelectorAll<HTMLElement>(closeSelector).forEach((btn) => btn.addEventListener("click", close));
+  root.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && modal.classList.contains("is-open")) close();
+  });
+}
+
+function initSalonModals(root: Document) {
+  wireSalonModal(root, "salonServicesModal", "[data-salon-services-open]", "[data-salon-services-close]", "salon-services-modal-open");
+  wireSalonModal(root, "salonProductsModal", "[data-salon-products-open]", "[data-salon-products-close]", "salon-products-modal-open");
+}
+
 function applyImageEffects(root: Document) {
   const positionPattern = /^\d{1,3}%\s+\d{1,3}%$/;
   root.querySelectorAll<HTMLElement>("[data-object-position]").forEach((image) => {
@@ -587,10 +655,12 @@ export function useMarketplacePageEffects(deps: unknown[] = [], options: { login
     initTreatmentPickers(root);
     initFavoriteButtons(root, loginUrl);
     initShareButtons(root);
+    initSalonModals(root); // apertura/chiusura modale Servizi (e Prodotti)
     let cancelled = false;
-    void loadMarketplaceData().then(({ cities, salons }) => {
+    void loadMarketplaceData().then(({ cities, salons, services }) => {
       if (cancelled) return;
       initSalonOptions(root, salons); // tab "Attività" del picker (legacy server-side)
+      initServiceOptions(root, services); // tab "Servizi" del picker
       initCitySuggestions(root, cities);
     });
     return () => {

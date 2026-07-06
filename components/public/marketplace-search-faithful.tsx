@@ -429,7 +429,9 @@ export function MarketplaceSearchFaithful({
               <div className="results-grid">
                 {cards.map(({ profile, location, favoriteKey, locationSlug }) => {
                   const cardUrl = `/attivita/${encodeURIComponent(profile.slug)}/sedi/${encodeURIComponent(locationSlug)}`;
-                  const bookingActionUrl = `/account/login?tenant=${encodeURIComponent(profile.slug)}&next=start&location_id=${location.id}`;
+                  // Gate-driven come il PHP: non loggato -> /account/login
+                  // CLIENTE, loggato -> wizard (senza hop dal login).
+                  const bookingActionUrl = `/${encodeURIComponent(profile.slug)}/booking?start=1&location_id=${location.id}`;
                   const place = [location.address, location.city].filter(Boolean).join(" ");
                   const title = location.name || profile.name;
                   const showSubtitle = profile.name && title.toLowerCase() !== profile.name.toLowerCase();
