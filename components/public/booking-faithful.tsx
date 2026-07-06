@@ -507,6 +507,29 @@ export function BookingFaithful({
     return closures.dows.has(day.getDay());
   }
 
+  // ensureDateSelectionReady (booking-wizard.js 3677-3700): entrando nello step
+  // Data/Ora, se la data selezionata è chiusa o nel passato, auto-seleziona la
+  // PRIMA data disponibile (e allinea lo strip), come il legacy — invece di
+  // restare su una data chiusa con "Nessuna disponibilità".
+  useEffect(() => {
+    if (step !== 5) return;
+    const todayStart = startOfDay(new Date());
+    const invalid = date < toYmd(todayStart) || isClosedDay(new Date(`${date}T00:00:00`));
+    if (!invalid) return;
+    for (let i = 0; i < 90; i += 1) {
+      const day = addDays(todayStart, i);
+      if (!isClosedDay(day)) {
+        const ymd = toYmd(day);
+        if (ymd !== date) {
+          setDate(ymd);
+          setStripStart(startOfDay(day));
+        }
+        return;
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, closures, date]);
+
   // AUTO-PROMO detection (mode=promotion_preview) on entering Step 6+: the best
   // automatic promotion the confirm will apply, per selected services/date/slot.
   useEffect(() => {
@@ -755,6 +778,9 @@ export function BookingFaithful({
     });
   }
 
+  // Come il legacy: lo slot endpoint/render mostra SOLO gli orari liberi
+  // (booking.php $slots contiene solo i disponibili; nessun pulsante disabilitato).
+  const freeSlots = availableSlots.filter((item) => item.available);
   const businessInitial = (ctx?.business.name ?? "").trim().charAt(0).toUpperCase() || "B";
   const dateStripDays = useMemo(
     () => Array.from({ length: 7 }, (_, index) => addDays(stripStart, index)),
@@ -1299,13 +1325,11 @@ export function BookingFaithful({
                   <div className="slot-grid" id="slotGrid">
                     {slotsLoading ? <div className="text-muted small">Caricamento orari…</div> : null}
                     {!slotsLoading &&
-                      availableSlots.map((item) => (
+                      freeSlots.map((item) => (
                         <button
                           key={item.time}
                           type="button"
-                          className={`slot-btn${item.available ? " available" : " disabled"}${slot === item.time ? " selected" : ""}`}
-                          disabled={!item.available}
-                          title={item.reason}
+                          className={`slot-btn available${slot === item.time ? " selected" : ""}`}
                           onClick={() => chooseSlot(item)}
                         >
                           {item.time}
@@ -1314,7 +1338,7 @@ export function BookingFaithful({
                   </div>
                   <div
                     id="slotEmpty"
-                    className={`text-muted small mt-2${slotsLoading || availableSlots.length ? " d-none" : ""}`}
+                    className={`text-muted small mt-2${slotsLoading || freeSlots.length ? " d-none" : ""}`}
                   >
                     Nessuna disponibilità per questa data.
                   </div>

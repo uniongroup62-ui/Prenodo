@@ -6484,3 +6484,25 @@ NB: audit avversariale del wizard (workflow, 6 dimensioni, 50 subagent) = 41
 finding confermati (6 HIGH, 23 MEDIUM, 12 LOW) — questo chiude l'anchor; i
 restanti (staff per-servizio, slot occupati/raggruppati, auto-select data,
 redeem a prezzo pieno, punti fidelity lordi, testi verbatim, ecc.) sono in coda.
+
+
+---
+
+## Wizard booking: slot solo disponibili + auto-select prima data aperta (2026-07-06)
+
+Due finding HIGH del wizard chiusi:
+- **Slot occupati**: il Next mostrava gli orari occupati come pulsanti
+  disabilitati (muro grigio); il PHP restituisce/mostra SOLO gli orari liberi.
+  Fix: la griglia rende solo freeSlots (available===true), nessun pulsante
+  disabilitato; "Nessuna disponibilità" quando 0 liberi.
+- **Auto-select data**: il Next restava su oggi anche se chiuso; il PHP
+  (ensureDateSelectionReady) auto-seleziona la prima data non chiusa entrando
+  nello step Data/Ora. Fix: effetto su step===5 che, se la data è chiusa/passata,
+  salta alla prima data aperta (allineando lo strip).
+
+Verifica live (Playwright): giorno 7/7 → 109 slot available, 0 disabled; oggi
+(aperto ma senza slot) → "Nessuna disponibilità", 0 disabled; domenica greyed
+(chiusa) non selezionabile. NB: >12 slot il PHP li RAGGRUPPA (Mattina/Pomeriggio/
+Sera) — porting del raggruppamento in coda (finding HIGH slot-grouping).
+Minor: breve flash step Sede prima del load del context (client-render).
+typecheck pulito.
