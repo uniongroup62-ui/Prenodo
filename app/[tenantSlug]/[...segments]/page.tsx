@@ -1000,6 +1000,16 @@ export default async function TenantPage({
     );
   }
 
+  // Ruoli (roles.php): ruolo selezionato + flash ?msg/?err dai redirect legacy
+  // ('Permessi Staff aggiornati' / errori validazione modulo).
+  if (page === "roles") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <RolesContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err, role: query.role }} />
+      </ManageShell>
+    );
+  }
+
   // Accessibilità (accessibility.php): flash ?msg/?err dai redirect legacy
   // (Codice inviato / Email verificata / Password aggiornata / errori).
   if (page === "accessibility") {

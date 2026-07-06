@@ -5700,3 +5700,50 @@ rimossi, account reale intatto) + LIVE PHP byte-per-byte (10 redirect err
 identici + 'Invio codice fallito (controlla mail() del server)' con
 pending auto-ripulita, live pulito) + 40/40 marker + regressioni
 (auth-roles 16, staff-page 27) + typecheck/lint puliti.
+
+## AUDIT COMPLETO — Ruoli (roles.php) (2026-07-06)
+
+Audit funzionale completo di roles.php (310 righe) + assets/js/pages/
+roles.js (153) + RolePermissions.php (584) vs roles-content.tsx +
+lib/role-permissions.ts + route permissions. La V6 aveva verificato il
+MOTORE permessi (can/parents) e l'auth; la PAGINA aveva bug reali:
+1. SEZIONE PACCHETTI MAI RENDERIZZATA: buildGroupTrees scartava le
+   definizioni non assegnabili PRIMA di costruire l'albero, ma nel gruppo
+   Pacchetti ogni nodo discende dalla radice non assegnabile
+   'packages.manage' (il padre legacy) → nessuna root → sezione vuota.
+   Port fedele di groupedTree+renderPermNode: l'albero include le radici
+   non assegnabili come contenitori, i nodi assegnabili si renderizzano
+   col livello legacy ($childLevel = assignable ? level+1 : level), un
+   tree entra solo con almeno un nodo assegnabile; display_parent
+   esplicito (anche '') vince, poi parent, poi il primo dei parents
+   presente nel catalogo (alias assente → radice); ordinamento
+   sort_order poi label.
+2. SUBMIT SENZA FEEDBACK: il salvataggio non mostrava né successo né
+   errori (.catch vuoto) — ora flash legacy 'Permessi {Staff|Altro}
+   aggiornati' (verbatim, senza punto), errori server (validazione modulo
+   'Per attivare Pacchetti seleziona almeno una funzione del modulo.' /
+   'Impossibile aggiornare i permessi: verifica schema DB e riprova.')
+   come alert danger; via l'alert validationError non-legacy nella card.
+3. LABEL SENZA ACCENTI nel catalogo Next: 'Disponibilità', 'Profilo
+   attività', 'Accessibilità' (il legacy sincronizza i label accentati
+   nella tabella permissions via ensureDb).
+4. FLASH + deep-link: initialQuery {msg, err, role} (branch page.tsx),
+   flash View::alert PRIMA del page header, cambio ruolo = URL ?role=
+   aggiornato (replaceState) + flash azzerato come la navigazione legacy.
+NON-GAP verificati: normalizeSelectedPerms/validateSelectedPerms/can/
+isInheritedFromAssigned/moduleAccessRules identici al PHP;
+autoEnableParentRules legacy è VUOTO → il ramo auto-parent di roles.js
+è morto anche nel legacy (il Next senza è equivalente); il POST invia le
+selezioni dirette come il form legacy (disabled non postati) e il server
+normalizza gli ereditati; audit log già completo nella route (actor,
+old/new ordinati, skip senza modifiche, best-effort).
+Verifica: battery NUOVA e2e-roles-page 16/16 (GET con label accentati e
+gruppi nell'ordine legacy, ruolo invalido→staff, save base, figli
+ereditati rimossi dalla normalizzazione, packages.access auto dal figlio,
+validazione modulo verbatim, non-assegnabili/sconosciuti filtrati, audit
+con actor + NESSUNA riga su save identico, ruolo altro; snapshot/restore
+integrale role_permissions + audit) + LIVE PHP byte-per-byte (redirect
+'Permessi Staff aggiornati' con normalizzazione identica clients.manage
+senza figlio ereditato, err modulo verbatim, 'Permessi Altro aggiornati'
+con packages.access auto; live ripristinato) + 35/35 marker + regressioni
+(auth-roles 16, residui-check 8) + typecheck/lint puliti.

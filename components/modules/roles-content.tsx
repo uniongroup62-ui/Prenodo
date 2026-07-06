@@ -46,13 +46,6 @@ function tenantSlug(): string {
   return window.location.pathname.split("/")[1] || "";
 }
 
-function splitPerms(raw: string | undefined): string[] {
-  return String(raw || "")
-    .split(",")
-    .map((v) => v.trim())
-    .filter(Boolean);
-}
-
 // Display tree node, derived from a permission definition (mirror PHP renderer).
 type TreeNode = {
   def: PermissionDefinition;
@@ -70,30 +63,37 @@ function moduleAccessForChild(perm: string): string {
   return "";
 }
 
-// Build, per group, the ordered list of trees -> nodes, replicating the PHP
-// page layout: roots (level 0) followed by their display children (level 1+).
+// Port fedele di RolePermissions::groupedTree + $renderPermNode (roles.php):
+// l'albero include ANCHE le radici non assegnabili (es. 'packages.manage',
+// il padre legacy di tutto il modulo Pacchetti) che non vengono renderizzate
+// ma fanno da contenitore — i figli restano al loro livello ($childLevel =
+// $assignable ? $level+1 : $level). Un tree entra solo se ha almeno un nodo
+// assegnabile (nodeHasAssignable).
 function buildGroupTrees(group: PermGroup): TreeNode[][] {
   const byPerm = new Map<string, PermissionDefinition>();
   for (const def of group.definitions) byPerm.set(def.perm, def);
 
-  // Determine display parent for each def.
+  // display_parent esplicito (anche "") vince; poi parent; poi il primo dei
+  // parents presente nel catalogo (se il primo è un alias assente e nessun
+  // successivo è presente, resta l'alias → il nodo è radice).
   function displayParentOf(def: PermissionDefinition): string {
     if (typeof def.displayParent === "string") return def.displayParent;
-    if (def.parent) return def.parent;
-    if (def.parents && def.parents.length > 0) {
-      // First parent that is itself a definition in this group.
-      for (const p of def.parents) {
-        if (byPerm.has(p)) return p;
+    let parent = def.parent ?? "";
+    if (!parent && def.parents && def.parents.length > 0) {
+      for (const candidate of def.parents) {
+        if (candidate && byPerm.has(candidate)) {
+          parent = candidate;
+          break;
+        }
+        if (!parent) parent = candidate;
       }
     }
-    return "";
+    return parent;
   }
 
-  // Roots are defs whose display parent is not present in this group.
   const childrenByParent = new Map<string, PermissionDefinition[]>();
   const roots: PermissionDefinition[] = [];
   for (const def of group.definitions) {
-    if (def.assignable === false) continue;
     const dp = displayParentOf(def);
     if (dp && byPerm.has(dp)) {
       const arr = childrenByParent.get(dp) ?? [];
@@ -104,22 +104,14 @@ function buildGroupTrees(group: PermGroup): TreeNode[][] {
     }
   }
 
-  function levelDepth(def: PermissionDefinition, depth: number): number {
-    const dp = displayParentOf(def);
-    if (dp && byPerm.has(dp)) {
-      const parentDef = byPerm.get(dp);
-      if (parentDef && parentDef !== def) {
-        return levelDepth(parentDef, depth + 1);
-      }
-    }
-    return depth;
-  }
+  const bySortThenLabel = (a: PermissionDefinition, b: PermissionDefinition) =>
+    a.sortOrder - b.sortOrder || a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: "base" });
 
-  function nodeFor(def: PermissionDefinition): TreeNode {
+  function nodeFor(def: PermissionDefinition, level: number): TreeNode {
     const moduleRule = MODULE_ACCESS_RULES[def.perm];
     return {
       def,
-      level: levelDepth(def, 0),
+      level,
       parentPerms: Array.from(new Set([def.parent, ...(def.parents ?? [])].filter((v): v is string => Boolean(v)))),
       isModuleRoot: Boolean(moduleRule),
       moduleChildren: moduleRule ? moduleRule.children : [],
@@ -128,39 +120,56 @@ function buildGroupTrees(group: PermGroup): TreeNode[][] {
   }
 
   const trees: TreeNode[][] = [];
-  for (const root of roots.sort((a, b) => a.sortOrder - b.sortOrder)) {
-    const nodes: TreeNode[] = [nodeFor(root)];
-    const stack = [...(childrenByParent.get(root.perm) ?? [])].sort((a, b) => a.sortOrder - b.sortOrder);
-    // Breadth-first by display parent, appended in sort order, depth-first per branch.
-    const visit = (parentPerm: string) => {
-      const kids = (childrenByParent.get(parentPerm) ?? []).sort((a, b) => a.sortOrder - b.sortOrder);
-      for (const kid of kids) {
-        nodes.push(nodeFor(kid));
-        visit(kid.perm);
+  for (const root of roots.sort(bySortThenLabel)) {
+    const nodes: TreeNode[] = [];
+    const visit = (def: PermissionDefinition, level: number) => {
+      const assignable = def.assignable !== false;
+      if (assignable) nodes.push(nodeFor(def, level));
+      const childLevel = assignable ? level + 1 : level;
+      for (const kid of (childrenByParent.get(def.perm) ?? []).sort(bySortThenLabel)) {
+        visit(kid, childLevel);
       }
     };
-    void stack; // ordering handled by visit
-    visit(root.perm);
-    trees.push(nodes);
+    visit(root, 0);
+    if (nodes.length > 0) trees.push(nodes);
   }
   return trees;
 }
 
-export function RolesContent({ slug: slugProp }: { slug?: string } = {}) {
+type Flash = { text: string; type: "success" | "danger" };
+
+export function RolesContent({
+  slug: slugProp,
+  initialQuery,
+}: { slug?: string; initialQuery?: { msg?: string; err?: string; role?: string } } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
+  const initialRole = String(initialQuery?.role ?? "staff").trim().toLowerCase() === "altro" ? "altro" : "staff";
 
   const [data, setData] = useState<RolePermissions | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeRole, setActiveRole] = useState<string>("staff");
+  const [activeRole, setActiveRole] = useState<string>(initialRole);
+  const [saving, setSaving] = useState(false);
+  // Flash legacy (View::alert msg success / err danger PRIMA del page header).
+  const [flash, setFlash] = useState<Flash | null>(() => {
+    if (initialQuery?.err) return { text: String(initialQuery.err), type: "danger" };
+    if (initialQuery?.msg) return { text: String(initialQuery.msg), type: "success" };
+    return null;
+  });
 
   // directSelected[perm] = user-chosen state (mirrors data-directSelected in roles.js).
   const [directSelected, setDirectSelected] = useState<Record<string, boolean>>({});
 
+  const showFlash = useCallback((next: Flash | null) => {
+    setFlash(next);
+    if (next && typeof window !== "undefined") window.scrollTo({ top: 0 });
+  }, []);
+
   const load = useCallback(
     (role: string) => {
-      setLoading(true);
+      // `loading` parte true e viene azzerato nel .finally; i chiamanti da
+      // event handler (selectRole) lo riattivano prima di chiamare load.
       fetch(`/api/manage/permissions?slug=${encodeURIComponent(slug)}&role=${encodeURIComponent(role)}`, {
         headers: { "x-tenant-slug": slug },
       })
@@ -182,11 +191,16 @@ export function RolesContent({ slug: slugProp }: { slug?: string } = {}) {
   );
 
   useEffect(() => {
-    load("staff");
+    load(initialRole);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [load]);
 
+  // Cambio ruolo = navigazione legacy (?role=): URL aggiornato e flash azzerato.
   function selectRole(role: string) {
     setActiveRole(role);
+    setFlash(null);
+    setLoading(true);
+    if (typeof window !== "undefined") window.history.replaceState(null, "", href(`&role=${encodeURIComponent(role)}`));
     load(role);
   }
 
@@ -262,22 +276,46 @@ export function RolesContent({ slug: slugProp }: { slug?: string } = {}) {
   const roleEntries = Object.entries(data?.manageableRoles ?? { staff: "Staff", altro: "Altro" });
   const groups = data?.groups ?? [];
 
-  function onSubmit(e: React.FormEvent) {
+  async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (saving) return;
+    setSaving(true);
+    // Come il form legacy: gli input ereditati/modulo sono disabled e non
+    // vengono postati; qui inviamo le selezioni dirette (il server normalizza).
     const perms = Object.keys(directSelected).filter((p) => directSelected[p]);
-    fetch(`/api/manage/permissions?slug=${encodeURIComponent(slug)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-      body: JSON.stringify({ slug, action: "save_role_perms", role: activeRole, perms }),
-    })
-      .then((r) => r.json())
-      .then(() => load(activeRole))
-      .catch(() => {});
+    try {
+      const res = await fetch(`/api/manage/permissions?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+        body: JSON.stringify({ slug, action: "save_role_perms", role: activeRole, perms }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || j?.ok === false) {
+        // Flash err del redirect legacy (validazione modulo / errore DB).
+        showFlash({ text: String(j?.error ?? "Impossibile aggiornare i permessi: verifica schema DB e riprova."), type: "danger" });
+        return;
+      }
+      showFlash({ text: `Permessi ${roleLabel} aggiornati`, type: "success" });
+      load(activeRole);
+    } catch {
+      showFlash({ text: "Impossibile aggiornare i permessi: verifica schema DB e riprova.", type: "danger" });
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
     <div className="container-fluid">
       <link rel="stylesheet" href="/assets/css/pages/roles.css" />
+
+      {flash ? (
+        <div className={`alert alert-${flash.type} d-flex align-items-start gap-2`}>
+          <div>
+            <i className="bi bi-info-circle" />
+          </div>
+          <div>{flash.text}</div>
+        </div>
+      ) : null}
 
       <div className="bs-page-header">
         <div className="bs-page-heading">
@@ -340,12 +378,6 @@ export function RolesContent({ slug: slugProp }: { slug?: string } = {}) {
                 </div>
               </div>
             </div>
-
-            {data?.validationError ? (
-              <div className="alert alert-danger mt-3 mb-0" role="alert">
-                {data.validationError}
-              </div>
-            ) : null}
 
             <form method="post" className="mt-3" onSubmit={onSubmit}>
               <input type="hidden" name="action" value="save_role_perms" />
@@ -432,7 +464,7 @@ export function RolesContent({ slug: slugProp }: { slug?: string } = {}) {
 
               <hr className="my-3" />
               <div className="d-flex justify-content-end">
-                <button className="btn btn-primary" type="submit">
+                <button className="btn btn-primary" type="submit" disabled={saving}>
                   <i className="bi bi-check2-circle me-1" />
                   Salva permessi {roleLabel}
                 </button>
