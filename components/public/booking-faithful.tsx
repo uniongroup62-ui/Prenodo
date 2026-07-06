@@ -459,7 +459,11 @@ export function BookingFaithful({
   );
   const selectedBenefit = ctx?.benefits.find((item) => item.id === benefitId) ?? null;
   const selectedSlot = availableSlots.find((item) => item.time === slot) ?? null;
-  const subtotal = selectedServices.reduce((sum, service) => sum + service.price, 0);
+  // Deep-link redeem attivo (book_package/prepaid/giftbox/omaggio): il servizio
+  // coperto è un RESIDUO → prezzo effettivo 0 nel subtotal/preview, e lo step
+  // Vantaggi viene saltato (il legacy azzera il servizio e salta i Vantaggi).
+  const redeemedServiceId = redeemPrefill && serviceIds.includes(redeemPrefill.serviceId) ? redeemPrefill.serviceId : 0;
+  const subtotal = selectedServices.reduce((sum, service) => sum + (service.id === redeemedServiceId ? 0 : service.price), 0);
   const totalDuration = selectedServices.reduce((sum, service) => sum + service.duration, 0);
   // Discount shown in Step 6/7: the VALIDATED coupon result wins (its discount
   // already includes a stacked auto-promo, like the legacy mode=coupon), then
@@ -496,7 +500,9 @@ export function BookingFaithful({
     // "Vantaggi" nel progress (hasBenefitsAvailable, booking-wizard.js 761).
     // Con carrello vuoto niente fetch: hasBenefitsAvailable ha il guard su
     // serviceIds.length, quindi lo stato stantio non conta.
-    if (!serviceIdsKey) return;
+    // Con un redeem attivo il servizio è già coperto (residuo): niente
+    // fidelity_preview, lo step Vantaggi è saltato.
+    if (!serviceIdsKey || redeemedServiceId) return;
     let alive = true;
     const params = new URLSearchParams({ slug, action: "fidelity_preview", service_ids: serviceIdsKey, discount: String(discount) });
     fetch(`/api/booking?${params.toString()}`)
@@ -538,7 +544,8 @@ export function BookingFaithful({
   // importo residuo > 0). Altrimenti l'item del progress è nascosto, il
   // contatore scala a "di 6" e la navigazione salta dallo step 5 al 7.
   const hasBenefitsAvailable = Boolean(
-    serviceIds.length > 0 &&
+    !redeemedServiceId &&
+      serviceIds.length > 0 &&
       custBenefits &&
       ((custBenefits.redeemEnabled && custBenefits.suggestedPoints > 0 && custBenefits.suggestedDiscount > 0.00001) ||
         (finalTotal > 0.00001 && custBenefits.giftcards.length > 0) ||

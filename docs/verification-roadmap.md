@@ -6754,3 +6754,24 @@ giftcardAppliedAmount = min(balance, dueAfterFidelity − credito). Il server
 applica gli importi pre-calcolati dal client (ogni sezione clampa in modo
 indipendente, nessuna doppia applicazione), quindi il consumo asset ora combacia
 col legacy senza toccare la money-calc server. typecheck pulito.
+
+
+---
+
+## Wizard booking: redeem = servizio residuo a 0€ + skip Vantaggi (2026-07-06) [HIGH]
+
+Chiuso il finding HIGH redeem-benefit-base. Con un deep-link redeem attivo
+(book_package/prepaid/giftbox/omaggio) il Next lasciava il servizio coperto a
+prezzo pieno e mostrava lo step Vantaggi; il legacy azzera il servizio (residuo)
+e salta del tutto i Vantaggi.
+
+Fix (BookingFaithful): redeemedServiceId (servizio coperto in carrello) →
+prezzo effettivo 0 nel subtotal (quindi finalTotal/summary/Saldo a 0€);
+hasBenefitsAvailable=false (step 6 saltato) e fidelity_preview NON fetchato con
+redeem attivo.
+
+Verifica live (deep-link book_prepaid&service_id=9): summary "test • 60 min",
+Prezzo Totale "€ 0,00", step Vantaggi saltato. typecheck pulito. RESIDUO: la
+RIGA per-servizio del recap step 7 (pre-conferma) mostra ancora il prezzo pieno
+sul singolo servizio (il totale è corretto) — parte del residuo cost-breakdown
+recap; la CONFERMA invece mostra già 0€ + badge residuo.
