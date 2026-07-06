@@ -18,6 +18,7 @@ import {
   publicBookingClosures,
   publicBookingContext,
   publicBookingSlots,
+  publicBookingStaffPerService,
   releasePublicBookingHold,
 } from "@/lib/public-booking-db";
 import {
@@ -68,8 +69,9 @@ export async function GET(request: Request) {
       const date = url.searchParams.get("date") ?? todayIso();
       const serviceIds = parseIdList(url.searchParams.get("service_ids") ?? url.searchParams.get("services"));
       const staffId = parseOptionalId(url.searchParams.get("staff_id"));
+      const staffMap = parseStaffMap(url.searchParams.get("staff_map"));
       const locationId = parseOptionalId(url.searchParams.get("location_id"));
-      const slots = await publicBookingSlots({ slug, date, serviceIds, staffId, locationId });
+      const slots = await publicBookingSlots({ slug, date, serviceIds, staffId, staffMap, locationId });
 
       return Response.json({
         ok: true,
@@ -77,6 +79,15 @@ export async function GET(request: Request) {
         date,
         slots,
       });
+    }
+
+    // Operatori idonei PER SERVIZIO (port di booking.php mode=staff): il wizard
+    // rende un gruppo per servizio quando la scelta operatore è attiva.
+    if (action === "staff") {
+      const serviceIds = parseIdList(url.searchParams.get("service_ids") ?? url.searchParams.get("services"));
+      const locationId = parseOptionalId(url.searchParams.get("location_id"));
+      const services = await publicBookingStaffPerService(slug, serviceIds, locationId);
+      return Response.json({ ok: true, sourceMode: "database", per_service: true, services });
     }
 
     // Closed days for the date strip (port of booking.php mode=closures).
@@ -239,12 +250,13 @@ export async function POST(request: Request) {
       const time = String(body.time ?? "");
       const serviceIds = parseIdList(body.service_ids ?? body.services);
       const staffId = parseOptionalId(body.staff_id);
+      const staffMap = parseStaffMap(body.staff_map);
       const locationId = parseOptionalId(body.location_id);
       const ownerKey = ownerKeyForRequest(request, body.owner_key);
       // Write action: a real booking must hit the DB. On failure, surface the
       // error so the client can retry instead of confirming a reservation that
       // was never persisted.
-      const hold = await holdPublicBookingSlot({ slug, date, time, serviceIds, staffId, locationId, ownerKey });
+      const hold = await holdPublicBookingSlot({ slug, date, time, serviceIds, staffId, staffMap, locationId, ownerKey });
 
       return Response.json({
         ok: true,
@@ -295,6 +307,7 @@ export async function POST(request: Request) {
       time: confirmTime,
       serviceIds: confirmServiceIds,
       staffId: parseOptionalId(body.staff_id),
+      staffMap: parseStaffMap(body.staff_map),
       locationId: confirmLocationId,
       ownerKey,
       holdToken: String(body.hold_token ?? body.appointment_hold_token ?? "") || null,
@@ -404,6 +417,27 @@ function parseIdList(value: unknown): number[] {
     .split(",")
     .map((item) => Number.parseInt(item.trim(), 10))
     .filter((item) => item > 0);
+}
+
+// staff_map (booking.php parse_staff_map): JSON { "<serviceId>": <staffId> } ->
+// Record<number, number>, scartando chiavi/valori non positivi. null se assente
+// o non valido (il backend ricade su operatore singolo/qualsiasi).
+function parseStaffMap(value: unknown): Record<number, number> | null {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const out: Record<number, number> = {};
+    for (const [key, val] of Object.entries(parsed as Record<string, unknown>)) {
+      const sid = Number.parseInt(key, 10);
+      const staffId = Number.parseInt(String(val), 10);
+      if (sid > 0 && staffId > 0) out[sid] = staffId;
+    }
+    return Object.keys(out).length ? out : null;
+  } catch {
+    return null;
+  }
 }
 
 function parseOptionalId(value: unknown): number | null {

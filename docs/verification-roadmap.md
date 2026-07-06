@@ -6918,3 +6918,44 @@ rimossa; residuo 0). typecheck pulito.
 RESIDUO confirmation-copy restante: righe omaggio Fidelity ("Puoi ottenere in
 gift...") e "Condizioni promozionali" — richiedono fidelity_gifts_json e promo_
 conditions configurati (assenti sul tenant), sottosistema gift a sé.
+
+
+---
+
+## Wizard booking: scelta operatore PER SERVIZIO + slot segment-aware (staff cluster) — CHIUSO (2026-07-06)
+
+Chiuso il residuo MAGGIORE della scelta operatore: il wizard usava un modello
+PIATTO (un operatore per tutto l'appuntamento, "Qualsiasi" + lista), il legacy usa
+GRUPPI PER SERVIZIO + staff_map + slot segment-aware. Port completo di booking.php
+mode=staff / build_slots_multi_staff_segments / parse_staff_map + booking-wizard.js
+renderStaffList / syncStaffMapInput / needsStaffStep.
+
+- **Backend endpoint** action=staff (publicBookingStaffPerService): operatori idonei
+  PER SERVIZIO (staff_for_service: un servizio senza righe staff_services è aperto
+  a tutti gli attivi; SSO escluso; no_operator => nessuno).
+- **Motore slot segment-aware** (publicBookingSlots, param staffMap): quando ogni
+  servizio ha un operatore nel staff_map, ogni segmento (in sequenza) dev'essere
+  libero per il SUO operatore nella propria finestra (build_slots_multi_staff_
+  segments, riusa candidateFree). Altrimenti candidato unico/qualsiasi.
+- **hold/confirm** accettano staffMap: staff_ids_json = operatori distinti,
+  segments (buildSegments/insertPublicAppointmentSegments) con staff_id per-servizio,
+  appointment_staff per ogni operatore distinto.
+- **Route** parse_staff_map (JSON {serviceId: staffId}) in slots/hold/confirm.
+- **Wizard**: fetch mode=staff al cambio carrello (anche con scelta OFF, per lo
+  staff_map deterministico dei servizi a operatore unico); gruppi per-servizio
+  (renderStaffList) con auto-assegnazione dell'operatore unico ("Assegnato
+  automaticamente") e selezione per i multi-operatore ("Seleziona"); skip dinamico
+  (needsStaffStep = scelta attiva E almeno un servizio con ≥2 operatori);
+  staff_map inviato a slots/hold/confirm; Avanti bloccato finché incompleto.
+
+VERIFICA LIVE (Playwright + API, tenant 25 con choose_staff=1 e 2 operatori su
+svc 9): step "Professionista" mostrato (non saltato), gruppo "test" con "luca" e
+"ZZ Op2" ("Seleziona"), Avanti disabilitato finché non si sceglie, staff_map
+{"9":54}, 30 slot per l'operatore scelto; hold.staffId=54; confirm -> appointment_
+segments(svc 9, staff 54) + appointment_staff 54. Appuntamento e setup di test
+ELIMINATI (residuo 0). typecheck pulito.
+
+RESIDUO minore: multi-servizio con operatori DIVERSI per servizio (slot segment
+combinati) è supportato dal motore ma non verificato live end-to-end (il tenant di
+test ha 1 servizio prenotabile alla sede). Righe conferma omaggio Fidelity /
+condizioni promozionali restano l'unico residuo (feature non configurate).

@@ -124,6 +124,13 @@ type BookingSlot = {
   reason: string;
 };
 
+// Operatori idonei per un servizio (booking.php mode=staff -> services[].staff).
+type BookingStaffGroup = {
+  serviceId: number;
+  name: string;
+  staff: Array<{ id: number; name: string }>;
+};
+
 type BookingHold = {
   token: string;
   expiresAt: string;
@@ -213,7 +220,10 @@ export function BookingFaithful({
   const [locationId, setLocationId] = useState<number>(0);
   const [categoryId, setCategoryId] = useState<number | null>(null);
   const [serviceIds, setServiceIds] = useState<number[]>([]);
-  const [operatorId, setOperatorId] = useState<number | "any">("any");
+  // Scelta operatore PER SERVIZIO (booking.php staff_map / renderStaffList): un
+  // gruppo per servizio con gli operatori idonei; l'operatore unico si auto-assegna.
+  const [staffGroups, setStaffGroups] = useState<BookingStaffGroup[]>([]);
+  const [staffByService, setStaffByService] = useState<Record<number, number>>({});
   const [date, setDate] = useState<string>(() => toYmd(new Date()));
   const [stripStart, setStripStart] = useState<Date>(() => startOfDay(new Date()));
   const [slot, setSlot] = useState("");
@@ -353,7 +363,6 @@ export function BookingFaithful({
         // (staff auto-assegnato). Se la scelta operatore è attiva, ferma allo step
         // Professionista.
         if (redeemSvc) {
-          setOperatorId("any");
           setStep(ctx.chooseStaffEnabled === false ? 5 : 4);
         }
         setError("");
@@ -369,6 +378,29 @@ export function BookingFaithful({
     };
   }, [slug]);
 
+  // Gruppi operatore PER SERVIZIO del carrello (nell'ordine di selezione), con
+  // solo operatori idonei (mode=staff). Definiti QUI (prima degli effetti slot)
+  // perché lo staff_map decide le disponibilità segment-aware.
+  const selectedStaffGroups = useMemo(
+    () => serviceIds.map((sid) => staffGroups.find((group) => group.serviceId === sid)).filter((group): group is BookingStaffGroup => Boolean(group)),
+    [serviceIds, staffGroups],
+  );
+  // staff_map completo: ogni servizio CON operatori ha un'assegnazione valida.
+  const staffMapComplete = selectedStaffGroups.length === serviceIds.length && selectedStaffGroups.every(
+    (group) => group.staff.length === 0 || Number(staffByService[group.serviceId] ?? 0) > 0,
+  );
+  // JSON staff_map da inviare (solo servizi con operatore assegnato); "" se
+  // incompleto o vuoto -> il backend auto-assegna "qualsiasi".
+  const staffMapJson = useMemo(() => {
+    if (!staffMapComplete) return "";
+    const map: Record<number, number> = {};
+    for (const group of selectedStaffGroups) {
+      const op = Number(staffByService[group.serviceId] ?? 0);
+      if (op > 0) map[group.serviceId] = op;
+    }
+    return Object.keys(map).length ? JSON.stringify(map) : "";
+  }, [staffMapComplete, selectedStaffGroups, staffByService]);
+
   // STEP 5: load availability (?action=slots) whenever the selection that affects slots changes.
   useEffect(() => {
     if (step !== 5 || !serviceIds.length || !locationId) return;
@@ -380,7 +412,8 @@ export function BookingFaithful({
       service_ids: serviceIds.join(","),
       location_id: String(locationId),
     });
-    if (operatorId !== "any") params.set("staff_id", String(operatorId));
+    // staff_map per-servizio (slot segment-aware); assente => "qualsiasi operatore".
+    if (staffMapJson) params.set("staff_map", staffMapJson);
 
     setSlotsLoading(true);
     setSlot("");
@@ -407,7 +440,7 @@ export function BookingFaithful({
     return () => {
       active = false;
     };
-  }, [step, slug, date, serviceIds, locationId, operatorId]);
+  }, [step, slug, date, serviceIds, locationId, staffMapJson]);
 
   // Auto-refresh silenzioso ogni 15s sullo step Data/Ora (in pausa se la tab è
   // nascosta), come il legacy — senza azzerare la selezione/hold.
@@ -422,7 +455,7 @@ export function BookingFaithful({
     if (step !== 5 || !serviceIds.length || !locationId || slotRefreshTick === 0) return;
     let active = true;
     const params = new URLSearchParams({ slug, action: "slots", date, service_ids: serviceIds.join(","), location_id: String(locationId) });
-    if (operatorId !== "any") params.set("staff_id", String(operatorId));
+    if (staffMapJson) params.set("staff_map", staffMapJson);
     void fetch(`/api/booking?${params.toString()}`)
       .then((response) => response.json())
       .then((data) => {
@@ -474,15 +507,50 @@ export function BookingFaithful({
         : [],
     [ctx, locationId],
   );
-  // Operatori idonei per lo step Professionista: solo quelli abilitati ad almeno
-  // un servizio selezionato, escluso l'operatore interno "SSO" (staff_for_service
-  // legacy). NB: il legacy raggruppa PER SERVIZIO — qui resta una lista unica
-  // filtrata (residuo: gruppi per-servizio + staff_map + slot segment-aware).
-  const eligibleStaff = (ctx?.staff ?? []).filter(
-    (member) =>
-      member.name.trim().toUpperCase() !== "SSO" &&
-      member.serviceIds.some((sid) => serviceIds.includes(sid)),
-  );
+  // Serve lo step Professionista? Solo con scelta attiva E almeno un servizio con
+  // ≥2 operatori idonei (booking-wizard.js needsStaffStep 4222); altrimenti si salta.
+  // (selectedStaffGroups/staffMapJson sono definiti più in alto: servono agli
+  // effetti slot.)
+  const needsStaffStep = chooseStaffEnabled && selectedStaffGroups.some((group) => group.staff.length >= 2);
+  // Carica i gruppi operatore per-servizio quando cambia il carrello (mode=staff).
+  // Si carica ANCHE con scelta operatore disattivata, per costruire lo staff_map
+  // deterministico dei servizi a operatore unico (advanceAfterServicesSelection).
+  const staffFetchKey = serviceIds.join(",");
+  useEffect(() => {
+    if (!slug || serviceIds.length === 0) {
+      setStaffGroups([]);
+      return;
+    }
+    let alive = true;
+    const params = new URLSearchParams({ slug, action: "staff", service_ids: staffFetchKey });
+    if (locationId > 0) params.set("location_id", String(locationId));
+    void fetch(`/api/booking?${params.toString()}`)
+      .then((res) => res.json().catch(() => null))
+      .then((data: { ok?: boolean; services?: BookingStaffGroup[] } | null) => {
+        if (!alive || !data?.ok || !Array.isArray(data.services)) return;
+        setStaffGroups(data.services);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [slug, staffFetchKey, locationId]);
+  // Auto-assegna gli operatori unici e rimuovi i servizi non più selezionati
+  // (renderStaffList 3018-3025 + advanceAfterServicesSelection 4207-4219).
+  useEffect(() => {
+    setStaffByService((prev) => {
+      const next: Record<number, number> = {};
+      for (const group of staffGroups) {
+        if (!serviceIds.includes(group.serviceId)) continue;
+        if (group.staff.length === 1) next[group.serviceId] = group.staff[0].id;
+        else if (prev[group.serviceId] && group.staff.some((member) => member.id === prev[group.serviceId])) next[group.serviceId] = prev[group.serviceId];
+      }
+      const prevKeys = Object.keys(prev);
+      let changed = prevKeys.length !== Object.keys(next).length;
+      if (!changed) for (const key of prevKeys) if (prev[Number(key)] !== next[Number(key)]) { changed = true; break; }
+      return changed ? next : prev;
+    });
+  }, [staffGroups, serviceIds]);
   const selectedBenefit = ctx?.benefits.find((item) => item.id === benefitId) ?? null;
   const selectedSlot = availableSlots.find((item) => item.time === slot) ?? null;
   // Deep-link redeem attivo (book_package/prepaid/giftbox/omaggio): il servizio
@@ -580,10 +648,16 @@ export function BookingFaithful({
         (finalTotal > 0.00001 && custBenefits.giftcards.length > 0) ||
         (finalTotal > 0.00001 && custBenefits.logged && custBenefits.creditAvailable > 0.00001)),
   );
-  const staffName =
-    operatorId === "any"
-      ? hold?.staffName || selectedSlot?.staffName || "Qualsiasi professionista"
-      : ctx?.staff.find((member) => member.id === operatorId)?.name ?? "Professionista";
+  // Nome operatore per il riepilogo: con staff_map mostra l'unico assegnato o
+  // "Più professionisti" (multi-operatore); altrimenti l'operatore dello slot.
+  const staffName = (() => {
+    const assignedOps = Array.from(new Set(selectedStaffGroups.map((group) => Number(staffByService[group.serviceId] ?? 0)).filter((op) => op > 0)));
+    if (staffMapJson && assignedOps.length === 1) {
+      return staffGroups.flatMap((group) => group.staff).find((member) => member.id === assignedOps[0])?.name || "Professionista";
+    }
+    if (staffMapJson && assignedOps.length > 1) return "Più professionisti";
+    return hold?.staffName || selectedSlot?.staffName || "Qualsiasi professionista";
+  })();
   const clientFullName = `${firstName} ${lastName}`.trim();
 
   const isFinalStep = step === 7;
@@ -746,6 +820,9 @@ export function BookingFaithful({
     if (step === 1) return locationId > 0;
     if (step === 2) return categoryId != null;
     if (step === 3) return serviceIds.length > 0;
+    // Step 4 Professionista: ogni servizio con operatori dev'essere assegnato
+    // (hasCompleteStaffSelection legacy): gli unici sono già auto-assegnati.
+    if (step === 4) return staffMapComplete;
     // Step 5-7: serve uno slot con hold ANCORA valido (validateStep legacy) —
     // niente Avanti/Invia con hold scaduto.
     if (step === 5) return Boolean(slot) && !slotsLoading && Boolean(hold) && !holdExpired;
@@ -781,7 +858,8 @@ export function BookingFaithful({
     setHold(null);
     setError("");
     try {
-      const staffForHold = operatorId === "any" ? item.staffId : operatorId;
+      // Con staff_map il backend riserva per-segmento; altrimenti l'operatore
+      // dello slot ("qualsiasi" -> quello risolto sul singolo slot).
       const response = await fetch("/api/booking", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -791,7 +869,8 @@ export function BookingFaithful({
           date,
           time: item.time,
           service_ids: serviceIds.join(","),
-          staff_id: staffForHold ?? "",
+          staff_id: staffMapJson ? "" : (item.staffId ?? ""),
+          staff_map: staffMapJson,
           location_id: locationId,
           owner_key: ownerKeyRef.current,
         }),
@@ -809,13 +888,13 @@ export function BookingFaithful({
     setError("");
     if (!isFinalStep) {
       if (!canContinue) return;
-      // Con la scelta operatore disattivata (booking_choose_staff_enabled=0) lo
-      // step 4 "Professionista" viene SALTATO come nel legacy (skippedStaffStep):
-      // resta "Qualsiasi" e l'operatore arriva dallo slot (auto-assegnazione).
+      // Lo step 4 "Professionista" viene SALTATO quando non serve (scelta operatore
+      // disattivata OPPURE nessun servizio ha ≥2 operatori idonei — needsStaffStep):
+      // gli operatori unici sono già auto-assegnati e l'operatore arriva dallo
+      // staff_map deterministico o dallo slot (booking-wizard.js needsStaffStep).
       setStep((current) => {
         let next = Math.min(7, current + 1);
-        if (next === 4 && !chooseStaffEnabled) {
-          setOperatorId("any");
+        if (next === 4 && !needsStaffStep) {
           next = 5;
         }
         // showStep legacy (booking-wizard.js 3212): senza vantaggi lo step 6
@@ -833,7 +912,8 @@ export function BookingFaithful({
     if (!canContinue) return;
     setSubmitting(true);
     try {
-      const staffForConfirm = operatorId === "any" ? hold?.staffId ?? selectedSlot?.staffId ?? "" : operatorId;
+      // staff_map per-servizio (multi-operatore) o singolo operatore dallo slot/hold.
+      const staffForConfirm = hold?.staffId ?? selectedSlot?.staffId ?? "";
       const response = await fetch("/api/booking", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -842,7 +922,8 @@ export function BookingFaithful({
           slug,
           location_id: locationId,
           service_ids: serviceIds.join(","),
-          staff_id: staffForConfirm,
+          staff_id: staffMapJson ? "" : staffForConfirm,
+          staff_map: staffMapJson,
           date,
           time: slot,
           hold_token: hold?.token ?? "",
@@ -901,7 +982,7 @@ export function BookingFaithful({
       // torna direttamente a Data/Ora.
       if (current === 7 && !hasBenefitsAvailable) return 5;
       let prev = Math.max(firstStep, current - 1);
-      if (prev === 4 && !chooseStaffEnabled) prev = 3;
+      if (prev === 4 && !needsStaffStep) prev = 3;
       // Non tornare mai allo step Sede quando è saltato (sede unica).
       if (prev === 1 && skipLocationStep) prev = 2;
       return prev;
@@ -1256,8 +1337,8 @@ export function BookingFaithful({
             <form method="post" id="wizardForm" className="booking-body" onSubmit={(event) => event.preventDefault()}>
               {/* Legacy hidden inputs (kept for parity; _csrf intentionally dropped). */}
               <input type="hidden" name="service_ids" id="service_ids" value={serviceIds.join(",")} readOnly />
-              <input type="hidden" name="staff_id" id="staff_id" value={operatorId === "any" ? "" : String(operatorId)} readOnly />
-              <input type="hidden" name="staff_map" id="staff_map" value="" readOnly />
+              <input type="hidden" name="staff_id" id="staff_id" value="" readOnly />
+              <input type="hidden" name="staff_map" id="staff_map" value={staffMapJson} readOnly />
               <input type="hidden" name="location_id" id="location_id" value={String(locationId)} readOnly />
               <input type="hidden" name="date" id="date" value={date} readOnly />
               <input type="hidden" name="time" id="time" value={slot} readOnly />
@@ -1452,47 +1533,51 @@ export function BookingFaithful({
                 </div>
               </div>
 
-              {/* STEP 4: Professional */}
+              {/* STEP 4: Professionista — un gruppo PER SERVIZIO (renderStaffList),
+                  operatore unico auto-assegnato, staff_map per gli slot segment-aware. */}
               <div className={`wizard-step${step === 4 ? "" : " d-none"}`} data-step="4">
-                <div className="mb-2 small-muted">Scegli l&apos;operatore per il tuo servizio.</div>
+                <div className="mb-2 small-muted">Scegli il professionista per ogni servizio selezionato.</div>
                 <div className="d-grid gap-2" id="staffList">
-                  <div
-                    className={`list-card${operatorId === "any" ? " active" : ""}`}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => setOperatorId("any")}
-                  >
-                    <div className="d-flex align-items-center gap-2">
-                      <div className="recap-avatar">
-                        <i className="bi bi-people" />
+                  {selectedStaffGroups.map((group) => {
+                    const auto = group.staff.length === 1;
+                    return (
+                      <div key={group.serviceId} className="mb-3">
+                        <div className="fw-semibold mb-2">{group.name || "Servizio"}</div>
+                        {group.staff.length === 0 ? (
+                          <div className="text-muted small">Nessun operatore disponibile.</div>
+                        ) : (
+                          group.staff.map((member) => {
+                            const selected = auto || staffByService[group.serviceId] === member.id;
+                            return (
+                              <div
+                                key={member.id}
+                                className={`list-card staff-card${selected ? " active" : ""}`}
+                                data-service={group.serviceId}
+                                role="button"
+                                tabIndex={0}
+                                onClick={auto ? undefined : () => setStaffByService((prev) => ({ ...prev, [group.serviceId]: member.id }))}
+                              >
+                                <div className="d-flex align-items-center justify-content-between w-100">
+                                  <div className="d-flex align-items-center gap-2">
+                                    <div className="recap-avatar">
+                                      <i className="bi bi-person" />
+                                    </div>
+                                    <div>
+                                      <div className="fw-semibold">{member.name || "Operatore"}</div>
+                                      <div className="text-muted small">{auto ? "Assegnato automaticamente" : "Seleziona"}</div>
+                                    </div>
+                                  </div>
+                                  <i className={`bi ${selected ? "bi-check-circle-fill text-success" : "bi-chevron-right text-muted"}`} aria-hidden="true" />
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
                       </div>
-                      <div className="fw-semibold">Qualsiasi professionista</div>
-                    </div>
-                    <div className="service-card__action" aria-hidden="true">
-                      +
-                    </div>
-                  </div>
-                  {eligibleStaff.map((member) => (
-                    <div
-                      key={member.id}
-                      className={`list-card${operatorId === member.id ? " active" : ""}`}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => setOperatorId(member.id)}
-                    >
-                      <div className="d-flex align-items-center gap-2">
-                        <div className="recap-avatar">
-                          <i className="bi bi-person" />
-                        </div>
-                        <div className="fw-semibold">{member.name}</div>
-                      </div>
-                      <div className="service-card__action" aria-hidden="true">
-                        +
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
-                <div id="staffEmpty" className={`text-muted small mt-2${eligibleStaff.length ? " d-none" : ""}`}>
+                <div id="staffEmpty" className={`text-muted small mt-2${selectedStaffGroups.length ? " d-none" : ""}`}>
                   Nessun operatore disponibile.
                 </div>
               </div>

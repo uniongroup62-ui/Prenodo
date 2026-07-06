@@ -458,6 +458,7 @@ export async function publicBookingSlots({
   date,
   serviceIds,
   staffId,
+  staffMap = null,
   locationId,
   excludeAppointmentId = null,
 }: {
@@ -465,6 +466,10 @@ export async function publicBookingSlots({
   date: string;
   serviceIds: number[];
   staffId?: number | null;
+  // Mappa per-servizio serviceId -> staffId (booking.php staff_map): quando ogni
+  // servizio ha un operatore assegnato si calcolano slot SEGMENT-AWARE
+  // (build_slots_multi_staff_segments), ognuno libero nella sua finestra.
+  staffMap?: Record<number, number> | null;
   locationId?: number | null;
   // Manage edit flow: the edited appointment must not block its own slot.
   excludeAppointmentId?: number | null;
@@ -474,8 +479,18 @@ export async function publicBookingSlots({
   const duration = services.reduce((sum, service) => sum + Math.max(5, Number(service.duration_min ?? 30)), 0);
   if (duration <= 0) throw new Error("Servizio non valido.");
 
-  const candidates = await eligibleStaffCandidates(slug, services, staffId ?? null);
-  if (!candidates.length) {
+  // SEGMENT-AWARE quando ogni servizio ha un operatore nel staff_map e non è
+  // tutto no_operator: ogni segmento (in sequenza) dev'essere libero per il suo
+  // operatore. Altrimenti: candidato unico/qualsiasi per l'intero appuntamento.
+  const useSegmentStaff = Boolean(
+    staffMap
+      && services.length > 0
+      && !services.every((service) => Number(service.no_operator ?? 0) === 1)
+      && services.every((service) => Number(staffMap[Number(service.id)] ?? 0) > 0),
+  );
+
+  const candidates = useSegmentStaff ? [] : await eligibleStaffCandidates(slug, services, staffId ?? null);
+  if (!useSegmentStaff && !candidates.length) {
     return [];
   }
 
@@ -527,18 +542,46 @@ export async function publicBookingSlots({
   const slots: PublicBookingSlot[] = [];
   const minStart = minimumStartForDate(normalizedDate);
 
+  // Segmenti per la modalità staff_map: [operatore, durata] in ordine servizio.
+  const staffSegments = useSegmentStaff
+    ? services.map((service) => ({
+        staffId: Number(staffMap![Number(service.id)]),
+        duration: Math.max(5, Number(service.duration_min ?? 30)),
+      }))
+    : [];
+  const segmentDistinctStaff = new Set(staffSegments.map((seg) => seg.staffId));
+
+  // Libero a `start`: in modalità segment ogni segmento dev'essere libero per il
+  // suo operatore nella propria finestra; altrimenti un candidato copre l'intero
+  // appuntamento. Ritorna l'operatore dello slot (null se ambiguo/qualsiasi).
+  const resolveStaff = (start: number): { ok: boolean; staffId: number | null; staffName: string } => {
+    if (useSegmentStaff) {
+      let offset = 0;
+      for (const seg of staffSegments) {
+        const cand: StaffCandidate = { id: seg.staffId, name: "", serviceIds: new Set<number>() };
+        if (!candidateFree(cand, start + offset, start + offset + seg.duration, locationId ?? null, busyRanges)) {
+          return { ok: false, staffId: null, staffName: "" };
+        }
+        offset += seg.duration;
+      }
+      return { ok: true, staffId: segmentDistinctStaff.size === 1 ? staffSegments[0].staffId : null, staffName: "" };
+    }
+    const free = candidates.find((candidate) =>
+      candidateFree(candidate, start, start + duration, locationId ?? null, busyRanges),
+    );
+    return { ok: Boolean(free), staffId: free?.id ?? null, staffName: free?.name ?? "" };
+  };
+
   for (const [opens, closes] of intervals) {
     for (let start = opens; start + duration <= closes; start += 5) {
       if (start < minStart) continue;
-      const free = candidates.find((candidate) =>
-        candidateFree(candidate, start, start + duration, locationId ?? null, busyRanges),
-      );
-      const available = Boolean(free) && cabinFree(start) && resourcesCtx.slotFree(start);
+      const resolved = resolveStaff(start);
+      const available = resolved.ok && cabinFree(start) && resourcesCtx.slotFree(start);
       slots.push({
         time: minutesToTime(start),
         available,
-        staffId: available ? (free?.id ?? null) : null,
-        staffName: available ? (free?.name ?? "") : "",
+        staffId: available ? resolved.staffId : null,
+        staffName: available ? resolved.staffName : "",
         reason: available ? "Disponibile" : "Orario occupato",
       });
     }
@@ -810,6 +853,7 @@ export async function holdPublicBookingSlot({
   time,
   serviceIds,
   staffId,
+  staffMap = null,
   locationId,
   ownerKey,
   channel = "public",
@@ -819,13 +863,14 @@ export async function holdPublicBookingSlot({
   time: string;
   serviceIds: number[];
   staffId?: number | null;
+  staffMap?: Record<number, number> | null;
   locationId?: number | null;
   ownerKey: string;
   channel?: string;
 }): Promise<PublicBookingHold> {
   const normalizedDate = normalizeDate(date);
   const normalizedTime = normalizeTime(time);
-  const slots = await publicBookingSlots({ slug, date: normalizedDate, serviceIds, staffId, locationId });
+  const slots = await publicBookingSlots({ slug, date: normalizedDate, serviceIds, staffId, staffMap, locationId });
   const selected = slots.find((slot) => slot.time === normalizedTime && slot.available);
   // Exact legacy hold refusal (booking.php:5259 / api_appointments.php:6378).
   if (!selected) throw new Error("Orario non piu disponibile. Ricarica e scegli un altro slot.");
@@ -835,7 +880,9 @@ export async function holdPublicBookingSlot({
   const duration = services.reduce((sum, service) => sum + Math.max(5, Number(service.duration_min ?? 30)), 0);
   const expiresAt = addSecondsSqlDate(new Date(), holdTtlSecondsForChannel(channel));
   const token = randomHex(64);
-  const selectedStaffId = staffId && staffId > 0 ? staffId : selected.staffId;
+  // Operatori distinti del staff_map (per staff_ids_json + hold single-op).
+  const mapOps = staffMap ? Array.from(new Set(Object.values(staffMap).map(Number).filter((n) => n > 0))) : [];
+  const selectedStaffId = staffId && staffId > 0 ? staffId : (mapOps.length === 1 ? mapOps[0] : selected.staffId);
 
   await tenantInsert(await tenantTable(slug, "appointment_holds"), {
     token,
@@ -845,9 +892,9 @@ export async function holdPublicBookingSlot({
     starts_at: sqlDateTime(normalizedDate, normalizedTime),
     ends_at: sqlDateTime(normalizedDate, minutesToTime(start + duration)),
     service_ids_json: JSON.stringify(services.map((service) => Number(service.id))),
-    staff_ids_json: JSON.stringify(selectedStaffId ? [selectedStaffId] : []),
+    staff_ids_json: JSON.stringify(mapOps.length ? mapOps : (selectedStaffId ? [selectedStaffId] : [])),
     cabin_ids_json: JSON.stringify(services.map((service) => nullableNumber(service.cabin_id)).filter(Boolean)),
-    segments_json: JSON.stringify(buildSegments(normalizedDate, normalizedTime, services, selectedStaffId)),
+    segments_json: JSON.stringify(buildSegments(normalizedDate, normalizedTime, services, selectedStaffId, staffMap)),
     resource_blocks_json: JSON.stringify([]),
     status: "active",
     expires_at: expiresAt,
@@ -942,6 +989,7 @@ export async function confirmPublicBooking({
   time,
   serviceIds,
   staffId,
+  staffMap = null,
   locationId,
   ownerKey,
   holdToken,
@@ -958,6 +1006,7 @@ export async function confirmPublicBooking({
   time: string;
   serviceIds: number[];
   staffId?: number | null;
+  staffMap?: Record<number, number> | null;
   locationId?: number | null;
   ownerKey: string;
   holdToken?: string | null;
@@ -974,7 +1023,10 @@ export async function confirmPublicBooking({
   const services = await publicServicesByIds(slug, serviceIds, locationId ?? null);
   const start = timeToMinutes(normalizedTime);
   const duration = services.reduce((sum, service) => sum + Math.max(5, Number(service.duration_min ?? 30)), 0);
-  const selectedStaffId = staffId && staffId > 0 ? staffId : null;
+  // Operatori distinti del staff_map: se uno solo diventa lo staff dell'appuntamento,
+  // se molti l'appuntamento resta multi-operatore (uno per segmento).
+  const mapOps = staffMap ? Array.from(new Set(Object.values(staffMap).map(Number).filter((n) => n > 0))) : [];
+  const selectedStaffId = staffId && staffId > 0 ? staffId : (mapOps.length === 1 ? mapOps[0] : null);
 
   if (holdToken) {
     await assertActivePublicHold({
@@ -988,7 +1040,7 @@ export async function confirmPublicBooking({
       locationId: locationId ?? null,
     });
   } else {
-    const slots = await publicBookingSlots({ slug, date: normalizedDate, serviceIds, staffId: selectedStaffId, locationId });
+    const slots = await publicBookingSlots({ slug, date: normalizedDate, serviceIds, staffId: selectedStaffId, staffMap, locationId });
     if (!slots.some((slot) => slot.time === normalizedTime && slot.available)) {
       throw new Error("Orario non disponibile.");
     }
@@ -1041,9 +1093,11 @@ export async function confirmPublicBooking({
   const appointmentId = await tenantInsert(appointments, values);
 
   await insertPublicAppointmentServices(slug, appointmentId, services, legacyBenefits?.serviceOverrides ?? []);
-  if (selectedStaffId) await insertPublicAppointmentStaff(slug, appointmentId, selectedStaffId);
+  // staff dell'appuntamento: tutti gli operatori distinti (staff_map) o il singolo.
+  const staffToInsert = mapOps.length ? mapOps : (selectedStaffId ? [selectedStaffId] : []);
+  for (const opId of staffToInsert) await insertPublicAppointmentStaff(slug, appointmentId, opId);
   if (locationId && locationId > 0) await insertPublicAppointmentLocation(slug, appointmentId, locationId);
-  await insertPublicAppointmentSegments(slug, appointmentId, normalizedDate, normalizedTime, services, selectedStaffId);
+  await insertPublicAppointmentSegments(slug, appointmentId, normalizedDate, normalizedTime, services, selectedStaffId, staffMap);
   if (holdToken) await markPublicHoldConverted(slug, holdToken, ownerKey, appointmentId);
 
   // Promotion redemption record (same shape the manage save writes; removed by
@@ -1191,6 +1245,57 @@ async function eligibleStaffCandidates(slug: string, services: ServiceRow[], req
       serviceIds: mappedByStaff.get(Number(row.id ?? 0)) ?? new Set<number>(),
     }))
     .filter((staff) => serviceIds.every((serviceId) => !mappedServiceIds.has(serviceId) || staff.serviceIds.has(serviceId)));
+}
+
+export type PublicBookingStaffGroup = {
+  serviceId: number;
+  name: string;
+  staff: Array<{ id: number; name: string }>;
+};
+
+// Operatori idonei PER SINGOLO servizio (booking.php mode=staff -> staff_for_service):
+// il wizard, quando la scelta operatore è attiva, rende un gruppo per servizio.
+// Un servizio senza righe staff_services è aperto a TUTTI gli operatori attivi
+// (come eligibleStaffCandidates); SSO è escluso; no_operator => nessun operatore.
+export async function publicBookingStaffPerService(slug: string, serviceIds: number[], locationId: number | null): Promise<PublicBookingStaffGroup[]> {
+  const ids = Array.from(new Set(serviceIds.map(Number).filter((n) => n > 0)));
+  if (!ids.length) return [];
+  const services = await publicServicesByIds(slug, ids, locationId);
+  if (!services.length) return [];
+
+  const [staffRows, staffServiceRows] = await Promise.all([
+    tenantSelect<RowDataPacket>({ slug, table: "staff", where: "COALESCE(is_active, 1) = 1 AND UPPER(COALESCE(full_name, '')) <> 'SSO'", orderBy: "full_name ASC, id ASC" }),
+    tenantSelect<RowDataPacket>({ slug, table: "staff_services" }).catch(() => [] as RowDataPacket[]),
+  ]);
+  const mappedByStaff = new Map<number, Set<number>>();
+  const mappedServiceIds = new Set<number>();
+  for (const row of staffServiceRows) {
+    const staffId = Number(row.staff_id ?? 0);
+    const serviceId = Number(row.service_id ?? 0);
+    if (!mappedByStaff.has(staffId)) mappedByStaff.set(staffId, new Set());
+    mappedByStaff.get(staffId)!.add(serviceId);
+    mappedServiceIds.add(serviceId);
+  }
+  const active = staffRows.map((row) => ({
+    id: Number(row.id ?? 0),
+    name: String(row.full_name ?? "Operatore"),
+    serviceIds: mappedByStaff.get(Number(row.id ?? 0)) ?? new Set<number>(),
+  }));
+
+  const svcById = new Map(services.map((svc) => [Number(svc.id), svc]));
+  const out: PublicBookingStaffGroup[] = [];
+  for (const sid of ids) {
+    const svc = svcById.get(sid);
+    if (!svc) continue;
+    if (Number(svc.no_operator ?? 0) === 1) {
+      out.push({ serviceId: sid, name: String(svc.name ?? ""), staff: [] });
+      continue;
+    }
+    const serviceMapped = mappedServiceIds.has(sid);
+    const eligible = active.filter((member) => !serviceMapped || member.serviceIds.has(sid));
+    out.push({ serviceId: sid, name: String(svc.name ?? ""), staff: eligible.map((member) => ({ id: member.id, name: member.name })) });
+  }
+  return out;
 }
 
 async function businessIntervals(slug: string, locationId: number | null, date: string): Promise<Array<[number, number]>> {
@@ -2146,16 +2251,17 @@ async function insertPublicAppointmentLocation(slug: string, appointmentId: numb
   await tenantInsert(await tenantTable(slug, "appointment_locations"), { appointment_id: appointmentId, location_id: locationId }).catch(() => 0);
 }
 
-async function insertPublicAppointmentSegments(slug: string, appointmentId: number, date: string, time: string, services: ServiceRow[], staffId: number | null): Promise<void> {
+async function insertPublicAppointmentSegments(slug: string, appointmentId: number, date: string, time: string, services: ServiceRow[], staffId: number | null, staffMap: Record<number, number> | null = null): Promise<void> {
   let cursor = timeToMinutes(time);
   let position = 1;
   for (const service of services) {
     const duration = Math.max(5, Number(service.duration_min ?? 30));
+    const segStaffId = Number(staffMap?.[Number(service.id ?? 0)] ?? 0) || Number(staffId ?? 0) || 0;
     await tenantInsert(await tenantTable(slug, "appointment_segments"), {
       appointment_id: appointmentId,
       service_id: Number(service.id ?? 0),
       service_name: String(service.name ?? ""),
-      staff_id: staffId ?? 0,
+      staff_id: segStaffId,
       position,
       starts_at: sqlDateTime(date, minutesToTime(cursor)),
       ends_at: sqlDateTime(date, minutesToTime(cursor + duration)),
@@ -2181,15 +2287,16 @@ async function markPublicHoldConverted(slug: string, token: string, ownerKey: st
   }
 }
 
-function buildSegments(date: string, time: string, services: ServiceRow[], staffId: number | null): Array<Record<string, unknown>> {
+function buildSegments(date: string, time: string, services: ServiceRow[], staffId: number | null, staffMap: Record<number, number> | null = null): Array<Record<string, unknown>> {
   let cursor = timeToMinutes(time);
   return services.map((service, index) => {
     const duration = Math.max(5, Number(service.duration_min ?? 30));
+    const segStaffId = Number(staffMap?.[Number(service.id ?? 0)] ?? 0) || Number(staffId ?? 0) || null;
     const segment = {
       position: index + 1,
       service_id: Number(service.id ?? 0),
       service_name: String(service.name ?? ""),
-      staff_id: staffId ?? null,
+      staff_id: segStaffId,
       starts_at: sqlDateTime(date, minutesToTime(cursor)),
       ends_at: sqlDateTime(date, minutesToTime(cursor + duration)),
       duration_minutes: duration,
