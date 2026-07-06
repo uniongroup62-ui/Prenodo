@@ -6082,3 +6082,26 @@ e2e-public-area 14/14 (tutte CLEAN); struttura confrontata 1:1 col PHP live
 (account-page/panel, eyebrow 'Account cliente', h1+subtitle, empty-state,
 2 form profilo); 46/46 marker account + 100/100 marketplace + 64/64 wizard;
 typecheck pulito.
+
+## MARKETPLACE — QUINTA PASSATA: fedeltà GRAFICA account cliente (segnalazione utente) (2026-07-06)
+L'utente ha segnalato che l'account cliente graficamente non è uguale al PHP.
+Analisi CSS completa: public_account.php carica `app.css` (base: btn/form/
+alert/body/reset) + `public_account.css` (:root vars + layout account:
+account-page/main--wide/panel/activity-grid/favorite-grid/profile-form) +
+`marketplace_topbar_style()` inline. Il componente Next caricava invece
+`public_marketplace.css` (per lista/dettaglio) + TOKEN/FOOTER style, SENZA
+app.css → mancavano tutti gli stili base (bottoni/form/tipografia) e la
+pagina risultava visivamente rotta. Fix:
+- account-faithful.tsx ora carica ESATTAMENTE come il PHP: /assets/css/app.css
+  + /assets/css/pages/public_account.css + TOPBAR_STYLE inline; rimossi
+  public_marketplace.css, TOKEN_STYLE, FOOTER_STYLE (public_account.css
+  definisce già tutti i :root: --brand/--ink/--line/--bg/--marketplace-page-*/
+  --marketplace-shell-max).
+- Aggiunto l'input filtro `marketplace-topbar-treatment-search` nel dropdown
+  del picker (account + ricerca) che mancava → DOM skeleton ora identico al
+  PHP (topbar + treatment panel).
+Verifica: skeleton DOM (tag+classi) di /account/activities confrontato 1:1 col
+PHP live (topbar → treatment picker → panel), unica differenza risolta era il
+filter input. 46/46 marker account + 100/100 marketplace, batterie
+e2e-account-faithful 15/15, e2e-marketplace 24/24, e2e-booking-marketplace
+26/26, e2e-public-area 14/14 CLEAN; typecheck pulito.

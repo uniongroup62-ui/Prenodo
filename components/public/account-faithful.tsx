@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { TOKEN_STYLE, TOPBAR_STYLE, FOOTER_STYLE, TOPBAR_CATEGORIES } from "@/components/public/marketplace-detail-faithful";
+import { TOPBAR_STYLE, TOPBAR_CATEGORIES } from "@/components/public/marketplace-detail-faithful";
 import { useMarketplacePageEffects } from "@/components/public/marketplace-shared";
 
 // Port fedele dell'AREA ACCOUNT CLIENTE centrale del marketplace legacy
@@ -193,13 +193,14 @@ export function AccountFaithful({ mode }: { mode: AccountMode }) {
 
   return (
     <>
-      <style dangerouslySetInnerHTML={{ __html: TOKEN_STYLE }} />
-      <style dangerouslySetInnerHTML={{ __html: TOPBAR_STYLE }} />
-      <style dangerouslySetInnerHTML={{ __html: FOOTER_STYLE }} />
+      {/* Fedele a public_account.php: app.css (base: btn/form/alert/body) +
+          public_account.css (layout account) + marketplace_topbar_style()
+          inline. NON carica public_marketplace.css (che è per lista/dettaglio). */}
       {/* eslint-disable-next-line @next/next/no-css-tags */}
-      <link rel="stylesheet" href="/assets/css/pages/public_marketplace.css" />
+      <link rel="stylesheet" href="/assets/css/app.css" />
       {/* eslint-disable-next-line @next/next/no-css-tags */}
       <link rel="stylesheet" href="/assets/css/pages/public_account.css" />
+      <style dangerouslySetInnerHTML={{ __html: TOPBAR_STYLE }} />
 
       <div className="account-page">
         {/* ===================== TOPBAR (con ricerca) ===================== */}
@@ -259,6 +260,17 @@ export function AccountFaithful({ mode }: { mode: AccountMode }) {
                       Servizi
                     </button>
                   </div>
+                  <input
+                    className="marketplace-topbar-treatment-search"
+                    type="search"
+                    placeholder="Cerca..."
+                    autoComplete="off"
+                    aria-label="Cerca nel menu"
+                    data-marketplace-treatment-filter
+                    hidden
+                    aria-hidden="true"
+                    tabIndex={-1}
+                  />
                   <div className="marketplace-topbar-treatment-lists">
                     <div className="marketplace-topbar-treatment-list" role="listbox" aria-label="Categorie" data-marketplace-treatment-list="categories">
                       {TOPBAR_CATEGORIES.map((cat) => (

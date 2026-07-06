@@ -241,6 +241,17 @@ export function MarketplaceSearchFaithful({
                     Servizi
                   </button>
                 </div>
+                <input
+                  className="marketplace-topbar-treatment-search"
+                  type="search"
+                  placeholder="Cerca..."
+                  autoComplete="off"
+                  aria-label="Cerca nel menu"
+                  data-marketplace-treatment-filter
+                  hidden
+                  aria-hidden="true"
+                  tabIndex={-1}
+                />
                 <div className="marketplace-topbar-treatment-lists">
                   <div className="marketplace-topbar-treatment-list" role="listbox" aria-label="Categorie" data-marketplace-treatment-list="categories">
                     {TOPBAR_CATEGORIES.map((cat) => (
