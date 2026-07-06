@@ -2,6 +2,7 @@ import { jsonError, parseInteger } from "@/lib/api-utils";
 import { listDbClients, listDbProducts, listDbSales, posDbSummary } from "@/lib/db-repositories";
 import { getManageReports } from "@/lib/manage-reports";
 import { currentManageSession } from "@/lib/manage-auth";
+import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can, canAny } from "@/lib/role-permissions";
 
@@ -17,6 +18,29 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const compare = ["1", "true", "yes", "on"].includes((url.searchParams.get("compare") ?? "").toLowerCase());
+    // Sede legacy (reports.php 296-338): filtra sulla SEDE CORRENTE di sessione
+    // (app_current_location_id), con fallback alla PRIMA sede autorizzata;
+    // all_locations=1/all estende alle sedi autorizzate (con 1 sola sede
+    // autorizzata il filtro resta quella sede, e la label ne mostra il nome).
+    // location_id esplicito è un extra dell'API Next (la pagina non lo manda).
+    const allLocations = ["1", "true", "yes", "on", "all"].includes((url.searchParams.get("all_locations") ?? "").toLowerCase());
+    const locationContext = await getManageLocationContext(tenantSlug);
+    const allowed = locationContext.locations;
+    const requestedLocation = parseInteger(url.searchParams.get("location_id"), 0);
+    let locationId: number;
+    if (requestedLocation > 0) {
+      locationId = requestedLocation;
+    } else if (allLocations) {
+      locationId = allowed.length === 1 ? Number(allowed[0].id) : 0;
+    } else {
+      locationId = Number(locationContext.currentLocationId ?? 0);
+      if (locationId <= 0 && allowed.length > 0) locationId = Number(allowed[0].id);
+    }
+    const locationLabel = allLocations && allowed.length > 1
+      ? "Tutte le sedi autorizzate"
+      : locationId > 0
+        ? String(locationContext.allLocations.find((l) => Number(l.id) === locationId)?.name ?? `Sede #${locationId}`)
+        : "Tutte le sedi";
     const [summary, sales, clients, products, analytics] = await Promise.all([
       posDbSummary(tenantSlug),
       listDbSales({ slug: tenantSlug }),
@@ -25,7 +49,7 @@ export async function GET(request: Request) {
       // Date-filtered analytics (from/to = YYYY-MM-DD; default = current month).
       // Costi/Commissioni sono perm-gated come nel legacy (reports.php:1203/1268);
       // compare_from/compare_to permettono le modalita' di confronto della pagina.
-      getManageReports(tenantSlug, url.searchParams.get("from") ?? "", url.searchParams.get("to") ?? "", parseInteger(url.searchParams.get("location_id"), 0), compare, {
+      getManageReports(tenantSlug, url.searchParams.get("from") ?? "", url.searchParams.get("to") ?? "", locationId, compare, {
         includeCosts: canAny(session.user.perms, ["costs.manage", "costs.items"]),
         includeCommissions: can(session.user.perms, "commissions.manage"),
         compareFrom: url.searchParams.get("compare_from") ?? undefined,
@@ -50,6 +74,8 @@ export async function GET(request: Request) {
         products: summary.productTotal,
       },
       latestSales: sales.slice(0, 5),
+      // Etichetta sede per il sottotitolo legacy e 'Profilo clienti {sede}'.
+      locationLabel,
       analytics,
     });
   } catch (error) {

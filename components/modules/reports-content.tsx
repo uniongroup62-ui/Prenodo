@@ -32,7 +32,7 @@ type Analytics = {
   costs: { total: number; paid: number; open: number } | null;
   commissions: { count: number; total: number; paid: number; open: number } | null;
   composition: { label: string; revenue: number }[];
-  comparison: { from: string; to: string; totalRevenue: number; soldRevenue: number; saleCount: number; servedClients: number; averageTicket: number; appointmentCount: number; deltaPct: number } | null;
+  comparison: { from: string; to: string; totalRevenue: number; soldRevenue: number; saleCount: number; servedClients: number; averageTicket: number; appointmentCount: number; deltaPct: number; costsTotal: number | null; commissionsTotal: number | null; daily: { day: string; revenue: number; saleCount: number }[]; appointmentTrend: { day: string; count: number }[] } | null;
   daily: { day: string; revenue: number; saleCount: number }[];
   topClients: { clientId: number; name: string; revenue: number; saleCount: number }[];
   topServices: ReportRow[];
@@ -44,6 +44,7 @@ type Analytics = {
 type ReportsResponse = {
   ok?: boolean;
   kpis?: { activeSales?: number; revenue?: number; cancelledRevenue?: number; averageTicket?: number; clients?: number; lowStock?: number };
+  locationLabel?: string;
   analytics?: Analytics;
 };
 
@@ -55,73 +56,135 @@ function tenantSlug(): string {
   return window.location.pathname.split("/")[1] || "";
 }
 
+// number_format($v, N, ',', '.') manuale: toLocaleString it-IT NON raggruppa
+// 1000-9999, il PHP sì.
+function numberFormatIt(value: number, decimals: number): string {
+  const fixed = Math.abs(value).toFixed(decimals);
+  const [intPart, decPart] = fixed.split(".");
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return `${value < 0 ? "-" : ""}${grouped}${decimals > 0 ? `,${decPart}` : ""}`;
+}
+
 function fmtMoney(n: number | undefined): string {
   const v = Number.isFinite(n as number) ? (n as number) : 0;
-  return `€ ${v.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `€ ${numberFormatIt(v, 2)}`;
 }
 
 function fmtInt(n: number | undefined): string {
-  const v = Number.isFinite(n as number) ? (n as number) : 0;
-  return String(v);
+  const v = Number.isFinite(n as number) ? Math.trunc(n as number) : 0;
+  return numberFormatIt(v, 0);
 }
 
-function fmtHours(n: number | undefined): string {
+// $qtyFmt legacy: 2 decimali con strip di zeri e virgola finali.
+function fmtQty(n: number | undefined): string {
   const v = Number.isFinite(n as number) ? (n as number) : 0;
-  return `${v.toLocaleString("it-IT", { minimumFractionDigits: 0, maximumFractionDigits: 1 })} h`;
+  return numberFormatIt(v, 2).replace(/0+$/, "").replace(/,$/, "") || "0";
+}
+
+// $hoursFmt legacy: ore con 1 decimale, strip di ',0' ('2 h', '1,5 h').
+function fmtHours(n: number | undefined): string {
+  const v = Math.max(0, Number.isFinite(n as number) ? (n as number) : 0);
+  const formatted = numberFormatIt(v, 1).replace(/0+$/, "").replace(/,$/, "");
+  return `${formatted === "" ? "0" : formatted} h`;
 }
 
 function itDate(iso: string): string {
   return iso.split("-").reverse().join("/");
 }
 
-// Port di formatDeltaInfo (reports.php 1505-1534): testo + classe del delta.
+// Port di formatDeltaInfo (reports.php 1505-1536): classi legacy
+// is-good/is-bad/is-flat, formatter €/int legacy, goodWhenUp invertibile
+// (per Costi/Commissioni un aumento è "bad").
 function deltaInfo(current: number, previous: number, opts: { money?: boolean; requiresBoth?: boolean; goodWhenUp?: boolean } = {}): { text: string; cls: string } {
   const eps = 0.0001;
   const goodWhenUp = opts.goodWhenUp !== false;
   const diff = current - previous;
+  let cls = "is-flat";
+  if (Math.abs(diff) >= eps) cls = (diff > 0) === goodWhenUp ? "is-good" : "is-bad";
+
   if (opts.requiresBoth && (current <= eps || previous <= eps)) {
-    return { text: Math.abs(diff) < eps ? "Nessuna variazione" : "Non confrontabile", cls: "text-muted" };
+    return { text: Math.abs(diff) < eps ? "Nessuna variazione" : "Non confrontabile", cls: "is-flat" };
   }
-  if (previous < eps) {
+  if (Math.abs(previous) < eps) {
     return current > eps
-      ? { text: "Nuovo rispetto al confronto", cls: goodWhenUp ? "text-success" : "text-danger" }
-      : { text: "Nessuna variazione", cls: "text-muted" };
+      ? { text: "Nuovo rispetto al confronto", cls }
+      : { text: "Nessuna variazione", cls: "is-flat" };
   }
-  if (Math.abs(diff) < eps) return { text: "Nessuna variazione", cls: "text-muted" };
+  const sign = diff > 0 ? "+" : diff < 0 ? "-" : "";
+  const value = opts.money ? `€ ${numberFormatIt(Math.abs(diff), 2)}` : numberFormatIt(Math.round(Math.abs(diff)), 0);
   const pct = (diff / Math.abs(previous)) * 100;
-  const sign = diff > 0 ? "+" : "-";
-  const value = opts.money ? fmtMoney(Math.abs(diff)) : String(Math.round(Math.abs(diff) * 10) / 10);
-  const good = diff > 0 ? goodWhenUp : !goodWhenUp;
-  return {
-    text: `${sign}${value} (${sign}${Math.abs(pct).toLocaleString("it-IT", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%)`,
-    cls: good ? "text-success" : "text-danger",
-  };
+  const pctSign = pct > 0 ? "+" : pct < 0 ? "-" : "";
+  return { text: `${sign}${value} (${pctSign}${numberFormatIt(Math.abs(pct), 1)}%)`, cls };
 }
 
-// Raggruppamento serie per granularita' (auto: <=45gg giorno, <=180 settimana, altrimenti mese).
-function groupSeries(rows: { day: string; value: number }[], granularity: string, rangeDays: number): { labels: string[]; values: number[] } {
+// Port di $buildTrendSeries (reports.php 1365-1410): ZERO-FILL dell'intero
+// periodo; daily = ogni giorno 'd/m'; weekly = bucket di 7 giorni DALL'INIZIO
+// del range con label 'd/m - d/m' (clippato alla fine); monthly = mesi di
+// calendario clippati al range con label 'm/Y'.
+function buildTrendSeries(
+  rows: { day: string; value: number; count?: number }[],
+  fromYmd: string,
+  toYmd: string,
+  granularity: string,
+  rangeDays: number,
+): { labels: string[]; values: number[]; counts: number[] } {
   const effective = granularity === "auto" ? (rangeDays <= 45 ? "daily" : rangeDays <= 180 ? "weekly" : "monthly") : granularity;
-  const keyOf = (day: string): string => {
-    if (effective === "monthly") return day.slice(0, 7);
-    if (effective === "weekly") {
-      const d = new Date(`${day}T00:00:00Z`);
-      const dow = (d.getUTCDay() + 6) % 7; // lunedi = 0
-      d.setUTCDate(d.getUTCDate() - dow);
-      return d.toISOString().slice(0, 10);
-    }
-    return day;
-  };
-  const map = new Map<string, number>();
+  const daily = new Map<string, { value: number; count: number }>();
   for (const row of rows) {
-    const key = keyOf(row.day);
-    map.set(key, (map.get(key) ?? 0) + row.value);
+    const key = row.day.slice(0, 10);
+    const prev = daily.get(key) ?? { value: 0, count: 0 };
+    daily.set(key, { value: prev.value + row.value, count: prev.count + (row.count ?? 0) });
   }
-  const keys = Array.from(map.keys()).sort();
-  const label = (key: string): string => {
-    if (effective === "monthly") return key.split("-").reverse().join("/");
-    return itDate(key).slice(0, effective === "daily" ? 5 : 10);
+  const parse = (iso: string): Date => {
+    const [y, m, d] = iso.split("-").map(Number);
+    return new Date(y, m - 1, d);
   };
-  return { labels: keys.map(label), values: keys.map((key) => Math.round((map.get(key) ?? 0) * 100) / 100) };
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const dm = (d: Date) => `${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
+  const start = parse(fromYmd);
+  const end = parse(toYmd);
+  const labels: string[] = [];
+  const values: number[] = [];
+  const counts: number[] = [];
+  const appendBucket = (bucketStart: Date, bucketEnd: Date, label: string) => {
+    let value = 0;
+    let count = 0;
+    for (let cur = new Date(bucketStart); cur.getTime() <= bucketEnd.getTime(); cur.setDate(cur.getDate() + 1)) {
+      const key = localYmd(cur);
+      value += daily.get(key)?.value ?? 0;
+      count += daily.get(key)?.count ?? 0;
+    }
+    labels.push(label);
+    values.push(Math.round(value * 100) / 100);
+    counts.push(count);
+  };
+  if (effective === "daily") {
+    for (let cur = new Date(start); cur.getTime() <= end.getTime(); cur.setDate(cur.getDate() + 1)) {
+      appendBucket(cur, cur, dm(cur));
+    }
+  } else if (effective === "weekly") {
+    for (let cur = new Date(start); cur.getTime() <= end.getTime(); cur.setDate(cur.getDate() + 7)) {
+      const bucketEnd = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() + 6);
+      const clipped = bucketEnd.getTime() > end.getTime() ? end : bucketEnd;
+      appendBucket(cur, clipped, `${dm(cur)} - ${dm(clipped)}`);
+    }
+  } else {
+    for (let cur = new Date(start.getFullYear(), start.getMonth(), 1); cur.getTime() <= end.getTime(); cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1)) {
+      const bucketStart = cur.getTime() < start.getTime() ? start : cur;
+      const monthEnd = new Date(cur.getFullYear(), cur.getMonth() + 1, 0);
+      const bucketEnd = monthEnd.getTime() > end.getTime() ? end : monthEnd;
+      appendBucket(bucketStart, bucketEnd, `${pad(bucketStart.getMonth() + 1)}/${bucketStart.getFullYear()}`);
+    }
+  }
+  return { labels, values, counts };
+}
+
+// $alignCompareSeries legacy (reports.php 1463-1471): la serie di confronto
+// viene troncata/paddata alla lunghezza della serie principale.
+function alignSeries(values: number[], length: number): number[] {
+  const out = values.slice(0, length);
+  while (out.length < length) out.push(0);
+  return out;
 }
 
 function granularityLabel(granularity: string, rangeDays: number): string {
@@ -129,91 +192,138 @@ function granularityLabel(granularity: string, rangeDays: number): string {
   return effective === "daily" ? "Per giorno" : effective === "weekly" ? "Per settimana" : "Per mese";
 }
 
-export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
+// Data LOCALE Y-m-d (il legacy usa la data del server; toISOString è UTC e di
+// sera sposta i preset al giorno sbagliato).
+function localYmd(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+// makeYmd legacy: clamp del giorno all'ultimo del mese (31/03 -1 mese = 28/02).
+function shiftMonthsYmd(isoDate: string, months: number): string {
+  const [y, m, d] = isoDate.split("-").map(Number);
+  const total = y * 12 + (m - 1) + months;
+  const ny = Math.floor(total / 12);
+  const nm = total - ny * 12; // 0-based
+  const lastDay = new Date(ny, nm + 1, 0).getDate();
+  return localYmd(new Date(ny, nm, Math.min(d, lastDay)));
+}
+
+function shiftYearsYmd(isoDate: string, years: number): string {
+  return shiftMonthsYmd(isoDate, years * 12);
+}
+
+const RANGE_LABELS: Record<string, string> = {
+  today: "Oggi",
+  yesterday: "Ieri",
+  last_7: "Ultimi 7 giorni",
+  last_30: "Ultimi 30 giorni",
+  last_90: "Ultimi 90 giorni",
+  last_180: "Ultimi 180 giorni",
+  month_current: "Mese corrente",
+  month_previous: "Mese precedente",
+  year_current: "Anno corrente",
+  custom: "Personalizzato",
+};
+
+const COMPARE_MODE_LABELS: Record<string, string> = {
+  auto: "Automatico",
+  previous_period: "Stesso periodo precedente",
+  previous_year: "Stesso periodo anno precedente",
+  month: "Scegli mese",
+  custom: "Periodo personalizzato",
+};
+
+type ReportsQuery = {
+  range?: string;
+  from?: string;
+  to?: string;
+  granularity?: string;
+  compare?: string;
+  compare_mode?: string;
+  compare_month?: string;
+  compare_from?: string;
+  compare_to?: string;
+};
+
+export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: ReportsQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
 
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = localYmd(new Date());
   const monthStartIso = `${todayIso.slice(0, 7)}-01`;
+  const isYmd = (v: unknown) => /^\d{4}-\d{2}-\d{2}$/.test(String(v ?? ""));
 
-  // Stato filtri (default legacy: mese corrente).
-  const [range, setRange] = useState("month_current");
-  const [from, setFrom] = useState(monthStartIso);
-  const [to, setTo] = useState(todayIso);
-  const [granularity, setGranularity] = useState("auto");
-  const [compare, setCompare] = useState(false);
-  const [compareMode, setCompareMode] = useState("auto");
-  const [compareMonth, setCompareMonth] = useState(() => {
-    const d = new Date();
-    d.setUTCMonth(d.getUTCMonth() - 1);
-    return d.toISOString().slice(0, 7);
-  });
-  const [compareFrom, setCompareFrom] = useState(monthStartIso);
-  const [compareTo, setCompareTo] = useState(todayIso);
+  // Stato filtri dai querystring legacy (?range=&from=&to=&granularity=&
+  // compare=...); default legacy: mese corrente (range=custom se from/to
+  // manuali senza range valido).
+  const q = initialQuery ?? {};
+  const initialRange = RANGE_LABELS[String(q.range ?? "")]
+    ? String(q.range)
+    : (isYmd(q.from) || isYmd(q.to) ? "custom" : "month_current");
+  const [range, setRange] = useState(initialRange);
+  const [from, setFrom] = useState(isYmd(q.from) ? String(q.from) : monthStartIso);
+  const [to, setTo] = useState(isYmd(q.to) ? String(q.to) : todayIso);
+  const [granularity, setGranularity] = useState(["auto", "daily", "weekly", "monthly"].includes(String(q.granularity ?? "")) ? String(q.granularity) : "auto");
+  const [compare, setCompare] = useState(["1", "true", "on", "yes"].includes(String(q.compare ?? "").toLowerCase()));
+  const [compareMode, setCompareMode] = useState(COMPARE_MODE_LABELS[String(q.compare_mode ?? "")] ? String(q.compare_mode) : "auto");
+  const [compareMonth, setCompareMonth] = useState(() =>
+    /^\d{4}-\d{2}$/.test(String(q.compare_month ?? "")) ? String(q.compare_month) : shiftMonthsYmd(todayIso, -1).slice(0, 7));
+  const [compareFrom, setCompareFrom] = useState(isYmd(q.compare_from) ? String(q.compare_from) : monthStartIso);
+  const [compareTo, setCompareTo] = useState(isYmd(q.compare_to) ? String(q.compare_to) : todayIso);
 
   const [data, setData] = useState<ReportsResponse | null>(null);
   const [clientSearch, setClientSearch] = useState("");
   const [itemSearch, setItemSearch] = useState("");
   const [operatorSearch, setOperatorSearch] = useState("");
 
-  // Preset periodo -> [from, to] (reports.php 47-90).
+  // Preset periodo -> [from, to] (reports.php 47-90), in data LOCALE.
   const resolveRange = useCallback((): { from: string; to: string } => {
-    const iso = (d: Date) => d.toISOString().slice(0, 10);
     const now = new Date();
-    const y = now.getUTCFullYear();
-    const m = now.getUTCMonth();
-    const d = now.getUTCDate();
-    const dayMs = 86400000;
-    const back = (n: number) => iso(new Date(Date.UTC(y, m, d) - n * dayMs));
+    const back = (n: number) => localYmd(new Date(now.getFullYear(), now.getMonth(), now.getDate() - n));
     switch (range) {
-      case "today": return { from: iso(now), to: iso(now) };
+      case "today": return { from: back(0), to: back(0) };
       case "yesterday": return { from: back(1), to: back(1) };
-      case "last_7": return { from: back(6), to: iso(now) };
-      case "last_30": return { from: back(29), to: iso(now) };
-      case "last_90": return { from: back(89), to: iso(now) };
-      case "last_180": return { from: back(179), to: iso(now) };
-      case "month_previous": return { from: iso(new Date(Date.UTC(y, m - 1, 1))), to: iso(new Date(Date.UTC(y, m, 0))) };
-      case "year_current": return { from: iso(new Date(Date.UTC(y, 0, 1))), to: iso(now) };
-      case "custom": return { from, to };
+      case "last_7": return { from: back(6), to: back(0) };
+      case "last_30": return { from: back(29), to: back(0) };
+      case "last_90": return { from: back(89), to: back(0) };
+      case "last_180": return { from: back(179), to: back(0) };
+      case "month_previous": {
+        const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        return { from: localYmd(start), to: localYmd(new Date(now.getFullYear(), now.getMonth(), 0)) };
+      }
+      case "year_current": return { from: localYmd(new Date(now.getFullYear(), 0, 1)), to: back(0) };
+      case "custom": return from <= to ? { from, to } : { from: to, to: from };
       case "month_current":
-      default: return { from: iso(new Date(Date.UTC(y, m, 1))), to: iso(now) };
+      default: return { from: localYmd(new Date(now.getFullYear(), now.getMonth(), 1)), to: back(0) };
     }
   }, [range, from, to]);
 
-  // Finestra di confronto per modalita' (reports.php 130-219).
+  // Finestra di confronto per modalita' (reports.php 130-219) col clamp del
+  // giorno legacy (makeYmd) su mesi/anni.
   const resolveCompareWindow = useCallback((win: { from: string; to: string }): { from: string; to: string } => {
-    const iso = (d: Date) => d.toISOString().slice(0, 10);
-    const shiftMonths = (isoDate: string, months: number) => {
-      const d = new Date(`${isoDate}T00:00:00Z`);
-      d.setUTCMonth(d.getUTCMonth() + months);
-      return iso(d);
-    };
-    const shiftYears = (isoDate: string, years: number) => {
-      const d = new Date(`${isoDate}T00:00:00Z`);
-      d.setUTCFullYear(d.getUTCFullYear() + years);
-      return iso(d);
-    };
     const previousPeriod = () => {
-      const lenDays = Math.max(1, Math.round((Date.parse(`${win.to}T00:00:00Z`) - Date.parse(`${win.from}T00:00:00Z`)) / 86400000) + 1);
-      const prevTo = new Date(Date.parse(`${win.from}T00:00:00Z`) - 86400000);
-      const prevFrom = new Date(prevTo.getTime() - (lenDays - 1) * 86400000);
-      return { from: iso(prevFrom), to: iso(prevTo) };
+      const lenDays = Math.max(1, Math.round((Date.parse(`${win.to}T12:00:00`) - Date.parse(`${win.from}T12:00:00`)) / 86400000) + 1);
+      const [y, m, d] = win.from.split("-").map(Number);
+      const prevTo = localYmd(new Date(y, m - 1, d - 1));
+      const prevFrom = localYmd(new Date(y, m - 1, d - lenDays));
+      return { from: prevFrom, to: prevTo };
     };
     switch (compareMode) {
-      case "previous_year": return { from: shiftYears(win.from, -1), to: shiftYears(win.to, -1) };
+      case "previous_year": return { from: shiftYearsYmd(win.from, -1), to: shiftYearsYmd(win.to, -1) };
       case "month": {
         const [yy, mm] = compareMonth.split("-").map(Number);
         if (yy && mm) {
-          const last = new Date(Date.UTC(yy, mm, 0));
-          return { from: `${compareMonth}-01`, to: iso(last) };
+          const last = new Date(yy, mm, 0);
+          return { from: `${compareMonth}-01`, to: localYmd(last) };
         }
         return previousPeriod();
       }
       case "custom": return compareFrom <= compareTo ? { from: compareFrom, to: compareTo } : { from: compareTo, to: compareFrom };
       case "auto":
-        if (range === "month_current" || range === "month_previous") return { from: shiftMonths(win.from, -1), to: shiftMonths(win.to, -1) };
-        if (range === "year_current") return { from: shiftYears(win.from, -1), to: shiftYears(win.to, -1) };
+        if (range === "month_current" || range === "month_previous") return { from: shiftMonthsYmd(win.from, -1), to: shiftMonthsYmd(win.to, -1) };
+        if (range === "year_current") return { from: shiftYearsYmd(win.from, -1), to: shiftYearsYmd(win.to, -1) };
         return previousPeriod();
       case "previous_period":
       default:
@@ -246,11 +356,58 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
   const rangeDays = a ? Math.max(1, Math.round((Date.parse(`${a.to}T00:00:00Z`) - Date.parse(`${a.from}T00:00:00Z`)) / 86400000) + 1) : 1;
   const trendBadge = granularityLabel(granularity, rangeDays);
 
-  // --- Grafici Chart.js (window.Chart, come dashboard-content) -----------
+  // --- Serie e dataset dei grafici: port fedele di reports.js -------------
+  // $chartTop legacy (limit 10 gia' applicato dall'API, value>0, label non vuota).
+  const chartTop = (rows: { label: string; value: number }[]): { labels: string[]; values: number[] } => {
+    const items = rows.slice(0, 10).filter((r) => r.label.trim() !== "" && r.value > 0);
+    return { labels: items.map((r) => r.label.trim()), values: items.map((r) => Math.round(r.value * 100) / 100) };
+  };
+  const trendSeries = a ? buildTrendSeries(a.daily.map((r) => ({ day: r.day, value: r.revenue, count: r.saleCount })), a.from, a.to, granularity, rangeDays) : null;
+  const prevTrendSeries = a?.comparison
+    ? buildTrendSeries(a.comparison.daily.map((r) => ({ day: r.day, value: r.revenue, count: r.saleCount })), a.comparison.from, a.comparison.to, granularity, rangeDays)
+    : null;
+  const apptSeries = a ? buildTrendSeries(a.appointments.trend.map((r) => ({ day: r.day, value: r.count })), a.from, a.to, granularity, rangeDays) : null;
+  const prevApptSeries = a?.comparison
+    ? buildTrendSeries(a.comparison.appointmentTrend.map((r) => ({ day: r.day, value: r.count })), a.comparison.from, a.comparison.to, granularity, rangeDays)
+    : null;
+  const genderChart = a
+    ? [
+        { label: "Donne", value: a.clientsArchive.female },
+        { label: "Uomini", value: a.clientsArchive.male },
+        { label: "Non indicato", value: a.clientsArchive.unknownGender },
+      ].filter((g) => g.value > 0)
+    : [];
+  const financeChart = a
+    ? [
+        { label: "Incasso", value: a.summary.totalRevenue },
+        ...(a.costs ? [{ label: "Costi", value: a.costs.total }] : []),
+        ...(a.commissions ? [{ label: "Commissioni", value: a.commissions.total }] : []),
+      ]
+    : [];
+  const clientsChart = chartTop((a?.topClients ?? []).map((c) => ({ label: c.name, value: c.revenue })));
+  const itemsChart = chartTop((a?.topItems ?? []).map((i) => ({ label: i.name, value: i.revenue })));
+  const operatorsChart = chartTop((a?.operators ?? []).map((o) => ({ label: o.name, value: o.revenue })));
+  // hasValues legacy: il grafico si disegna solo se c'e' almeno un valore > 0
+  // (per i trend contano anche i previousValues), altrimenti report-chart-empty.
+  const hasChart = {
+    trend: [...(trendSeries?.values ?? []), ...(prevTrendSeries?.values ?? [])].some((v) => v > 0),
+    appt: [...(apptSeries?.values ?? []), ...(prevApptSeries?.values ?? [])].some((v) => v > 0),
+    salesTypes: (a?.composition ?? []).some((c) => c.revenue > 0),
+    paymentMethods: (a?.paymentMethods ?? []).some((m) => m.amount > 0),
+    gender: genderChart.some((g) => g.value > 0),
+    age: (a?.clientsArchive.ageBuckets ?? []).some((b) => b.count > 0),
+    finance: financeChart.some((f) => f.value > 0),
+    clients: clientsChart.values.some((v) => v > 0),
+    items: itemsChart.values.some((v) => v > 0),
+    operators: operatorsChart.values.some((v) => v > 0),
+  };
+  const chartEmpty = <div className="report-chart-empty">Nessun dato disponibile nel periodo selezionato.</div>;
+
+  // --- Grafici Chart.js (window.Chart): stessi tipi/opzioni di reports.js --
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chartsRef = useRef<Record<string, any>>({});
   useEffect(() => {
-    if (!a) return;
+    if (!a || !trendSeries || !apptSeries) return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const w = window as any;
     let stop = false;
@@ -260,6 +417,8 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
         setTimeout(draw, 150);
         return;
       }
+      w.Chart.defaults.font.family = "'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+      w.Chart.defaults.color = "#344054";
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const make = (id: string, config: any) => {
         const el = document.getElementById(id) as HTMLCanvasElement | null;
@@ -267,69 +426,158 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
         if (chartsRef.current[id]) chartsRef.current[id].destroy();
         chartsRef.current[id] = new w.Chart(el, config);
       };
-      const noLegend = { plugins: { legend: { display: false } }, maintainAspectRatio: false, responsive: true };
-      const withLegend = { plugins: { legend: { position: "bottom" } }, maintainAspectRatio: false, responsive: true };
+      const moneyFmt = new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" });
+      const numberFmt = new Intl.NumberFormat("it-IT");
+      const moneyShort = (value: unknown) => {
+        const v = Number(value || 0);
+        if (Math.abs(v) >= 1000) return `${(v / 1000).toLocaleString("it-IT", { maximumFractionDigits: 1 })}k €`;
+        return `${v.toLocaleString("it-IT", { maximumFractionDigits: 0 })} €`;
+      };
+      const integerShort = (value: unknown) => {
+        const v = Number(value || 0);
+        if (Math.abs(v) >= 1000) return `${(v / 1000).toLocaleString("it-IT", { maximumFractionDigits: 1 })}k`;
+        return numberFmt.format(Math.round(v));
+      };
+      const backgroundColors = (count: number) => Array.from({ length: count }, (_, i) => CHART_COLORS[i % CHART_COLORS.length]);
 
-      const revenueSeries = groupSeries(a.daily.map((r) => ({ day: r.day, value: r.revenue })), granularity, rangeDays);
-      make("reportTrendChart", {
-        type: "line",
-        data: { labels: revenueSeries.labels, datasets: [{ label: "Incasso", data: revenueSeries.values, borderColor: CHART_COLORS[0], backgroundColor: "rgba(37,99,235,.08)", borderWidth: 2, tension: 0.25, fill: true }] },
-        options: noLegend,
-      });
-
-      const apptSeries = groupSeries(a.appointments.trend.map((r) => ({ day: r.day, value: r.count })), granularity, rangeDays);
-      make("reportAppointmentsTrendChart", {
-        type: "line",
-        data: { labels: apptSeries.labels, datasets: [{ label: "Prenotazioni", data: apptSeries.values, borderColor: CHART_COLORS[1], backgroundColor: "rgba(22,163,74,.08)", borderWidth: 2, tension: 0.25, fill: true }] },
-        options: noLegend,
-      });
-
-      make("reportSalesTypesChart", {
-        type: "doughnut",
-        data: { labels: a.composition.map((c) => c.label), datasets: [{ data: a.composition.map((c) => c.revenue), backgroundColor: CHART_COLORS }] },
-        options: withLegend,
-      });
-
-      make("reportPaymentMethodsChart", {
-        type: "doughnut",
-        data: { labels: a.paymentMethods.map((m) => m.label), datasets: [{ data: a.paymentMethods.map((m) => m.amount), backgroundColor: CHART_COLORS }] },
-        options: withLegend,
-      });
-
-      make("reportGenderChart", {
-        type: "doughnut",
-        data: { labels: ["Donne", "Uomini", "Non indicato"], datasets: [{ data: [a.clientsArchive.female, a.clientsArchive.male, a.clientsArchive.unknownGender], backgroundColor: [CHART_COLORS[4], CHART_COLORS[0], CHART_COLORS[6]] }] },
-        options: withLegend,
-      });
-
-      make("reportAgeChart", {
-        type: "bar",
-        data: { labels: a.clientsArchive.ageBuckets.map((b) => b.label), datasets: [{ label: "Clienti", data: a.clientsArchive.ageBuckets.map((b) => b.count), backgroundColor: CHART_COLORS[5] }] },
-        options: noLegend,
-      });
-
-      const hbar = (labels: string[], values: number[], color: string) => ({
-        type: "bar",
-        data: { labels, datasets: [{ data: values, backgroundColor: color }] },
-        options: { ...noLegend, indexAxis: "y" },
-      });
-      make("reportClientsChart", hbar(a.topClients.slice(0, 10).map((c) => c.name), a.topClients.slice(0, 10).map((c) => c.revenue), CHART_COLORS[0]));
-      make("reportItemsChart", hbar(a.topItems.slice(0, 10).map((i) => i.name), a.topItems.slice(0, 10).map((i) => i.revenue), CHART_COLORS[2]));
-      make("reportOperatorsChart", hbar(a.operators.slice(0, 10).map((o) => o.name), a.operators.slice(0, 10).map((o) => o.revenue), CHART_COLORS[4]));
-
-      make("reportFinanceChart", {
-        type: "bar",
-        data: {
-          labels: ["Incasso", "Costi", "Commissioni"],
-          datasets: [{ data: [a.summary.totalRevenue, a.costs?.total ?? 0, a.commissions?.total ?? 0], backgroundColor: [CHART_COLORS[1], CHART_COLORS[3], CHART_COLORS[2]] }],
+      // renderLine legacy: 'Periodo attuale' + dataset tratteggiato di confronto.
+      const lineDatasets = (values: number[], prev: number[] | null, color: string, bg: string) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const datasets: any[] = [{ label: "Periodo attuale", data: values, borderColor: color, backgroundColor: bg, borderWidth: 2, fill: true, pointRadius: 2, pointHoverRadius: 4, tension: 0.25 }];
+        if (prev && prev.some((v) => v > 0)) {
+          datasets.push({ label: "Periodo precedente", data: prev, borderColor: CHART_COLORS[6], backgroundColor: "rgba(100, 116, 139, .08)", borderDash: [6, 4], borderWidth: 2, fill: false, pointRadius: 2, pointHoverRadius: 4, tension: 0.25 });
+        }
+        return datasets;
+      };
+      const lineOptions = (yTicks: (v: unknown) => string, tooltipLabel: (ctx: { dataset: { label?: string }; parsed: { y?: number } }) => string, afterLabel?: (ctx: { datasetIndex: number; dataIndex: number }) => string) => ({
+        maintainAspectRatio: false,
+        responsive: true,
+        interaction: { intersect: false, mode: "index" },
+        plugins: {
+          legend: { display: false, position: "bottom", labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true } },
+          tooltip: { callbacks: { label: tooltipLabel, ...(afterLabel ? { afterLabel } : {}) } },
         },
-        options: noLegend,
+        scales: {
+          x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true, maxTicksLimit: 10 } },
+          y: { beginAtZero: true, ticks: { callback: yTicks } },
+        },
       });
+
+      if (hasChart.trend) {
+        const prevValues = prevTrendSeries ? alignSeries(prevTrendSeries.values, trendSeries.values.length) : null;
+        const prevCounts = prevTrendSeries ? alignSeries(prevTrendSeries.counts, trendSeries.values.length) : null;
+        const datasets = lineDatasets(trendSeries.values, prevValues, CHART_COLORS[0], "rgba(37, 99, 235, .12)");
+        const options = lineOptions(
+          moneyShort,
+          (ctx) => `${ctx.dataset.label}: ${moneyFmt.format(ctx.parsed.y || 0)}`,
+          (ctx) => {
+            const counts = ctx.datasetIndex === 1 ? prevCounts : trendSeries.counts;
+            return `Movimenti: ${numberFmt.format(Number(counts?.[ctx.dataIndex] ?? 0))}`;
+          },
+        );
+        options.plugins.legend.display = datasets.length > 1;
+        make("reportTrendChart", { type: "line", data: { labels: trendSeries.labels, datasets }, options });
+      }
+
+      if (hasChart.appt) {
+        const prevValues = prevApptSeries ? alignSeries(prevApptSeries.values, apptSeries.values.length) : null;
+        const datasets = lineDatasets(apptSeries.values, prevValues, CHART_COLORS[1], "rgba(22, 163, 74, .12)");
+        const options = lineOptions(integerShort, (ctx) => `${ctx.dataset.label}: ${numberFmt.format(ctx.parsed.y || 0)}`);
+        options.plugins.legend.display = datasets.length > 1;
+        options.scales.y.ticks = { precision: 0, callback: integerShort } as never;
+        make("reportAppointmentsTrendChart", { type: "line", data: { labels: apptSeries.labels, datasets }, options });
+      }
+
+      // renderDoughnut legacy: cutout 62%, bordo bianco, tooltip in euro.
+      const doughnut = (labels: string[], values: number[], tooltipLabel: (ctx: { label?: string; parsed?: number }) => string) => ({
+        type: "doughnut",
+        data: { labels, datasets: [{ data: values, backgroundColor: backgroundColors(values.length), borderColor: "#fff", borderWidth: 2 }] },
+        options: {
+          cutout: "62%",
+          maintainAspectRatio: false,
+          responsive: true,
+          plugins: {
+            legend: { position: "bottom", labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true } },
+            tooltip: { callbacks: { label: tooltipLabel } },
+          },
+        },
+      });
+      const moneyDoughnutLabel = (ctx: { label?: string; parsed?: number }) => `${ctx.label}: ${moneyFmt.format(ctx.parsed || 0)}`;
+      if (hasChart.salesTypes) {
+        make("reportSalesTypesChart", doughnut(a.composition.map((c) => c.label), a.composition.map((c) => c.revenue), moneyDoughnutLabel));
+      }
+      if (hasChart.finance) {
+        make("reportFinanceChart", doughnut(financeChart.map((f) => f.label), financeChart.map((f) => Math.round(f.value * 100) / 100), moneyDoughnutLabel));
+      }
+      if (hasChart.gender) {
+        const total = genderChart.reduce((sum, g) => sum + g.value, 0);
+        make("reportGenderChart", doughnut(genderChart.map((g) => g.label), genderChart.map((g) => g.value), (ctx) => {
+          const value = Number(ctx.parsed || 0);
+          const pct = total > 0 ? ` (${((value / total) * 100).toLocaleString("it-IT", { maximumFractionDigits: 1 })}%)` : "";
+          return `${ctx.label}: ${numberFmt.format(value)}${pct}`;
+        }));
+      }
+
+      // renderBar legacy: barre orizzontali in euro con palette ciclica.
+      const moneyBar = (labels: string[], values: number[], counts?: number[]) => ({
+        type: "bar",
+        data: { labels, datasets: [{ label: "Incasso", data: values, backgroundColor: backgroundColors(values.length), borderRadius: 5, maxBarThickness: 18 }] },
+        options: {
+          indexAxis: "y",
+          maintainAspectRatio: false,
+          responsive: true,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: (ctx: { parsed: { x?: number } }) => moneyFmt.format(ctx.parsed.x || 0),
+                afterLabel: (ctx: { dataIndex: number }) => {
+                  const count = Number(counts?.[ctx.dataIndex] ?? 0);
+                  return count > 0 ? `Utilizzi: ${numberFmt.format(count)}` : undefined;
+                },
+              },
+            },
+          },
+          scales: {
+            x: { beginAtZero: true, ticks: { callback: moneyShort } },
+            y: { grid: { display: false }, ticks: { font: { size: 11 } } },
+          },
+        },
+      });
+      if (hasChart.paymentMethods) {
+        make("reportPaymentMethodsChart", moneyBar(a.paymentMethods.map((m) => m.label), a.paymentMethods.map((m) => m.amount), a.paymentMethods.map((m) => m.count)));
+      }
+      if (hasChart.clients) make("reportClientsChart", moneyBar(clientsChart.labels, clientsChart.values));
+      if (hasChart.items) make("reportItemsChart", moneyBar(itemsChart.labels, itemsChart.values));
+      if (hasChart.operators) make("reportOperatorsChart", moneyBar(operatorsChart.labels, operatorsChart.values));
+
+      // renderCountBar legacy (eta'): barre orizzontali a conteggio.
+      if (hasChart.age) {
+        make("reportAgeChart", {
+          type: "bar",
+          data: { labels: a.clientsArchive.ageBuckets.map((b) => b.label), datasets: [{ label: "Clienti", data: a.clientsArchive.ageBuckets.map((b) => b.count), backgroundColor: backgroundColors(a.clientsArchive.ageBuckets.length), borderRadius: 5, maxBarThickness: 22 }] },
+          options: {
+            indexAxis: "y",
+            maintainAspectRatio: false,
+            responsive: true,
+            plugins: {
+              legend: { display: false },
+              tooltip: { callbacks: { label: (ctx: { parsed: { x?: number } }) => numberFmt.format(ctx.parsed.x || 0) } },
+            },
+            scales: {
+              x: { beginAtZero: true, ticks: { precision: 0, callback: integerShort } },
+              y: { grid: { display: false }, ticks: { font: { size: 11 } } },
+            },
+          },
+        });
+      }
     };
     draw();
     return () => {
       stop = true;
     };
+    // trendSeries & co. derivano tutti da `a`+granularity: bastano loro come deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [a, granularity, rangeDays]);
 
   const arch = a?.clientsArchive;
@@ -344,6 +592,29 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
   const ticketDelta = a?.comparison ? deltaInfo(a.summary.averageTicket, a.comparison.averageTicket, { money: true, requiresBoth: true }) : null;
   const clientiDelta = a?.comparison ? deltaInfo(a.summary.servedClients, a.comparison.servedClients) : null;
   const prenotazioniDelta = a?.comparison ? deltaInfo(a.summary.appointmentCount, a.comparison.appointmentCount) : null;
+  // Costi/Commissioni: goodWhenUp=false (un aumento è "bad", reports.php 1543-1544).
+  const costiDelta = a?.comparison && a.comparison.costsTotal !== null && a.costs
+    ? deltaInfo(a.costs.total, a.comparison.costsTotal, { money: true, goodWhenUp: false })
+    : null;
+  const commissioniDelta = a?.comparison && a.comparison.commissionsTotal !== null && a.commissions
+    ? deltaInfo(a.commissions.total, a.comparison.commissionsTotal, { money: true, goodWhenUp: false })
+    : null;
+
+  const renderDelta = (delta: { text: string; cls: string } | null, extraClass = "") =>
+    delta ? (
+      <div className={`report-delta ${delta.cls}${extraClass}`}>
+        <i className="bi bi-arrow-left-right" />
+        {delta.text}
+      </div>
+    ) : null;
+
+  const locationLabelText = data?.locationLabel ?? "Tutte le sedi";
+  // Sottotitolo legacy: "{Range} / d/m/Y - d/m/Y / {Sede} / Grafici per giorno
+  // [ / Confronto {modo}: {d/m/Y - d/m/Y}]" (reports.php 1638-1645).
+  const subtitle = a
+    ? `${RANGE_LABELS[range] ?? "Periodo"} / ${itDate(a.from)} - ${itDate(a.to)} / ${locationLabelText} / Grafici ${trendBadge.toLowerCase()}`
+      + (compare && compareWindow ? ` / Confronto ${(COMPARE_MODE_LABELS[compareMode] ?? "").toLowerCase()}: ${itDate(compareWindow.from)} - ${itDate(compareWindow.to)}` : "")
+    : "Statistiche vendite del periodo";
 
   return (
     <div className="container-fluid">
@@ -353,7 +624,7 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Analisi</div>
           <h1 className="bs-page-title">Report</h1>
-          <div className="bs-page-subtitle">{a ? `Periodo ${itDate(a.from)} – ${itDate(a.to)}` : "Statistiche vendite del periodo"}</div>
+          <div className="bs-page-subtitle">{subtitle}</div>
         </div>
       </div>
 
@@ -362,6 +633,24 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
           method="get"
           onSubmit={(e) => {
             e.preventDefault();
+            // Aggiorna l'URL come il form GET legacy (deep-link condivisibili).
+            if (typeof window !== "undefined") {
+              const qs = new URLSearchParams({ range, granularity });
+              if (range === "custom") {
+                qs.set("from", from);
+                qs.set("to", to);
+              }
+              if (compare) {
+                qs.set("compare", "1");
+                qs.set("compare_mode", compareMode);
+                if (compareMode === "month") qs.set("compare_month", compareMonth);
+                if (compareMode === "custom") {
+                  qs.set("compare_from", compareFrom);
+                  qs.set("compare_to", compareTo);
+                }
+              }
+              window.history.replaceState(null, "", `/${encodeURIComponent(slug)}/reports?${qs.toString()}`);
+            }
             load();
           }}
         >
@@ -543,26 +832,28 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
           <div className="sub">
             Venduto {fmtMoney(a?.summary.soldRevenue)} / Lordo {fmtMoney(a?.summary.grossRevenue)}
           </div>
-          <div className="sub">Movimenti incasso {fmtInt(a?.summary.collectionMovements)}</div>
-          {incassoDelta ? <div className={`sub ${incassoDelta.cls}`}>{incassoDelta.text}</div> : null}
+          {(a?.summary.collectionMovements ?? 0) > 0 ? (
+            <div className="sub">Movimenti incasso {fmtInt(a?.summary.collectionMovements)}</div>
+          ) : null}
+          {renderDelta(incassoDelta)}
         </div>
         <div className="report-kpi">
           <div className="label">Vendite</div>
           <div className="value">{fmtInt(a?.summary.saleCount)}</div>
           <div className="sub">Periodo selezionato</div>
-          {venditeDelta ? <div className={`sub ${venditeDelta.cls}`}>{venditeDelta.text}</div> : null}
+          {renderDelta(venditeDelta)}
         </div>
         <div className="report-kpi">
           <div className="label">Scontrino medio</div>
           <div className="value">{fmtMoney(a?.summary.averageTicket)}</div>
           <div className="sub">Periodo selezionato</div>
-          {ticketDelta ? <div className={`sub ${ticketDelta.cls}`}>{ticketDelta.text}</div> : null}
+          {renderDelta(ticketDelta)}
         </div>
         <div className="report-kpi">
           <div className="label">Clienti serviti</div>
           <div className="value">{fmtInt(a?.summary.servedClients)}</div>
           <div className="sub">Clienti associati alle vendite</div>
-          {clientiDelta ? <div className={`sub ${clientiDelta.cls}`}>{clientiDelta.text}</div> : null}
+          {renderDelta(clientiDelta)}
         </div>
       </div>
 
@@ -574,12 +865,12 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
           <div className="sub">
             In attesa {fmtInt(a?.appointments.pending)} / Prenotate {fmtInt(a?.appointments.scheduled)} / Eseguite {fmtInt(a?.appointments.done)} / Annullate {fmtInt(a?.appointments.canceled)} / No show {fmtInt(a?.appointments.noShow)}
           </div>
-          {prenotazioniDelta ? <div className={`sub ${prenotazioniDelta.cls}`}>{prenotazioniDelta.text}</div> : null}
+          {renderDelta(prenotazioniDelta)}
         </div>
         <div className="report-kpi">
           <div className="label">Clienti in archivio</div>
           <div className="value">{fmtInt(arch?.total ?? k.clients)}</div>
-          <div className="sub">Profilo clienti</div>
+          <div className="sub">Profilo clienti {locationLabelText.toLowerCase()}</div>
         </div>
         <div className="report-kpi">
           <div className="label">Genere prevalente</div>
@@ -591,7 +882,7 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
         </div>
         <div className="report-kpi">
           <div className="label">Et&agrave; media</div>
-          <div className="value">{arch && arch.avgAge !== null ? `${arch.avgAge} anni` : "N/D"}</div>
+          <div className="value">{arch && arch.avgAge !== null ? `${numberFormatIt(arch.avgAge, 1)} anni` : "N/D"}</div>
           <div className="sub">Con data {fmtInt(arch?.birthKnown)} / Senza data {fmtInt(arch?.birthUnknown ?? k.clients)}</div>
         </div>
       </div>
@@ -603,6 +894,7 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
               <div className="label">Costi</div>
               <div className="value">{fmtMoney(a.costs.total)}</div>
               <div className="sub">Residuo {fmtMoney(a.costs.open)}</div>
+              {renderDelta(costiDelta)}
             </div>
           ) : null}
           {a?.commissions ? (
@@ -610,116 +902,11 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
               <div className="label">Commissioni</div>
               <div className="value">{fmtMoney(a.commissions.total)}</div>
               <div className="sub">Da pagare {fmtMoney(a.commissions.open)}</div>
+              {renderDelta(commissioniDelta)}
             </div>
           ) : null}
         </div>
       ) : null}
-
-      {/* Date-filtered analytics (top clients / operators / services / products + daily trend). */}
-      <div className="row g-3 mb-3">
-        <div className="col-xl-6">
-          <div className="report-panel p-3">
-            <div className="d-flex justify-content-between align-items-center mb-2">
-              <div className="fw-semibold">Migliori clienti</div>
-              <button className="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="modal" data-bs-target="#reportClientsModal">Mostra altro</button>
-            </div>
-            <div className="table-responsive">
-              <table className="table table-sm align-middle mb-0">
-                <thead><tr><th>Cliente</th><th className="text-end">Vendite</th><th className="text-end">Incasso</th></tr></thead>
-                <tbody>
-                  {(a?.topClients ?? []).length === 0 ? (
-                    <tr><td colSpan={3} className="text-muted p-2">Nessun dato nel periodo.</td></tr>
-                  ) : (
-                    (a?.topClients ?? []).slice(0, 10).map((c) => (
-                      <tr key={`${c.clientId}-${c.name}`}><td>{c.name}</td><td className="text-end">{c.saleCount}</td><td className="text-end">{fmtMoney(c.revenue)}</td></tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-        <div className="col-xl-6">
-          <div className="report-panel p-3">
-            <div className="d-flex justify-content-between align-items-center mb-2">
-              <div className="fw-semibold">Operatori</div>
-              <button className="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="modal" data-bs-target="#reportOperatorsModal">Mostra altro</button>
-            </div>
-            <div className="table-responsive">
-              <table className="table table-sm align-middle mb-0">
-                <thead><tr><th>Operatore</th><th className="text-end">Ore lavorate</th><th className="text-end">Vendite</th><th className="text-end">Incasso</th></tr></thead>
-                <tbody>
-                  {(a?.operators ?? []).length === 0 ? (
-                    <tr><td colSpan={4} className="text-muted p-2">Nessun dato nel periodo.</td></tr>
-                  ) : (
-                    (a?.operators ?? []).slice(0, 10).map((o) => (
-                      <tr key={o.name}><td>{o.name}</td><td className="text-end">{fmtHours(o.hoursWorked)}</td><td className="text-end">{o.saleCount}</td><td className="text-end">{fmtMoney(o.revenue)}</td></tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-        <div className="col-xl-6">
-          <div className="report-panel p-3">
-            <div className="fw-semibold mb-2">Servizi più venduti</div>
-            <div className="table-responsive">
-              <table className="table table-sm align-middle mb-0">
-                <thead><tr><th>Servizio</th><th className="text-end">Qtà</th><th className="text-end">Incasso</th></tr></thead>
-                <tbody>
-                  {(a?.topServices ?? []).length === 0 ? (
-                    <tr><td colSpan={3} className="text-muted p-2">Nessun dato nel periodo.</td></tr>
-                  ) : (
-                    (a?.topServices ?? []).map((s) => (
-                      <tr key={s.name}><td>{s.name}</td><td className="text-end">{s.qty ?? 0}</td><td className="text-end">{fmtMoney(s.revenue)}</td></tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-        <div className="col-xl-6">
-          <div className="report-panel p-3">
-            <div className="fw-semibold mb-2">Prodotti più venduti</div>
-            <div className="table-responsive">
-              <table className="table table-sm align-middle mb-0">
-                <thead><tr><th>Prodotto</th><th className="text-end">Qtà</th><th className="text-end">Incasso</th></tr></thead>
-                <tbody>
-                  {(a?.topProducts ?? []).length === 0 ? (
-                    <tr><td colSpan={3} className="text-muted p-2">Nessun dato nel periodo.</td></tr>
-                  ) : (
-                    (a?.topProducts ?? []).map((s) => (
-                      <tr key={s.name}><td>{s.name}</td><td className="text-end">{s.qty ?? 0}</td><td className="text-end">{fmtMoney(s.revenue)}</td></tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-        <div className="col-12">
-          <div className="report-panel p-3">
-            <div className="fw-semibold mb-2">Andamento incasso per giorno</div>
-            <div className="table-responsive" style={{ maxHeight: 240, overflowY: "auto" }}>
-              <table className="table table-sm align-middle mb-0">
-                <thead><tr><th>Giorno</th><th className="text-end">Movimenti</th><th className="text-end">Incasso</th></tr></thead>
-                <tbody>
-                  {(a?.daily ?? []).length === 0 ? (
-                    <tr><td colSpan={3} className="text-muted p-2">Nessuna vendita nel periodo.</td></tr>
-                  ) : (
-                    (a?.daily ?? []).map((row) => {
-                      const [yy, mm, dd] = row.day.split("-");
-                      return (<tr key={row.day}><td>{dd}/{mm}/{yy}</td><td className="text-end">{row.saleCount}</td><td className="text-end">{fmtMoney(row.revenue)}</td></tr>);
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      </div>
 
       <div className="row g-3 mb-3">
         <div className="col-xl-6">
@@ -729,7 +916,7 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
               <span className="badge text-bg-light">{trendBadge}</span>
             </div>
             <div className="report-chart-wrap">
-              <canvas id="reportTrendChart" aria-label="Andamento incasso" />
+              {hasChart.trend ? <canvas id="reportTrendChart" aria-label="Andamento incasso" /> : chartEmpty}
             </div>
           </div>
         </div>
@@ -740,7 +927,7 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
               <span className="badge text-bg-light">{trendBadge}</span>
             </div>
             <div className="report-chart-wrap">
-              <canvas id="reportAppointmentsTrendChart" aria-label="Andamento prenotazioni" />
+              {hasChart.appt ? <canvas id="reportAppointmentsTrendChart" aria-label="Andamento prenotazioni" /> : chartEmpty}
             </div>
           </div>
         </div>
@@ -754,7 +941,7 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
               <span className="badge text-bg-light">Tipologia</span>
             </div>
             <div className="report-chart-wrap">
-              <canvas id="reportSalesTypesChart" aria-label="Tipologie di vendita" />
+              {hasChart.salesTypes ? <canvas id="reportSalesTypesChart" aria-label="Tipologie di vendita" /> : chartEmpty}
             </div>
           </div>
         </div>
@@ -765,7 +952,7 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
               <span className="badge text-bg-light">Importi</span>
             </div>
             <div className="report-chart-wrap">
-              <canvas id="reportPaymentMethodsChart" aria-label="Metodi di pagamento" />
+              {hasChart.paymentMethods ? <canvas id="reportPaymentMethodsChart" aria-label="Metodi di pagamento" /> : chartEmpty}
             </div>
           </div>
         </div>
@@ -776,7 +963,7 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
               <span className="badge text-bg-light">Archivio</span>
             </div>
             <div className="report-chart-wrap">
-              <canvas id="reportGenderChart" aria-label="Clienti per genere" />
+              {hasChart.gender ? <canvas id="reportGenderChart" aria-label="Clienti per genere" /> : chartEmpty}
             </div>
           </div>
         </div>
@@ -787,7 +974,7 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
               <span className="badge text-bg-light">Fasce</span>
             </div>
             <div className="report-chart-wrap">
-              <canvas id="reportAgeChart" aria-label="Clienti per eta" />
+              {hasChart.age ? <canvas id="reportAgeChart" aria-label="Clienti per eta" /> : chartEmpty}
             </div>
           </div>
         </div>
@@ -800,10 +987,15 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
               <div className="fw-semibold">Top clienti</div>
               <div className="report-section-actions">
                 <span className="badge text-bg-light">Top 10</span>
+                {(a?.topClients.length ?? 0) > 0 ? (
+                  <button className="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="modal" data-bs-target="#reportClientsModal">
+                    <i className="bi bi-search me-1"></i>Mostra altro
+                  </button>
+                ) : null}
               </div>
             </div>
             <div className="report-chart-wrap is-compact is-top10">
-              <canvas id="reportClientsChart" aria-label="Top clienti" />
+              {hasChart.clients ? <canvas id="reportClientsChart" aria-label="Top clienti" /> : chartEmpty}
             </div>
           </div>
         </div>
@@ -813,10 +1005,15 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
               <div className="fw-semibold">Top servizi e prodotti</div>
               <div className="report-section-actions">
                 <span className="badge text-bg-light">Top 10</span>
+                {(a?.topItems.length ?? 0) > 0 ? (
+                  <button className="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="modal" data-bs-target="#reportItemsModal">
+                    <i className="bi bi-search me-1"></i>Mostra altro
+                  </button>
+                ) : null}
               </div>
             </div>
             <div className="report-chart-wrap is-compact is-top10">
-              <canvas id="reportItemsChart" aria-label="Top servizi e prodotti" />
+              {hasChart.items ? <canvas id="reportItemsChart" aria-label="Top servizi e prodotti" /> : chartEmpty}
             </div>
           </div>
         </div>
@@ -826,10 +1023,15 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
               <div className="fw-semibold">Operatori</div>
               <div className="report-section-actions">
                 <span className="badge text-bg-light">Top 10</span>
+                {(a?.operators.length ?? 0) > 0 ? (
+                  <button className="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="modal" data-bs-target="#reportOperatorsModal">
+                    <i className="bi bi-search me-1"></i>Mostra altro
+                  </button>
+                ) : null}
               </div>
             </div>
             <div className="report-chart-wrap is-compact is-top10">
-              <canvas id="reportOperatorsChart" aria-label="Operatori" />
+              {hasChart.operators ? <canvas id="reportOperatorsChart" aria-label="Operatori" /> : chartEmpty}
             </div>
           </div>
         </div>
@@ -844,7 +1046,7 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
             </div>
             <div className="report-finance-layout">
               <div className="report-chart-wrap is-compact">
-                <canvas id="reportFinanceChart" aria-label="Incasso e costi" />
+                {hasChart.finance ? <canvas id="reportFinanceChart" aria-label="Incasso e costi" /> : chartEmpty}
               </div>
               <div className="report-finance-summary">
                 <div className="report-finance-line">
@@ -854,23 +1056,30 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
                       Movimenti {fmtInt(a?.summary.collectionMovements)} / Venduto {fmtMoney(a?.summary.soldRevenue)} / Scontrino medio{" "}
                       {fmtMoney(a?.summary.averageTicket)}
                     </div>
+                    {renderDelta(incassoDelta, " mt-1")}
                   </div>
                   <div className="report-finance-value">{fmtMoney(a?.summary.totalRevenue)}</div>
                 </div>
-                <div className="report-finance-line">
-                  <div>
-                    <div className="report-finance-label">Costi</div>
-                    <div className="report-finance-sub">Pagato {fmtMoney(a?.costs?.paid)} / Residuo {fmtMoney(a?.costs?.open)}</div>
+                {a?.costs ? (
+                  <div className="report-finance-line">
+                    <div>
+                      <div className="report-finance-label">Costi</div>
+                      <div className="report-finance-sub">Pagato {fmtMoney(a.costs.paid)} / Residuo {fmtMoney(a.costs.open)}</div>
+                      {renderDelta(costiDelta, " mt-1")}
+                    </div>
+                    <div className="report-finance-value">{fmtMoney(a.costs.total)}</div>
                   </div>
-                  <div className="report-finance-value">{fmtMoney(a?.costs?.total)}</div>
-                </div>
-                <div className="report-finance-line">
-                  <div>
-                    <div className="report-finance-label">Commissioni</div>
-                    <div className="report-finance-sub">Pagate {fmtMoney(a?.commissions?.paid)} / Da pagare {fmtMoney(a?.commissions?.open)}</div>
+                ) : null}
+                {a?.commissions ? (
+                  <div className="report-finance-line">
+                    <div>
+                      <div className="report-finance-label">Commissioni</div>
+                      <div className="report-finance-sub">Pagate {fmtMoney(a.commissions.paid)} / Da pagare {fmtMoney(a.commissions.open)}</div>
+                      {renderDelta(commissioniDelta, " mt-1")}
+                    </div>
+                    <div className="report-finance-value">{fmtMoney(a.commissions.total)}</div>
                   </div>
-                  <div className="report-finance-value">{fmtMoney(a?.commissions?.total)}</div>
-                </div>
+                ) : null}
               </div>
             </div>
           </div>
@@ -892,7 +1101,7 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
                   Top clienti
                 </h5>
                 <div className="small text-muted" data-report-modal-count>
-                  {filteredClients.length} risultati
+                  {fmtInt(filteredClients.length)} risultati
                 </div>
               </div>
               <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Chiudi" />
@@ -932,10 +1141,10 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
                     ) : (
                       filteredClients.map((c, i) => (
                         <tr key={`${c.clientId}-${c.name}`}>
-                          <td className="text-muted">{i + 1}</td>
+                          <td className="text-muted">{fmtInt(i + 1)}</td>
                           <td>{c.name}</td>
-                          <td className="text-end">{c.saleCount}</td>
-                          <td className="text-end">{fmtMoney(c.revenue)}</td>
+                          <td className="text-end">{fmtInt(c.saleCount)}</td>
+                          <td className="text-end fw-semibold">{fmtMoney(c.revenue)}</td>
                         </tr>
                       ))
                     )}
@@ -962,7 +1171,7 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
                   Top servizi e prodotti
                 </h5>
                 <div className="small text-muted" data-report-modal-count>
-                  {filteredItems.length} risultati
+                  {fmtInt(filteredItems.length)} risultati
                 </div>
               </div>
               <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Chiudi" />
@@ -1004,12 +1213,12 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
                     ) : (
                       filteredItems.map((it, i) => (
                         <tr key={`${it.type}-${it.name}`}>
-                          <td className="text-muted">{i + 1}</td>
+                          <td className="text-muted">{fmtInt(i + 1)}</td>
                           <td>{it.name}</td>
-                          <td>{it.type ?? "Voce"}</td>
-                          <td className="text-end">{it.qty ?? 0}</td>
-                          <td className="text-end">{it.saleCount ?? 0}</td>
-                          <td className="text-end">{fmtMoney(it.revenue)}</td>
+                          <td><span className="badge text-bg-light">{it.type ?? "Voce"}</span></td>
+                          <td className="text-end">{fmtQty(it.qty)}</td>
+                          <td className="text-end">{fmtInt(it.saleCount)}</td>
+                          <td className="text-end fw-semibold">{fmtMoney(it.revenue)}</td>
                         </tr>
                       ))
                     )}
@@ -1036,7 +1245,7 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
                   Operatori
                 </h5>
                 <div className="small text-muted" data-report-modal-count>
-                  {filteredOperators.length} risultati
+                  {fmtInt(filteredOperators.length)} risultati
                 </div>
               </div>
               <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Chiudi" />
@@ -1079,13 +1288,13 @@ export function ReportsContent({ slug: slugProp }: { slug?: string } = {}) {
                     ) : (
                       filteredOperators.map((o, i) => (
                         <tr key={o.name}>
-                          <td className="text-muted">{i + 1}</td>
+                          <td className="text-muted">{fmtInt(i + 1)}</td>
                           <td>{o.name}</td>
                           <td className="text-end">{fmtHours(o.hoursWorked)}</td>
-                          <td className="text-end">{o.apptCount}</td>
-                          <td className="text-end">{o.saleCount}</td>
+                          <td className="text-end">{fmtInt(o.apptCount)}</td>
+                          <td className="text-end">{fmtInt(o.saleCount)}</td>
                           <td className="text-end">{fmtMoney(o.avgTicket)}</td>
-                          <td className="text-end">{fmtMoney(o.revenue)}</td>
+                          <td className="text-end fw-semibold">{fmtMoney(o.revenue)}</td>
                         </tr>
                       ))
                     )}

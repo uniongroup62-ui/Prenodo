@@ -86,6 +86,14 @@ export type ManageReports = {
     averageTicket: number;
     appointmentCount: number;
     deltaPct: number;
+    // Totali costi/commissioni del periodo di confronto per i delta KPI
+    // legacy ($previousCostSummary/$previousCommissionSummary, goodWhenUp=false).
+    costsTotal: number | null;
+    commissionsTotal: number | null;
+    // Serie del periodo di confronto per i dataset tratteggiati "Periodo
+    // precedente" dei grafici trend (reports.php 1456-1462).
+    daily: { day: string; revenue: number; saleCount: number }[];
+    appointmentTrend: { day: string; count: number }[];
   } | null;
   daily: { day: string; revenue: number; saleCount: number }[];
   topClients: { clientId: number; name: string; revenue: number; saleCount: number }[];
@@ -286,12 +294,16 @@ export async function getManageReports(
   ).catch(() => [] as RowDataPacket[]);
   const ar = apptSummaryRows[0] ?? {};
 
-  const apptTrendRows = await dbQuery<RowDataPacket[]>(
-    `SELECT a.starts_at::date d, COUNT(*) cnt FROM ${quoteIdentifier(appt.name)} a
-      WHERE a.tenant_id = ? AND a.starts_at >= ? AND a.starts_at < ? AND ${activeCond}${apptLocClause}
-      GROUP BY d ORDER BY d ASC`,
-    [appt.tenantId ?? 0, from, toExclusive, ...apptLocParams],
-  ).catch(() => [] as RowDataPacket[]);
+  const apptTrendFor = async (winFrom: string, winToExclusive: string): Promise<{ day: string; count: number }[]> => {
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT a.starts_at::date d, COUNT(*) cnt FROM ${quoteIdentifier(appt.name)} a
+        WHERE a.tenant_id = ? AND a.starts_at >= ? AND a.starts_at < ? AND ${activeCond}${apptLocClause}
+        GROUP BY d ORDER BY d ASC`,
+      [appt.tenantId ?? 0, winFrom, winToExclusive, ...apptLocParams],
+    ).catch(() => [] as RowDataPacket[]);
+    return rows.map((r) => ({ day: dayOf(r.d), count: Number(r.cnt ?? 0) }));
+  };
+  const apptTrend = await apptTrendFor(from, toExclusive);
 
   // --- Top clienti (reports.php 841-852, etichette fallback legacy) ------
   const clientsTable = await tenantTable(slug, "clients");
@@ -322,32 +334,42 @@ export async function getManageReports(
   ).catch(() => [] as RowDataPacket[]);
 
   // Composizione per tipologia (donut "Tipologie di vendita", tutti i tipi).
+  // Legacy raggruppa per tipo+nome e classifica anche dal NOME (reports.php 877-889).
   const compRows = await dbQuery<RowDataPacket[]>(
-    `SELECT COALESCE(NULLIF(TRIM(si.item_type),''),'altro') type, COALESCE(SUM(si.line_total),0) rev
+    `SELECT COALESCE(NULLIF(TRIM(si.item_type),''),'altro') type, si.item_name name, COALESCE(SUM(si.line_total),0) rev
        FROM ${quoteIdentifier(itemsTable.name)} si
        JOIN ${quoteIdentifier(sales.name)} s ON s.id = si.sale_id AND s.tenant_id = si.tenant_id
       WHERE si.tenant_id = ? AND ${baseWhere}
-      GROUP BY type`,
+      GROUP BY si.item_type, si.item_name ORDER BY rev DESC`,
     [tid, ...baseParams],
   ).catch(() => [] as RowDataPacket[]);
-  const typeLabel = (t: string): string => {
-    const low = t.toLowerCase();
-    if (low === "service") return "Servizio";
-    if (low === "product") return "Prodotto";
-    if (low.includes("package") || low.includes("pacchetto")) return "Pacchetto";
-    if (low.includes("giftcard")) return "GiftCard";
-    if (low.includes("giftbox")) return "GiftBox";
-    if (low.includes("recharge") || low.includes("ricarica")) return "Ricarica";
+  // Port di $itemTypeLabel (reports.php 1191-1202): il nome vince su GiftCard/
+  // GiftBox/Ricarica/Pacchetto anche quando il tipo dice 'service'/'product'.
+  const typeLabel = (t: string, name = ""): string => {
+    const low = t.toLowerCase().trim();
+    const nameLow = name.toLowerCase().trim();
+    if (["service", "services", "servizio", "servizi"].includes(low)) return "Servizio";
+    if (["package", "packages", "pacchetto", "pacchetti"].includes(low) || nameLow.includes("pacchetto")) return "Pacchetto";
+    if (nameLow.includes("giftcard")) return "GiftCard";
+    if (nameLow.includes("giftbox")) return "GiftBox";
+    if (nameLow.includes("ricarica")) return "Ricarica";
+    if (["product", "products", "prodotto", "prodotti"].includes(low)) return "Prodotto";
     return "Voce";
   };
   const compMap = new Map<string, number>();
   for (const row of compRows) {
-    const label = typeLabel(String(row.type ?? "altro"));
+    // Nel donut legacy la voce generica si chiama 'Altro' (salesTypeOrder,
+    // reports.php 1477-1492); 'Voce' resta solo nel badge del modale items.
+    let label = typeLabel(String(row.type ?? "altro"), String(row.name ?? ""));
+    if (label === "Voce") label = "Altro";
     compMap.set(label, money((compMap.get(label) ?? 0) + Number(row.rev ?? 0)));
   }
   if (!compMap.has("Prodotto")) compMap.set("Prodotto", 0); // legacy: Prodotto sempre mostrato
-  const compOrder = ["Servizio", "Prodotto", "Pacchetto", "GiftCard", "GiftBox", "Ricarica", "Voce"];
-  const composition = compOrder.filter((label) => compMap.has(label)).map((label) => ({ label, revenue: compMap.get(label) ?? 0 }));
+  const compOrder = ["Servizio", "Prodotto", "Pacchetto", "GiftCard", "GiftBox", "Ricarica", "Altro"];
+  // Legacy: nel donut entrano solo i tipi con valore > 0 (Prodotto sempre).
+  const composition = compOrder
+    .filter((label) => (compMap.get(label) ?? 0) > 0 || label === "Prodotto")
+    .map((label) => ({ label, revenue: compMap.get(label) ?? 0 }));
 
   // --- Operatori: vendite + ore lavorate (fusione legacy 1146-1189) ------
   const opRows = await dbQuery<RowDataPacket[]>(
@@ -453,8 +475,7 @@ export async function getManageReports(
   };
 
   // --- Costi (reports.php 1211-1266): due_date BETWEEN inclusivo ----------
-  let costs: ManageReports["costs"] = null;
-  if (options.includeCosts && await tableExists("costs")) {
+  const costSummaryFor = async (rangeFrom: string, rangeTo: string): Promise<{ total: number; paid: number; open: number }> => {
     const costsTable = await tenantTable(slug, "costs");
     const costLoc = locationId > 0 ? " AND c.location_id = ?" : "";
     const costRows = await dbQuery<RowDataPacket[]>(
@@ -465,15 +486,17 @@ export async function getManageReports(
               COALESCE(SUM(CASE WHEN COALESCE(c.is_paid,0) = 1 THEN 0 ELSE GREATEST(COALESCE(c.amount,0) - COALESCE(c.paid_amount,0), 0) END),0) open
          FROM ${quoteIdentifier(costsTable.name)} c
         WHERE c.tenant_id = ? AND c.due_date BETWEEN ? AND ?${costLoc}`,
-      [costsTable.tenantId ?? 0, from, to, ...(locationId > 0 ? [locationId] : [])],
+      [costsTable.tenantId ?? 0, rangeFrom, rangeTo, ...(locationId > 0 ? [locationId] : [])],
     ).catch(() => [] as RowDataPacket[]);
     const row = costRows[0] ?? {};
-    costs = { total: money(row.total), paid: money(row.paid), open: money(row.open) };
-  }
+    return { total: money(row.total), paid: money(row.paid), open: money(row.open) };
+  };
+  let costs: ManageReports["costs"] = null;
+  const costsAvailable = options.includeCosts && await tableExists("costs");
+  if (costsAvailable) costs = await costSummaryFor(from, to);
 
   // --- Commissioni (reports.php 1276-1327) --------------------------------
-  let commissions: ManageReports["commissions"] = null;
-  if (options.includeCommissions && await tableExists("staff_commission_payments")) {
+  const commissionSummaryFor = async (rangeFrom: string, rangeToExclusive: string): Promise<{ count: number; total: number; paid: number; open: number }> => {
     const commTable = await tenantTable(slug, "staff_commission_payments");
     const commLoc = locationId > 0 ? " AND p.location_id = ?" : "";
     const commRows = await dbQuery<RowDataPacket[]>(
@@ -483,11 +506,14 @@ export async function getManageReports(
          FROM ${quoteIdentifier(commTable.name)} p
         WHERE p.tenant_id = ? AND COALESCE(p.movement_datetime, p.created_at) >= ? AND COALESCE(p.movement_datetime, p.created_at) < ?
           AND LOWER(TRIM(COALESCE(p.entry_status,''))) <> 'cancelled'${commLoc}`,
-      [commTable.tenantId ?? 0, from, toExclusive, ...(locationId > 0 ? [locationId] : [])],
+      [commTable.tenantId ?? 0, rangeFrom, rangeToExclusive, ...(locationId > 0 ? [locationId] : [])],
     ).catch(() => [] as RowDataPacket[]);
     const row = commRows[0] ?? {};
-    commissions = { count: Number(row.cnt ?? 0), total: money(row.total), paid: money(row.paid), open: money(row.open) };
-  }
+    return { count: Number(row.cnt ?? 0), total: money(row.total), paid: money(row.paid), open: money(row.open) };
+  };
+  let commissions: ManageReports["commissions"] = null;
+  const commissionsAvailable = options.includeCommissions && await tableExists("staff_commission_payments");
+  if (commissionsAvailable) commissions = await commissionSummaryFor(from, toExclusive);
 
   // --- Confronto (finestra esplicita o periodo precedente di pari durata) --
   let comparison: ManageReports["comparison"] = null;
@@ -504,10 +530,13 @@ export async function getManageReports(
       prevFrom = addDaysYmd(from, -lenDays);
     }
     const prevToExclusive = addDaysYmd(prevTo, 1);
-    const [prevCollections, prevSummary, prevApptCount] = await Promise.all([
+    const [prevCollections, prevSummary, prevApptCount, prevCosts, prevCommissions, prevApptTrend] = await Promise.all([
       collect(prevFrom, prevToExclusive),
       salesSummary(prevFrom, prevToExclusive),
       apptCount(prevFrom, prevToExclusive),
+      costsAvailable ? costSummaryFor(prevFrom, prevTo) : Promise.resolve(null),
+      commissionsAvailable ? commissionSummaryFor(prevFrom, prevToExclusive) : Promise.resolve(null),
+      apptTrendFor(prevFrom, prevToExclusive),
     ]);
     const deltaPct = prevSummary.sold > 0
       ? Math.round(((summaryRow.sold - prevSummary.sold) / prevSummary.sold) * 1000) / 10
@@ -522,6 +551,10 @@ export async function getManageReports(
       averageTicket: prevSummary.avgTicket,
       appointmentCount: prevApptCount,
       deltaPct,
+      costsTotal: prevCosts ? prevCosts.total : null,
+      commissionsTotal: prevCommissions ? prevCommissions.total : null,
+      daily: Array.from(prevCollections.byDay.keys()).sort().map((day) => ({ day, revenue: prevCollections.byDay.get(day)!.revenue, saleCount: prevCollections.byDay.get(day)!.movements })),
+      appointmentTrend: prevApptTrend,
     };
   }
 
@@ -562,7 +595,7 @@ export async function getManageReports(
       canceled: Number(ar.canceled ?? 0),
       noShow: Number(ar.no_show ?? 0),
       activeClients: Number(ar.active_clients ?? 0),
-      trend: apptTrendRows.map((r) => ({ day: dayOf(r.d), count: Number(r.cnt ?? 0) })),
+      trend: apptTrend,
     },
     paymentMethods,
     clientsArchive,
@@ -574,7 +607,7 @@ export async function getManageReports(
     topClients: topClientRows.map((r) => ({ clientId: Number(r.client_id ?? 0), name: String(r.name ?? "—"), revenue: money(r.rev), saleCount: Number(r.cnt ?? 0) })),
     topServices: itemRows.filter((r) => String(r.type).toLowerCase() === "service").slice(0, 10).map((r) => ({ name: String(r.name ?? ""), revenue: money(r.rev), qty: Number(r.qty ?? 0), saleCount: Number(r.cnt ?? 0) })),
     topProducts: itemRows.filter((r) => String(r.type).toLowerCase() === "product").slice(0, 10).map((r) => ({ name: String(r.name ?? ""), revenue: money(r.rev), qty: Number(r.qty ?? 0), saleCount: Number(r.cnt ?? 0) })),
-    topItems: itemRows.map((r) => ({ name: String(r.name ?? ""), type: typeLabel(String(r.type ?? "altro")), revenue: money(r.rev), qty: Number(r.qty ?? 0), saleCount: Number(r.cnt ?? 0) })),
+    topItems: itemRows.map((r) => ({ name: String(r.name ?? ""), type: typeLabel(String(r.type ?? "altro"), String(r.name ?? "")), revenue: money(r.rev), qty: Number(r.qty ?? 0), saleCount: Number(r.cnt ?? 0) })),
     operators,
   };
 }

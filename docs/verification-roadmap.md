@@ -5805,3 +5805,54 @@ email, saldo '0 crediti' e 'Costo stimato: 1 credito'; live ripristinato
 riga-per-riga incl. sms_reminder_enabled del tenant) + 77/77 marker +
 regressioni (notifications-automation 19, fidelity-membership-settings
 29) + typecheck/lint puliti.
+
+## AUDIT COMPLETO — Report (reports.php, seconda passata) (2026-07-06)
+Verificato contro reports.php + reports.js + PHP live con dati gemelli
+(vendite/costi/commissioni ZZ gennaio 2019, poi ripristinato). Bug reali
+trovati e corretti:
+- **Sede di sessione ignorata**: la route non filtrava sulla sede corrente
+  (il legacy usa app_current_location_id con fallback alla PRIMA sede
+  autorizzata; all_locations estende alle autorizzate — con 1 sola sede il
+  filtro resta e la label mostra il nome). Ora locationId dal contesto sedi
+  + `locationLabel` nel payload ('Sede1'/'Tutte le sedi autorizzate'/
+  'Sede #N'/'Tutte le sedi') per il sottotitolo composito legacy
+  (`Preset / dal - al / Sede / Grafici per giorno [/ Confronto ...]`).
+- **Comparison senza costi/commissioni**: aggiunti costsTotal/
+  commissionsTotal (chiusure costSummaryFor/commissionSummaryFor sul
+  periodo di confronto) + serie daily/appointmentTrend del confronto per i
+  dataset tratteggiati 'Periodo precedente' dei grafici trend.
+- **Grafici non fedeli a reports.js**: riscritti — trend con ZERO-FILL
+  dell'intero periodo e bucket legacy (weekly di 7gg dall'inizio range con
+  label 'd/m - d/m' clippata, monthly 'm/Y'), allineamento serie confronto
+  ($alignCompareSeries), finance e tipologie DOUGHNUT cutout 62% bordo
+  bianco, metodi di pagamento/top/età BAR ORIZZONTALI con palette ciclica
+  borderRadius 5, tooltip it-IT (€, 'Utilizzi: N', 'Movimenti: N', % genere),
+  moneyShort/integerShort sugli assi, legend bottom pointStyle solo con
+  confronto, empty-state 'Nessun dato disponibile nel periodo selezionato.',
+  Chart.defaults font Inter/#344054.
+- **Tipologie donut**: classificazione port fedele di $itemTypeLabel (il
+  NOME vince su GiftCard/GiftBox/Ricarica/Pacchetto per i tipi non-service),
+  composition raggruppata per tipo+nome, 'Voce'→'Altro', esclusi i tipi a 0
+  (Prodotto sempre presente). Confermato sul live: type product + nome
+  'GiftCard X' → fetta GiftCard.
+- **Formatter it**: number_format manuale (toLocaleString non raggruppa
+  1000-9999), $qtyFmt/$hoursFmt/$intFmt nei KPI e nei 3 modali (badge tipo
+  text-bg-light, Quantità, fw-semibold sul Totale, contatori 'N risultati').
+- **Delta KPI legacy**: formatDeltaInfo port completo (is-good/is-bad/
+  is-flat, '±€ X (±Y,Z%)', 'Nuovo rispetto al confronto', 'Non confrontabile'
+  requires_both per scontrino medio, goodWhenUp=false per Costi/Commissioni)
+  reso con markup report-delta + bi-arrow-left-right nei KPI e nel finance
+  summary (mt-1). Verificato 1:1 col live (id-good per costi in calo).
+- **Markup**: rimosse 5 card tabellari extra non-legacy; 'Movimenti incasso'
+  solo se >0; 'Profilo clienti {sede minuscolo}'; età media a 1 decimale
+  ('31,0 anni'); bottoni 'Mostra altro' (btn-outline-primary bi-search)
+  condizionali nei 3 pannelli top; righe Costi/Commissioni del finance
+  summary solo coi permessi.
+- **TZ preset**: resolveRange/compare window in date LOCALI (localYmd) con
+  clamp giorno legacy (makeYmd) su mesi/anni; deep-link ?range=&from=&to=&
+  granularity=&compare=&compare_mode=&compare_month=&compare_from=&compare_to=
+  letti dal page.tsx (initialQuery) e riscritti con replaceState al submit.
+Battery: e2e-reports-page.mjs 15/15 (sede default/all_locations/label,
+tipologie per nome, comparison costi+serie, deep-link SSR) + regressione
+e2e-reports.mjs 20/20, baseline CLEAN; live MySQL ripristinato (0 residui);
+114/114 marker bundle; typecheck/lint puliti.
