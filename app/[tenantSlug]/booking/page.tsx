@@ -195,5 +195,5 @@ export default async function TenantBookingPage({
           : serviceId > 0 && qp("book_omaggio") > 0
             ? ({ kind: "gift", refId: qp("book_omaggio"), itemId: Number.isFinite(rewardIdx) && rewardIdx >= 0 ? rewardIdx : 0, serviceId } as const)
             : null;
-  return <BookingFaithful slug={tenantSlug} redeemPrefill={prefill} />;
+  return <BookingFaithful slug={tenantSlug} redeemPrefill={prefill} initialLocationId={qp("location_id")} />;
 }

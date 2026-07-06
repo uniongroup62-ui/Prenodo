@@ -6458,3 +6458,29 @@ totalPaid 50, purchaseDate 2026-06-01, used 2/5; hub ?prepaids=1 →
 "Acquisto: 01/06/2026 • Scadenza: 31/12/2026 • Totale pagato: € 50,00 •
 Servizi utilizzati: 2 / 5", nessun "Prezzo unitario". typecheck/lint puliti;
 residue DB=0.
+
+
+---
+
+## Wizard booking pubblico: skip step "Scegli la sede" con sede unica (2026-07-06)
+
+Segnalazione (screenshot): il PHP con una sola sede mostra "Step 1 di 5 — Scegli
+una categoria" (step Sede SALTATO), il Next mostrava "Step 1 di 6 — Scegli la
+sede". Confermato: il JS SERVITO (authoritative) ha
+`const skipLocationStep = locationCards.length === 1` + shouldSkipLocationStep()
++ bookingVisibleProgressOrder che filtra 'location' (il file locale
+booking-wizard.js è una build più VECCHIA senza questa logica — un agente del
+workflow l'ha letto e ha erroneamente concluso "nessun skip").
+
+Fix (BookingFaithful): quando ctx.locations.length===1 → skipLocationStep:
+visibleOrder esclude 'location' (contatore -1), lo step iniziale diventa 2
+(Categoria), handleBack non torna mai allo step Sede, il pulsante Indietro è
+nascosto sul primo step visibile. Aggiunto anche il rispetto di ?location_id=
+(sede d'ingresso valida, altrimenti la prima). Verifica live: il Next ora rende
+"Step 1 di 5 — Scegli una categoria" con la card 'genera' — pixel-match allo
+screenshot PHP. typecheck/lint puliti.
+
+NB: audit avversariale del wizard (workflow, 6 dimensioni, 50 subagent) = 41
+finding confermati (6 HIGH, 23 MEDIUM, 12 LOW) — questo chiude l'anchor; i
+restanti (staff per-servizio, slot occupati/raggruppati, auto-select data,
+redeem a prezzo pieno, punti fidelity lordi, testi verbatim, ecc.) sono in coda.

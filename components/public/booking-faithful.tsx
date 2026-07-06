@@ -177,7 +177,8 @@ export type BookingRedeemPrefill = {
 export function BookingFaithful({
   slug: slugProp,
   redeemPrefill = null,
-}: { slug?: string; redeemPrefill?: BookingRedeemPrefill | null } = {}) {
+  initialLocationId = 0,
+}: { slug?: string; redeemPrefill?: BookingRedeemPrefill | null; initialLocationId?: number } = {}) {
   const slug = useMemo(() => {
     if (slugProp) return slugProp;
     if (typeof window === "undefined") return "";
@@ -285,7 +286,12 @@ export function BookingFaithful({
         if (!data.ok || !data.context) throw new Error(data.error || "Contesto non disponibile.");
         const ctx = data.context as BookingContext;
         setContext(ctx);
-        setLocationId(ctx.locations[0]?.id ?? 0);
+        // Sede d'ingresso: onora ?location_id= (o la sede di riferimento) se
+        // valida, altrimenti la prima sede (booking-wizard.js $defaultBookingLocationId).
+        const entryLoc = initialLocationId > 0 && ctx.locations.some((l) => l.id === initialLocationId)
+          ? initialLocationId
+          : ctx.locations[0]?.id ?? 0;
+        setLocationId(entryLoc);
         setCategoryId(ctx.categories[0]?.id ?? null);
         // Deep-link prefill: preselect the covered service (and its category) so
         // the customer lands with the redeem's service already in the cart.
@@ -296,6 +302,9 @@ export function BookingFaithful({
             if (svc.categoryId) setCategoryId(svc.categoryId);
           }
         }
+        // shouldSkipLocationStep: con una sola sede il legacy parte dallo step
+        // Categoria (salta "Scegli la sede"). Avanza solo se siamo ancora al primo.
+        if (ctx.locations.length === 1) setStep((s) => (s === 1 ? 2 : s));
         setError("");
       })
       .catch((caught) => {
@@ -348,6 +357,11 @@ export function BookingFaithful({
   }, [step, slug, date, serviceIds, locationId, operatorId]);
 
   const ctx = context;
+  // shouldSkipLocationStep (booking-wizard.js: skipLocationStep = locationCards.length===1):
+  // con una sola sede il legacy SALTA lo step "Scegli la sede" (parte da
+  // Categoria, contatore -1). Con più sedi lo step resta.
+  const skipLocationStep = (ctx?.locations.length ?? 0) === 1;
+  const firstStep = skipLocationStep ? 2 : 1;
   // Default true finché il context non è caricato (nessuno skip prematuro).
   const chooseStaffEnabled = ctx ? ctx.chooseStaffEnabled !== false : true;
   const selectedLocation = ctx?.locations.find((item) => item.id === locationId) ?? null;
@@ -733,8 +747,10 @@ export function BookingFaithful({
       // Legacy (booking-wizard.js 4097): dal riepilogo senza vantaggi si
       // torna direttamente a Data/Ora.
       if (current === 7 && !hasBenefitsAvailable) return 5;
-      let prev = Math.max(1, current - 1);
+      let prev = Math.max(firstStep, current - 1);
       if (prev === 4 && !chooseStaffEnabled) prev = 3;
+      // Non tornare mai allo step Sede quando è saltato (sede unica).
+      if (prev === 1 && skipLocationStep) prev = 2;
       return prev;
     });
   }
@@ -918,7 +934,7 @@ export function BookingFaithful({
         <div className="booking-modal" role="dialog" aria-modal="true" aria-label="Prenotazione online">
           <button
             type="button"
-            className={`booking-floating-action booking-floating-back${step <= 1 ? " is-hidden" : ""}`}
+            className={`booking-floating-action booking-floating-back${step <= firstStep ? " is-hidden" : ""}`}
             id="btnBackTop"
             aria-label="Indietro"
             onClick={handleBack}
@@ -939,7 +955,8 @@ export function BookingFaithful({
               {/* syncProgress legacy (booking-wizard.js 3140-3174): senza
                   vantaggi l'item "Vantaggi" è d-none e il contatore scala. */}
               {(() => {
-                const visibleOrder = PROGRESS.map((p) => p.key).filter((key) => key !== "benefits" || hasBenefitsAvailable);
+                const visibleOrder = PROGRESS.map((p) => p.key).filter((key) =>
+                  (key !== "benefits" || hasBenefitsAvailable) && (key !== "location" || !skipLocationStep));
                 const currentStage = (() => {
                   const stage = PROGRESS[step - 1]?.key ?? "location";
                   return stage === "benefits" && !hasBenefitsAvailable ? "confirm" : stage;
@@ -1724,7 +1741,7 @@ export function BookingFaithful({
                   event.preventDefault();
                   handleBack();
                 }}
-                style={step <= 1 ? { visibility: "hidden" } : undefined}
+                style={step <= firstStep ? { visibility: "hidden" } : undefined}
               >
                 <i className="bi bi-arrow-left me-1" />
                 Indietro
