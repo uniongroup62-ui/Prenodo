@@ -869,7 +869,8 @@ export async function togglePublicCustomerFavorite(
     [accountId, target.tenantSlug, target.locationId],
   );
   if (existing[0]) {
-    await dbExecute("DELETE FROM `public_customer_favorites` WHERE id=? LIMIT 1", [Number(existing[0].id)]);
+    // Niente LIMIT su DELETE: Postgres non lo supporta (id è comunque PK).
+    await dbExecute("DELETE FROM `public_customer_favorites` WHERE id=?", [Number(existing[0].id)]);
     return { ok: true, active: false, key };
   }
 

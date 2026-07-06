@@ -41,6 +41,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { MarketplaceAccountNav, useMarketplacePageEffects } from "@/components/public/marketplace-shared";
 
 type BookingService = {
   id: number;
@@ -306,6 +307,10 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
     return raw.replace(/^Oggi\s*/i, "").trim() || "09:00 - 19:00";
   })();
 
+  // Effetti legacy: treatment picker della topbar, suggerimenti/validazione
+  // città, condivisione scheda (copy), preferiti.
+  useMarketplacePageEffects([context, profile]);
+
   return (
     <>
       {/* Inline styles reproduced verbatim from the PHP <head> + design tokens. */}
@@ -477,29 +482,8 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
             </button>
             <div className="marketplace-topbar-city-suggestions" role="listbox" aria-label="Citta suggerite" hidden data-marketplace-topbar-city-suggestions></div>
           </form>
-          <nav className="header-actions">
-            <a className="marketplace-promote-link" href="/#promuovi-attivita">
-              Promuovi la tua attivita
-            </a>
-            <div className="marketplace-account-wrap" data-marketplace-account-menu>
-              <button className="marketplace-menu-chip" type="button" aria-haspopup="menu" aria-expanded="false" data-marketplace-account-toggle>
-                <span>Menu</span>
-                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                  <path d="M5 7h14"></path>
-                  <path d="M5 12h14"></path>
-                  <path d="M5 17h14"></path>
-                </svg>
-              </button>
-              <div className="marketplace-account-menu marketplace-account-menu--public" role="menu" hidden data-marketplace-account-panel>
-                <a role="menuitem" href="/account/login?return=%2Fattivita">
-                  Accedi
-                </a>
-                <a role="menuitem" href="/account/register?return=%2Fattivita">
-                  Registrati
-                </a>
-              </div>
-            </div>
-          </nav>
+          {/* Menu account cablato (toggle + variante loggata, initAccountMenus legacy). */}
+          <MarketplaceAccountNav />
         </div>
       </header>
 

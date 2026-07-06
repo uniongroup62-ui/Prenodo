@@ -5994,3 +5994,48 @@ e2e-public-area 14/14 e e2e-booking-marketplace 26/26 CLEAN; live PHP
 confrontato (titoli h1 verbatim, '1 risultato/i trovato/i.', card 'Unghie',
 link /sedi/altino-sede1-21); 88/88 marker bundle su lista+ricerca+sede;
 typecheck pulito, lint con i soli pattern-fedeli pre-esistenti (<a> verbatim).
+
+## MARKETPLACE — TERZA PASSATA: comportamenti JS cablati (segnalazione utente) (2026-07-06)
+L'utente ha segnalato: ricerca non simile, menu che non funziona, scheda
+attività non simile. Verificato contro MarketplaceTopbar.php
+(marketplace_topbar_script 472-856: treatment picker, suggerimenti città,
+initAccountMenus) + public_marketplace.js (419 righe: preferiti, share,
+city-image, object-position, filtri) + markup menu loggato
+(public_marketplace.php 1005-1066). Fix:
+- **Menu topbar MORTO**: il dropdown 'Menu' era markup statico; ora
+  components/public/marketplace-shared.tsx MarketplaceAccountNav cablato su
+  tutte e 3 le pagine: toggle con chiusura su click-fuori/Escape; da
+  SLOGGATO 'Promuovi la tua attività' + Menu (Accedi/Registrati con
+  return); da LOGGATO chip avatar/nome/email con Attività(/account/
+  activities)/Preferiti(/account/favorites)/Profilo(/account/profile)/Esci
+  (logout API + redirect /attivita, markup marketplace-account-chip legacy).
+- **Ricerca non simile**: (a) la hero della home NON navigava (preventDefault
+  + filtro in-place) — ora il form GET naviga a /attivita/ricerca come il
+  legacy; (b) le chips 'Servizi più cercati' filtravano client-side — ora
+  sono LINK a /attivita/ricerca?category=; (c) il treatment picker della
+  topbar (ricerca+dettaglio) era statico — port 1:1 di
+  marketplace_topbar_script (tab Categorie/Attività/Servizi, filtro,
+  scelta -> hidden inputs); (d) i suggerimenti città erano morti — port
+  completo: dataset = città sedi pubblicate + comuni italy_geo.json +
+  preferite (publicSearchCitySuggestions), pannello suggerimenti (max 8),
+  validazione submit 'Seleziona una città dalla lista.' (setCustomValidity).
+- **Preferiti morti** su tutte le card: cablati (toggle_favorite con payload
+  legacy, 401 -> login, is-active/aria sync su tutte le card con la stessa
+  key, stato iniziale da favoriteKeys del GET /api/account).
+  BUG POSTGRES trovato dal test: togglePublicCustomerFavorite usava
+  'DELETE ... LIMIT 1' (MySQL-only) -> la RIMOZIONE di un preferito
+  falliva sempre ('syntax error at or near LIMIT'). Fix: DELETE per PK.
+- **Share scheda**: 'Condividi scheda' cablato (navigator.share ->
+  fallback clipboard con 'Link copiato' 1600ms is-copied, come il legacy).
+- **Sfondi city-card + object-position**: applicati (--city-image CSS var
+  e objectPosition dai data-attr, port di public_marketplace.js 13-25).
+- **Scheda attività**: la card Contatti (salon-contact-actions con Chiama)
+  e salon-service-book ESISTONO già (il diff SSR ingannava: sono
+  client-side); aggiunti gli effetti condivisi (share/picker/città).
+Battery: e2e-marketplace.mjs estesa 24/24 (F: italy_geo.json servito,
+toggle preferito ON/OFF round-trip, favoriteKeys nel GET, user per il menu
+loggato, 401 anonimo, logout, hero GET + chips link) + regressioni
+e2e-booking-marketplace 26/26 e e2e-public-area 14/14 CLEAN; 100/100
+marker bundle (inclusi 'Rimuovi dai preferiti', 'Seleziona una città dalla
+lista.', 'Link copiato', chip menu loggato); typecheck pulito, lint solo
+pattern-fedeli pre-esistenti.

@@ -46,6 +46,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { MarketplaceAccountNav, useMarketplacePageEffects } from "@/components/public/marketplace-shared";
 
 type MarketplaceLocation = {
   id: number;
@@ -337,6 +338,11 @@ export function MarketplaceListFaithful() {
 
   const salonOptions = profiles;
 
+  // Effetti legacy: sfondi city-card, preferiti (toggle + stato account),
+  // suggerimenti/validazione città sulla hero search. Il picker della hero è
+  // già cablato in React (data-marketplace-treatment-ready lo fa saltare).
+  useMarketplacePageEffects([profiles]);
+
   return (
     <>
       {/* Page CSS (verbatim from the original <link>). Inline <style> blocks captured verbatim. */}
@@ -361,36 +367,8 @@ export function MarketplaceListFaithful() {
             <span className="marketplace-topbar__brand-mark">B</span>
             <span>BeautySuite</span>
           </a>
-          <nav className="header-actions">
-            <a className="marketplace-promote-link" href="/#promuovi-attivita">
-              Promuovi la tua attivit&agrave;
-            </a>
-            <div className="marketplace-account-wrap" data-marketplace-account-menu>
-              <button
-                className="marketplace-menu-chip"
-                type="button"
-                aria-haspopup="menu"
-                aria-expanded="false"
-                data-marketplace-account-toggle
-              >
-                <span>Menu</span>
-                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                  <path d="M5 7h14"></path>
-                  <path d="M5 12h14"></path>
-                  <path d="M5 17h14"></path>
-                </svg>
-              </button>
-              {/* Account dropdown is faithful-but-static (markup only). */}
-              <div className="marketplace-account-menu marketplace-account-menu--public" role="menu" hidden data-marketplace-account-panel>
-                <a role="menuitem" href="/account/login?return=%2Fattivita">
-                  Accedi
-                </a>
-                <a role="menuitem" href="/account/register?return=%2Fattivita">
-                  Registrati
-                </a>
-              </div>
-            </div>
-          </nav>
+          {/* Menu account cablato (toggle + variante loggata, initAccountMenus legacy). */}
+          <MarketplaceAccountNav />
         </div>
       </header>
 
@@ -404,15 +382,16 @@ export function MarketplaceListFaithful() {
             method="get"
             action="/attivita/ricerca"
             data-marketplace-topbar-search
-            onSubmit={(event) => {
-              // Filtering is live; prevent a full navigation so results update in-place.
-              event.preventDefault();
+            onSubmit={() => {
+              // Legacy: il form GET naviga alla pagina risultati /attivita/ricerca
+              // (la validazione città è cablata da useMarketplacePageEffects).
               setPanelOpen(false);
             }}
           >
             <div
               className="field search-box-treatment-field marketplace-topbar-treatment-field"
               data-marketplace-treatment-picker
+              data-marketplace-treatment-ready="1"
             >
               <span className="marketplace-topbar-treatment-kicker">Attivit&agrave; o servizio</span>
               <input type="hidden" name="q" value={query} readOnly data-marketplace-treatment-query />
@@ -617,14 +596,8 @@ export function MarketplaceListFaithful() {
         </div>
         {/* Category chips: WIRED to filter the rendered cards. */}
         <div className="chips">
-          <a
-            className={`chip${category === "" ? " active" : ""}`}
-            href="/attivita/ricerca"
-            onClick={(event) => {
-              event.preventDefault();
-              selectCategory("");
-            }}
-          >
+          {/* Legacy: le chips NAVIGANO alla pagina risultati (niente filtro client). */}
+          <a className={`chip${category === "" ? " active" : ""}`} href="/attivita/ricerca">
             Tutti
           </a>
           {(categories.length ? categories : TREATMENT_CATEGORIES.map((c) => c.label)).map((label) => (
@@ -632,10 +605,6 @@ export function MarketplaceListFaithful() {
               key={label}
               className={`chip${category === label ? " active" : ""}`}
               href={`/attivita/ricerca?category=${encodeURIComponent(label)}`}
-              onClick={(event) => {
-                event.preventDefault();
-                selectCategory(label);
-              }}
             >
               {label}
             </a>

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { TOKEN_STYLE, TOPBAR_STYLE, FOOTER_STYLE, TOPBAR_CATEGORIES } from "@/components/public/marketplace-detail-faithful";
+import { MarketplaceAccountNav, useMarketplacePageEffects } from "@/components/public/marketplace-shared";
 
 // Port fedele della pagina RISULTATI RICERCA del marketplace legacy
 // (public_marketplace.php $isSearchResults, righe 1720-1892: route
@@ -171,6 +172,10 @@ export function MarketplaceSearchFaithful({
     ? "Affina la ricerca usando attività, città, categoria o servizio."
     : "Sfoglia tutti i centri pubblicati nel marketplace.";
 
+  // Effetti legacy: treatment picker della topbar, suggerimenti/validazione
+  // città, preferiti sulle result-card.
+  useMarketplacePageEffects([profiles]);
+
   return (
     <>
       <style dangerouslySetInnerHTML={{ __html: TOKEN_STYLE }} />
@@ -289,29 +294,7 @@ export function MarketplaceSearchFaithful({
             </button>
             <div className="marketplace-topbar-city-suggestions" role="listbox" aria-label="Citta suggerite" hidden data-marketplace-topbar-city-suggestions></div>
           </form>
-          <nav className="header-actions">
-            <a className="marketplace-promote-link" href="/#promuovi-attivita">
-              Promuovi la tua attivita
-            </a>
-            <div className="marketplace-account-wrap" data-marketplace-account-menu>
-              <button className="marketplace-menu-chip" type="button" aria-haspopup="menu" aria-expanded="false" data-marketplace-account-toggle>
-                <span>Menu</span>
-                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                  <path d="M5 7h14"></path>
-                  <path d="M5 12h14"></path>
-                  <path d="M5 17h14"></path>
-                </svg>
-              </button>
-              <div className="marketplace-account-menu marketplace-account-menu--public" role="menu" hidden data-marketplace-account-panel>
-                <a role="menuitem" href="/account/login?return=%2Fattivita">
-                  Accedi
-                </a>
-                <a role="menuitem" href="/account/register?return=%2Fattivita">
-                  Registrati
-                </a>
-              </div>
-            </div>
-          </nav>
+          <MarketplaceAccountNav />
         </div>
       </header>
 
