@@ -5,7 +5,7 @@
 // sono mappati sulle pagine account CENTRALI del port; showcase torna al
 // profilo marketplace. Senza tenant vale il `return` (default /attivita).
 const NEXT_ROUTES: Record<string, string> = {
-  hub: "/account",
+  hub: "/account/appointments",
   my: "/account/appointments",
   quotes: "/account/quotes",
   packs: "/account/packages",

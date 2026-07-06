@@ -236,11 +236,13 @@ export function MarketplaceListFaithful() {
   const [categories, setCategories] = useState<string[]>([]);
   const [loaded, setLoaded] = useState(false);
 
-  // Wired search/filter state.
+  // Stato del treatment picker: SOLO per popolare gli hidden input q/category
+  // del form (come il picker legacy) — NON filtra la home. La ricerca avviene
+  // sulla pagina /attivita/ricerca dopo il submit (public_marketplace.php: la
+  // home mostra SEMPRE tutte le attività, count($profiles)).
   const [query, setQuery] = useState(""); // treatment query (q)
   const [category, setCategory] = useState(""); // selected category
   const [treatmentLabel, setTreatmentLabel] = useState("Tutte le attivita");
-  const [city, setCity] = useState("");
 
   // Treatment dropdown UI state.
   const [panelOpen, setPanelOpen] = useState(false);
@@ -286,35 +288,6 @@ export function MarketplaceListFaithful() {
     }
     return items;
   }, [profiles]);
-
-  const filteredCards = useMemo<CardItem[]>(() => {
-    const q = query.trim().toLowerCase();
-    const cat = category.trim().toLowerCase();
-    const cityNeedle = city.trim().toLowerCase();
-
-    return allCards.filter((card) => {
-      const { profile, location } = card;
-      const haystack = [
-        profile.name,
-        profile.category,
-        profile.area,
-        ...profile.services,
-        location.name,
-        location.city,
-        location.area,
-        location.address,
-      ]
-        .join(" ")
-        .toLowerCase();
-      const categoryText = [profile.category, ...profile.services].join(" ").toLowerCase();
-      const cityText = [location.city, location.area, profile.area].join(" ").toLowerCase();
-
-      const matchesQuery = q === "" || haystack.includes(q);
-      const matchesCategory = cat === "" || categoryText.includes(cat) || profile.category.toLowerCase() === cat;
-      const matchesCity = cityNeedle === "" || cityText.includes(cityNeedle);
-      return matchesQuery && matchesCategory && matchesCity;
-    });
-  }, [allCards, query, category, city]);
 
   function selectCategory(label: string) {
     if (label === "") {
@@ -564,17 +537,19 @@ export function MarketplaceListFaithful() {
             </div>
             <div className="field search-box-city-field">
               <label htmlFor="marketplace-home-city">Dove</label>
+              {/* Input NON controllato: i suggerimenti città e la validazione
+                  'Seleziona una città dalla lista.' sono cablati dal DOM
+                  (useMarketplacePageEffects), come il legacy. */}
               <input
                 id="marketplace-home-city"
                 type="search"
                 name="city"
-                value={city}
+                defaultValue=""
                 placeholder="La tua citt&agrave;"
                 autoComplete="off"
                 data-marketplace-topbar-city-input
-                onChange={(event) => setCity(event.target.value)}
               />
-              {/* City autocomplete suggestions are faithful-but-static (the JS populates them in the legacy page). */}
+              {/* Suggerimenti città popolati dal DOM effect (initCitySuggestions). */}
               <div
                 className="search-box-city-suggestions"
                 role="listbox"
@@ -594,18 +569,14 @@ export function MarketplaceListFaithful() {
           <h2>Servizi pi&ugrave; cercati</h2>
           <p>Filtra le attivit&agrave; pubblicate in base alle categorie configurate.</p>
         </div>
-        {/* Category chips: WIRED to filter the rendered cards. */}
+        {/* Legacy: le chips NAVIGANO alla pagina risultati; sulla home 'Tutti'
+            è sempre active (nessun filtro applicato). */}
         <div className="chips">
-          {/* Legacy: le chips NAVIGANO alla pagina risultati (niente filtro client). */}
-          <a className={`chip${category === "" ? " active" : ""}`} href="/attivita/ricerca">
+          <a className="chip active" href="/attivita/ricerca">
             Tutti
           </a>
           {(categories.length ? categories : TREATMENT_CATEGORIES.map((c) => c.label)).map((label) => (
-            <a
-              key={label}
-              className={`chip${category === label ? " active" : ""}`}
-              href={`/attivita/ricerca?category=${encodeURIComponent(label)}`}
-            >
+            <a key={label} className="chip" href={`/attivita/ricerca?category=${encodeURIComponent(label)}`}>
               {label}
             </a>
           ))}
@@ -613,11 +584,12 @@ export function MarketplaceListFaithful() {
 
         <div className="section-head">
           <h2>Le nostre attivit&agrave;</h2>
-          <p>{filteredCards.length} risultato/i disponibili.</p>
+          {/* Legacy: la home mostra SEMPRE tutte le attività (count($profiles)). */}
+          <p>{allCards.length} risultato/i disponibili.</p>
         </div>
 
         <div className="grid">
-          {filteredCards.map((card) => {
+          {allCards.map((card) => {
             const { profile, location, favoriteKey, locationSlug } = card;
             // Legacy: la card sede linka la SCHEDA SEDE /attivita/<slug>/sedi/<loc-slug>.
             const schedaHref = `/attivita/${profile.slug}/sedi/${encodeURIComponent(locationSlug)}`;
@@ -671,9 +643,10 @@ export function MarketplaceListFaithful() {
           })}
         </div>
 
-        {loaded && filteredCards.length === 0 ? (
-          <div className="section-head">
-            <p>Nessuna attivit&agrave; trovata. Modifica citt&agrave;, servizio o categoria.</p>
+        {loaded && allCards.length === 0 ? (
+          <div className="empty">
+            <h3>Nessuna attivit&agrave; pubblicata</h3>
+            <p>Configura la visibilit&agrave; marketplace da Profilo attività per far comparire i centri in questa pagina.</p>
           </div>
         ) : null}
 

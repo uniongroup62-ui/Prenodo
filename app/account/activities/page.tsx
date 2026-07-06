@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
-import { PublicAccountPage } from "@/components/public-account-page";
+import { AccountFaithful } from "@/components/public/account-faithful";
 
 export const metadata: Metadata = {
-  title: "Attivita cliente | Prenodo",
+  title: "Attività - Account cliente",
 };
 
 export default function AccountActivitiesPage() {
-  return <PublicAccountPage initialMode="activities" />;
+  return <AccountFaithful mode="activities" />;
 }

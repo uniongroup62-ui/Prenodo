@@ -10,7 +10,10 @@ import { currentPublicCustomerSession } from "@/lib/public-customer-account";
 // port l'area cliente è CENTRALE (/account/*), quindi i target non-wizard
 // vengono mappati sulle pagine account corrispondenti.
 const ACCOUNT_TARGET_ROUTES: Record<string, string> = {
-  hub: "/account",
+  // hub (Pannello / "Apri area cliente") = dashboard residui del cliente
+  // (equivalente centralizzato dell'hub per-tenant legacy). L'account
+  // "cliente" vero e proprio (attività/preferiti/profilo) è /account/*.
+  hub: "/account/appointments",
   my: "/account/appointments",
   quotes: "/account/quotes",
   packs: "/account/packages",
@@ -112,11 +115,14 @@ export default async function TenantBookingPage({
       }
       redirect(`/attivita/${encodeURIComponent(tenantSlug)}`);
     }
-    // Loggato: i target dell'area cliente per-tenant vanno alle pagine
-    // account centrali del port; start (e i deep-link redeem) al wizard.
-    // Il public=1 "nudo" da loggato nel legacy rende l'HUB per-tenant.
+    // Loggato: start (e i deep-link redeem) al wizard; i target dell'area
+    // cliente per-tenant alle pagine account del port; il public=1 "nudo"
+    // (nessun target) è showcase → profilo marketplace (booking.php 9188+9307).
+    if (requestedTarget === "") {
+      redirect(`/attivita/${encodeURIComponent(tenantSlug)}`);
+    }
     if (requestedTarget !== "start") {
-      redirect(ACCOUNT_TARGET_ROUTES[requestedTarget] ?? "/account");
+      redirect(ACCOUNT_TARGET_ROUTES[requestedTarget] ?? `/attivita/${encodeURIComponent(tenantSlug)}`);
     }
   }
 

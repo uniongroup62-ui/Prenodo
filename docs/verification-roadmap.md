@@ -6039,3 +6039,46 @@ e2e-booking-marketplace 26/26 e e2e-public-area 14/14 CLEAN; 100/100
 marker bundle (inclusi 'Rimuovi dai preferiti', 'Seleziona una città dalla
 lista.', 'Link copiato', chip menu loggato); typecheck pulito, lint solo
 pattern-fedeli pre-esistenti.
+
+## MARKETPLACE — QUARTA PASSATA: home filtri navigano + account cliente centrale rifatto (segnalazione utente) (2026-07-06)
+L'utente ha segnalato: (1) in home i filtri aggiornano il contenuto invece di
+portare alla pagina di ricerca (come nel PHP); (2) l'account cliente
+(/account/*) è totalmente diverso dal PHP. Verificato contro
+public_marketplace.php (home 1897-1997) + public_account.php (modi
+activities/favorites/profile) + PHP live.
+- **Home filtri**: la home filtrava le card in-place (filteredCards) e la
+  hero faceva preventDefault. Il legacy mostra SEMPRE tutte le attività
+  (count($profiles)) e la ricerca avviene su /attivita/ricerca. Fix: la
+  griglia "Le nostre attività" mostra sempre allCards; il form hero fa GET
+  → /attivita/ricerca; le chips 'Servizi più cercati' sono link category
+  ('Tutti' sempre active); input città non controllato (suggerimenti +
+  validazione dal DOM); empty-state legacy 'Nessuna attività pubblicata /
+  Configura la visibilità marketplace da Profilo attività...'.
+- **Account cliente centrale RIFATTO**: il Next serviva a /account/* la
+  dashboard residui a sidebar (12 sezioni aggregate su tutti i tenant),
+  mentre il PHP central account è topbar marketplace + chip account
+  (Attività/Preferiti/Profilo/Esci) + un account-panel con 3 pannelli.
+  Nuovo components/public/account-faithful.tsx (port 1:1 di public_account.php):
+  - Attività: grid attività collegate (logo iniziale, chip sedi, 'Apri area
+    cliente'→hub per-tenant, 'Scheda'→profilo), empty 'Nessuna attività
+    collegata.'.
+  - Preferiti: favorite-grid con 'Scheda'/'Prenota'/'Rimuovi' (remove_favorite
+    → 'Preferito rimosso.'), empty 'Nessun preferito salvato.'.
+  - Profilo: form update_profile (nome/cognome/telefono, email readonly →
+    'Profilo aggiornato.') + form change_password (attuale/nuova/conferma →
+    'Password aggiornata.'), con account-section-divider e testi verbatim.
+  Route /account, /account/activities, /account/favorites, /account/profile →
+  AccountFaithful; /account → /account/activities. La dashboard residui
+  (PublicAccountPage) resta l'HUB per-tenant, raggiunta da 'Apri area cliente'
+  e dai target hub/my/packs/... del gate booking (hub ora → /account/appointments,
+  non più /account).
+- **Gate booking**: public=1 "nudo" da LOGGATO ora → /attivita/<slug>
+  (showcase default, booking.php 9188+9307) come da anonimo, non più /account.
+- **BUG Postgres**: (già dalla terza passata) DELETE...LIMIT nei preferiti.
+Battery: e2e-account-faithful.mjs 15/15 (home naviga, 3 pannelli, update_profile
++ change_password + remove_favorite round-trip, password errata gestita) +
+regressioni e2e-marketplace 24/24, e2e-booking-marketplace 26/26,
+e2e-public-area 14/14 (tutte CLEAN); struttura confrontata 1:1 col PHP live
+(account-page/panel, eyebrow 'Account cliente', h1+subtitle, empty-state,
+2 form profilo); 46/46 marker account + 100/100 marketplace + 64/64 wizard;
+typecheck pulito.
