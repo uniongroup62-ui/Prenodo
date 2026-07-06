@@ -101,6 +101,8 @@ export type PublicBookingConfirmation = {
   clientId: number;
   staffId: number | null;
   locationId: number | null;
+  // Righe costi per-servizio (listino + prezzo scontato + badge promo).
+  services: Array<{ serviceId: number; name: string; listPrice: number; price: number; badge: string }>;
 };
 
 type ServiceRow = RowDataPacket & {
@@ -1047,6 +1049,20 @@ export async function confirmPublicBooking({
     }
   }
 
+  // Righe per-servizio con prezzo di listino + prezzo scontato + badge (dai
+  // serviceOverrides della promozione), per il dettaglio costi della conferma
+  // (booking.php 8957-8987: prezzo barrato + scontato + badge).
+  const serviceLines = services.map((service) => {
+    const serviceId = Number(service.id ?? 0) || 0;
+    const override = (legacyBenefits?.serviceOverrides ?? []).find((o) => o.serviceId === serviceId);
+    return {
+      serviceId,
+      name: String(service.name ?? "").trim(),
+      listPrice: roundMoney(override ? override.listPrice : Number(service.price ?? 0)),
+      price: roundMoney(override ? override.price : Number(service.price ?? 0)),
+      badge: String(override?.badge ?? ""),
+    };
+  });
   return {
     id: appointmentId,
     publicCode,
@@ -1058,6 +1074,7 @@ export async function confirmPublicBooking({
     clientId: client.id,
     staffId: selectedStaffId,
     locationId: locationId ?? null,
+    services: serviceLines,
   };
 }
 

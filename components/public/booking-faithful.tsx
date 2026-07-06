@@ -135,6 +135,8 @@ type BookingConfirmation = {
   accountLinked?: boolean;
   staffId: number | null;
   locationId: number | null;
+  // Righe costi per-servizio (listino/scontato/badge) dal server.
+  services?: Array<{ serviceId: number; name: string; listPrice: number; price: number; badge: string }>;
 };
 
 // Legacy progress order: Sede, Categoria, Servizi, Professionista, Ora, Vantaggi, Conferma (steps 1..7).
@@ -964,16 +966,41 @@ export function BookingFaithful({
               {email ? <div className="text-muted small">{email}</div> : null}
 
               <div className="sec-title">Dettaglio costi</div>
-              {selectedServices.map((service) => (
-                <div className="line" key={service.id}>
-                  <div>{service.name}</div>
-                  <div className="confirm-price">
-                    <div>
-                      <strong>€ {fmtMoney(service.price)}</strong>
+              {/* Per-servizio: prezzo di listino barrato + badge sconto/residuo +
+                  prezzo scontato/0€ (renderPriceHtml legacy, booking.php 8957-8987). */}
+              {(confirmation.services && confirmation.services.length
+                ? confirmation.services
+                : selectedServices.map((s) => ({ serviceId: s.id, name: s.name, listPrice: s.price, price: s.price, badge: "" }))
+              ).map((line, index) => {
+                const isRedeemed = Boolean(redeemPrefill && redeemPrefill.serviceId === line.serviceId && serviceIds.includes(line.serviceId));
+                const nowPrice = isRedeemed ? 0 : line.price;
+                const badge = isRedeemed
+                  ? redeemPrefill?.kind === "package"
+                    ? "Pacchetto"
+                    : redeemPrefill?.kind === "prepaid"
+                      ? "Prepagato"
+                      : redeemPrefill?.kind === "giftbox"
+                        ? "GiftBox"
+                        : "gift"
+                  : line.badge;
+                const showOld = badge.trim() !== "" && line.listPrice > nowPrice + 0.00001;
+                return (
+                  <div className="line" key={`${line.serviceId}:${index}`}>
+                    <div>{line.name}</div>
+                    <div className="confirm-price">
+                      {showOld ? (
+                        <div className="price-row">
+                          <span className="price-old">€ {fmtMoney(line.listPrice)}</span>
+                          <span className="discount-badge">{badge}</span>
+                        </div>
+                      ) : null}
+                      <div className="price-now">
+                        <strong>€ {fmtMoney(nowPrice)}</strong>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
               {confirmation.discount > 0.00001 ? (
                 <div className="line confirm-line-success">
                   <div>{confirmDiscountLabel}</div>

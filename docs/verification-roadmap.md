@@ -6658,3 +6658,25 @@ Fix:
 
 Verifica live (centroesteticoelite): categorie=["genera"], auto-selected; niente
 categorie vuote né "Categoria #N". typecheck/lint puliti.
+
+
+---
+
+## Wizard booking conferma: dettaglio costi per-servizio (cost-breakdown) (2026-07-06)
+
+Chiuso il finding MEDIUM cost-breakdown (parte CONFERMA). Il dettaglio costi della
+conferma mostrava prezzi pieni piatti; il legacy (renderPriceHtml, booking.php
+8957-8987) mostra per-servizio il prezzo di LISTINO barrato + badge sconto/
+residuo + prezzo scontato/0€.
+
+Fix: confirmPublicBooking restituisce services[] (serviceId, name, listPrice,
+price, badge) dai serviceOverrides della promozione; la conferma rende per-
+servizio price-old barrato + discount-badge + price-now, e 0€ + badge residuo
+(Pacchetto/Prepagato/GiftBox/gift) per i servizi coperti da deep-link redeem.
+
+Verifica live (prenotazione ZZ completa mint→book→confirm→cleanup, appuntamento
+eliminato, residue=0): conferma "CODICE PRENOTAZIONE #...", price-now "€ 12,00",
+"Saldo dovuto € 12,00" (caso pieno, nessun crash). typecheck/lint puliti.
+RESIDUO: il recap dello STEP 7 (pre-conferma) mostra ancora prezzi pieni +
+sconto aggregato — la risoluzione per-servizio lato client (computeCouponBreakdown)
+non è portata.
