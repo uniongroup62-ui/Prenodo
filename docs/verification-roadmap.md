@@ -6680,3 +6680,22 @@ eliminato, residue=0): conferma "CODICE PRENOTAZIONE #...", price-now "€ 12,00
 RESIDUO: il recap dello STEP 7 (pre-conferma) mostra ancora prezzi pieni +
 sconto aggregato — la risoluzione per-servizio lato client (computeCouponBreakdown)
 non è portata.
+
+
+---
+
+## Wizard booking: countdown live dell'hold + gating scadenza (2026-07-06)
+
+Chiuso il finding MEDIUM hold-countdown-and-gating. Il Next mostrava un banner
+statico "Orario riservato fino alle HH:MM." e permetteva Invia con hold scaduto
+(rifiutato solo dal confirm). Il legacy (booking-wizard.js 341-424) fa un
+countdown 1s "Slot riservato per M:SS.", warning poi rosso, e alla scadenza
+rilascia l'hold + riporta allo step Data/Ora; validateStep 5/6/7 richiede un
+hold non scaduto.
+
+Fix: tick 1s (holdNow), "Slot riservato per M:SS." con alert-warning <30s /
+alert-danger <10s; alla scadenza release_hold + azzera slot + torna a step 5 +
+messaggio; computeCanContinue 5/6/7 richiede hold && !holdExpired.
+
+Verifica live: dopo aver scelto uno slot il banner mostra "Slot riservato per
+2:29." e dopo 3s "2:26." (tick attivo). typecheck/lint puliti.

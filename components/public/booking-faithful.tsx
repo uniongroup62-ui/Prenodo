@@ -211,6 +211,12 @@ export function BookingFaithful({
   // Ore espanse (toggle "Mostra tutti") nella vista slot raggruppata.
   const [expandedHours, setExpandedHours] = useState<Set<string>>(new Set());
   const [hold, setHold] = useState<BookingHold | null>(null);
+  // Countdown live dell'hold (booking-wizard.js bookingStartHoldCountdown): tick 1s.
+  const [holdNow, setHoldNow] = useState(0);
+  // Secondi rimanenti + scaduto (expiresAt è ora locale "YYYY-MM-DD HH:MM:SS").
+  const holdExpiresMs = hold ? new Date(hold.expiresAt.replace(" ", "T")).getTime() : 0;
+  const holdRemainingSec = hold && holdNow > 0 ? Math.max(0, Math.round((holdExpiresMs - holdNow) / 1000)) : 0;
+  const holdExpired = Boolean(hold) && holdNow > 0 && holdRemainingSec <= 0;
   const [benefitId, setBenefitId] = useState("none");
   // COUPON free-text (port of the legacy Step 6 coupon box -> mode=coupon):
   // the typed code is validated SERVER-SIDE per cart/date; a code matching a
@@ -666,8 +672,11 @@ export function BookingFaithful({
     if (step === 1) return locationId > 0;
     if (step === 2) return categoryId != null;
     if (step === 3) return serviceIds.length > 0;
-    if (step === 5) return Boolean(slot) && !slotsLoading;
-    if (step === 7) return Boolean(firstName.trim()) && Boolean(email.trim()) && Boolean(slot);
+    // Step 5-7: serve uno slot con hold ANCORA valido (validateStep legacy) —
+    // niente Avanti/Invia con hold scaduto.
+    if (step === 5) return Boolean(slot) && !slotsLoading && Boolean(hold) && !holdExpired;
+    if (step === 6) return Boolean(hold) && !holdExpired;
+    if (step === 7) return Boolean(firstName.trim()) && Boolean(email.trim()) && Boolean(slot) && Boolean(hold) && !holdExpired;
     return true;
   }
 
@@ -837,6 +846,29 @@ export function BookingFaithful({
       else next.add(key);
       return next;
     });
+  // Effetti del countdown hold: tick 1s + gestione scadenza (rilascia l'hold,
+  // azzera lo slot, torna a Data/Ora). I valori derivati (holdRemainingSec/
+  // holdExpired) sono calcolati più in alto (servono a computeCanContinue).
+  useEffect(() => {
+    if (!hold) return;
+    setHoldNow(Date.now());
+    const id = window.setInterval(() => setHoldNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [hold]);
+  useEffect(() => {
+    if (!hold || !holdExpired) return;
+    const token = hold.token;
+    void fetch("/api/booking", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "release_hold", slug, token, owner_key: ownerKeyRef.current }),
+    }).catch(() => {});
+    setHold(null);
+    setSlot("");
+    setStep((current) => (current > 5 ? 5 : current));
+    setError("Il tempo per riservare lo slot è scaduto. Scegli di nuovo un orario.");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [holdExpired]);
   const businessInitial = (ctx?.business.name ?? "").trim().charAt(0).toUpperCase() || "B";
   const dateStripDays = useMemo(
     () => Array.from({ length: 7 }, (_, index) => addDays(stripStart, index)),
@@ -1174,14 +1206,21 @@ export function BookingFaithful({
               <input type="hidden" name="email" id="email" value={email} readOnly />
               <input type="hidden" name="notes" id="notes" value="" readOnly />
 
-              {/* Hold TTL countdown banner (faithful-but-static: shows the reserved-until time of the hold). */}
+              {/* Hold TTL: countdown LIVE "Slot riservato per M:SS." (warning <30s,
+                  rosso <10s), come il legacy (bookingRenderHoldCountdown). */}
               <div
                 id="bookingHoldCountdown"
-                className={`alert alert-info py-2 px-3 mb-3 small${hold ? "" : " d-none"}`}
+                className={`alert py-2 px-3 mb-3 small${hold ? "" : " d-none"} ${
+                  !hold ? "alert-info" : holdRemainingSec <= 10 ? "alert-danger" : holdRemainingSec <= 30 ? "alert-warning" : "alert-info"
+                }`}
                 role="status"
                 aria-live="polite"
               >
-                {hold ? `Orario riservato fino alle ${hold.expiresAt.slice(11, 16)}.` : ""}
+                {hold
+                  ? holdNow > 0
+                    ? `Slot riservato per ${Math.floor(holdRemainingSec / 60)}:${String(holdRemainingSec % 60).padStart(2, "0")}.`
+                    : "Slot riservato."
+                  : ""}
               </div>
 
               {error ? (
