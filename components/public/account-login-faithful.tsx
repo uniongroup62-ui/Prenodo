@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import { accountAuthDestination } from "@/components/public/account-auth-destination";
 
 // Pixel-faithful port of the legacy PHP public CUSTOMER ACCOUNT login page
 // served at http://localhost/account/login (public_customer_accounts /
@@ -103,12 +104,12 @@ export function AccountLoginFaithful() {
     setLocationId(params.get("location_id") ?? "");
   }, []);
 
-  // Build the destination once login succeeds, mirroring the PHP `return`
-  // behaviour (defaults to the marketplace home).
+  // Build the destination once login succeeds, mirroring the PHP
+  // account_after_auth_url: with ?tenant=&next= the customer lands on the
+  // tenant flow (next=start -> booking wizard, +location_id); otherwise the
+  // `return` path (defaults to the marketplace home).
   function destination(): string {
-    const target = returnTarget.trim();
-    if (target.startsWith("/")) return target;
-    return "/attivita";
+    return accountAuthDestination(tenant, nextTarget, returnTarget, locationId);
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -137,8 +138,10 @@ export function AccountLoginFaithful() {
         const verifyParams = new URLSearchParams();
         if (result.accountId) verifyParams.set("account_id", String(result.accountId));
         if (result.email) verifyParams.set("email", result.email);
+        if (tenant) verifyParams.set("tenant", tenant);
         if (nextTarget) verifyParams.set("next", nextTarget);
         if (returnTarget) verifyParams.set("return", returnTarget);
+        if (locationId) verifyParams.set("location_id", locationId);
         const query = verifyParams.toString();
         window.location.href = `/account/verify${query ? `?${query}` : ""}`;
         return;

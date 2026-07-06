@@ -5890,3 +5890,64 @@ e2e-booking-settings.mjs 12/12, RESTORE CLEAN; live PHP: POST 99999 ore →
 sopra bs-page-header, poi ripristinato (0/1/24/hours); wizard pubblico
 verificato raggiungibile (public=1/start/hub/book_prepaid) e /booking nudo
 anonimo → 307 login; 31/31 marker bundle; typecheck/lint puliti.
+
+## AUDIT COMPLETO — Booking pubblico del MARKETPLACE (booking.php public + public_account.php) (2026-07-06)
+Verificato contro booking.php (gate 9307-9340, confirmed screen 8889-9152,
+bottom nav 13413), booking-wizard.js (hasBenefitsAvailable 761,
+syncProgress 3140-3174, showStep 3212, fillClientStepFromUser 4631,
+refreshCustomerUI 4782), public_account.php (account_next_key /
+account_booking_params / account_after_auth_url 54-120) + live PHP con
+account cliente ZZ reale (creato e rimosso). Bug reali corretti:
+- **GATE mancante (divergenza V5 ora allineata)**: il legacy OBBLIGA il
+  login cliente: start/my/hub/... senza sessione → 302 al login CENTRALE
+  (/account/login?tenant=&next=[&location_id]), tab=register → register;
+  public=1 nudo/showcase/products → 302 /attivita/<slug>. Il Next rendeva
+  il wizard a chiunque. Ora la route /slug/booking applica il gate
+  server-side (currentPublicCustomerSession): confirmed=1 resta senza gate
+  (chiave=code); i target dell'area cliente per-tenant (hub/my/quotes/
+  packs/prepaids/credit/giftcards/giftboxes/preorders/fidelity/gifts/
+  profile/settings) da loggato vanno alle pagine account CENTRALI del port
+  (/account, /account/appointments, /account/quotes, /account/packages,
+  /account/profile) — l'hub per-tenant legacy nel port è l'area centrale
+  (decisione architetturale V5, ora instradata coerentemente).
+- **destination() post-auth ignorava tenant+next**: login/verify centrale
+  atterravano sempre su `return` (/attivita) — il flusso marketplace →
+  login → WIZARD si rompeva. Port di account_after_auth_url in
+  account-auth-destination.ts (start→wizard+location_id, mapping target,
+  showcase→/attivita/<slug>, next sconosciuto→start, senza tenant→return
+  sanificato); login propaga tenant/location_id anche al verify step.
+- **Step counter/progress**: il Next mostrava sempre 'Step X di 7'; il
+  legacy nasconde 'Vantaggi' (d-none) quando hasBenefitsAvailable()=false
+  → contatore 'di 6', skip 6→7 all'avanti e 7→5 all'indietro con azzeramento
+  selezioni benefit. Port completo (fidelity_preview caricata al variare
+  del carrello, non più solo allo step 6).
+- **Wizard cieco all'account**: nessun prefill; ora port di
+  refreshCustomerUI/fillClientStepFromUser: dati cliente precompilati
+  dall'account (solo campi vuoti, split full_name), email READONLY da
+  loggato, bottone header 'I miei appuntamenti' (→/account/appointments) /
+  'Accedi' (→login centrale con tenant+next).
+- **Schermata di conferma NON legacy**: c'era un alert inline nello step 7;
+  il legacy rende la pagina dedicata ?confirmed=1 (confirm-modal: check,
+  'Richiesta inviata', 'In attesa di approvazione. Ti avviseremo via
+  email.', 'CODICE PRENOTAZIONE #', date-box con mese INGLESE date('M'),
+  'd/m/Y, H:i', titolo '+N servizi', Aggiungi al calendario/Stampa,
+  Operatore/Posizione/Cliente, Dettaglio costi con righe sconto
+  Coupon/Fidelity/Credito/GiftCard, 'Pagamenti e crediti € 0,00',
+  'Saldo dovuto', bottom nav). Port completo client-side.
+- **Bottom nav 'Home' puntava all'ADMIN**: /slug/booking nudo (= pagina
+  impostazioni manage) invece del profilo marketplace /attivita/<slug>
+  (booking.php 13414); 'Pannello' ?hub=1 ora instradato dal gate.
+RESIDUI DELIBERATI: (a) /api/booking confirm resta guest-friendly a
+livello API (il gate legacy è sulla pagina; l'upsert account V5 copre il
+linking) — il flusso UI è comunque login-gated; (b) la schermata confirmed
+è client-state: il RELOAD di ?confirmed=1&code non rilegge i dettagli dal
+DB (il legacy sì); (c) hub/my/... per-tenant → area account centrale.
+Battery: e2e-booking-marketplace.mjs 26/26 (gate anonimo 7 casi, register
+devCode→verify→sessione, prefill me, wizard loggato con 'Step 1 di 6' +
+benefits d-none SSR, mapping loggato 5 target, unit accountAuthDestination
+7 casi, cleanup account Supabase CLEAN) + regressioni e2e-public-area
+14/14, e2e-booking-settings 12/12, e2e-booking-admin 9/9; live PHP:
+redirect catturati 1:1 (302 /attivita, 302 login centrale con tenant+next,
+post-login 302 wizard con customer_handoff, wizard loggato 'Step 1 di 6');
+account ZZ live rimosso; 64/64 marker bundle; typecheck/lint puliti
+(8 errori lint pre-esistenti nel wizard, invariati).

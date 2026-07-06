@@ -221,6 +221,45 @@ export function BookingFaithful({
   const [submitting, setSubmitting] = useState(false);
   const [confirmation, setConfirmation] = useState<BookingConfirmation | null>(null);
 
+  // Cliente loggato (refreshCustomerUI + fillClientStepFromUser legacy,
+  // booking-wizard.js 4631-4818): il flusso marketplace arriva sempre
+  // autenticato (gate), quindi i dati vengono precompilati dall'account
+  // (solo i campi vuoti), l'email diventa readonly e il bottone in alto
+  // mostra 'I miei appuntamenti' invece di 'Accedi'.
+  const [bookingUser, setBookingUser] = useState<{ email: string; fullName: string } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/account")
+      .then((r) => r.json())
+      .then((j: { ok?: boolean; user?: { email?: string; fullName?: string; firstName?: string; lastName?: string; phone?: string } | null }) => {
+        if (!alive || !j?.ok || !j.user?.email) return;
+        const u = j.user;
+        setBookingUser({ email: String(u.email ?? ""), fullName: String(u.fullName ?? "").trim() });
+        // fillClientStepFromUser: nome/cognome dai campi salvati o dallo split
+        // del full_name; compila SOLO i campi ancora vuoti.
+        const savedFirst = String(u.firstName ?? "").trim();
+        const savedLast = String(u.lastName ?? "").trim();
+        const full = String(u.fullName ?? "").trim();
+        let first = savedFirst;
+        let last = savedLast;
+        if ((!first || !last) && full) {
+          const parts = full.split(/\s+/).filter(Boolean);
+          if (!first) first = parts.shift() ?? "";
+          if (!last) last = parts.join(" ");
+        }
+        if (first) setFirstName((cur) => cur || first);
+        if (last) setLastName((cur) => cur || last);
+        const accEmail = String(u.email ?? "").trim();
+        if (accEmail) setEmail((cur) => cur || accEmail);
+        const accPhone = String(u.phone ?? "").trim();
+        if (accPhone) setPhone((cur) => cur || accPhone);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const ownerKeyRef = useRef<string>("");
   if (!ownerKeyRef.current && typeof window !== "undefined") {
     ownerKeyRef.current = `public-${Math.random().toString(36).slice(2)}`;
@@ -361,7 +400,12 @@ export function BookingFaithful({
   const [giftcardChoiceId, setGiftcardChoiceId] = useState(0);
   const serviceIdsKey = serviceIds.join(",");
   useEffect(() => {
-    if (step < 6 || !serviceIdsKey) return;
+    // Legacy: fidelityPreview viene aggiornata al variare del carrello (non
+    // solo allo step 6) perché decide ANCHE la visibilità dello step
+    // "Vantaggi" nel progress (hasBenefitsAvailable, booking-wizard.js 761).
+    // Con carrello vuoto niente fetch: hasBenefitsAvailable ha il guard su
+    // serviceIds.length, quindi lo stato stantio non conta.
+    if (!serviceIdsKey) return;
     let alive = true;
     const params = new URLSearchParams({ slug, action: "fidelity_preview", service_ids: serviceIdsKey, discount: String(discount) });
     fetch(`/api/booking?${params.toString()}`)
@@ -392,6 +436,19 @@ export function BookingFaithful({
     useCredit && custBenefits ? round2c(Math.min(custBenefits.creditAvailable, Math.max(0, dueAfterFidelity - giftcardAppliedAmount))) : 0;
   // The customer-facing payable total after every selected benefit.
   const payableTotal = Math.max(0, round2c(finalTotal - fidelityDiscountApplied - giftcardAppliedAmount - creditAppliedAmount));
+
+  // Port di hasBenefitsAvailable (booking-wizard.js 761-777): lo step
+  // "Vantaggi" esiste solo se il cliente loggato ha davvero qualcosa da
+  // spendere (punti con sconto > 0, giftcard, o credito con saldo > 0 su un
+  // importo residuo > 0). Altrimenti l'item del progress è nascosto, il
+  // contatore scala a "di 6" e la navigazione salta dallo step 5 al 7.
+  const hasBenefitsAvailable = Boolean(
+    serviceIds.length > 0 &&
+      custBenefits &&
+      ((custBenefits.redeemEnabled && custBenefits.suggestedPoints > 0 && custBenefits.suggestedDiscount > 0.00001) ||
+        (finalTotal > 0.00001 && custBenefits.giftcards.length > 0) ||
+        (finalTotal > 0.00001 && custBenefits.logged && custBenefits.creditAvailable > 0.00001)),
+  );
   const staffName =
     operatorId === "any"
       ? hold?.staffName || selectedSlot?.staffName || "Qualsiasi professionista"
@@ -600,6 +657,14 @@ export function BookingFaithful({
           setOperatorId("any");
           next = 5;
         }
+        // showStep legacy (booking-wizard.js 3212): senza vantaggi lo step 6
+        // viene saltato e le selezioni benefit azzerate.
+        if (next === 6 && !hasBenefitsAvailable) {
+          setUseFidelity(false);
+          setUseCredit(false);
+          setGiftcardChoiceId(0);
+          next = 7;
+        }
         return next;
       });
       return;
@@ -665,6 +730,9 @@ export function BookingFaithful({
   function handleBack() {
     setError("");
     setStep((current) => {
+      // Legacy (booking-wizard.js 4097): dal riepilogo senza vantaggi si
+      // torna direttamente a Data/Ora.
+      if (current === 7 && !hasBenefitsAvailable) return 5;
       let prev = Math.max(1, current - 1);
       if (prev === 4 && !chooseStaffEnabled) prev = 3;
       return prev;
@@ -678,6 +746,166 @@ export function BookingFaithful({
   );
   const nextLabel = isFinalStep ? "Invia" : step === 5 ? "Continua" : "Avanti";
   const nextIcon = isFinalStep ? "bi-send" : "bi-arrow-right";
+
+  // --- Schermata di conferma post-book (booking.php ?confirmed=1, 8889-9152):
+  // il legacy REDIRIGE a una pagina dedicata (confirm-modal) al posto del
+  // wizard; qui la rendiamo client-side con lo stato del wizard + il codice.
+  if (confirmation) {
+    // date('d') / date('M') PHP: mese abbreviato INGLESE (quirk legacy).
+    const MONTHS_EN = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const [cy, cm, cd] = confirmation.date.split("-").map(Number);
+    const confirmDay = String(cd ?? "").padStart(2, "0");
+    const confirmMonth = MONTHS_EN[(cm ?? 1) - 1] ?? "";
+    const dateLine = `${confirmDay}/${String(cm ?? "").padStart(2, "0")}/${cy}, ${confirmation.time}`;
+    const svcTitle = selectedServices.length
+      ? `${selectedServices[0].name}${selectedServices.length > 1 ? ` +${selectedServices.length - 1} servizi` : ""}`
+      : "Appuntamento";
+    const confirmLocation = ctx?.locations.find((loc) => loc.id === locationId) ?? null;
+    return (
+      <>
+        {CSS_LINKS.map((href) => (
+          <link key={href} rel="stylesheet" href={href} />
+        ))}
+        <style dangerouslySetInnerHTML={{ __html: EMBED_INLINE_STYLE }} />
+
+        <nav className="booking-bottom-nav" aria-label="Navigazione booking">
+          <a className="booking-bottom-nav__item" href={`/attivita/${slug}`}>
+            <i className="bi bi-house" />
+            <span>Home</span>
+          </a>
+          <a className="booking-bottom-nav__item" href={`/${slug}/booking?hub=1`}>
+            <i className="bi bi-person-square" />
+            <span>Pannello</span>
+          </a>
+          <a className="booking-bottom-nav__item is-active" href={`/${slug}/booking?start=1`} aria-current="page">
+            <i className="bi bi-calendar-plus-fill" />
+            <span>Prenota</span>
+          </a>
+        </nav>
+
+        <div className="booking-overlay">
+          <div className="confirm-modal">
+            <a className="confirm-close" href={`/${slug}/booking?public=1`} aria-label="Chiudi">
+              <i className="bi bi-x-lg" />
+            </a>
+
+            <div className="confirm-top">
+              <div className="confirm-check">
+                <i className="bi bi-check-lg" />
+              </div>
+              <div className="h4 fw-bold mb-1">Richiesta inviata</div>
+              <div className="text-muted small">In attesa di approvazione. Ti avviseremo via email.</div>
+              <div className="mt-2">
+                <span className="confirm-code">CODICE PRENOTAZIONE #{confirmation.publicCode}</span>
+              </div>
+            </div>
+
+            <div className="confirm-body">
+              <div className="appt-row">
+                <div className="date-box">
+                  <div className="day">{confirmDay}</div>
+                  <div className="month">{confirmMonth}</div>
+                </div>
+                <div className="confirm-service-copy">
+                  <div className="fw-bold confirm-service-title">{svcTitle}</div>
+                  <div className="text-muted">{dateLine}</div>
+                </div>
+              </div>
+
+              <div className="btn-row">
+                {/* .ics solo con sessione cliente loggata (endpoint account-gated). */}
+                {confirmation.accountLinked && custBenefits?.logged ? (
+                  <a className="btn-soft" href={`/api/account/ics?code=${encodeURIComponent(confirmation.publicCode)}`}>
+                    <i className="bi bi-calendar2-plus" /> Aggiungi al calendario
+                  </a>
+                ) : null}
+                <button
+                  className="btn-soft"
+                  type="button"
+                  id="printBtn"
+                  onClick={() => {
+                    if (typeof window !== "undefined") window.print();
+                  }}
+                >
+                  <i className="bi bi-printer" /> Stampa
+                </button>
+              </div>
+
+              <div className="sec-title">Operatore</div>
+              <div className="fw-semibold">
+                <div>{staffName || "—"}</div>
+              </div>
+
+              <div className="sec-title">Posizione</div>
+              <div className="fw-semibold">{confirmLocation?.name ?? "—"}</div>
+              {confirmLocation?.address ? <div className="text-muted small">{confirmLocation.address}</div> : null}
+
+              <div className="sec-title">Cliente</div>
+              <div className="fw-semibold">{clientFullName || "—"}</div>
+              {email ? <div className="text-muted small">{email}</div> : null}
+
+              <div className="sec-title">Dettaglio costi</div>
+              {selectedServices.map((service) => (
+                <div className="line" key={service.id}>
+                  <div>{service.name}</div>
+                  <div className="confirm-price">
+                    <div>
+                      <strong>€ {fmtMoney(service.price)}</strong>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {confirmation.discount > 0.00001 ? (
+                <div className="line confirm-line-success">
+                  <div>Coupon {selectedBenefit?.type === "coupon" ? selectedBenefit.code ?? "" : ""}</div>
+                  <div>
+                    <strong>-€ {fmtMoney(confirmation.discount)}</strong>
+                  </div>
+                </div>
+              ) : null}
+              {fidelityDiscountApplied > 0.00001 && custBenefits ? (
+                <div className="line confirm-line-success">
+                  <div>Sconto Fidelity ({custBenefits.suggestedPoints} Punti)</div>
+                  <div>
+                    <strong>-€ {fmtMoney(fidelityDiscountApplied)}</strong>
+                  </div>
+                </div>
+              ) : null}
+              {creditAppliedAmount > 0.00001 ? (
+                <div className="line confirm-line-success">
+                  <div>Credito</div>
+                  <div>
+                    <strong>-€ {fmtMoney(creditAppliedAmount)}</strong>
+                  </div>
+                </div>
+              ) : null}
+              {giftcardAppliedAmount > 0.00001 ? (
+                <div className="line confirm-line-success">
+                  <div>GiftCard{chosenGiftcard?.code ? ` ${chosenGiftcard.code}` : ""}</div>
+                  <div>
+                    <strong>-€ {fmtMoney(giftcardAppliedAmount)}</strong>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="line confirm-line-muted">
+                <div>Pagamenti e crediti</div>
+                <div>€ 0,00</div>
+              </div>
+              <div className="line confirm-total-line">
+                <div>
+                  <strong>Saldo dovuto</strong>
+                </div>
+                <div>
+                  <strong>€ {fmtMoney(payableTotal)}</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -708,25 +936,45 @@ export function BookingFaithful({
 
           <div className="booking-main">
             <div className="booking-head">
-              <div className="booking-progress" id="bookingProgress" aria-label="Avanzamento prenotazione">
-                {PROGRESS.map((item, index) => {
-                  const order = index + 1;
-                  const cls =
-                    order === step
-                      ? "booking-progress__item is-active"
-                      : order < step
-                        ? "booking-progress__item is-done"
-                        : "booking-progress__item";
-                  return (
-                    <span key={item.key} className={cls} data-progress={item.key}>
-                      {item.label}
-                    </span>
-                  );
-                })}
-              </div>
-              <div className="booking-progress__label" id="bookingStepCounter">
-                Step {step} di 7
-              </div>
+              {/* syncProgress legacy (booking-wizard.js 3140-3174): senza
+                  vantaggi l'item "Vantaggi" è d-none e il contatore scala. */}
+              {(() => {
+                const visibleOrder = PROGRESS.map((p) => p.key).filter((key) => key !== "benefits" || hasBenefitsAvailable);
+                const currentStage = (() => {
+                  const stage = PROGRESS[step - 1]?.key ?? "location";
+                  return stage === "benefits" && !hasBenefitsAvailable ? "confirm" : stage;
+                })();
+                const activeIdx = Math.max(0, visibleOrder.indexOf(currentStage));
+                return (
+                  <>
+                    <div
+                      className="booking-progress"
+                      id="bookingProgress"
+                      aria-label="Avanzamento prenotazione"
+                      style={{ "--booking-progress-count": String(Math.max(1, visibleOrder.length)) } as React.CSSProperties}
+                    >
+                      {PROGRESS.map((item) => {
+                        const itemIdx = visibleOrder.indexOf(item.key);
+                        const visible = itemIdx > -1;
+                        const cls = [
+                          "booking-progress__item",
+                          !visible ? "d-none" : "",
+                          visible && itemIdx === activeIdx ? "is-active" : "",
+                          visible && itemIdx < activeIdx ? "is-done" : "",
+                        ].filter(Boolean).join(" ");
+                        return (
+                          <span key={item.key} className={cls} data-progress={item.key} aria-hidden={visible ? "false" : "true"}>
+                            {item.label}
+                          </span>
+                        );
+                      })}
+                    </div>
+                    <div className="booking-progress__label" id="bookingStepCounter">
+                      Step {activeIdx + 1} di {visibleOrder.length}
+                    </div>
+                  </>
+                );
+              })()}
               <div className="booking-head__row">
                 <div>
                   <h4 id="stepTitle">{STEP_HEAD[step].title}</h4>
@@ -734,9 +982,20 @@ export function BookingFaithful({
                     {STEP_HEAD[step].desc}
                   </div>
                 </div>
-                <button type="button" className="btn btn-outline-secondary btn-sm btn-pill booking-head__account" id="customerAreaBtn">
+                {/* refreshCustomerUI legacy: loggato -> 'I miei appuntamenti'
+                    (apre l'area cliente), sloggato -> 'Accedi' (login centrale). */}
+                <button
+                  type="button"
+                  className="btn btn-outline-secondary btn-sm btn-pill booking-head__account"
+                  id="customerAreaBtn"
+                  onClick={() => {
+                    window.location.href = bookingUser
+                      ? "/account/appointments"
+                      : `/account/login?tenant=${encodeURIComponent(slug)}&next=start`;
+                  }}
+                >
                   <i className="bi bi-person me-1" />
-                  <span id="customerAreaBtnLabel">Accedi</span>
+                  <span id="customerAreaBtnLabel">{bookingUser ? "I miei appuntamenti" : "Accedi"}</span>
                 </button>
               </div>
             </div>
@@ -1281,41 +1540,8 @@ export function BookingFaithful({
                   Controlla i dettagli del tuo appuntamento e premi su <strong>Invia</strong> per confermare.
                 </div>
 
-                {confirmation ? (
-                  <div className="alert alert-success booking-alert-rounded mt-3">
-                    <div className="fw-bold">
-                      <i className="bi bi-check2-circle me-1" />
-                      Richiesta inviata
-                    </div>
-                    <div className="small mt-1">
-                      Prenotazione <strong>{confirmation.publicCode}</strong> in attesa di conferma per {formatDateIt(confirmation.date)} alle {confirmation.time}.
-                    </div>
-                    {/* Legacy confirmation actions (booking.php ~8928-8931): the .ics
-                        download (login-gated, hence accountLinked) + Stampa. */}
-                    <div className="d-flex gap-2 mt-2">
-                      {/* .ics only for a LOGGED session (custBenefits.logged): the endpoint
-                          serves the session account's own bookings; accountLinked alone
-                          may be true for an email-matched account without a session. */}
-                      {confirmation.accountLinked && custBenefits?.logged ? (
-                        <a className="btn btn-sm btn-outline-success" href={`/api/account/ics?code=${encodeURIComponent(confirmation.publicCode)}`}>
-                          <i className="bi bi-calendar2-plus me-1" />
-                          Aggiungi al calendario
-                        </a>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-outline-secondary"
-                        onClick={() => {
-                          if (typeof window !== "undefined") window.print();
-                        }}
-                      >
-                        <i className="bi bi-printer me-1" />
-                        Stampa
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-
+                {/* La conferma post-book NON è più inline: come il legacy
+                    (?confirmed=1) rende la schermata dedicata (early return). */}
                 <div className="mt-3">
                   <div className="fw-bold booking-recap-service-title" id="recServiceTitle">
                     {selectedServices.map((service) => service.name).join(", ") || "—"}
@@ -1377,11 +1603,14 @@ export function BookingFaithful({
                         />
                       </div>
                       <div className="col-md-6">
+                        {/* fillClientStepFromUser legacy: da loggato l'email
+                            dell'account è readonly. */}
                         <input
                           className="form-control"
                           type="email"
                           placeholder="Email"
                           value={email}
+                          readOnly={Boolean(bookingUser)}
                           onChange={(event) => setEmail(event.target.value)}
                         />
                       </div>
@@ -1616,7 +1845,9 @@ export function BookingFaithful({
         </div>
 
         <nav className="booking-bottom-nav" aria-label="Navigazione booking">
-          <a className="booking-bottom-nav__item" href={`/${slug}/booking`}>
+          {/* Legacy (booking.php 13414-13418): Home = profilo marketplace del
+              tenant, Pannello = area cliente (?hub=1, il gate la instrada). */}
+          <a className="booking-bottom-nav__item" href={`/attivita/${slug}`}>
             <i className="bi bi-house" />
             <span>Home</span>
           </a>

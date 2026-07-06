@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import { accountAuthDestination } from "@/components/public/account-auth-destination";
 
 // Pixel-faithful port of the legacy PHP public CUSTOMER ACCOUNT
 // "verify email" page served at http://localhost/account/verify
@@ -111,11 +112,9 @@ export function AccountVerifyFaithful() {
   }, []);
 
   // Build the destination once verification succeeds, mirroring the PHP
-  // `return` behaviour (defaults to the marketplace home).
+  // account_after_auth_url (tenant+next -> tenant flow; else `return`).
   function destination(): string {
-    const target = returnTarget.trim();
-    if (target.startsWith("/")) return target;
-    return "/attivita";
+    return accountAuthDestination(tenant, nextTarget, returnTarget, locationId);
   }
 
   async function handleVerify(event: FormEvent<HTMLFormElement>) {
