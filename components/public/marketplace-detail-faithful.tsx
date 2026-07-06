@@ -264,6 +264,13 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
   const primaryLocation = (locationIdProp ? locations.find((loc) => loc.id === locationIdProp) : undefined) ?? locations[0];
 
   const businessName = business?.name || profile?.name || "Attivita";
+  // Legacy: il <title> della scheda è il NOME attività (es. "elite"), non lo
+  // slug. Il nome arriva client-side dal context, quindi aggiorno il titolo.
+  useEffect(() => {
+    if (typeof document !== "undefined" && businessName && businessName !== "Attivita") {
+      document.title = businessName;
+    }
+  }, [businessName]);
   const locationId = primaryLocation?.id
     ?? (locationIdProp && profile?.locations?.some((loc) => loc.id === locationIdProp) ? locationIdProp : undefined)
     ?? profile?.locations?.[0]?.id

@@ -160,23 +160,34 @@ function escapeHtml(value: string): string {
 
 const PREFERRED_CITIES = ["Roma", "Milano", "Napoli", "Torino", "Palermo", "Genova", "Bologna", "Firenze", "Bari", "Catania"];
 
-// Città suggerite come il legacy (publicSearchCitySuggestions): città delle
-// sedi pubblicate + comuni italiani (italy_geo.json) + preferite.
-async function loadCitySuggestions(): Promise<string[]> {
+type SalonOption = { name: string; meta: string; initial: string };
+
+// Opzioni "Attività" del picker (marketplace_topbar_search_data.salons):
+// una voce per attività pubblicata, con meta 'categoria - città - provincia'.
+async function loadMarketplaceData(): Promise<{ cities: string[]; salons: SalonOption[] }> {
   const cities: string[] = [];
-  const seen = new Set<string>();
-  const add = (value: unknown) => {
+  const seenCity = new Set<string>();
+  const addCity = (value: unknown) => {
     const city = String(value ?? "").trim();
     if (!city) return;
     const key = city.toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
+    if (seenCity.has(key)) return;
+    seenCity.add(key);
     cities.push(city);
   };
+  const salons: SalonOption[] = [];
   try {
     const j = await (await fetch("/api/marketplace")).json();
     for (const profile of j?.profiles ?? []) {
-      for (const location of profile.locations ?? []) add(location.city);
+      for (const location of profile.locations ?? []) addCity(location.city);
+      const name = String(profile.name ?? "").trim();
+      if (name) {
+        const loc0 = profile.locations?.[0] ?? {};
+        const meta = [String(loc0.categoryText ?? profile.category ?? "").trim(), String(loc0.city ?? "").trim(), String(profile.area ?? "").trim()]
+          .filter(Boolean)
+          .join(" - ");
+        salons.push({ name, meta, initial: name.charAt(0).toUpperCase() || "B" });
+      }
     }
   } catch { /* come il catch legacy */ }
   try {
@@ -187,10 +198,80 @@ async function loadCitySuggestions(): Promise<string[]> {
       for (const city of byProvince[key] ?? []) geoCities.push(String(city));
     }
     geoCities.sort((a, b) => a.localeCompare(b, "it", { sensitivity: "base", numeric: true }));
-    for (const city of geoCities) add(city);
+    for (const city of geoCities) addCity(city);
   } catch { /* senza dataset restano le città delle sedi */ }
-  for (const city of PREFERRED_CITIES) add(city);
-  return cities;
+  for (const city of PREFERRED_CITIES) addCity(city);
+  return { cities, salons };
+}
+
+// Categorie del picker (marketplace_topbar_treatment_picker_html): stesse 16
+// del legacy con icona Bootstrap e slug per la ricerca.
+const PICKER_CATEGORIES: Array<{ category: string; icon: string; slug: string }> = [
+  { category: "Parrucchiere", icon: "bi-scissors", slug: "parrucchiere" },
+  { category: "Salone di bellezza", icon: "bi-shop", slug: "salone-bellezza" },
+  { category: "Estetista", icon: "bi-stars", slug: "estetista" },
+  { category: "Barbiere", icon: "bi-person-badge", slug: "barbiere" },
+  { category: "Unghie", icon: "bi-hand-index-thumb", slug: "unghie" },
+  { category: "Sopracciglia e ciglia", icon: "bi-eye", slug: "sopracciglia-ciglia" },
+  { category: "Centro epilazione", icon: "bi-magic", slug: "centro-epilazione" },
+  { category: "Massaggi", icon: "bi-person-heart", slug: "massaggi" },
+  { category: "Spa e sauna", icon: "bi-water", slug: "spa-sauna" },
+  { category: "MedSpa", icon: "bi-gem", slug: "medspa" },
+  { category: "Centro abbronzatura", icon: "bi-brightness-high", slug: "centro-abbronzatura" },
+  { category: "Tatuaggi e piercing", icon: "bi-gem", slug: "tatuaggi-piercing" },
+  { category: "Fisioterapia", icon: "bi-heart-pulse", slug: "fisioterapia" },
+  { category: "Fitness e recupero", icon: "bi-bicycle", slug: "fitness-recupero" },
+  { category: "Centro sanitario", icon: "bi-hospital", slug: "centro-sanitario" },
+  { category: "Toelettatura animali", icon: "bi-gem", slug: "toelettatura-animali" },
+];
+
+// Completa la tab "Categorie" nei picker che hanno solo "Tutte le attività"
+// (auth pages): aggiunge le 16 categorie legacy dopo l'opzione iniziale.
+function initCategoryOptions(root: Document) {
+  root.querySelectorAll<HTMLElement>('[data-marketplace-treatment-list="categories"]').forEach((list) => {
+    const options = list.querySelectorAll("[data-marketplace-treatment-option]");
+    if (options.length > 1) return; // già completa (list/search/detail/account)
+    list.insertAdjacentHTML(
+      "beforeend",
+      PICKER_CATEGORIES.map((cat) => {
+        const label = escapeHtml(cat.category);
+        return (
+          `<button class="marketplace-topbar-treatment-option" type="button" role="option" aria-selected="false"` +
+          ` data-marketplace-treatment-option data-treatment-category="${label}" data-treatment-query=""` +
+          ` data-treatment-service="" data-treatment-label="${label}" data-treatment-search="${escapeHtml(cat.category + " " + cat.slug)}">` +
+          `<span class="marketplace-topbar-treatment-icon"><i class="bi ${cat.icon}" aria-hidden="true"></i></span>` +
+          `<span class="marketplace-topbar-treatment-copy"><span class="marketplace-topbar-treatment-name">${label}</span></span>` +
+          `</button>`
+        );
+      }).join(""),
+    );
+  });
+}
+
+// Popola la tab "Attività" (salons) del picker come il legacy (che la rende
+// server-side): un option per attività, se la lista è ancora vuota.
+function initSalonOptions(root: Document, salons: SalonOption[]) {
+  if (!salons.length) return;
+  root.querySelectorAll<HTMLElement>('[data-marketplace-treatment-list="salons"]').forEach((list) => {
+    if (list.querySelector("[data-marketplace-treatment-option]")) return; // già popolata
+    list.innerHTML = salons
+      .map((salon) => {
+        const safeName = escapeHtml(salon.name);
+        const safeMeta = escapeHtml(salon.meta);
+        const search = escapeHtml(`${salon.name} ${salon.meta} ${salon.name}`.trim());
+        return (
+          `<button class="marketplace-topbar-treatment-option" type="button" role="option" aria-selected="false"` +
+          ` data-marketplace-treatment-option data-treatment-category="" data-treatment-query="${safeName}"` +
+          ` data-treatment-service="" data-treatment-label="${safeName}" data-treatment-search="${search}">` +
+          `<span class="marketplace-topbar-treatment-avatar">${escapeHtml(salon.initial)}</span>` +
+          `<span class="marketplace-topbar-treatment-copy">` +
+          `<span class="marketplace-topbar-treatment-name">${safeName}</span>` +
+          (safeMeta ? `<span class="marketplace-topbar-treatment-meta">${safeMeta}</span>` : "") +
+          `</span></button>`
+        );
+      })
+      .join("");
+  });
 }
 
 function initTreatmentPickers(root: Document) {
@@ -502,12 +583,15 @@ export function useMarketplacePageEffects(deps: unknown[] = [], options: { login
   useEffect(() => {
     const root = document;
     applyImageEffects(root);
+    initCategoryOptions(root); // completa le categorie nei picker "corti" (auth)
     initTreatmentPickers(root);
     initFavoriteButtons(root, loginUrl);
     initShareButtons(root);
     let cancelled = false;
-    void loadCitySuggestions().then((cities) => {
-      if (!cancelled) initCitySuggestions(root, cities);
+    void loadMarketplaceData().then(({ cities, salons }) => {
+      if (cancelled) return;
+      initSalonOptions(root, salons); // tab "Attività" del picker (legacy server-side)
+      initCitySuggestions(root, cities);
     });
     return () => {
       cancelled = true;

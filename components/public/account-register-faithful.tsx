@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import { useMarketplacePageEffects } from "@/components/public/marketplace-shared";
 import { accountAuthDestination } from "@/components/public/account-auth-destination";
 
 // Pixel-faithful port of the legacy PHP public CUSTOMER ACCOUNT register page
@@ -179,6 +180,10 @@ export function AccountRegisterFaithful() {
     const query = params.toString();
     return query ? `?${query}` : "";
   })();
+
+  // Cabla il picker della topbar (categorie/attività/città) come le altre
+  // pagine marketplace.
+  useMarketplacePageEffects([]);
 
   return (
     <>

@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import { useMarketplacePageEffects } from "@/components/public/marketplace-shared";
 
 // Pixel-faithful port of the legacy PHP public CUSTOMER ACCOUNT
 // "reset password" page served at http://localhost/account/reset
@@ -147,6 +148,10 @@ export function AccountResetFaithful() {
       setBusy(false);
     }
   }
+
+  // Cabla il picker della topbar (categorie/attività/città) come le altre
+  // pagine marketplace.
+  useMarketplacePageEffects([]);
 
   return (
     <>

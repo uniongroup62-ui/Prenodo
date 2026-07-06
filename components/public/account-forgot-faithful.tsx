@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import { useMarketplacePageEffects } from "@/components/public/marketplace-shared";
 
 // Pixel-faithful port of the legacy PHP public CUSTOMER ACCOUNT
 // "forgot password" page served at http://localhost/account/forgot
@@ -139,6 +140,10 @@ export function AccountForgotFaithful() {
     const query = params.toString();
     return query ? `?${query}` : "";
   })();
+
+  // Cabla il picker della topbar (categorie/attività/città) come le altre
+  // pagine marketplace.
+  useMarketplacePageEffects([]);
 
   return (
     <>

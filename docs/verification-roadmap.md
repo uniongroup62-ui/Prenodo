@@ -6105,3 +6105,35 @@ PHP live (topbar → treatment picker → panel), unica differenza risolta era i
 filter input. 46/46 marker account + 100/100 marketplace, batterie
 e2e-account-faithful 15/15, e2e-marketplace 24/24, e2e-booking-marketplace
 26/26, e2e-public-area 14/14 CLEAN; typecheck pulito.
+
+## MARKETPLACE — SESTA PASSATA: audit grafico completo (titoli, picker categorie/salons, CSS per pagina) (2026-07-06)
+Audit sistematico di TUTTE le pagine marketplace (/, /attivita, ricerca,
+dettaglio, sede, auth) con diff CSS + DOM skeleton + testi vs PHP live.
+Delta trovati e corretti:
+- **Titoli <title>**: root era "BeautySuite - Prenota..." → "Cerca attività"
+  (legacy); le 5 pagine auth (login/register/verify/forgot/reset) avevano
+  titoli diversi → "Area cliente - BeautySuite" (unico titolo legacy per
+  tutte); scheda dettaglio/sede: il tab mostra ora il NOME attività ("elite")
+  via document.title client-side (era lo slug), come il legacy server-side.
+- **Picker ricerca nelle pagine AUTH mai cablato**: login/register/verify/
+  forgot/reset avevano il picker con solo "Tutte le attività" (mancavano le
+  16 categorie) e nessun wiring (dropdown non si apriva). Aggiunto
+  useMarketplacePageEffects + iniezione client-side delle 16 categorie
+  legacy (initCategoryOptions: solo nei picker "corti") → dropdown completo
+  e funzionante ovunque.
+- **Tab "Attività" (salons) del picker vuota**: il legacy la rende server-side
+  con una voce per attività (avatar + nome + meta 'categoria - città -
+  provincia'). initSalonOptions ora la popola client-side da /api/marketplace
+  in tutte le topbar (list/search/detail/account/auth).
+- **Filter input del picker** aggiunto anche in account + ricerca (mancava)
+  → DOM skeleton del treatment panel identico al PHP.
+Confermato che i CSS caricati per pagina combaciano col PHP: marketplace
+(list/search/detail/sede/root) → public_marketplace.css; auth+account →
+app.css + public_account.css + topbar inline. Le differenze residue nello
+skeleton SSR (tenant-card, salon-service-group, salon-side-info) sono il
+pattern client-render dell'intera area pubblica (dati caricati via fetch,
+markup presente nel bundle e reso dopo l'hydration).
+Battery: e2e-marketplace.mjs 28/28 (incl. G: titoli, picker categorie auth,
+salon data, document.title dettaglio, CSS per pagina) + regressioni
+e2e-public-area 14/14, e2e-account-faithful 15/15, e2e-booking-marketplace
+26/26 CLEAN; 100/100 + 46/46 marker; typecheck/lint puliti.

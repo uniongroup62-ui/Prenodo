@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { AccountFaithful } from "@/components/public/account-faithful";
 
 export const metadata: Metadata = {
-  title: "Profilo - Account cliente",
+  title: "Area cliente - BeautySuite",
 };
 
 export default function AccountProfilePage() {

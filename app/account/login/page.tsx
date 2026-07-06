@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { AccountLoginFaithful } from "@/components/public/account-login-faithful";
 
 export const metadata: Metadata = {
-  title: "Accedi al tuo account - BeautySuite",
+  title: "Area cliente - BeautySuite",
 };
 
 export default function AccountLoginPage() {
