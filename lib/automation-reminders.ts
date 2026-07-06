@@ -3,6 +3,7 @@ import "server-only";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { columnExists, dbExecute, dbQuery, tenantInsert, tenantSelect, tenantTable } from "@/lib/tenant-db";
 import { normalizeSmsRecipient } from "@/lib/sms";
+import { fidelityCardExpiryReminderConfig } from "@/lib/manage-feature-settings";
 
 // Port fedele dello scheduling promemoria legacy (Helpers.php
 // automation_schedule_reminder ~9315-9413 + automation_clear_pending_reminders
@@ -240,11 +241,11 @@ export async function saveAutomationSettings(slug: string, body: Record<string, 
     sms_reminder_hours: normalizeReminderHours(body.sms_reminder_hours, reminderHours),
     sms_reminder_sender: "Prenodo",
   };
-  // Il toggle Fidelity viene toccato solo se il form lo invia (nel legacy e'
-  // disabilitato finche' validita' tessera + finestra rinnovo non sono configurate).
-  if (body.fidelity_expiry_reminder_enabled !== undefined) {
-    values.fidelity_expiry_reminder_enabled = isOn(body.fidelity_expiry_reminder_enabled) ? 1 : 0;
-  }
+  // Guardia legacy (automation.php 48): il toggle Fidelity viene salvato a 1
+  // SOLO se durata tessera + finestra rinnovo sono configurate; il POST del
+  // form legacy è sempre completo, quindi il flag viene azzerato se assente.
+  const fidelityConfig = await fidelityCardExpiryReminderConfig(slug).catch(() => ({ configOk: false, validityLabel: "0 giorni", windowLabel: "0 giorni" }));
+  values.fidelity_expiry_reminder_enabled = fidelityConfig.configOk && isOn(body.fidelity_expiry_reminder_enabled) ? 1 : 0;
 
   const table = await tenantTable(slug, "automation_settings");
   const filtered: Record<string, unknown> = {};
@@ -284,4 +285,148 @@ export async function saveAutomationSettings(slug: string, body: Record<string, 
   }
 
   return getAutomationSettings(slug);
+}
+
+// ---------------------------------------------------------------------------
+// Contesto della PAGINA Automazione (automation.php 10-130): saldo crediti
+// SMS, esempi email/SMS costruiti con la cancel policy del booking, conteggio
+// segmenti, pacchetti SMS del listino centrale e config Fidelity.
+// ---------------------------------------------------------------------------
+
+// Port di sms_credit_segment_count (Helpers.php 9193-9226): GSM-7 basic (1
+// unità) + extended (2 unità); non-GSM → UCS-2 (70/67 per segmento).
+const GSM_BASIC = "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà";
+const GSM_EXTENDED = "^{}\\[~]|€";
+
+export function smsSegmentCount(message: string): number {
+  const text = message.trim();
+  if (text === "") return 0;
+  let gsmUnits = 0;
+  let gsm = true;
+  for (const ch of text) {
+    if (GSM_BASIC.includes(ch)) gsmUnits += 1;
+    else if (GSM_EXTENDED.includes(ch)) gsmUnits += 2;
+    else {
+      gsm = false;
+      break;
+    }
+  }
+  if (gsm) return gsmUnits <= 160 ? 1 : Math.ceil(gsmUnits / 153);
+  const len = Array.from(text).length;
+  return len <= 70 ? 1 : Math.ceil(len / 67);
+}
+
+// number_format legacy (virgola decimali, punto migliaia) + valuta.
+function smsMoney(value: number, currency = "EUR", decimals = 2): string {
+  const fixed = Number(value || 0).toFixed(decimals);
+  const [intPart, decPart] = fixed.split(".");
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return `${grouped},${decPart} ${(currency.slice(0, 3) || "EUR").toUpperCase()}`;
+}
+
+export type AutomationPageContext = {
+  businessName: string;
+  smsCreditBalance: number;
+  emailCancellationNotice: string;
+  smsExampleText: string;
+  smsExampleSegments: number;
+  smsExampleCreditsLabel: string;
+  fidelity: { configOk: boolean; validityLabel: string; windowLabel: string };
+  smsPlans: Array<{
+    id: number;
+    name: string;
+    credits: number;
+    priceLabel: string;
+    pricePerCreditLabel: string;
+    description: string;
+    isFeatured: boolean;
+  }>;
+  smsDefaultPlanId: number;
+  smsPlansError: string;
+};
+
+export async function getAutomationPageContext(slug: string): Promise<AutomationPageContext> {
+  const bizRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "businesses",
+    columns: "name, booking_customer_cancel_enabled, booking_customer_cancel_before_value, booking_customer_cancel_before_unit",
+    orderBy: "id ASC",
+    limit: 1,
+  }).catch(() => [] as RowDataPacket[]);
+  const biz = bizRows[0] ?? ({} as RowDataPacket);
+  const businessName = String(biz.name ?? "").trim() || "La mia attivita";
+
+  // booking_customer_cancel_policy (Helpers.php 5384-5416) → gli avvisi di
+  // annullo negli esempi email/SMS (automation.php 75-98).
+  let emailCancellationNotice = "";
+  let smsCancellationNotice = "";
+  if (Number(biz.booking_customer_cancel_enabled ?? 0) === 1) {
+    let value = Math.max(0, Math.trunc(Number(biz.booking_customer_cancel_before_value ?? 0) || 0));
+    let unit = String(biz.booking_customer_cancel_before_unit ?? "hours").trim().toLowerCase();
+    if (unit !== "hours" && unit !== "days") unit = "hours";
+    if (unit === "days" && value > 365) value = 365;
+    if (unit === "hours" && value > 8760) value = 8760;
+    const label = value <= 0
+      ? "fino all'inizio dell'appuntamento"
+      : `${value} ${unit === "days" ? (value === 1 ? "giorno" : "giorni") : (value === 1 ? "ora" : "ore")}`;
+    if (value <= 0 || label === "fino all'inizio dell'appuntamento") {
+      emailCancellationNotice = "Puoi annullare l'appuntamento fino all'inizio dell'appuntamento.";
+      smsCancellationNotice = "Annulla fino all'inizio.";
+    } else {
+      emailCancellationNotice = `Puoi annullare l'appuntamento fino a ${label} prima.`;
+      smsCancellationNotice = `Annulla entro ${label}.`;
+    }
+  }
+
+  let smsExampleText = "Ciao, ti ricordiamo l'appuntamento da Sede1 il 22/06 alle 09:00.";
+  if (smsCancellationNotice !== "") smsExampleText += ` ${smsCancellationNotice}`;
+  smsExampleText += " Non rispondere a questo SMS. Per assistenza: 3756266694.";
+  const smsExampleSegments = Math.max(1, smsSegmentCount(smsExampleText));
+
+  // sms_credit_wallet_row: prima riga wallet del tenant (0 se assente).
+  const walletRows = await tenantSelect<RowDataPacket>({ slug, table: "sms_credit_wallet", columns: "balance_credits", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const smsCreditBalance = Math.max(0, Number(walletRows[0]?.balance_credits ?? 0) || 0);
+
+  // SaasSmsBilling::plans(false): listino centrale attivo, featured in testa
+  // come default; prezzi formattati come il legacy ($smsMoney).
+  let smsPlans: AutomationPageContext["smsPlans"] = [];
+  let smsPlansError = "";
+  try {
+    const rows = await dbQuery<RowDataPacket[]>(
+      "SELECT id, name, credits, price_gross, currency, is_featured, description FROM saas_sms_plans WHERE is_active=1 ORDER BY sort_order ASC, id ASC",
+    );
+    smsPlans = rows.map((row) => {
+      const credits = Math.max(1, Number(row.credits ?? 0) || 0);
+      const price = Number(row.price_gross ?? 0) || 0;
+      const currency = String(row.currency ?? "EUR");
+      return {
+        id: Number(row.id ?? 0),
+        name: String(row.name ?? ""),
+        credits,
+        priceLabel: smsMoney(price, currency),
+        pricePerCreditLabel: smsMoney(credits > 0 ? price / credits : 0, currency, 4),
+        description: String(row.description ?? ""),
+        isFeatured: Number(row.is_featured ?? 0) === 1,
+      };
+    });
+  } catch {
+    smsPlansError = "Pacchetti SMS momentaneamente non disponibili.";
+  }
+  let smsDefaultPlanId = smsPlans.find((plan) => plan.isFeatured)?.id ?? 0;
+  if (smsDefaultPlanId <= 0 && smsPlans.length) smsDefaultPlanId = smsPlans[0].id;
+
+  const fidelity = await fidelityCardExpiryReminderConfig(slug).catch(() => ({ configOk: false, validityLabel: "0 giorni", windowLabel: "0 giorni" }));
+
+  return {
+    businessName,
+    smsCreditBalance,
+    emailCancellationNotice,
+    smsExampleText,
+    smsExampleSegments,
+    smsExampleCreditsLabel: smsExampleSegments === 1 ? "1 credito" : `${smsExampleSegments} crediti`,
+    fidelity,
+    smsPlans,
+    smsDefaultPlanId,
+    smsPlansError,
+  };
 }

@@ -1000,6 +1000,15 @@ export default async function TenantPage({
     );
   }
 
+  // Automazione (automation.php): flash ?msg=Automazione salvata dal redirect.
+  if (page === "automation") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <AutomationContent slug={tenantSlug} initialQuery={{ msg: query.msg }} />
+      </ManageShell>
+    );
+  }
+
   // Ruoli (roles.php): ruolo selezionato + flash ?msg/?err dai redirect legacy
   // ('Permessi Staff aggiornati' / errori validazione modulo).
   if (page === "roles") {

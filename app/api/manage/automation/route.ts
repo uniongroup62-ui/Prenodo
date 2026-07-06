@@ -1,5 +1,5 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
-import { getAutomationSettings, saveAutomationSettings } from "@/lib/automation-reminders";
+import { getAutomationPageContext, getAutomationSettings, saveAutomationSettings } from "@/lib/automation-reminders";
 import { listDbAutomationRules, runDbAutomationRule, toggleDbAutomationRule } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -22,6 +22,9 @@ export async function GET(request: Request) {
       // Impostazioni complete della pagina Automazione (toggle + ore invio),
       // cosi' il form puo' prefillarsi come il legacy (automation.php).
       settings: await getAutomationSettings(tenantSlug),
+      // Contesto pagina legacy: saldo crediti SMS, esempi con cancel policy,
+      // pacchetti SMS del listino centrale, config promemoria Fidelity.
+      page: await getAutomationPageContext(tenantSlug),
     });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Errore automazione.");

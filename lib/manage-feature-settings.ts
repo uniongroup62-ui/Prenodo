@@ -447,6 +447,35 @@ function localTodayYmd(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// Config effettiva del promemoria scadenza tessera per la pagina Automazione
+// (fidelity_card_default_validity_config + fidelity_card_renewal_window_config
+// legacy): value effettivo 0 quando l'interruttore è spento; il toggle in
+// Automazione si abilita solo con durata E finestra > 0.
+export async function fidelityCardExpiryReminderConfig(slug: string): Promise<{
+  configOk: boolean;
+  validityLabel: string;
+  windowLabel: string;
+}> {
+  const businessRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_adhesion_json", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const adhesion = parseAdhesion(businessRows[0]?.fidelity_adhesion_json);
+  const expiryEnabled = cardExpiryEnabled(adhesion);
+  const validityUnit = normalizeUnit(adhesion.card_default_validity_unit);
+  const validityValue = expiryEnabled ? normalizeValidityValue(adhesion.card_default_validity_value) : 0;
+  const renewalEnabled = renewalStoredEnabled(adhesion);
+  const clamp = clampRenewalWindow(
+    normalizeValidityValue(adhesion.renewal_window_value),
+    normalizeUnit(adhesion.renewal_window_unit),
+    normalizeValidityValue(adhesion.card_default_validity_value),
+    validityUnit,
+  );
+  const windowValue = renewalEnabled ? clamp.value : 0;
+  return {
+    configOk: validityValue > 0 && windowValue > 0,
+    validityLabel: durationLabel(validityValue, validityUnit),
+    windowLabel: durationLabel(windowValue, clamp.unit),
+  };
+}
+
 export async function getFidelityMembershipSettings(slug: string): Promise<ConfigModuleState> {
   const businessRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", orderBy: "id ASC", limit: 1 });
   const row = businessRows[0] ?? ({} as RowDataPacket);

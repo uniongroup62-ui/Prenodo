@@ -5747,3 +5747,61 @@ integrale role_permissions + audit) + LIVE PHP byte-per-byte (redirect
 senza figlio ereditato, err modulo verbatim, 'Permessi Altro aggiornati'
 con packages.access auto; live ripristinato) + 35/35 marker + regressioni
 (auth-roles 16, residui-check 8) + typecheck/lint puliti.
+
+## AUDIT COMPLETO — Automazione (automation.php, seconda passata) (2026-07-06)
+
+Audit funzionale completo di automation.php (537 righe) vs
+automation-content.tsx + automation-reminders.ts + route automation. La V7
+aveva fixato i gap gravi del backend (reminders mai creati, save su route
+inesistente); la PAGINA aveva ancora molti dati FINTI:
+1. SALDO CREDITI SMS hardcoded '0 crediti' (card + modale): ora dal wallet
+   reale (sms_credit_wallet del tenant, port sms_credit_wallet_row) — era
+   il differito "saldo SMS reale" di V7.
+2. BADGE 'Stato promemoria SMS' hardcoded 'Attivo' verde: ora dai settings
+   salvati (Attivo/Disattivo come il legacy).
+3. ESEMPI email/SMS hardcoded ('Puoi annullare ... fino a 24 ore prima.'
+   fisso): ora costruiti server-side col port di
+   booking_customer_cancel_policy (Helpers 5384-5416) — notice email
+   'Puoi annullare l'appuntamento fino a {label} prima.' / 'fino
+   all'inizio dell'appuntamento.' / ASSENTE con policy off, notice SMS
+   'Annulla entro {label}.' / 'Annulla fino all'inizio.', singolare/
+   plurale (1 ora/N ore, 1 giorno/N giorni), clamp 365gg/8760h; nome
+   attività reale (fallback 'La mia attivita') al posto di 'elite' fisso.
+4. COSTO STIMATO hardcoded '1 credito': ora da smsSegmentCount (port GSM-7
+   di sms_credit_segment_count: basic 1 unità/extended 2, 160/153; UCS-2
+   70/67) sul testo d'esempio reale; l'avviso 'Crediti SMS insufficienti'
+   era mostrato SEMPRE — ora solo con promemoria SMS attivo e saldo
+   insufficiente (condizione legacy).
+5. PACCHETTI SMS hardcoded (4 piani copiati): ora dal listino centrale
+   saas_sms_plans (attivi, sort legacy, featured='Consigliato' e default
+   selezionato, prezzi number_format it '17,50 EUR' e per-credito a 4
+   decimali '0,0700 EUR', descrizione) con gli stati legacy 'Nessun
+   pacchetto SMS disponibile al momento.' / 'Pacchetti SMS momentaneamente
+   non disponibili.'.
+6. FIDELITY: il toggle era SEMPRE disabled col warning fisso — ora
+   fidelityCardExpiryReminderConfig (port di fidelity_card_default_
+   validity_config + renewal_window_config da fidelity_adhesion_json,
+   value effettivo 0 a interruttore spento, clamp finestra, label
+   legacy '6 mesi'/'30 giorni') decide warning vs box 'Configurazione
+   attuale: durata tessera X • finestra rinnovo Y.' e abilita il toggle;
+   il save ora INVIA il flag e la lib applica la guardia legacy
+   (automation.php 48): salvato 1 solo con config ok, azzerato quando il
+   POST non lo contiene (form completo legacy) — prima il flag non veniva
+   mai inviato e in lib veniva toccato solo se presente.
+7. FLASH legacy: 'Automazione salvata' come View::alert SOPRA il page
+   header (prima alert dentro il form) + initialQuery ?msg= (branch
+   page.tsx) + scroll top; rimosso il fetch delle rules generiche non
+   più usato dal prefill.
+Verifica: battery NUOVA e2e-automation-page 18/18 (context con saldo/
+piani/formattazioni/fidelity-off, 4 varianti cancel policy incl.
+singolare e policy off, wallet dinamico, save con ore+toggle+sender
+Prenodo, guardia fidelity con config non ok, fallback ore invalide
+7→24 e 99→eredita, fidelity configurata → labels e flag salvabile, POST
+senza flag → azzerato; snapshot/restore integrale con save API finale
+che rischedula coi valori originali) + LIVE PHP byte-per-byte (esempi
+con notice 24 ore/1 ora... encodate h(), 'fino all'inizio', policy off,
+redirect msg=Automazione salvata, fallback sms hours 99→12 eredita
+email, saldo '0 crediti' e 'Costo stimato: 1 credito'; live ripristinato
+riga-per-riga incl. sms_reminder_enabled del tenant) + 77/77 marker +
+regressioni (notifications-automation 19, fidelity-membership-settings
+29) + typecheck/lint puliti.

@@ -1,22 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 // Pixel-faithful port of the PHP automation page (app/pages/automation.php,
-// ?page=automation). Original Bootstrap markup preserved verbatim. Toggle
-// states are pre-filled from /api/manage/automation, which exposes a `rules`
-// array; each rule id maps to one of the on/off switches below. The PHP page
-// also renders fields the API does not expose (send-time selects, example
-// texts, SMS credit balance) — those keep their captured defaults. See risks.
-
-type AutomationRule = {
-  id: number;
-  name: string;
-  channel: string;
-  trigger: string;
-  enabled: boolean;
-  createdAt?: string;
-};
+// ?page=automation). Original Bootstrap markup preserved verbatim. The form is
+// prefilled from /api/manage/automation (settings) e il resto della pagina —
+// saldo crediti SMS, badge stato, esempi email/SMS costruiti con la cancel
+// policy del booking, conteggio segmenti, pacchetti SMS del listino centrale,
+// config del promemoria Fidelity — arriva dal `page` context della stessa GET
+// (port di automation.php 10-130). Flash legacy 'Automazione salvata' come
+// View::alert sopra il page header.
 
 type AutomationSettings = {
   reminder_enabled: boolean;
@@ -29,26 +22,56 @@ type AutomationSettings = {
   fidelity_expiry_reminder_enabled: boolean;
 };
 
-const SMS_PLANS = [
-  { value: "1", domId: "smsPlan1", name: "Base", credits: "100", price: "7,00 EUR", pricePerCredit: "0,0700 EUR", note: "Per iniziare con i promemoria SMS.", recommended: false },
-  { value: "2", domId: "smsPlan2", name: "Standard", credits: "250", price: "17,50 EUR", pricePerCredit: "0,0700 EUR", note: "Per attivita con invii regolari.", recommended: true },
-  { value: "3", domId: "smsPlan3", name: "Pro", credits: "500", price: "35,00 EUR", pricePerCredit: "0,0700 EUR", note: "Per volumi mensili piu alti.", recommended: false },
-  { value: "4", domId: "smsPlan4", name: "Business", credits: "1000", price: "70,00 EUR", pricePerCredit: "0,0700 EUR", note: "Per tenant con molti appuntamenti.", recommended: false },
-] as const;
+type SmsPlan = {
+  id: number;
+  name: string;
+  credits: number;
+  priceLabel: string;
+  pricePerCreditLabel: string;
+  description: string;
+  isFeatured: boolean;
+};
+
+type PageContext = {
+  businessName: string;
+  smsCreditBalance: number;
+  emailCancellationNotice: string;
+  smsExampleText: string;
+  smsExampleSegments: number;
+  smsExampleCreditsLabel: string;
+  fidelity: { configOk: boolean; validityLabel: string; windowLabel: string };
+  smsPlans: SmsPlan[];
+  smsDefaultPlanId: number;
+  smsPlansError: string;
+};
 
 function tenantSlug(): string {
   if (typeof window === "undefined") return "";
   return window.location.pathname.split("/")[1] || "";
 }
 
-export function AutomationContent({ slug: slugProp }: { slug?: string } = {}) {
+type Flash = { text: string; type: "success" | "danger" };
+
+export function AutomationContent({
+  slug: slugProp,
+  initialQuery,
+}: { slug?: string; initialQuery?: { msg?: string } } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
-  const [rules, setRules] = useState<AutomationRule[]>([]);
   const [settings, setSettings] = useState<AutomationSettings | null>(null);
-  const [saveMessage, setSaveMessage] = useState<string>("");
+  const [page, setPage] = useState<PageContext | null>(null);
   const [saving, setSaving] = useState(false);
+  const [selectedPlan, setSelectedPlan] = useState(0);
+  // Flash legacy (View::alert msg success sopra il page header).
+  const [flash, setFlash] = useState<Flash | null>(() =>
+    initialQuery?.msg ? { text: String(initialQuery.msg), type: "success" } : null,
+  );
+
+  const showFlash = useCallback((next: Flash | null) => {
+    setFlash(next);
+    if (next && typeof window !== "undefined") window.scrollTo({ top: 0 });
+  }, []);
 
   useEffect(() => {
     fetch(`/api/manage/automation?slug=${encodeURIComponent(slug)}`, {
@@ -56,35 +79,38 @@ export function AutomationContent({ slug: slugProp }: { slug?: string } = {}) {
     })
       .then((r) => r.json())
       .then((j) => {
-        setRules(Array.isArray(j.rules) ? j.rules : []);
         setSettings(j.settings ?? null);
+        const ctx = (j.page ?? null) as PageContext | null;
+        setPage(ctx);
+        if (ctx) setSelectedPlan(ctx.smsDefaultPlanId || ctx.smsPlans[0]?.id || 0);
       })
-      .catch(() => setRules([]));
+      .catch(() => setSettings(null));
   }, [slug]);
 
-  const enabledById = useMemo(() => {
-    const map: Record<number, boolean> = {};
-    for (const rule of rules) map[rule.id] = !!rule.enabled;
-    return map;
-  }, [rules]);
-
-  // Prefill dai settings API (port automation_settings); i toggle modified/
-  // rejected ora sono esposti direttamente, fallback sulle rules legacy-shape.
-  const reminderEnabled = settings?.reminder_enabled ?? enabledById[1] ?? true;
-  const smsReminderEnabled = settings?.sms_reminder_enabled ?? enabledById[2] ?? true;
-  const approvedEnabled = settings?.approved_enabled ?? enabledById[3] ?? true;
-  const fidelityExpiryEnabled = settings?.fidelity_expiry_reminder_enabled ?? enabledById[4] ?? false;
+  const fidelityConfigOk = page?.fidelity?.configOk ?? false;
+  const reminderEnabled = settings?.reminder_enabled ?? true;
+  const smsReminderEnabled = settings?.sms_reminder_enabled ?? true;
+  const approvedEnabled = settings?.approved_enabled ?? true;
+  const fidelityExpiryEnabled = fidelityConfigOk && (settings?.fidelity_expiry_reminder_enabled ?? false);
   const modifiedEnabled = settings?.modified_enabled ?? true;
   const rejectedEnabled = settings?.rejected_enabled ?? true;
 
+  const businessName = page?.businessName ?? "La mia attivita";
+  const smsCreditBalance = page?.smsCreditBalance ?? 0;
+  const smsCreditsLabel = page?.smsExampleCreditsLabel ?? "1 credito";
+  const smsSegments = Math.max(1, page?.smsExampleSegments ?? 1);
+  // Avviso legacy: solo con promemoria SMS attivo (valore SALVATO) e saldo
+  // insufficiente per un invio d'esempio.
+  const showSmsCreditsWarning = Boolean(settings?.sms_reminder_enabled) && smsCreditBalance < smsSegments;
+  const summaryPlan = page?.smsPlans.find((p) => p.id === selectedPlan);
+
   // Salvataggio (port del POST di automation.php): invia toggle + ore all'API,
-  // che persiste e rischedula i promemoria futuri; alert "Automazione salvata".
+  // che persiste e rischedula i promemoria futuri; flash "Automazione salvata".
   const submitSave = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const flag = (name: string) => (form.get(name) ? "1" : "0");
     setSaving(true);
-    setSaveMessage("");
     try {
       const response = await fetch(`/api/manage/automation?slug=${encodeURIComponent(slug)}`, {
         method: "POST",
@@ -98,28 +124,34 @@ export function AutomationContent({ slug: slugProp }: { slug?: string } = {}) {
           approved_enabled: flag("approved_enabled"),
           modified_enabled: flag("modified_enabled"),
           rejected_enabled: flag("rejected_enabled"),
+          fidelity_expiry_reminder_enabled: flag("fidelity_expiry_reminder_enabled"),
         }),
       });
       const json = await response.json().catch(() => ({}));
       if (json.ok) {
         setSettings(json.settings ?? null);
-        setSaveMessage(json.message || "Automazione salvata");
+        showFlash({ text: String(json.message || "Automazione salvata"), type: "success" });
       } else {
-        setSaveMessage(json.error || "Errore salvataggio automazione.");
+        showFlash({ text: String(json.error || "Errore automazione."), type: "danger" });
       }
     } catch {
-      setSaveMessage("Errore salvataggio automazione.");
+      showFlash({ text: "Errore automazione.", type: "danger" });
     } finally {
       setSaving(false);
     }
   };
 
-  // SMS top-up plan selection (mirrors the inline PHP script behaviour).
-  const [selectedPlan, setSelectedPlan] = useState<string>("2");
-  const summaryPlan = SMS_PLANS.find((p) => p.value === selectedPlan);
-
   return (
     <div className="container-fluid">
+
+      {flash ? (
+        <div className={`alert alert-${flash.type} d-flex align-items-start gap-2`}>
+          <div>
+            <i className="bi bi-info-circle" />
+          </div>
+          <div>{flash.text}</div>
+        </div>
+      ) : null}
 
       <div className="bs-page-header">
         <div className="bs-page-heading">
@@ -136,9 +168,6 @@ export function AutomationContent({ slug: slugProp }: { slug?: string } = {}) {
             <div className="text-muted small">Invia una email prima dell&apos;appuntamento al cliente con indirizzo email valido. Il promemoria parte solo per appuntamenti in stato <strong>Prenotato</strong>.</div>
 
             <form className="mt-3" onSubmit={submitSave}>
-              {saveMessage ? (
-                <div className={`alert ${saveMessage === "Automazione salvata" ? "alert-success" : "alert-danger"} py-2`}>{saveMessage}</div>
-              ) : null}
               <div className="row g-3">
                 <div className="col-12">
                   <div className="form-check form-switch">
@@ -162,10 +191,14 @@ export function AutomationContent({ slug: slugProp }: { slug?: string } = {}) {
                     <div className="small text-muted">
                       Ciao,<br /><br />
                       ti ricordiamo il tuo appuntamento presso Sede1 il 22/06 alle 09:00 per Taglio, Colore e Piega.<br />
-                      Puoi annullare l&apos;appuntamento fino a 24 ore prima.<br />
+                      {page?.emailCancellationNotice ? (
+                        <>
+                          {page.emailCancellationNotice}<br />
+                        </>
+                      ) : null}
                       Per assistenza contattaci al 3756266694.<br /><br />
                       Saluti,<br />
-                      elite
+                      {businessName}
                     </div>
                   </div>
                 </div>
@@ -194,19 +227,21 @@ export function AutomationContent({ slug: slugProp }: { slug?: string } = {}) {
                   </select>
                 </div>
 
-                <div className="col-12">
-                  <div className="alert alert-warning py-2 mb-0 small">
-                    Crediti SMS insufficienti: il promemoria resterà attivo, ma gli invii verranno bloccati finché non saranno disponibili crediti.
+                {showSmsCreditsWarning ? (
+                  <div className="col-12">
+                    <div className="alert alert-warning py-2 mb-0 small">
+                      Crediti SMS insufficienti: il promemoria resterà attivo, ma gli invii verranno bloccati finché non saranno disponibili crediti.
+                    </div>
                   </div>
-                </div>
+                ) : null}
 
                 <div className="col-12">
                   <div className="alert alert-light border mb-0">
                     <div className="fw-semibold mb-2">Esempio</div>
                     <div className="small text-muted">
-                      Ciao, ti ricordiamo l&apos;appuntamento da Sede1 il 22/06 alle 09:00. Annulla entro 24 ore. Non rispondere a questo SMS. Per assistenza: 3756266694.
+                      {page?.smsExampleText ?? "Ciao, ti ricordiamo l'appuntamento da Sede1 il 22/06 alle 09:00. Non rispondere a questo SMS. Per assistenza: 3756266694."}
                     </div>
-                    <div className="small text-muted mt-2">Costo stimato: <strong>1 credito</strong> per invio. Se il testo supera un singolo SMS, il provider può inviarlo in più segmenti.</div>
+                    <div className="small text-muted mt-2">Costo stimato: <strong>{smsCreditsLabel}</strong> per invio. Se il testo supera un singolo SMS, il provider può inviarlo in più segmenti.</div>
                   </div>
                 </div>
 
@@ -218,14 +253,20 @@ export function AutomationContent({ slug: slugProp }: { slug?: string } = {}) {
                 </div>
 
                 <div className="col-12">
-                  <div className="alert alert-warning py-2 mb-0 small">
-                    Per attivare questo promemoria, configura prima la durata della tessera e la finestra di rinnovo in <strong>Fidelity → Adesione → Impostazioni tessera</strong>.
-                  </div>
+                  {!fidelityConfigOk ? (
+                    <div className="alert alert-warning py-2 mb-0 small">
+                      Per attivare questo promemoria, configura prima la durata della tessera e la finestra di rinnovo in <strong>Fidelity → Adesione → Impostazioni tessera</strong>.
+                    </div>
+                  ) : (
+                    <div className="alert alert-light border py-2 mb-0 small">
+                      Configurazione attuale: durata tessera <strong>{page?.fidelity.validityLabel}</strong> • finestra rinnovo <strong>{page?.fidelity.windowLabel}</strong>. L&apos;email viene inviata all&apos;apertura della finestra.
+                    </div>
+                  )}
                 </div>
 
                 <div className="col-12">
                   <div className="form-check form-switch">
-                    <input className="form-check-input" type="checkbox" role="switch" id="fidExpiryReminderEnabled" name="fidelity_expiry_reminder_enabled" value="1" defaultChecked={fidelityExpiryEnabled} key={`f-${fidelityExpiryEnabled}`} disabled />
+                    <input className="form-check-input" type="checkbox" role="switch" id="fidExpiryReminderEnabled" name="fidelity_expiry_reminder_enabled" value="1" defaultChecked={fidelityExpiryEnabled} key={`f-${fidelityExpiryEnabled}-${fidelityConfigOk}`} disabled={!fidelityConfigOk} />
                     <label className="form-check-label" htmlFor="fidExpiryReminderEnabled">Attiva promemoria Fidelity</label>
                   </div>
                 </div>
@@ -239,7 +280,7 @@ export function AutomationContent({ slug: slugProp }: { slug?: string } = {}) {
                       Per mantenerla attiva, effettua un acquisto o completa un appuntamento entro il 22/07.<br />
                       Il rinnovo verrà applicato automaticamente.<br /><br />
                       Saluti,<br />
-                      elite
+                      {businessName}
                     </div>
                   </div>
                 </div>
@@ -269,7 +310,7 @@ export function AutomationContent({ slug: slugProp }: { slug?: string } = {}) {
                       Via Tremiti 6, 00100 Roma (RM)<br />
                       Per assistenza contattaci al 3756266694.<br /><br />
                       Saluti,<br />
-                      elite
+                      {businessName}
                     </div>
                   </div>
                 </div>
@@ -299,7 +340,7 @@ export function AutomationContent({ slug: slugProp }: { slug?: string } = {}) {
                       Via Tremiti 6, 00100 Roma (RM)<br />
                       Per assistenza contattaci al 3756266694.<br /><br />
                       Saluti,<br />
-                      elite
+                      {businessName}
                     </div>
                   </div>
                 </div>
@@ -324,7 +365,7 @@ export function AutomationContent({ slug: slugProp }: { slug?: string } = {}) {
                       purtroppo non possiamo confermare l&apos;appuntamento richiesto.<br />
                       Per assistenza contattaci al 3756266694.<br /><br />
                       Saluti,<br />
-                      elite
+                      {businessName}
                     </div>
                   </div>
                 </div>
@@ -344,15 +385,17 @@ export function AutomationContent({ slug: slugProp }: { slug?: string } = {}) {
             <div className="fw-semibold mb-2">Riepilogo credito</div>
             <div className="d-flex justify-content-between align-items-center mb-2">
               <span className="small text-muted">Saldo disponibile</span>
-              <span className="fw-bold">0 crediti</span>
+              <span className="fw-bold">{smsCreditBalance} crediti</span>
             </div>
             <div className="d-flex justify-content-between align-items-center mb-2">
               <span className="small text-muted">Stato promemoria SMS</span>
-              <span className="badge bg-success">Attivo</span>
+              <span className={`badge ${settings?.sms_reminder_enabled ? "bg-success" : "bg-secondary"}`}>
+                {settings?.sms_reminder_enabled ? "Attivo" : "Disattivo"}
+              </span>
             </div>
             <div className="d-flex justify-content-between align-items-center">
               <span className="small text-muted">Costo stimato per invio</span>
-              <span className="fw-semibold">1 credito</span>
+              <span className="fw-semibold">{smsCreditsLabel}</span>
             </div>
 
             <div className="small text-muted mt-3">
@@ -398,73 +441,81 @@ export function AutomationContent({ slug: slugProp }: { slug?: string } = {}) {
             <div className="modal-body">
               <div className="d-flex justify-content-between align-items-center border rounded-3 p-3 mb-3">
                 <span className="small text-muted">Saldo attuale</span>
-                <span className="fw-bold">0 crediti</span>
+                <span className="fw-bold">{smsCreditBalance} crediti</span>
               </div>
 
-              <div className="small text-muted mb-3">
-                Scegli un pacchetto. I crediti verranno scalati automaticamente quando il sistema invia un SMS.
-              </div>
-              <div className="row g-2">
-                {SMS_PLANS.map((plan) => {
-                  const selected = plan.value === selectedPlan;
-                  return (
-                    <div className="col-md-6" key={plan.value}>
-                      <label
-                        className={`d-block border rounded-3 p-3 h-100 ${selected ? "border-primary bg-primary-subtle" : "bg-white"}`}
-                        htmlFor={plan.domId}
-                      >
-                        <div className="d-flex justify-content-between gap-2 align-items-start">
-                          <div>
-                            <input
-                              className="form-check-input me-2"
-                              type="radio"
-                              name="sms_credit_plan"
-                              id={plan.domId}
-                              value={plan.value}
-                              data-sms-plan-option
-                              data-name={plan.name}
-                              data-credits={plan.credits}
-                              data-price={plan.price}
-                              data-price-per-credit={plan.pricePerCredit}
-                              checked={selected}
-                              onChange={() => setSelectedPlan(plan.value)}
-                            />
-                            <span className="fw-semibold">{plan.name}</span>
-                          </div>
-                          {plan.recommended ? <span className="badge bg-primary">Consigliato</span> : null}
+              {page?.smsPlansError ? (
+                <div className="alert alert-warning mb-0">{page.smsPlansError}</div>
+              ) : !page || page.smsPlans.length === 0 ? (
+                <div className="alert alert-light border mb-0">Nessun pacchetto SMS disponibile al momento.</div>
+              ) : (
+                <>
+                  <div className="small text-muted mb-3">
+                    Scegli un pacchetto. I crediti verranno scalati automaticamente quando il sistema invia un SMS.
+                  </div>
+                  <div className="row g-2">
+                    {page.smsPlans.map((plan) => {
+                      const selected = plan.id === selectedPlan;
+                      return (
+                        <div className="col-md-6" key={plan.id}>
+                          <label
+                            className={`d-block border rounded-3 p-3 h-100 ${selected ? "border-primary bg-primary-subtle" : "bg-white"}`}
+                            htmlFor={`smsPlan${plan.id}`}
+                          >
+                            <div className="d-flex justify-content-between gap-2 align-items-start">
+                              <div>
+                                <input
+                                  className="form-check-input me-2"
+                                  type="radio"
+                                  name="sms_credit_plan"
+                                  id={`smsPlan${plan.id}`}
+                                  value={plan.id}
+                                  data-sms-plan-option
+                                  data-name={plan.name}
+                                  data-credits={plan.credits}
+                                  data-price={plan.priceLabel}
+                                  data-price-per-credit={plan.pricePerCreditLabel}
+                                  checked={selected}
+                                  onChange={() => setSelectedPlan(plan.id)}
+                                />
+                                <span className="fw-semibold">{plan.name}</span>
+                              </div>
+                              {plan.isFeatured ? <span className="badge bg-primary">Consigliato</span> : null}
+                            </div>
+                            <div className="mt-2">
+                              <div className="fw-bold">{plan.credits} crediti</div>
+                              <div>{plan.priceLabel}</div>
+                              <div className="small text-muted">{plan.pricePerCreditLabel} per credito</div>
+                              {plan.description ? <div className="small text-muted mt-2">{plan.description}</div> : null}
+                            </div>
+                          </label>
                         </div>
-                        <div className="mt-2">
-                          <div className="fw-bold">{plan.credits} crediti</div>
-                          <div>{plan.price}</div>
-                          <div className="small text-muted">{plan.pricePerCredit} per credito</div>
-                          <div className="small text-muted mt-2">{plan.note}</div>
-                        </div>
-                      </label>
+                      );
+                    })}
+                  </div>
+
+                  <div className="alert alert-light border mt-3 mb-0">
+                    <div className="fw-semibold mb-2">Riepilogo</div>
+                    <div className="d-flex justify-content-between mb-1">
+                      <span className="small text-muted">Pacchetto</span>
+                      <span className="fw-semibold" data-sms-plan-summary="name">{summaryPlan ? summaryPlan.name : "-"}</span>
                     </div>
-                  );
-                })}
-              </div>
-
-              <div className="alert alert-light border mt-3 mb-0">
-                <div className="fw-semibold mb-2">Riepilogo</div>
-                <div className="d-flex justify-content-between mb-1">
-                  <span className="small text-muted">Pacchetto</span>
-                  <span className="fw-semibold" data-sms-plan-summary="name">{summaryPlan ? summaryPlan.name : "-"}</span>
-                </div>
-                <div className="d-flex justify-content-between mb-1">
-                  <span className="small text-muted">Crediti</span>
-                  <span className="fw-semibold" data-sms-plan-summary="credits">{summaryPlan ? `${summaryPlan.credits} crediti` : "-"}</span>
-                </div>
-                <div className="d-flex justify-content-between mb-1">
-                  <span className="small text-muted">Totale</span>
-                  <span className="fw-semibold" data-sms-plan-summary="price">{summaryPlan ? summaryPlan.price : "-"}</span>
-                </div>
-                <div className="d-flex justify-content-between">
-                  <span className="small text-muted">Prezzo medio</span>
-                  <span className="fw-semibold" data-sms-plan-summary="pricePerCredit">{summaryPlan ? summaryPlan.pricePerCredit : "-"}</span>
-                </div>
-                <div className="small text-muted mt-2">Se un SMS supera un segmento, puo consumare piu crediti.</div>
-              </div>
+                    <div className="d-flex justify-content-between mb-1">
+                      <span className="small text-muted">Crediti</span>
+                      <span className="fw-semibold" data-sms-plan-summary="credits">{summaryPlan ? `${summaryPlan.credits} crediti` : "-"}</span>
+                    </div>
+                    <div className="d-flex justify-content-between mb-1">
+                      <span className="small text-muted">Totale</span>
+                      <span className="fw-semibold" data-sms-plan-summary="price">{summaryPlan ? summaryPlan.priceLabel : "-"}</span>
+                    </div>
+                    <div className="d-flex justify-content-between">
+                      <span className="small text-muted">Prezzo medio</span>
+                      <span className="fw-semibold" data-sms-plan-summary="pricePerCredit">{summaryPlan ? summaryPlan.pricePerCreditLabel : "-"}</span>
+                    </div>
+                    <div className="small text-muted mt-2">Se un SMS supera un segmento, puo consumare piu crediti.</div>
+                  </div>
+                </>
+              )}
             </div>
             <div className="modal-footer">
               <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal">Chiudi</button>
