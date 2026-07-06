@@ -6959,3 +6959,37 @@ RESIDUO minore: multi-servizio con operatori DIVERSI per servizio (slot segment
 combinati) è supportato dal motore ma non verificato live end-to-end (il tenant di
 test ha 1 servizio prenotabile alla sede). Righe conferma omaggio Fidelity /
 condizioni promozionali restano l'unico residuo (feature non configurate).
+
+
+---
+
+## Wizard booking: multi-servizio operatori diversi (verifica) + "Condizioni promozionali" (2026-07-07)
+
+Chiusi gli ultimi due residui.
+
+### (B) Slot segment-aware multi-servizio con operatori DIVERSI — VERIFICATO
+Il motore (publicBookingSlots segment-aware, commit precedente) era supportato ma
+non verificato end-to-end. Con 2 servizi prenotabili e operatori distinti su
+tenant 25 (setup temporaneo): staff_map {9:22, 80:55} -> slot dove il segmento 1
+(svc 9, luca, 60') e il segmento 2 (svc 80, ZZ Op2, 30') sono entrambi liberi in
+sequenza; confirm -> appointment_segments(pos1 svc9 staff22, pos2 svc80 staff55) +
+appointment_staff 22,55. Dati di test rimossi (residuo 0). NESSUN cambio codice.
+
+### (A) Riga "Condizioni promozionali" (confirmation-copy) — CHIUSO
+Lo step Conferma aveva il markup #recPromoConditions ma era MORTO (d-none fisso,
+nessun testo). Port di booking-wizard.js 2772-2790 + booking.php 7886-7892:
+- **Backend**: evalBestPromotionForAppointment / evalPromotionCodeForAppointment
+  espongono promotion.promoConditions (da promotions.promo_conditions_enabled +
+  promo_conditions); resolvePublicBookingBenefits.promotionConditions; le action
+  promotion_preview e coupon ritornano promo_conditions.
+- **Wizard**: autoPromo e couponApplied catturano `conditions`; #recPromoConditions
+  reso quando il testo è presente (newline -> <br>), verbatim "Condizioni promozionali".
+
+VERIFICA LIVE (Playwright, promo -10% con promo_conditions su tenant 25): step
+Conferma -> box "Condizioni promozionali" con "Valida dal lunedi al venerdi." +
+"Non cumulabile con altre offerte."; promo anche nel Dettaglio Costi (-€ 1,20,
+totale € 10,80). Promo di test rimossa (residuo 0). typecheck pulito.
+
+RESIDUO UNICO rimasto: nota omaggio Fidelity ("Puoi ottenere in gift...") — richiede
+fidelity_gifts_json configurato + il sottosistema gift-matching (bestFidelityGift
+ForRemaining + conflitto sconto/gift), niente sul tenant. Sub-feature a sé.

@@ -13991,7 +13991,7 @@ function promoStackMeta(promoRow: RowDataPacket | null): { hasPromotion: boolean
 
 export type AppointmentPromoContext = {
   applied: boolean;
-  promotion: { id: number; title: string; stackable: number; stackable_with_fidelity: boolean; stackable_with_coupon: boolean } | null;
+  promotion: { id: number; title: string; stackable: number; stackable_with_fidelity: boolean; stackable_with_coupon: boolean; promoConditions: string } | null;
   // Only services with a REAL discount (old - now > 0), like the legacy preview.
   services: Array<{ service_id: number; list_price: number; booked_price: number; discount_badge: string }>;
   discount: number;
@@ -14055,13 +14055,15 @@ export async function evalBestPromotionForAppointment({
       if (!row) continue;
       if (String(row.coupon_code ?? "").trim() !== "") continue;
       const meta = promoStackMeta(row);
+      // Condizioni promozionali (testo) — mostrate nel recap se abilitate.
+      const promoConditions = Number(row.promo_conditions_enabled ?? 0) === 1 && String(row.promo_conditions ?? "").trim() !== "" ? String(row.promo_conditions).trim() : "";
       const services = Object.entries(evalResult.breakdownServices)
         .map(([sid, b]) => ({ service_id: Number(sid), list_price: roundMoney(b.old), booked_price: roundMoney(b.now), discount_badge: b.badge }))
         .filter((line) => line.list_price > 0 && line.booked_price >= 0 && line.list_price - line.booked_price > 0.000001);
       if (services.length === 0) {
         return {
           applied: false,
-          promotion: { id: meta.id, title: meta.title, stackable: meta.stackable, stackable_with_fidelity: meta.stackableWithFidelity, stackable_with_coupon: meta.stackableWithCoupon },
+          promotion: { id: meta.id, title: meta.title, stackable: meta.stackable, stackable_with_fidelity: meta.stackableWithFidelity, stackable_with_coupon: meta.stackableWithCoupon, promoConditions },
           services: [],
           discount: 0,
           reason: "La promozione non produce righe servizio scontate per il dettaglio prezzi.",
@@ -14069,7 +14071,7 @@ export async function evalBestPromotionForAppointment({
       }
       return {
         applied: true,
-        promotion: { id: meta.id, title: meta.title, stackable: meta.stackable, stackable_with_fidelity: meta.stackableWithFidelity, stackable_with_coupon: meta.stackableWithCoupon },
+        promotion: { id: meta.id, title: meta.title, stackable: meta.stackable, stackable_with_fidelity: meta.stackableWithFidelity, stackable_with_coupon: meta.stackableWithCoupon, promoConditions },
         services,
         discount: evalResult.discount,
         reason: "",
@@ -14136,6 +14138,7 @@ export async function evalPromotionCodeForAppointment({
     return { found: true, ok: false, reason: result.reason || "Promozione non applicabile.", context: none };
   }
   const meta = promoStackMeta(row);
+  const promoConditions = Number(row.promo_conditions_enabled ?? 0) === 1 && String(row.promo_conditions ?? "").trim() !== "" ? String(row.promo_conditions).trim() : "";
   const services = Object.entries(result.breakdownServices)
     .map(([sid, b]) => ({ service_id: Number(sid), list_price: roundMoney(b.old), booked_price: roundMoney(b.now), discount_badge: b.badge }))
     .filter((line) => line.list_price > 0 && line.booked_price >= 0 && line.list_price - line.booked_price > 0.000001);
@@ -14145,7 +14148,7 @@ export async function evalPromotionCodeForAppointment({
     reason: "",
     context: {
       applied: true,
-      promotion: { id: promotionId, title: meta.title, stackable: meta.stackable, stackable_with_fidelity: meta.stackableWithFidelity, stackable_with_coupon: meta.stackableWithCoupon },
+      promotion: { id: promotionId, title: meta.title, stackable: meta.stackable, stackable_with_fidelity: meta.stackableWithFidelity, stackable_with_coupon: meta.stackableWithCoupon, promoConditions },
       services,
       discount: result.discount,
       reason: "",

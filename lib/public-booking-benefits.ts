@@ -36,6 +36,8 @@ export type PublicBookingBenefitResolution = {
   // Promotion applied (by code, preferred or best-auto).
   promotionId: number | null;
   promotionTitle: string;
+  // Condizioni promozionali (testo) della promo applicata, se abilitate.
+  promotionConditions: string;
   promoDiscount: number;
   // Per-service promo prices for appointment_services (price/list_price/badge).
   serviceOverrides: Array<{ serviceId: number; price: number; listPrice: number; badge: string }>;
@@ -126,6 +128,7 @@ export async function resolvePublicBookingBenefits({
     couponDiscount: 0,
     promotionId: null,
     promotionTitle: "",
+    promotionConditions: "",
     promoDiscount: 0,
     serviceOverrides: [],
     noteLines: [],
@@ -145,6 +148,7 @@ export async function resolvePublicBookingBenefits({
       const { overrides, note } = promoNotes(byCode.context);
       result.promotionId = byCode.context.promotion?.id ?? null;
       result.promotionTitle = byCode.context.promotion?.title ?? "";
+      result.promotionConditions = byCode.context.promotion?.promoConditions ?? "";
       result.promoDiscount = round2(byCode.context.discount);
       result.serviceOverrides = overrides;
       result.noteLines = [note];
@@ -186,6 +190,7 @@ export async function resolvePublicBookingBenefits({
           const { overrides, note } = promoNotes(autoPromo);
           result.promotionId = autoPromo.promotion.id;
           result.promotionTitle = autoPromo.promotion.title;
+          result.promotionConditions = autoPromo.promotion.promoConditions;
           result.promoDiscount = round2(autoPromo.discount);
           result.serviceOverrides = overrides;
           result.noteLines = [note];
@@ -217,6 +222,7 @@ export async function resolvePublicBookingBenefits({
     const { overrides, note } = promoNotes(autoPromo);
     result.promotionId = autoPromo.promotion.id;
     result.promotionTitle = autoPromo.promotion.title;
+    result.promotionConditions = autoPromo.promotion.promoConditions;
     result.promoDiscount = round2(autoPromo.discount);
     result.serviceOverrides = overrides;
     result.noteLines.push(note);

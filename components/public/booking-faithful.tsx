@@ -248,12 +248,12 @@ export function BookingFaithful({
   // promotion's coupon_code comes back as a promotion. The validated result
   // feeds coupon_code to the confirm (which re-resolves, never trusting this).
   const [couponInput, setCouponInput] = useState("");
-  const [couponApplied, setCouponApplied] = useState<null | { code: string; discount: number; isPromotion: boolean; promotionTitle: string }>(null);
+  const [couponApplied, setCouponApplied] = useState<null | { code: string; discount: number; isPromotion: boolean; promotionTitle: string; conditions: string }>(null);
   const [couponMsg, setCouponMsg] = useState<null | { ok: boolean; text: string }>(null);
   const [couponChecking, setCouponChecking] = useState(false);
   // AUTO-PROMO (port of mode=promotion_preview): the best automatic promotion
   // the confirm will apply, shown as an informational banner in Step 6.
-  const [autoPromo, setAutoPromo] = useState<null | { title: string; discount: number }>(null);
+  const [autoPromo, setAutoPromo] = useState<null | { title: string; discount: number; conditions: string }>(null);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
@@ -659,6 +659,9 @@ export function BookingFaithful({
     return hold?.staffName || selectedSlot?.staffName || "Qualsiasi professionista";
   })();
   const clientFullName = `${firstName} ${lastName}`.trim();
+  // Condizioni promozionali (recPromoConditions): testo della promo applicata
+  // (coupon-code o automatica), reso nel recap se presente (booking-wizard.js 2772).
+  const promoConditionsText = String(couponApplied?.conditions || autoPromo?.conditions || "").trim();
 
   const isFinalStep = step === 7;
   const canContinue = computeCanContinue();
@@ -743,10 +746,10 @@ export function BookingFaithful({
     if (phone.trim()) params.set("phone", phone.trim());
     void fetch(`/api/booking?${params.toString()}`)
       .then((res) => res.json().catch(() => null))
-      .then((data: { ok?: boolean; eligible?: boolean; title?: string; discount?: number } | null) => {
+      .then((data: { ok?: boolean; eligible?: boolean; title?: string; discount?: number; promo_conditions?: string } | null) => {
         if (!active) return;
         if (data?.ok && data.eligible && Number(data.discount ?? 0) > 0) {
-          setAutoPromo({ title: String(data.title ?? ""), discount: Number(data.discount ?? 0) });
+          setAutoPromo({ title: String(data.title ?? ""), discount: Number(data.discount ?? 0), conditions: String(data.promo_conditions ?? "") });
         } else {
           setAutoPromo(null);
         }
@@ -781,7 +784,7 @@ export function BookingFaithful({
       if (email.trim()) params.set("email", email.trim());
       if (phone.trim()) params.set("phone", phone.trim());
       const res = await fetch(`/api/booking?${params.toString()}`);
-      const data: { ok?: boolean; error?: string; discount?: number; is_promotion?: number; promotion_title?: string } =
+      const data: { ok?: boolean; error?: string; discount?: number; is_promotion?: number; promotion_title?: string; promo_conditions?: string } =
         await res.json().catch(() => ({}));
       if (!data.ok) {
         setCouponApplied(null);
@@ -794,6 +797,7 @@ export function BookingFaithful({
         discount: Number(data.discount ?? 0),
         isPromotion,
         promotionTitle: String(data.promotion_title ?? ""),
+        conditions: String(data.promo_conditions ?? ""),
       });
       setCouponMsg({
         ok: true,
@@ -2128,12 +2132,16 @@ export function BookingFaithful({
                   </div>
                 </div>
 
-                <div id="recPromoConditions" className="alert alert-info p-2 mt-2 d-none booking-alert-rounded">
+                <div id="recPromoConditions" className={`alert alert-info p-2 mt-2 booking-alert-rounded${promoConditionsText ? "" : " d-none"}`}>
                   <div className="d-flex gap-2">
                     <i className="bi bi-info-circle" />
                     <div className="small">
                       <div className="fw-semibold">Condizioni promozionali</div>
-                      <div id="recPromoConditionsText" />
+                      <div id="recPromoConditionsText">
+                        {promoConditionsText.split("\n").map((line, idx) => (
+                          <span key={idx}>{idx > 0 ? <br /> : null}{line}</span>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 </div>

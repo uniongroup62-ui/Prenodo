@@ -143,6 +143,7 @@ export async function GET(request: Request) {
         is_promotion: benefits.couponCode ? 0 : 1,
         promotion_id: benefits.promotionId ?? 0,
         promotion_title: benefits.promotionTitle,
+        promo_conditions: benefits.promotionConditions,
         stacked_with_coupon: benefits.couponCode && benefits.promotionId ? 1 : 0,
       });
     }
@@ -177,6 +178,7 @@ export async function GET(request: Request) {
         eligible: true,
         promotion_id: promo.promotion.id,
         title: promo.promotion.title,
+        promo_conditions: promo.promotion.promoConditions,
         stackable: promo.promotion.stackable,
         // breakdown prezzi per servizio: {serviceId: {old, now, badge}} (legacy shape).
         breakdown: Object.fromEntries(promo.services.map((line) => [line.service_id, { old: line.list_price, now: line.booked_price, badge: line.discount_badge }])),
