@@ -180,7 +180,8 @@ export function BookingFaithful({
   slug: slugProp,
   redeemPrefill = null,
   initialLocationId = 0,
-}: { slug?: string; redeemPrefill?: BookingRedeemPrefill | null; initialLocationId?: number } = {}) {
+  initialSkipLocation = false,
+}: { slug?: string; redeemPrefill?: BookingRedeemPrefill | null; initialLocationId?: number; initialSkipLocation?: boolean } = {}) {
   const slug = useMemo(() => {
     if (slugProp) return slugProp;
     if (typeof window === "undefined") return "";
@@ -194,7 +195,8 @@ export function BookingFaithful({
   const [loadingContext, setLoadingContext] = useState(true);
   const [error, setError] = useState("");
 
-  const [step, setStep] = useState(1);
+  // Sede unica nota dal server: parte già da Categoria (2) — niente flash Sede.
+  const [step, setStep] = useState(initialSkipLocation ? 2 : 1);
   const [locationId, setLocationId] = useState<number>(0);
   const [categoryId, setCategoryId] = useState<number | null>(null);
   const [serviceIds, setServiceIds] = useState<number[]>([]);
@@ -362,7 +364,7 @@ export function BookingFaithful({
   // shouldSkipLocationStep (booking-wizard.js: skipLocationStep = locationCards.length===1):
   // con una sola sede il legacy SALTA lo step "Scegli la sede" (parte da
   // Categoria, contatore -1). Con più sedi lo step resta.
-  const skipLocationStep = (ctx?.locations.length ?? 0) === 1;
+  const skipLocationStep = ctx ? ctx.locations.length === 1 : initialSkipLocation;
   const firstStep = skipLocationStep ? 2 : 1;
   // Default true finché il context non è caricato (nessuno skip prematuro).
   const chooseStaffEnabled = ctx ? ctx.chooseStaffEnabled !== false : true;

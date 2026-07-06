@@ -6,7 +6,7 @@ import { ManageShell } from "@/components/manage-shell";
 import { PerTenantHub, type HubSection } from "@/components/public/per-tenant-hub";
 import { currentManageSession } from "@/lib/manage-auth";
 import { currentPublicCustomerSession } from "@/lib/public-customer-account";
-import { publicBookingContext } from "@/lib/public-booking-db";
+import { publicBookingContext, bookableLocationCount } from "@/lib/public-booking-db";
 import { dbQuery, type RowDataPacket } from "@/lib/tenant-db";
 
 // booking_public_allowed (saas_tenants) — port di TenantFeatureGate::
@@ -195,5 +195,7 @@ export default async function TenantBookingPage({
           : serviceId > 0 && qp("book_omaggio") > 0
             ? ({ kind: "gift", refId: qp("book_omaggio"), itemId: Number.isFinite(rewardIdx) && rewardIdx >= 0 ? rewardIdx : 0, serviceId } as const)
             : null;
-  return <BookingFaithful slug={tenantSlug} redeemPrefill={prefill} initialLocationId={qp("location_id")} />;
+  // Sede unica -> il wizard parte già da "Categoria" (skip Sede) senza flash.
+  const initialSkipLocation = (await bookableLocationCount(tenantSlug).catch(() => 0)) === 1;
+  return <BookingFaithful slug={tenantSlug} redeemPrefill={prefill} initialLocationId={qp("location_id")} initialSkipLocation={initialSkipLocation} />;
 }

@@ -125,6 +125,19 @@ export type BusyRange = {
   staffIds: number[];
 };
 
+// Conteggio sedi prenotabili (stesso filtro di publicBookingContext.locations):
+// il gate lo usa per sapere se saltare lo step "Scegli la sede" (sede unica)
+// GIÀ al primo render, senza flash lato client (il PHP lo sa server-side).
+export async function bookableLocationCount(slug: string): Promise<number> {
+  const rows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "locations",
+    columns: "id",
+    where: "COALESCE(is_active, 1) = 1 AND COALESCE(booking_enabled, 1) = 1",
+  }).catch(() => [] as RowDataPacket[]);
+  return rows.length;
+}
+
 export async function publicBookingContext(slug: string): Promise<PublicBookingContext> {
   const [businessRows, locationRows, categoryRows, serviceRows, serviceLocationRows, staffRows, staffServiceRows] = await Promise.all([
     tenantSelect<RowDataPacket>({ slug, table: "businesses", orderBy: "id ASC", limit: 1 }),
