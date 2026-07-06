@@ -31,7 +31,7 @@ type StaffMember = {
 // Role -> { label, Bootstrap badge class } shown in the "Ruolo" column.
 const ROLE_BADGES: Record<string, { label: string; cls: string }> = {
   admin: { label: "Admin", cls: "text-bg-primary" },
-  staff: { label: "Staff", cls: "text-bg-secondary" },
+  staff: { label: "Staff", cls: "text-bg-info" },
   altro: { label: "Personalizzato", cls: "text-bg-secondary" },
 };
 
@@ -49,21 +49,38 @@ function avatarLetter(name: string): string {
   return trimmed ? trimmed.charAt(0).toUpperCase() : "O";
 }
 
-export function StaffContent({ slug: slugProp }: { slug?: string } = {}) {
+type StaffQuery = { msg?: string; err?: string; q?: string; role?: string; status?: string };
+type StaffBlockPopup = { title?: string; operator_name?: string; message?: string; services?: Array<{ service_id: number; service_name: string; service_active: number }> };
+
+export function StaffContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: StaffQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Filter form state (legacy: GET form with q / role / status).
-  const [q, setQ] = useState("");
-  const [role, setRole] = useState("");
-  const [status, setStatus] = useState("");
-  const [applied, setApplied] = useState({ q: "", role: "", status: "" });
+  // Filtri dal querystring come il form GET legacy (q / role / status).
+  const appliedQ = String(initialQuery?.q ?? "");
+  const appliedRole = ["admin", "staff", "altro"].includes(String(initialQuery?.role ?? "")) ? String(initialQuery?.role) : "";
+  const appliedStatus = ["active", "inactive"].includes(String(initialQuery?.status ?? "")) ? String(initialQuery?.status) : "";
+  const [q, setQ] = useState(appliedQ);
+  const [role, setRole] = useState(appliedRole);
+  const [status, setStatus] = useState(appliedStatus);
+  const applied = { q: appliedQ, role: appliedRole, status: appliedStatus };
+
+  // Popup blocco eliminazione (staff.js showStaffDeleteBlockPopup).
+  const [blockPopup, setBlockPopup] = useState<StaffBlockPopup | null>(null);
+  const [blockOpenList, setBlockOpenList] = useState(false);
+
+  function filtersQuery(): URLSearchParams {
+    const usp = new URLSearchParams();
+    if (appliedQ) usp.set("q", appliedQ);
+    if (appliedRole) usp.set("role", appliedRole);
+    if (appliedStatus) usp.set("status", appliedStatus);
+    return usp;
+  }
 
   const load = useCallback(() => {
-    setLoading(true);
     fetch(`/api/manage/resources?slug=${encodeURIComponent(slug)}&section=staff`, {
       headers: { "x-tenant-slug": slug },
     })
@@ -96,19 +113,31 @@ export function StaffContent({ slug: slugProp }: { slug?: string } = {}) {
     return `/${encodeURIComponent(slug)}/${`staff${suffix}`.replace("&", "?")}`;
   }
 
-  const [msg, setMsg] = useState("");
-  const [err, setErr] = useState("");
+  // Flash legacy dai redirect: msg VERDE (staff.php 1129-1137, salvo i
+  // duplicati timeoff che diventano danger), err rosso.
+  const [msg, setMsg] = useState(() => String(initialQuery?.msg ?? ""));
+  const [err, setErr] = useState(() => String(initialQuery?.err ?? ""));
+  const msgIsDanger = msg.startsWith("Periodo già presente") || msg.startsWith("Esiste già un periodo per l'intera giornata");
 
-  // Messaggio post-redirect dal form (staff.php redirect ?msg=Operatore salvato).
-  useEffect(() => {
-    const m = new URLSearchParams(window.location.search).get("msg");
-    if (m) setMsg(m);
-  }, []);
+  function redirectFlash(params: Record<string, string>) {
+    const usp = filtersQuery();
+    for (const [k, v] of Object.entries(params)) if (v !== "") usp.set(k, v);
+    window.location.assign(`/${encodeURIComponent(slug)}/staff${usp.size > 0 ? `?${usp.toString()}` : ""}`);
+  }
 
-  // Eliminazione operatore con i vincoli/messaggi legacy dal server
-  // (prenotazioni storiche, servizi associati, storico commissioni, owner).
+  // Eliminazione operatore (staff.js confirmStaffDelete + staff.php 626-703):
+  // servizi collegati -> popup client; poi confirm verbatim e guardie server.
   async function removeStaff(s: StaffMember) {
-    if (!window.confirm(`Eliminare l'operatore "${s.fullName}"?`)) return;
+    if ((s.serviceLinks ?? []).length > 0) {
+      setBlockPopup({
+        operator_name: s.fullName,
+        services: (s.serviceLinks ?? []).map((link) => ({ service_id: link.serviceId, service_name: link.serviceName, service_active: link.isActive ? 1 : 0 })),
+        message: "L'operatore non può essere eliminato perché è associato ai servizi elencati. Rimuovi prima l'operatore dai servizi collegati.",
+      });
+      setBlockOpenList(false);
+      return;
+    }
+    if (!window.confirm("Eliminare questo operatore?")) return;
     setMsg("");
     setErr("");
     try {
@@ -117,10 +146,19 @@ export function StaffContent({ slug: slugProp }: { slug?: string } = {}) {
         headers: { "content-type": "application/json", "x-tenant-slug": slug },
         body: JSON.stringify({ action: "staff_delete", id: String(s.id) }),
       });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok || j.ok === false) throw new Error(String(j.error || "Errore eliminazione operatore."));
-      setMsg("Operatore eliminato");
-      load();
+      const j = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (res.ok && j.ok !== false) {
+        redirectFlash({ msg: String(j.msg ?? "Operatore eliminato") });
+        return;
+      }
+      if (j.popup) {
+        setBlockPopup(j.popup as StaffBlockPopup);
+        setBlockOpenList(false);
+      }
+      // flashKind 'msg' = alert verde come i redirect &msg= del legacy.
+      if (String(j.flashKind ?? "") === "msg") setMsg(String(j.error ?? ""));
+      else setErr(String(j.error ?? "Errore eliminazione operatore."));
+      window.scrollTo(0, 0);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Errore eliminazione operatore.");
     }
@@ -128,6 +166,9 @@ export function StaffContent({ slug: slugProp }: { slug?: string } = {}) {
 
   return (
     <div className="container-fluid">
+      {msg ? <div className={`alert alert-${msgIsDanger ? "danger" : "success"}`}>{msg}</div> : null}
+      {err ? <div className="alert alert-danger">{err}</div> : null}
+
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Impostazioni</div>
@@ -144,14 +185,17 @@ export function StaffContent({ slug: slugProp }: { slug?: string } = {}) {
 
       <div className="card p-3 mb-3">
         <form
-          method="get"
           className="row g-2 align-items-end"
           onSubmit={(e) => {
             e.preventDefault();
-            setApplied({ q, role, status });
+            // Come il form GET legacy: filtri nel querystring.
+            const usp = new URLSearchParams();
+            if (q.trim()) usp.set("q", q.trim());
+            if (role) usp.set("role", role);
+            if (status) usp.set("status", status);
+            window.location.assign(`/${encodeURIComponent(slug)}/staff${usp.size > 0 ? `?${usp.toString()}` : ""}`);
           }}
         >
-          <input type="hidden" name="page" value="staff" />
           <div className="col-xl-4 col-lg-4 col-md-6">
             <label className="form-label">Cerca operatore</label>
             <input
@@ -185,17 +229,7 @@ export function StaffContent({ slug: slugProp }: { slug?: string } = {}) {
               <i className="bi bi-search me-1" />
               Filtra
             </button>
-            <a
-              className="btn btn-outline-secondary app-filter-reset"
-              href={href("")}
-              onClick={(e) => {
-                e.preventDefault();
-                setQ("");
-                setRole("");
-                setStatus("");
-                setApplied({ q: "", role: "", status: "" });
-              }}
-            >
+            <a className="btn btn-outline-secondary app-filter-reset" href={href("")}>
               Reset
             </a>
           </div>
@@ -247,13 +281,18 @@ export function StaffContent({ slug: slugProp }: { slug?: string } = {}) {
                         {s.email}
                       </td>
                       <td className="text-muted">
-                        {s.locations.length === 0
-                          ? "—"
-                          : s.locations.map((loc) => (
+                        {s.locations.length === 0 ? (
+                          <span className="badge text-bg-light border">Tutte</span>
+                        ) : (
+                          <>
+                            {s.locations.slice(0, 3).map((loc) => (
                               <span className="badge text-bg-light border me-1" key={loc.id}>
                                 {loc.name}
                               </span>
                             ))}
+                            {s.locations.length > 3 ? <span className="badge text-bg-light border">+{s.locations.length - 3}</span> : null}
+                          </>
+                        )}
                       </td>
                       <td>
                         {s.isActive ? (
@@ -263,18 +302,20 @@ export function StaffContent({ slug: slugProp }: { slug?: string } = {}) {
                         )}
                       </td>
                       <td className="text-end">
-                        <a className="btn btn-sm btn-outline-secondary" href={href(`&action=edit&id=${s.id}`)}>
+                        <a className="btn btn-sm btn-outline-secondary" href={href(`&action=edit&id=${s.id}${filtersQuery().size ? `&${filtersQuery().toString()}` : ""}`)}>
                           Modifica
                         </a>{" "}
-                        <button
-                          className="btn btn-sm btn-outline-danger"
-                          type="button"
-                          data-staff-name={s.fullName}
-                          data-staff-delete="1"
-                          onClick={() => removeStaff(s)}
-                        >
-                          Elimina
-                        </button>
+                        {s.isOwner ? (
+                          <span className="badge text-bg-light border ms-2">Protetto</span>
+                        ) : (
+                          <button
+                            className="btn btn-sm btn-outline-danger"
+                            type="button"
+                            onClick={() => removeStaff(s)}
+                          >
+                            Elimina
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -285,35 +326,71 @@ export function StaffContent({ slug: slugProp }: { slug?: string } = {}) {
         </div>
       </div>
 
-      <div
-        className="modal fade"
-        id="staffDeleteBlockModal"
-        tabIndex={-1}
-        aria-hidden="true"
-      >
-        <div className="modal-dialog modal-dialog-centered">
-          <div className="modal-content">
-            <div className="modal-header">
-              <div>
-                <div className="text-muted small">Operatori</div>
-                <h5 className="modal-title fw-bold m-0" id="staffDeleteBlockModalTitle">
-                  Impossibile eliminare l&apos;operatore
-                </h5>
+      {/* MODALE blocco eliminazione (#staffDeleteBlockModal, staff.js 250-330). */}
+      {blockPopup ? (
+        <>
+          <div className="modal fade show d-block" id="staffDeleteBlockModal" tabIndex={-1}>
+            <div className="modal-dialog modal-dialog-centered">
+              <div className="modal-content">
+                <div className="modal-header">
+                  <div>
+                    <div className="text-muted small">Operatori</div>
+                    <h5 className="modal-title fw-bold m-0" id="staffDeleteBlockModalTitle">
+                      {blockPopup.title || "Impossibile eliminare l'operatore"}
+                    </h5>
+                  </div>
+                  <button type="button" className="btn-close" aria-label="Chiudi" onClick={() => setBlockPopup(null)} />
+                </div>
+                <div className="modal-body">
+                  <div className="alert alert-warning small mb-3" id="staffDeleteBlockModalMessage" style={{ whiteSpace: "pre-line" }}>
+                    {(blockPopup.message || "L'operatore non può essere eliminato perché è associato ai servizi elencati. Rimuovi prima l'operatore dai servizi collegati.")
+                      + (blockPopup.operator_name ? `\nOperatore: ${blockPopup.operator_name}` : "")}
+                  </div>
+                  <div id="staffDeleteBlockServiceList">
+                    {(blockPopup.services ?? []).length === 0 ? (
+                      <div className="text-muted small">Nessun servizio rilevato.</div>
+                    ) : (
+                      <div className="accordion" id="staffDeleteBlockServiceAccordion">
+                        <div className="accordion-item border rounded-3 overflow-hidden mb-2">
+                          <h3 className="accordion-header">
+                            <button
+                              className={`accordion-button ${blockOpenList ? "" : "collapsed"} bg-white shadow-none py-2`}
+                              type="button"
+                              onClick={() => setBlockOpenList((v) => !v)}
+                            >
+                              <span className="d-flex align-items-center justify-content-between gap-2 w-100 pe-2">
+                                <span className="fw-semibold">Servizi associati</span>
+                                <span className="badge rounded-pill text-bg-info">{(blockPopup.services ?? []).length}</span>
+                              </span>
+                            </button>
+                          </h3>
+                          <div className={`accordion-collapse collapse ${blockOpenList ? "show" : ""}`}>
+                            <div className="accordion-body py-2">
+                              <div className="list-group list-group-flush">
+                                {(blockPopup.services ?? []).map((svc, i) => (
+                                  <div className="list-group-item px-0" key={`${svc.service_id}-${i}`}>
+                                    {Number(svc.service_active ?? 1) === 1 ? svc.service_name : `${svc.service_name} — non attivo`}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="modal-footer">
+                  <button type="button" className="btn btn-outline-secondary" onClick={() => setBlockPopup(null)}>
+                    Chiudi
+                  </button>
+                </div>
               </div>
-              <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Chiudi" />
-            </div>
-            <div className="modal-body">
-              <div className="alert alert-warning small mb-3" id="staffDeleteBlockModalMessage" />
-              <div id="staffDeleteBlockServiceList" />
-            </div>
-            <div className="modal-footer">
-              <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal">
-                Chiudi
-              </button>
             </div>
           </div>
-        </div>
-      </div>
+          <div className="modal-backdrop fade show" />
+        </>
+      ) : null}
     </div>
   );
 }

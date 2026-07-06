@@ -5310,3 +5310,65 @@ salvate' con gli stessi dati, anti-bypass identico, delete bloccata da
 servizio e da prenotazione con popup di sessione IDENTICI campo per campo,
 delete pulite con reorder) + 24/24 marker bundle + regressioni (cabins 14,
 resources 25, services 40) + typecheck/lint puliti.
+
+## Operatori — SECONDA PASSATA: pagina completa (staff.php + staff.js) — 2026-07-06
+Ri-audit su richiesta (motore V3 gia' verde; chiuso anche il residuo V3
+"guardie sedi/disattivazione semplificate"). BUG e DIVERGENZE CORRETTI:
+1. OWNER MAI RICONOSCIUTO SU PG (bug reale): le protezioni Admin usavano
+   users.id===1 (convenzione del DB per-tenant legacy) ma nello schema PG
+   condiviso gli id sono identity GLOBALI (per questo tenant l'owner e' id
+   20) -> "Protetto", blocco eliminazione e lock ruolo/stato non scattavano
+   MAI. Equivalente portabile: primo utente del tenant (MIN(id)) con ruolo
+   admin (tenantOwnerUserId), applicato a lista/prefill/save/delete.
+2. PROTEZIONI OWNER portate (staff.php 806-814): 'Email obbligatoria per
+   Admin' (come msg), attivo e ruolo FORZATI (non disattivabile, non
+   degradabile), 'Admin non può essere eliminato' (accento).
+3. GUARDIE SEDE/DISATTIVAZIONE legacy complete (staff.php 828-873, prima
+   "in forma semplificata" e TROPPO restrittive — bloccavano la
+   disattivazione con qualunque servizio attivo collegato): ora solo alla
+   TRANSIZIONE attivo->disattivo e solo se un servizio (attivo, con
+   operatore, coperto nella sede) resterebbe senza ALTRI operatori
+   abilitati (staff_service_location_blockers con service_locations e
+   filtro staff_locations): 'Non puoi disattivare l'operatore: il servizio
+   "X" resterebbe senza operatori abilitati in "Y".'; rimozione sede con
+   'Non puoi rimuovere la sede "Y": il servizio "X" resterebbe senza
+   operatori abilitati.' e la variante prenotazioni aperte per sede.
+4. FLASH KIND legacy: gli errori che staff.php veicola come &msg= sono
+   alert VERDI (Email obbligatoria / Password obbligatoria / Email già
+   utilizzata (accentata) / Colore non valido / Nome operatore riservato
+   (SSO) / Operatore SSO non modificabile-eliminabile / Email obbligatoria
+   per Admin) — il server li marca flashKind='msg' e i componenti li
+   rendono verdi; gli altri (sede mancante, guardie, Solo Admin) restano
+   rossi. Aggiunta la validazione colore (prima il Next ripiegava in
+   silenzio sulla palette) e il gating 'Solo Admin puo modificare/assegnare
+   ...' col ruolo di sessione.
+5. DELETE: catena guardie nell'ORDINE legacy (SSO msg -> owner -> non
+   trovato -> Solo Admin -> storico prenotazioni ANCHE annullate ->
+   servizi con POPUP {title, operator_name, message, services} -> storico
+   commissioni con 'Disattivalo per mantenere lo storico.') + cleanup
+   completo (user_email_verifications, user_locations, users,
+   staff_commission_settings/periods) — prima messaggi con
+   punteggiatura/accenti divergenti, niente popup ne' cleanup commissioni.
+6. LISTA: filtri q/ruolo/stato dal querystring (form GET legacy), flash
+   ?msg (VERDE, salvo i duplicati timeoff) /?err, badge Staff text-bg-info
+   (era secondary), sedi max 3 + '+N' e 'Tutte' a lista vuota, badge
+   'Protetto' per l'owner al posto di Elimina, confirm 'Eliminare questo
+   operatore?' (senza nome), popup 'Servizi associati' con accordion e
+   voci 'nome — non attivo'. FORM: redirect flash 'Operatore salvato',
+   flashKind, label 'Immagine operatore' (era 'Foto operatore').
+   page.tsx: branch staff con initialQuery.
+RESIDUO UI documentato: il 'Nuovo operatore' legacy apre il form in un
+MODAL sulla lista (il Next usa la pagina dedicata action=new, stesso form
+e stessi flussi); cropper foto senza drag/zoom interattivo (upload+crop
+server gia' coperti dalla route dedicata).
+Verifica: battery NUOVA e2e-staff-page 27/27 (6 validazioni con flashKind,
+create con account users role/non verificato e colore normalizzato, owner
+reale protetto SENZA modifiche distruttive, guardie disattivazione nei due
+rami + sblocco con secondo operatore, guardie rimozione sede con sede
+temporanea ZZ creata/rimossa, delete: catena completa nell'ordine legacy
+con popup verbatim e cleanup account, ripristino owner+zero residui) +
+LIVE PHP (msg verdi identici, 'Operatore salvato', disattivazione bloccata
+col messaggio esatto nomi-inclusi alla transizione — e conferma che senza
+transizione il legacy salva, come il port —, delete popup di sessione
+IDENTICO) + 35/35 marker + regressioni (staff-availability 16,
+staff-for-service 6, cabins 20, services 40) + typecheck/lint puliti.

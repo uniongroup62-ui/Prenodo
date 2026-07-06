@@ -165,28 +165,16 @@ export function StaffFormContent({ slug: slugProp }: { slug?: string } = {}) {
   const locations = useMemo(() => ctx.locations ?? [], [ctx.locations]);
   const hasLocations = locations.length > 0;
 
+  // flashKind 'msg' del server = alert VERDE (i redirect &msg= del legacy).
+  const [flashMsg, setFlashMsg] = useState("");
+
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError("");
-
-    // Validation faithful to staff.php saveStaffMember: name required; email +
-    // password required when creating the login account (id <= 0).
-    const fullName = form.full_name.trim();
-    if (fullName === "") {
-      setError("Nome operatore obbligatorio.");
-      return;
-    }
-    if (fullName.toUpperCase() === "SSO") {
-      setError("Nome operatore riservato.");
-      return;
-    }
-    if (action === "new" && (form.email.trim() === "" || form.password === "")) {
-      setError("Email e password obbligatorie per creare l'account.");
-      return;
-    }
-
+    setFlashMsg("");
     setSaving(true);
     try {
+      const fullName = form.full_name.trim();
       const payload: Record<string, unknown> = {
         action: "staff_save",
         id: String(form.id),
@@ -206,8 +194,12 @@ export function StaffFormContent({ slug: slugProp }: { slug?: string } = {}) {
       });
       const j = await res.json();
       if (!res.ok || !j.ok) {
-        setError(String(j.error ?? "Errore nel salvataggio dell'operatore."));
+        // Errori 'msg' del legacy (Email obbligatoria, Email già utilizzata,
+        // Colore non valido, ...) restano alert VERDI; gli altri rossi.
+        if (String(j.flashKind ?? "") === "msg") setFlashMsg(String(j.error ?? ""));
+        else setError(String(j.error ?? "Errore nel salvataggio dell'operatore."));
         setSaving(false);
+        window.scrollTo(0, 0);
         return;
       }
 
@@ -233,7 +225,8 @@ export function StaffFormContent({ slug: slugProp }: { slug?: string } = {}) {
         }
       }
 
-      backToList();
+      // Redirect flash legacy (staff.php 1069).
+      window.location.assign(`/${encodeURIComponent(slug)}/staff?msg=${encodeURIComponent(String(j.msg ?? "Operatore salvato"))}`);
     } catch {
       setError("Errore nel salvataggio dell'operatore.");
       setSaving(false);
@@ -260,6 +253,7 @@ export function StaffFormContent({ slug: slugProp }: { slug?: string } = {}) {
         </div>
       </div>
 
+      {flashMsg ? <div className="alert alert-success">{flashMsg}</div> : null}
       {error ? <div className="alert alert-danger">{error}</div> : null}
 
       {loading ? (
@@ -308,7 +302,7 @@ export function StaffFormContent({ slug: slugProp }: { slug?: string } = {}) {
                   documentata). */}
               <div className="col-12">
                 <div className="border rounded-4 p-3">
-                  <div className="fw-semibold mb-2">Foto operatore</div>
+                  <div className="fw-semibold mb-2">Immagine operatore</div>
                   <div className="d-flex align-items-center gap-3 flex-wrap">
                     <div
                       className="rounded-circle border d-flex align-items-center justify-content-center overflow-hidden flex-shrink-0"

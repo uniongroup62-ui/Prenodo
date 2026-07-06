@@ -149,16 +149,28 @@ export async function POST(request: Request) {
       }
     }
 
+    // Save/delete operatore: gli errori portano flashKind ('msg' = alert VERDE
+    // come i redirect &msg= del legacy) ed eventuale popup di blocco servizi.
     if (action === "staff_save") {
       if (!can(activeUser.perms, "staff.manage")) return jsonError("Permesso Operatori richiesto.", 403);
-      const staff = await saveStaffMember(tenantSlug, body);
-      return Response.json({ ok: true, staff });
+      try {
+        const staff = await saveStaffMember(tenantSlug, body, { actorIsAdmin: String(activeUser.role ?? "").toLowerCase() === "admin" });
+        return Response.json({ ok: true, msg: "Operatore salvato", staff });
+      } catch (error) {
+        const flashKind = error instanceof Error ? (error as Error & { flashKind?: string }).flashKind : undefined;
+        return Response.json({ ok: false, error: error instanceof Error ? error.message : "Errore operatori.", ...(flashKind ? { flashKind } : {}) }, { status: 400 });
+      }
     }
 
     if (action === "staff_delete") {
       if (!can(activeUser.perms, "staff.manage")) return jsonError("Permesso Operatori richiesto.", 403);
-      await deleteStaffMember(tenantSlug, parseInteger(body.id, 0));
-      return Response.json({ ok: true });
+      try {
+        await deleteStaffMember(tenantSlug, parseInteger(body.id, 0), { actorIsAdmin: String(activeUser.role ?? "").toLowerCase() === "admin" });
+        return Response.json({ ok: true, msg: "Operatore eliminato" });
+      } catch (error) {
+        const err = error as Error & { popup?: unknown; flashKind?: string };
+        return Response.json({ ok: false, error: error instanceof Error ? error.message : "Errore operatori.", ...(err.popup ? { popup: err.popup } : {}), ...(err.flashKind ? { flashKind: err.flashKind } : {}) }, { status: 400 });
+      }
     }
 
     if (action === "hours_save") {

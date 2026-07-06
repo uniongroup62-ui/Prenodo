@@ -299,6 +299,7 @@ export async function getManageCabin(slug: string, id: number): Promise<Resource
 export async function getManageStaffMember(slug: string, id: number): Promise<ResourceStaff | null> {
   if (!(id > 0)) return null;
   await ensureResourceColumns(slug);
+  const ownerUserId = await tenantOwnerUserId(slug);
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "staff", columns: "*", where: "id = ?", params: [id], limit: 1 }).catch(() => []);
   const row = rows[0];
   if (!row) return null;
@@ -327,7 +328,7 @@ export async function getManageStaffMember(slug: string, id: number): Promise<Re
     locationIds,
     locations: resolvedLocations,
     serviceLinks: serviceMap.get(id) ?? [],
-    isOwner: Number(user?.id ?? 0) === 1 && String(user?.role ?? "") === "admin",
+    isOwner: ownerUserId > 0 && Number(user?.id ?? 0) === ownerUserId && String(user?.role ?? "") === "admin",
   };
 }
 
@@ -647,31 +648,94 @@ export async function deleteCabin(slug: string, id: number, locationId = 0): Pro
   await reorderActiveCabins(slug, locationId);
 }
 
-export async function saveStaffMember(slug: string, body: Record<string, string>): Promise<ResourceStaff> {
+// Errori che il legacy veicola come ?msg= (alert VERDE, staff.php 883-955) vs
+// gli err rossi di staff_form_error_redirect: flashKind li distingue.
+function staffFlashError(message: string, flashKind: "msg" | "err" = "err"): Error {
+  const error = new Error(message) as Error & { flashKind?: "msg" | "err" };
+  error.flashKind = flashKind;
+  return error;
+}
+
+export async function saveStaffMember(slug: string, body: Record<string, string>, options: { actorIsAdmin?: boolean } = {}): Promise<ResourceStaff> {
+  const actorIsAdmin = options.actorIsAdmin !== false;
   const table = await tenantTable(slug, "staff");
   const id = parseInteger(body.id, 0);
   const fullName = cleanName(body.full_name ?? body.fullName, 190);
   const email = normalizeEmail(body.email ?? "");
   const phone = cleanName(body.phone ?? "", 40);
-  const role = normalizeRole(body.role ?? body.ui_role);
+  let role = normalizeRole(body.role ?? body.ui_role);
   const password = String(body.password ?? "");
-  const isActive = truthy(body.is_active ?? body.isActive ?? "1");
-  const color = normalizeColor(body.calendar_color ?? body.color, 0);
+  let isActive = truthy(body.is_active ?? body.isActive ?? "1");
   const locationIds = parseIdList(body.location_ids ?? body.locationIds);
+
+  // SSO: operatore tecnico non gestibile da questa pagina (staff.php 754-764).
+  if (id > 0) {
+    const ssoRows = await tenantSelect<RowDataPacket>({ slug, table: "staff", columns: "full_name", where: "id = ?", params: [id], limit: 1 }).catch(() => []);
+    if (String(ssoRows[0]?.full_name ?? "").trim().toUpperCase() === "SSO") throw staffFlashError("Operatore SSO non modificabile", "msg");
+  }
   if (!fullName) throw new Error("Nome operatore obbligatorio.");
-  if (fullName.toUpperCase() === "SSO") throw new Error("Nome operatore riservato (SSO)");
-  if (id <= 0 && !email) throw new Error("Email obbligatoria");
-  if (id <= 0 && !password) throw new Error("Password obbligatoria");
+  if (fullName.toUpperCase() === "SSO") throw staffFlashError("Nome operatore riservato (SSO)", "msg");
+
+  // Owner (primo utente admin del tenant) + gating 'Solo Admin' (staff.php 779-814).
+  const current = id > 0 ? await staffRowWithUser(slug, id) : null;
+  const ownerUserId = await tenantOwnerUserId(slug);
+  const isOwnerEditing = Boolean(current && ownerUserId > 0 && Number(current.user_id ?? 0) === ownerUserId && String(current.user_role ?? "") === "admin");
+  if (!actorIsAdmin && current && String(current.user_role ?? "") === "admin") {
+    throw new Error("Solo Admin puo modificare account Admin.");
+  }
+  if (role === "admin" && !actorIsAdmin) throw new Error("Solo Admin puo assegnare il ruolo Admin.");
+  if (isOwnerEditing) {
+    if (!email) throw staffFlashError("Email obbligatoria per Admin", "msg");
+    isActive = true;
+    role = "admin";
+  }
+
+  // Colore calendario: formato #RRGGBB o vuoto (staff.php 784-796, come msg).
+  let colorRaw = String(body.calendar_color ?? body.color ?? "").trim();
+  let color: string | null = null;
+  if (colorRaw !== "") {
+    if (!colorRaw.startsWith("#")) colorRaw = `#${colorRaw}`;
+    if (!/^#[0-9a-fA-F]{6}$/.test(colorRaw)) throw staffFlashError("Colore non valido", "msg");
+    color = colorRaw;
+  }
+
+  if (id <= 0 && !email) throw staffFlashError("Email obbligatoria", "msg");
+  if (id <= 0 && !password) throw staffFlashError("Password obbligatoria", "msg");
   if (email) await ensureStaffEmailAvailable(slug, email, id);
   // "Seleziona almeno una sede per l'operatore." (staff.php:823) — solo quando
   // il tenant ha sedi configurate (con la tabella assente il legacy salta il check).
-  if (locationIds.length === 0) {
-    const locs = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "id", limit: 1 }).catch(() => [] as RowDataPacket[]);
-    if (locs.length > 0) throw new Error("Seleziona almeno una sede per l'operatore.");
+  const allLocations = await listLocations(slug);
+  if (locationIds.length === 0 && allLocations.length > 0) {
+    throw new Error("Seleziona almeno una sede per l'operatore.");
   }
 
-  if (id > 0 && !isActive) {
-    await ensureStaffCanDeactivate(slug, id);
+  // Guardie sede/disattivazione legacy (staff.php 828-873), solo in edit non-owner.
+  if (id > 0 && !isOwnerEditing) {
+    const allLocationIds = allLocations.map((location) => location.id);
+    const oldStoredRows = await tenantSelect<RowDataPacket>({ slug, table: "staff_locations", columns: "location_id", where: "staff_id = ?", params: [id], orderBy: "location_id ASC" }).catch(() => []);
+    const oldStored = uniquePositive(oldStoredRows.map((row) => Number(row.location_id ?? 0)));
+    const oldEffective = oldStored.filter((lid) => allLocationIds.includes(lid));
+    const newEffective = locationIds.filter((lid) => allLocationIds.includes(lid));
+    const removedLocationIds = oldEffective.filter((lid) => !newEffective.includes(lid));
+    if (removedLocationIds.length) {
+      if (await staffHasOpenAppointmentsInLocations(slug, id, removedLocationIds)) {
+        throw new Error("Non puoi rimuovere questa sede: l'operatore ha prenotazioni in sospeso o prenotate collegate.");
+      }
+      const blockers = await staffServiceLocationBlockers(slug, id, removedLocationIds, allLocations);
+      if (blockers.length) {
+        throw new Error(`Non puoi rimuovere la sede "${blockers[0].locationName}": il servizio "${blockers[0].serviceName}" resterebbe senza operatori abilitati.`);
+      }
+    }
+    const oldActive = Number(current?.is_active ?? 1) === 1;
+    if (!isActive && oldActive) {
+      if (await staffHasAppointmentRefs(slug, id, true)) {
+        throw new Error("Non puoi disattivare l'operatore: ha prenotazioni in sospeso o prenotate collegate.");
+      }
+      const blockers = await staffServiceLocationBlockers(slug, id, oldEffective.length ? oldEffective : allLocationIds, allLocations);
+      if (blockers.length) {
+        throw new Error(`Non puoi disattivare l'operatore: il servizio "${blockers[0].serviceName}" resterebbe senza operatori abilitati in "${blockers[0].locationName}".`);
+      }
+    }
   }
 
   // Capture the prior staff email and whether a login user already existed under it
@@ -727,23 +791,57 @@ export async function saveStaffMember(slug: string, body: Record<string, string>
   return mustFindStaff(slug, staffId);
 }
 
-export async function deleteStaffMember(slug: string, id: number): Promise<void> {
+// Popup 'Impossibile eliminare l'operatore' (staff_flash_delete_block_popup).
+export type StaffDeleteBlockPopup = {
+  title: string;
+  operator_name: string;
+  message: string;
+  services: Array<{ service_id: number; service_name: string; service_active: number }>;
+};
+
+// Port completo di staff.php action=delete (626-703): guardie in ordine
+// (SSO come msg, Admin protetto, gating Solo Admin, storico prenotazioni,
+// servizi con popup, storico commissioni), poi hard delete con account login
+// e righe collegate.
+export async function deleteStaffMember(slug: string, id: number, options: { actorIsAdmin?: boolean } = {}): Promise<void> {
+  const actorIsAdmin = options.actorIsAdmin !== false;
   const staffId = Math.max(0, Number(id) || 0);
-  if (!staffId) throw new Error("Operatore non valido.");
-  const row = await staffRowWithUser(slug, staffId);
-  if (!row) throw new Error("Operatore non trovato.");
-  if (Number(row.user_id ?? 0) === 1 && String(row.user_role ?? "") === "admin") throw new Error("Admin non puo essere eliminato.");
+  const row = staffId > 0 ? await staffRowWithUser(slug, staffId) : null;
+  if (row && String(row.full_name ?? "").trim().toUpperCase() === "SSO") throw staffFlashError("Operatore SSO non eliminabile", "msg");
+  const ownerUserId = await tenantOwnerUserId(slug);
+  if (row && ownerUserId > 0 && Number(row.user_id ?? 0) === ownerUserId && String(row.user_role ?? "") === "admin") throw new Error("Admin non può essere eliminato");
+  if (!row) throw new Error("Operatore non trovato");
+  if (!actorIsAdmin && String(row.user_role ?? "") === "admin") throw new Error("Solo Admin puo eliminare o modificare account Admin.");
   if (await staffHasAppointmentRefs(slug, staffId, false)) throw new Error("Operatore non eliminabile: risulta gia usato in prenotazioni. Disattivalo per mantenere lo storico.");
-  if ((await staffServiceLinks(slug, [staffId])).get(staffId)?.length) throw new Error("Operatore non eliminabile: associato a uno o piu servizi.");
-  if (await staffHasCommissionHistory(slug, staffId)) throw new Error("Operatore non eliminabile: risulta usato nello storico commissioni.");
+
+  const linked = (await staffServiceLinks(slug, [staffId])).get(staffId) ?? [];
+  if (linked.length) {
+    const error = new Error("Operatore non eliminabile: associato a uno o più servizi") as Error & { popup?: StaffDeleteBlockPopup };
+    error.popup = {
+      title: "Impossibile eliminare l'operatore",
+      operator_name: String(row.full_name ?? "Operatore"),
+      message: "L'operatore non può essere eliminato perché è associato ai servizi elencati. Rimuovi prima l'operatore dai servizi collegati.",
+      services: linked.map((link) => ({ service_id: link.serviceId, service_name: link.serviceName, service_active: link.isActive ? 1 : 0 })),
+    };
+    throw error;
+  }
+  if (await staffHasCommissionHistory(slug, staffId)) throw new Error("Operatore non eliminabile: risulta usato nello storico commissioni. Disattivalo per mantenere lo storico.");
 
   const email = normalizeEmail(row.email ?? "");
-  await deleteByOwner(slug, "staff_locations", "staff_id", staffId);
-  await deleteByOwner(slug, "staff_availability", "staff_id", staffId);
-  await deleteByOwner(slug, "staff_timeoff", "staff_id", staffId);
-  await deleteByOwner(slug, "staff_services", "staff_id", staffId);
+  if (email && !await staffEmailUsed(slug, email, staffId)) {
+    const users = await tenantSelect<RowDataPacket>({ slug, table: "users", columns: "id", where: "LOWER(email) = ?", params: [email], limit: 1 }).catch(() => []);
+    const loginUserId = Number(users[0]?.id ?? 0);
+    if (loginUserId > 0) {
+      await deleteByOwner(slug, "user_email_verifications", "user_id", loginUserId);
+      await deleteByOwner(slug, "user_locations", "user_id", loginUserId);
+      await tenantDelete({ slug, table: "users", id: loginUserId }).catch(() => undefined);
+    }
+  }
+  // staff_delete_related_rows (staff.php 188-196).
+  for (const tableName of ["staff_locations", "staff_availability", "staff_timeoff", "staff_services", "staff_commission_settings", "staff_commission_periods"]) {
+    await deleteByOwner(slug, tableName, "staff_id", staffId);
+  }
   await tenantDelete({ slug, table: "staff", id: staffId });
-  if (email && !await staffEmailUsed(slug, email, staffId)) await deleteUserByEmail(slug, email);
 }
 
 export async function saveBusinessHours(slug: string, body: Record<string, string>): Promise<BusinessHourRow[]> {
@@ -1153,6 +1251,9 @@ async function listStaff(slug: string, activeLocationId: number, locations: Reso
     tenantSelect<RowDataPacket>({ slug, table: "users", columns: "id,name,email,role", orderBy: "id ASC" }).catch(() => []),
   ]);
   const usersByEmail = new Map(users.map((row) => [normalizeEmail(row.email ?? ""), row]));
+  // Owner = primo utente del tenant con ruolo admin (equivalente PG di users.id=1).
+  const firstUser = users[0];
+  const ownerUserId = firstUser && String(firstUser.role ?? "") === "admin" ? Number(firstUser.id ?? 0) : 0;
   return filtered.map((row, index) => {
     const id = Number(row.id ?? 0);
     const email = normalizeEmail(row.email ?? "");
@@ -1171,7 +1272,7 @@ async function listStaff(slug: string, activeLocationId: number, locations: Reso
       locationIds,
       locations: resolvedLocations,
       serviceLinks: serviceMap.get(id) ?? [],
-      isOwner: Number(user?.id ?? 0) === 1 && String(user?.role ?? "") === "admin",
+      isOwner: ownerUserId > 0 && Number(user?.id ?? 0) === ownerUserId && String(user?.role ?? "") === "admin",
     };
   }).filter((item) => item.id > 0 && (!activeLocationId || item.locationIds.length === 0 || item.locationIds.includes(activeLocationId)));
 }
@@ -1522,6 +1623,14 @@ async function futureCabinAppointmentCount(slug: string, cabinId: number): Promi
   return Number(rows[0]?.count ?? 0);
 }
 
+// Owner del tenant: nel legacy per-tenant è users.id=1 (primo utente creato,
+// staff.php 560-561); nello schema PG condiviso gli id sono globali, quindi
+// l'equivalente è il PRIMO utente del tenant (MIN(id)) con ruolo admin.
+async function tenantOwnerUserId(slug: string): Promise<number> {
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "users", columns: "id, role", orderBy: "id ASC", limit: 1 }).catch(() => []);
+  return rows[0] && String(rows[0].role ?? "") === "admin" ? Number(rows[0].id ?? 0) : 0;
+}
+
 async function staffRowWithUser(slug: string, staffId: number): Promise<RowDataPacket | null> {
   const staffRows = await tenantSelect<RowDataPacket>({ slug, table: "staff", where: "id = ?", params: [staffId], limit: 1 }).catch(() => []);
   const row = staffRows[0];
@@ -1533,12 +1642,13 @@ async function staffRowWithUser(slug: string, staffId: number): Promise<RowDataP
 }
 
 async function ensureStaffEmailAvailable(slug: string, email: string, currentStaffId: number): Promise<void> {
-  if (await staffEmailUsed(slug, email, currentStaffId)) throw new Error("Email gia utilizzata.");
+  // 'Email già utilizzata' arriva come ?msg= nel legacy (staff.php 892-955).
+  if (await staffEmailUsed(slug, email, currentStaffId)) throw staffFlashError("Email già utilizzata", "msg");
   const old = currentStaffId > 0 ? await staffRowWithUser(slug, currentStaffId) : null;
   const oldUserId = Number(old?.user_id ?? 0);
   const users = await tenantSelect<RowDataPacket>({ slug, table: "users", where: "LOWER(email) = ?", params: [email], limit: 1 }).catch(() => []);
   const existingUserId = Number(users[0]?.id ?? 0);
-  if (existingUserId > 0 && existingUserId !== oldUserId) throw new Error("Email gia utilizzata.");
+  if (existingUserId > 0 && existingUserId !== oldUserId) throw staffFlashError("Email già utilizzata", "msg");
 }
 
 async function staffEmailUsed(slug: string, email: string, currentStaffId: number): Promise<boolean> {
@@ -1587,10 +1697,103 @@ async function deleteUserByEmail(slug: string, email: string): Promise<void> {
   if (id > 0 && id !== 1) await tenantDelete({ slug, table: "users", id }).catch(() => undefined);
 }
 
-async function ensureStaffCanDeactivate(slug: string, staffId: number): Promise<void> {
-  if (await staffHasAppointmentRefs(slug, staffId, true)) throw new Error("Non puoi disattivare l'operatore: ha prenotazioni in sospeso o prenotate collegate.");
-  const services = (await staffServiceLinks(slug, [staffId])).get(staffId) ?? [];
-  if (services.some((service) => service.isActive)) throw new Error("Non puoi disattivare l'operatore: e collegato a servizi attivi.");
+// Scope tenant per le query manuali (tabelle shared).
+function tenantClause(table: Awaited<ReturnType<typeof tenantTable>>): { sql: string; params: unknown[] } {
+  if (table.mode === "shared") return { sql: " AND tenant_id = ?", params: [table.tenantId ?? 0] };
+  return { sql: "", params: [] };
+}
+
+// staff_operator_appointment_refs con filtro sedi (staff.php 347-398).
+async function staffHasOpenAppointmentsInLocations(slug: string, staffId: number, locationIds: number[]): Promise<boolean> {
+  const appointments = await tenantTable(slug, "appointments").catch(() => null);
+  if (!appointments || !locationIds.length || !await columnExists(appointments.name, "location_id")) {
+    return staffHasAppointmentRefs(slug, staffId, true);
+  }
+  const checks: string[] = [];
+  const params: unknown[] = [];
+  const segments = await tenantTable(slug, "appointment_segments").catch(() => null);
+  if (segments && await columnExists(segments.name, "staff_id")) {
+    checks.push(`EXISTS (SELECT 1 FROM ${quoteIdentifier(segments.name)} sg WHERE sg.appointment_id=a.id AND sg.staff_id=?)`);
+    params.push(staffId);
+  }
+  const appointmentStaff = await tenantTable(slug, "appointment_staff").catch(() => null);
+  if (appointmentStaff && await columnExists(appointmentStaff.name, "staff_id")) {
+    checks.push(`EXISTS (SELECT 1 FROM ${quoteIdentifier(appointmentStaff.name)} ast WHERE ast.appointment_id=a.id AND ast.staff_id=?)`);
+    params.push(staffId);
+  }
+  if (!checks.length) return false;
+  const clauses = [`(${checks.join(" OR ")})`, "a.status IN ('pending','scheduled')", `a.location_id IN (${locationIds.map(() => "?").join(",")})`];
+  params.push(...locationIds);
+  if (appointments.mode === "shared" && await columnExists(appointments.name, "tenant_id")) {
+    clauses.unshift("a.tenant_id = ?");
+    params.unshift(appointments.tenantId ?? 0);
+  }
+  const rows = await dbQuery<RowDataPacket[]>(`SELECT a.id FROM ${quoteIdentifier(appointments.name)} a WHERE ${clauses.join(" AND ")} LIMIT 1`, params).catch(() => []);
+  return rows.length > 0;
+}
+
+// staff_service_location_blockers (staff.php 401-477): servizi ATTIVI con
+// operatore che nella sede resterebbero senza ALTRI operatori abilitati.
+async function staffServiceLocationBlockers(slug: string, staffId: number, locationIds: number[], allLocations: ResourceLocation[]): Promise<Array<{ serviceId: number; serviceName: string; locationId: number; locationName: string }>> {
+  const out: Array<{ serviceId: number; serviceName: string; locationId: number; locationName: string }> = [];
+  const ids = uniquePositive(locationIds);
+  if (!(staffId > 0) || !ids.length) return out;
+  const services = await tenantTable(slug, "services").catch(() => null);
+  const staffServices = await tenantTable(slug, "staff_services").catch(() => null);
+  if (!services || !staffServices) return out;
+  const allLocationIds = allLocations.map((location) => location.id);
+  const names = new Map(allLocations.map((location) => [location.id, location.name]));
+  const hasNoOperator = await columnExists(services.name, "no_operator");
+
+  const svcScope = tenantClause(staffServices);
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT DISTINCT s.id, s.name, COALESCE(s.is_active,1) AS is_active${hasNoOperator ? ", COALESCE(s.no_operator,0) AS no_operator" : ", 0 AS no_operator"}
+       FROM ${quoteIdentifier(staffServices.name)} ss
+       JOIN ${quoteIdentifier(services.name)} s ON s.id = ss.service_id
+      WHERE ss.staff_id = ?${svcScope.sql.replace(" AND ", " AND ss.")}
+      ORDER BY s.name ASC, s.id ASC`,
+    [staffId, ...svcScope.params],
+  ).catch(() => [] as RowDataPacket[]);
+
+  for (const svc of rows) {
+    const serviceId = Number(svc.id ?? 0);
+    if (!(serviceId > 0) || Number(svc.is_active ?? 1) !== 1 || Number(svc.no_operator ?? 0) === 1) continue;
+
+    // Sedi effettive del servizio (service_locations; vuoto = tutte).
+    let serviceLocationIds: number[] = [];
+    const serviceLocations = await tenantTable(slug, "service_locations").catch(() => null);
+    if (serviceLocations) {
+      const locRows = await tenantSelect<RowDataPacket>({ slug, table: "service_locations", columns: "location_id", where: "service_id = ?", params: [serviceId] }).catch(() => []);
+      serviceLocationIds = uniquePositive(locRows.map((row) => Number(row.location_id ?? 0)));
+    }
+    const effective = serviceLocationIds.length ? serviceLocationIds : allLocationIds;
+
+    for (const locationId of ids) {
+      if (!effective.includes(locationId)) continue;
+      // Altri operatori ATTIVI abilitati al servizio e alla sede.
+      const others = await dbQuery<RowDataPacket[]>(
+        `SELECT st.id FROM ${quoteIdentifier(staffServices.name)} ss
+           JOIN ${quoteIdentifier((await tenantTable(slug, "staff")).name)} st ON st.id = ss.staff_id
+          WHERE ss.service_id = ? AND st.id <> ? AND COALESCE(st.is_active,1) = 1 AND st.full_name <> 'SSO'${svcScope.sql.replace(" AND ", " AND ss.")}`,
+        [serviceId, staffId, ...svcScope.params],
+      ).catch(() => [] as RowDataPacket[]);
+      let otherIds = uniquePositive(others.map((row) => Number(row.id ?? 0)));
+      if (otherIds.length) {
+        // app_filter_staff_ids_by_location: operatore valido nella sede se ha la riga.
+        const staffLocationRows = await tenantSelect<RowDataPacket>({
+          slug,
+          table: "staff_locations",
+          columns: "staff_id",
+          where: `location_id = ? AND staff_id IN (${otherIds.map(() => "?").join(",")})`,
+          params: [locationId, ...otherIds],
+        }).catch(() => []);
+        otherIds = uniquePositive(staffLocationRows.map((row) => Number(row.staff_id ?? 0)));
+      }
+      if (otherIds.length) continue;
+      out.push({ serviceId, serviceName: String(svc.name ?? `Servizio #${serviceId}`), locationId, locationName: names.get(locationId) ?? `Sede #${locationId}` });
+    }
+  }
+  return out;
 }
 
 async function ensureStaffAvailableForLocation(slug: string, staffId: number, locationId: number): Promise<void> {
