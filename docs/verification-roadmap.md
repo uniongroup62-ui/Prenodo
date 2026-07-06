@@ -6636,3 +6636,25 @@ usa per le righe Fidelity/Credito/GiftCard e per il Saldo dovuto = totale server
 confermato; test dello scenario di clamp saltato per non creare prenotazioni
 reali + debiti benefit. Residuo cost-breakdown: prezzi per-servizio barrati/0€
 redeem non ancora dal server.)
+
+
+---
+
+## Wizard booking: categorie filtrate (non vuote / per sede) (2026-07-06)
+
+Chiuso il finding MEDIUM data-shown-categories. Il Next mostrava TUTTE le
+service_categories (anche vuote o con servizi di sole altre sedi) + creava
+categorie sintetiche "Categoria #N"; il PHP mostra solo quelle con >=1 servizio
+prenotabile visibile nella sede (booking.php 2959 EXISTS + 3061-3070
+$visibleCategoryIds).
+
+Fix:
+- publicBookingContext: le categorie sono filtrate a quelle referenziate da >=1
+  servizio bookable (usedCategoryIds); il fallback "Categoria #N" resta SOLO per
+  category_id orfani (categoria cancellata) di un servizio bookable.
+- BookingFaithful: lo step 2 mostra categoriesForLocation (categorie con >=1
+  servizio nella sede selezionata); l'auto-select categoria unica considera la
+  sede d'ingresso.
+
+Verifica live (centroesteticoelite): categorie=["genera"], auto-selected; niente
+categorie vuote né "Categoria #N". typecheck/lint puliti.

@@ -305,8 +305,16 @@ export function BookingFaithful({
           : ctx.locations[0]?.id ?? 0;
         setLocationId(entryLoc);
         // Il legacy NON preseleziona una categoria con più categorie (validateStep
-        // step 2 richiede una scelta); con UNA sola categoria la auto-seleziona.
-        setCategoryId(ctx.categories.length === 1 ? ctx.categories[0]?.id ?? null : null);
+        // step 2 richiede una scelta); con UNA sola categoria (nella sede
+        // d'ingresso) la auto-seleziona.
+        const catsAtEntryLoc = ctx.categories.filter((cat) =>
+          ctx.services.some(
+            (service) =>
+              service.categoryId === cat.id &&
+              (service.locationIds.length === 0 || service.locationIds.includes(entryLoc)),
+          ),
+        );
+        setCategoryId(catsAtEntryLoc.length === 1 ? catsAtEntryLoc[0]?.id ?? null : null);
         // Deep-link prefill: preselect the covered service (and its category) so
         // the customer lands with the redeem's service already in the cart.
         if (redeemPrefill && redeemPrefill.serviceId > 0) {
@@ -394,6 +402,21 @@ export function BookingFaithful({
           )
         : [],
     [ctx, locationId, categoryId],
+  );
+  // Categorie con almeno un servizio prenotabile NELLA sede selezionata
+  // (booking.php 3061-3070: $visibleCategoryIds dei servizi già filtrati per sede).
+  const categoriesForLocation = useMemo(
+    () =>
+      ctx
+        ? ctx.categories.filter((cat) =>
+            ctx.services.some(
+              (service) =>
+                service.categoryId === cat.id &&
+                (service.locationIds.length === 0 || service.locationIds.includes(locationId)),
+            ),
+          )
+        : [],
+    [ctx, locationId],
   );
   const selectedBenefit = ctx?.benefits.find((item) => item.id === benefitId) ?? null;
   const selectedSlot = availableSlots.find((item) => item.time === slot) ?? null;
@@ -1168,12 +1191,12 @@ export function BookingFaithful({
               <div className={`wizard-step${step === 2 ? "" : " d-none"}`} data-step="2">
                 <div className="booking-list-section-title">Scegli una categoria</div>
                 <div className="d-grid gap-3">
-                  {ctx && !ctx.categories.length ? (
+                  {ctx && !categoriesForLocation.length ? (
                     <div className="text-muted">
                       Nessuna categoria configurata. Vai su <strong>Servizi → Categorie</strong> per crearle.
                     </div>
                   ) : null}
-                  {ctx?.categories.map((cat) => (
+                  {categoriesForLocation.map((cat) => (
                     <div
                       key={cat.id}
                       className={`list-card cat-card${categoryId === cat.id ? " active" : ""}`}

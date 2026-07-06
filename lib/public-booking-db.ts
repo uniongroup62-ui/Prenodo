@@ -169,14 +169,24 @@ export async function publicBookingContext(slug: string): Promise<PublicBookingC
   const staffServices = groupNumberMap(staffServiceRows, "staff_id", "service_id");
   const today = todayIsoLocal();
 
-  const categories = categoryRows.map((row) => ({
-    id: Number(row.id ?? 0),
-    name: String(row.name ?? "Servizi"),
-    // Solo URL http assoluti (R2) arrivano al wizard; i path locali legacy
-    // (/uploads/...) non esistono nel Next e cadrebbero sul fallback comunque.
-    imageUrl: /^https?:\/\//i.test(String(row.image_url ?? "").trim()) ? String(row.image_url).trim() : "",
-  }));
+  // Come il legacy (booking.php 2959: WHERE EXISTS servizio bookable): mostra
+  // solo le categorie con almeno un servizio prenotabile — niente categorie
+  // vuote o con servizi di sole altre sedi.
+  const usedCategoryIds = new Set(
+    serviceRows.map((service) => nullableNumber(service.category_id)).filter((id): id is number => !!id),
+  );
+  const categories = categoryRows
+    .map((row) => ({
+      id: Number(row.id ?? 0),
+      name: String(row.name ?? "Servizi"),
+      // Solo URL http assoluti (R2) arrivano al wizard; i path locali legacy
+      // (/uploads/...) non esistono nel Next e cadrebbero sul fallback comunque.
+      imageUrl: /^https?:\/\//i.test(String(row.image_url ?? "").trim()) ? String(row.image_url).trim() : "",
+    }))
+    .filter((category) => usedCategoryIds.has(category.id));
   const serviceCategoryIds = new Set(categories.map((category) => category.id));
+  // Fallback SOLO per category_id orfani (categoria cancellata) referenziati da
+  // un servizio bookable, così quei servizi restano raggiungibili.
   for (const service of serviceRows) {
     const categoryId = nullableNumber(service.category_id);
     if (categoryId && !serviceCategoryIds.has(categoryId)) {
