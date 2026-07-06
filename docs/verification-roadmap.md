@@ -6595,3 +6595,24 @@ expand per-ora e la classe has-groups.
 Verifica live (giorno con 109 slot): has-groups; periodi Mattina(36 orari)/
 Pomeriggio(72)/Sera(1); 10 card ora con "12 disponibilita" + "Mostra tutti";
 09:00 mostra 09:00/09:15/09:30/09:45 (consigliati). typecheck pulito.
+
+
+---
+
+## Wizard booking: label sconto conferma + rimozione box coupon morto (2026-07-06)
+
+Due finding MEDIUM della schermata di conferma:
+- **discount-label**: la riga sconto della conferma era sempre "Coupon" e leggeva
+  il codice solo da selectedBenefit; una PROMOZIONE appariva come "Coupon " vuoto.
+  Fix: etichetta calcolata (promozione → titolo, coupon → "Coupon <codice>") da
+  couponApplied/autoPromo/selectedBenefit.
+- **dead-markup**: rimosso il box coupon/promozioni STATICO dello step 7 (markup
+  morto senza handler + id DOM DUPLICATI couponInput/couponBox/couponMsg già nello
+  step 6 funzionante). Residuo dichiarato: nel legacy il coupon è inseribile anche
+  allo step 7; nel port l'inserimento free-text vive nello step 6.
+
+typecheck pulito. RESIDUI del cluster conferma (server-side): post-book-amounts
+(importi dal client invece che dal DB) e cost-breakdown (prezzi barrati/sconto
+per-servizio) richiedono che confirmPublicBooking restituisca gli importi
+realmente applicati (fidelity/credito/giftcard) + i prezzi per-servizio — non
+ancora fatto.

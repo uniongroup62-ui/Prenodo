@@ -824,6 +824,17 @@ export function BookingFaithful({
       ? `${selectedServices[0].name}${selectedServices.length > 1 ? ` +${selectedServices.length - 1} servizi` : ""}`
       : "Appuntamento";
     const confirmLocation = ctx?.locations.find((loc) => loc.id === locationId) ?? null;
+    // Etichetta della riga sconto: una PROMOZIONE mostra il titolo, un coupon
+    // free-text mostra "Coupon <codice>" — non sempre "Coupon" (come il legacy).
+    const confirmDiscountLabel = couponApplied
+      ? couponApplied.isPromotion
+        ? couponApplied.promotionTitle || "Promozione"
+        : `Coupon ${couponApplied.code}`.trim()
+      : autoPromo
+        ? autoPromo.title
+        : selectedBenefit?.type === "promotion"
+          ? selectedBenefit.label || "Promozione"
+          : `Coupon ${selectedBenefit?.type === "coupon" ? selectedBenefit.code ?? "" : ""}`.trim();
     return (
       <>
         {CSS_LINKS.map((href) => (
@@ -920,7 +931,7 @@ export function BookingFaithful({
               ))}
               {confirmation.discount > 0.00001 ? (
                 <div className="line confirm-line-success">
-                  <div>Coupon {selectedBenefit?.type === "coupon" ? selectedBenefit.code ?? "" : ""}</div>
+                  <div>{confirmDiscountLabel}</div>
                   <div>
                     <strong>-€ {fmtMoney(confirmation.discount)}</strong>
                   </div>
@@ -1814,33 +1825,12 @@ export function BookingFaithful({
                     </div>
                   </div>
                 </div>
-                <div className="mt-2 text-end">
-                  {/* Promotions + coupon box (static markup). */}
-                  <div id="promotionsBox" className="mt-2 d-none text-start">
-                    <div className="small fw-semibold mb-1">
-                      <i className="bi bi-megaphone me-1" />
-                      Promozioni disponibili
-                    </div>
-                    <div id="promotionsList" className="d-grid gap-2" />
-                  </div>
-
-                  <a href="#" className="text-success small text-decoration-underline" id="couponToggle" onClick={(event) => event.preventDefault()}>
-                    Hai un codice coupon?
-                  </a>
-
-                  <div className="mt-2 d-none" id="couponBox">
-                    <div className="input-group input-group-sm">
-                      <input className="form-control" id="couponInput" type="text" placeholder="Inserisci codice (es. WELCOME10)" autoComplete="off" />
-                      <button className="btn btn-outline-success" type="button" id="couponApplyBtn">
-                        Applica
-                      </button>
-                      <button className="btn btn-outline-secondary" type="button" id="couponRemoveBtn">
-                        Rimuovi
-                      </button>
-                    </div>
-                    <div className="small mt-1" id="couponMsg" />
-                  </div>
-                </div>
+                {/* Rimosso il box coupon/promozioni STATICO dello step 7: era
+                    markup morto (nessun handler) con id DOM DUPLICATI
+                    (couponInput/couponBox/couponMsg già presenti — e funzionanti
+                    — nello step 6 Vantaggi). Residuo dichiarato: nel legacy il
+                    coupon è inseribile anche allo step 7; qui l'inserimento
+                    coupon free-text vive nello step 6. */}
               </div>
             </form>
 
