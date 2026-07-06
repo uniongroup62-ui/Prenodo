@@ -6391,3 +6391,27 @@ next=start. Residue DB=0. typecheck/lint puliti.
 Residuo residuo (badge "Prenotato" per omaggi già riservati): minore, la lista
 mostra solo i 'disponibile' e i reward riservati non espongono più il pulsante
 (reserved sottratto), quindi nessuna doppia-prenotazione offerta.
+
+
+---
+
+## Hub cliente: feature-gate booking_public_allowed + normalizzazione slug (2026-07-06)
+
+Chiusi due residui LOW di correttezza:
+
+- **booking_public_allowed (TenantFeatureGate::allowsPublicBooking)**: se il
+  tenant ha disattivato la prenotazione online (saas_tenants.booking_public_allowed=0),
+  il PHP nasconde "Prenota ora" e mostra 'Prenotazione online non disponibile.'
+  (booking.php 2981-2985), e blocca il wizard. Il Next lo ignorava (mostrava il
+  CTA). Ora il gate legge il flag: hasBookableLocations = allowed && sedi
+  prenotabili; noLocationsMessage varia; ?start=1 e i deep-link redeem con
+  booking disattivato → showcase /attivita/<slug>.
+- **Case-sensitivity slug**: onlyTenant/sidebar usavano lo slug grezzo della
+  route; uno slug URL non minuscolo svuotava le liste. Il gate ora passa
+  slug.toLowerCase() a PerTenantHub → link e filtro coerenti.
+
+Verifica live (toggle saas_tenants.booking_public_allowed su centroesteticoelite,
+save→set 0→test→RESTORE 1): flag=1 → "Prenota ora" + start 200; flag=0 → nessun
+CTA + 'Prenotazione online non disponibile.' + start=1 → 307 /attivita/<slug>;
+ripristino a 1 verificato (baseline OK). URL mixed-case → link sidebar
+lowercased. typecheck/lint puliti; nessun dato reale alterato.

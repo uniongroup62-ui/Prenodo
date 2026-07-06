@@ -166,12 +166,16 @@ export function PerTenantHub({
   section,
   tenantName,
   hasBookableLocations,
+  noLocationsMessage = "Nessuna sede disponibile per la prenotazione online.",
   initialUser = null,
 }: {
   slug: string;
   section: HubSection;
   tenantName: string;
   hasBookableLocations: boolean;
+  // Messaggio della landing quando non ci sono sedi prenotabili: varia se la
+  // prenotazione online è disattivata per il tenant (booking.php 2981-2985).
+  noLocationsMessage?: string;
   // Cliente noto lato server (dal gate): idrata il chip account in SSR come il
   // PHP, che server-renderizza il widget account (BookingPublicUi.php 296-313).
   initialUser?: PublicCustomer | null;
@@ -604,7 +608,7 @@ export function PerTenantHub({
                     </div>
                   ) : (
                     <>
-                      <div className="alert alert-warning mt-3 mb-0">Nessuna sede disponibile per la prenotazione online.</div>
+                      <div className="alert alert-warning mt-3 mb-0">{noLocationsMessage}</div>
                       <div className="booking-dashboard-home__actions">
                         <a className="booking-dashboard-home__cta booking-dashboard-home__cta--secondary" href={profileUrl}>
                           <i className="bi bi-shop"></i>

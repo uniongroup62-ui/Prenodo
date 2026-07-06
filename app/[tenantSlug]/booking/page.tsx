@@ -7,6 +7,18 @@ import { PerTenantHub, type HubSection } from "@/components/public/per-tenant-hu
 import { currentManageSession } from "@/lib/manage-auth";
 import { currentPublicCustomerSession } from "@/lib/public-customer-account";
 import { publicBookingContext } from "@/lib/public-booking-db";
+import { dbQuery, type RowDataPacket } from "@/lib/tenant-db";
+
+// booking_public_allowed (saas_tenants) — port di TenantFeatureGate::
+// allowsPublicBooking: se il tenant ha disattivato la prenotazione online, la
+// landing dell'hub non mostra "Prenota ora" e il wizard/redeem è bloccato.
+async function tenantBookingPublicAllowed(slug: string): Promise<boolean> {
+  const rows = await dbQuery<RowDataPacket[]>(
+    "SELECT booking_public_allowed FROM saas_tenants WHERE slug = ? LIMIT 1",
+    [slug],
+  ).catch(() => [] as RowDataPacket[]);
+  return rows.length ? Number(rows[0].booking_public_allowed ?? 1) === 1 : true;
+}
 
 // Target legacy dell'area cliente per-tenant (booking.php 9314-9336): l'hub
 // per-sede (booking.php?public=1&<sezione>=1) è reso IN LOCO da PerTenantHub
@@ -120,18 +132,25 @@ export default async function TenantBookingPage({
     if (requestedTarget === "profile" || requestedTarget === "settings") {
       redirect(`/account/profile`);
     }
+    const publicBookingAllowed = await tenantBookingPublicAllowed(tenantSlug);
     if (HUB_SECTIONS.has(requestedTarget as HubSection)) {
       // Nome attività + sedi prenotabili (booking.php: $businessName +
-      // $bookingHasBookableLocations per la landing "Ciao 👋").
+      // $bookingHasBookableLocations per la landing "Ciao 👋"). Se la
+      // prenotazione online è disattivata → nessuna sede prenotabile +
+      // messaggio dedicato (booking.php 2981-2985).
       const ctx = await publicBookingContext(tenantSlug).catch(() => null);
       const tenantName = ctx?.business.name?.trim() || tenantSlug;
-      const hasBookableLocations = (ctx?.locations ?? []).some((location) => location.bookingEnabled);
+      const hasBookableLocations = publicBookingAllowed && (ctx?.locations ?? []).some((location) => location.bookingEnabled);
+      const noLocationsMessage = publicBookingAllowed
+        ? "Nessuna sede disponibile per la prenotazione online."
+        : "Prenotazione online non disponibile.";
       return (
         <PerTenantHub
-          slug={tenantSlug}
+          slug={tenantSlug.toLowerCase()}
           section={requestedTarget as HubSection}
           tenantName={tenantName}
           hasBookableLocations={hasBookableLocations}
+          noLocationsMessage={noLocationsMessage}
           initialUser={{
             id: customer.id,
             email: customer.email,
@@ -142,6 +161,11 @@ export default async function TenantBookingPage({
           }}
         />
       );
+    }
+    // start / deep-link redeem: bloccati se la prenotazione online è disattivata
+    // (TenantFeatureGate::allowsPublicBooking) → showcase.
+    if (!publicBookingAllowed) {
+      redirect(`/attivita/${encodeURIComponent(tenantSlug)}`);
     }
     if (requestedTarget !== "start") {
       redirect(`/attivita/${encodeURIComponent(tenantSlug)}`);
