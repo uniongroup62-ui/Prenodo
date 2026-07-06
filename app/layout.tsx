@@ -14,7 +14,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="it" className="h-full antialiased">
-      <body className="min-h-full flex flex-col">{children}</body>
+      {/* body a display:block (NON flex): le pagine pubbliche marketplace/
+          account usano .wrap/.account-page con margin:auto+max-width, che in
+          un flex-column si restringono al contenuto. Il gestionale usa i
+          propri wrapper Bootstrap (min-vh-100) e non richiede il flex. */}
+      <body className="min-h-full">{children}</body>
     </html>
   );
 }

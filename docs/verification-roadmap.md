@@ -6137,3 +6137,29 @@ Battery: e2e-marketplace.mjs 28/28 (incl. G: titoli, picker categorie auth,
 salon data, document.title dettaglio, CSS per pagina) + regressioni
 e2e-public-area 14/14, e2e-account-faithful 15/15, e2e-booking-marketplace
 26/26 CLEAN; 100/100 + 46/46 marker; typecheck/lint puliti.
+
+## MARKETPLACE — SETTIMA PASSATA: layout rotto (body flex) — misurazione Playwright (2026-07-06)
+L'utente ha mostrato che la scheda sede/dettaglio era visibilmente rotta
+(contenuto stretto ~670px invece di 1520px, copertina piccola, avatar
+sovrapposto), mentre lista/ricerca sembravano quasi ok. Diagnosi con
+Playwright (misura larghezze reali a 1900px):
+- CAUSA: il layout root di Next aveva `<body class="min-h-full flex flex-col">`.
+  Con body a display:flex column, `.wrap{margin:0 auto;max-width:1520px}` (e
+  `.salon-detail-layout`, `.results-wrap`) NON si stira alla larghezza del
+  contenitore ma si restringe al contenuto (margin:auto su flex item annulla
+  lo stretch) → `.wrap` misurava 672px invece di 1520px, hero 208px invece
+  di 1056px. Il PHP ha body block, quindi 1520/1056.
+- FIX: rimosso `flex flex-col` dal body (rimane `min-h-full`). Le pagine
+  pubbliche usano `.wrap`/`.account-page` con margin:auto+max-width (richiedono
+  body block); il gestionale usa `.app-shell{display:flex;min-height:100vh}` e
+  le auth `.account-page{min-height:100vh;display:grid}` — nessuno richiede il
+  body flex, quindi zero regressioni.
+Verifica Playwright (parità pixel PHP vs Next a 1900px):
+- /attivita: hero 1900, grid 1440, wrap 1520, topbar 1440 — MATCH
+- /attivita/ricerca: results-wrap 1520, results-grid 1440, result-card 348 — MATCH
+- /attivita/<slug>: wrap 1520, salon-detail-layout 1440, salon-hero 1056 — MATCH
+- font body = Inter su entrambi ovunque.
+Battery: e2e-marketplace-layout.mjs 3/3 (parità larghezze) + regressioni
+e2e-marketplace 28/28, e2e-account-faithful 15/15, e2e-public-area 14/14,
+e2e-booking-marketplace 26/26 + 100/100 e 46/46 marker; typecheck pulito;
+manage login/app verificati non regrediti (usano wrapper propri).
