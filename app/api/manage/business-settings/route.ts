@@ -62,8 +62,15 @@ export async function POST(request: Request) {
       if (action === "location_gallery_upload") {
         if (!can(session.user.perms, "settings.location")) return jsonError("Permesso Sedi richiesto.", 403);
         const locationId = parseInteger(String(form.get("location_id") ?? "0"), 0);
-        const files = form.getAll("location_gallery_images").filter((f): f is File => f instanceof File);
-        return Response.json(await uploadLocationGalleryImages(tenantSlug, locationId, files, publicOrigin(request)));
+        // 'Sede non valida per la gallery.' arriva NUDO (locations.php 381),
+        // gli altri errori col wrapper AJAX 'Errore upload gallery sede: '.
+        if (locationId <= 0) return jsonError("Sede non valida per la gallery.", 422);
+        try {
+          const files = form.getAll("location_gallery_images").filter((f): f is File => f instanceof File);
+          return Response.json(await uploadLocationGalleryImages(tenantSlug, locationId, files, publicOrigin(request)));
+        } catch (error) {
+          return jsonError(`Errore upload gallery sede: ${error instanceof Error ? error.message : "Operazione non riuscita."}`);
+        }
       }
 
       const kind = normalizeBrandingKind(String(form.get("kind") ?? ""));
@@ -142,20 +149,46 @@ export async function POST(request: Request) {
 
       case "location_save":
         if (!can(session.user.perms, "settings.location")) return jsonError("Permesso Sedi richiesto.", 403);
-        return Response.json(await saveBusinessLocation(tenantSlug, body, publicOrigin(request)));
+        // Come locations.php 297-353: le validazioni (sede_location_validation
+        // _error + gate piano) escono NUDE, gli errori imprevisti col wrapper
+        // 'Errore salvataggio sede: '.
+        try {
+          return Response.json(await saveBusinessLocation(tenantSlug, body, publicOrigin(request)));
+        } catch (error) {
+          const inner = error instanceof Error ? error.message : "Operazione non riuscita.";
+          const isValidation = inner === "Inserisci il nome della sede."
+            || inner === "Email non valida."
+            || inner.endsWith(" non valido.")
+            || inner === "Esiste gia una sede con questo nome."
+            || inner === "Funzione non disponibile nel piano attuale.";
+          return jsonError(isValidation ? inner : `Errore salvataggio sede: ${inner}`);
+        }
 
-      case "location_move":
+      case "location_move": {
         if (!can(session.user.perms, "settings.location")) return jsonError("Permesso Sedi richiesto.", 403);
-        return Response.json(await moveBusinessLocation(
-          tenantSlug,
-          parseInteger(body.id ?? body.location_id, 0),
-          body.direction === "up" ? "up" : "down",
-          publicOrigin(request),
-        ));
+        // Validazione legacy nuda + wrapper 'Errore ordinamento sedi: '.
+        const moveId = parseInteger(body.id ?? body.location_id, 0);
+        const moveDirection = String(body.direction ?? "");
+        if (moveId <= 0 || (moveDirection !== "up" && moveDirection !== "down")) return jsonError("Spostamento sede non valido.", 422);
+        try {
+          return Response.json(await moveBusinessLocation(tenantSlug, moveId, moveDirection, publicOrigin(request)));
+        } catch (error) {
+          return jsonError(`Errore ordinamento sedi: ${error instanceof Error ? error.message : "Operazione non riuscita."}`);
+        }
+      }
 
       case "location_marketplace_save":
         if (!canAny(session.user.perms, ["settings.location", "settings.general"])) return jsonError("Permesso Sedi richiesto.", 403);
-        return Response.json(await saveLocationMarketplace(tenantSlug, body, publicOrigin(request)));
+        // Wrapper legacy: TUTTI gli errori del try (inclusa la validazione
+        // categorie) escono come 'Errore salvataggio marketplace sede: ...';
+        // solo 'Sede non valida per il marketplace.' arriva nudo (427).
+        try {
+          return Response.json(await saveLocationMarketplace(tenantSlug, body, publicOrigin(request)));
+        } catch (error) {
+          const inner = error instanceof Error ? error.message : "Operazione non riuscita.";
+          if (inner === "Sede non valida per il marketplace.") return jsonError(inner, 422);
+          return jsonError(`Errore salvataggio marketplace sede: ${inner}`);
+        }
 
       case "location_delete_preview":
         if (!can(session.user.perms, "settings.location")) return jsonError("Permesso Sedi richiesto.", 403);
@@ -173,11 +206,19 @@ export async function POST(request: Request) {
 
       case "location_gallery_delete":
         if (!can(session.user.perms, "settings.location")) return jsonError("Permesso Sedi richiesto.", 403);
-        return Response.json(await deleteLocationGalleryImage(tenantSlug, parseInteger(body.location_id, 0), parseInteger(body.gallery_image_id ?? body.id, 0), publicOrigin(request)));
+        try {
+          return Response.json(await deleteLocationGalleryImage(tenantSlug, parseInteger(body.location_id, 0), parseInteger(body.gallery_image_id ?? body.id, 0), publicOrigin(request)));
+        } catch (error) {
+          return jsonError(`Errore rimozione foto gallery sede: ${error instanceof Error ? error.message : "Operazione non riuscita."}`);
+        }
 
       case "location_gallery_move":
         if (!can(session.user.perms, "settings.location")) return jsonError("Permesso Sedi richiesto.", 403);
-        return Response.json(await moveLocationGalleryImage(tenantSlug, parseInteger(body.location_id, 0), parseInteger(body.gallery_image_id ?? body.id, 0), body.direction === "up" ? "up" : "down", publicOrigin(request)));
+        try {
+          return Response.json(await moveLocationGalleryImage(tenantSlug, parseInteger(body.location_id, 0), parseInteger(body.gallery_image_id ?? body.id, 0), body.direction === "up" ? "up" : "down", publicOrigin(request)));
+        } catch (error) {
+          return jsonError(`Errore ordinamento gallery sede: ${error instanceof Error ? error.message : "Operazione non riuscita."}`);
+        }
 
       case "marketplace_sync":
         if (!can(session.user.perms, "settings.general")) return jsonError("Permesso Profilo attivita richiesto.", 403);

@@ -989,6 +989,16 @@ export default async function TenantPage({
     );
   }
 
+  // Sedi (locations.php; page=settings è lo shim legacy che la richiama):
+  // flash ?msg=/?err= dai redirect + deep-link action=delete_preview&id=N.
+  if (page === "locations" || page === "settings") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <LocationsContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err, action: query.action, id: query.id }} />
+      </ManageShell>
+    );
+  }
+
   // Profilo attività (business_profile.php): flash ?msg=/?err= dai redirect
   // legacy (Profilo attività salvato / Posizione logo salvata / ...).
   if (page === "business_profile") {

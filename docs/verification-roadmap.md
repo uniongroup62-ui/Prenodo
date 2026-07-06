@@ -5496,3 +5496,89 @@ salvato'/'Posizione logo salvata', AJAX senza file, ciclo upload→guardia→
 delete con 'Logo salvato'/'Logo rimosso', live ripulito) + 73/73 marker +
 regressioni (locations 18, branding-r2 12 con aspettativa aggiornata al
 wrapper, booking-settings 12) + typecheck/lint puliti.
+
+## AUDIT COMPLETO — Sedi (locations.php, seconda passata) (2026-07-06)
+
+Audit funzionale completo di locations.php (1253 righe) + assets/js/pages/
+locations.js (711) + italy-geo.js vs locations-content.tsx + lib
+manage-business-settings.ts + route business-settings. La V2 (2026-07-03)
+aveva chiuso il backend; la UI era una versione funzionale ma NON fedele.
+Bug/divergenze trovate e corrette:
+1. WRAPPER ERRORI LEGACY nella route: 'Errore salvataggio marketplace sede:'
+   (anche sulla validazione categorie, come nel try legacy), 'Errore upload
+   gallery sede:', 'Errore rimozione foto gallery sede:', 'Errore
+   ordinamento gallery sede:', 'Errore ordinamento sedi:', 'Errore
+   salvataggio sede:' (solo errori non-validazione: le validazioni di
+   sede_location_validation_error escono NUDE); 'Sede non valida per la
+   gallery.'/'per il marketplace.' e 'Spostamento sede non valido.' nudi.
+2. MOVE: flash legacy 'La sede e gia in posizione limite.' (msg SUCCESS,
+   anche per id inesistente) / 'Ordine sedi aggiornato' via flag moved —
+   prima il limite era silenzioso.
+3. PREVIEW DELETE: block reason completato (': non viene eliminata per
+   evitare perdita di dati.' mancava); shape exclusive/shared/
+   clientReassignments esposta per il modale (calcolo P11 documentato).
+4. MESSAGE nei payload di tutte le azioni ('Sede salvata', 'Marketplace
+   sede aggiornato', 'Foto gallery sede caricate' + uploaded, 'Foto gallery
+   sede rimossa', 'Ordine gallery sede aggiornato', 'Sede eliminata
+   definitivamente'); iconClass legacy (activityCategoryIconSvg → mappa
+   icon_key→classe bi-*, default bi-grid-3x3-gap) sulle categorie.
+5. COMPONENT riscritto fedele:
+   - flash View::alert (msg success/err danger) SOPRA il page header +
+     initialQuery {msg, err, action, id} con deep-link
+     action=delete_preview&id (branch page.tsx per locations E settings);
+   - header actions btn-pill con bi-clock-history/bi-link-45deg;
+   - tabella legacy: contatti testuali (telefono / 'WhatsApp: x' / email,
+     '-' se vuoti — prima icone e ordine diverso), badge
+     Visibile/Bloccata(+title gate piano)/Nascosta per Booking e
+     Marketplace (prima Attivo/Disattivo senza gate), categorie con chip
+     location-category-chip e 'Da impostare' warning, Ordine text-center
+     con title 'Sposta su'/'Sposta giu', azioni Modifica/Marketplace/
+     Elimina senza icone, empty 'Nessuna sede configurata.';
+   - modale sede modal-xl col markup legacy: subtitle dinamico ('Aggiorna i
+     dati e la visibilità della sede: NAME.'), label 'Nome sede', combobox
+     Regione→Provincia→Città di italy-geo.js (pattern GeoCombobox: hidden
+     non controllati + iniezione script a ogni apertura), CAP maxlength 20,
+     placeholder social legacy, warning dinamico 'Disattivando le
+     prenotazioni online, la scheda può restare accessibile ma i pulsanti
+     Prenota non verranno mostrati.' (edit + marketplace visibile + booking
+     deselezionato) o alert-danger di gate, bottoni 'Salva sede'/'Annulla'
+     nel body — prima input di testo liberi e layout inventato;
+   - modale Marketplace sede col pannello legacy: summary sede, switch
+     Visibile + help, card categorie con icona/badge Principale/posizione,
+     counter N/5, max 5 con alert legacy, dblclick = principale, guardia
+     submit client ('...per rendere visibile la sede nel marketplace.',
+     testo DIVERSO dal server); GALLERY legacy completa: grid card 'Foto
+     N' con frecce e delete AJAX (confirm 'Rimuovere questa foto dalla
+     gallery della sede?' + feedback nel modale), pending 'Da salvare' con
+     anteprime objectURL/size it/rimozione singola/Svuota, dropzone con
+     is-dragover, validazione client (alert 'Alcune foto non sono state
+     aggiunte: ... supera 5 MB.'), 'Salva gallery' con spinner e '1 foto
+     pronta - X,X MB totali'; move gallery = flash globale (redirect
+     legacy) — prima un semplice input file con upload immediato;
+   - modale eliminazione col markup legacy completo: kicker 'Sedi', titoli
+     'Eliminazione definitiva sede'/'Impossibile eliminare la sede', alert
+     'Non puoi eliminare NAME.', accordion 3 sezioni (Configurazioni della
+     sede eliminate / Dati globali eliminati perche esclusivi / mantenuti
+     perche condivisi) con badge e righe label+count, rendering clients
+     riassegnati ('Riassegnato a', 'Attivita residue', 'Ultima attivita'),
+     'Motivo eliminazione' con placeholder legacy, 'Scrivi ELIMINA per
+     confermare' (senza disabilitare il submit client-side: 'Conferma non
+     valida.' arriva dal server come nel legacy), footer 'Annulla'/'Elimina
+     sede'; TABLE_LABELS completa verbatim (~90 voci + 'Dato collegato' —
+     prima 18 voci con testi inventati).
+Verifica: battery NUOVA e2e-locations-page 32/32 (context con iconClass,
+4 validazioni nude, social @handle normalizzati, sort_order/marketplace_
+enabled=0 su create, move con flash limite/swap/restore + direction e id
+invalidi, marketplace wrapper + ordine/primary + troncamento a 5, gallery
+0/senza file/gif/5MB coi wrapper + upload/move/delete con ricompattazione,
+preview eliminabile vs Sede1 bloccata con reason verbatim completo, confirm
+case-sensitive, delete con cleanup gallery/mappings e cliente ZZ
+riassegnato a Sede1, 'Deve restare almeno una sede.'; restore CLEAN con
+Sede1 intatta) + LIVE PHP byte-per-byte (err validazioni nudi, msg 'Sede
+salvata' con instagram @handle normalizzato e sort/marketplace_enabled
+identici, 'La sede e gia in posizione limite.' come MSG, wrapper
+marketplace, 'Conferma non valida.', 'Sede eliminata definitivamente',
+live ripulito) + 119/119 marker + regressioni (locations 18 e branding-r2
+12 con aspettative aggiornate ai wrapper, booking-settings 12,
+business-profile 25, shim /settings e flash ?msg= verificati) +
+typecheck/lint puliti.

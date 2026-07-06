@@ -365,7 +365,7 @@ export async function saveBusinessLocation(slug: string, input: Record<string, s
   }
 
   await syncMarketplaceProfile(slug, publicOrigin);
-  return getBusinessSettingsContext(slug, publicOrigin);
+  return { ...await getBusinessSettingsContext(slug, publicOrigin), message: "Sede salvata" };
 }
 
 export async function moveBusinessLocation(slug: string, locationId: number, direction: "up" | "down", publicOrigin = "") {
@@ -373,13 +373,15 @@ export async function moveBusinessLocation(slug: string, locationId: number, dir
   if (!await columnExists(target.name, "sort_order")) throw new Error("Campo sort_order non disponibile.");
   const rows = await normalizeLocationOrder(slug);
   const index = rows.findIndex((row) => Number(row.id ?? 0) === locationId);
-  if (index < 0) throw new Error("Sede non trovata.");
+  // Flash legacy: msg='Ordine sedi aggiornato' se spostata, msg='La sede e gia
+  // in posizione limite.' altrimenti (entrambi SUCCESS in locations.php 372).
+  if (index < 0) return { ...await getBusinessSettingsContext(slug, publicOrigin), moved: false, message: "La sede e gia in posizione limite." };
   const targetIndex = direction === "up" ? index - 1 : index + 1;
-  if (targetIndex < 0 || targetIndex >= rows.length) return getBusinessSettingsContext(slug, publicOrigin);
+  if (targetIndex < 0 || targetIndex >= rows.length) return { ...await getBusinessSettingsContext(slug, publicOrigin), moved: false, message: "La sede e gia in posizione limite." };
   await tenantUpdate({ slug, table: "locations", id: Number(rows[index].id), values: { sort_order: Number(rows[targetIndex].sort_order ?? 0) } });
   await tenantUpdate({ slug, table: "locations", id: Number(rows[targetIndex].id), values: { sort_order: Number(rows[index].sort_order ?? 0) } });
   await syncMarketplaceProfile(slug, publicOrigin);
-  return getBusinessSettingsContext(slug, publicOrigin);
+  return { ...await getBusinessSettingsContext(slug, publicOrigin), moved: true, message: "Ordine sedi aggiornato" };
 }
 
 export async function saveLocationMarketplace(slug: string, input: Record<string, string>, publicOrigin = "") {
@@ -406,7 +408,7 @@ export async function saveLocationMarketplace(slug: string, input: Record<string
   await tenantUpdate({ slug, table: "locations", id: locationId, values: { marketplace_enabled: enabled } });
   await saveLocationActivityCategories(slug, locationId, orderedCategoryIds, primaryCategoryId);
   await syncMarketplaceProfile(slug, publicOrigin);
-  return getBusinessSettingsContext(slug, publicOrigin);
+  return { ...await getBusinessSettingsContext(slug, publicOrigin), message: "Marketplace sede aggiornato" };
 }
 
 // GALLERY SEDE (Helpers.php ~11642-11903 + locations.php location_gallery_*):
@@ -439,7 +441,7 @@ export async function uploadLocationGalleryImages(slug: string, locationId: numb
     await tenantInsert(table, { location_id: locationId, path: publicPath, sort_order: Number(sortRows[0]?.m ?? 0) + 10, is_active: 1 });
   }
   await syncMarketplaceProfile(slug, publicOrigin);
-  return getBusinessSettingsContext(slug, publicOrigin);
+  return { ...await getBusinessSettingsContext(slug, publicOrigin), message: "Foto gallery sede caricate", uploaded: valid.length };
 }
 
 export async function deleteLocationGalleryImage(slug: string, locationId: number, imageId: number, publicOrigin = "") {
@@ -456,7 +458,7 @@ export async function deleteLocationGalleryImage(slug: string, locationId: numbe
     await tenantUpdate({ slug, table: "location_gallery_images", id: Number(remaining[i].id), values: { sort_order: (i + 1) * 10 } }).catch(() => 0);
   }
   await syncMarketplaceProfile(slug, publicOrigin);
-  return getBusinessSettingsContext(slug, publicOrigin);
+  return { ...await getBusinessSettingsContext(slug, publicOrigin), message: "Foto gallery sede rimossa" };
 }
 
 export async function moveLocationGalleryImage(slug: string, locationId: number, imageId: number, direction: "up" | "down", publicOrigin = "") {
@@ -468,7 +470,7 @@ export async function moveLocationGalleryImage(slug: string, locationId: number,
     await tenantUpdate({ slug, table: "location_gallery_images", id: Number(rows[index].id), values: { sort_order: Number(rows[targetIndex].sort_order ?? 0) } });
     await tenantUpdate({ slug, table: "location_gallery_images", id: Number(rows[targetIndex].id), values: { sort_order: Number(rows[index].sort_order ?? 0) } });
   }
-  return getBusinessSettingsContext(slug, publicOrigin);
+  return { ...await getBusinessSettingsContext(slug, publicOrigin), message: "Ordine gallery sede aggiornato" };
 }
 
 export async function previewLocationDelete(slug: string, locationId: number) {
@@ -498,9 +500,15 @@ export async function previewLocationDelete(slug: string, locationId: number) {
     canDelete,
     deleteBlockReason: locationCount <= 1
       ? "Deve restare almeno una sede."
-      : (Object.keys(blockingCounts).length ? "La sede contiene storico operativo o contabile. Archiviala/nascondila o sposta prima i dati storici." : ""),
+      : (Object.keys(blockingCounts).length ? "La sede contiene storico operativo o contabile. Archiviala/nascondila o sposta prima i dati storici: non viene eliminata per evitare perdita di dati." : ""),
     blockingCounts,
     directCounts,
+    // Le sezioni exclusive/shared/client_reassignments del LocationDeletion
+    // legacy fanno parte del multi-sede completo (P11): shape presente per il
+    // modale, calcolo non replicato.
+    exclusive: {} as Record<string, string[]>,
+    shared: {} as Record<string, Record<string, string>>,
+    clientReassignments: {} as Record<string, { location_name?: string; activity_count?: number; last_activity?: string }>,
     confirmText: "ELIMINA",
   };
 }
@@ -544,7 +552,7 @@ export async function deleteBusinessLocation(slug: string, locationId: number, c
   await tenantDelete({ slug, table: "locations", id: locationId });
   await normalizeLocationOrder(slug);
   await syncMarketplaceProfile(slug, publicOrigin);
-  return getBusinessSettingsContext(slug, publicOrigin);
+  return { ...await getBusinessSettingsContext(slug, publicOrigin), message: "Sede eliminata definitivamente" };
 }
 
 async function getTenant(slug: string) {
@@ -669,6 +677,39 @@ async function listLocationGalleryImages(slug: string) {
   return grouped;
 }
 
+// Marketplace::activityCategoryIconSvg (Marketplace.php 556-609): icona
+// Bootstrap per icon_key, default bi-grid-3x3-gap.
+const activityIconClasses: Record<string, string> = {
+  hair: "bi-scissors", capelli: "bi-scissors", parrucchiere: "bi-scissors",
+  beauty: "bi-shop", "salone-bellezza": "bi-shop",
+  sparkles: "bi-stars", estetica: "bi-stars", estetista: "bi-stars",
+  barber: "bi-person-badge", barbiere: "bi-person-badge",
+  nails: "bi-hand-index-thumb", unghie: "bi-hand-index-thumb",
+  eye: "bi-eye", sopracciglia: "bi-eye", "sopracciglia-ciglia": "bi-eye",
+  epilation: "bi-magic", epilazione: "bi-magic", laser: "bi-magic",
+  massage: "bi-person-heart", massaggi: "bi-person-heart",
+  spa: "bi-water", benessere: "bi-water", "spa-sauna": "bi-water",
+  medspa: "bi-gem",
+  sun: "bi-brightness-high", solarium: "bi-brightness-high", "centro-abbronzatura": "bi-brightness-high",
+  tattoo: "bi-gem", tatuaggi: "bi-gem", "tatuaggi-piercing": "bi-gem",
+  physio: "bi-heart-pulse", fisioterapia: "bi-heart-pulse",
+  fitness: "bi-bicycle", "fitness-recupero": "bi-bicycle",
+  health: "bi-hospital", "centro-sanitario": "bi-hospital", odontoiatria: "bi-hospital",
+  pet: "bi-heart", "toelettatura-animali": "bi-heart",
+  podologia: "bi-universal-access",
+  viso: "bi-emoji-smile",
+  rimodellamento: "bi-activity",
+  corpo: "bi-person",
+  trucco: "bi-palette",
+  sposa: "bi-gem",
+  olistico: "bi-flower1",
+  trattamenti: "bi-stars",
+};
+
+export function activityCategoryIconClass(iconKey: string): string {
+  return activityIconClasses[iconKey.trim().toLowerCase()] ?? "bi-grid-3x3-gap";
+}
+
 async function listMarketplaceActivityCategories() {
   await ensureMarketplaceDirectoryTables();
   const rows = await dbQuery<RowDataPacket[]>(
@@ -679,6 +720,7 @@ async function listMarketplaceActivityCategories() {
     slug: String(row.slug ?? ""),
     name: String(row.name ?? ""),
     iconKey: String(row.icon_key ?? ""),
+    iconClass: activityCategoryIconClass(String(row.icon_key ?? "")),
     sortOrder: Number(row.sort_order ?? 0),
   }));
 }
