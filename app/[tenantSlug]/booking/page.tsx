@@ -3,30 +3,19 @@ import { redirect } from "next/navigation";
 import { BookingFaithful } from "@/components/public/booking-faithful";
 import { BookingSettingsContent } from "@/components/modules/booking-content";
 import { ManageShell } from "@/components/manage-shell";
+import { PerTenantHub, type HubSection } from "@/components/public/per-tenant-hub";
 import { currentManageSession } from "@/lib/manage-auth";
 import { currentPublicCustomerSession } from "@/lib/public-customer-account";
+import { publicBookingContext } from "@/lib/public-booking-db";
 
-// Target legacy dell'area cliente per-tenant (booking.php 9314-9336): nel
-// port l'area cliente è CENTRALE (/account/*), quindi i target non-wizard
-// vengono mappati sulle pagine account corrispondenti.
-const ACCOUNT_TARGET_ROUTES: Record<string, string> = {
-  // hub (Pannello / "Apri area cliente") = dashboard residui del cliente
-  // (equivalente centralizzato dell'hub per-tenant legacy). L'account
-  // "cliente" vero e proprio (attività/preferiti/profilo) è /account/*.
-  hub: "/account/appointments",
-  my: "/account/appointments",
-  quotes: "/account/quotes",
-  packs: "/account/packages",
-  prepaids: "/account/packages",
-  credit: "/account/packages",
-  giftcards: "/account/packages",
-  giftboxes: "/account/packages",
-  preorders: "/account/packages",
-  fidelity: "/account/packages",
-  gifts: "/account/packages",
-  profile: "/account/profile",
-  settings: "/account/profile",
-};
+// Target legacy dell'area cliente per-tenant (booking.php 9314-9336): l'hub
+// per-sede (booking.php?public=1&<sezione>=1) è reso IN LOCO da PerTenantHub
+// (dashboard residui del cliente presso QUESTA attività). profile/settings
+// vanno all'account CENTRALE (/account/profile). L'account cliente vero e
+// proprio (attività/preferiti/profilo) resta /account/*.
+const HUB_SECTIONS = new Set<HubSection>([
+  "hub", "my", "credit", "giftcards", "packs", "prepaids", "giftboxes", "preorders", "quotes", "fidelity", "gifts",
+]);
 
 export const metadata: Metadata = {
   title: "Prenotazione online - BeautySuite",
@@ -115,14 +104,33 @@ export default async function TenantBookingPage({
       }
       redirect(`/attivita/${encodeURIComponent(tenantSlug)}`);
     }
-    // Loggato: start (e i deep-link redeem) al wizard; i target dell'area
-    // cliente per-tenant alle pagine account del port; il public=1 "nudo"
-    // (nessun target) è showcase → profilo marketplace (booking.php 9188+9307).
+    // Loggato: start (e i deep-link redeem) al wizard; i target dell'hub
+    // per-sede resi in loco da PerTenantHub; profile/settings all'account
+    // centrale; il public=1 "nudo" (nessun target) è showcase → profilo
+    // marketplace (booking.php 9188+9307).
     if (requestedTarget === "") {
       redirect(`/attivita/${encodeURIComponent(tenantSlug)}`);
     }
+    if (requestedTarget === "profile" || requestedTarget === "settings") {
+      redirect(`/account/profile`);
+    }
+    if (HUB_SECTIONS.has(requestedTarget as HubSection)) {
+      // Nome attività + sedi prenotabili (booking.php: $businessName +
+      // $bookingHasBookableLocations per la landing "Ciao 👋").
+      const ctx = await publicBookingContext(tenantSlug).catch(() => null);
+      const tenantName = ctx?.business.name?.trim() || tenantSlug;
+      const hasBookableLocations = (ctx?.locations ?? []).some((location) => location.bookingEnabled);
+      return (
+        <PerTenantHub
+          slug={tenantSlug}
+          section={requestedTarget as HubSection}
+          tenantName={tenantName}
+          hasBookableLocations={hasBookableLocations}
+        />
+      );
+    }
     if (requestedTarget !== "start") {
-      redirect(ACCOUNT_TARGET_ROUTES[requestedTarget] ?? `/attivita/${encodeURIComponent(tenantSlug)}`);
+      redirect(`/attivita/${encodeURIComponent(tenantSlug)}`);
     }
   }
 

@@ -6227,3 +6227,50 @@ Battery: e2e-marketplace-detail-fn.mjs 5/5 (Playwright: modale Servizi,
 orari reali ven/sab/dom, tab Servizi, Prenota->login cliente, share url) +
 regressioni e2e-marketplace 28/28, e2e-booking-marketplace 26/26,
 e2e-public-area 14/14, layout 3/3, 100/100 marker; typecheck/lint puliti.
+
+
+---
+
+## Account cliente per-sede: rimosso il pannello centralizzato fabbricato, ricostruito l'hub per-tenant fedele (2026-07-06)
+
+Segnalazione: "vedo un pannello di account cliente totalmente diverso, elimina
+completamente ciò che non centra nulla". Il Next rendeva un PublicAccountPage
+CENTRALIZZATO (nav a 12 voci aggregate su tutti i tenant) che NON esiste nel PHP.
+Il legacy ha due aree distinte: (1) account CENTRALE /account/* = Attività/
+Preferiti/Profilo (public_account.php, già fedele = AccountFaithful); (2) HUB
+PER-SEDE booking.php?public=1&hub=1 = dashboard "residui" del cliente presso UNA
+attività (BookingPublicUi.php shell + "Ciao 👋").
+
+Fatto:
+- **Nuovo PerTenantHub** (components/public/per-tenant-hub.tsx): port fedele
+  della shell booking-public-account (topbar marketplace + sidebar 220px con le
+  11 voci Dashboard/Prenotazioni/Credito/GiftCard/Pacchetti/Prepagati/GiftBox/
+  Preordini/Preventivi/Fidelity/Omaggi con icone/ordine legaci + bottom-nav
+  Home/Pannello/Prenota + footer marketplace) e della landing "Ciao 👋"
+  (kicker "Area cliente", testo verbatim, CTA Prenota ora/Scheda attività,
+  empty-state "Nessuna sede disponibile per la prenotazione online.").
+- **Sezioni riusate** (components/public/hub-sections.tsx, estratte dal monolite):
+  i renderer data-fedeli (Prenotazioni/Pacchetti/Prepagati/Credito/GiftCard/
+  Omaggi/Fidelity/Preordini/Preventivi) alimentati da /api/account FILTRATO sul
+  tenant corrente (item.tenantSlug === slug).
+- **Gate riscritto** (app/[tenantSlug]/booking/page.tsx): i target hub/my/credit/
+  giftcards/packs/prepaids/giftboxes/preorders/quotes/fidelity/gifts sono resi
+  IN LOCO da PerTenantHub (business.name + sedi prenotabili via
+  publicBookingContext); profile/settings -> /account/profile; start -> wizard.
+- **auth-destination + booking-faithful**: i link post-login e "I miei
+  appuntamenti" puntano ora a /<slug>/booking?<key>=1 (hub), non più a
+  /account/*.
+- **Rimossi**: routes /account/{appointments,packages,quotes} + il monolite
+  public-account-page.tsx (1552 righe). /account/* ora = activities/favorites/
+  profile + auth, come public_account.php.
+
+Verifica live: gate anonimo -> 307 /account/login?tenant=..&next=hub; loggato
+(sessione ZZ mint+cleanup+RESTORE) -> hub 200 con shell/sidebar/landing fedeli
+(screenshot), active sidebar corretto per sezione (Dashboard/Prenotazioni/
+Pacchetti), sezioni con empty-state. typecheck pulito.
+
+RESIDUI DELIBERATI: [MEDIUM] lo styling delle CARD di sezione riusa i renderer
+Tailwind estratti (dati/testi fedeli) dentro la shell corretta — non ancora
+allineato pixel al booking-account-card legacy; [MEDIUM] sezione GiftBox senza
+sorgente dati in /api/account (mai portata nell'aggregato) -> empty-state;
+[LOW] profile/settings dell'hub -> /account/profile centrale (scelta di port).

@@ -990,7 +990,7 @@ export function BookingFaithful({
                   id="customerAreaBtn"
                   onClick={() => {
                     window.location.href = bookingUser
-                      ? "/account/appointments"
+                      ? `/${encodeURIComponent(slug)}/booking?my=1`
                       : `/account/login?tenant=${encodeURIComponent(slug)}&next=start`;
                   }}
                 >
