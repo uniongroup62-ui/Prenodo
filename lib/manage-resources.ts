@@ -2,7 +2,7 @@ import "server-only";
 
 import bcrypt from "bcryptjs";
 import type { RowDataPacket } from "@/lib/tenant-db";
-import { emptyToNull, parseInteger } from "@/lib/api-utils";
+import { parseInteger } from "@/lib/api-utils";
 import { dbExecute, dbQuery, quoteIdentifier, columnExists, tenantDelete, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
 import { sendStaffInviteEmailCode } from "@/lib/manage-accessibility";
 
@@ -145,7 +145,7 @@ export type StaffAvailabilityEvent = {
   seriesUid: string;
 };
 
-const dayLabels = ["Domenica", "Lunedi", "Martedi", "Mercoledi", "Giovedi", "Venerdi", "Sabato"];
+const dayLabels = ["Domenica", "Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato"];
 
 export async function resourceContext({
   slug,
@@ -848,9 +848,13 @@ export async function saveBusinessHours(slug: string, body: Record<string, strin
   const locationId = parseInteger(body.location_id ?? body.locationId, 0);
   if (locationId <= 0) throw new Error("Seleziona una sede.");
   const rows = parseHoursRows(body.hours_json ?? body.hours ?? "[]");
-  const table = await tenantTable(slug, "business_hours");
 
-  for (const row of rows) validateHourRow(row);
+  // hours.php 145-241: valida TUTTE le righe accumulando gli errori; il flash
+  // danger unisce i primi 8 con "; " (suffisso " ..." se ce ne sono di più).
+  const errors = rows.flatMap((row) => hoursRowErrors(row));
+  if (errors.length) throw new Error(`Orari non validi: ${errors.slice(0, 8).join("; ")}${errors.length > 8 ? " ..." : ""}`);
+
+  const table = await tenantTable(slug, "business_hours");
   for (const row of rows) {
     const existing = await tenantSelect<RowDataPacket>({
       slug,
@@ -860,30 +864,60 @@ export async function saveBusinessHours(slug: string, body: Record<string, strin
       params: [locationId, row.dow],
       limit: 1,
     }).catch(() => []);
-    const values = await filterColumns(table.name, { location_id: locationId, ...row });
+    const values = await filterColumns(table.name, {
+      location_id: locationId,
+      dow: row.dow,
+      opens: hourTimeOrNull(row.opens),
+      closes: hourTimeOrNull(row.closes),
+      opens2: hourTimeOrNull(row.opens2),
+      closes2: hourTimeOrNull(row.closes2),
+      is_closed: row.is_closed,
+    });
     if (existing[0]?.id) await tenantUpdate({ slug, table: "business_hours", id: Number(existing[0].id), values });
     else await tenantInsert(table, values);
   }
   return listBusinessHours(slug, locationId);
 }
 
+// Port fedele di hours.php tab=closures POST (243-341): accumula gli errori
+// nell'ordine legacy e li impacchetta in "Impossibile salvare: " + primi 3
+// separati da spazio (" ..." oltre). Le date nei conflitti sono d/m/Y.
 export async function saveClosure(slug: string, body: Record<string, string>): Promise<CalendarDateRange[]> {
   const locationId = parseInteger(body.location_id ?? body.locationId, 0);
-  const from = normalizeDate(body.date_from ?? body.from);
-  const to = normalizeDate(body.date_to ?? body.to) || from;
-  if (locationId <= 0 || !from || !to) throw new Error("Compila sede e date.");
-  const [start, end] = orderedDates(from, to);
-  const dates = datesBetween(start, end);
-  if (dates.length > 370) throw new Error("Intervallo troppo lungo. Seleziona un periodo piu breve.");
-  const openExceptions = await exceptionDatesInRange(slug, locationId, start, end);
-  if (openExceptions.length) throw new Error(`Impossibile salvare la chiusura: esistono aperture straordinarie (${openExceptions.slice(0, 6).join(", ")}).`);
-  const activeDates = await activeAppointmentDates(slug, locationId, start, end);
-  if (activeDates.length) throw new Error(`Impossibile salvare la chiusura: esistono appuntamenti attivi (${activeDates.slice(0, 6).join(", ")}).`);
+  if (locationId <= 0) throw new Error("Seleziona una sede.");
+  const from = String(body.date_from ?? body.from ?? "").trim();
+  let to = String(body.date_to ?? body.to ?? "").trim();
+  if (to === "") to = from;
+  const kind = String(body.kind ?? "").trim();
+  const note = String(body.note ?? "").trim();
+  const reason = (kind + (note ? ` - ${note}` : "")).trim() || null;
+
+  const errors: string[] = [];
+  if (from === "") errors.push("Seleziona una data di inizio.");
+  let start = normalizeDate(from) || null;
+  let end = normalizeDate(to) || null;
+  if (!start) errors.push("Data inizio non valida.");
+  if (!end) errors.push("Data fine non valida.");
+  if (start && end && end < start) [start, end] = [end, start];
+  if (!errors.length && start && end && daysDiff(start, end) + 1 > 370) {
+    errors.push("Intervallo troppo lungo. Seleziona un periodo più breve.");
+  }
+  if (!errors.length && start && end) {
+    const conflicts = await exceptionDatesInRange(slug, locationId, start, end);
+    if (conflicts.length) {
+      errors.push(`Impossibile salvare la chiusura: esistono già aperture straordinarie nelle seguenti date: ${conflicts.slice(0, 6).map(isoToDmy).join(", ")}${conflicts.length > 6 ? " ..." : ""}. Rimuovi prima lo straordinario o modifica le date.`);
+    }
+  }
+  if (!errors.length && start && end) {
+    const activeDates = await activeAppointmentDates(slug, locationId, start, end);
+    if (activeDates.length) {
+      errors.push(`Impossibile salvare la chiusura: esistono appuntamenti in sospeso o prenotati nelle seguenti date: ${dateSampleIt(activeDates)}. Sposta o annulla prima gli appuntamenti.`);
+    }
+  }
+  if (errors.length) throw new Error(`Impossibile salvare: ${errors.slice(0, 3).join(" ")}${errors.length > 3 ? " ..." : ""}`);
 
   const table = await tenantTable(slug, "closures");
-  const kind = cleanName(body.kind ?? "Chiusura", 80);
-  const note = cleanName(body.note ?? "", 120);
-  const reason = [kind, note].filter(Boolean).join(" - ") || null;
+  const dates = datesBetween(start!, end!);
   for (const date of dates) {
     const existing = await tenantSelect<RowDataPacket>({ slug, table: "closures", columns: "id", where: "location_id = ? AND date = ?", params: [locationId, date], limit: 1 }).catch(() => []);
     if (existing[0]?.id) await tenantUpdate({ slug, table: "closures", id: Number(existing[0].id), values: { reason } });
@@ -902,24 +936,68 @@ export async function deleteClosureRange(slug: string, body: Record<string, stri
   return listClosureRanges(slug, locationId);
 }
 
+// Port fedele di hours.php tab=exceptions POST (345-473): errori accumulati
+// nell'ordine legacy, wrap "Impossibile salvare: " + primi 6 separati da
+// spazio (" ..." oltre). I messaggi orario sono frasi standalone (non
+// prefissate dal giorno come nel tab Orari).
 export async function saveException(slug: string, body: Record<string, string>): Promise<CalendarExceptionRange[]> {
   const locationId = parseInteger(body.location_id ?? body.locationId, 0);
-  const from = normalizeDate(body.date_from ?? body.from);
-  const to = normalizeDate(body.date_to ?? body.to) || from;
-  const opens = normalizeTime(body.opens ?? "");
-  const closes = normalizeTime(body.closes ?? "");
-  const opens2 = normalizeTime(body.opens2 ?? "");
-  const closes2 = normalizeTime(body.closes2 ?? "");
-  if (locationId <= 0 || !from || !to) throw new Error("Compila sede e date.");
-  const [start, end] = orderedDates(from, to);
-  const dates = datesBetween(start, end);
-  if (dates.length > 370) throw new Error("Intervallo troppo lungo. Seleziona un periodo piu breve.");
-  validateTimePair(opens, closes, "Apertura straordinaria");
-  if (opens2 || closes2) validateSplit(opens, closes, opens2, closes2, "Apertura straordinaria");
-  const closureConflicts = await closureDatesInRange(slug, locationId, start, end);
-  if (closureConflicts.length) throw new Error(`Impossibile salvare lo straordinario: date chiuse (${closureConflicts.slice(0, 6).join(", ")}).`);
+  if (locationId <= 0) throw new Error("Seleziona una sede.");
+  const from = String(body.date_from ?? body.from ?? "").trim();
+  let to = String(body.date_to ?? body.to ?? "").trim();
+  if (to === "") to = from;
+  const note = String(body.note ?? "").trim();
+  const opens = String(body.opens ?? "").trim();
+  const closes = String(body.closes ?? "").trim();
+  const opens2 = String(body.opens2 ?? "").trim();
+  const closes2 = String(body.closes2 ?? "").trim();
+
+  const errors: string[] = [];
+  if (from === "") errors.push("Seleziona una data di inizio.");
+  let start = normalizeDate(from) || null;
+  let end = normalizeDate(to) || null;
+  if (!start) errors.push("Data inizio non valida.");
+  if (!end) errors.push("Data fine non valida.");
+  if (start && end && end < start) [start, end] = [end, start];
+
+  if (opens === "" || closes === "") {
+    errors.push("Per un'apertura straordinaria devi compilare apertura e chiusura.");
+  } else {
+    const open1 = phpTimeToMinutes(opens);
+    const close1 = phpTimeToMinutes(closes);
+    if (open1 === null || close1 === null) errors.push("Formato orario non valido.");
+    else if (close1 <= open1) errors.push("La chiusura deve essere successiva all'apertura.");
+  }
+  if (opens2 !== "" || closes2 !== "") {
+    if (opens2 === "" || closes2 === "") {
+      errors.push("Per l'orario spezzato devi compilare sia riapertura sia chiusura 2.");
+    } else if (opens === "" || closes === "") {
+      errors.push("Per l'orario spezzato devi compilare anche apertura e chiusura (prima fascia).");
+    } else {
+      const close1 = phpTimeToMinutes(closes);
+      const open2 = phpTimeToMinutes(opens2);
+      const close2 = phpTimeToMinutes(closes2);
+      if (open2 === null || close2 === null || close1 === null) {
+        errors.push("Formato orario spezzato non valido.");
+      } else {
+        if (open2 < close1) errors.push("La riapertura deve essere uguale o successiva alla chiusura (prima fascia).");
+        if (close2 <= open2) errors.push("La chiusura 2 deve essere successiva alla riapertura.");
+      }
+    }
+  }
+  if (!errors.length && start && end && daysDiff(start, end) + 1 > 370) {
+    errors.push("Intervallo troppo lungo. Seleziona un periodo più breve.");
+  }
+  if (!errors.length && start && end) {
+    const closureConflicts = await closureDatesInRange(slug, locationId, start, end);
+    if (closureConflicts.length) {
+      errors.push(`Impossibile salvare lo straordinario: le seguenti date sono impostate come chiuse: ${closureConflicts.slice(0, 6).map(isoToDmy).join(", ")}${closureConflicts.length > 6 ? " ..." : ""}. Rimuovi prima la chiusura (tab Chiusure) o modifica le date.`);
+    }
+  }
+  if (errors.length) throw new Error(`Impossibile salvare: ${errors.slice(0, 6).join(" ")}${errors.length > 6 ? " ..." : ""}`);
 
   const table = await tenantTable(slug, "business_hours_exceptions");
+  const dates = datesBetween(start!, end!);
   for (const date of dates) {
     const existing = await tenantSelect<RowDataPacket>({
       slug,
@@ -932,12 +1010,12 @@ export async function saveException(slug: string, body: Record<string, string>):
     const values = await filterColumns(table.name, {
       location_id: locationId,
       date,
-      opens,
-      closes,
-      opens2: opens2 || null,
-      closes2: closes2 || null,
+      opens: hourTimeOrNull(opens),
+      closes: hourTimeOrNull(closes),
+      opens2: hourTimeOrNull(opens2),
+      closes2: hourTimeOrNull(closes2),
       is_closed: 0,
-      note: emptyToNull(body.note),
+      note: note || null,
     });
     if (existing[0]?.id) await tenantUpdate({ slug, table: "business_hours_exceptions", id: Number(existing[0].id), values });
     else await tenantInsert(table, values);
@@ -1292,7 +1370,11 @@ async function listBusinessHours(slug: string, locationId: number): Promise<Busi
   }).catch(() => []);
   const byDow = new Map<number, RowDataPacket>();
   for (const row of rows) byDow.set(Number(row.dow ?? 0), row);
-  return Array.from({ length: 7 }, (_, dow) => mapHourRow(byDow.get(dow) ?? { dow, is_closed: dow === 0 ? 1 : 0, opens: "09:00", closes: "19:00" }));
+  // Fallback = ensure_default_hours legacy: Domenica chiusa, Sabato 09-13,
+  // gli altri giorni 09-19.
+  return Array.from({ length: 7 }, (_, dow) => mapHourRow(byDow.get(dow) ?? (dow === 0
+    ? { dow, is_closed: 1 }
+    : { dow, is_closed: 0, opens: "09:00", closes: dow === 6 ? "13:00" : "19:00" })));
 }
 
 async function listClosureRanges(slug: string, locationId: number): Promise<CalendarDateRange[]> {
@@ -2090,48 +2172,100 @@ function mapAvailabilityRow(row: RowDataPacket, table: "availability" | "timeoff
   };
 }
 
-function parseHoursRows(value: string): Array<{ dow: number; opens: string | null; closes: string | null; opens2: string | null; closes2: string | null; is_closed: number }> {
+// Righe orari come le POSTa il form legacy: SOLO i dow presenti nel payload
+// (hours.php itera $_POST['hours']); i valori restano stringhe raw perché la
+// validazione legacy distingue "campo vuoto" da "formato non valido".
+type PostedHourRow = { dow: number; opens: string; closes: string; opens2: string; closes2: string; is_closed: number };
+
+function parseHoursRows(value: string): PostedHourRow[] {
   const rows = parseJsonArray<Record<string, unknown>>(value);
-  const byDow = new Map(rows.map((row) => [Number(row.dow), row]));
-  return Array.from({ length: 7 }, (_, dow) => {
-    const row = byDow.get(dow) ?? {};
-    const isClosed = truthy(row.is_closed ?? row.isClosed);
+  // Chiave assoc come $_POST['hours'][dow]: un dow duplicato vince per ultimo.
+  const byDow = new Map<number, Record<string, unknown>>();
+  for (const row of rows) byDow.set(Math.trunc(Number(row.dow) || 0), row);
+  return Array.from(byDow.entries()).map(([dow, row]) => {
+    const isClosed = truthy(row.is_closed ?? row.isClosed) ? 1 : 0;
     return {
       dow,
-      opens: isClosed ? null : normalizeTime(row.opens),
-      closes: isClosed ? null : normalizeTime(row.closes),
-      opens2: isClosed ? null : normalizeTime(row.opens2),
-      closes2: isClosed ? null : normalizeTime(row.closes2),
-      is_closed: isClosed ? 1 : 0,
+      opens: isClosed ? "" : String(row.opens ?? "").trim(),
+      closes: isClosed ? "" : String(row.closes ?? "").trim(),
+      opens2: isClosed ? "" : String(row.opens2 ?? "").trim(),
+      closes2: isClosed ? "" : String(row.closes2 ?? "").trim(),
+      is_closed: isClosed,
     };
   });
 }
 
-// Validazioni orari con i messaggi legacy esatti (hours.php ~161-199).
-function validateHourRow(row: { dow: number; opens: string | null; closes: string | null; opens2: string | null; closes2: string | null; is_closed: number }): void {
+// _time_to_minutes legacy (hours.php 14-25): PHP (int) sulle parti, quindi
+// "aa:bb" vale 00:00; null solo se vuoto, senza ":" o fuori range.
+function phpTimeToMinutes(raw: string): number | null {
+  const value = String(raw ?? "").trim();
+  if (value === "") return null;
+  const parts = value.split(":");
+  if (parts.length < 2) return null;
+  const hours = phpIntVal(parts[0]);
+  const minutes = phpIntVal(parts[1]);
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+function phpIntVal(value: string): number {
+  const parsed = Number.parseInt(value.trim(), 10);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+// Orario da persistere: il legacy salva la stringa raw e lascia normalizzare a
+// MySQL; qui canonizziamo in HH:MM (equivalente) per non far fallire il cast PG.
+function hourTimeOrNull(raw: string): string | null {
+  const minutes = phpTimeToMinutes(raw);
+  return minutes === null ? null : minutesToTime(minutes);
+}
+
+function isoToDmy(iso: string): string {
+  const parts = String(iso ?? "").split("-");
+  return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : String(iso ?? "");
+}
+
+// hours_format_date_sample (hours.php 27-38): unique+sort, max 6 in d/m/Y,
+// " ..." se l'elenco è più lungo.
+function dateSampleIt(dates: string[]): string {
+  const unique = Array.from(new Set(dates.filter(Boolean))).sort();
+  const sample = unique.slice(0, 6);
+  return sample.map(isoToDmy).join(", ") + (unique.length > sample.length ? " ..." : "");
+}
+
+// Errori di una riga del tab Orari, messaggi e ordine legacy esatti
+// (hours.php 161-199); una riga può produrne più di uno.
+function hoursRowErrors(row: PostedHourRow): string[] {
   const label = dayLabels[row.dow] ?? `Giorno ${row.dow}`;
-  if (row.is_closed) return;
-  if (!row.opens || !row.closes) throw new Error(`${label}: se il giorno non e chiuso devi compilare apertura e chiusura.`);
-  validateTimePair(row.opens, row.closes, label);
-  if (row.opens2 || row.closes2) validateSplit(row.opens, row.closes, row.opens2, row.closes2, label);
-}
-
-function validateTimePair(opens: string | null, closes: string | null, label: string): void {
-  const start = timeToMinutes(opens);
-  const end = timeToMinutes(closes);
-  if (start === null || end === null) throw new Error(`${label}: formato orario non valido.`);
-  if (end <= start) throw new Error(`${label}: la chiusura deve essere successiva all'apertura.`);
-}
-
-function validateSplit(opens: string | null, closes: string | null, opens2: string | null, closes2: string | null, label: string): void {
-  if (!opens2 || !closes2) throw new Error(`${label}: per l'orario spezzato devi compilare sia riapertura sia chiusura 2.`);
-  if (!opens || !closes) throw new Error(`${label}: per l'orario spezzato devi compilare anche apertura e chiusura.`);
-  const close1 = timeToMinutes(closes);
-  const open2 = timeToMinutes(opens2);
-  const close2 = timeToMinutes(closes2);
-  if (open2 === null || close2 === null) throw new Error(`${label}: formato orario non valido.`);
-  if (close1 !== null && open2 < close1) throw new Error(`${label}: la riapertura deve essere uguale o successiva alla chiusura (prima fascia).`);
-  if (close2 <= open2) throw new Error(`${label}: la chiusura 2 deve essere successiva alla riapertura.`);
+  const errors: string[] = [];
+  if (row.is_closed) return errors;
+  const { opens, closes, opens2, closes2 } = row;
+  if (opens === "" || closes === "") {
+    errors.push(`${label}: se il giorno non e chiuso devi compilare apertura e chiusura.`);
+  } else {
+    const open1 = phpTimeToMinutes(opens);
+    const close1 = phpTimeToMinutes(closes);
+    if (open1 === null || close1 === null) errors.push(`${label}: formato orario non valido.`);
+    else if (close1 <= open1) errors.push(`${label}: la chiusura deve essere successiva all'apertura.`);
+  }
+  if (opens2 !== "" || closes2 !== "") {
+    if (opens2 === "" || closes2 === "") {
+      errors.push(`${label}: per l'orario spezzato devi compilare sia riapertura sia chiusura 2.`);
+    } else if (opens === "" || closes === "") {
+      errors.push(`${label}: per l'orario spezzato devi compilare anche apertura e chiusura.`);
+    } else {
+      const close1 = phpTimeToMinutes(closes);
+      const open2 = phpTimeToMinutes(opens2);
+      const close2 = phpTimeToMinutes(closes2);
+      if (open2 === null || close2 === null || close1 === null) {
+        errors.push(`${label}: formato orario spezzato non valido.`);
+      } else {
+        if (open2 < close1) errors.push(`${label}: la riapertura deve essere uguale o successiva alla chiusura (prima fascia).`);
+        if (close2 <= open2) errors.push(`${label}: la chiusura 2 deve essere successiva alla riapertura.`);
+      }
+    }
+  }
+  return errors;
 }
 
 function groupDateRanges(rows: Array<{ id: number; date: string; reason: string }>): CalendarDateRange[] {
@@ -2288,8 +2422,9 @@ function normalizeDate(value: unknown): string {
   const raw = String(value ?? "").trim().slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return "";
   const date = new Date(`${raw}T12:00:00`);
-  if (!Number.isFinite(date.getTime())) return "";
-  return dateIsoLocal(date);
+  // Round-trip check (hours_parse_ymd legacy): "2026-02-31" NON deve rollare a marzo.
+  if (!Number.isFinite(date.getTime()) || dateIsoLocal(date) !== raw) return "";
+  return raw;
 }
 
 function normalizeTime(value: unknown): string | null {

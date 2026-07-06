@@ -81,7 +81,8 @@ export async function GET(request: Request) {
       locationId: parseInteger(url.searchParams.get("location_id") ?? url.searchParams.get("locationId"), 0),
       date: url.searchParams.get("date") ?? undefined,
     });
-    return Response.json({ ok: true, ...context });
+    // hours.php gates il bottone header "Attivita" su Auth::can('settings.location').
+    return Response.json({ ok: true, canSettingsLocation: can(activeUser.perms, "settings.location"), ...context });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Risorse non disponibili.", 400);
   }

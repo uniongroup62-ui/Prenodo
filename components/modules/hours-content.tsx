@@ -1,18 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // Faithful port of the PHP "Orari & chiusure" settings page (app/pages/hours.php),
-// reproducing the original Bootstrap markup verbatim: bs-page-header, nav-pills
-// tabs (Orari / Chiusure / Straordinari), the weekly hours card form, and the
-// Chiusure / Straordinari add+list cards.
+// reproducing the original Bootstrap markup verbatim: View::alert flash ABOVE the
+// bs-page-header, nav-pills tabs (Orari / Chiusure / Straordinari), the weekly
+// hours card form (with the hours.js live validation: setCustomValidity +
+// is-invalid + min hints + submit block) and the Chiusure / Straordinari
+// add+list cards.
 //
 // Data: the DB-backed /api/manage/resources route (section=hours) returns the
 // location list, the per-weekday business_hours rows, the grouped `closures`
-// ranges and the grouped `exceptions` ranges. The Chiusure & Straordinari tabs
-// fetch that context and persist add/delete via JSON POSTs to the same route
-// (actions closure_save / closure_delete_range / exception_save /
-// exception_delete_range) instead of redirecting to the legacy PHP page.
+// ranges and the grouped `exceptions` ranges. The tabs persist add/delete via
+// JSON POSTs to the same route (actions hours_save / closure_save /
+// closure_delete_range / exception_save / exception_delete_range); the legacy
+// redirect flash (?msg=Orari salvati / Chiusura salvata / ...) becomes a local
+// success alert with the same texts.
 
 type ApiLocation = {
   id: number;
@@ -53,7 +56,10 @@ type ResourcesContext = {
   hours?: BusinessHourRow[];
   closures?: ClosureRange[];
   exceptions?: ExceptionRange[];
+  canSettingsLocation?: boolean;
 };
+
+type HoursTabKey = "hours" | "closures" | "exceptions";
 
 // PHP renders days starting at DOW 0 = Domenica through DOW 6 = Sabato.
 const DAYS: Array<{ dow: number; label: string }> = [
@@ -82,18 +88,40 @@ function trimTime(value: string): string {
   return String(value || "").slice(0, 5);
 }
 
-export function HoursContent({ slug: slugProp }: { slug?: string } = {}) {
+function normalizeTab(value: string | undefined): HoursTabKey {
+  return value === "closures" || value === "exceptions" ? value : "hours";
+}
+
+type Flash = { text: string; type: "success" | "danger" };
+
+export function HoursContent({
+  slug: slugProp,
+  initialQuery,
+}: { slug?: string; initialQuery?: { tab?: string; location_id?: string; msg?: string } } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
-  const [locationId, setLocationId] = useState<number>(0);
-  const [tab, setTab] = useState<"hours" | "closures" | "exceptions">("hours");
+  const [locationId, setLocationId] = useState<number>(() => {
+    const parsed = Number(initialQuery?.location_id ?? 0);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : 0;
+  });
+  const [tab, setTab] = useState<HoursTabKey>(() => normalizeTab(initialQuery?.tab));
   const [hours, setHours] = useState<BusinessHourRow[]>([]);
   const [closures, setClosures] = useState<ClosureRange[]>([]);
   const [exceptions, setExceptions] = useState<ExceptionRange[]>([]);
+  const [locationsCount, setLocationsCount] = useState(1);
+  const [canSettingsLocation, setCanSettingsLocation] = useState(true);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string>("");
-  const [savedMsg, setSavedMsg] = useState<string>("");
+  // Flash legacy (View::alert sopra il page header): i redirect ?msg= diventano
+  // alert success locali con gli stessi testi; gli errori server sono danger.
+  const [flash, setFlash] = useState<Flash | null>(() =>
+    initialQuery?.msg ? { text: String(initialQuery.msg), type: "success" } : null,
+  );
+
+  const showFlash = useCallback((next: Flash | null) => {
+    setFlash(next);
+    if (next && typeof window !== "undefined") window.scrollTo({ top: 0 });
+  }, []);
 
   const load = useCallback(() => {
     // Note: `loading` starts true and is only cleared in .finally(); we avoid a
@@ -110,6 +138,8 @@ export function HoursContent({ slug: slugProp }: { slug?: string } = {}) {
         setHours(Array.isArray(j.hours) ? j.hours : []);
         setClosures(Array.isArray(j.closures) ? j.closures : []);
         setExceptions(Array.isArray(j.exceptions) ? j.exceptions : []);
+        setLocationsCount(locs.length || 1);
+        if (typeof j.canSettingsLocation === "boolean") setCanSettingsLocation(j.canSettingsLocation);
         setLocationId((prev) => (prev > 0 ? prev : Number(j.activeLocationId ?? locs[0]?.id ?? 0)));
       })
       .catch(() => {
@@ -124,10 +154,11 @@ export function HoursContent({ slug: slugProp }: { slug?: string } = {}) {
     load();
   }, [load]);
 
-  // Shared JSON POST to /api/manage/resources (mirrors the roles-content style).
+  // Shared JSON POST to /api/manage/resources; on success shows the legacy
+  // redirect-flash text (Orari salvati / Chiusura salvata / ...), on failure
+  // the server error as danger alert (hours.php renders errors inline).
   const postAction = useCallback(
-    async (body: Record<string, unknown>): Promise<boolean> => {
-      setError("");
+    async (body: Record<string, unknown>, successMsg: string): Promise<boolean> => {
       try {
         const res = await fetch(`/api/manage/resources?slug=${encodeURIComponent(slug)}`, {
           method: "POST",
@@ -136,45 +167,68 @@ export function HoursContent({ slug: slugProp }: { slug?: string } = {}) {
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok || json?.ok === false) {
-          setError(String(json?.error || "Operazione non riuscita."));
+          showFlash({ text: String(json?.error || "Operazione non riuscita."), type: "danger" });
           return false;
         }
         // The route returns the refreshed list; reflect it immediately.
         if (Array.isArray(json?.closures)) setClosures(json.closures as ClosureRange[]);
         if (Array.isArray(json?.exceptions)) setExceptions(json.exceptions as ExceptionRange[]);
+        showFlash({ text: successMsg, type: "success" });
         return true;
       } catch {
-        setError("Errore di rete.");
+        showFlash({ text: "Errore di rete.", type: "danger" });
         return false;
       }
     },
-    [slug, locationId],
+    [slug, locationId, showFlash],
   );
 
   function pageHref(suffix: string): string {
     return `/${encodeURIComponent(slug)}/${`hours${suffix}`.replace("&", "?")}`;
   }
 
-  function tabHref(target: "hours" | "closures" | "exceptions"): string {
+  function tabHref(target: HoursTabKey): string {
     return pageHref(`&tab=${target}&location_id=${locationId}`);
   }
 
+  // Come la navigazione legacy: cambio tab = nuova pagina (flash azzerato,
+  // URL aggiornato) senza però ricaricare la SPA.
+  function switchTab(target: HoursTabKey) {
+    setTab(target);
+    setFlash(null);
+    if (typeof window !== "undefined") window.history.replaceState(null, "", tabHref(target));
+  }
+
   const navLinkBase = "nav-link";
+  const subtitle = locationsCount > 1
+    ? "Gestisci orari, chiusure e straordinari. Segue la sede selezionata nella barra superiore."
+    : "Gestisci orari, chiusure e straordinari.";
 
   return (
     <div className="container-fluid">
+      {flash ? (
+        <div className={`alert alert-${flash.type} d-flex align-items-start gap-2`}>
+          <div>
+            <i className="bi bi-info-circle" />
+          </div>
+          <div>{flash.text}</div>
+        </div>
+      ) : null}
+
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Impostazioni</div>
           <h1 className="bs-page-title">Orari &amp; chiusure</h1>
-          <div className="bs-page-subtitle">Gestisci orari, chiusure e straordinari.</div>
+          <div className="bs-page-subtitle">{subtitle}</div>
         </div>
-        <div className="bs-page-actions">
-          <a className="btn btn-outline-primary" href={`/${encodeURIComponent(slug)}/settings`}>
-            <i className="bi bi-building me-1" />
-            Attivita
-          </a>
-        </div>
+        {canSettingsLocation ? (
+          <div className="bs-page-actions">
+            <a className="btn btn-outline-primary" href={`/${encodeURIComponent(slug)}/settings`}>
+              <i className="bi bi-building me-1" />
+              Attivita
+            </a>
+          </div>
+        ) : null}
       </div>
 
       <ul className="nav nav-pills mb-3">
@@ -184,7 +238,7 @@ export function HoursContent({ slug: slugProp }: { slug?: string } = {}) {
             href={tabHref("hours")}
             onClick={(e) => {
               e.preventDefault();
-              setTab("hours");
+              switchTab("hours");
             }}
           >
             <i className="bi bi-clock me-1" />
@@ -197,7 +251,7 @@ export function HoursContent({ slug: slugProp }: { slug?: string } = {}) {
             href={tabHref("closures")}
             onClick={(e) => {
               e.preventDefault();
-              setTab("closures");
+              switchTab("closures");
             }}
           >
             <i className="bi bi-calendar-x me-1" />
@@ -210,7 +264,7 @@ export function HoursContent({ slug: slugProp }: { slug?: string } = {}) {
             href={tabHref("exceptions")}
             onClick={(e) => {
               e.preventDefault();
-              setTab("exceptions");
+              switchTab("exceptions");
             }}
           >
             <i className="bi bi-calendar2-week me-1" />
@@ -219,36 +273,20 @@ export function HoursContent({ slug: slugProp }: { slug?: string } = {}) {
         </li>
       </ul>
 
-      {error ? (
-        <div className="alert alert-danger" role="alert">
-          {error}
-        </div>
-      ) : null}
-
-      {savedMsg ? (
-        <div className="alert alert-success" role="alert">
-          {savedMsg}
-        </div>
-      ) : null}
-
       {tab === "hours" ? (
         <HoursTab
           locationId={locationId}
           hours={hours}
           onSave={async (rows) => {
-            setSavedMsg("");
-            const ok = await postAction({ action: "hours_save", hours_json: JSON.stringify(rows) });
-            if (ok) {
-              setSavedMsg("Orari salvati.");
-              load();
-            }
+            const ok = await postAction({ action: "hours_save", hours_json: JSON.stringify(rows) }, "Orari salvati");
+            if (ok) load();
             return ok;
           }}
         />
       ) : tab === "closures" ? (
-        <ClosuresTab loading={loading} closures={closures} onSave={postAction} />
+        <ClosuresTab loading={loading} closures={closures} onAction={postAction} />
       ) : (
-        <ExceptionsTab loading={loading} exceptions={exceptions} onSave={postAction} />
+        <ExceptionsTab loading={loading} exceptions={exceptions} onAction={postAction} />
       )}
     </div>
   );
@@ -257,8 +295,21 @@ export function HoursContent({ slug: slugProp }: { slug?: string } = {}) {
 // Editable weekly-hours row state (times as HH:MM, dow 0=Domenica..6=Sabato).
 type HourRowState = { dow: number; opens: string; closes: string; opens2: string; closes2: string; isClosed: boolean };
 
-// Controlled weekly-hours grid (port of the hours.php save_hours form): prefilled
-// from the resources context and saved via POST action=hours_save (hours_json).
+// hours.js toMin: parseInt sulle parti, null se NaN.
+function jsTimeToMin(value: string): number | null {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const parts = raw.split(":");
+  if (parts.length < 2) return null;
+  const h = Number.parseInt(parts[0], 10);
+  const m = Number.parseInt(parts[1], 10);
+  if (Number.isNaN(h) || Number.isNaN(m)) return null;
+  return h * 60 + m;
+}
+
+// Controlled weekly-hours grid (port of the hours.php save_hours form +
+// assets/js/pages/hours.js live validation): prefilled from the resources
+// context and saved via POST action=hours_save (hours_json).
 function HoursTab({
   locationId,
   hours,
@@ -270,6 +321,7 @@ function HoursTab({
 }) {
   const [rows, setRows] = useState<HourRowState[]>([]);
   const [saving, setSaving] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
 
   // Hydrate/refresh the editable grid whenever the loaded hours (or sede) change.
   const hoursSig = useMemo(
@@ -298,8 +350,112 @@ function HoursTab({
     setRows((prev) => prev.map((r) => (r.dow === dow ? { ...r, ...changes } : r)));
   }
 
+  // Port of hours.js validateDow: reads the (controlled) inputs from the DOM,
+  // sets setCustomValidity + is-invalid + the min hints with the legacy texts.
+  const validateDow = useCallback((dow: number): boolean => {
+    const form = formRef.current;
+    if (!form) return true;
+    const get = (field: string) => form.querySelector<HTMLInputElement>(`input[name="hours[${dow}][${field}]"]`);
+    const opens = get("opens");
+    const closes = get("closes");
+    const opens2 = get("opens2");
+    const closes2 = get("closes2");
+    const closedInput = get("is_closed");
+    const setValidity = (input: HTMLInputElement | null, msg: string) => {
+      if (!input) return;
+      input.setCustomValidity(msg || "");
+      input.classList.toggle("is-invalid", Boolean(msg));
+    };
+    const clearAll = () => [opens, closes, opens2, closes2].forEach((input) => setValidity(input, ""));
+
+    if (closedInput?.checked) {
+      clearAll();
+      return true;
+    }
+
+    // Aggiorna i min per aiutare l'utente (hours.js 63-72).
+    if (closes) {
+      if (opens?.value) closes.min = opens.value;
+      else closes.removeAttribute("min");
+    }
+    if (opens2) {
+      if (closes?.value) opens2.min = closes.value;
+      else opens2.removeAttribute("min");
+    }
+    if (closes2) {
+      if (opens2?.value) closes2.min = opens2.value;
+      else closes2.removeAttribute("min");
+    }
+
+    clearAll();
+    let ok = true;
+
+    const o = jsTimeToMin(opens?.value ?? "");
+    const c = jsTimeToMin(closes?.value ?? "");
+    if (!opens?.value || !closes?.value) {
+      ok = false;
+      if (!opens?.value) setValidity(opens, "Compila anche l'apertura");
+      if (!closes?.value) setValidity(closes, "Compila anche la chiusura");
+    } else if (o !== null && c !== null && c <= o) {
+      ok = false;
+      setValidity(closes, "La chiusura deve essere successiva all'apertura");
+    }
+
+    const o2 = jsTimeToMin(opens2?.value ?? "");
+    const c2 = jsTimeToMin(closes2?.value ?? "");
+    if (opens2?.value || closes2?.value) {
+      // Split richiede la prima fascia
+      if (!opens?.value || !closes?.value) {
+        ok = false;
+        setValidity(opens2, "Compila prima apertura/chiusura");
+        setValidity(closes2, "Compila prima apertura/chiusura");
+      } else if (!opens2?.value || !closes2?.value) {
+        ok = false;
+        if (!opens2?.value) setValidity(opens2, "Compila anche la riapertura");
+        if (!closes2?.value) setValidity(closes2, "Compila anche la chiusura 2");
+      } else {
+        if (o2 !== null && c !== null && o2 < c) {
+          ok = false;
+          setValidity(opens2, "La riapertura deve essere uguale o successiva alla chiusura");
+        }
+        if (o2 !== null && c2 !== null && c2 <= o2) {
+          ok = false;
+          setValidity(closes2, "La chiusura 2 deve essere successiva alla riapertura");
+        }
+      }
+    }
+
+    return ok;
+  }, []);
+
+  // Validazione live come il listener 'input' + initial sync di hours.js: gira
+  // dopo ogni render con i valori aggiornati (gated finché la griglia è vuota
+  // per non marcare is-invalid durante il primo load).
+  useEffect(() => {
+    if (rows.length !== DAYS.length) return;
+    for (const day of DAYS) validateDow(day.dow);
+  }, [rows, validateDow]);
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    // Blocco submit se invalido (hours.js 222-238): focus + reportValidity
+    // sul primo campo marcato is-invalid.
+    let allOk = true;
+    for (const day of DAYS) {
+      if (!validateDow(day.dow)) allOk = false;
+    }
+    if (!allOk) {
+      const firstInvalid = formRef.current?.querySelector<HTMLInputElement>("input.is-invalid");
+      if (firstInvalid) {
+        try {
+          firstInvalid.focus();
+          firstInvalid.reportValidity();
+        } catch {
+          // ignore focus errors
+        }
+      }
+      return;
+    }
     setSaving(true);
     try {
       await onSave(rows.map((r) => ({ dow: r.dow, opens: r.opens, closes: r.closes, opens2: r.opens2, closes2: r.closes2, is_closed: r.isClosed ? 1 : 0 })));
@@ -310,7 +466,7 @@ function HoursTab({
 
   return (
     <div className="card p-3">
-      <form method="post" onSubmit={submit}>
+      <form method="post" onSubmit={submit} ref={formRef} noValidate>
         <input type="hidden" name="location_id" value={locationId} />
         <div className="table-responsive">
           <table className="table mb-0 align-middle">
@@ -326,10 +482,7 @@ function HoursTab({
             <tbody id="hoursTable">
               {DAYS.map((day) => {
                 const row = rows.find((r) => r.dow === day.dow) ?? { dow: day.dow, opens: "", closes: "", opens2: "", closes2: "", isClosed: false };
-                const splitOpen = row.opens2 !== "" || row.closes2 !== "";
-                return (
-                  <HoursRow key={day.dow} label={day.label} row={row} splitOpen={splitOpen} onPatch={(changes) => patch(day.dow, changes)} />
-                );
+                return <HoursRow key={day.dow} label={day.label} row={row} onPatch={(changes) => patch(day.dow, changes)} />;
               })}
             </tbody>
           </table>
@@ -348,44 +501,60 @@ function HoursTab({
 function HoursRow({
   label,
   row,
-  splitOpen: splitFromData,
   onPatch,
 }: {
   label: string;
   row: HourRowState;
-  splitOpen: boolean;
   onPatch: (changes: Partial<HourRowState>) => void;
 }) {
-  // The split row stays visible once opened even with empty times (like the PHP UI).
+  // The split row stays visible once opened even with empty times (like the
+  // PHP UI); closing the day hides row+buttons WITHOUT clearing the values and
+  // drops the forced-open state (hours.js setSplit/syncRow).
   const [splitForced, setSplitForced] = useState(false);
-  const splitOpen = splitForced || splitFromData;
+  const hasSplitValues = row.opens2 !== "" || row.closes2 !== "";
+  const splitOpen = (splitForced || hasSplitValues) && !row.isClosed;
   const dow = row.dow;
+
+  function focusSplit() {
+    // focus sul primo campo della seconda fascia (hours.js 155-157)
+    setTimeout(() => {
+      try {
+        document.querySelector<HTMLInputElement>(`input[name="hours[${dow}][opens2]"]`)?.focus();
+      } catch {
+        // ignore
+      }
+    }, 0);
+  }
 
   return (
     <>
       <tr className="hours-row" data-role="main" data-dow={dow}>
         <td className="fw-semibold">{label}</td>
         <td>
-          <input className="form-control" type="time" name={`hours[${dow}][opens]`} value={row.opens} disabled={row.isClosed} onChange={(e) => onPatch({ opens: e.target.value })} />
+          <input className="form-control" type="time" name={`hours[${dow}][opens]`} value={row.opens} onChange={(e) => onPatch({ opens: e.target.value })} />
         </td>
         <td>
-          <input className="form-control" type="time" name={`hours[${dow}][closes]`} value={row.closes} disabled={row.isClosed} onChange={(e) => onPatch({ closes: e.target.value })} />
+          <input className="form-control" type="time" name={`hours[${dow}][closes]`} value={row.closes} onChange={(e) => onPatch({ closes: e.target.value })} />
         </td>
         <td className="text-nowrap">
           <button
             type="button"
-            className={`btn btn-sm btn-outline-secondary js-add-split ${splitOpen ? "d-none" : ""}`}
+            className={`btn btn-sm btn-outline-secondary js-add-split ${splitOpen || row.isClosed ? "d-none" : ""}`}
             data-dow={dow}
-            onClick={() => setSplitForced(true)}
+            onClick={() => {
+              setSplitForced(true);
+              focusSplit();
+            }}
           >
             <i className="bi bi-plus-lg me-1" />
             Aggiungi orario spezzato
           </button>
           <button
             type="button"
-            className={`btn btn-sm btn-outline-danger js-remove-split ${splitOpen ? "" : "d-none"}`}
+            className={`btn btn-sm btn-outline-danger js-remove-split ${splitOpen && !row.isClosed ? "" : "d-none"}`}
             data-dow={dow}
             onClick={() => {
+              if (!window.confirm("Rimuovere l'orario spezzato per questo giorno?")) return;
               setSplitForced(false);
               onPatch({ opens2: "", closes2: "" });
             }}
@@ -402,7 +571,10 @@ function HoursRow({
               name={`hours[${dow}][is_closed]`}
               data-dow={dow}
               checked={row.isClosed}
-              onChange={(e) => onPatch({ isClosed: e.target.checked })}
+              onChange={(e) => {
+                if (e.target.checked) setSplitForced(false);
+                onPatch({ isClosed: e.target.checked });
+              }}
             />
           </div>
         </td>
@@ -411,11 +583,11 @@ function HoursRow({
         <td></td>
         <td>
           <label className="form-label small text-muted mb-1">Riapertura</label>
-          <input className="form-control" type="time" name={`hours[${dow}][opens2]`} value={row.opens2} disabled={row.isClosed} onChange={(e) => onPatch({ opens2: e.target.value })} />
+          <input className="form-control" type="time" name={`hours[${dow}][opens2]`} value={row.opens2} onChange={(e) => onPatch({ opens2: e.target.value })} />
         </td>
         <td>
           <label className="form-label small text-muted mb-1">Chiusura 2</label>
-          <input className="form-control" type="time" name={`hours[${dow}][closes2]`} value={row.closes2} disabled={row.isClosed} onChange={(e) => onPatch({ closes2: e.target.value })} />
+          <input className="form-control" type="time" name={`hours[${dow}][closes2]`} value={row.closes2} onChange={(e) => onPatch({ closes2: e.target.value })} />
         </td>
         <td className="small text-muted">Orario spezzato</td>
         <td></td>
@@ -427,11 +599,11 @@ function HoursRow({
 function ClosuresTab({
   loading,
   closures,
-  onSave,
+  onAction,
 }: {
   loading: boolean;
   closures: ClosureRange[];
-  onSave: (body: Record<string, unknown>) => Promise<boolean>;
+  onAction: (body: Record<string, unknown>, successMsg: string) => Promise<boolean>;
 }) {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -443,13 +615,16 @@ function ClosuresTab({
     e.preventDefault();
     if (saving) return;
     setSaving(true);
-    const ok = await onSave({
-      action: "closure_save",
-      date_from: dateFrom,
-      date_to: dateTo,
-      kind,
-      note,
-    });
+    const ok = await onAction(
+      {
+        action: "closure_save",
+        date_from: dateFrom,
+        date_to: dateTo,
+        kind,
+        note,
+      },
+      "Chiusura salvata",
+    );
     setSaving(false);
     if (ok) {
       setDateFrom("");
@@ -461,14 +636,17 @@ function ClosuresTab({
 
   async function remove(range: ClosureRange) {
     if (!window.confirm("Eliminare questo periodo?")) return;
-    await onSave({
-      action: "closure_delete_range",
-      // Stored desc: end is the older bound, start the newer bound. The legacy
-      // delete link passes from=end & to=start; the lib re-orders internally.
-      from: range.end,
-      to: range.start,
-      reason: range.reason ?? "",
-    });
+    await onAction(
+      {
+        action: "closure_delete_range",
+        // Stored desc: end is the older bound, start the newer bound. The legacy
+        // delete link passes from=end & to=start; the lib re-orders internally.
+        from: range.end,
+        to: range.start,
+        reason: range.reason ?? "",
+      },
+      "Chiusura eliminata",
+    );
   }
 
   return (
@@ -586,11 +764,11 @@ function ClosuresTab({
 function ExceptionsTab({
   loading,
   exceptions,
-  onSave,
+  onAction,
 }: {
   loading: boolean;
   exceptions: ExceptionRange[];
-  onSave: (body: Record<string, unknown>) => Promise<boolean>;
+  onAction: (body: Record<string, unknown>, successMsg: string) => Promise<boolean>;
 }) {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -606,16 +784,19 @@ function ExceptionsTab({
     e.preventDefault();
     if (saving) return;
     setSaving(true);
-    const ok = await onSave({
-      action: "exception_save",
-      date_from: dateFrom,
-      date_to: dateTo,
-      note,
-      opens,
-      closes,
-      opens2: splitOpen ? opens2 : "",
-      closes2: splitOpen ? closes2 : "",
-    });
+    const ok = await onAction(
+      {
+        action: "exception_save",
+        date_from: dateFrom,
+        date_to: dateTo,
+        note,
+        opens,
+        closes,
+        opens2: splitOpen ? opens2 : "",
+        closes2: splitOpen ? closes2 : "",
+      },
+      "Straordinario salvato",
+    );
     setSaving(false);
     if (ok) {
       setDateFrom("");
@@ -631,11 +812,14 @@ function ExceptionsTab({
 
   async function remove(range: ExceptionRange) {
     if (!window.confirm("Eliminare questo periodo?")) return;
-    await onSave({
-      action: "exception_delete_range",
-      from: range.end,
-      to: range.start,
-    });
+    await onAction(
+      {
+        action: "exception_delete_range",
+        from: range.end,
+        to: range.start,
+      },
+      "Straordinario eliminato",
+    );
   }
 
   function removeSplit() {

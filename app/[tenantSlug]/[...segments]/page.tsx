@@ -989,6 +989,16 @@ export default async function TenantPage({
     );
   }
 
+  // Orari & chiusure (hours.php): tab e sede dal querystring + flash ?msg= dai
+  // redirect legacy (Orari salvati / Chiusura salvata / Straordinario salvato...).
+  if (page === "hours") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <HoursContent slug={tenantSlug} initialQuery={{ tab: query.tab, location_id: query.location_id, msg: query.msg }} />
+      </ManageShell>
+    );
+  }
+
   // Modulo fedele: anche CON ?action= residue (i moduli leggono l'action dall'URL
   // client-side — es. appointments?action=edit apre il drawer; un'action ignota
   // rende la lista, come il legacy). Le action con pagina dedicata sono già

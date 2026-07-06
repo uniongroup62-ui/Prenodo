@@ -5372,3 +5372,67 @@ col messaggio esatto nomi-inclusi alla transizione — e conferma che senza
 transizione il legacy salva, come il port —, delete popup di sessione
 IDENTICO) + 35/35 marker + regressioni (staff-availability 16,
 staff-for-service 6, cabins 20, services 40) + typecheck/lint puliti.
+
+## AUDIT COMPLETO — Orari & chiusure (hours.php) (2026-07-06)
+
+Audit funzionale completo di hours.php (875 righe) + assets/js/pages/hours.js
+(279) vs hours-content.tsx + saveBusinessHours/saveClosure/saveException/
+deleteClosureRange/deleteExceptionRange (manage-resources.ts) + route
+resources. Prima esisteva solo il fix parziale calendario (0fd0d3f).
+Bug trovati e corretti:
+1. VALIDAZIONE AGGREGATA: il legacy accumula TUTTI gli errori — tab Orari
+   'Orari non validi: ' + primi 8 uniti da '; ' (+' ...'), Chiusure
+   'Impossibile salvare: ' + primi 3 uniti da spazio, Straordinari idem
+   con primi 6 — il Next lanciava solo il PRIMO errore senza wrapper.
+   Riscritte le tre save con raccolta errori nell'ordine legacy esatto.
+2. MESSAGGI VERBATIM: dayLabels senza accenti ('Lunedi' vs 'Lunedì');
+   'più breve' senza accento; conflitti chiusura/straordinario con testi
+   inventati e date ISO — ora 'esistono già aperture straordinarie nelle
+   seguenti date: d/m/Y ... Rimuovi prima lo straordinario o modifica le
+   date.', 'esistono appuntamenti in sospeso o prenotati nelle seguenti
+   date: ... Sposta o annulla prima gli appuntamenti.', 'le seguenti date
+   sono impostate come chiuse: ... Rimuovi prima la chiusura (tab
+   Chiusure) o modifica le date.' (hours_format_date_sample: max 6 date
+   d/m/Y + ' ...'). Messaggi straordinari standalone ('Per un'apertura
+   straordinaria devi compilare...', 'Formato orario spezzato non
+   valido.') non più prefissati con 'Apertura straordinaria:'.
+   Errori data legacy accumulati ('Seleziona una data di inizio.' + 'Data
+   inizio non valida.' + 'Data fine non valida.').
+3. SEMANTICA PHP: _time_to_minutes portato con (int) PHP ('aa:bb' = 00:00,
+   '9:30' valido — normalizeTime li scartava trasformandoli in falsi
+   "campo vuoto"); normalizeDate ora rifiuta le date rollate (2026-02-31
+   non diventa più 03-03, come hours_parse_ymd); parseHoursRows salva solo
+   i dow POSTati (raw strings); reason = kind + ' - ' + note senza
+   troncature cleanName; fallback default = ensure_default_hours (Domenica
+   chiusa, Sabato 09-13, altri 09-19 — il Sabato era 09-19).
+4. COMPONENT: flash legacy con markup View::alert (d-flex align-items-start
+   gap-2 + bi-info-circle) SOPRA il bs-page-header (era alert semplice
+   sotto le pills); messaggi successo dei redirect ('Orari salvati',
+   'Chiusura salvata', 'Chiusura eliminata', 'Straordinario salvato',
+   'Straordinario eliminato') prima ASSENTI per chiusure/straordinari;
+   porting integrale della validazione live hours.js (setCustomValidity +
+   is-invalid + min dinamici + blocco submit con focus/reportValidity,
+   testi 'Compila anche l'apertura'...); confirm 'Rimuovere l'orario
+   spezzato per questo giorno?' sul Rimuovi settimanale (mancava); giorno
+   chiuso = split e bottoni nascosti SENZA disabilitare/cancellare gli
+   orari (il Next disabilitava gli input); reset forced-split alla
+   chiusura del giorno; subtitle multi-sede ('Segue la sede selezionata
+   nella barra superiore.'); bottone 'Attivita' gated su
+   settings.location (canSettingsLocation nel GET della route); cambio
+   tab = URL aggiornato (replaceState) + flash azzerato come la
+   navigazione legacy. page.tsx: branch hours con initialQuery
+   {tab, location_id, msg} per i deep-link legacy.
+Verifica: battery NUOVA e2e-hours-page 37/37 (context+override sede,
+salvataggi, giorno chiuso azzera orari, 8 validazioni orari verbatim
+inclusi quirk PHP 'aa:bb' e troncamento a 8 errori, chiusure con
+grouping/swap/conflitti straordinario+appuntamento scheduled/canceled,
+straordinari con split e 5 validazioni, delete_range con/senza reason,
+fallback Sabato 09-13; snapshot/restore integrale business_hours 14/14 +
+closures/exceptions/clients ZZ a zero) + LIVE PHP byte-per-byte (alert
+'Orari non validi: Lunedì: ...; Martedì: ...', 'Impossibile salvare:
+Seleziona una data di inizio. Data inizio non valida. Data fine non
+valida.', conflitti chiusura<->straordinario identici, redirect
+msg=Chiusura%20salvata/Straordinario%20salvato/Chiusura%20eliminata/
+Straordinario%20eliminato, live ripulito) + 62/62 marker + regressioni
+(hours-calendar 4, resources 25, cabins-page 20, cabins-resources 14,
+staff-page 27, staff-availability 16) + typecheck/lint puliti.
