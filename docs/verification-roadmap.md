@@ -6790,3 +6790,32 @@ Data/Ora (staff auto-assegnato).
 Fix: nel ctx-load con redeem risolto, setOperatorId('any') + setStep(5 se
 chooseStaffEnabled=false, altrimenti 4). Verifica live (book_prepaid&service_id=9):
 il wizard atterra su "Data e ora". typecheck pulito.
+
+
+---
+
+## Wizard booking: filtro operatori idonei (SSO/eligibilità) + residui staff/LOW (2026-07-06)
+
+Chiusa la parte BOUNDED di staff-selection-structure: lo step Professionista
+mostra ora solo gli operatori abilitati ad almeno un servizio selezionato,
+escluso l'operatore interno "SSO" (eligibleStaff), invece di TUTTO lo staff
+attivo. (Lo step Professionista è comunque saltato quando la scelta operatore è
+disattivata — default su centroesteticoelite.)
+
+RESIDUI DELIBERATI (documentati) — richiedono un port MAGGIORE o dati backend, e
+NON toccano il flusso default (scelta operatore OFF di default):
+- **Staff per-servizio completo** [HIGH/MED] (staff-selection-structure gruppi +
+  step-skip-divergence-staff/staff-step-skip-condition skip dinamico + multi-
+  service-staff-map + confirm-payload staff_map): il legacy rende un GRUPPO per
+  servizio (solo operatori idonei, location-filtered, auto-assegnazione singolo
+  operatore), invia uno staff_map per-servizio e calcola slot segment-aware per
+  carrelli multi-servizio. È un sottosistema a sé, rilevante solo con la scelta
+  operatore attiva. NON portato.
+- **prices-promo-badge** [LOW]: la card servizio (step 3) non mostra prezzo promo
+  barrato + badge — serve serviceCatalogPromotions nel context (backend).
+- **closure-notice** [LOW]: l'avviso "Il negozio sara chiuso dal.. al.." non è
+  reso — serve il calcolo dei range di chiusura contigui.
+- **confirmation-copy** [LOW]: la conferma hardcoda l'etichetta fidelity "Punti" e
+  omette le righe omaggio Fidelity/"scelta in negozio" e "Condizioni promozionali".
+- **recap step 7 per-servizio** (cost-breakdown recap): prezzi per-servizio
+  barrati/0€ nel recap PRE-conferma (la CONFERMA li mostra già).

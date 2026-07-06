@@ -463,6 +463,15 @@ export function BookingFaithful({
         : [],
     [ctx, locationId],
   );
+  // Operatori idonei per lo step Professionista: solo quelli abilitati ad almeno
+  // un servizio selezionato, escluso l'operatore interno "SSO" (staff_for_service
+  // legacy). NB: il legacy raggruppa PER SERVIZIO — qui resta una lista unica
+  // filtrata (residuo: gruppi per-servizio + staff_map + slot segment-aware).
+  const eligibleStaff = (ctx?.staff ?? []).filter(
+    (member) =>
+      member.name.trim().toUpperCase() !== "SSO" &&
+      member.serviceIds.some((sid) => serviceIds.includes(sid)),
+  );
   const selectedBenefit = ctx?.benefits.find((item) => item.id === benefitId) ?? null;
   const selectedSlot = availableSlots.find((item) => item.time === slot) ?? null;
   // Deep-link redeem attivo (book_package/prepaid/giftbox/omaggio): il servizio
@@ -1419,7 +1428,7 @@ export function BookingFaithful({
                       +
                     </div>
                   </div>
-                  {ctx?.staff.map((member) => (
+                  {eligibleStaff.map((member) => (
                     <div
                       key={member.id}
                       className={`list-card${operatorId === member.id ? " active" : ""}`}
@@ -1439,7 +1448,7 @@ export function BookingFaithful({
                     </div>
                   ))}
                 </div>
-                <div id="staffEmpty" className={`text-muted small mt-2${ctx?.staff.length ? " d-none" : ""}`}>
+                <div id="staffEmpty" className={`text-muted small mt-2${eligibleStaff.length ? " d-none" : ""}`}>
                   Nessun operatore disponibile.
                 </div>
               </div>
