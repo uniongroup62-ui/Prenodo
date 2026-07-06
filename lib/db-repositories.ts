@@ -15976,6 +15976,9 @@ export type FidelityPointsSettings = {
   expireEnabled: boolean;
   expireDays: number;
   expireWarnDays: number;
+  // fidelity_points_label (default 'Punti'): etichetta unità punti mostrata dove
+  // il legacy usa fidLabel (es. "Disponibili: N <label>").
+  pointsLabel: string;
 };
 
 function clampNum(n: number, min: number, max: number, fallback: number): number {
@@ -16000,6 +16003,7 @@ export async function getFidelityPointsSettings(slug: string): Promise<FidelityP
     expireEnabled: Number(r.fidelity_expire_enabled ?? 0) === 1,
     expireDays: Math.max(0, Math.min(36500, Math.round(Number(r.fidelity_expire_days ?? 365)))),
     expireWarnDays: Math.max(0, Math.min(36500, Math.round(Number(r.fidelity_expire_warn_days ?? 30)))),
+    pointsLabel: String(r.fidelity_points_label ?? "").trim() || "Punti",
   };
 }
 

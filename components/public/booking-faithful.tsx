@@ -514,6 +514,8 @@ export function BookingFaithful({
     suggestedDiscount: number;
     creditAvailable: number;
     giftcards: Array<{ id: number; code: string; balance: number }>;
+    // Etichetta unità punti (fidelity_points_label, default 'Punti'), come fidLabel.
+    pointsLabel: string;
   };
   const [custBenefits, setCustBenefits] = useState<CustomerBenefits | null>(null);
   const [useFidelity, setUseFidelity] = useState(false);
@@ -543,6 +545,7 @@ export function BookingFaithful({
           suggestedDiscount: Number(j.discount ?? 0) || 0,
           creditAvailable: Number(j.credit_available ?? 0) || 0,
           giftcards: Array.isArray(j.giftcards) ? j.giftcards : [],
+          pointsLabel: String(j.points_label ?? "").trim() || "Punti",
         });
       })
       .catch(() => undefined);
@@ -1797,10 +1800,14 @@ export function BookingFaithful({
                         <i className="bi bi-percent me-1" />
                         Punti Fidelity
                       </div>
-                      <div className="small text-muted" id="recFidelityHint" />
+                      <div className="small text-muted" id="recFidelityHint">
+                        {custBenefits && custBenefits.suggestedPoints > 0 && custBenefits.suggestedDiscount > 0.00001
+                          ? `Sconto applicabile con ${custBenefits.suggestedPoints} ${custBenefits.pointsLabel}.`
+                          : ""}
+                      </div>
                     </div>
                     <div className="small text-muted" id="recFidelityAvail">
-                      Disponibili: {custBenefits?.pointsAvailable ?? 0} Punti
+                      Disponibili: {custBenefits?.pointsAvailable ?? 0} {custBenefits?.pointsLabel ?? "Punti"}
                     </div>
                   </div>
                   <div className="d-grid gap-2 mt-3">

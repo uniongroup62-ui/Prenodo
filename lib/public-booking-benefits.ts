@@ -248,6 +248,9 @@ export type PublicCustomerBenefitsPreview = {
     // zeroed under the minimum (the toggle applies exactly this).
     suggestedPoints: number;
     suggestedDiscount: number;
+    // Etichetta unità punti (businesses.fidelity_points_label, default 'Punti'):
+    // usata dove il legacy usa fidLabel ("Disponibili: N <label>").
+    label: string;
   };
   // Credito panel (#recCreditUseBox): the client's spendable wallet credit.
   creditAvailable: number;
@@ -268,7 +271,7 @@ export async function publicCustomerBenefitsPreview({
 }): Promise<PublicCustomerBenefitsPreview> {
   const out: PublicCustomerBenefitsPreview = {
     ok: true,
-    fidelity: { enabled: false, redeemEnabled: false, pointsAvailable: 0, euroPerPoint: 0.1, minPoints: 0, suggestedPoints: 0, suggestedDiscount: 0 },
+    fidelity: { enabled: false, redeemEnabled: false, pointsAvailable: 0, euroPerPoint: 0.1, minPoints: 0, suggestedPoints: 0, suggestedDiscount: 0, label: "Punti" },
     creditAvailable: 0,
     giftcards: [],
   };
@@ -279,6 +282,9 @@ export async function publicCustomerBenefitsPreview({
   // --- Fidelity (settings gate + adhesion + wallet points) ---
   try {
     const settings = await getFidelityPointsSettings(slug);
+    // Etichetta unità punti: SEMPRE esposta (non dipende da adesione/punti), come
+    // FIDELITY_LABEL lato page nel legacy.
+    out.fidelity.label = settings.pointsLabel;
     const programOn = settings.globalEnabled && settings.pointsEnabled;
     out.fidelity.enabled = programOn;
     out.fidelity.redeemEnabled = programOn && settings.redeemEnabled;

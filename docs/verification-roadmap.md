@@ -6885,3 +6885,36 @@ RESIDUO minore: promo in modalità 'badge' pura (time-windowed / min_qty>1) — 
 motore Next valuta su 1 unità al tempo corrente, quindi rende badge solo per le
 promo attive-ora; le promo min_qty>1 (che nel legacy darebbero un badge senza
 prezzo) non emettono badge. Non tocca il caso prezzo-barrato (il cuore del finding).
+
+
+---
+
+## Wizard booking: etichetta unità Punti Fidelity dinamica (confirmation-copy label) — CHIUSO (2026-07-06)
+
+Chiusa la parte etichetta-fidelity del residuo confirmation-copy. Il wizard
+hardcodava "Punti" dove il legacy usa fidLabel (= businesses.fidelity_points_label,
+default 'Punti'). Port fedele di FIDELITY_LABEL / recFidelityAvail / recFidelityHint
+(booking-wizard.js 162, 2323, 2327).
+
+DISCRIMINAZIONE dinamico vs fisso (verificata sul legacy per non sovra-sostituire):
+- DINAMICO (unità punti, = fidLabel): "Disponibili: N <label>" (recFidelityAvail),
+  "Sconto applicabile con N <label>." (recFidelityHint).
+- FISSO (nome feature, MAI sostituito): "Punti Fidelity" (titolo card + toggle
+  "Usa sconto Punti Fidelity"), descrizione step "Applica Punti Fidelity...".
+
+- **Backend**: getFidelityPointsSettings espone pointsLabel; il preview benefit
+  espone out.fidelity.label SEMPRE (indipendente da adesione/punti, come la
+  costante FIDELITY_LABEL lato page); action=fidelity_preview ritorna points_label.
+- **Wizard**: custBenefits.pointsLabel usato in #recFidelityAvail ("Disponibili:
+  N <label>") e #recFidelityHint (prima VUOTO — ora popolato fedelmente
+  "Sconto applicabile con N <label>."). Titolo "Punti Fidelity" invariato.
+
+VERIFICA LIVE (Playwright, tenant 25 con label temporanea "Gemme", cliente con
+500 punti + tessera attiva): step Vantaggi → titolo "Punti Fidelity" (fisso),
+"Disponibili: 500 Gemme", "Sconto applicabile con 120 Gemme.", toggle "Usa sconto
+Punti Fidelity" (fisso). Dati di test RIPRISTINATI (label→Punti, punti→22, tessera
+rimossa; residuo 0). typecheck pulito.
+
+RESIDUO confirmation-copy restante: righe omaggio Fidelity ("Puoi ottenere in
+gift...") e "Condizioni promozionali" — richiedono fidelity_gifts_json e promo_
+conditions configurati (assenti sul tenant), sottosistema gift a sé.

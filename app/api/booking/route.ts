@@ -195,6 +195,7 @@ export async function GET(request: Request) {
         min_points: preview.fidelity.minPoints,
         points_used: preview.fidelity.suggestedPoints,
         discount: preview.fidelity.suggestedDiscount,
+        points_label: preview.fidelity.label,
         credit_available: preview.creditAvailable,
         giftcards: preview.giftcards,
       });
