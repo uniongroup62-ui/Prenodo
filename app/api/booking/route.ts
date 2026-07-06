@@ -87,6 +87,7 @@ export async function GET(request: Request) {
         closed_dows: closures.closedDows,
         closed_dates: closures.closedDates,
         open_dates: closures.openDates,
+        closure_ranges: closures.closureRanges,
       });
     }
 

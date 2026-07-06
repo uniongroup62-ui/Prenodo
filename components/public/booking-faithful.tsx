@@ -577,7 +577,7 @@ export function BookingFaithful({
 
   // CLOSED days for the date strip (port of mode=closures): weekly closed dows
   // + specific closures, special opens re-enable the day.
-  const [closures, setClosures] = useState<{ dows: Set<number>; dates: Set<string>; open: Set<string> }>({ dows: new Set(), dates: new Set(), open: new Set() });
+  const [closures, setClosures] = useState<{ dows: Set<number>; dates: Set<string>; open: Set<string>; ranges: Array<{ start: string; end: string; reason: string }> }>({ dows: new Set(), dates: new Set(), open: new Set(), ranges: [] });
   useEffect(() => {
     if (!slug) return;
     let active = true;
@@ -587,12 +587,15 @@ export function BookingFaithful({
     if (locationId > 0) params.set("location_id", String(locationId));
     void fetch(`/api/booking?${params.toString()}`)
       .then((res) => res.json().catch(() => null))
-      .then((data: { ok?: boolean; closed_dows?: number[]; closed_dates?: string[]; open_dates?: string[] } | null) => {
+      .then((data: { ok?: boolean; closed_dows?: number[]; closed_dates?: string[]; open_dates?: string[]; closure_ranges?: Array<{ start?: string; end?: string; reason?: string }> } | null) => {
         if (!active || !data?.ok) return;
         setClosures({
           dows: new Set((data.closed_dows ?? []).map(Number)),
           dates: new Set((data.closed_dates ?? []).map(String)),
           open: new Set((data.open_dates ?? []).map(String)),
+          ranges: (data.closure_ranges ?? [])
+            .map((r) => ({ start: String(r.start ?? ""), end: String(r.end ?? ""), reason: String(r.reason ?? "") }))
+            .filter((r) => r.start && r.end),
         });
       })
       .catch(() => {});
@@ -1458,12 +1461,23 @@ export function BookingFaithful({
                 <div className="mb-2 small-muted">
                   Scegli un giorno dalla lista. Usa il calendario per raggiungere più velocemente una data lontana.
                 </div>
-                <div id="closureNotice" className="alert alert-warning d-none booking-alert-rounded">
+                <div id="closureNotice" className={`alert alert-warning booking-alert-rounded${closures.ranges.length === 0 ? " d-none" : ""}`}>
                   <div className="d-flex gap-2">
                     <i className="bi bi-info-circle-fill" />
                     <div>
                       <div className="fw-semibold">Chiusura negozio</div>
-                      <div id="closureNoticeText" className="small" />
+                      <div id="closureNoticeText" className="small">
+                        {closures.ranges.slice(0, 3).map((range, idx) => (
+                          <span key={`${range.start}-${range.end}`}>
+                            {idx > 0 ? <br /> : null}
+                            {range.start === range.end ? (
+                              <>Il negozio sarà chiuso il <strong>{formatSlotDateLabel(range.start)}</strong>.</>
+                            ) : (
+                              <>Il negozio sarà chiuso dal <strong>{formatSlotDateLabel(range.start)}</strong> al <strong>{formatSlotDateLabel(range.end)}</strong>.</>
+                            )}
+                          </span>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 </div>

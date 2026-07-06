@@ -1227,8 +1227,16 @@ async function businessIntervals(slug: string, locationId: number | null, date: 
 // business_hours), the specific closure DATES over the next 365 days and the
 // special-open dates (business_hours_exceptions is_closed=0, which REOPEN a
 // day) — the public date strip disables closed days like the legacy wizard.
-export async function publicBookingClosures(slug: string, locationId: number | null): Promise<{ closedDows: number[]; closedDates: string[]; openDates: string[] }> {
+export async function publicBookingClosures(slug: string, locationId: number | null): Promise<{ closedDows: number[]; closedDates: string[]; openDates: string[]; closureRanges: Array<{ start: string; end: string; reason: string }> }> {
   const pad = (n: number) => String(n).padStart(2, "0");
+  // Giorno di calendario successivo (UTC, per evitare shift da fuso) — usato per
+  // raggruppare le chiusure consecutive (booking_dates_consecutive_asc: +1 day).
+  const nextYmd = (ymd: string): string => {
+    const [y, m, d] = ymd.split("-").map((n) => Number.parseInt(n, 10));
+    const dt = new Date(Date.UTC(y, (m || 1) - 1, d || 1));
+    dt.setUTCDate(dt.getUTCDate() + 1);
+    return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
+  };
   const today = new Date();
   const from = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
   const toDateObj = new Date(today);
@@ -1238,14 +1246,19 @@ export async function publicBookingClosures(slug: string, locationId: number | n
   const closureRows = await tenantSelect<RowDataPacket>({
     slug,
     table: "closures",
-    columns: "date",
+    columns: "date, reason",
     where: locationId
       ? "(location_id IS NULL OR location_id = ?) AND date BETWEEN ? AND ?"
       : "location_id IS NULL AND date BETWEEN ? AND ?",
     params: locationId ? [locationId, from, to] : [from, to],
     orderBy: "date ASC",
   }).catch(() => [] as RowDataPacket[]);
-  const closedSet = new Set<string>(closureRows.map((row) => dateFromSql(row.date)).filter(Boolean));
+  // date => motivazione (l'ultima riga vince, come il foreach del legacy).
+  const closedMap = new Map<string, string>();
+  for (const row of closureRows) {
+    const d = dateFromSql(row.date);
+    if (d) closedMap.set(d, String(row.reason ?? ""));
+  }
 
   // Special opens override closures (the legacy removes them from closed_dates).
   const openRows = await tenantSelect<RowDataPacket>({
@@ -1259,7 +1272,7 @@ export async function publicBookingClosures(slug: string, locationId: number | n
     orderBy: "date ASC",
   }).catch(() => [] as RowDataPacket[]);
   const openDates = Array.from(new Set(openRows.map((row) => dateFromSql(row.date)).filter(Boolean)));
-  for (const date of openDates) closedSet.delete(date);
+  for (const date of openDates) closedMap.delete(date);
 
   // Weekly closed dows: the effective business_hours row (location-preferred)
   // yields no intervals (is_closed / empty hours). A missing row = open (the
@@ -1278,7 +1291,27 @@ export async function publicBookingClosures(slug: string, locationId: number | n
     if (preferred && intervalsFromHoursRow(preferred).length === 0) closedDows.push(dow);
   }
 
-  return { closedDows, closedDates: Array.from(closedSet).sort(), openDates };
+  // Raggruppa chiusure CONSECUTIVE con la STESSA motivazione in intervalli per
+  // la notifica del wizard (booking.php 4971-4993).
+  const closedDates = Array.from(closedMap.keys()).sort();
+  const closureRanges: Array<{ start: string; end: string; reason: string }> = [];
+  for (let i = 0; i < closedDates.length; ) {
+    const start = closedDates[i];
+    const reason = closedMap.get(start) ?? "";
+    let end = start;
+    let j = i + 1;
+    while (
+      j < closedDates.length
+      && nextYmd(closedDates[j - 1]) === closedDates[j]
+      && (closedMap.get(closedDates[j]) ?? "") === reason
+    ) {
+      end = closedDates[j];
+      j++;
+    }
+    closureRanges.push({ start, end, reason });
+    i = j;
+  }
+  return { closedDows, closedDates, openDates, closureRanges };
 }
 
 // Per-staff UNAVAILABILITY bands for the calendar staff-day view (port of the

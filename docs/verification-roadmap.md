@@ -6819,3 +6819,34 @@ NON toccano il flusso default (scelta operatore OFF di default):
   omette le righe omaggio Fidelity/"scelta in negozio" e "Condizioni promozionali".
 - **recap step 7 per-servizio** (cost-breakdown recap): prezzi per-servizio
   barrati/0€ nel recap PRE-conferma (la CONFERMA li mostra già).
+
+
+---
+
+## Wizard booking: avviso "Chiusura negozio" (closure-notice) — CHIUSO (2026-07-06)
+
+Chiuso il residuo LOW closure-notice (prima elencato come deliberato). Lo step
+"Data e ora" ha sempre avuto il markup #closureNotice/#closureNoticeText ma era
+MORTO (hardcoded d-none, testo vuoto: nulla lo popolava).
+
+Port fedele di booking.php mode=closures (4971-4993) + booking-wizard.js
+renderClosureNotice (3761-3777):
+- **Backend** (publicBookingClosures): la query chiusure ora legge anche `reason`;
+  costruisce una mappa date→motivazione (ultima riga vince, come il foreach PHP),
+  toglie le aperture straordinarie, poi raggruppa le date CONSECUTIVE con la
+  STESSA motivazione in `closureRanges` [{start,end,reason}]
+  (booking_dates_consecutive_asc = +1 giorno).
+- **API** /api/booking?action=closures: ritorna `closure_ranges`.
+- **Wizard**: lo stato closures cattura `ranges`; #closureNotice mostra fino a 3
+  range (slice(0,3)) — "Il negozio sarà chiuso il <b>DATA</b>." (singolo) o
+  "Il negozio sarà chiuso dal <b>A</b> al <b>B</b>." (intervallo), date via
+  formatSlotDateLabel ("10 agosto 2026").
+
+VERIFICA LIVE (Playwright, step "Data e ora", 5 chiusure di test su tenant 25):
+- 10-08→12-08 stessa motivazione "ZZ Ferie" → 1 riga "dal 10 agosto 2026 al 12
+  agosto 2026." (raggruppate);
+- 13-08 "ZZ Altro" (consecutiva a 12 ma motivazione diversa) → riga separata
+  "il 13 agosto 2026." (la motivazione spezza il range);
+- 20-08 "ZZ Chiuso" (gap) → riga separata.
+Notice visibile (no d-none), heading "Chiusura negozio". Dati di test poi
+ELIMINATI (residuo=0). typecheck pulito.
