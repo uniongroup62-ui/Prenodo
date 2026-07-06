@@ -213,6 +213,8 @@ export function BookingFaithful({
   const [hold, setHold] = useState<BookingHold | null>(null);
   // Countdown live dell'hold (booking-wizard.js bookingStartHoldCountdown): tick 1s.
   const [holdNow, setHoldNow] = useState(0);
+  // Auto-refresh silenzioso della disponibilità ogni 15s sullo step Data/Ora.
+  const [slotRefreshTick, setSlotRefreshTick] = useState(0);
   // Secondi rimanenti + scaduto (expiresAt è ora locale "YYYY-MM-DD HH:MM:SS").
   const holdExpiresMs = hold ? new Date(hold.expiresAt.replace(" ", "T")).getTime() : 0;
   const holdRemainingSec = hold && holdNow > 0 ? Math.max(0, Math.round((holdExpiresMs - holdNow) / 1000)) : 0;
@@ -386,6 +388,32 @@ export function BookingFaithful({
       active = false;
     };
   }, [step, slug, date, serviceIds, locationId, operatorId]);
+
+  // Auto-refresh silenzioso ogni 15s sullo step Data/Ora (in pausa se la tab è
+  // nascosta), come il legacy — senza azzerare la selezione/hold.
+  useEffect(() => {
+    if (step !== 5) return;
+    const id = window.setInterval(() => {
+      if (typeof document !== "undefined" && !document.hidden) setSlotRefreshTick((tick) => tick + 1);
+    }, 15000);
+    return () => window.clearInterval(id);
+  }, [step]);
+  useEffect(() => {
+    if (step !== 5 || !serviceIds.length || !locationId || slotRefreshTick === 0) return;
+    let active = true;
+    const params = new URLSearchParams({ slug, action: "slots", date, service_ids: serviceIds.join(","), location_id: String(locationId) });
+    if (operatorId !== "any") params.set("staff_id", String(operatorId));
+    void fetch(`/api/booking?${params.toString()}`)
+      .then((response) => response.json())
+      .then((data) => {
+        if (active && data.ok && Array.isArray(data.slots)) setAvailableSlots(data.slots as BookingSlot[]);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slotRefreshTick]);
 
   const ctx = context;
   // shouldSkipLocationStep (booking-wizard.js: skipLocationStep = locationCards.length===1):
@@ -967,7 +995,7 @@ export function BookingFaithful({
 
               <div className="btn-row">
                 {/* .ics solo con sessione cliente loggata (endpoint account-gated). */}
-                {confirmation.accountLinked && custBenefits?.logged ? (
+                {confirmation.accountLinked ? (
                   <a className="btn-soft" href={`/api/account/ics?code=${encodeURIComponent(confirmation.publicCode)}`}>
                     <i className="bi bi-calendar2-plus" /> Aggiungi al calendario
                   </a>
@@ -1470,7 +1498,7 @@ export function BookingFaithful({
                 </div>
                 <div className="mt-3">
                   <div className="fw-semibold">
-                    Scegli uno slot per <span id="slotDateLabel" className="text-success">{formatDateIt(date)}</span>
+                    Scegli uno slot per <span id="slotDateLabel" className="text-success">{formatSlotDateLabel(date)}</span>
                   </div>
                   <div
                     className={`slot-grid${!slotsLoading && freeSlots.length > SLOT_GROUP_THRESHOLD ? " has-groups" : ""}`}
@@ -1993,7 +2021,12 @@ export function BookingFaithful({
             <div className="booking-summary__selection" id="summarySelectionText">
               {selectedServices.length ? (
                 <>
-                  <strong>{selectedServices.map((service) => service.name).join(", ")}</strong>
+                  <strong>
+                    {selectedServices.length === 1
+                      ? selectedServices[0].name
+                      : `${selectedServices.length} servizi selezionati`}
+                  </strong>
+                  {` • ${selectedServices.reduce((sum, service) => sum + (service.duration || 0), 0)} min`}
                 </>
               ) : (
                 "Nessun servizio selezionato"
@@ -2022,7 +2055,7 @@ export function BookingFaithful({
               <div className="summary-row">
                 <div className="label">Servizi</div>
                 <div className="fw-semibold text-end" id="sumServices">
-                  {selectedServices.length || "—"}
+                  {selectedServices.length ? selectedServices.map((service) => service.name).join(", ") : "—"}
                 </div>
               </div>
               <div className="summary-row">
@@ -2363,6 +2396,14 @@ function formatDateIt(ymd: string): string {
   const date = parseYmd(ymd);
   if (!date) return ymd;
   return `${WEEKDAYS_SHORT[date.getDay()]} ${date.getDate()} ${MONTHS_IT[date.getMonth()]}`;
+}
+
+// Etichetta "Scegli uno slot per <data>": giorno 2 cifre + mese lungo + anno
+// (es. "07 luglio 2026"), come il legacy.
+function formatSlotDateLabel(ymd: string): string {
+  const date = parseYmd(ymd);
+  if (!date) return ymd;
+  return `${String(date.getDate()).padStart(2, "0")} ${MONTHS_IT[date.getMonth()]} ${date.getFullYear()}`;
 }
 
 export default BookingFaithful;

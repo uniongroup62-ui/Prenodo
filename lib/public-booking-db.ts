@@ -200,7 +200,8 @@ export async function publicBookingContext(slug: string): Promise<PublicBookingC
   const locations = await Promise.all(locationRows.map(async (row) => ({
     id: Number(row.id ?? 0),
     name: String(row.name ?? "Sede"),
-    address: [row.address, row.legal_city].map((value) => String(value ?? "").trim()).filter(Boolean).join(", "),
+    // Card sede: solo la colonna address (il legacy NON concatena legal_city).
+    address: String(row.address ?? "").trim(),
     city: String(row.legal_city ?? "").trim(),
     region: String(row.legal_region ?? "").trim(),
     email: String(row.email ?? ""),

@@ -6699,3 +6699,24 @@ messaggio; computeCanContinue 5/6/7 richiede hold && !holdExpired.
 
 Verifica live: dopo aver scelto uno slot il banner mostra "Slot riservato per
 2:29." e dopo 3s "2:26." (tick attivo). typecheck/lint puliti.
+
+
+---
+
+## Wizard booking: batch bounded (indirizzo, riepilogo, data slot, calendario, auto-refresh) (2026-07-06)
+
+Cinque finding chiusi:
+- **[MED] data-shown-address**: la card sede mostra la sola colonna address (niente
+  concat legal_city) — public-booking-db.ts.
+- **[MED] data-shown-summary**: il testo di selezione mostra il nome per 1 servizio /
+  "N servizi selezionati" per 2+ SEMPRE con "• {durata} min"; la riga "Servizi" del
+  riepilogo mostra i nomi (join ", ") invece del conteggio.
+- **[LOW] slot-date-label-format**: "Scegli uno slot per" usa "07 luglio 2026"
+  (giorno 2 cifre + mese lungo + anno) invece di "lun 7 luglio".
+- **[LOW] add-to-calendar-gating**: il pulsante .ics compare quando la conferma è
+  del cliente collegato (accountLinked), senza il doppio gate logged.
+- **[LOW] slot-auto-refresh**: refresh silenzioso della disponibilità ogni 15s
+  sullo step Data/Ora (in pausa se la tab è nascosta), senza azzerare selezione/hold.
+
+Verifica live: slotDateLabel "07 luglio 2026", summary "test • 60 min", Servizi
+"test". typecheck/lint puliti.
