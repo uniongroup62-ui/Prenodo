@@ -2003,7 +2003,7 @@ export function BookingFaithful({
                     {selectedServices.map((service) => service.name).join(", ") || "—"}
                   </div>
                   <div className="text-muted" id="recDateTime">
-                    {slot ? `${formatDateIt(date)} · ${slot}` : "—"}
+                    {slot ? `${formatSlotDateLabel(date)}, ${slot}` : "—"}
                   </div>
                 </div>
 
@@ -2210,7 +2210,7 @@ export function BookingFaithful({
               <div className="summary-row">
                 <div className="label">Data/Ora</div>
                 <div className="fw-semibold text-end" id="sumDateTime">
-                  {slot ? `${formatDateIt(date)} · ${slot}` : "—"}
+                  {slot ? `${formatSlotDateLabel(date)}, ${slot}` : "—"}
                 </div>
               </div>
               <div className="summary-row">
@@ -2539,12 +2539,6 @@ function parseYmd(ymd: string): Date | null {
 
 function formatMonthYearIt(date: Date): string {
   return `${MONTHS_IT[date.getMonth()]} ${date.getFullYear()}`;
-}
-
-function formatDateIt(ymd: string): string {
-  const date = parseYmd(ymd);
-  if (!date) return ymd;
-  return `${WEEKDAYS_SHORT[date.getDay()]} ${date.getDate()} ${MONTHS_IT[date.getMonth()]}`;
 }
 
 // Etichetta "Scegli uno slot per <data>": giorno 2 cifre + mese lungo + anno
