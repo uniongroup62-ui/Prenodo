@@ -135,6 +135,14 @@ export async function POST(request: Request) {
     const account = await currentPublicCustomerSession();
     if (!account) return jsonError("Accesso cliente richiesto.", 401);
 
+    // Hub per-sede: quando la richiesta arriva dall'hub (body.tenant), le liste
+    // di sezione sono ristrette a QUEL tenant lato server, così il payload di
+    // rete non espone i dati degli altri centri collegati (parità con la pagina
+    // per-sede legacy, che interroga solo il tenant corrente).
+    const hubTenant = String(body.tenant ?? "").trim().toLowerCase();
+    const scopeToHub = <T extends { tenantSlug: string }>(list: T[]): T[] =>
+      hubTenant ? list.filter((item) => item.tenantSlug === hubTenant) : list;
+
     if (action === "update_profile") {
       const result = await updatePublicCustomerProfile(account.id, {
         firstName: body.first_name ?? body.firstName ?? "",
@@ -188,12 +196,12 @@ export async function POST(request: Request) {
     // Area cliente — le mie prenotazioni (port of booking.php mode=my_appointments):
     // the account's appointments across every linked activity, with can_cancel.
     if (action === "appointments" || action === "my_appointments") {
-      // tenant/tenantName: hub per-sede corrente → appuntamenti visibili per
-      // email anche senza link (parità adoptGlobalSession legacy).
-      const hubTenant = String(body.tenant ?? "").trim().toLowerCase();
+      // hubTenant/tenantName: hub per-sede corrente → appuntamenti visibili per
+      // email anche senza link (parità adoptGlobalSession legacy); payload
+      // ristretto al tenant corrente.
       const hubTenantName = String(body.tenantName ?? "");
       const appointments = await listPublicCustomerAppointments(account.id, account.email, hubTenant, hubTenantName);
-      return Response.json({ ok: true, appointments });
+      return Response.json({ ok: true, appointments: scopeToHub(appointments) });
     }
 
     // Annulla prenotazione (port of mode=cancel_appointment): ownership + the
@@ -209,42 +217,41 @@ export async function POST(request: Request) {
         tenantSlug,
         appointmentId,
       });
-      return Response.json({ ok: true, appointments: await listPublicCustomerAppointments(account.id, account.email, tenantSlug, String(body.tenantName ?? "")) });
+      return Response.json({ ok: true, appointments: scopeToHub(await listPublicCustomerAppointments(account.id, account.email, tenantSlug, String(body.tenantName ?? ""))) });
     }
 
     // I miei pacchetti (port of booking.php mode=my_packages).
     if (action === "packages" || action === "my_packages") {
       const packages = await listPublicCustomerPackages(account.id);
-      return Response.json({ ok: true, packages });
+      return Response.json({ ok: true, packages: scopeToHub(packages) });
     }
 
     // Sezioni area cliente P3 (port of the tenant-panel views: credit / giftcards /
     // prepaids / gifts / fidelity / preorders) — read-only lists per linked activity.
     if (action === "credit" || action === "my_credit") {
-      return Response.json({ ok: true, credit: await listPublicCustomerCredit(account.id) });
+      return Response.json({ ok: true, credit: scopeToHub(await listPublicCustomerCredit(account.id)) });
     }
     if (action === "giftcards" || action === "my_giftcards") {
-      return Response.json({ ok: true, giftcards: await listPublicCustomerGiftcards(account.id) });
+      return Response.json({ ok: true, giftcards: scopeToHub(await listPublicCustomerGiftcards(account.id)) });
     }
     if (action === "prepaids" || action === "my_prepaids") {
-      return Response.json({ ok: true, prepaids: await listPublicCustomerPrepaids(account.id) });
+      return Response.json({ ok: true, prepaids: scopeToHub(await listPublicCustomerPrepaids(account.id)) });
     }
     if (action === "gifts" || action === "my_gifts") {
-      return Response.json({ ok: true, gifts: await listPublicCustomerGifts(account.id) });
+      return Response.json({ ok: true, gifts: scopeToHub(await listPublicCustomerGifts(account.id)) });
     }
     if (action === "fidelity" || action === "my_fidelity") {
-      return Response.json({ ok: true, fidelity: await listPublicCustomerFidelity(account.id) });
+      return Response.json({ ok: true, fidelity: scopeToHub(await listPublicCustomerFidelity(account.id)) });
     }
     if (action === "preorders" || action === "my_preorders") {
-      return Response.json({ ok: true, preorders: await listPublicCustomerPreorders(account.id) });
+      return Response.json({ ok: true, preorders: scopeToHub(await listPublicCustomerPreorders(account.id)) });
     }
 
     // I miei preventivi (port of mode=my_quotes).
     if (action === "quotes" || action === "my_quotes") {
-      const hubTenant = String(body.tenant ?? "").trim().toLowerCase();
       const hubTenantName = String(body.tenantName ?? "");
       const quotes = await listPublicCustomerQuotes(account.id, account.email, hubTenant, hubTenantName);
-      return Response.json({ ok: true, quotes });
+      return Response.json({ ok: true, quotes: scopeToHub(quotes) });
     }
 
     // Accetta/Rifiuta preventivo (port of mode=quote_decision). Legacy guards +
@@ -263,7 +270,7 @@ export async function POST(request: Request) {
         quoteId,
         decision,
       });
-      return Response.json({ ok: true, quotes: await listPublicCustomerQuotes(account.id, account.email, tenantSlug, String(body.tenantName ?? "")) });
+      return Response.json({ ok: true, quotes: scopeToHub(await listPublicCustomerQuotes(account.id, account.email, tenantSlug, String(body.tenantName ?? ""))) });
     }
 
     if (action === "toggle_favorite") {

@@ -323,7 +323,7 @@ export function PerTenantHub({
       const res = await fetch("/api/account", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "cancel_appointment", tenant_slug: appt.tenantSlug, appointment_id: appt.id, tenantName }),
+        body: JSON.stringify({ action: "cancel_appointment", tenant_slug: appt.tenantSlug, appointment_id: appt.id, tenant: slug, tenantName }),
       });
       const data = (await res.json()) as AccountResponse;
       if (!data.ok) {
@@ -349,7 +349,7 @@ export function PerTenantHub({
       const res = await fetch("/api/account", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "quote_decision", tenant_slug: quote.tenantSlug, quote_id: quote.id, decision, tenantName }),
+        body: JSON.stringify({ action: "quote_decision", tenant_slug: quote.tenantSlug, quote_id: quote.id, decision, tenant: slug, tenantName }),
       });
       const data = (await res.json()) as AccountResponse;
       if (!data.ok) {

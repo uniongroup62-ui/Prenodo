@@ -6415,3 +6415,24 @@ save→set 0→test→RESTORE 1): flag=1 → "Prenota ora" + start 200; flag=0 �
 CTA + 'Prenotazione online non disponibile.' + start=1 → 307 /attivita/<slug>;
 ripristino a 1 verificato (baseline OK). URL mixed-case → link sidebar
 lowercased. typecheck/lint puliti; nessun dato reale alterato.
+
+
+---
+
+## Hub cliente: scoping server-side del payload di sezione (2026-07-06)
+
+Chiuso il residuo LOW "data-exposure": /api/account restituiva le liste di
+sezione AGGREGATE su tutti i centri collegati (credito/giftcard/punti/... di
+altri tenant nel payload di rete), filtrate solo lato client. Il legacy
+per-sede trasmette solo il tenant corrente.
+
+- /api/account POST: quando arriva body.tenant (solo l'hub lo invia), ogni lista
+  di sezione (appointments/packages/credit/giftcards/prepaids/gifts/fidelity/
+  preorders/quotes + refresh di cancel/quote_decision) è filtrata server-side su
+  quel tenant (scopeToHub) PRIMA di serializzare. Senza tenant (account CENTRALE)
+  resta invariato (aggregato).
+- PerTenantHub invia tenant anche nei POST di cancel/quote_decision.
+
+Verifica live (ZZ omaggio a centroesteticoelite): POST gifts tenant=
+centroesteticoelite → 1 (mantenuto); tenant=altro → 0 (rimosso dal payload);
+senza tenant → 1 (invariato). typecheck/lint puliti; ZZ cleanup+RESTORE.
