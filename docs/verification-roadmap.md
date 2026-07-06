@@ -6737,3 +6737,20 @@ RESIDUI LOW DOCUMENTATI (non modificati, deliberati):
 - **entry-auth-redirect-params**: il redirect al login propaga location_id +
   next=start — miglioria additiva (preserva la sede attraverso il login), non un
   bug; il PHP droppa location_id al guest-gate ma lo ri-onora post-login.
+
+
+---
+
+## Wizard booking: ordine benefit Credito→GiftCard (2026-07-06)
+
+Chiuso il finding MEDIUM benefit-apply-order. Il Next applicava GiftCard poi
+Credito (giftcard sul residuo dopo fidelity, credito sul residuo dopo giftcard);
+il legacy applica prima il Credito (su totale−sconto−fidelity) e poi la GiftCard
+sul residuo dopo il credito. Totale pagato identico, ma cambiava l'asset consumato
+per primo.
+
+Fix (client): creditAppliedAmount = min(creditAvailable, dueAfterFidelity); poi
+giftcardAppliedAmount = min(balance, dueAfterFidelity − credito). Il server
+applica gli importi pre-calcolati dal client (ogni sezione clampa in modo
+indipendente, nessuna doppia applicazione), quindi il consumo asset ora combacia
+col legacy senza toccare la money-calc server. typecheck pulito.

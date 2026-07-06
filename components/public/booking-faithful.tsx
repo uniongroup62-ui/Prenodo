@@ -520,11 +520,15 @@ export function BookingFaithful({
   }, [step, slug, serviceIdsKey, discount]);
   const round2c = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
   const fidelityDiscountApplied = useFidelity && custBenefits ? Math.min(custBenefits.suggestedDiscount, finalTotal) : 0;
+  // Ordine legacy (booking.php 8336-8422 / booking-wizard.js 2331-2358): prima
+  // il CREDITO (su totale − sconto − fidelity), poi la GiftCard sul residuo
+  // DOPO il credito — non il contrario.
   const dueAfterFidelity = Math.max(0, round2c(finalTotal - fidelityDiscountApplied));
+  const creditAppliedAmount = useCredit && custBenefits ? round2c(Math.min(custBenefits.creditAvailable, dueAfterFidelity)) : 0;
   const chosenGiftcard = custBenefits?.giftcards.find((g) => g.id === giftcardChoiceId) ?? null;
-  const giftcardAppliedAmount = chosenGiftcard ? round2c(Math.min(chosenGiftcard.balance, dueAfterFidelity)) : 0;
-  const creditAppliedAmount =
-    useCredit && custBenefits ? round2c(Math.min(custBenefits.creditAvailable, Math.max(0, dueAfterFidelity - giftcardAppliedAmount))) : 0;
+  const giftcardAppliedAmount = chosenGiftcard
+    ? round2c(Math.min(chosenGiftcard.balance, Math.max(0, dueAfterFidelity - creditAppliedAmount)))
+    : 0;
   // The customer-facing payable total after every selected benefit.
   const payableTotal = Math.max(0, round2c(finalTotal - fidelityDiscountApplied - giftcardAppliedAmount - creditAppliedAmount));
 
