@@ -6436,3 +6436,25 @@ per-sede trasmette solo il tenant corrente.
 Verifica live (ZZ omaggio a centroesteticoelite): POST gifts tenant=
 centroesteticoelite → 1 (mantenuto); tenant=altro → 0 (rimosso dal payload);
 senza tenant → 1 (invariato). typecheck/lint puliti; ZZ cleanup+RESTORE.
+
+
+---
+
+## Hub cliente: parità campi Prepagati/Preordini (2026-07-06)
+
+Chiuso il residuo LOW sui campi delle sezioni Prepagati/Preordini:
+
+- **Prepagati** (booking.php 10503-10531): rimosso "Prezzo unitario" (il legacy
+  non lo mostra); aggiunti purchase_date + total_paid → meta "Acquisto • Scadenza
+  • Totale pagato"; "Quantità residua R/P" sostituito da "Servizi utilizzati
+  used/purchased" (used = purchased - remaining). (Residuo minore: "Prenotati" =
+  qty riservata, dipende dal link appuntamenti-prepagato, non portato.)
+- **Preordini** (booking.php 10707-10716): qty NON più arrotondata (2.5 restava
+  3) e formattata a 2 decimali it-IT come fmt_money; aggiunto line_total →
+  "€ X totale". (Residuo minore: Sede/Codice richiedono join a locations/products.)
+
+Verifica live (ZZ prepagato linkato, mint→test→cleanup→RESTORE): API prepaids →
+totalPaid 50, purchaseDate 2026-06-01, used 2/5; hub ?prepaids=1 →
+"Acquisto: 01/06/2026 • Scadenza: 31/12/2026 • Totale pagato: € 50,00 •
+Servizi utilizzati: 2 / 5", nessun "Prezzo unitario". typecheck/lint puliti;
+residue DB=0.

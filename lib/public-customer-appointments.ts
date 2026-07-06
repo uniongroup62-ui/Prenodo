@@ -890,6 +890,8 @@ export type PublicCustomerPrepaid = {
   remainingQty: number;
   purchasedQty: number;
   unitPrice: number;
+  totalPaid: number;
+  purchaseDate: string | null;
   expiresAt: string | null;
   statusLabel: string;
 };
@@ -904,7 +906,7 @@ export async function listPublicCustomerPrepaids(accountId: number): Promise<Pub
       const rows = await tenantSelect<RowDataPacket>({
         slug,
         table: "client_prepaid_services",
-        columns: "id, service_id, service_name, purchased_qty, remaining_qty, unit_price, status, expires_at",
+        columns: "id, service_id, service_name, purchased_qty, remaining_qty, unit_price, total_paid, purchase_date, status, expires_at",
         where: "client_id = ?",
         params: [activity.clientId],
         orderBy: "id DESC",
@@ -933,6 +935,8 @@ export async function listPublicCustomerPrepaids(accountId: number): Promise<Pub
           remainingQty: remaining,
           purchasedQty: Math.max(0, Number(row.purchased_qty ?? 0) || 0),
           unitPrice: Math.round((Math.max(0, Number(row.unit_price ?? 0) || 0) + Number.EPSILON) * 100) / 100,
+          totalPaid: Math.round((Math.max(0, Number(row.total_paid ?? 0) || 0) + Number.EPSILON) * 100) / 100,
+          purchaseDate: ymdLocal(row.purchase_date),
           expiresAt: expires,
           statusLabel,
         });
@@ -1245,6 +1249,7 @@ export type PublicCustomerPreorder = {
   tenantName: string;
   itemName: string;
   qty: number;
+  lineTotal: number;
   statusLabel: string;
   saleDate: string | null;
   expiresAt: string | null;
@@ -1260,7 +1265,7 @@ export async function listPublicCustomerPreorders(accountId: number): Promise<Pu
       const sales = await tenantTable(slug, "sales");
       const saleItems = await tenantTable(slug, "sale_items");
       const rows = await dbQuery<RowDataPacket[]>(
-        `SELECT si.item_name, si.qty, si.item_status, si.preorder_expires_at, s.sale_date, s.created_at
+        `SELECT si.item_name, si.qty, si.line_total, si.item_status, si.preorder_expires_at, s.sale_date, s.created_at
            FROM ${quoteIdentifier(saleItems.name)} si
            JOIN ${quoteIdentifier(sales.name)} s ON s.id = si.sale_id AND s.tenant_id = si.tenant_id
           WHERE s.tenant_id = ?
@@ -1281,7 +1286,10 @@ export async function listPublicCustomerPreorders(accountId: number): Promise<Pu
           tenantSlug: slug,
           tenantName: activity.tenantName,
           itemName: String(row.item_name ?? "Prodotto"),
-          qty: Math.max(1, Math.round(Number(row.qty ?? 1) || 1)),
+          // Come il legacy (fmt_money($qty)): qty NON arrotondata (una preorder
+          // frazionaria 2.5 resta 2.5), formattata a 2 decimali dalla view.
+          qty: Math.max(0, Number(row.qty ?? 1) || 0),
+          lineTotal: Math.round((Math.max(0, Number(row.line_total ?? 0) || 0) + Number.EPSILON) * 100) / 100,
           statusLabel,
           saleDate: ymdLocal(row.sale_date ?? row.created_at),
           expiresAt: expires,

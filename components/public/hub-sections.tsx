@@ -100,6 +100,8 @@ export type CustomerPrepaid = {
   remainingQty: number;
   purchasedQty: number;
   unitPrice: number;
+  totalPaid: number;
+  purchaseDate: string | null;
   expiresAt: string | null;
   statusLabel: string;
 };
@@ -127,6 +129,7 @@ export type CustomerPreorder = {
   tenantName: string;
   itemName: string;
   qty: number;
+  lineTotal: number;
   statusLabel: string;
   saleDate: string | null;
   expiresAt: string | null;
@@ -339,30 +342,36 @@ export function PrepaidsView({ items }: { items?: CustomerPrepaid[] }) {
       <h2 className="text-2xl font-semibold">I miei prepagati</h2>
       <div className="mt-4 grid gap-3">
         {items === undefined ? <SectionLoading text="Caricamento prepagati..." /> : null}
-        {(items ?? []).map((item) => (
-          <article className="rounded-lg border border-zinc-200 p-4" key={`${item.tenantSlug}:${item.id}`}>
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-lg font-semibold">{item.serviceName}</h3>
-              <SectionBadge label={item.statusLabel} />
-            </div>
-            <p className="mt-1 text-sm text-zinc-600">
-              {item.tenantName}
-              {item.expiresAt ? ` • Scade il ${fmtYmdShared(item.expiresAt)}` : ""}
-            </p>
-            <p className="mt-1 text-sm font-medium text-zinc-800">
-              Quantità residua: {item.remainingQty} / {item.purchasedQty}
-              {item.unitPrice > 0 ? ` • Prezzo unitario ${fmtEuro(item.unitPrice)}` : ""}
-            </p>
-            {item.statusLabel === "Attivo" && item.serviceId > 0 ? (
-              <Link
-                className="mt-2 inline-flex items-center gap-1 rounded-full bg-emerald-600 px-3 py-1 text-sm font-semibold text-white hover:bg-emerald-700"
-                href={`/${encodeURIComponent(item.tenantSlug)}/booking?book_prepaid=${item.id}&service_id=${item.serviceId}`}
-              >
-                <CalendarDays className="h-4 w-4" /> Prenota
-              </Link>
-            ) : null}
-          </article>
-        ))}
+        {(items ?? []).map((item) => {
+          // Meta come il legacy (booking.php 10503-10510): Acquisto • Scadenza •
+          // Totale pagato. Barra "Servizi utilizzati" used/purchased.
+          const used = Math.max(0, item.purchasedQty - item.remainingQty);
+          const meta = [
+            item.purchaseDate ? `Acquisto: ${fmtYmdShared(item.purchaseDate)}` : "",
+            item.expiresAt ? `Scadenza: ${fmtYmdShared(item.expiresAt)}` : "",
+            `Totale pagato: ${fmtEuro(item.totalPaid)}`,
+          ].filter(Boolean).join(" • ");
+          return (
+            <article className="rounded-lg border border-zinc-200 p-4" key={`${item.tenantSlug}:${item.id}`}>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="text-lg font-semibold">{item.serviceName}</h3>
+                <SectionBadge label={item.statusLabel} />
+              </div>
+              <p className="mt-1 text-sm text-zinc-600">{meta}</p>
+              <p className="mt-1 text-sm font-medium text-zinc-800">
+                Servizi utilizzati: {used} / {item.purchasedQty}
+              </p>
+              {item.statusLabel === "Attivo" && item.serviceId > 0 ? (
+                <Link
+                  className="mt-2 inline-flex items-center gap-1 rounded-full bg-emerald-600 px-3 py-1 text-sm font-semibold text-white hover:bg-emerald-700"
+                  href={`/${encodeURIComponent(item.tenantSlug)}/booking?book_prepaid=${item.id}&service_id=${item.serviceId}`}
+                >
+                  <CalendarDays className="h-4 w-4" /> Prenota
+                </Link>
+              ) : null}
+            </article>
+          );
+        })}
         {items !== undefined && !items.length ? (
           <EmptyState icon={Ticket} title="Nessun servizio prepagato" text="I servizi prepagati acquistati nei centri collegati appariranno qui." />
         ) : null}
@@ -536,16 +545,20 @@ export function PreordersView({ items }: { items?: CustomerPreorder[] }) {
         {items === undefined ? <SectionLoading text="Caricamento preordini..." /> : null}
         {(items ?? []).map((item, index) => (
           <article className="rounded-lg border border-zinc-200 p-4" key={`${item.tenantSlug}:${index}`}>
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-lg font-semibold">{item.itemName}</h3>
-              <SectionBadge label={item.statusLabel} />
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="text-lg font-semibold">{item.itemName}</h3>
+                <SectionBadge label={item.statusLabel} />
+              </div>
+              {item.lineTotal > 0 ? <span className="text-sm font-semibold text-zinc-800">{fmtEuro(item.lineTotal)} totale</span> : null}
             </div>
             <p className="mt-1 text-sm text-zinc-600">
               {item.tenantName}
               {item.saleDate ? ` • Ordinato il ${fmtYmdShared(item.saleDate)}` : ""}
               {item.expiresAt ? ` • Ritiro entro il ${fmtYmdShared(item.expiresAt)}` : ""}
             </p>
-            <p className="mt-1 text-sm font-medium text-zinc-800">Quantità: {item.qty}</p>
+            {/* Quantità come il legacy (fmt_money): 2 decimali it-IT. */}
+            <p className="mt-1 text-sm font-medium text-zinc-800">Quantità: {item.qty.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
           </article>
         ))}
         {items !== undefined && !items.length ? (
