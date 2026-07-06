@@ -144,6 +144,11 @@ export async function GET(request: Request) {
         promotion_id: benefits.promotionId ?? 0,
         promotion_title: benefits.promotionTitle,
         promo_conditions: benefits.promotionConditions,
+        // Breakdown per-servizio (listino barrato + prezzo scontato + badge) per
+        // il recap, dagli serviceOverrides (renderPriceHtml legacy).
+        breakdown: Object.fromEntries(
+          benefits.serviceOverrides.map((o) => [o.serviceId, { old: o.listPrice, now: o.price, badge: o.badge }]),
+        ),
         stacked_with_coupon: benefits.couponCode && benefits.promotionId ? 1 : 0,
       });
     }

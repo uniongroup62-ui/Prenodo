@@ -248,12 +248,14 @@ export function BookingFaithful({
   // promotion's coupon_code comes back as a promotion. The validated result
   // feeds coupon_code to the confirm (which re-resolves, never trusting this).
   const [couponInput, setCouponInput] = useState("");
-  const [couponApplied, setCouponApplied] = useState<null | { code: string; discount: number; isPromotion: boolean; promotionTitle: string; conditions: string }>(null);
+  type PriceBreakdown = Record<string, { old: number; now: number; badge: string }>;
+  const [couponApplied, setCouponApplied] = useState<null | { code: string; discount: number; isPromotion: boolean; promotionTitle: string; conditions: string; breakdown: PriceBreakdown }>(null);
   const [couponMsg, setCouponMsg] = useState<null | { ok: boolean; text: string }>(null);
   const [couponChecking, setCouponChecking] = useState(false);
   // AUTO-PROMO (port of mode=promotion_preview): the best automatic promotion
   // the confirm will apply, shown as an informational banner in Step 6.
-  const [autoPromo, setAutoPromo] = useState<null | { title: string; discount: number; conditions: string }>(null);
+  // PriceBreakdown (definito sopra): listino barrato + scontato + badge per servizio.
+  const [autoPromo, setAutoPromo] = useState<null | { title: string; discount: number; conditions: string; breakdown: PriceBreakdown }>(null);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
@@ -687,6 +689,32 @@ export function BookingFaithful({
   // Condizioni promozionali (recPromoConditions): testo della promo applicata
   // (coupon-code o automatica), reso nel recap se presente (booking-wizard.js 2772).
   const promoConditionsText = String(couponApplied?.conditions || autoPromo?.conditions || "").trim();
+  // Breakdown prezzi per-servizio del recap (coupon prevale, poi promo automatica):
+  // ogni servizio mostra listino barrato + badge + prezzo scontato (renderPriceHtml
+  // legacy), invece di una riga sconto aggregata. Il servizio a residuo va a 0€.
+  const svcBreakdown: PriceBreakdown = couponApplied?.breakdown ?? autoPromo?.breakdown ?? {};
+  const redeemResidualLabel = redeemPrefill
+    ? (redeemPrefill.kind === "prepaid" ? "Prepagato" : redeemPrefill.kind === "package" ? "Pacchetto" : redeemPrefill.kind === "giftbox" ? "GiftBox" : "Omaggio")
+    : "";
+  // Cella prezzo di un servizio nel recap (listino barrato + badge + scontato).
+  const renderServiceCost = (service: BookingService) => {
+    const isRedeem = service.id === redeemedServiceId;
+    const bd = svcBreakdown[String(service.id)];
+    const hasDisc = !isRedeem && Boolean(bd) && bd.old > bd.now + 0.00001;
+    const oldP = isRedeem ? service.price : hasDisc ? bd.old : service.price;
+    const nowP = isRedeem ? 0 : hasDisc ? bd.now : service.price;
+    const badge = isRedeem ? redeemResidualLabel : hasDisc ? bd.badge : "";
+    if (badge) {
+      return (
+        <div className="price-row">
+          <span className="price-old">{euroRecap(oldP)}</span>
+          <span className="discount-badge">{badge}</span>
+          <span className="price-now">{euroRecap(nowP)}</span>
+        </div>
+      );
+    }
+    return <>{euroRecap(nowP)}</>;
+  };
 
   const isFinalStep = step === 7;
   const canContinue = computeCanContinue();
@@ -771,10 +799,10 @@ export function BookingFaithful({
     if (phone.trim()) params.set("phone", phone.trim());
     void fetch(`/api/booking?${params.toString()}`)
       .then((res) => res.json().catch(() => null))
-      .then((data: { ok?: boolean; eligible?: boolean; title?: string; discount?: number; promo_conditions?: string } | null) => {
+      .then((data: { ok?: boolean; eligible?: boolean; title?: string; discount?: number; promo_conditions?: string; breakdown?: PriceBreakdown } | null) => {
         if (!active) return;
         if (data?.ok && data.eligible && Number(data.discount ?? 0) > 0) {
-          setAutoPromo({ title: String(data.title ?? ""), discount: Number(data.discount ?? 0), conditions: String(data.promo_conditions ?? "") });
+          setAutoPromo({ title: String(data.title ?? ""), discount: Number(data.discount ?? 0), conditions: String(data.promo_conditions ?? ""), breakdown: (data.breakdown ?? {}) as PriceBreakdown });
         } else {
           setAutoPromo(null);
         }
@@ -809,7 +837,7 @@ export function BookingFaithful({
       if (email.trim()) params.set("email", email.trim());
       if (phone.trim()) params.set("phone", phone.trim());
       const res = await fetch(`/api/booking?${params.toString()}`);
-      const data: { ok?: boolean; error?: string; discount?: number; is_promotion?: number; promotion_title?: string; promo_conditions?: string } =
+      const data: { ok?: boolean; error?: string; discount?: number; is_promotion?: number; promotion_title?: string; promo_conditions?: string; breakdown?: PriceBreakdown } =
         await res.json().catch(() => ({}));
       if (!data.ok) {
         setCouponApplied(null);
@@ -823,6 +851,7 @@ export function BookingFaithful({
         isPromotion,
         promotionTitle: String(data.promotion_title ?? ""),
         conditions: String(data.promo_conditions ?? ""),
+        breakdown: (data.breakdown ?? {}) as PriceBreakdown,
       });
       setCouponMsg({
         ok: true,
@@ -2086,18 +2115,15 @@ export function BookingFaithful({
 
                 <div className="small-muted mb-2">Dettaglio Costi</div>
                 <div id="recCostLines">
+                  {/* Prezzo per-servizio col listino barrato + badge + scontato
+                      (renderPriceHtml legacy): promo/coupon bakati per servizio,
+                      NESSUNA riga sconto aggregata. */}
                   {selectedServices.map((service) => (
                     <div key={service.id} className="summary-row summary-row--no-border">
                       <div className="label">{service.name}</div>
-                      <div className="fw-semibold text-end">{euroRecap(service.id === redeemedServiceId ? 0 : service.price)}</div>
+                      <div className="fw-semibold text-end">{renderServiceCost(service)}</div>
                     </div>
                   ))}
-                  {discount > 0 ? (
-                    <div className="summary-row summary-row--no-border summary-row--success">
-                      <div className="label">{couponApplied ? (couponApplied.isPromotion ? `Promozione ${couponApplied.promotionTitle || couponApplied.code}` : `Coupon ${couponApplied.code}`) : autoPromo ? `Promozione ${autoPromo.title}` : selectedBenefit?.label ?? "Sconto"}</div>
-                      <div className="fw-semibold">- {euroRecap(discount)}</div>
-                    </div>
-                  ) : null}
                   {/* Fidelity -> Credito -> GiftCard (ordine legacy updateSummary
                       2735/2747/2756); etichetta "Sconto Fidelity (N <label>)". */}
                   {fidelityDiscountApplied > 0 ? (
@@ -2265,21 +2291,15 @@ export function BookingFaithful({
             <div className="summary-block mt-4">
               <div className="small-muted mb-1">DETTAGLIO COSTI</div>
               <div id="sumCostLines">
+                {/* Il riepilogo LATERALE mostra gli sconti SOLO al riepilogo finale
+                    (sideSummaryDisableDiscounts = step < 7, updateSummary 2390): fino
+                    ad allora prezzi di listino; allo step 7 il barrato per-servizio. */}
                 {selectedServices.map((service) => (
                   <div key={service.id} className="summary-row summary-row--no-border">
                     <div className="label">{service.name}</div>
-                    <div className="fw-semibold text-end">{euroRecap(service.price)}</div>
+                    <div className="fw-semibold text-end">{step === 7 ? renderServiceCost(service) : euroRecap(service.price)}</div>
                   </div>
                 ))}
-                {/* Il riepilogo LATERALE mostra gli sconti SOLO al riepilogo finale
-                    (sideSummaryDisableDiscounts = step < 7, updateSummary 2390): fino
-                    ad allora prezzi di listino e totale = subtotale. */}
-                {discount > 0 && step === 7 ? (
-                  <div className="summary-row summary-row--no-border summary-row--success">
-                    <div className="label">{couponApplied ? (couponApplied.isPromotion ? `Promozione ${couponApplied.promotionTitle || couponApplied.code}` : `Coupon ${couponApplied.code}`) : autoPromo ? `Promozione ${autoPromo.title}` : selectedBenefit?.label ?? "Sconto"}</div>
-                    <div className="fw-semibold">- {euroRecap(discount)}</div>
-                  </div>
-                ) : null}
               </div>
               <div id="sumFidelityNote" className="alert alert-info p-2 mt-2 d-none" />
               <div className="summary-total">
