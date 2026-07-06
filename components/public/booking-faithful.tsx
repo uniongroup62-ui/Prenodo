@@ -227,6 +227,12 @@ export function BookingFaithful({
   const [phone, setPhone] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [confirmation, setConfirmation] = useState<BookingConfirmation | null>(null);
+  // Importi REALMENTE applicati dal server al confirm (clampati/ri-validati):
+  // la schermata di conferma li usa al posto dello stato client ottimistico
+  // (post-book-amounts, come il legacy che ricarica dal DB).
+  const [appliedAmounts, setAppliedAmounts] = useState<
+    { fidelityPoints: number; fidelityDiscount: number; creditUsed: number; giftcardUsed: number } | null
+  >(null);
 
   // Cliente loggato (refreshCustomerUI + fillClientStepFromUser legacy,
   // booking-wizard.js 4631-4818): il flusso marketplace arriva sempre
@@ -766,6 +772,12 @@ export function BookingFaithful({
       if (!data.ok) throw new Error(data.error || "Prenotazione non completata.");
       // accountLinked gates the .ics button: the calendar endpoint serves only
       // the LOGGED customer's own bookings (the legacy page was login-gated).
+      setAppliedAmounts({
+        fidelityPoints: Number(data.fidelity_points_used ?? 0) || 0,
+        fidelityDiscount: Number(data.fidelity_discount ?? 0) || 0,
+        creditUsed: Number(data.credit_used ?? 0) || 0,
+        giftcardUsed: Number(data.giftcard_used ?? 0) || 0,
+      });
       setConfirmation({ ...(data.confirmation as BookingConfirmation), accountLinked: Boolean(data.accountLinked) });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Prenotazione non completata.");
@@ -835,6 +847,16 @@ export function BookingFaithful({
         : selectedBenefit?.type === "promotion"
           ? selectedBenefit.label || "Promozione"
           : `Coupon ${selectedBenefit?.type === "coupon" ? selectedBenefit.code ?? "" : ""}`.trim();
+    // Importi dal server (clampati/ri-validati), non dallo stato client: il
+    // Saldo dovuto = totale (dopo sconto coupon/promo) − fidelity − credito − giftcard.
+    const appFidelityDiscount = appliedAmounts?.fidelityDiscount ?? 0;
+    const appFidelityPoints = appliedAmounts?.fidelityPoints ?? 0;
+    const appCreditUsed = appliedAmounts?.creditUsed ?? 0;
+    const appGiftcardUsed = appliedAmounts?.giftcardUsed ?? 0;
+    const appPayable = Math.max(
+      0,
+      Math.round((confirmation.total - appFidelityDiscount - appCreditUsed - appGiftcardUsed + Number.EPSILON) * 100) / 100,
+    );
     return (
       <>
         {CSS_LINKS.map((href) => (
@@ -937,27 +959,27 @@ export function BookingFaithful({
                   </div>
                 </div>
               ) : null}
-              {fidelityDiscountApplied > 0.00001 && custBenefits ? (
+              {appFidelityDiscount > 0.00001 ? (
                 <div className="line confirm-line-success">
-                  <div>Sconto Fidelity ({custBenefits.suggestedPoints} Punti)</div>
+                  <div>Sconto Fidelity ({appFidelityPoints} Punti)</div>
                   <div>
-                    <strong>-€ {fmtMoney(fidelityDiscountApplied)}</strong>
+                    <strong>-€ {fmtMoney(appFidelityDiscount)}</strong>
                   </div>
                 </div>
               ) : null}
-              {creditAppliedAmount > 0.00001 ? (
+              {appCreditUsed > 0.00001 ? (
                 <div className="line confirm-line-success">
                   <div>Credito</div>
                   <div>
-                    <strong>-€ {fmtMoney(creditAppliedAmount)}</strong>
+                    <strong>-€ {fmtMoney(appCreditUsed)}</strong>
                   </div>
                 </div>
               ) : null}
-              {giftcardAppliedAmount > 0.00001 ? (
+              {appGiftcardUsed > 0.00001 ? (
                 <div className="line confirm-line-success">
                   <div>GiftCard{chosenGiftcard?.code ? ` ${chosenGiftcard.code}` : ""}</div>
                   <div>
-                    <strong>-€ {fmtMoney(giftcardAppliedAmount)}</strong>
+                    <strong>-€ {fmtMoney(appGiftcardUsed)}</strong>
                   </div>
                 </div>
               ) : null}
@@ -971,7 +993,7 @@ export function BookingFaithful({
                   <strong>Saldo dovuto</strong>
                 </div>
                 <div>
-                  <strong>€ {fmtMoney(payableTotal)}</strong>
+                  <strong>€ {fmtMoney(appPayable)}</strong>
                 </div>
               </div>
             </div>

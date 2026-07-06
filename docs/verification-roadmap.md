@@ -6616,3 +6616,23 @@ typecheck pulito. RESIDUI del cluster conferma (server-side): post-book-amounts
 per-servizio) richiedono che confirmPublicBooking restituisca gli importi
 realmente applicati (fidelity/credito/giftcard) + i prezzi per-servizio — non
 ancora fatto.
+
+
+---
+
+## Wizard booking: importi conferma dal server (post-book-amounts) (2026-07-06)
+
+Chiuso il finding MEDIUM post-book-amounts. La schermata di conferma calcolava
+sconto Fidelity/Credito/GiftCard e Saldo dovuto dallo STATO CLIENT ottimistico
+(custBenefits, payableTotal): se il server clampava un benefit (es. credito
+richiesto 50€ ma disponibile 30€), la conferma mostrava -50€ e un saldo errato.
+Il server GIÀ restituisce gli importi realmente applicati (route.ts 368-371:
+fidelity_points_used/fidelity_discount/credit_used/giftcard_used), ma il client
+li scartava (teneva solo confirmation+accountLinked).
+
+Fix: il confirm cattura gli importi applicati (appliedAmounts) e la conferma li
+usa per le righe Fidelity/Credito/GiftCard e per il Saldo dovuto = totale server
+− fidelity − credito − giftcard. typecheck pulito. (Verifica: contratto API già
+confermato; test dello scenario di clamp saltato per non creare prenotazioni
+reali + debiti benefit. Residuo cost-breakdown: prezzi per-servizio barrati/0€
+redeem non ancora dal server.)
