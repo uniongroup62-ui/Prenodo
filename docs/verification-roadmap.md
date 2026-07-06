@@ -6506,3 +6506,22 @@ Verifica live (Playwright): giorno 7/7 → 109 slot available, 0 disabled; oggi
 Sera) — porting del raggruppamento in coda (finding HIGH slot-grouping).
 Minor: breve flash step Sede prima del load del context (client-render).
 typecheck pulito.
+
+
+---
+
+## Wizard booking: punti fidelity al netto dei riservati + ownership GiftCard (2026-07-06)
+
+Due finding sui Vantaggi (step 6) chiusi:
+- **[HIGH] Punti fidelity lordi**: preview e apply usavano clients.points LORDO;
+  il PHP usa availablePoints = punti − riservati (su altri appuntamenti pending).
+  Fix: available = max(0, floor(saldo − fidelityReservedPoints(slug, clientId)))
+  sia in publicCustomerBenefitsPreview sia in applyPublicCustomerBenefits —
+  niente più sconto gonfiato né sovra-riserva al confirm.
+- **[MEDIUM] Ownership GiftCard**: la lista giftcard filtrava solo
+  recipient_client_id=cliente; il PHP include anche le carte del cliente
+  (client_id) con recipient NULL/0. Fix: stessa clausola OR del legacy (con
+  fallback a client_id) — stesso pattern già verificato live nell'hub.
+
+typecheck/lint puliti. (benefit-apply-order credito↔giftcard rimandato: il
+totale pagato è già corretto, cambia solo l'asset consumato per primo.)

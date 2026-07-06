@@ -21,6 +21,7 @@ import {
   evalBestPromotionForAppointment,
   evalPromotionCodeForAppointment,
   fidelityIsClientAdhering,
+  fidelityReservedPoints,
   getFidelityPointsSettings,
   previewDbCoupon,
   type AppointmentPromoContext,
@@ -285,7 +286,11 @@ export async function publicCustomerBenefitsPreview({
     out.fidelity.minPoints = settings.redeemMinPoints;
     if (out.fidelity.redeemEnabled && (await fidelityIsClientAdhering(slug, clientId).catch(() => false))) {
       const wallet = await dbWalletBalance(clientId, slug);
-      const available = Math.max(0, Math.floor(Number(wallet.points ?? 0) || 0));
+      // availablePoints = saldo − punti già riservati su altri appuntamenti
+      // pending/scheduled (Fidelity::availablePoints, booking.php 6136); usare il
+      // saldo LORDO gonfia i punti/sconto e sovra-riserva al confirm.
+      const reserved = await fidelityReservedPoints(slug, clientId).catch(() => 0);
+      const available = Math.max(0, Math.floor((Number(wallet.points ?? 0) || 0) - reserved));
       out.fidelity.pointsAvailable = available;
       const epp = settings.redeemEuroPerPoint > 0 ? settings.redeemEuroPerPoint : 0.1;
       let suggested = Math.min(available, Math.floor(due / epp));
@@ -308,15 +313,29 @@ export async function publicCustomerBenefitsPreview({
   // --- GiftCard (active, spendable, owned by the client) — same availability rule
   //     as the manage residuals (recipient, active, balance>0, not expired). ---
   try {
+    // Ownership come booking_public_list_available_giftcards (booking.php 261-263):
+    // carte con recipient_client_id = cliente OPPURE, se l'intestatario è vuoto
+    // (NULL/0), quelle acquistate dal cliente stesso (client_id).
     const rows = await tenantSelect<RowDataPacket>({
       slug,
       table: "giftcards",
       columns: "id, code, balance, expires_at",
-      where: "recipient_client_id = ? AND status = 'active' AND balance > 0 AND (expires_at IS NULL OR expires_at >= CURRENT_DATE)",
-      params: [clientId],
+      where:
+        "((recipient_client_id IS NOT NULL AND recipient_client_id > 0 AND recipient_client_id = ?) OR ((recipient_client_id IS NULL OR recipient_client_id = 0) AND client_id = ?)) AND status = 'active' AND balance > 0 AND (expires_at IS NULL OR expires_at >= CURRENT_DATE)",
+      params: [clientId, clientId],
       orderBy: "(expires_at IS NULL) DESC, expires_at ASC, id DESC",
       limit: 20,
-    });
+    }).catch(() =>
+      tenantSelect<RowDataPacket>({
+        slug,
+        table: "giftcards",
+        columns: "id, code, balance, expires_at",
+        where: "client_id = ? AND status = 'active' AND balance > 0 AND (expires_at IS NULL OR expires_at >= CURRENT_DATE)",
+        params: [clientId],
+        orderBy: "(expires_at IS NULL) DESC, expires_at ASC, id DESC",
+        limit: 20,
+      }),
+    );
     out.giftcards = rows
       .map((r) => ({ id: Number(r.id ?? 0), code: String(r.code ?? ""), balance: round2(Math.max(0, Number(r.balance ?? 0) || 0)) }))
       .filter((g) => g.id > 0 && g.balance > 0);
@@ -369,7 +388,8 @@ export async function applyPublicCustomerBenefits({
         (await fidelityIsClientAdhering(slug, clientId).catch(() => false))
       ) {
         const wallet = await dbWalletBalance(clientId, slug);
-        const available = Math.max(0, Math.floor(Number(wallet.points ?? 0) || 0));
+        const reserved = await fidelityReservedPoints(slug, clientId).catch(() => 0);
+        const available = Math.max(0, Math.floor((Number(wallet.points ?? 0) || 0) - reserved));
         const epp = settings.redeemEuroPerPoint > 0 ? settings.redeemEuroPerPoint : 0.1;
         let pts = Math.min(reqPts, available, Math.floor(dueBase / epp));
         if (pts < settings.redeemMinPoints) pts = 0;
