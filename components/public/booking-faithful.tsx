@@ -2040,45 +2040,13 @@ export function BookingFaithful({
                   <div className="recap-avatar" id="recClientInitials">
                     {initialsOf(clientFullName) || "..."}
                   </div>
-                  <div className="w-100">
-                    <div className="row g-2">
-                      <div className="col-md-6">
-                        <input
-                          className="form-control"
-                          placeholder="Nome"
-                          value={firstName}
-                          onChange={(event) => setFirstName(event.target.value)}
-                        />
-                      </div>
-                      <div className="col-md-6">
-                        <input
-                          className="form-control"
-                          placeholder="Cognome"
-                          value={lastName}
-                          onChange={(event) => setLastName(event.target.value)}
-                        />
-                      </div>
-                      <div className="col-md-6">
-                        {/* fillClientStepFromUser legacy: da loggato l'email
-                            dell'account è readonly. */}
-                        <input
-                          className="form-control"
-                          type="email"
-                          placeholder="Email"
-                          value={email}
-                          readOnly={Boolean(bookingUser)}
-                          onChange={(event) => setEmail(event.target.value)}
-                        />
-                      </div>
-                      <div className="col-md-6">
-                        <input
-                          className="form-control"
-                          placeholder="Telefono"
-                          value={phone}
-                          onChange={(event) => setPhone(event.target.value)}
-                        />
-                      </div>
-                    </div>
+                  <div>
+                    {/* Cliente in SOLA LETTURA come il legacy (#recClientName /
+                        #recClientEmail, booking.php 13293-13300): il flusso pubblico
+                        è sempre autenticato, i dati arrivano dall'account e NON sono
+                        modificabili qui (niente campi Nome/Cognome/Email/Telefono). */}
+                    <div className="fw-semibold" id="recClientName">{clientFullName || "—"}</div>
+                    <div className="text-muted small" id="recClientEmail">{email || "—"}</div>
                   </div>
                 </div>
 
