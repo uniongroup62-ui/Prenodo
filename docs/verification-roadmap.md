@@ -5436,3 +5436,63 @@ msg=Chiusura%20salvata/Straordinario%20salvato/Chiusura%20eliminata/
 Straordinario%20eliminato, live ripulito) + 62/62 marker + regressioni
 (hours-calendar 4, resources 25, cabins-page 20, cabins-resources 14,
 staff-page 27, staff-availability 16) + typecheck/lint puliti.
+
+## AUDIT COMPLETO — Profilo attività (business_profile.php) (2026-07-06)
+
+Audit funzionale completo di business_profile.php (475 righe) +
+assets/js/pages/business_profile.js (444) vs business_profile-content.tsx +
+saveBusinessProfile/uploadBusinessBrandingImage/saveBusinessBrandingPosition/
+deleteBusinessBrandingImage (manage-business-settings.ts) + route
+business-settings. Bug trovati e corretti:
+1. MESSAGGI VERBATIM: 'Inserisci il nome attività.' e 'Il nome attività può
+   contenere al massimo 190 caratteri.' erano senza accenti ("puo" del Chi
+   siamo resta NON accentato: quirk del sorgente); errori upload legacy
+   SENZA punto finale ('Logo troppo grande (max 5 MB)', 'Formato non
+   valido: carica un file JPG o PNG', 'Formato non valido' secco per la
+   cover, 'Upload non valido').
+2. VALIDAZIONE 190 MORTA: clean(input,190) troncava il nome PRIMA del check
+   di lunghezza → l'errore dei 190 caratteri era irraggiungibile; ora trim
+   puro + check codepoint (nome esattamente 190 passa, 191 no).
+3. WRAPPER ERRORI LEGACY nella route: profilo → 'Errore salvataggio profilo
+   attività: {msg} (se persiste, controlla che lo schema business sia
+   aggiornato e che il DB possa eseguire ALTER/UPDATE)'; upload/delete AJAX
+   → {ok:false, errors:['Errore upload logo: ...']} / 'Errore rimozione
+   logo/copertina: ...'; posizioni → 'Errore salvataggio posizione
+   logo/copertina: ...'. Prima gli errori uscivano nudi.
+4. MESSAGE NEI PAYLOAD: 'Profilo attività salvato', 'Posizione logo
+   salvata', 'Posizione copertina salvata', 'Logo salvato', 'Immagine di
+   copertina salvata', 'Logo rimosso', 'Immagine di copertina rimossa' —
+   prima assenti (il component mostrava 'Operazione completata.').
+5. ORDINE GUARDIE UPLOAD legacy: 'Rimuovi il logo/la copertina attuale...'
+   PRIMA di 'Seleziona un file...' e dei check size/formato (prima il
+   formato veniva controllato per primo).
+6. COMPONENT riscritto: accenti UI ('Logo attività', 'Verrà visualizzato/
+   mostrato/ridimensionato...'); flash globale View::alert SOPRA il page
+   header con type INFO per i msg (default View::alert legacy, non
+   success!) e danger per gli err + initialQuery {msg,err} (branch
+   page.tsx); feedback per-kind negli alert branding-feedback (upload/
+   delete AJAX come il legacy, non più alert globale); card pending 'Da
+   salvare' con anteprima objectURL, nome file, size it 'X,X MB', bottone
+   clear e testi 'Logo pronto - .. MB'/'Nessun nuovo logo selezionato.';
+   validazione client verbatim ('File troppo grande: max 5 MB.', 'Formato
+   non valido: carica JPG o PNG.'/'...JPG, PNG o WEBP.', 'Seleziona un
+   logo/una copertina da salvare.'); selezione ignorata se immagine già
+   presente; DRAG dell'anteprima con pointer events (clamp 0-100 +
+   object-position live su <img>, prima era background statico senza
+   drag); visibilità legacy branding-image-hidden sugli elementi
+   without-image (prima dropzone e Salva restavano visibili col logo
+   caricato); spinner 'Salvataggio...'/'Rimozione...'; dropzone
+   is-dragover/is-disabled; bottone form nascosto 'Aggiorna'/'Carica'.
+Residuo deliberato (già documentato nel codice): il legacy ricomprime con
+GD e salva su filesystem; il Next carica l'originale su Cloudflare R2
+(Amplify ha filesystem effimero) e valida il mime dichiarato.
+Verifica: battery NUOVA e2e-business-profile 25/25 (context, save profilo +
+3 validazioni col wrapper, nome esattamente 190, about→NULL, posizioni con
+clamp e non-numerico→50, ciclo upload/guardia/delete logo e cover con
+messaggi AJAX verbatim, delete senza immagine non fallisce; restore VIA API
+così il sync marketplace torna coerente, stato finale CLEAN) + LIVE PHP
+byte-per-byte (alert wrapper nome vuoto/>190, redirect 'Profilo attività
+salvato'/'Posizione logo salvata', AJAX senza file, ciclo upload→guardia→
+delete con 'Logo salvato'/'Logo rimosso', live ripulito) + 73/73 marker +
+regressioni (locations 18, branding-r2 12 con aspettativa aggiornata al
+wrapper, booking-settings 12) + typecheck/lint puliti.

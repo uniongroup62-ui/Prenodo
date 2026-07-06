@@ -71,10 +71,18 @@ export async function POST(request: Request) {
       if (!can(session.user.perms, "settings.general")) return jsonError("Permesso Profilo attivita richiesto.", 403);
 
       if (action === "upload_logo" || action === "upload_cover" || action === "branding_upload") {
-        const fileKey = kind === "logo" ? "business_logo" : "business_cover";
-        const file = form.get(fileKey) ?? form.get("file");
-        if (!(file instanceof File)) return jsonError(kind === "logo" ? "Seleziona un file (JPG o PNG) da caricare." : "Seleziona un file immagine da caricare.", 422);
-        return Response.json(await uploadBusinessBrandingImage(tenantSlug, kind, file, publicOrigin(request)));
+        // Errori impacchettati come l'AJAX legacy: {ok:false, errors:['Errore
+        // upload logo: ...']} — il client mostra errors.join(' ').
+        try {
+          const fileKey = kind === "logo" ? "business_logo" : "business_cover";
+          const file = form.get(fileKey) ?? form.get("file");
+          // File mancante gestito nella lib DOPO la guardia "Rimuovi ... attuale"
+          // (ordine legacy business_profile.php 125-132).
+          return Response.json(await uploadBusinessBrandingImage(tenantSlug, kind, file instanceof File ? file : null, publicOrigin(request)));
+        } catch (error) {
+          const wrapped = `Errore upload ${kind === "logo" ? "logo" : "copertina"}: ${error instanceof Error ? error.message : "Upload non valido"}`;
+          return Response.json({ ok: false, error: wrapped, errors: [wrapped] }, { status: 400 });
+        }
       }
 
       return jsonError("Azione upload non valida.", 400);
@@ -87,7 +95,13 @@ export async function POST(request: Request) {
       case "save_profile_activity":
       case "business_profile_save":
         if (!can(session.user.perms, "settings.general")) return jsonError("Permesso Profilo attivita richiesto.", 403);
-        return Response.json(await saveBusinessProfile(tenantSlug, body, publicOrigin(request)));
+        // Wrapper errore della pagina legacy (business_profile.php 118).
+        try {
+          return Response.json(await saveBusinessProfile(tenantSlug, body, publicOrigin(request)));
+        } catch (error) {
+          const inner = error instanceof Error ? error.message : "Operazione non riuscita.";
+          return jsonError(`Errore salvataggio profilo attività: ${inner} (se persiste, controlla che lo schema business sia aggiornato e che il DB possa eseguire ALTER/UPDATE)`);
+        }
 
       case "save_logo_position":
       case "save_cover_position":
@@ -97,7 +111,12 @@ export async function POST(request: Request) {
         if (!kind) return jsonError("Tipo immagine non valido.", 422);
         const x = parseInteger(body[`${kind}_position_x`] ?? body.x, 50);
         const y = parseInteger(body[`${kind}_position_y`] ?? body.y, 50);
-        return Response.json(await saveBusinessBrandingPosition(tenantSlug, kind, x, y, publicOrigin(request)));
+        try {
+          return Response.json(await saveBusinessBrandingPosition(tenantSlug, kind, x, y, publicOrigin(request)));
+        } catch (error) {
+          const inner = error instanceof Error ? error.message : "Operazione non riuscita.";
+          return jsonError(`Errore salvataggio posizione ${kind === "logo" ? "logo" : "copertina"}: ${inner}`);
+        }
       }
 
       case "delete_logo":
@@ -106,7 +125,13 @@ export async function POST(request: Request) {
         if (!can(session.user.perms, "settings.general")) return jsonError("Permesso Profilo attivita richiesto.", 403);
         const kind = normalizeBrandingKind(body.kind ?? (action === "delete_logo" ? "logo" : "cover"));
         if (!kind) return jsonError("Tipo immagine non valido.", 422);
-        return Response.json(await deleteBusinessBrandingImage(tenantSlug, kind, publicOrigin(request)));
+        // Errori come l'AJAX legacy: {errors:['Errore rimozione logo: ...']}.
+        try {
+          return Response.json(await deleteBusinessBrandingImage(tenantSlug, kind, publicOrigin(request)));
+        } catch (error) {
+          const wrapped = `Errore rimozione ${kind === "logo" ? "logo" : "copertina"}: ${error instanceof Error ? error.message : "Operazione non riuscita."}`;
+          return Response.json({ ok: false, error: wrapped, errors: [wrapped] }, { status: 400 });
+        }
       }
 
       // Impostazioni Prenotazioni online (legacy booking.php admin POST):

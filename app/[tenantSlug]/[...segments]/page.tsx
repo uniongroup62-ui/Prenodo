@@ -989,6 +989,16 @@ export default async function TenantPage({
     );
   }
 
+  // Profilo attività (business_profile.php): flash ?msg=/?err= dai redirect
+  // legacy (Profilo attività salvato / Posizione logo salvata / ...).
+  if (page === "business_profile") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+        <BusinessProfileContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
+      </ManageShell>
+    );
+  }
+
   // Orari & chiusure (hours.php): tab e sede dal querystring + flash ?msg= dai
   // redirect legacy (Orari salvati / Chiusura salvata / Straordinario salvato...).
   if (page === "hours") {

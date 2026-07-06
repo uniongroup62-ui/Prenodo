@@ -190,15 +190,19 @@ export async function getBookingSettings(slug: string) {
   };
 }
 
+// Port di business_profile.php action=save_profile_activity: messaggi legacy
+// verbatim ("attività"/"può" accentate ma "puo" del Chi siamo NON accentato,
+// quirk del sorgente) e validazione lunghezza PRIMA di salvare — niente
+// clean(190) che troncava rendendo irraggiungibile l'errore dei 190 caratteri.
 export async function saveBusinessProfile(slug: string, input: Record<string, string>, publicOrigin = "") {
-  const name = clean(input.business_name ?? input.name ?? "", 190);
-  const aboutText = (input.booking_about_text ?? input.aboutText ?? "").trim();
-  if (!name) throw new Error("Inserisci il nome attivita.");
-  if (stringLength(name) > 190) throw new Error("Il nome attivita puo contenere al massimo 190 caratteri.");
+  const name = String(input.business_name ?? input.name ?? "").trim();
+  const aboutText = String(input.booking_about_text ?? input.aboutText ?? "").trim();
+  if (!name) throw new Error("Inserisci il nome attività.");
+  if (stringLength(name) > 190) throw new Error("Il nome attività può contenere al massimo 190 caratteri.");
   if (stringLength(aboutText) > 3000) throw new Error("Il testo Chi siamo puo contenere al massimo 3000 caratteri.");
 
   const business = await firstBusinessRow(slug);
-  if (!business) throw new Error("Business non trovato.");
+  if (!business) throw new Error("Business non trovato");
 
   await tenantUpdate({
     slug,
@@ -210,7 +214,8 @@ export async function saveBusinessProfile(slug: string, input: Record<string, st
     },
   });
   await syncMarketplaceProfile(slug, publicOrigin);
-  return getBusinessSettingsContext(slug, publicOrigin);
+  // Flash del redirect legacy: index.php?page=business_profile&msg=...
+  return { ...await getBusinessSettingsContext(slug, publicOrigin), message: "Profilo attività salvato" };
 }
 
 export async function saveBusinessBrandingPosition(slug: string, kind: "logo" | "cover", x: number, y: number, publicOrigin = "") {
@@ -227,23 +232,29 @@ export async function saveBusinessBrandingPosition(slug: string, kind: "logo" | 
     },
   });
   await syncMarketplaceProfile(slug, publicOrigin);
-  return getBusinessSettingsContext(slug, publicOrigin);
+  return {
+    ...await getBusinessSettingsContext(slug, publicOrigin),
+    message: kind === "logo" ? "Posizione logo salvata" : "Posizione copertina salvata",
+  };
 }
 
-export async function uploadBusinessBrandingImage(slug: string, kind: "logo" | "cover", file: File, publicOrigin = "") {
-  if (!file || file.size <= 0) throw new Error(kind === "logo" ? "Seleziona un file (JPG o PNG) da caricare." : "Seleziona un file immagine da caricare.");
-  if (file.size > 5 * 1024 * 1024) throw new Error(kind === "logo" ? "Logo troppo grande (max 5 MB)." : "Immagine di copertina troppo grande (max 5 MB).");
-  if (kind === "logo" && !["image/jpeg", "image/png"].includes(file.type)) {
-    throw new Error("Formato non valido: carica un file JPG o PNG.");
-  }
-  if (kind === "cover" && !imageMimeToExt[file.type]) throw new Error("Formato non valido.");
-
+// Ordine guardie e messaggi legacy esatti (business_profile.php upload_* +
+// process_uploaded_logo/branding_image, SENZA punto finale): prima
+// "Rimuovi ... attuale", poi "Seleziona un file", poi size/formato.
+export async function uploadBusinessBrandingImage(slug: string, kind: "logo" | "cover", file: File | null, publicOrigin = "") {
   const business = await firstBusinessRow(slug);
   if (!business) throw new Error("Business non trovato.");
   const currentPath = clean(String(kind === "logo" ? business.logo_path ?? "" : business.cover_path ?? ""), 255);
   if (currentPath) {
     throw new Error(kind === "logo" ? "Rimuovi il logo attuale prima di caricarne uno nuovo." : "Rimuovi la copertina attuale prima di caricarne una nuova.");
   }
+  if (!file) throw new Error(kind === "logo" ? "Seleziona un file (JPG o PNG) da caricare." : "Seleziona un file immagine da caricare.");
+  if (file.size <= 0) throw new Error("Upload non valido");
+  if (file.size > 5 * 1024 * 1024) throw new Error(kind === "logo" ? "Logo troppo grande (max 5 MB)" : "Immagine di copertina troppo grande (max 5 MB)");
+  if (kind === "logo" && !["image/jpeg", "image/png"].includes(file.type)) {
+    throw new Error("Formato non valido: carica un file JPG o PNG");
+  }
+  if (kind === "cover" && !imageMimeToExt[file.type]) throw new Error("Formato non valido");
 
   // Cloudflare R2 PUBBLICO (come foto staff / immagini prodotto): su Amplify il
   // filesystem è effimero, quindi il branding vive su R2 e nel DB si salva
@@ -271,7 +282,10 @@ export async function uploadBusinessBrandingImage(slug: string, kind: "logo" | "
 
   await tenantUpdate({ slug, table: "businesses", id: Number(business.id ?? 0), values });
   await syncMarketplaceProfile(slug, publicOrigin);
-  return getBusinessSettingsContext(slug, publicOrigin);
+  return {
+    ...await getBusinessSettingsContext(slug, publicOrigin),
+    message: kind === "logo" ? "Logo salvato" : "Immagine di copertina salvata",
+  };
 }
 
 export async function deleteBusinessBrandingImage(slug: string, kind: "logo" | "cover", publicOrigin = "") {
@@ -296,7 +310,10 @@ export async function deleteBusinessBrandingImage(slug: string, kind: "logo" | "
   }
   await tenantUpdate({ slug, table: "businesses", id: Number(business.id ?? 0), values });
   await syncMarketplaceProfile(slug, publicOrigin);
-  return getBusinessSettingsContext(slug, publicOrigin);
+  return {
+    ...await getBusinessSettingsContext(slug, publicOrigin),
+    message: kind === "logo" ? "Logo rimosso" : "Immagine di copertina rimossa",
+  };
 }
 
 export async function saveBusinessLocation(slug: string, input: Record<string, string>, publicOrigin = "") {
