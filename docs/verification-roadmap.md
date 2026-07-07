@@ -25,6 +25,20 @@ NON regressivo finché le tabelle erano vuote (fallback is_enabled). Tenant 25 r
 (modulo OFF, 0 periodi/settings, nessun residuo). NB comportamento fedele: il seed staff da
 created_at esclude retroattivamente i movimenti pre-configurazione (come il legacy).
 
+### Nota: TRANSAZIONALITÀ checkout/annullo — INVESTIGATA, blocco concreto, NON fatta
+Esiste `withTenantTransaction` (tenant-db.ts) ma attivarla sul checkout richiede o filtrare `q`
+in ~15 funzioni, o un context AsyncLocalStorage nel layer DB CORE. Investigazione: checkout/annullo
+DIRETTI non hanno Promise.all (mutazioni sequenziali), MA `filterColumns` (usato in tutta la fase
+mutazione via insertSaleItem/issue*FromSale) fa `Promise.all(columnExists(...))` = query schema
+CONCORRENTI → dentro una tx a client singolo romperebbe con "another query is already in progress"
+a CACHE FREDDA (columnExists è cachato → safe a caldo, fragile a freddo); inoltre 34 siti Promise.all
+in db-repositories richiedono un audit transitivo esaustivo dell'intero albero di mutazione, fragile
+a modifiche future. Il test concorrenza b3 ha confermato il gap reale (checkout perdente → vendita
+orfana prima del throw sullo stock). CONCLUSIONE: non è un drop-in sicuro; task DEDICATO con
+prerequisito = rendere l'albero mutazione concurrent-query-free (filterColumns sequenziale/prewarm +
+audit Promise.all) + regressione app-wide. #8 (errore piano rate → vendita orfana) è entangled: la
+vendita è committata prima del piano, senza tx né un-swallow né compensazione sono sicuri.
+
 ## Pagamenti AUDIT-2 batch 5: storico #11 filtro data SERVER-SIDE (2026-07-07)
 
 Lo storico Movimenti caricava le 250 vendite piu' recenti e filtrava date/tipo/cliente/servizio
