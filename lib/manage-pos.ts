@@ -217,12 +217,12 @@ export type SellableRecharge = {
 
 export async function getManagePosContext(
   slug: string,
-  options: { locationId?: number; includeCancelled?: boolean; query?: string } = {},
+  options: { locationId?: number; includeCancelled?: boolean; query?: string; from?: string; to?: string } = {},
 ): Promise<ManagePosContext> {
   const locationContext = await getManageLocationContext(slug);
   const activeLocationId = normalizeLocationId(options.locationId ?? locationContext.currentLocationId, locationContext.locations);
   const [sales, clients, services, products, packages, giftboxes, rechargeTemplates, business] = await Promise.all([
-    listPosSales(slug, { locationId: activeLocationId, includeCancelled: options.includeCancelled ?? true, query: options.query ?? "" }),
+    listPosSales(slug, { locationId: activeLocationId, includeCancelled: options.includeCancelled ?? true, query: options.query ?? "", from: options.from, to: options.to }),
     listPosClients(slug),
     listPosServices(slug, activeLocationId),
     listPosProducts(slug, activeLocationId),
@@ -3511,7 +3511,7 @@ async function recordPickupStockDoc(
   }
 }
 
-async function listPosSales(slug: string, options: { locationId: number; includeCancelled: boolean; query: string }): Promise<PosSale[]> {
+async function listPosSales(slug: string, options: { locationId: number; includeCancelled: boolean; query: string; from?: string; to?: string }): Promise<PosSale[]> {
   const salesTable = await tenantTable(slug, "sales");
   const clientsTable = await tenantTable(slug, "clients").catch(() => null);
   const clauses: string[] = [];
@@ -3524,6 +3524,14 @@ async function listPosSales(slug: string, options: { locationId: number; include
     clauses.push("(s.location_id IS NULL OR s.location_id=?)");
     params.push(options.locationId);
   }
+  // #11: intervallo data SERVER-SIDE (finestra [from 00:00, to+1g 00:00) come il legacy
+  // pos_history), cosi' il LIMIT 250 si applica DOPO il filtro — altrimenti una ricerca per
+  // data oltre le 250 vendite piu' recenti non trovava nulla (limit-then-filter). Il filtro
+  // client-side resta come raffinamento (tipo/cliente/servizio) sull'insieme gia' in-range.
+  const dateFrom = normalizeInstallmentDate(options.from ?? "");
+  const dateTo = normalizeInstallmentDate(options.to ?? "");
+  if (dateFrom) { clauses.push("s.sale_date >= ?"); params.push(`${dateFrom} 00:00:00`); }
+  if (dateTo) { clauses.push("s.sale_date < ?"); params.push(`${addDaysIso(dateTo, 1)} 00:00:00`); }
   if (!options.includeCancelled) clauses.push("LOWER(COALESCE(s.status,'')) NOT IN ('cancelled','canceled','annullata','annullato')");
   const query = clean(options.query, 120).toLowerCase();
   if (query) {

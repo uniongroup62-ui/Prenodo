@@ -125,12 +125,18 @@ export function PosHistoryContent({ slug: slugProp }: { slug?: string } = {}) {
 
   useEffect(() => {
     setLoading(true);
-    fetch(`/api/manage/pos?slug=${encodeURIComponent(slug)}`, { headers: { "x-tenant-slug": slug } })
+    // #11: l'intervallo data viene passato al SERVER (from/to) cosi' il LIMIT si applica DOPO
+    // il filtro — una ricerca per data profonda non viene piu' troncata dalle 250 vendite piu'
+    // recenti. Gli altri filtri (tipo/cliente/servizio) restano un raffinamento client-side.
+    const params = new URLSearchParams({ slug });
+    if (from) params.set("from", from);
+    if (to) params.set("to", to);
+    fetch(`/api/manage/pos?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
       .then((j: PosContext) => setCtx(j ?? null))
       .catch(() => setCtx(null))
       .finally(() => setLoading(false));
-  }, [slug]);
+  }, [slug, from, to]);
 
   const clients = ctx?.catalog?.clients ?? [];
   const services = ctx?.catalog?.services ?? [];

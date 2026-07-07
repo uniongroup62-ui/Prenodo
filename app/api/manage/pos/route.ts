@@ -99,6 +99,10 @@ export async function GET(request: Request) {
       locationId,
       includeCancelled,
       query: url.searchParams.get("q") ?? "",
+      // #11: intervallo data server-side per lo storico (evita che il LIMIT tagli i movimenti
+      // piu' vecchi del range prima del filtro).
+      from: url.searchParams.get("from") ?? "",
+      to: url.searchParams.get("to") ?? "",
     }));
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Errore POS.");

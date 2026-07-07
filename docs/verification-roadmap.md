@@ -1,5 +1,19 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Pagamenti AUDIT-2 batch 5: storico #11 filtro data SERVER-SIDE (2026-07-07)
+
+Lo storico Movimenti caricava le 250 vendite piu' recenti e filtrava date/tipo/cliente/servizio
+CLIENT-SIDE → una ricerca per data oltre le 250 righe piu' recenti non trovava nulla
+(limit-then-filter invece di filter-then-limit come il legacy pos_history). FIX: intervallo data
+SERVER-SIDE. listPosSales accetta from/to e aggiunge `sale_date >= from 00:00 AND < to+1g 00:00`
+(finestra legacy) PRIMA del LIMIT 250; getManagePosContext e la route GET propagano from/to
+(searchParams); la UI pos_history-content li invia e RIFETCHA quando cambiano (useEffect deps).
+Gli altri filtri (tipo/cliente/servizio) restano raffinamento client-side sull'insieme in-range;
+le sorgenti standalone (basso volume) restano filtrate client-side. VERIFICATO live: vendita del
+2025-03-10 compare col range che la copre, esclusa dal range recente (filtro server-side attivo);
+regressione checkout 8/8. (La troncatura >250 non e' riproducibile su tenant 25 che ha <250
+vendite, ma il filtro gira ora prima del LIMIT per costruzione.)
+
 ## Pagamenti AUDIT-2 batch 4b: date/ora ancorate a Europe/Rome (Pagamenti) (2026-07-07)
 
 Il legacy usa date()/DateTimeZone('Europe/Rome'); il Next su Amplify/Lambda gira in UTC, quindi
