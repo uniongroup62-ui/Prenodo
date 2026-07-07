@@ -25,7 +25,24 @@ NON regressivo finché le tabelle erano vuote (fallback is_enabled). Tenant 25 r
 (modulo OFF, 0 periodi/settings, nessun residuo). NB comportamento fedele: il seed staff da
 created_at esclude retroattivamente i movimenti pre-configurazione (come il legacy).
 
-### Nota: TRANSAZIONALITÀ checkout/annullo — INVESTIGATA, blocco concreto, NON fatta
+### Nota: TRANSAZIONALITÀ checkout/annullo — TENTATA e funzionante ma TROPPO LENTA (revert)
+AGGIORNAMENTO (2026-07-08): implementata e VERIFICATA funzionante (atomicità provata: un errore
+a metà checkout NON lascia più vendita orfana, test concorrenza stock). Approccio: AsyncLocalStorage
+in tenant-db.ts che instrada dbQuery/dbExecute su un client dedicato serializzato, con SAVEPOINT
+per-query (necessario perché checkout/annullo usano molte operazioni best-effort `.catch(...)` su
+tabelle opzionali: in una tx un singolo errore avvelena l'intera tx, il savepoint isola il fallimento).
+PROBLEMA: il checkout è passato da ~1.4s a ~5.7s (4x) — i savepoint TRIPLICANO i round-trip verso
+Supabase remoto (~24ms l'uno) e la singola connessione serializza le letture normalmente parallele
+(getManagePosContext = 8 liste in Promise.all). 5.7s a vendita è inaccettabile per una cassa →
+REVERTATO (checkout torna a ~1.4s). Il gap "vendita orfana su errore raro a metà" resta coperto in
+pratica dai PRE-CHECK già committati (stock atomico b3, guardia storno ricarica b1, feasibility punti/
+credito) che falliscono PRIMA di mutare. Per un checkout atomico E veloce serve un task dedicato:
+split writes-only in tx (letture fuori, parallele) + rendere le ~15 operazioni best-effort tx-safe
+SENZA savepoint (guardhandole con tableExists cachato) — stimato ~1.3s. Non fatto: refactor delicato,
+non da rushare. Blocco storico sotto (filterColumns concorrente) confermato e risolto dai savepoint,
+ma il costo savepoint è il vero collo di bottiglia.
+
+### Nota storica: blocco concreto identificato pre-tentativo
 Esiste `withTenantTransaction` (tenant-db.ts) ma attivarla sul checkout richiede o filtrare `q`
 in ~15 funzioni, o un context AsyncLocalStorage nel layer DB CORE. Investigazione: checkout/annullo
 DIRETTI non hanno Promise.all (mutazioni sequenziali), MA `filterColumns` (usato in tutta la fase
