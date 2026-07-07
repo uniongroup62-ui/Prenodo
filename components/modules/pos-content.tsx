@@ -44,8 +44,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 //
 // WIRED (package + prepaid sale): the "Vendi pacchetto" modal sells a PACKAGE template
 // (its price + a custom validity window/note) as a {type:"package"} cart line (qty 1);
-// each SERVICE tile carries a "+ Prepagato" affordance that adds a {type:"prepaid"} line
-// (qty = purchased sessions). Both flow through checkout's items_json. At checkout the
+// un servizio si vende come prepagato dal toggle di riga "Eseguito / Prepagato" nel carrello
+// (come il legacy) -> {type:"prepaid"}. Both flow through checkout's items_json. At checkout the
 // backend issues a client_packages row (sessions read from the package template,
 // start/expiry/note from the line) and a client_prepaid_services row (purchased_qty =
 // line qty) — issuance is gated on a real client (a bench sale cannot issue).
@@ -1401,30 +1401,9 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   }
 
   // ---- PREPAID sale (wired) ----
-  // Sell a SERVICE as prepaid: a {type:"prepaid"} cart line whose qty is the purchased
-  // session count (per-session unitPrice). At checkout this issues a client_prepaid_services
-  // row (purchased_qty/remaining_qty = qty). Faithful to the legacy "Prepagato" service
-  // status — issuance requires a client (gated server-side), but the line can be added
-  // without one. Adding from a service tile via the "P" affordance.
-  function addPrepaidTile(tile: { id: number; name: string; price: number }) {
-    if (cartBlocksCatalogAdd()) return;
-    setCart((prev) => {
-      const existing = prev.find((l) => l.type === "prepaid" && l.refId === tile.id);
-      if (existing) {
-        return prev.map((l) => (l === existing ? { ...l, quantity: Math.min(1000, l.quantity + 1) } : l));
-      }
-      const line: CartLine = {
-        key: `${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-        type: "prepaid",
-        refId: tile.id,
-        name: tile.name,
-        quantity: 1,
-        unitPrice: tile.price,
-        status: "prepaid",
-      };
-      return [line, ...prev];
-    });
-  }
+  // NB: un servizio si vende come PREPAGATO aggiungendolo al carrello e usando il toggle di riga
+  // "Eseguito / Prepagato" (come il legacy) — NON esiste più un badge "+ Prepagato" sulle tile
+  // (il legacy non ce l'ha). Al checkout una riga in stato "prepaid" emette il client_prepaid_services.
 
   // ---- PACKAGE sale (wired) ----
   // The proposed expiry for the chosen package: the custom value once the staff edits the
@@ -2812,29 +2791,9 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                       <div className="pos-tile-meta">
                         <div className="small text-muted">
                           {catalogMode === "product" && tile.stock !== undefined ? `Stock: ${tile.stock}` : ""}
-                          {/* Prepaid affordance: sell this SERVICE as prepaid (a session
-                              pack) instead of executing it now. Stops the tile's add. */}
-                          {catalogMode === "service" ? (
-                            <span
-                              role="button"
-                              tabIndex={0}
-                              className="badge bg-light text-primary border pos-tile-prepaid-btn"
-                              title="Vendi come prepagato (sedute)"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                addPrepaidTile(tile);
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter" || e.key === " ") {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  addPrepaidTile(tile);
-                                }
-                              }}
-                            >
-                              + Prepagato
-                            </span>
-                          ) : null}
+                          {/* Il legacy NON ha un badge "+ Prepagato" sulle tile: un servizio si
+                              imposta come Prepagato dal toggle "Eseguito / Prepagato" sulla riga
+                              del carrello (pos.js: onLabel 'Eseguito' / offLabel 'Prepagato'). */}
                         </div>
                         <div className="text-end">
                           {/* Promo tile legacy (pos.js tileSetPromo): prezzo pieno barrato +
