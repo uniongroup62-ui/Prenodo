@@ -7162,3 +7162,32 @@ attesa ON+locked), pulsante permesso che riflette lo stato del browser. typechec
 RESIDUO minore: il feed espone SOLO l'evento appointment_pending (il tipo sempre
 attivo); gli eventi opt-in preventivi/rate/compleanni/tessere non sono nel feed
 (estendibile). Modifica linka al Calendario (drawer quick-booking non portato).
+
+
+---
+
+## Notifiche: feed tipi opt-in + Modifica → drawer edit (2026-07-07)
+
+Chiusi gli ultimi due residui della pagina notifiche.
+
+### Feed browser: tutti i tipi opt-in
+Il feed esponeva solo appointment_pending. Aggiunti gli eventi opt-in (port di
+BrowserNotifications::feed): quote_response (countUnseenQuoteDecisions),
+installment_due (notificationInstallmentGroups), client_birthday
+(countUpcomingBirthdays), fidelity_cards (notificationFidelityCardGroups) — ognuno
+gated dal permesso. Il component filtra per tipo secondo le preferenze utente
+(appointment_pending sempre attivo). VERIFICATO: con un compleanno di test il feed
+include {type:client_birthday, "Compleanno cliente", "1 cliente compie gli anni a
+breve."}; dato ripristinato.
+
+### Modifica → drawer quick-booking in EDIT mode
+"Modifica" linkava al Calendario; ora è un elemento data-qb-edit={id} (+ data-qb-
+reload-on-save) che apre il drawer quick-booking GLOBALE (montato in ManageShell)
+in EDIT mode via il listener [data-qb-edit], come il legacy. VERIFICA LIVE
+(Playwright): click Modifica su appt 139 -> "Modifica prenotazione" #11348 con
+Cliente Luca Rossi, Servizi "test", Operatore luca, 02/07/2026 10:15-11:15, Cabina,
+Stato "In attesa", note — il drawer completo prefillato.
+
+RESIDUO minore: il drawer Next non gestisce data-qb-reload-on-save, quindi dopo un
+salvataggio dal drawer la lista pending non si auto-aggiorna (refresh manuale o
+Approva/Annulla la aggiorna). Il sistema notifiche è per il resto completo.

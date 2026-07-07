@@ -445,13 +445,18 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
                         <i className="bi bi-check2 me-1" />
                         Approva
                       </button>
-                      <a
+                      {/* Modifica: apre il drawer quick-booking GLOBALE (montato in
+                          ManageShell) in EDIT mode via il listener [data-qb-edit],
+                          come il legacy (data-qb-edit + data-qb-reload-on-save). */}
+                      <button
+                        type="button"
                         className="btn btn-link text-primary fw-semibold text-decoration-none"
-                        href={`/${encodeURIComponent(slug)}/calendario`}
+                        data-qb-edit={a.id}
+                        data-qb-reload-on-save="1"
                       >
                         <i className="bi bi-pencil-square me-1" />
                         Modifica
-                      </a>
+                      </button>
                       <button
                         className="btn btn-link text-danger fw-semibold text-decoration-none"
                         type="button"
