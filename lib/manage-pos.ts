@@ -34,7 +34,7 @@ import {
   type PromoCartLine,
 } from "@/lib/db-repositories";
 import { expireClientLots, fidelityLotsSettings } from "@/lib/fidelity-lots";
-import { prepaidExpiryForPurchaseDate } from "@/lib/manage-pos-settings";
+import { prepaidExpiryForPurchaseDate, prepaidsExpiryEnabled } from "@/lib/manage-pos-settings";
 import { giftInvalidateSource, giftRecordSale } from "@/lib/gifts-engine";
 import { giftRedeemAppointmentSelectionIfAny } from "@/lib/gifts-instances";
 import { getManageLocationContext } from "@/lib/manage-locations";
@@ -2984,11 +2984,14 @@ export async function markPrepaidManualExecution(
 
   const table = await tenantTable(slug, "client_prepaid_services");
   const usageTable = await tenantTable(slug, "client_prepaid_service_usages");
+  // Scadenza attiva? (gate del blocco "credito scaduto", come il legacy
+  // ClientPrepaidServices.php:1115-1117 via PosSettings::prepaidExpiryEnabled).
+  const expiryEnabled = await prepaidsExpiryEnabled(slug).catch(() => false);
 
   await withTenantTransaction(slug, async (q) => {
     const scope = await tenantScope(table, ["id=?"], [prepaidId]);
     const rows = await q<RowDataPacket>(
-      `SELECT id, sale_id, service_id, service_name, purchased_qty, remaining_qty, status FROM ${quoteIdentifier(table.name)}${scope.where} FOR UPDATE`,
+      `SELECT id, sale_id, service_id, service_name, purchased_qty, remaining_qty, status, expires_at FROM ${quoteIdentifier(table.name)}${scope.where} FOR UPDATE`,
       scope.params,
     );
     const pre = rows[0];
@@ -3001,6 +3004,17 @@ export async function markPrepaidManualExecution(
     const status = String(pre.status ?? "active").toLowerCase();
     if (["canceled", "cancelled"].includes(status)) throw new Error(`Servizio prepagato "${serviceName}": residuo annullato.`);
     if (remaining <= 0 || status === "completed") throw new Error(`Servizio prepagato "${serviceName}": residuo esaurito.`);
+    // Credito SCADUTO: con la scadenza attiva un prepagato oltre expires_at non è
+    // eseguibile manualmente (port di ClientPrepaidServices::prepaidExpiredForDate).
+    if (expiryEnabled) {
+      const expRaw = String(pre.expires_at ?? "").trim();
+      if (expRaw) {
+        const exp = new Date(expRaw.includes("T") ? expRaw : expRaw.replace(" ", "T"));
+        if (!Number.isNaN(exp.getTime()) && exp.getTime() < Date.now()) {
+          throw new Error(`Servizio prepagato "${serviceName}": credito scaduto.`);
+        }
+      }
+    }
 
     const linkedQty = await prepaidActiveLinkedQty(slug, prepaidId);
     const freeQty = Math.max(0, remaining - linkedQty);

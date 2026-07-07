@@ -275,6 +275,13 @@ export async function prepaidExpiryForPurchaseDate(slug: string, purchaseDate: s
   return computeExpiry(purchaseDate, value, s.prepaids_expiry_unit);
 }
 
+// La scadenza prepagati è ATTIVA? (port di PosSettings::prepaidsExpiryEnabled,
+// PosSettings.php:236: flag on + value>0). Usata per gatare i blocchi "credito scaduto".
+export async function prepaidsExpiryEnabled(slug: string): Promise<boolean> {
+  const s = await settingsRow(slug).catch(() => null);
+  return Boolean(s && s.prepaids_expiry_enabled && normalizeValue(s.prepaids_expiry_value) > 0);
+}
+
 function dateTimeString(value: unknown): string {
   if (!value) return new Date().toISOString();
   if (value instanceof Date) return value.toISOString();
