@@ -1,5 +1,18 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Quick Booking drawer: stile grigio dei campi disabilitati (2026-07-07)
+
+Fedeltà UI: nel legacy i select non ancora cliccabili del drawer (Operatore prima del
+servizio, Cabina prima della disponibilità, + i select per-servizio multi-servizio) sono
+GRIGI via la classe qb-field-muted (app.css:880-886: sfondo #f1f5f9, bordo #cbd5e1, testo
+#64748b, cursor:not-allowed), toggolata da app.js (8064-8089). Il drawer Next NON applicava
+mai la classe -> i campi disabilitati restavano bianchi (app.css forza .form-select bianco
+con specificità che batte il :disabled di Bootstrap; solo #quickBooking .qb-field-muted, con
+#id, vince). FIX: aggiunta qb-field-muted ai select Operatore/Cabina (singoli + per-riga
+multi-servizio) quando disabilitati, e qb-field-loading all'Operatore durante il controllo.
+Ora di Fine (.form-control) e bottone Disponibilità restano come nel legacy (bianco/opacity
+Bootstrap: il legacy non li muta via qb-field-muted).
+
 ## Quick Booking AUDIT + comunicazione booking pubblico (2026-07-07)
 
 Audit completo del quick booking (4 analisi parallele + test live) e verifica della

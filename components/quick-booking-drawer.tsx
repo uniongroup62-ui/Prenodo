@@ -3824,16 +3824,16 @@ export function QuickBookingDrawer() {
                           <label className="form-label small mb-1">{row.name}</label>
                           {row.noOperator ? (
                             // noOperator service: no operator to assign (port: skipped/disabled).
-                            <select className="form-select qb-staff-for-service" data-service-id={row.id} disabled>
+                            <select className="form-select qb-staff-for-service qb-field-muted" data-service-id={row.id} disabled>
                               <option value="">Senza operatore</option>
                             </select>
                           ) : row.eligible.length === 0 ? (
-                            <select className="form-select qb-staff-for-service" data-service-id={row.id} disabled>
+                            <select className="form-select qb-staff-for-service qb-field-muted" data-service-id={row.id} disabled>
                               <option value="">Nessun operatore disponibile</option>
                             </select>
                           ) : (
                             <select
-                              className="form-select qb-staff-for-service"
+                              className={`form-select qb-staff-for-service${row.onlyOne ? " qb-field-muted" : ""}`}
                               data-service-id={row.id}
                               // Exactly one eligible operator -> auto-selected + locked.
                               disabled={row.onlyOne}
@@ -3854,12 +3854,12 @@ export function QuickBookingDrawer() {
                               values are serialized to #qb_cabin_map as
                               {serviceId: cabinId}. */}
                           {cabinOptions.length === 0 ? (
-                            <select className="form-select qb-cabin-for-service mt-1" data-service-id={row.id} disabled>
+                            <select className="form-select qb-cabin-for-service mt-1 qb-field-muted" data-service-id={row.id} disabled>
                               <option value="">Nessuna cabina</option>
                             </select>
                           ) : (
                             <select
-                              className="form-select qb-cabin-for-service mt-1"
+                              className={`form-select qb-cabin-for-service mt-1${freeCabinOptions.length === 1 ? " qb-field-muted" : ""}`}
                               data-service-id={row.id}
                               // Exactly one FREE cabin -> auto-selected + locked.
                               disabled={freeCabinOptions.length === 1}
@@ -3894,7 +3894,7 @@ export function QuickBookingDrawer() {
                   return (
                     <>
                       <select
-                        className="form-select"
+                        className={`form-select${staffChecking ? " qb-field-loading" : (startGateDisabled || staffLoadFailed || zeroEligible || singleEligible) ? " qb-field-muted" : ""}`}
                         name="staff_id"
                         value={staffId}
                         onChange={(e) => {
@@ -4039,7 +4039,7 @@ export function QuickBookingDrawer() {
                     is free it is auto-selected and the select is locked, per the
                     hint. The chosen value flows to the save as `cabin_id`. */}
                 <select
-                  className="form-select"
+                  className={`form-select${(!cabinGateOpen || freeCabinOptions.length === 1) ? " qb-field-muted" : ""}`}
                   name="cabin_id"
                   id="qb_cabin_id"
                   value={effectiveCabinId}
