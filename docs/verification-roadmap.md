@@ -7569,3 +7569,22 @@ updateDbAppointment dopo assertStaffAllowedForServices. Errori verbatim del draw
 "Operatore non disponibile nella sede selezionata."; servizio fuori sede -> "Servizio
 non disponibile nella sede selezionata."; entrambi in sede + cabina -> prenotazione OK.
 Setup Sede 2 lasciato attivo (indirizzo placeholder "Via Roma 1" da rinominare via UI).
+
+## Appuntamenti multi-sede: guard per-sede su edit/delete/move/status (2026-07-07)
+
+Chiusa l'ultima divergenza multi-sede (#8 MEDIUM): mancava il gate per-sede
+sull'accesso all'appuntamento nelle azioni di gestione. Portato
+api_appt_require_appointment_access -> app_location_allowed_for_user
+(api_appointments.php:3675 / Helpers.php:660) come helper esportato
+appointmentLocationAllowedForUser(slug, user, appointmentId): admin o utente senza
+restrizioni di sede (locationIds vuoto) -> sempre; appuntamento senza sede (location_id
+NULL/<=0) -> permissivo; altrimenti la sede dell'appuntamento DEVE essere tra quelle
+assegnate all'utente. Cablato in app/api/manage/appointments/route.ts nelle azioni
+status, move, save (ramo isEdit) e delete/bulk_delete (single -> errore 403, bulk ->
+skip contato tra "non disponibili"). Errore verbatim "Prenotazione non trovata o non
+disponibile nella sede corrente." (403). VERIFICATO live (6/6) con token firmati ad
+hoc: utente ristretto a Sede1 [21] -> 403 su status/move/delete/save del Sede2 (417);
+consentito sul Sede1 (416); admin (locationIds vuoto) consentito ovunque. Appuntamenti
+di test creati e rimossi (residuo=0, inclusi i reminder generati dalle chiamate status).
+Nota: la sessione è interamente serializzata nel cookie firmato, quindi locationIds/role
+vengono letti dal token (impostati al login da loginLocationState su user_locations).

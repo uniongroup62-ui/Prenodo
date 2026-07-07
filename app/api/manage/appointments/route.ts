@@ -4,6 +4,7 @@ import {
 import { emptyToNull, jsonError, parseRequestBody } from "@/lib/api-utils";
 import {
   appointmentCustomerVisibleChanged,
+  appointmentLocationAllowedForUser,
   appointmentPhpStatus,
   cancelDoneAppointment,
   cabinsForServicesContext,
@@ -519,6 +520,16 @@ export async function POST(request: Request) {
       let blockedNotCanceled = 0;
       let blockedUnavailable = 0;
       for (const id of ids) {
+        // Guard per-sede (api_appt_require_appointment_access): un utente ristretto
+        // non può eliminare un appuntamento di un'altra sede — il single restituisce
+        // l'errore legacy, il bulk lo salta contandolo tra i "non disponibili".
+        if (!(await appointmentLocationAllowedForUser(tenantSlug, session.user, id))) {
+          if (action === "delete") {
+            return jsonError("Prenotazione non trovata o non disponibile nella sede corrente.", 403);
+          }
+          blockedUnavailable += 1;
+          continue;
+        }
         try {
           if (await deleteDbAppointment(tenantSlug, id)) {
             deleted += 1;
@@ -556,6 +567,11 @@ export async function POST(request: Request) {
         return jsonError("Permesso Appuntamenti richiesto.", 403);
       }
       const id = Number.parseInt(String(body.id ?? "0"), 10);
+      // Guard per-sede (api_appt_require_appointment_access): un utente ristretto non
+      // può cambiare stato a un appuntamento di un'altra sede.
+      if (!(await appointmentLocationAllowedForUser(tenantSlug, session.user, id))) {
+        return jsonError("Prenotazione non trovata o non disponibile nella sede corrente.", 403);
+      }
       // The status select (drawer + calendar) sends the PHP CODE
       // (pending|scheduled|done|canceled|no_show). We must NOT route it through
       // normalizeAppointmentStatus: that maps to the 3-value UI type and DEFAULTS
@@ -745,6 +761,11 @@ export async function POST(request: Request) {
       if (!Number.isFinite(id) || id <= 0 || !startsAt || !endsAt) {
         return Response.json({ ok: false, error: "Dati mancanti" });
       }
+      // Guard per-sede (api_appt_require_appointment_access): un utente ristretto non
+      // può spostare/ridimensionare un appuntamento di un'altra sede.
+      if (!(await appointmentLocationAllowedForUser(tenantSlug, session.user, id))) {
+        return jsonError("Prenotazione non trovata o non disponibile nella sede corrente.", 403);
+      }
       const hasStaffParam = body.staff_id !== undefined;
       const staffIdParam = hasStaffParam ? Number.parseInt(String(body.staff_id ?? "0"), 10) || 0 : undefined;
       const segmentId = Number.parseInt(String(body.segment_id ?? "0"), 10) || 0;
@@ -802,6 +823,11 @@ export async function POST(request: Request) {
     if (isEdit) {
       if (!can(session.user.perms, "appointments.manage")) {
         return jsonError("Permesso Appuntamenti richiesto.", 403);
+      }
+      // Guard per-sede (api_appt_require_appointment_access): un utente ristretto non
+      // può modificare un appuntamento appartenente a un'altra sede.
+      if (!(await appointmentLocationAllowedForUser(tenantSlug, session.user, editId))) {
+        return jsonError("Prenotazione non trovata o non disponibile nella sede corrente.", 403);
       }
     } else if (!can(session.user.perms, "appointments.quick_booking")) {
       return jsonError("Permesso Prenotazione rapida richiesto.", 403);

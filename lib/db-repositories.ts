@@ -4944,6 +4944,26 @@ export async function cancelDoneAppointment(
 // azzera promotion_id/promotion_conditions sull'appuntamento. Il legacy lo invoca
 // sia all'ANNULLAMENTO (AppointmentLifecycle.php:1294) sia all'ELIMINAZIONE
 // (appointments.php:256/469). Guardato su esistenza colonne; best-effort.
+// Guard per-sede sull'accesso all'appuntamento (port di
+// api_appt_require_appointment_access -> app_location_allowed_for_user,
+// api_appointments.php:3675 / Helpers.php:660): un utente RISTRETTO ad alcune sedi non
+// può operare (edit/delete/move/status) su un appuntamento di un'ALTRA sede. Admin o
+// utente senza restrizioni -> sempre; appuntamento senza sede (NULL) -> permissivo.
+export async function appointmentLocationAllowedForUser(
+  slug: string,
+  user: { role?: string; locationIds?: number[] },
+  appointmentId: number,
+): Promise<boolean> {
+  if ((user.role ?? "").toLowerCase() === "admin") return true;
+  const ids = (user.locationIds ?? []).filter((n) => Number(n) > 0);
+  if (ids.length === 0) return true; // nessuna restrizione -> tutte le sedi
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "appointments", columns: "location_id", where: "id = ?", params: [appointmentId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  if (!rows[0]) return false; // inesistente / non del tenant
+  const loc = rows[0].location_id;
+  if (loc === null || loc === undefined || Number(loc) <= 0) return true; // senza sede -> permissivo
+  return ids.map((n) => Number(n)).includes(Number(loc));
+}
+
 async function releaseAppointmentPromotionReservation(slug: string, appointmentId: number): Promise<void> {
   if (!(appointmentId > 0)) return;
   const redTable = await tenantTable(slug, "promotion_redemptions").catch(() => null);
