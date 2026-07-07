@@ -424,9 +424,12 @@ const MS_ACCENT_PALETTE = [
   "#fb7185", "#10b981", "#8b5cf6", "#22c55e", "#eab308", "#ef4444", "#4e6da5",
 ];
 
-// Segment count of a booking = the legacy ms_count (one list event per segment).
+// Conteggio "multi-servizio" = numero di SEGMENTI (il legacy rende un evento per
+// segmento; è multi-servizio con HAVING COUNT(segments) > 1). NON usare
+// services.length: un appuntamento con più appointment_services ma UN solo segmento
+// non è multi-servizio nel legacy (L16). `segments` è popolato solo quando >1.
 function msCountOf(a: Appointment): number {
-  return Math.max(a.segments?.length ?? 0, a.services?.length ?? 0, 1);
+  return a.segments && a.segments.length > 1 ? a.segments.length : 1;
 }
 
 // A renderable calendar block: either a whole appointment or ONE segment of a

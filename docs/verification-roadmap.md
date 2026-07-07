@@ -7472,3 +7472,17 @@ segmenti; filtro stato canceled -> 0. M2 (servizi per sede) non rilevante (1 sed
 - L24: etichetta "Periodo visibile" mostra il range della vista (settimana/mese),
   non sempre un singolo giorno.
 Nota: a-capo note preservati (M18 batch 1) riconfermato live ("Riga 1\nRiga 2").
+
+## Calendario batch 5: multi-servizio conteggio segmenti (L16) (2026-07-07)
+
+msCountOf ora conta i SEGMENTI (a.segments.length>1) e non più max(segments,services):
+un appuntamento con più appointment_services ma UN solo segmento non è multi-servizio
+nel legacy (rende un evento per segmento, MS = HAVING COUNT(segments)>1). VERIFICATO
+live: il multi-servizio reale (#42806, 2 segmenti) rende ancora correttamente.
+
+Residui deliberatamente NON chiusi (cosmetici/edge, basso valore / alto costo di
+verifica su calendar.js 5204 righe): L13 (label HH:MM sull'indicatore ora — aggiunta
+utile, non un bug), M5/L10-L12 (ombreggiatura chiusure Settimana + eccezioni is_closed),
+L14 (hover su scroll/resize), L15 (palette accenti MS), L17 (colore pallino operatore),
+e ~12 minori (deep-link ?calendar_date/view, picker responsive/align-right, eventAllow
+oltre orario, meta card note, autofocus, badge 99+, ecc.). Elencati nell'audit.
