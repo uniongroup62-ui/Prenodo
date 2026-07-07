@@ -4837,6 +4837,11 @@ export async function cancelDoneAppointment(
   //    appointments schema has all three columns, so this is the clean persistence spot
   //    for the reason — no notes fallback needed. Each is column-guarded so an older
   //    schema without the column simply skips it (the status flip still happens).
+  // Rilascia la prenotazione promozione all'annullamento, come il legacy
+  // AppointmentLifecycle.php:1294 (Promotions::releaseAppointmentReservation): lo
+  // slot per_customer_limit torna libero quando l'appuntamento viene annullato.
+  await releaseAppointmentPromotionReservation(slug, id);
+
   const statusValues: Record<string, unknown> = { status: target };
   const nowSql = `${sqlDateTimePrefix(new Date())}:00`; // "YYYY-MM-DD HH:MM:SS"
   if (await columnExists("appointments", "cancelled_at")) statusValues.cancelled_at = nowSql;
@@ -4884,6 +4889,35 @@ export async function cancelDoneAppointment(
 // appointments row itself. Every step is best-effort per table (wrapped in try/catch,
 // columnExists-guarded) so a missing column/table on an older install never aborts the
 // delete — the row still goes away. Returns true when the appointment row was removed.
+// Rilascia la prenotazione promozione dell'appuntamento (port di
+// Promotions::releaseAppointmentReservation, Promotions.php:5365 + :5163): cancella
+// le righe promotion_redemptions LEGATE ALL'APPUNTAMENTO (guardia sale_id IS NULL/0:
+// non tocca quelle di una vendita) così lo slot per_customer_limit torna libero, e
+// azzera promotion_id/promotion_conditions sull'appuntamento. Il legacy lo invoca
+// sia all'ANNULLAMENTO (AppointmentLifecycle.php:1294) sia all'ELIMINAZIONE
+// (appointments.php:256/469). Guardato su esistenza colonne; best-effort.
+async function releaseAppointmentPromotionReservation(slug: string, appointmentId: number): Promise<void> {
+  if (!(appointmentId > 0)) return;
+  const redTable = await tenantTable(slug, "promotion_redemptions").catch(() => null);
+  if (redTable && (await columnExists(redTable.name, "appointment_id").catch(() => false))) {
+    const saleGuard = (await columnExists(redTable.name, "sale_id").catch(() => false)) ? " AND (sale_id IS NULL OR sale_id = 0)" : "";
+    await dbExecute(
+      `DELETE FROM ${quoteIdentifier(redTable.name)} WHERE tenant_id = ? AND appointment_id = ?${saleGuard}`,
+      [redTable.tenantId ?? 0, appointmentId],
+    ).catch(() => undefined);
+  }
+  const apptTable = await tenantTable(slug, "appointments").catch(() => null);
+  if (!apptTable) return;
+  const sets: string[] = [];
+  if (await columnExists(apptTable.name, "promotion_id").catch(() => false)) sets.push("promotion_id = NULL");
+  if (await columnExists(apptTable.name, "promotion_conditions").catch(() => false)) sets.push("promotion_conditions = NULL");
+  if (!sets.length) return;
+  await dbExecute(
+    `UPDATE ${quoteIdentifier(apptTable.name)} SET ${sets.join(", ")} WHERE tenant_id = ? AND id = ?`,
+    [apptTable.tenantId ?? 0, appointmentId],
+  ).catch(() => undefined);
+}
+
 export async function deleteDbAppointment(slug: string, id: number): Promise<boolean> {
   const appointmentId = Number(id);
   if (!Number.isFinite(appointmentId) || appointmentId <= 0) return false;
@@ -4923,6 +4957,11 @@ export async function deleteDbAppointment(slug: string, id: number): Promise<boo
   await deleteAppointmentChildren(slug, "appointment_staff", appointmentId);
   await deleteAppointmentChildren(slug, "appointment_locations", appointmentId);
   await deleteAppointmentChildren(slug, "appointment_gift_items", appointmentId);
+
+  // 3b) Rilascia la prenotazione promozione (per_customer_limit) come il legacy
+  //     appointments.php:256/469 — altrimenti la riga promotion_redemptions
+  //     sopravvive e continua a consumare lo slot promo del cliente.
+  await releaseAppointmentPromotionReservation(slug, appointmentId);
 
   // 4) Finally remove the appointment row itself (tenant-scoped).
   const removed = await tenantDelete({ slug, table: "appointments", id: appointmentId }).catch(() => 0);

@@ -7516,3 +7516,27 @@ valore), L17 (colore pallino operatore senza calendar_color — rischio accent r
 M5 (banda Chiuso Settimana), L10 (eccezione is_closed = chiusura sensata), L11
 (estensione asse). Tutto il resto (sicurezza, funzionale, visibile, cosmetico
 verificabile) è chiuso.
+
+## Appuntamenti: rilascio prenotazione promozione su annulla/elimina (2026-07-07)
+
+Audit backend Appuntamenti (3 analisi parallele: delete+restore, cancel_done+status,
+save) + test live del ciclo di vita. FIX della sola divergenza HIGH a impatto reale
+(le altre erano multi-sede o dati-migrati): il rilascio della prenotazione promozione
+mancava del tutto. createDbAppointment scrive una riga promotion_redemptions
+(appointment_id) che conta nel per_customer_limit, ma né deleteDbAppointment né
+cancelDoneAppointment la cancellavano → il cliente perdeva PERMANENTEMENTE uno slot
+promo. Aggiunto releaseAppointmentPromotionReservation (port di
+Promotions::releaseAppointmentReservation, Promotions.php:5365/5163): DELETE
+promotion_redemptions WHERE appointment_id=? AND (sale_id IS NULL/0) + UPDATE
+appointments SET promotion_id=NULL, promotion_conditions=NULL. Chiamato all'ANNULLO
+(cancelDoneAppointment, come AppointmentLifecycle.php:1294) e all'ELIMINAZIONE
+(deleteDbAppointment, come appointments.php:256/469). VERIFICATO live: appuntamento con
+redemption -> annullo -> redemption rilasciata (count 0) + promotion_id azzerato;
+residuo=0.
+
+Divergenze NON corrette (confermate ma a impatto nullo su questo tenant mono-sede/dati
+nativi, elencate per riferimento): save senza validazione sede-servizio/sede-operatore
+(multi-sede), earn non su create-as-done (dipende dal drawer), cleanup tabelle-link QB
+giftbox/package/prepaid (solo dati migrati), guard per-sede su delete/edit (multi-sede),
+points_storno_mode/preview blockers (TODO nel codice), notes non specchia staff_notes,
+public_code [10000-99999] senza zeri iniziali, reminders cleanup solo pending.
