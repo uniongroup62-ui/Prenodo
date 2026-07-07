@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 
 // Faithful port of the PHP notifications page (app/pages/notifications.php):
 // "Centro notifiche" header + browser-notification actions/modal, the
@@ -70,6 +70,135 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
   const [prefs, setPrefs] = useState<Record<string, boolean>>({});
   const [busyId, setBusyId] = useState(0);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [notifPerm, setNotifPerm] = useState<NotificationPermission | "unsupported">("default");
+  const [savingPrefs, setSavingPrefs] = useState(false);
+
+  // Permesso browser + preferenze salvate (port di api_user_prefs get_browser_
+  // notification_preferences; il tipo "appointments" resta sempre attivo).
+  useEffect(() => {
+    if (typeof window !== "undefined" && "Notification" in window) setNotifPerm(Notification.permission);
+    else setNotifPerm("unsupported");
+    fetch(`/api/manage/user-prefs?action=get_browser_notification_preferences&slug=${encodeURIComponent(slug)}`, {
+      headers: { "x-tenant-slug": slug },
+    })
+      .then((r) => r.json())
+      .then((j) => {
+        if (j?.ok && j.preferences && typeof j.preferences === "object") setPrefs(j.preferences as Record<string, boolean>);
+      })
+      .catch(() => undefined);
+  }, [slug]);
+
+  // Richiesta permesso "Attiva notifiche browser" (updatePermissionButtons /
+  // requestBrowserNotifications legacy); da concesso, invia una notifica di test.
+  async function requestPermission() {
+    if (typeof window === "undefined" || !("Notification" in window)) return;
+    if (Notification.permission === "granted") {
+      try {
+        new Notification("Notifiche browser attive", { body: "Riceverai qui le nuove prenotazioni in attesa." });
+      } catch {
+        /* noop */
+      }
+      return;
+    }
+    try {
+      setNotifPerm(await Notification.requestPermission());
+    } catch {
+      /* noop */
+    }
+  }
+
+  async function savePrefs(event: FormEvent) {
+    event.preventDefault();
+    setSavingPrefs(true);
+    try {
+      // Chiavi FLAT nel body: parseRequestBody stringifica ogni valore (un oggetto
+      // annidato diventerebbe "[object Object]"), quindi la route legge le chiavi
+      // singole di primo livello (normalizePreferences(bodyObj)).
+      await fetch(`/api/manage/user-prefs?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-tenant-slug": slug },
+        body: JSON.stringify({ action: "set_browser_notification_preferences", ...prefs }),
+      });
+      setMsg({ ok: true, text: "Preferenze salvate" });
+    } catch {
+      setMsg({ ok: false, text: "Impossibile salvare le preferenze" });
+    } finally {
+      setSavingPrefs(false);
+    }
+  }
+
+  // Feed notifiche browser (BrowserNotifications::feed): polling ogni 15s degli
+  // appuntamenti in attesa; alla PRIMA lettura marca tutto come "visto" senza
+  // notificare (feedHydrated), poi mostra una notifica desktop per ogni nuovo.
+  useEffect(() => {
+    if (notifPerm !== "granted" || typeof window === "undefined") return;
+    const seenKey = `bs_notif_seen:${slug}`;
+    const hydratedKey = `${seenKey}:hydrated`;
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/manage/notifications?action=feed&slug=${encodeURIComponent(slug)}`, { headers: { "x-tenant-slug": slug } });
+        const j = await res.json();
+        if (stopped || !j?.ok || !Array.isArray(j.events)) return;
+        let seen: string[] = [];
+        try {
+          seen = JSON.parse(window.localStorage.getItem(seenKey) || "[]");
+        } catch {
+          seen = [];
+        }
+        const seenSet = new Set(seen.map(String));
+        const hydrated = window.localStorage.getItem(hydratedKey) === "1";
+        for (const ev of j.events as Array<{ key: string; title: string; body: string; url: string }>) {
+          if (seenSet.has(ev.key)) continue;
+          seenSet.add(ev.key);
+          if (hydrated) {
+            try {
+              const n = new Notification(ev.title, { body: ev.body, tag: ev.key });
+              n.onclick = () => {
+                try {
+                  window.focus();
+                } catch {
+                  /* noop */
+                }
+                window.location.href = ev.url;
+                n.close();
+              };
+            } catch {
+              /* noop */
+            }
+          }
+        }
+        window.localStorage.setItem(seenKey, JSON.stringify(Array.from(seenSet).slice(-180)));
+        window.localStorage.setItem(hydratedKey, "1");
+      } catch {
+        /* noop */
+      }
+    };
+    poll();
+    const id = window.setInterval(poll, 15000);
+    return () => {
+      stopped = true;
+      window.clearInterval(id);
+    };
+  }, [notifPerm, slug]);
+
+  const permLabel =
+    notifPerm === "unsupported"
+      ? "Notifiche non supportate"
+      : notifPerm === "granted"
+        ? "Notifiche browser attive"
+        : notifPerm === "denied"
+          ? "Notifiche bloccate"
+          : "Attiva notifiche browser";
+  const permClass =
+    notifPerm === "unsupported"
+      ? "btn-outline-secondary"
+      : notifPerm === "denied"
+        ? "btn-warning"
+        : notifPerm === "granted"
+          ? "btn-success"
+          : "btn-outline-primary";
+  const permDisabled = notifPerm === "unsupported" || notifPerm === "denied";
 
   const load = useCallback(() => {
     fetch(`/api/manage/notifications?action=pending&slug=${encodeURIComponent(slug)}`, {
@@ -144,9 +273,15 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
               <i className="bi bi-sliders me-1" />
               Personalizza
             </button>
-            <button className="btn btn-outline-primary btn-sm" type="button" data-browser-notifications-enable="">
+            <button
+              className={`btn ${permClass} btn-sm`}
+              type="button"
+              disabled={permDisabled}
+              onClick={requestPermission}
+              title={notifPerm === "granted" ? "Clicca per inviare una notifica di test." : notifPerm === "denied" ? "Riattivale dalle impostazioni del browser." : undefined}
+            >
               <i className="bi bi-bell me-1" />
-              <span data-browser-notifications-label="">Attiva notifiche browser</span>
+              <span>{permLabel}</span>
             </button>
           </div>
         </div>
@@ -160,7 +295,7 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
         data-browser-notifications-settings-modal=""
       >
         <div className="modal-dialog modal-dialog-centered">
-          <form className="modal-content" data-browser-notifications-preferences-form="">
+          <form className="modal-content" data-browser-notifications-preferences-form="" onSubmit={savePrefs}>
             <div className="modal-header">
               <div>
                 <div className="text-muted small">Notifiche browser</div>
@@ -213,7 +348,7 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
               <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal">
                 Annulla
               </button>
-              <button className="btn btn-primary" type="submit" data-browser-notifications-preferences-save="">
+              <button className="btn btn-primary" type="submit" disabled={savingPrefs} data-browser-notifications-preferences-save="">
                 <i className="bi bi-check2-circle me-1" />
                 Salva
               </button>

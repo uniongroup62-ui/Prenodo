@@ -7133,3 +7133,32 @@ RESIDUO: il wiring completo delle NOTIFICHE BROWSER (permesso desktop + persiste
 preferenze + feed polling) resta un sottosistema JS a sé (BrowserNotifications.php);
 i controlli sono presenti come markup. Modifica linka al calendario (il drawer
 quick-booking inline non è portato in questa pagina).
+
+
+---
+
+## Pagina Notifiche: wiring notifiche browser (permesso + preferenze + feed) — CHIUSO (2026-07-07)
+
+Chiuso il residuo del wiring desktop (era markup morto). Port di View.php 2000-2450
++ BrowserNotifications.php:
+
+- **Preferenze**: il component carica (GET user-prefs get_browser_notification_
+  preferences) e salva (POST) le preferenze; il tipo "appointments" resta locked+ON.
+  Le chiavi vanno FLAT nel body (parseRequestBody stringifica gli oggetti annidati).
+- **Permesso**: "Attiva notifiche browser" chiama Notification.requestPermission();
+  l'etichetta/stile riflettono lo stato (Attiva / Notifiche browser attive /
+  Notifiche bloccate / Notifiche non supportate), come updatePermissionButtons.
+- **Feed**: route action=feed (port di BrowserNotifications::feed evento
+  appointment_pending) ritorna gli appuntamenti in attesa come eventi {key,title,
+  body,url}; il component fa polling ogni 15s, marca "visto" alla prima lettura
+  (feedHydrated) e mostra una notifica desktop per ogni NUOVO evento (seen in
+  localStorage).
+
+VERIFICA LIVE (sessione manage firmata): action=feed -> 4 eventi con body
+"test - Luca Rossi - 02/07/2026 10:15 - 11:15 - #11348"; prefs GET/SET (flat)
+persistono; UI modal "Personalizza notifiche" coi toggle caricati (Prenotazioni in
+attesa ON+locked), pulsante permesso che riflette lo stato del browser. typecheck pulito.
+
+RESIDUO minore: il feed espone SOLO l'evento appointment_pending (il tipo sempre
+attivo); gli eventi opt-in preventivi/rate/compleanni/tessere non sono nel feed
+(estendibile). Modifica linka al Calendario (drawer quick-booking non portato).

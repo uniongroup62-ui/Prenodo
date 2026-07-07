@@ -52,6 +52,30 @@ export async function GET(request: Request) {
       }, { headers: { "Cache-Control": "no-store" } });
     }
 
+    // Port di BrowserNotifications::feed (evento "appuntamento in attesa"): la
+    // lista degli appuntamenti pending come eventi {key,title,body,url} per le
+    // notifiche desktop del browser (il tipo "appointments" è sempre attivo).
+    if (action === "feed") {
+      const locationContext = await getManageLocationContext(tenantSlug);
+      const pending = await listNotificationPendingAppointments(tenantSlug, locationContext.currentLocationId);
+      const events = pending.map((a) => {
+        const when = a.dateLabel ? `${a.dateLabel} ${a.timeLabel}${a.endLabel ? ` - ${a.endLabel}` : ""}` : "";
+        const parts = [a.clientName];
+        if (when) parts.push(when);
+        if (a.publicCode) parts.push(`#${a.publicCode}`);
+        if (a.packageSummary) parts.push(a.packageSummary);
+        if (a.prepaidSummary) parts.push(a.prepaidSummary);
+        return {
+          key: `appointment_pending:${a.id}`,
+          type: "appointment_pending",
+          title: "Nuova prenotazione in attesa",
+          body: `${a.serviceName} - ${parts.join(" - ")}`,
+          url: `/${tenantSlug}/notifications`,
+        };
+      });
+      return Response.json({ ok: true, events }, { headers: { "Cache-Control": "no-store" } });
+    }
+
     // Impostazioni avvisi lette dalle pagine notifiche (giorni compleanni/rate).
     if (action === "settings") {
       const settings = await getAutomationSettings(tenantSlug);
