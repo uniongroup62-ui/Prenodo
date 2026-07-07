@@ -7486,3 +7486,17 @@ utile, non un bug), M5/L10-L12 (ombreggiatura chiusure Settimana + eccezioni is_
 L14 (hover su scroll/resize), L15 (palette accenti MS), L17 (colore pallino operatore),
 e ~12 minori (deep-link ?calendar_date/view, picker responsive/align-right, eventAllow
 oltre orario, meta card note, autofocus, badge 99+, ecc.). Elencati nell'audit.
+
+## Calendario batch 6: giorno con sola fascia pomeridiana = CHIUSO (L12) (2026-07-07)
+
+Come getStoreScheduleForDow (effectiveClosed = isClosed || !opens || !closes) un
+giorno con la PRIMA fascia (mattino) vuota è CHIUSO anche se la seconda (pomeriggio)
+è valorizzata; il port lo apriva rendendo solo il pomeriggio. Corretto nel calcolo
+schedule standard (salta la riga se manca la fascia mattutina). VERIFICATO: gli orari
+normali del tenant restano invariati (grid + eventi ok, nessun errore).
+
+Batch 6 chiude L12. Gli altri 🟡 restano deliberatamente aperti perché o discutibili
+(L13 label ora = aggiunta utile, L10 eccezione is_closed = chiusura sensata) o
+complessi/cosmetici ad alto costo di verifica e impatto quasi nullo (L14 hover su
+scroll, L15 palette accenti MS, L17 colore pallino operatore senza calendar_color,
+M5 banda "Chiuso" in Settimana, L11 estensione asse): elencati nell'audit calendario.

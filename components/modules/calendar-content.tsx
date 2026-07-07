@@ -1157,6 +1157,12 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
       const intervals: { start: number; end: number }[] = [];
       for (const b of todays) {
         if (b.isClosed) continue;
+        // L12: come getStoreScheduleForDow (effectiveClosed = !opens || !closes) il
+        // giorno è CHIUSO se manca la PRIMA fascia (mattino), anche se la seconda
+        // (pomeriggio) è valorizzata. Salta la riga senza aprire la sola fascia 2.
+        const ms = timeToMin(b.openTime ?? "");
+        const me = timeToMin(b.closeTime ?? "");
+        if (ms === null || me === null || me <= ms) continue;
         pushInterval(intervals, b.openTime, b.closeTime);
         pushInterval(intervals, b.openTime2, b.closeTime2);
       }
