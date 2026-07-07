@@ -548,6 +548,13 @@ export async function POST(request: Request) {
     }
 
     if (action === "status") {
+      // Cambio stato di un appuntamento ESISTENTE = azione di gestione:
+      // richiede appointments.manage come il legacy (api_appt_require_manage) e
+      // come l'"Approva" della pagina Notifiche. L'ombrello POST include anche
+      // quick_booking, che qui NON deve bastare.
+      if (!can(session.user.perms, "appointments.manage")) {
+        return jsonError("Permesso Appuntamenti richiesto.", 403);
+      }
       const id = Number.parseInt(String(body.id ?? "0"), 10);
       // The status select (drawer + calendar) sends the PHP CODE
       // (pending|scheduled|done|canceled|no_show). We must NOT route it through
@@ -726,6 +733,12 @@ export async function POST(request: Request) {
     // All guards/messages live in moveDbAppointmentCalendar; failures return
     // 200 { ok:false, error } like the legacy j() (the client alert()s them).
     if (action === "move") {
+      // Drag/resize dal calendario = azione di gestione: richiede
+      // appointments.manage (legacy api_appt_require_manage a :9103). L'ombrella
+      // POST include quick_booking, che qui NON deve bastare.
+      if (!can(session.user.perms, "appointments.manage")) {
+        return jsonError("Permesso Appuntamenti richiesto.", 403);
+      }
       const id = Number.parseInt(String(body.id ?? "0"), 10);
       const startsAt = String(body.starts_at ?? "").trim();
       const endsAt = String(body.ends_at ?? "").trim();
@@ -782,6 +795,17 @@ export async function POST(request: Request) {
     // when a customer-visible field (date/time/service names) changed.
     const editId = Number.parseInt(String(body.id ?? "0"), 10);
     const isEdit = Number.isFinite(editId) && editId > 0;
+    // Gate permessi come il legacy: la MODIFICA di un appuntamento esistente
+    // richiede appointments.manage (api_appt_require_manage a :9910); la CREAZIONE
+    // richiede appointments.quick_booking (api_appt_require_quick_booking a :9908).
+    // L'ombrella POST è più larga, quindi qui si applica il check specifico.
+    if (isEdit) {
+      if (!can(session.user.perms, "appointments.manage")) {
+        return jsonError("Permesso Appuntamenti richiesto.", 403);
+      }
+    } else if (!can(session.user.perms, "appointments.quick_booking")) {
+      return jsonError("Permesso Prenotazione rapida richiesto.", 403);
+    }
     const operator = String(body.staff_name ?? body.operator ?? "");
     const locationId = await resolveManageLocationId({
       slug: tenantSlug,

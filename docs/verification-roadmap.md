@@ -7395,3 +7395,40 @@ mostravano "—" e i servizi rinominati il nome corrente.
 
 VERIFICATO: tsc pulito; render Playwright senza errori console; KPI/€/grafico/avvisi
 corretti; nessuna scrittura DB (solo letture).
+
+
+---
+
+## Calendario: audit completo (workflow) — batch 1: permessi + note + accenti (2026-07-07)
+
+Audit indipendente (workflow: 11 lettori paralleli + verifica adversariale; 57
+divergenze confermate su 60, 3 già-risolte). Verifica live PASS (render Giorno/
+Settimana/Mese senza errori). Chiuso per primo il cluster 🔴 PERMESSI (sicurezza).
+
+### 🔴 Escalation permessi (server + client) — CHIUSA
+Il legacy separa appointments.manage (modifica/sposta/ridimensiona/note) da
+quick_booking (solo crea). Il port non lo replicava.
+- SERVER (appointments route): aggiunto gate `appointments.manage` su action=move,
+  action=status e save-in-modifica (isEdit); create richiede quick_booking. Prima
+  l'unico check era l'ombrello canAny([manage,plan,quick_booking]) → un utente
+  quick_booking-only poteva spostare/ridimensionare/modificare.
+- SERVER (calendar route): note_save/note_delete ora richiedono SOLO
+  appointments.manage (api_calendar_notes.php:19), non più manage|quick_booking.
+- CLIENT: il contesto /api/manage/calendar espone canManageAppointments/
+  canCreateAppointments; calendar-content li usa per gatare gli handler
+  (postMove, beginResize, openGlobalEdit → manage; openGlobalQuickBook → create).
+VERIFICATO live: token quick_booking-only → 403 su move/status/save-edit/note
+(prima 200); admin → passa il gate (200/400). Nessuna regressione admin (2 eventi
+draggable, render pulito).
+
+### Note: perdita a-capo (M18)
+clean() faceva .replace(/\s+/g," ") → note multi-riga appiattite. Ora solo trim +
+taglio (calendar_notes_trim, api_calendar_notes.php:37-48).
+
+### Accenti giorni (L5/L9)
+IT_WEEKDAYS: "lunedi/martedi/..." → "lunedì/martedì/mercoledì/giovedì/venerdì".
+VERIFICATO live: titolo "Martedì 7 luglio 2026".
+
+Restano da chiudere (batch successivi): filtri Giorno/Settimana (colonne/totali/
+multi-servizio), note in vista Mese (marker/griglia 42gg/data default), titoli
+Settimana/Mese, gating UI note read-only, e i residui 🟡/⚪.

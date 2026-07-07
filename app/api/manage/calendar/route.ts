@@ -71,6 +71,11 @@ export async function GET(request: Request) {
       sourceMode: "database",
       ...context,
       staffUnavailability,
+      // Permessi come il legacy (calendar.php:7-8 -> config canManage/canCreate):
+      // manage = drag/resize/click-edit/note-write; quick_booking = crea da slot.
+      // Il client li usa per gatare le affordance (sola-lettura senza manage).
+      canManageAppointments: can(activeUser.perms, "appointments.manage"),
+      canCreateAppointments: can(activeUser.perms, "appointments.quick_booking"),
     });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Calendario non disponibile.", 400);
@@ -90,7 +95,9 @@ export async function POST(request: Request) {
 
   try {
     if (action === "note_save" || action === "save") {
-      if (!canAny(activeUser.perms, ["appointments.manage", "appointments.quick_booking"])) {
+      // Scrittura note: SOLO appointments.manage come il legacy
+      // (api_calendar_notes.php:19 Auth::can('appointments.manage')).
+      if (!can(activeUser.perms, "appointments.manage")) {
         return jsonError("Permesso Appuntamenti richiesto.", 403);
       }
       const note = await saveCalendarNote({
@@ -105,7 +112,9 @@ export async function POST(request: Request) {
     }
 
     if (action === "note_delete" || action === "delete") {
-      if (!canAny(activeUser.perms, ["appointments.manage", "appointments.quick_booking"])) {
+      // Scrittura note: SOLO appointments.manage come il legacy
+      // (api_calendar_notes.php:19 Auth::can('appointments.manage')).
+      if (!can(activeUser.perms, "appointments.manage")) {
         return jsonError("Permesso Appuntamenti richiesto.", 403);
       }
       await deleteCalendarNote({ slug: tenantSlug, id: parseInteger(body.id, 0) });

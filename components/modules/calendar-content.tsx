@@ -116,6 +116,10 @@ type CalendarContextResponse = {
   // port of the legacy include_unavailability background events (off-shift +
   // time-off clipped to the store's open intervals).
   staffUnavailability?: Array<{ staffId: number; start: number; end: number }>;
+  // Permessi (calendar.php:7-8): manage = drag/resize/click-Modifica/note-write;
+  // quick_booking = crea da slot vuoto.
+  canManageAppointments?: boolean;
+  canCreateAppointments?: boolean;
 };
 
 type Appointment = {
@@ -170,7 +174,7 @@ function addDays(iso: string, days: number): string {
   return isoLocal(d);
 }
 
-const IT_WEEKDAYS = ["domenica", "lunedi", "martedi", "mercoledi", "giovedi", "venerdi", "sabato"];
+const IT_WEEKDAYS = ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"];
 const IT_MONTHS = [
   "gennaio",
   "febbraio",
@@ -833,6 +837,13 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
   // Per-staff grey unavailability ranges for the Day view (legacy
   // include_unavailability: off-shift + time-off, clipped to store hours).
   const [staffUnavail, setStaffUnavail] = useState<Array<{ staffId: number; start: number; end: number }>>([]);
+  // Permessi (dal contesto /api/manage/calendar): come il legacy calendar.php:7-8.
+  // canManage = drag/resize/click-Modifica/scrittura note; canCreate = crea da slot
+  // vuoto. Default false: nessuna affordance finché il contesto non è caricato
+  // (il calendario è comunque vuoto/loading fino ad allora). Il server resta il
+  // vero confine di autorizzazione.
+  const [canManage, setCanManage] = useState(false);
+  const [canCreate, setCanCreate] = useState(false);
   const [loading, setLoading] = useState(true);
   // Loading overlay lifecycle (port of calendarSetLoading / calendarSetLoadError,
   // calendar.js ~88-140): the "Caricamento prenotazioni..." card appears only after
@@ -986,6 +997,8 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
           setStaffUnavail(Array.isArray(j.staffUnavailability) ? j.staffUnavailability : []);
           setCurrentStaffId(Number(j.currentStaffId ?? 0) || 0);
           setSavedStaffOrder(normalizeStaffOrder(j.staffOrder));
+          setCanManage(j.canManageAppointments === true);
+          setCanCreate(j.canCreateAppointments === true);
         })
         .catch(() => {
           setStaff([]);
@@ -998,6 +1011,8 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
           setCurrentStaffId(0);
           setStaffUnavail([]);
           setSavedStaffOrder([]);
+          setCanManage(false);
+          setCanCreate(false);
         });
 
       // Appointments: a single-day `date` for the Day view (unchanged), or a
@@ -1625,6 +1640,9 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
       patch: (list: Appointment[]) => Appointment[],
       fallbackMsg: string,
     ) => {
+      // Gate manage (legacy editable:CAN_MANAGE_APPOINTMENTS): senza il permesso
+      // niente drag/resize (il server rifiuta comunque action=move).
+      if (!canManage) return;
       const prev = appointments;
       setAppointments(patch);
       try {
@@ -1646,7 +1664,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
         window.alert(fallbackMsg);
       }
     },
-    [appointments, date, loadContext, slug, visibleRange],
+    [appointments, date, loadContext, slug, visibleRange, canManage],
   );
 
   // Drop nella vista GIORNO (port di eventDrop in staffTimeGridDay): cambia l'ORA
@@ -1777,6 +1795,9 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
     (e: ReactMouseEvent, appt: CalBlock) => {
       e.preventDefault();
       e.stopPropagation();
+      // Gate manage (legacy editable:CAN_MANAGE_APPOINTMENTS): niente resize senza
+      // il permesso (il commit postMove è comunque gatato e il server rifiuta).
+      if (!canManage) return;
       // Guardia legacy (eventResize, calendar.js ~5015): i blocchi-segmento non si
       // ridimensionano. La maniglia non è nemmeno renderizzata sui segmenti
       // (durationEditable:false), quindi questa è la cintura verbatim del legacy.
@@ -1803,7 +1824,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
       resizeRef.current = { id: appt.id, startMin, bodyTopPx, winStart: wStart, winEnd: wEnd, endTime: currentEnd };
       setResizePreview({ id: appt.id, endTime: currentEnd });
     },
-    [minMin, maxMin],
+    [minMin, maxMin, canManage],
   );
 
   // `resizing` is just whether a resize is active; the effect depends on this boolean
@@ -1924,11 +1945,14 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
   // renderMonthView) without tripping the no-ref-access-during-render lint.
   const openGlobalEdit = useCallback((id: number) => {
     if (typeof document === "undefined") return;
+    // Gate manage (legacy: click->Modifica solo con appointments.manage,
+    // calendar.js:4916). Senza il permesso il click non apre l'editor.
+    if (!canManage) return;
     const anchor = document.getElementById("calQbEditAnchor");
     if (!anchor) return;
     anchor.setAttribute("data-qb-edit", String(id));
     anchor.click();
-  }, []);
+  }, [canManage]);
 
   // Open the GLOBAL quick-booking drawer in CREATE mode, prefilled with the clicked
   // empty cell's date/time/operator. The drawer's [data-qb-new] listener reads the
@@ -1937,6 +1961,9 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
   const openGlobalQuickBook = useCallback(
     (cellTime: string, staffId: number, endTime?: string, cellDate?: string) => {
       if (typeof document === "undefined") return;
+      // Gate quick_booking (legacy selectable:CAN_CREATE_APPOINTMENTS,
+      // calendar.js:4063): senza il permesso il click su slot vuoto non crea.
+      if (!canCreate) return;
       const anchor = document.getElementById("calQbNewAnchor");
       if (!anchor) return;
       // cellDate lets the Week view book against the clicked DAY column's date (each
@@ -1953,7 +1980,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
       else anchor.removeAttribute("data-qb-endtime");
       anchor.click();
     },
-    [date],
+    [date, canCreate],
   );
 
   // While a drag-select is active, track the live end with a window mousemove and commit

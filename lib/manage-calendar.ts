@@ -637,7 +637,10 @@ function dateIsoLocal(date: Date): string {
 }
 
 function clean(value: string, max: number): string {
-  return value.trim().replace(/\s+/g, " ").slice(0, max);
+  // Come calendar_notes_trim (api_calendar_notes.php:37-48): solo trim + taglio a
+  // maxLen. NON collassare gli spazi interni: le note multi-riga devono conservare
+  // gli a-capo (prima .replace(/\s+/g," ") li perdeva).
+  return value.trim().slice(0, max);
 }
 
 function normalizeColor(value: unknown, index: number): string {
