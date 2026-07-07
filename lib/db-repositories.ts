@@ -1984,6 +1984,44 @@ async function assertStaffAllowedForServices(
   }
 }
 
+// Validazione SEDE↔servizio e SEDE↔operatore del salvataggio (port di
+// app_service_location_allowed / app_staff_location_allowed via app_entity_location_
+// allowed, Helpers.php:1154-1165): un servizio/operatore con righe service_locations /
+// staff_locations DEVE includere la sede scelta; senza righe vale ovunque. Errori
+// verbatim del drawer legacy (api_appointments.php:3736 / :3823). No-op senza sede.
+async function assertServicesAndStaffAllowedInLocation(
+  slug: string,
+  plan: AppointmentServicePlan,
+  locationId: number | null,
+): Promise<void> {
+  if (!(locationId && locationId > 0)) return;
+  const entityAllowed = async (table: string, idColumn: string, entityId: number): Promise<boolean> => {
+    if (!(entityId > 0)) return true;
+    const any = await tenantSelect<RowDataPacket>({ slug, table, columns: "location_id", where: `${idColumn} = ?`, params: [entityId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    if (any.length === 0) return true; // nessuna restrizione -> disponibile ovunque
+    const hit = await tenantSelect<RowDataPacket>({ slug, table, columns: "location_id", where: `${idColumn} = ? AND location_id = ?`, params: [entityId, locationId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    return hit.length > 0;
+  };
+  const checkedServices = new Set<number>();
+  for (const svc of plan.services) {
+    const sid = Number(svc.id ?? 0);
+    if (sid <= 0 || checkedServices.has(sid)) continue;
+    checkedServices.add(sid);
+    if (!(await entityAllowed("service_locations", "service_id", sid))) {
+      throw new Error("Servizio non disponibile nella sede selezionata.");
+    }
+  }
+  const checkedStaff = new Set<number>();
+  for (const seg of plan.segments) {
+    const staffId = Number(seg.staffId ?? 0);
+    if (staffId <= 0 || checkedStaff.has(staffId)) continue;
+    checkedStaff.add(staffId);
+    if (!(await entityAllowed("staff_locations", "staff_id", staffId))) {
+      throw new Error("Operatore non disponibile nella sede selezionata.");
+    }
+  }
+}
+
 async function planAppointmentServices({
   slug,
   serviceName,
@@ -2627,6 +2665,10 @@ export async function createDbAppointment({
   // Legacy staff-service guard: each segment's operator must be enabled for its
   // service (see assertStaffAllowedForServices).
   await assertStaffAllowedForServices(slug, plan.segments);
+  // Multi-sede: servizio/operatore devono essere disponibili nella sede scelta
+  // (port di appt_require_services_allowed_for_location / appt_require_staff_allowed
+  // _for_service). No-op senza sede o quando l'entità non ha restrizioni di sede.
+  await assertServicesAndStaffAllowedInLocation(slug, plan, locationId);
   // Cabina: validate the drawer choice / auto-pick the first free allowed cabin
   // per segment, exactly like the legacy save (resolve_cabin_id_for_range).
   await resolvePlanCabins({
@@ -3011,6 +3053,10 @@ export async function updateDbAppointment({
   // Legacy staff-service guard (same as create): each segment's operator must be
   // enabled for its service.
   await assertStaffAllowedForServices(slug, plan.segments);
+  // Multi-sede: servizio/operatore devono essere disponibili nella sede scelta
+  // (port di appt_require_services_allowed_for_location / appt_require_staff_allowed
+  // _for_service). No-op senza sede o quando l'entità non ha restrizioni di sede.
+  await assertServicesAndStaffAllowedInLocation(slug, plan, locationId);
   // Cabina (legacy resolve_cabin_id_for_range on edit): requested cabin, else
   // keep the current appointment/segment cabin when still free, else auto-pick.
   await resolvePlanCabins({

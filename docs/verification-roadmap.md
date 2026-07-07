@@ -7554,3 +7554,18 @@ Batch di fix a impatto universale (anche dati nativi/mono-sede), basso rischio:
   VERIFICATO live: reminder 'sent' + appointment_package_items rimossi all'elimina.
 NB: gli orfani reminders pre-esistenti (da eliminazioni precedenti) NON toccati (dati
 non creati in sessione); il fix previene nuovi orfani.
+
+## Appuntamenti multi-sede: validazione sede↔servizio/operatore nel save (2026-07-07)
+
+Attivato il MULTI-SEDE (creata Sede 2 id 51 + assegnazioni service_locations/
+staff_locations/cabins) e chiusa la divergenza HIGH #2: il save del drawer non
+validava sede↔servizio/operatore (booking cross-sede possibile). Aggiunto
+assertServicesAndStaffAllowedInLocation (port di app_service_location_allowed /
+app_staff_location_allowed via app_entity_location_allowed, Helpers.php:1154-1165):
+un servizio/operatore con righe service_locations/staff_locations DEVE includere la
+sede scelta; senza righe vale ovunque. Chiamato in createDbAppointment E
+updateDbAppointment dopo assertStaffAllowedForServices. Errori verbatim del drawer
+(api_appointments.php:3736/3823). VERIFICATO live a stadi: operatore fuori sede ->
+"Operatore non disponibile nella sede selezionata."; servizio fuori sede -> "Servizio
+non disponibile nella sede selezionata."; entrambi in sede + cabina -> prenotazione OK.
+Setup Sede 2 lasciato attivo (indirizzo placeholder "Via Roma 1" da rinominare via UI).
