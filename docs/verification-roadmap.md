@@ -7326,3 +7326,15 @@ handler sullo stesso click che si annullavano nel browser reale → la riga non 
 apriva. Rimossi gli attributi Bootstrap: l'apertura è ora gestita SOLO da React
 (stato expanded + classe show + display inline sulle righe figlie). VERIFICATO
 (Playwright): click ripetuti 0→2→0→2 righe visibili, freccia chevron-right/down.
+
+### Fix definitivo toggle multi-servizio: conditional rendering
+La rimozione dei soli attributi Bootstrap non bastava nel browser reale (in Playwright
+headless l'ordine eventi mascherava il problema). Fix definitivo: le righe figlie
+(tr.ms-child) vengono RENDERIZZATE solo quando `expanded` è true (`isMulti && expanded
+&& lines.map(...)`), senza più classi Bootstrap collapse/show né display inline —
+nessuna dipendenza dal CSS globale .collapse:not(.show) né dal plugin Collapse. Il
+toggle è ora puro stato React, deterministico su ogni browser. VERIFICATO con workflow
+adversariale (3 verificatori Playwright indipendenti sul codice live): (A) 6 click →
+2,0,2,0,2,0 figlie visibili + freccia che gira, 0 errori; (B) click utente + reload →
+2 figlie col contenuto esatto in entrambe le sessioni; (C) 0 tr.ms-child da chiuso,
+toggle solo sulle righe multi, nessun errore duplicate-key, badge presente.

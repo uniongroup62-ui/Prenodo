@@ -557,7 +557,6 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
                         const deleteLocked = normStatusCode(appt) !== "canceled";
                         const lines = appt.services && appt.services.length > 0 ? appt.services : [{ serviceId: 0, name: appt.service, price: appt.price } as AppointmentServiceLine];
                         const isMulti = lines.length > 1;
-                        const collapseId = `apptMs${appt.id}`;
                         const expanded = expandedRows.includes(appt.id);
                         // Data legacy: "dd/mm/yyyy HH:MM → HH:MM".
                         const dateCell = `${fmtDate(appt.date)} ${appt.time}${appt.endTime ? ` → ${appt.endTime}` : ""}`;
@@ -683,17 +682,21 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
                                 ) : null}
                               </td>
                             </tr>
-                            {isMulti &&
+                            {/* Conditional rendering: le righe figlie esistono nel DOM
+                                SOLO quando espanso. Niente più classi Bootstrap
+                                collapse/show né display inline (che dipendevano dal CSS
+                                globale .collapse:not(.show) e dal plugin Collapse); così
+                                il toggle è puro stato React, deterministico in ogni
+                                browser. */}
+                            {isMulti && expanded &&
                               lines.map((line, index) => (
                                 <tr
                                   // Key univoca per SEGMENTO: due segmenti dello stesso
                                   // servizio (serviceId identico) collidevano; index la
                                   // rende comunque univoca anche senza segmentId.
                                   key={`${appt.id}-seg-${line.segmentId ?? line.serviceId}-${index}`}
-                                  id={index === 0 ? collapseId : undefined}
-                                  className={`collapse ms-child ms-children-${appt.id}${expanded ? " show" : ""}`}
+                                  className={`ms-child ms-children-${appt.id}`}
                                   data-ms-child={appt.id}
-                                  style={expanded ? undefined : { display: "none" }}
                                 >
                                   <td></td>
                                   <td className="text-muted">
