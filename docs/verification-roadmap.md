@@ -7310,3 +7310,11 @@ prenotazione, azioni Modifica/Elimina (solo Annullati) + guard, bulk delete +
 messaggi/contatori, riepiloghi pacchetto/prepagato, pallini colore, stati vuoti,
 deep-link, conferme, toast riordino. Nessuna scrittura DB residua (test ripristinati,
 residuo=0).
+
+### Follow-up: key React univoca sulle righe figlie multi-servizio
+Il Fix #3 (righe per segmento) ha esposto una key React duplicata quando due
+segmenti hanno lo STESSO servizio (es. appt 175: 2 segmenti service_id 9 →
+"Encountered two children with the same key `175-svc-9`" all'espansione). La key
+delle righe figlie ora usa il segmentId (univoco) + index invece del serviceId.
+VERIFICATO live (Playwright): espansione di appt 175 senza errori console, 2 righe
+figlie corrette (↳ 14:00→15:00 test/luca, ↳ 13:50→14:50 test/—) con riordino.

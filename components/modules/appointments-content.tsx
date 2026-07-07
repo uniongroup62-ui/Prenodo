@@ -684,7 +684,10 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
                             {isMulti &&
                               lines.map((line, index) => (
                                 <tr
-                                  key={`${appt.id}-svc-${line.serviceId || index}`}
+                                  // Key univoca per SEGMENTO: due segmenti dello stesso
+                                  // servizio (serviceId identico) collidevano; index la
+                                  // rende comunque univoca anche senza segmentId.
+                                  key={`${appt.id}-seg-${line.segmentId ?? line.serviceId}-${index}`}
                                   id={index === 0 ? collapseId : undefined}
                                   className={`collapse ms-child ms-children-${appt.id}${expanded ? " show" : ""}`}
                                   data-ms-child={appt.id}
