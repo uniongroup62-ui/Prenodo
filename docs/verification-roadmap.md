@@ -7588,3 +7588,27 @@ consentito sul Sede1 (416); admin (locationIds vuoto) consentito ovunque. Appunt
 di test creati e rimossi (residuo=0, inclusi i reminder generati dalle chiamate status).
 Nota: la sessione è interamente serializzata nel cookie firmato, quindi locationIds/role
 vengono letti dal token (impostati al login da loginLocationState su user_locations).
+
+## Appuntamenti multi-sede: scope per-sede in LETTURA (calendario + refresh) (2026-07-07)
+
+Chiuso il leak cross-sede in lettura: il feed legacy (api_appointments.php action=list
+:8044-8052) e la lista pagina (appointments.php :752-774) filtrano gli appuntamenti per
+sede corrente ("a.location_id = ? OR a.location_id IS NULL"). Nel Next la lista Gift
+principale (GET /api/manage/appointments) era già scoped via resolveManageLocationId ->
+listDbAppointments(locationId), ma mancavano due superfici:
+- calendarContext (lib/manage-calendar.ts): l'INIT del calendario caricava
+  listDbAppointments senza sede -> aggiunto filtro in-memory scopedAppointments
+  (location_id = currentLocationId OR NULL; currentLocationId<=0 -> tutti, come le
+  chiusure/eccezioni già portate). currentLocationId da getManageLocationContext (sessione).
+- Le 6 risposte POST post-mutazione (status/move/save/delete/... -> "appointments:
+  listDbAppointments({slug})") tornavano la lista NON filtrata: aggiunto locationId:
+  postListLocationId (risolto una volta a inizio POST). Admin/sede-non-attiva -> 0 ->
+  nessun filtro (storico).
+VERIFICATO live (12/12, token firmati ad hoc): (feed) ristretto a Sede1 [21] vede solo
+l'appuntamento della sua sede, nasconde il Sede2; admin vede entrambi. (refresh) status
+del ristretto sul proprio Sede1 -> lista di ritorno esclude il Sede2 (count 10 vs admin
+11). Appuntamenti di test creati e rimossi (residuo=0, inclusi reminder da status).
+Residuo noto (fedeltà UI, non-leak): le COLONNE staff e la tendina servizi del calendario
+non sono ancora filtrate per sede (app_filter_staff_ids_by_location / app_service_location_
+allowed) — colonne/voci in più ma nessun dato di altra sede visibile (gli appuntamenti
+sono scoped) e il booking cross-sede è già bloccato lato save.

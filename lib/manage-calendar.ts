@@ -142,6 +142,16 @@ export async function calendarContext(input: {
   const closures = closuresAll.filter((c) => c.locationId === null || c.locationId === 0 || c.locationId === currentLocationId || currentLocationId <= 0);
   const exceptions = exceptionsAll.filter((x) => x.locationId === null || x.locationId === 0 || x.locationId === currentLocationId || currentLocationId <= 0);
 
+  // Appuntamenti PER SEDE come il feed legacy (api_appointments.php action=list
+  // :8044-8052 "a.location_id = ? OR a.location_id IS NULL"): il calendario della
+  // sede attiva NON deve mostrare gli appuntamenti di un'altra sede (un utente
+  // ristretto vedrebbe altrimenti prenotazioni fuori dalla propria sede). Le righe
+  // globali (location_id NULL) restano visibili ovunque; in single-sede o senza
+  // sede attiva (currentLocationId<=0) nessun filtro, come app_current_location_id()==0.
+  const scopedAppointments = currentLocationId > 0
+    ? appointments.filter((a) => a.locationId === null || a.locationId === undefined || a.locationId === currentLocationId)
+    : appointments;
+
   return {
     date,
     start,
@@ -151,7 +161,7 @@ export async function calendarContext(input: {
     currentStaffId: resolveCurrentStaffId(staff, input.userEmail, input.userName),
     locations,
     services,
-    appointments,
+    appointments: scopedAppointments,
     notes: notesPayload.notes,
     countByDate: notesPayload.countByDate,
     businessHours,

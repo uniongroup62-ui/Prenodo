@@ -361,6 +361,12 @@ export async function POST(request: Request) {
   const url = new URL(request.url);
   const action = String(body.action ?? url.searchParams.get("action") ?? "save");
 
+  // Sede corrente per scopare le liste restituite DOPO una mutazione (come il GET e
+  // la lista legacy: location_id=? OR NULL). Un utente ristretto a una sede non deve
+  // ricevere, nel refresh post-azione, gli appuntamenti di un'altra sede; admin/sede
+  // non attiva -> 0 -> nessun filtro (comportamento storico).
+  const postListLocationId = (await resolveManageLocationId({ slug: tenantSlug, raw: null, fallbackCurrent: true }).catch(() => 0)) || 0;
+
   try {
     if (action === "hold_availability") {
       const date = String(body.date ?? todayIso());
@@ -469,7 +475,7 @@ export async function POST(request: Request) {
         return Response.json({
           sourceMode: "database",
           ...result,
-          appointments: await listDbAppointments({ slug: tenantSlug }),
+          appointments: await listDbAppointments({ slug: tenantSlug, locationId: postListLocationId }),
         });
       } catch (error) {
         // Validation / no-slot throws -> 200 { ok:false, error } so the planner UI
@@ -554,7 +560,7 @@ export async function POST(request: Request) {
         skipped: ids.length - deleted,
         blockedNotCanceled,
         blockedUnavailable,
-        appointments: await listDbAppointments({ slug: tenantSlug }),
+        appointments: await listDbAppointments({ slug: tenantSlug, locationId: postListLocationId }),
       });
     }
 
@@ -653,7 +659,7 @@ export async function POST(request: Request) {
       // Port di automation_handle_status_change: (ri)schedula i promemoria se
       // il nuovo stato e' prenotato, altrimenti cancella le righe pending.
       await automationScheduleReminder(tenantSlug, id);
-      return Response.json({ ok: true, sourceMode: "database", appointment, appointments: await listDbAppointments({ slug: tenantSlug }) });
+      return Response.json({ ok: true, sourceMode: "database", appointment, appointments: await listDbAppointments({ slug: tenantSlug, locationId: postListLocationId }) });
     }
 
     // CANCEL-DONE — the dedicated annullamento flow for an EXECUTED ('done')
@@ -702,7 +708,7 @@ export async function POST(request: Request) {
           ok: true,
           sourceMode: "database",
           appointment,
-          appointments: await listDbAppointments({ slug: tenantSlug }),
+          appointments: await listDbAppointments({ slug: tenantSlug, locationId: postListLocationId }),
         });
       } catch (error) {
         // Validation errors (not done / not found / bad target) -> 200 { ok:false }
@@ -803,7 +809,7 @@ export async function POST(request: Request) {
       return Response.json({
         ok: true,
         sourceMode: "database",
-        appointments: await listDbAppointments({ slug: tenantSlug }),
+        appointments: await listDbAppointments({ slug: tenantSlug, locationId: postListLocationId }),
       });
     }
 
@@ -977,7 +983,7 @@ export async function POST(request: Request) {
       ok: true,
       sourceMode: "database",
       appointment,
-      appointments: await listDbAppointments({ slug: tenantSlug }),
+      appointments: await listDbAppointments({ slug: tenantSlug, locationId: postListLocationId }),
       // Per-redeem skip messages (e.g. package not covering a service / exhausted):
       // the booking still succeeds (legacy best-effort parity); the drawer may show them.
       ...(packageWarnings.length > 0 ? { packageWarnings } : {}),
