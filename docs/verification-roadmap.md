@@ -7500,3 +7500,19 @@ Batch 6 chiude L12. Gli altri 🟡 restano deliberatamente aperti perché o disc
 complessi/cosmetici ad alto costo di verifica e impatto quasi nullo (L14 hover su
 scroll, L15 palette accenti MS, L17 colore pallino operatore senza calendar_color,
 M5 banda "Chiuso" in Settimana, L11 estensione asse): elencati nell'audit calendario.
+
+## Calendario batch 7: now-indicator senza label + accenti MS fedeli (2026-07-07)
+
+- L13: rimossa la label HH:MM sull'indicatore ora (Giorno+Settimana) — il legacy
+  (FullCalendar nowIndicator) rende solo linea + freccia. VERIFICATO: 0 label,
+  line+arrow presenti.
+- L15: accenti multi-servizio col PORT FEDELE di getMsAccentForGroup (calendar.js
+  3887-3959): palette-first evitando i colori di STATO (MS_STATUS_COLORS) e i colori
+  OPERATORE del giorno, poi fallback golden-angle hslToHex(idx*137.508,0.78,0.48).
+  Prima: palette[seq%15] senza evitare collisioni. VERIFICATO: #42806 -> #7c3aed.
+
+Residui calendario FINALI (deliberati): L14 (hover su scroll — complesso, basso
+valore), L17 (colore pallino operatore senza calendar_color — rischio accent reuse),
+M5 (banda Chiuso Settimana), L10 (eccezione is_closed = chiusura sensata), L11
+(estensione asse). Tutto il resto (sicurezza, funzionale, visibile, cosmetico
+verificabile) è chiuso.

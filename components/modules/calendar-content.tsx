@@ -423,6 +423,29 @@ const MS_ACCENT_PALETTE = [
   "#7c3aed", "#06b6d4", "#f97316", "#84cc16", "#e11d48", "#14b8a6", "#a855f7", "#0ea5e9",
   "#fb7185", "#10b981", "#8b5cf6", "#22c55e", "#eab308", "#ef4444", "#4e6da5",
 ];
+// Colori di STATO da EVITARE per gli accenti MS (calendar.js:3870 MS_STATUS_COLORS).
+const MS_STATUS_COLORS = ["#0d6efd", "#f59e0b", "#20c997", "#6c757d", "#dc3545", "#fd7e14"];
+// Port di clamp01 + hslToHex (calendar.js:3887-3906) per il fallback golden-angle.
+function clamp01(x: number): number {
+  return Math.max(0, Math.min(1, x));
+}
+function hslToHex(h: number, s: number, l: number): string {
+  h = ((h % 360) + 360) % 360;
+  s = clamp01(s);
+  l = clamp01(l);
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) { r = c; g = x; b = 0; }
+  else if (h < 120) { r = x; g = c; b = 0; }
+  else if (h < 180) { r = 0; g = c; b = x; }
+  else if (h < 240) { r = 0; g = x; b = c; }
+  else if (h < 300) { r = x; g = 0; b = c; }
+  else { r = c; g = 0; b = x; }
+  const toHex = (v: number) => Math.round((v + m) * 255).toString(16).padStart(2, "0");
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
 
 // Conteggio "multi-servizio" = numero di SEGMENTI (il legacy rende un evento per
 // segmento; è multi-servizio con HAVING COUNT(segments) > 1). NON usare
@@ -1377,19 +1400,60 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
   // which is chronological within the day). ---
   const msAccentByAppt = useMemo(() => {
     const map: Record<number, string> = {};
-    const seqByDay: Record<string, number> = {};
+    // Port di getMsAccentForGroup: per giorno tiene i colori USATI (stato + colore
+    // operatore degli appuntamenti del giorno + accenti già assegnati) e la sequenza
+    // fallback golden-angle. Palette-first evitando collisioni, poi HSL generato.
+    const usedByDay: Record<string, Set<string>> = {};
+    const fallbackSeqByDay: Record<string, number> = {};
+    // Colore operatore (per nome) dalla lista staff — usato per evitare che un
+    // accento MS collida col pallino operatore del giorno.
+    const staffColorByName = (name?: string): string | null => {
+      const op = staff.find((s) => (s.name || "").trim().toLowerCase() === (name || "").trim().toLowerCase());
+      const c = op?.color;
+      return c && /^#[0-9a-fA-F]{6}$/.test(c) ? c.toLowerCase() : null;
+    };
+    const seedDay = (day: string): Set<string> => {
+      let set = usedByDay[day];
+      if (set) return set;
+      set = new Set<string>();
+      for (const c of MS_STATUS_COLORS) set.add(c.toLowerCase());
+      for (const a of appointments) {
+        if (a.date !== day) continue;
+        const c = staffColorByName(a.operator);
+        if (c) set.add(c);
+        for (const seg of a.segments ?? []) { const sc = staffColorByName(seg.staffName); if (sc) set.add(sc); }
+      }
+      usedByDay[day] = set;
+      fallbackSeqByDay[day] = 0;
+      return set;
+    };
     const groups = appointments
       .filter((a) => msCountOf(a) > 1)
       .sort((x, y) =>
         x.date < y.date ? -1 : x.date > y.date ? 1 : ((timeToMin(x.time) ?? 0) - (timeToMin(y.time) ?? 0)) || x.id - y.id,
       );
     for (const a of groups) {
-      const seq = seqByDay[a.date] ?? 0;
-      seqByDay[a.date] = seq + 1;
-      map[a.id] = MS_ACCENT_PALETTE[seq % MS_ACCENT_PALETTE.length];
+      const used = seedDay(a.date);
+      let pick: string | null = null;
+      for (const c of MS_ACCENT_PALETTE) {
+        if (!used.has(c.toLowerCase())) { pick = c; break; }
+      }
+      if (!pick) {
+        let tries = 0;
+        while (tries < 120) {
+          const idx = (fallbackSeqByDay[a.date] || 0) + 1;
+          fallbackSeqByDay[a.date] = idx;
+          const cand = hslToHex((idx * 137.508) % 360, 0.78, 0.48);
+          if (!used.has(cand.toLowerCase())) { pick = cand; break; }
+          tries++;
+        }
+      }
+      pick = pick || "#7c3aed";
+      map[a.id] = pick;
+      used.add(pick.toLowerCase());
     }
     return map;
-  }, [appointments]);
+  }, [appointments, staff]);
   // Hovering ANY block of a multi-service group highlights ALL its blocks
   // (port of eventMouseEnter/Leave -> .ms-active, calendar.js 4538-4558).
   const [msHoverGroup, setMsHoverGroup] = useState(0);
@@ -2509,24 +2573,8 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                   zIndex: 7,
                 }}
               />
-              <span
-                className="fc-timegrid-now-indicator-label"
-                style={{
-                  position: "absolute",
-                  right: 8,
-                  top: 44 + weekNowIndicator.top,
-                  transform: "translateY(-50%)",
-                  fontSize: 11,
-                  fontWeight: 600,
-                  color: "#ef4444",
-                  background: "#fff",
-                  padding: "0 2px",
-                  pointerEvents: "none",
-                  zIndex: 7,
-                }}
-              >
-                {weekNowIndicator.label}
-              </span>
+              {/* L13: nessuna label HH:MM sull'indicatore ora — il legacy
+                  (FullCalendar nowIndicator) rende solo linea + freccia. */}
             </>
           ) : null}
           {weekRows.map((m) => {
@@ -3366,24 +3414,8 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                 zIndex: 7,
                               }}
                             />
-                            <span
-                              className="fc-timegrid-now-indicator-label"
-                              style={{
-                                position: "absolute",
-                                right: 8,
-                                top: 44 + dayNowIndicator.top,
-                                transform: "translateY(-50%)",
-                                fontSize: 11,
-                                fontWeight: 600,
-                                color: "#ef4444",
-                                background: "#fff",
-                                padding: "0 2px",
-                                pointerEvents: "none",
-                                zIndex: 7,
-                              }}
-                            >
-                              {dayNowIndicator.label}
-                            </span>
+                            {/* L13: nessuna label HH:MM sull'indicatore ora (solo
+                                linea + freccia come il legacy FullCalendar). */}
                           </>
                         ) : null}
                         {rows.map((m) => {
