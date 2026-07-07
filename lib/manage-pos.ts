@@ -1224,6 +1224,9 @@ export async function cancelManageSale(
     rechargePointsModes: input.rechargePointsModes ?? {},
   };
   await assertNormalStornoFeasible(slug, saleRow, pointsModes);
+  // Stessa logica per il CREDITO della ricarica: se il credito emesso è già stato speso,
+  // lo storno porterebbe il wallet in negativo → blocca prima di mutare (port CreditRechargeCancel.php:869-874).
+  await assertRechargeCreditFeasible(slug, saleRow);
 
   await markSaleCancelled(slug, input.saleId, {
     userId: input.userId,
@@ -4620,6 +4623,45 @@ async function assertNormalStornoFeasible(
       throw new Error(`R#${rechargeId}: i punti accreditati sulla ricarica (${earned} pt) non sono disponibili per lo storno.`);
     }
     if (mode !== "skip") projected -= earned;
+  }
+}
+
+// PRE-FLIGHT feasibility guard for the recharge CREDIT storno. reverseIssuedSaleRecharges
+// DEBITS the wallet by each recharge's total_amount (the inverse of the issue-time top-up):
+// if that credit was already spent, the debit would drive the wallet balance NEGATIVE. The
+// legacy blocks this per-recharge BEFORE mutating — credit_wallet_balance(client) < total ⇒
+// "R#N: credito insufficiente per lo storno (saldo attuale € X)." (CreditRechargeCancel.php
+// 869-874, + credit_wallet_adjust require_available). The cancel is not one transaction, so
+// this must gate here (like assertNormalStornoFeasible) before markSaleCancelled — otherwise a
+// throw at reverse time leaves the sale already cancelled with the recharge un-reversed.
+// Chained from the balance the recharge storno will actually see: currentCredit + credit_used
+// (cancelLinkedSaleResidues restores the residui credit BEFORE reversing the recharge), minus
+// each earlier recharge's debit — so the projected "saldo attuale" matches the apply order.
+async function assertRechargeCreditFeasible(slug: string, saleRow: RowDataPacket): Promise<void> {
+  const clientId = Math.max(0, Number(saleRow.client_id ?? 0) || 0);
+  if (clientId <= 0) return;
+  const saleId = Math.max(0, Number(saleRow.id ?? 0) || 0);
+  const table = await tenantTable(slug, "recharges").catch(() => null);
+  if (!table) return;
+  const rows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: table.name,
+    columns: "id, total_amount, is_void",
+    where: "sale_id=?",
+    params: [saleId],
+  }).catch(() => [] as RowDataPacket[]);
+  const pending = rows.filter((row) => Number(row.is_void ?? 0) !== 1 && roundMoney(Number(row.total_amount ?? 0) || 0) > 0.00001);
+  if (!pending.length) return;
+  const creditUsed = roundMoney(Number(saleRow.credit_used ?? 0) || 0);
+  const startBal = roundMoney((await dbWalletBalance(clientId, slug).catch(() => ({ credit: 0, points: 0 }))).credit || 0);
+  let projected = roundMoney(startBal + creditUsed);
+  for (const row of pending) {
+    const rechargeId = Math.max(0, Number(row.id ?? 0) || 0);
+    const total = roundMoney(Number(row.total_amount ?? 0) || 0);
+    if (projected + 0.0000001 < total) {
+      throw new Error(`R#${rechargeId}: credito insufficiente per lo storno (saldo attuale € ${formatMoney(projected)}).`);
+    }
+    projected = roundMoney(projected - total);
   }
 }
 

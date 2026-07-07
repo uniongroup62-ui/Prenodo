@@ -1,5 +1,28 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Pagamenti AUDIT-2 batch 1: guardia saldo storno ricarica (2026-07-07)
+
+Audit completo dei Pagamenti (6 aree, diff riga-per-riga legacy↔Next). Primo fix: la
+GUARDIA SALDO sullo storno del CREDITO ricarica. PRIMA: `reverseIssuedSaleRecharges`
+(manage-pos.ts:4960) debitava il wallet di `-total_amount` con `.catch(()=>undefined)`
+SENZA controllo saldo → se il credito emesso dalla ricarica era già stato speso (altra
+vendita/prenotazione), l'annullo portava il wallet in NEGATIVO silenziosamente (rompe la
+simmetria create↔storno). ORA: nuovo preflight `assertRechargeCreditFeasible` (gemello di
+`assertNormalStornoFeasible`) chiamato in `cancelManageSale` PRIMA di ogni mutazione: per ogni
+ricarica non-void della vendita proietta `saldo credito + credit_used` (l'ordine reale:
+cancelLinkedSaleResidues ripristina i residui PRIMA di stornare la ricarica) e, se il debito
+porterebbe sotto zero, blocca con il messaggio verbatim legacy (CreditRechargeCancel.php:
+869-874) `R#N: credito insufficiente per lo storno (saldo attuale € X).`. Blocca prima di
+markSaleCancelled → nessun half-cancel.
+VERIFICATO live 3/3: credito speso→annullo bloccato (wallet resta a 0, ricarica non void);
+credito presente→annullo consentito (wallet 50→0, mai negativo); residuo 0, cliente 9
+invariato (credito 25, punti 22).
+RESIDUI (finding #4/#5 dell'audit, NON portati): il blocker FIFO "ricarica collegata a
+un'altra vendita da Pagamenti" e il popup prenotazioni-collegate-al-credito-ricarica
+(recharge_cancel_load_links) darebbero solo un messaggio più specifico — il danno (wallet
+negativo) è già impedito dalla guardia saldo. Il porting FIFO di attribuzione credito è
+grande e solo-messaggistica: rinviato come task dedicato se richiesto.
+
 ## Pagamenti D1: blocker annullo con prenotazioni collegate (2026-07-07)
 
 Chiuso il nucleo di integrità dati di D1 (port di appt_lifecycle_apply_sale_cancel_
