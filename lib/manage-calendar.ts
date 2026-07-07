@@ -152,13 +152,20 @@ export async function calendarContext(input: {
     ? appointments.filter((a) => a.locationId === null || a.locationId === undefined || a.locationId === currentLocationId)
     : appointments;
 
+  // Colonne/operatori PER SEDE (calendar.php:149-150 app_filter_staff_ids_by_location):
+  // un operatore assegnato SOLO ad un'altra sede non compare come colonna nella sede
+  // attiva. Solo con sede attiva; currentLocationId<=0 (single-sede/nessuna) -> tutti.
+  const scopedStaff = currentLocationId > 0
+    ? await filterStaffByLocation(input.slug, staff, currentLocationId)
+    : staff;
+
   return {
     date,
     start,
     end,
-    staff: orderStaff(staff, staffOrder),
+    staff: orderStaff(scopedStaff, staffOrder),
     staffOrder,
-    currentStaffId: resolveCurrentStaffId(staff, input.userEmail, input.userName),
+    currentStaffId: resolveCurrentStaffId(scopedStaff, input.userEmail, input.userName),
     locations,
     services,
     appointments: scopedAppointments,
@@ -168,6 +175,50 @@ export async function calendarContext(input: {
     closures,
     exceptions,
   };
+}
+
+// Filtro colonne/operatori PER SEDE — port di app_filter_staff_ids_by_location ->
+// app_filter_ids_by_location (Helpers.php:1057-1087). STRICT come il legacy: un
+// operatore con righe staff_locations è mostrato SOLO nelle sedi elencate; un operatore
+// con righe ma NON per la sede corrente viene NASCOSTO. Differenza di SICUREZZA rispetto
+// al legacy: se NESSUN operatore ha alcuna riga staff_locations (feature non configurata
+// o errore query) restituiamo lo staff invariato invece di azzerare le colonne (il
+// legacy mostrerebbe zero colonne). Best-effort su tabella/colonna assenti.
+async function filterStaffByLocation<T extends { id: number }>(
+  slug: string,
+  staff: T[],
+  locationId: number,
+): Promise<T[]> {
+  if (!(locationId > 0) || staff.length === 0) return staff;
+  const ids = staff.map((s) => Number(s.id)).filter((n) => n > 0);
+  if (ids.length === 0) return staff;
+  try {
+    if (
+      !(await tableExists("staff_locations")) ||
+      !(await columnExists("staff_locations", "staff_id")) ||
+      !(await columnExists("staff_locations", "location_id"))
+    ) {
+      return staff;
+    }
+  } catch {
+    return staff;
+  }
+  const rows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "staff_locations",
+    columns: "staff_id, location_id",
+    where: `staff_id IN (${ids.map(() => "?").join(",")})`,
+    params: ids,
+  }).catch(() => [] as RowDataPacket[]);
+  // Nessun mapping affatto (o errore) -> permissivo (safety anti-calendario-vuoto).
+  if (rows.length === 0) return staff;
+  const allowedHere = new Set<number>();
+  for (const r of rows) {
+    if (Number(r.location_id ?? 0) === locationId) allowedHere.add(Number(r.staff_id ?? 0));
+  }
+  // STRICT: tiene solo gli operatori con riga per la sede corrente (array_filter su
+  // $allowed nel legacy). Chi ha righe solo per altre sedi -> rimosso.
+  return staff.filter((s) => allowedHere.has(Number(s.id)));
 }
 
 export async function listCalendarNotes({

@@ -7625,7 +7625,24 @@ VERIFICATO live (12/12, token firmati ad hoc): (feed) ristretto a Sede1 [21] ved
 l'appuntamento della sua sede, nasconde il Sede2; admin vede entrambi. (refresh) status
 del ristretto sul proprio Sede1 -> lista di ritorno esclude il Sede2 (count 10 vs admin
 11). Appuntamenti di test creati e rimossi (residuo=0, inclusi reminder da status).
-Residuo noto (fedeltà UI, non-leak): le COLONNE staff e la tendina servizi del calendario
-non sono ancora filtrate per sede (app_filter_staff_ids_by_location / app_service_location_
-allowed) — colonne/voci in più ma nessun dato di altra sede visibile (gli appuntamenti
-sono scoped) e il booking cross-sede è già bloccato lato save.
+Residuo noto (fedeltà UI, non-leak): la tendina SERVIZI del calendario non è ancora
+filtrata per sede (app_service_location_allowed) — voci in più ma nessun dato di altra
+sede e il booking cross-sede è già bloccato lato save. Le COLONNE staff sono ora
+filtrate per sede (vedi voce dedicata sotto).
+
+## Calendario multi-sede: filtro COLONNE operatore per sede (2026-07-07)
+
+Chiuso il residuo colonne: il calendario mostrava TUTTI gli operatori come colonne
+anche se assegnati ad altre sedi. Portato app_filter_staff_ids_by_location ->
+app_filter_ids_by_location (Helpers.php:1057-1087) come helper filterStaffByLocation
+in calendarContext: STRICT come il legacy — un operatore con righe staff_locations è
+mostrato SOLO nelle sedi elencate; chi ha righe solo per altre sedi viene nascosto.
+currentLocationId<=0 (single-sede/nessuna) -> tutti. DIFFERENZA DI SICUREZZA voluta:
+se NESSUN operatore ha alcuna riga staff_locations (feature non configurata o errore
+query) si restituisce lo staff invariato invece di azzerare le colonne (il legacy
+mostrerebbe zero colonne -> calendario vuoto). Filtra sia le colonne Giorno sia la
+tendina Operatore e il resolve currentStaffId (tutti da context.staff). VERIFICATO live
+(4/4, dati esistenti, nessuna modifica): Sede1 -> operatori 22 (21+51) e 56 (solo 21)
+entrambi presenti; Sede2 -> solo 22, il 56 filtrato via. NB: le colonne restano PER
+TUTTI gli operatori ammessi nella sede (non "solo loggato"); un operatore ammesso senza
+appuntamenti mostra colonna vuota, corretto.
