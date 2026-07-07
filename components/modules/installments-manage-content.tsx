@@ -103,10 +103,14 @@ function tenantSlug(): string {
   return window.location.pathname.split("/")[1] || "";
 }
 
-// "€ 1.234,56" style — mirrors the euro strings used across components/modules
-// (fmtMoney in pos_sale_detail-content.tsx: it-IT with 2 fraction digits).
+// "1.234,56" — formatter it-IT MANUALE (fedele a number_format PHP): raggruppa SEMPRE le
+// migliaia col punto, anche per 1000-9999 (toLocaleString('it-IT') NON le raggruppa in quella
+// fascia — trappola it-number-format-trap). Virgola per i decimali.
 function fmtMoney(value: number): string {
-  return Number(value || 0).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const n = Math.round((Number(value) || 0) * 100) / 100;
+  const [intPart, decPart] = Math.abs(n).toFixed(2).split(".");
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return `${n < 0 ? "-" : ""}${grouped},${decPart}`;
 }
 
 // dd/mm/yyyy for a YYYY-MM-DD due date. "—" when empty.

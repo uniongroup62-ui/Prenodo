@@ -1,5 +1,39 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Gestione Rate: audit + fix 2 MAJOR + 2 minori (2026-07-08)
+
+Audit della pagina "Gestione Rate" (installments_manage.php) con 2 agenti paralleli (pagina UI +
+logica backend). VERDETTO: port largamente FEDELE — stati (Scaduto/overdueCount/Scaduta), badge
+VERBATIM (planStatusMeta + installmentStatusMeta), effetti mark_paid/mark_pending, filtri
+searchPlans + ORDER BY, stati sintetici (Aperte/Scadute/Completate), stats, fuso orario risolto
+(businessTodayIso). Fix applicati (verificati live 10/10 + e2e-installments-manage 37 OK):
+- **#1 MAJOR metodo pagamento vuoto**: `mapInstallmentPlan` restituiva `paymentType` gia'
+  convertito in LABEL ("Carta di Credito"), ma la UI lo tratta come CHIAVE (payLabel(), value
+  della select) -> payLabel(label) non matchava -> KPI "Pagamento" e metodo dell'acconto VUOTI +
+  select rata pending non pre-selezionata. FIX: il mapper ora ritorna la CHIAVE grezza
+  (cash/card/check/bank) come mapInstallment (db-repositories.ts:21071). Consumato solo dalla
+  pagina Rate (il config piano del POS e il dettaglio vendita usano oggetti/campi diversi).
+- **#2 MAJOR scope sede assente** (autorizzazione intra-tenant): searchDbInstallmentPlans e
+  mark_paid/mark_pending non filtravano per sede -> su tenant multi-sede un utente ristretto a
+  Sede A vedeva E incassava rate di Sede B (unica route manage senza scope; le altre 26 lo hanno).
+  FIX: `InstallmentPlanSearchFilters.locationId` + IN-subquery non correlata su sales.location_id
+  (NULL-permissiva come listPosSales) in searchDbInstallmentPlans; `installmentRow(…, locationId)`
+  con lo stesso filtro (row assente -> "Rata non trovata" come il legacy locationScopeSql); la
+  route GET/POST risolve la sede con resolveManageLocationId (fallbackCurrent). Verificato: Sede51
+  vede/incassa, Sede21 no ("Rata non trovata"); currentLocationId=0 (admin multi-sede) -> nessuno
+  scope (vede tutto), coerente col resto del Next.
+- **minore updated_by su incasso**: refreshInstallmentPlanStatus ora riceve userId anche su
+  mark_paid (prima solo su mark_pending) -> plan.updated_by aggiornato come il legacy.
+- **minore formato it-IT**: fmtMoney del componente ora usa un formatter MANUALE (raggruppa sempre
+  le migliaia, fedele a number_format) invece di toLocaleString (trappola 1000-9999).
+NON fatti (residui deliberati): reset filtri post-azione (il Next preserva i filtri, comportamento
+difendibile); deep-link ?plan_id fuori dal filtro corrente (edge); flash lista non filtrata nella
+risposta POST (transiente, la UI ri-fetcha scoped); stato "tabelle rateizzazione mancanti" (non
+riproducibile su Supabase). NOTA bug latente separato: l'EXISTS due_from/due_to in
+searchDbInstallmentPlans usa `p.id` ma tenantSelect non aliasa la tabella (referenza non valida) —
+fuori scope, la pagina usa raramente il filtro date.
+
+
 ## Pagamenti AUDIT-2 batch 6: #16 periodi commissione (gate attività) (2026-07-07)
 
 Il motore commissioni Next accumulava su TUTTE le vendite/appuntamenti nel range ignorando le

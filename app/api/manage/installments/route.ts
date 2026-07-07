@@ -4,8 +4,9 @@ import { currentManageSession } from "@/lib/manage-auth";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { cancelDbInstallmentPlan, createDbInstallmentPlan, listDbInstallmentPlans, saveDbInstallmentAlertDays, searchDbInstallmentPlans } from "@/lib/db-repositories";
 import { automationAlertDays } from "@/lib/manage-shell-context";
+import { resolveManageLocationId } from "@/lib/manage-locations";
 import { can } from "@/lib/role-permissions";
-import { tenantSelect, tenantUpdate } from "@/lib/tenant-db";
+import { columnExists, quoteIdentifier, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
 import type { InstallmentPlan } from "@/lib/tenant-store";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +21,9 @@ export async function GET(request: Request) {
   // Filters (faithful to installments_manage.php searchPlans query params): status / client_id /
   // sale_id / q / due_from / due_to. Empty/absent → the full list (searchDbInstallmentPlans with {}).
   const url = new URL(request.url);
+  // #2 scope sede: la sede corrente dell'utente (0 = tutte, per admin/all-locations) — come le
+  // altre route manage. Filtra la lista ai piani delle vendite di questa sede.
+  const scopeLocationId = await resolveManageLocationId({ slug: tenantSlug, raw: url.searchParams.get("location_id"), fallbackCurrent: true });
   const filters = {
     status: url.searchParams.get("status") || undefined,
     clientId: parseInteger(url.searchParams.get("client_id"), 0) || undefined,
@@ -27,6 +31,7 @@ export async function GET(request: Request) {
     q: url.searchParams.get("q") || undefined,
     dueFrom: url.searchParams.get("due_from") || undefined,
     dueTo: url.searchParams.get("due_to") || undefined,
+    locationId: scopeLocationId,
   };
 
   try {
@@ -64,6 +69,9 @@ export async function POST(request: Request) {
 
   const body = await parseRequestBody(request);
   const action = body.action ?? body.do ?? "create";
+  // #2 scope sede per le mutazioni: mark_paid/mark_pending su una rata di un'altra sede
+  // falliscono con "Rata non trovata" (come il legacy locationScopeSql).
+  const scopeLocationId = await resolveManageLocationId({ slug: tenantSlug, raw: body.location_id, fallbackCurrent: true });
 
   try {
     if (action === "create") {
@@ -85,12 +93,13 @@ export async function POST(request: Request) {
         paymentType: body.payment_type,
         note: body.note,
         userId: session.user.id,
+        locationId: scopeLocationId,
       });
       return Response.json({ ok: true, source: "installments?action=pay", sourceMode: "database", plan, plans: await listDbInstallmentPlans(tenantSlug) });
     }
 
     if (action === "pending" || action === "reopen" || action === "mark_pending") {
-      const plan = await markInstallmentPending(tenantSlug, parseInteger(body.installment_id ?? body.id), session.user.id);
+      const plan = await markInstallmentPending(tenantSlug, parseInteger(body.installment_id ?? body.id), session.user.id, scopeLocationId);
       return Response.json({ ok: true, source: "installments?action=mark_pending", sourceMode: "database", plan, plans: await listDbInstallmentPlans(tenantSlug) });
     }
 
@@ -121,9 +130,9 @@ export async function POST(request: Request) {
 
 async function markInstallmentPaid(
   slug: string,
-  options: { installmentId: number; paidAmount?: string; paidAt?: string; paymentType?: string; note?: string; userId: number },
+  options: { installmentId: number; paidAmount?: string; paidAt?: string; paymentType?: string; note?: string; userId: number; locationId?: number },
 ): Promise<InstallmentPlan> {
-  const row = await installmentRow(slug, options.installmentId);
+  const row = await installmentRow(slug, options.installmentId, options.locationId ?? 0);
   // NB parità legacy: NESSUNA guardia "già pagata" — markInstallmentPaid ri-esegue
   // l'UPDATE anche su una rata paid (aggiorna paid_at/tipo, idempotente).
   // Rata o piano annullati non incassabili (SaleInstallments::markInstallmentPaid ~554-557).
@@ -175,12 +184,13 @@ async function markInstallmentPaid(
   });
 
   const planId = Number(row.plan_id ?? 0);
-  await refreshInstallmentPlanStatus(slug, planId);
+  // Minore: il legacy passa $userId a syncPlanStatus anche su incasso -> aggiorna plan.updated_by.
+  await refreshInstallmentPlanStatus(slug, planId, options.userId);
   return installmentPlan(slug, planId);
 }
 
-async function markInstallmentPending(slug: string, installmentId: number, userId: number): Promise<InstallmentPlan> {
-  const row = await installmentRow(slug, installmentId);
+async function markInstallmentPending(slug: string, installmentId: number, userId: number, locationId = 0): Promise<InstallmentPlan> {
+  const row = await installmentRow(slug, installmentId, locationId);
   // Guard legacy markInstallmentPending: rata o piano annullati non riapribili.
   if (String(row.status ?? "") === "cancelled" || (await planStatus(slug, Number(row.plan_id ?? 0))) === "cancelled") {
     throw new Error("Non puoi riaprire una rata annullata.");
@@ -205,17 +215,24 @@ async function markInstallmentPending(slug: string, installmentId: number, userI
   return installmentPlan(slug, planId);
 }
 
-async function installmentRow(slug: string, installmentId: number): Promise<RowDataPacket> {
+async function installmentRow(slug: string, installmentId: number, locationId = 0): Promise<RowDataPacket> {
   // Il legacy ritorna null dalla lib (id non valido O rata inesistente) e la pagina
   // presenta lo stesso messaggio per entrambi i casi.
   if (installmentId <= 0) throw new Error("Rata non trovata o non aggiornata.");
-  const rows = await tenantSelect<RowDataPacket>({
-    slug,
-    table: "sale_installments",
-    where: "id = ?",
-    params: [installmentId],
-    limit: 1,
-  });
+  // #2 SCOPE SEDE (port di locationScopeSql usato in markInstallmentPaid/Pending): la rata deve
+  // appartenere a una vendita della sede corrente (o NULL). Se locationId>0 e la vendita e' di
+  // un'altra sede, la row e' assente -> stesso messaggio del legacy ("Rata non trovata").
+  let where = "id = ?";
+  const params: unknown[] = [installmentId];
+  if (locationId > 0) {
+    const salesT = await tenantTable(slug, "sales");
+    const salesScoped = salesT.mode === "shared" && (await columnExists(salesT.name, "tenant_id"));
+    const salesTenant = salesScoped ? "tenant_id = ? AND " : "";
+    where += ` AND sale_id IN (SELECT id FROM ${quoteIdentifier(salesT.name)} WHERE ${salesTenant}(location_id = ? OR location_id IS NULL))`;
+    if (salesScoped) params.push(salesT.tenantId ?? 0);
+    params.push(locationId);
+  }
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "sale_installments", where, params, limit: 1 });
   if (!rows[0]) throw new Error("Rata non trovata o non aggiornata.");
   return rows[0];
 }

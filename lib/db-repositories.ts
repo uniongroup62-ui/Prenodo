@@ -15566,6 +15566,8 @@ export type InstallmentPlanSearchFilters = {
   q?: string;
   dueFrom?: string;
   dueTo?: string;
+  // #2 scope sede: id della sede corrente dell'utente (0 = tutte, per admin/all-locations).
+  locationId?: number;
 };
 
 export async function listDbInstallmentPlans(slug: string): Promise<InstallmentPlan[]> {
@@ -15648,6 +15650,20 @@ export async function searchDbInstallmentPlans(
     clauses.push(`EXISTS (SELECT 1 FROM ${quoteIdentifier(instTable.name)} i WHERE ${subClauses.join(" AND ")})`);
     // EXISTS params must precede the other where params: rebuild ordering.
     params.push(...subParams);
+  }
+
+  // #2 SCOPE SEDE (port di SaleInstallments::locationScopeSql): mostra solo i piani la cui VENDITA
+  // e' nella sede corrente dell'utente (NULL = non assegnata, visibile come nel resto del Next —
+  // vedi listPosSales). locationId 0 = nessuno scope (admin / tutte le sedi). IN-subquery non
+  // correlata: nessuna dipendenza dall'alias della tabella esterna.
+  const scopeLocationId = Number(filters.locationId ?? 0);
+  if (scopeLocationId > 0) {
+    const salesT = await tenantTable(slug, "sales");
+    const salesScoped = salesT.mode === "shared" && (await columnExists(salesT.name, "tenant_id"));
+    const salesTenant = salesScoped ? "tenant_id = ? AND " : "";
+    clauses.push(`sale_id IN (SELECT id FROM ${quoteIdentifier(salesT.name)} WHERE ${salesTenant}(location_id = ? OR location_id IS NULL))`);
+    if (salesScoped) params.push(salesT.tenantId ?? 0);
+    params.push(scopeLocationId);
   }
 
   const rows = await tenantSelect<RowDataPacket>({
@@ -21068,7 +21084,11 @@ async function mapInstallmentPlan(slug: string, row: RowDataPacket): Promise<Ins
     nextDueDate: nextDueDate && nextDueDate !== "" ? nextDueDate : undefined,
     nextDueAmount: roundMoney(nextDueAmount),
     downPayment,
-    paymentType: installmentPaymentTypeLabel(String(row.payment_type ?? "")),
+    // CHIAVE grezza (cash/card/check/bank) come mapInstallment — la UI Gestione Rate la converte
+    // in etichetta con payLabel() e la usa come value della select "Tipo". Prima era gia'
+    // convertita in label ("Carta di Credito"): payLabel(label) non matchava -> KPI "Pagamento"
+    // e metodo dell'acconto VUOTI + select rata non pre-selezionata.
+    paymentType: String(row.payment_type ?? "").trim().toLowerCase(),
     intervalLabel: installmentIntervalLabel(intervalUnit, intervalValue),
     notes: trimOrNull(row.notes) ?? undefined,
     cancelledReason: trimOrNull(row.cancelled_reason) ?? undefined,
