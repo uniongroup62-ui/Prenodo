@@ -586,6 +586,8 @@ export function BookingFaithful({
     giftcards: Array<{ id: number; code: string; balance: number }>;
     // Etichetta unità punti (fidelity_points_label, default 'Punti'), come fidLabel.
     pointsLabel: string;
+    // Punti che il cliente MATURA con questa prenotazione (nota "guadagnerai N").
+    earnPoints: number;
   };
   const [custBenefits, setCustBenefits] = useState<CustomerBenefits | null>(null);
   const [useFidelity, setUseFidelity] = useState(false);
@@ -613,6 +615,7 @@ export function BookingFaithful({
           pointsAvailable: Number(j.available_points ?? 0) || 0,
           suggestedPoints: Number(j.points_used ?? 0) || 0,
           suggestedDiscount: Number(j.discount ?? 0) || 0,
+          earnPoints: Number(j.earn_points ?? 0) || 0,
           creditAvailable: Number(j.credit_available ?? 0) || 0,
           giftcards: Array.isArray(j.giftcards) ? j.giftcards : [],
           pointsLabel: String(j.points_label ?? "").trim() || "Punti",
@@ -2151,12 +2154,19 @@ export function BookingFaithful({
                   <div id="recTotal">{euroRecap(payableTotal)}</div>
                 </div>
 
-                {/* Nota punti Fidelity (legacy #recFidelityNote, booking.php 13313):
-                    reminds the customer the points are only RESERVED until executed. */}
-                <div id="recFidelityNote" className={`alert alert-info p-2 mt-2${fidelityDiscountApplied > 0 ? "" : " d-none"}`}>
+                {/* Nota punti Fidelity (legacy #recFidelityNote, booking-wizard.js
+                    2851-2896): avviso di MATURAZIONE ("guadagnerai N Punti", con
+                    campagna earn attiva) + riserva dei punti riscattati. */}
+                <div id="recFidelityNote" className={`alert alert-info p-2 mt-2${(custBenefits?.earnPoints ?? 0) > 0 || fidelityDiscountApplied > 0 ? "" : " d-none"}`}>
                   <div className="small">
                     <i className="bi bi-info-circle me-1" />
-                    Verranno prenotati {custBenefits?.suggestedPoints ?? 0} Punti Fidelity: saranno scalati quando l&apos;appuntamento sarà eseguito.
+                    {(custBenefits?.earnPoints ?? 0) > 0 ? (
+                      <>Se questa prenotazione sarà eseguita, guadagnerai <strong>{custBenefits?.earnPoints ?? 0}</strong> {custBenefits?.pointsLabel ?? "Punti"}.</>
+                    ) : null}
+                    {(custBenefits?.earnPoints ?? 0) > 0 && fidelityDiscountApplied > 0 ? <br /> : null}
+                    {fidelityDiscountApplied > 0 ? (
+                      <>Verranno prenotati {custBenefits?.suggestedPoints ?? 0} Punti Fidelity: saranno scalati quando l&apos;appuntamento sarà eseguito.</>
+                    ) : null}
                   </div>
                 </div>
 

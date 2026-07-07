@@ -5030,7 +5030,7 @@ async function issueRechargeFromSale(
 // Schema-guarded: a missing column / table falls back to disabled with a 10€ step.
 type FidelityEarnSettings = { enabled: boolean; earnStep: number; earnOnBonus: boolean };
 
-async function getFidelityEarnSettings(slug: string): Promise<FidelityEarnSettings> {
+export async function getFidelityEarnSettings(slug: string): Promise<FidelityEarnSettings> {
   const defaults: FidelityEarnSettings = { enabled: false, earnStep: 10, earnOnBonus: true };
   try {
     const rows = await tenantSelect<RowDataPacket>({
@@ -5067,7 +5067,7 @@ function tierPointsForSpend(amount: number, tiers: Array<{ minSpend: number; poi
 // (clients.fidelity_level). Returns the campaign id so the caller stamps
 // sales.fidelity_campaign_id. earnStepFallback is the businesses default step used
 // when the campaign leaves earn_step_euro at 0.
-async function computeCampaignEarn(slug: string, amount: number, clientId: number, earnStepFallback: number): Promise<{ points: number; campaignId: number; campaignName: string }> {
+export async function computeCampaignEarn(slug: string, amount: number, clientId: number, earnStepFallback: number): Promise<{ points: number; campaignId: number; campaignName: string }> {
   if (amount <= 0.0000001) return { points: 0, campaignId: 0, campaignName: "" };
   const today = todayIso();
   const campaign = (await listFidelityCampaigns(slug)).find(

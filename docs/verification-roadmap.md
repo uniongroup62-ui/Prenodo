@@ -7050,3 +7050,28 @@ RESIDUI (documentati, richiedono dati/porting maggiore):
 - Nota Fidelity earn ("Se questa prenotazione sarà eseguita, guadagnerai N Punti.")
   + saldo negativo + credito in sospeso — richiede l'esposizione dei punti maturati/
   saldo nella preview; la nota omaggio resta legata a Gifts v2 (non portato).
+
+
+---
+
+## Wizard booking: nota Fidelity "guadagnerai N Punti" (earn) — CHIUSO (2026-07-07)
+
+Chiusa la parte earn del residuo nota-Fidelity. #recFidelityNote mostra ora anche
+l'avviso di MATURAZIONE punti ("Se questa prenotazione sarà eseguita, guadagnerai N
+<label>.", booking-wizard.js 2856-2859), oltre alla riserva dei punti riscattati.
+
+- **Backend**: la action fidelity_preview calcola i punti maturati riusando il
+  motore POS (computeCampaignEarn + getFidelityEarnSettings, ora esportati): come al
+  POS, i punti si accreditano SOLO sotto una campagna earn ATTIVA (0 senza campagna),
+  con fidelity attiva + tessera del cliente. Ritorna earn_points.
+- **Wizard**: custBenefits.earnPoints; #recFidelityNote rende la nota earn (label
+  dinamica) + la nota riserva se c'è sconto fidelity.
+
+VERIFICA LIVE (Playwright, tenant 25 con campagna earn amount step 10 + tessera
+cliente): fidelity_preview earn_points=1 (12€/10); Conferma → "Se questa
+prenotazione sarà eseguita, guadagnerai 1 Punti." Campagna/tessera di test rimosse
+(residuo 0). typecheck pulito.
+
+RESIDUI FIDELITY rimasti (note niche/blocked): saldo NEGATIVO + credito in sospeso
+(richiedono i dettagli wallet nella preview), e la nota OMAGGIO ("Puoi ottenere in
+gift…") legata a Gifts v2 (sottosistema non portato).

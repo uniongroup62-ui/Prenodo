@@ -6,6 +6,7 @@ import {
   applyAppointmentPackageRedeems,
   applyAppointmentPrepaidRedeems,
   evalBestPromotionForAppointment,
+  fidelityIsClientAdhering,
   publicBookingServiceCatalogPromos,
   type AppointmentGiftRedeem,
   type AppointmentGiftboxRedeem,
@@ -32,6 +33,7 @@ import {
   publicCustomerActivities,
   upsertPublicCustomerFromBooking,
 } from "@/lib/public-customer-account";
+import { computeCampaignEarn, getFidelityEarnSettings } from "@/lib/manage-pos";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { tenantSelect } from "@/lib/tenant-db";
 
@@ -203,10 +205,21 @@ export async function GET(request: Request) {
       const subtotal = await publicCartSubtotal(slug, serviceIds);
       const priorDiscount = Math.max(0, Number.parseFloat(String(url.searchParams.get("discount") ?? "0").replace(",", ".")) || 0);
       const preview = await publicCustomerBenefitsPreview({ slug, clientId, subtotal, priorDiscount });
+      // Punti MATURATI (nota "guadagnerai N Punti"): come il POS, accreditati solo
+      // sotto una campagna earn ATTIVA (computeCampaignEarn => 0 senza campagna),
+      // con fidelity attiva + tessera del cliente.
+      let earnPoints = 0;
+      if (preview.fidelity.enabled && clientId > 0) {
+        const earnSettings = await getFidelityEarnSettings(slug).catch(() => null);
+        if (earnSettings?.enabled && (await fidelityIsClientAdhering(slug, clientId).catch(() => false))) {
+          earnPoints = (await computeCampaignEarn(slug, subtotal, clientId, earnSettings.earnStep).catch(() => ({ points: 0 }))).points;
+        }
+      }
       return Response.json({
         ok: true,
         logged: clientId > 0 ? 1 : 0,
         enabled: preview.fidelity.enabled ? 1 : 0,
+        earn_points: earnPoints,
         redeem_enabled: preview.fidelity.redeemEnabled ? 1 : 0,
         available_points: preview.fidelity.pointsAvailable,
         euro_per_point: preview.fidelity.euroPerPoint,
