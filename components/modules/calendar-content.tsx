@@ -247,22 +247,37 @@ function monthGridDates(iso: string): string[] {
   return Array.from({ length: 42 }, (_, i) => addDays(start, i));
 }
 
-// Week range header label (port of itWeekRangeLongLabel): "30 - 6 luglio 2026"
-// when same month, "30 giugno - 6 luglio 2026" across months, with the year(s).
+// Titolo toolbar vista SETTIMANA — port FEDELE di updateCalendarTitle
+// (calendar.js:1226-1236): include i NOMI dei giorni. Stessa settimana/mese:
+// "Lunedì 6 - Domenica 12 luglio 2026"; a cavallo mese/anno: "Lunedì 29 giugno
+// 2026 - Domenica 5 luglio 2026" (anno su entrambi).
 function weekRangeTitle(iso: string): string {
   const dates = weekDates(iso);
   const a = new Date(`${dates[0]}T12:00:00`);
   const b = new Date(`${dates[6]}T12:00:00`);
-  const sameMonth = a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
-  const sameYear = a.getFullYear() === b.getFullYear();
+  const sameMY = a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
+  const wa = capFirst(IT_WEEKDAYS[a.getDay()] ?? "");
+  const wb = capFirst(IT_WEEKDAYS[b.getDay()] ?? "");
   const ma = IT_MONTHS[a.getMonth()] ?? "";
   const mb = IT_MONTHS[b.getMonth()] ?? "";
-  if (sameMonth) return capFirst(`${a.getDate()} - ${b.getDate()} ${mb} ${b.getFullYear()}`);
-  if (sameYear) return capFirst(`${a.getDate()} ${ma} - ${b.getDate()} ${mb} ${b.getFullYear()}`);
-  return capFirst(`${a.getDate()} ${ma} ${a.getFullYear()} - ${b.getDate()} ${mb} ${b.getFullYear()}`);
+  if (sameMY) return `${wa} ${a.getDate()} - ${wb} ${b.getDate()} ${mb} ${b.getFullYear()}`;
+  return `${wa} ${a.getDate()} ${ma} ${a.getFullYear()} - ${wb} ${b.getDate()} ${mb} ${b.getFullYear()}`;
 }
 
-// Month header label (port of itLongMonthYear), capitalized: "Giugno 2026".
+// Titolo toolbar vista MESE — port FEDELE di updateCalendarTitle
+// (calendar.js:1239-1245): range dal PRIMO all'ULTIMO giorno del mese coi nomi
+// giorni, es. "Mercoledì 1 - Venerdì 31 luglio 2026".
+function monthViewTitle(iso: string): string {
+  const d = new Date(`${iso}T12:00:00`);
+  const first = new Date(d.getFullYear(), d.getMonth(), 1);
+  const last = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  const wf = capFirst(IT_WEEKDAYS[first.getDay()] ?? "");
+  const wl = capFirst(IT_WEEKDAYS[last.getDay()] ?? "");
+  return `${wf} ${first.getDate()} - ${wl} ${last.getDate()} ${IT_MONTHS[last.getMonth()] ?? ""} ${last.getFullYear()}`;
+}
+
+// Etichetta mese+anno (port di itLongMonthYear), capitalizzata: "Giugno 2026" —
+// usata SOLO dal mini date-picker (header in modalità giorno/settimana).
 function monthTitle(iso: string): string {
   const d = new Date(`${iso}T12:00:00`);
   return capFirst(`${IT_MONTHS[d.getMonth()] ?? ""} ${d.getFullYear()}`);
@@ -3009,7 +3024,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                     </button>
                   </div>
                   <h2 className="fc-toolbar-title">
-                    {view === "timeGridWeek" ? weekRangeTitle(date) : view === "dayGridMonth" ? monthTitle(date) : longTitle(date)}
+                    {view === "timeGridWeek" ? weekRangeTitle(date) : view === "dayGridMonth" ? monthViewTitle(date) : longTitle(date)}
                     {/* Day-view note marker ON the toolbar title (legacy places the
                         paperclip+count there in staffTimeGridDay, calendar.js 759-858);
                         click opens the notes modal filtered on the focused day. */}
@@ -4035,10 +4050,14 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                             : `${notesCount} note nel periodo visibile`}
                       </div>
                     </div>
-                    <button type="button" className="btn btn-sm btn-outline-secondary" id="calendarNotesNewBtn">
-                      <i className="bi bi-plus-circle me-1" />
-                      Nuova
-                    </button>
+                    {/* Scrittura note: solo con appointments.manage (legacy
+                        api_calendar_notes.php:19). Utente sola-lettura -> nascoste. */}
+                    {canManage ? (
+                      <button type="button" className="btn btn-sm btn-outline-secondary" id="calendarNotesNewBtn">
+                        <i className="bi bi-plus-circle me-1" />
+                        Nuova
+                      </button>
+                    ) : null}
                   </div>
                   <div id="calendarNotesList" className="calendar-notes-list">
                     {displayNotes.length === 0 ? (
@@ -4076,15 +4095,19 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                 <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal">
                   Chiudi
                 </button>
-                <button type="submit" form="calendarNotesForm" className="btn btn-primary" id="calendarNotesSaveBtn">
-                  <i className="bi bi-check2-circle me-1" />
-                  Salva nota
-                </button>
+                {canManage ? (
+                  <button type="submit" form="calendarNotesForm" className="btn btn-primary" id="calendarNotesSaveBtn">
+                    <i className="bi bi-check2-circle me-1" />
+                    Salva nota
+                  </button>
+                ) : null}
               </div>
-              <button type="button" className="btn btn-outline-danger d-none ms-auto" id="calendarNoteDeleteBtn">
-                <i className="bi bi-trash me-1" />
-                Elimina
-              </button>
+              {canManage ? (
+                <button type="button" className="btn btn-outline-danger d-none ms-auto" id="calendarNoteDeleteBtn">
+                  <i className="bi bi-trash me-1" />
+                  Elimina
+                </button>
+              ) : null}
             </div>
           </div>
         </div>

@@ -7432,3 +7432,16 @@ VERIFICATO live: titolo "Martedì 7 luglio 2026".
 Restano da chiudere (batch successivi): filtri Giorno/Settimana (colonne/totali/
 multi-servizio), note in vista Mese (marker/griglia 42gg/data default), titoli
 Settimana/Mese, gating UI note read-only, e i residui 🟡/⚪.
+
+## Calendario batch 2: titoli Settimana/Mese + note read-only (2026-07-07)
+
+### Titoli toolbar (M4/L4)
+Settimana: aggiunti i NOMI dei giorni come updateCalendarTitle (calendar.js:1226-1236)
+-> "Lunedì 6 - Domenica 12 luglio 2026" (era "6 - 12 luglio 2026"); a cavallo mese/
+anno anno su entrambi. Mese: range primo-ultimo giorno del mese (monthViewTitle) ->
+"Mercoledì 1 - Venerdì 31 luglio 2026" (era "Luglio 2026"); monthTitle resta per il
+mini-picker. VERIFICATO live entrambi.
+
+### Note read-only (M21)
+I controlli di scrittura (Nuova / Salva nota / Elimina) sono nascosti senza
+appointments.manage — completa il gate note lato client.
