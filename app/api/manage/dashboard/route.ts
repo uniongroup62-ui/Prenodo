@@ -27,6 +27,7 @@ export async function GET(request: Request) {
         locationId: locationContext.currentLocationId,
         canSeeCalendar: can(session.user.perms, "calendar.view"),
         canSeeCosts: canAny(session.user.perms, ["costs.manage", "costs.items"]),
+        needsLocationSelection: locationContext.needsLocationSelection,
       }),
       // Avvisi raggruppati (port dedicato con permessi + sede come dashboard.php).
       getDashboardAlerts(tenantSlug, {

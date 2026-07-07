@@ -27,7 +27,16 @@ type DashboardData = {
   upcoming: Appt[] | null;
   alerts: DashboardAlert[];
   // null = permessi costs.manage/costs.items mancanti (card nascosta).
-  costs: { overdueAmount: number; monthAmount: number; overdueCount: number; monthCount: number } | null;
+  costs: {
+    overdueAmount: number;
+    monthAmount: number;
+    overdueCount: number;
+    monthCount: number;
+    overdueFrom: string;
+    overdueTo: string;
+    monthFrom: string;
+    monthTo: string;
+  } | null;
 };
 type Appt = { date?: string; clientName?: string; serviceName?: string };
 
@@ -41,14 +50,32 @@ function euro(value: string): string {
 function fmtEuro(n: number): string {
   return `€ ${n.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
+// fmtEUR di dashboard.js: Intl currency it-IT (tooltip grafico, nel browser).
+function fmtEurCurrency(v: number): string {
+  try {
+    return new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(v || 0);
+  } catch {
+    return `€ ${v || 0}`;
+  }
+}
+// axisEUR di dashboard.js: "€ " + Intl it-IT senza decimali (asse Y).
+function axisEur(v: number): string {
+  try {
+    return `€ ${new Intl.NumberFormat("it-IT", { maximumFractionDigits: 0 }).format(Number(v || 0))}`;
+  } catch {
+    return `€ ${v || 0}`;
+  }
+}
 // Port di setDelta (dashboard.js:30-41): verde >0, rosso <0, muted per 0/null.
 function deltaClass(deltaPct: number | null): string {
   if (deltaPct === null || deltaPct === 0) return "text-muted";
   return deltaPct > 0 ? "text-success" : "text-danger";
 }
+// setDelta: arrotonda a 1 decimale, virgola come separatore ("+12,5%").
 function deltaText(deltaPct: number | null): string {
   if (deltaPct === null) return "—";
-  return `${deltaPct > 0 ? "+" : ""}${deltaPct}%`;
+  const rounded = Math.round(deltaPct * 10) / 10;
+  return `${deltaPct > 0 ? "+" : ""}${String(rounded).replace(".", ",")}%`;
 }
 
 export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: string }) {
@@ -93,23 +120,34 @@ export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: 
             {
               label: "Ricavi",
               data: data.weekly.series.map((p) => p.revenue),
-              borderColor: "#0d6efd",
-              backgroundColor: "rgba(13,110,253,.08)",
-              borderWidth: 2,
-              tension: 0,
+              borderColor: "#2f63f4",
+              backgroundColor: "rgba(47,99,244,.08)",
+              pointBackgroundColor: "#2f63f4",
+              pointBorderColor: "#2f63f4",
+              pointRadius: 2.5,
+              pointHoverRadius: 4,
+              borderWidth: 2.25,
+              tension: 0.4,
               fill: true,
-              pointRadius: 3,
-              pointBackgroundColor: "#0d6efd",
             },
           ],
         },
         options: {
           responsive: true,
           maintainAspectRatio: false,
-          plugins: { legend: { display: false } },
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            legend: { display: false },
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            tooltip: { callbacks: { label: (ctx: any) => fmtEurCurrency(ctx.parsed.y || 0) } },
+          },
           scales: {
-            y: { beginAtZero: true, ticks: { callback: (v: number) => `€ ${v}` } },
-            x: { grid: { display: false } },
+            x: { grid: { color: "rgba(18,44,88,.09)", drawBorder: false }, ticks: { color: "#405693" } },
+            y: {
+              beginAtZero: true,
+              grid: { color: "rgba(18,44,88,.11)", borderDash: [3, 4], drawBorder: false },
+              ticks: { color: "#405693", padding: 10, callback: (v: number) => axisEur(v) },
+            },
           },
         },
       });
@@ -313,7 +351,10 @@ export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: 
                         <div className="text-muted small">Scaduti</div>
                         <div className="h5 fw-bold mb-0">{fmtEuro(data.costs.overdueAmount)}</div>
                         <div className="small text-muted">{data.costs.overdueCount} voci</div>
-                        <a className="small dashboard-link-action" href={`/${slug}/costs?tab=scadenziario&status=open`}>
+                        <a
+                          className="small dashboard-link-action"
+                          href={`/${slug}/costs?tab=scadenziario&status=open&from=${data.costs.overdueFrom}&to=${data.costs.overdueTo}`}
+                        >
                           Vedi scaduti
                         </a>
                       </div>
@@ -321,7 +362,10 @@ export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: 
                         <div className="text-muted small">Questo mese</div>
                         <div className="h5 fw-bold mb-0">{fmtEuro(data.costs.monthAmount)}</div>
                         <div className="small text-muted">{data.costs.monthCount} voci</div>
-                        <a className="small dashboard-link-action" href={`/${slug}/costs?tab=scadenziario&status=open`}>
+                        <a
+                          className="small dashboard-link-action"
+                          href={`/${slug}/costs?tab=scadenziario&status=open&from=${data.costs.monthFrom}&to=${data.costs.monthTo}`}
+                        >
                           Vedi mese
                         </a>
                       </div>

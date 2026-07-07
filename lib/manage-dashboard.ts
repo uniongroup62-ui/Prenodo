@@ -52,9 +52,11 @@ const saleActiveSql = (alias: string) => `LOWER(TRIM(COALESCE(${alias}.status,''
 const locFilter = (alias: string, locationId: number) => (locationId > 0 ? ` AND (${alias}.location_id = ${locationId} OR ${alias}.location_id IS NULL)` : "");
 
 // _pct_change (api_dashboard_performance:16-22): null quando prev=0 e cur>0.
+// Restituisce la percentuale GREZZA (l'arrotondamento a 1 decimale è fatto in
+// fase di rendering, come setDelta in dashboard.js).
 function pctChange(current: number, previous: number): number | null {
   if (previous === 0) return current === 0 ? 0 : null;
-  return Math.round(((current - previous) / previous) * 100);
+  return ((current - previous) / previous) * 100;
 }
 
 export type DashboardWeeklyMetric = { label: string; value: string; deltaPct: number | null };
@@ -65,19 +67,82 @@ export type ManageDashboardPayload = {
   // null quando manca calendar.view (la card non viene resa, come il legacy).
   upcoming: Array<{ date: string; clientName: string; serviceName: string }> | null;
   // null quando mancano costs.manage/costs.items.
-  costs: { overdueAmount: number; overdueCount: number; monthAmount: number; monthCount: number } | null;
+  costs: {
+    overdueAmount: number;
+    overdueCount: number;
+    overdueFrom: string;
+    overdueTo: string;
+    monthAmount: number;
+    monthCount: number;
+    monthFrom: string;
+    monthTo: string;
+  } | null;
 };
 
 export async function getManageDashboard(
   slug: string,
-  opts: { locationId: number; canSeeCalendar: boolean; canSeeCosts: boolean },
+  opts: { locationId: number; canSeeCalendar: boolean; canSeeCosts: boolean; needsLocationSelection?: boolean },
 ): Promise<ManageDashboardPayload> {
   const locationId = Math.max(0, opts.locationId || 0);
+  const failClosed = opts.needsLocationSelection === true;
+  const today = isoLocal(new Date());
+
+  // Settimana corrente lun->dom + settimana precedente (per i delta) — servono
+  // anche in fail-closed per costruire il range e la serie a zero.
+  const weekStart = mondayOf(today);
+  const weekEnd = addDaysIso(weekStart, 6);
+  const prevStart = addDaysIso(weekStart, -7);
+  const prevEnd = addDaysIso(weekStart, -1);
+
+  // Formattatori it-IT con raggruppamento MANUALE: Node non raggruppa 1000-9999
+  // con toLocaleString('it-IT'), mentre number_format PHP / Intl browser sì.
+  const groupThousands = (intDigits: string) => intDigits.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  // fmt_money / Intl currency: simbolo PRIMA ("€ 1.234,56").
+  const fmtEuro = (n: number) => {
+    const v = round2(n);
+    const [ip, dp] = Math.abs(v).toFixed(2).split(".");
+    return `€ ${v < 0 ? "-" : ""}${groupThousands(ip)},${dp}`;
+  };
+  // fmtNum (Intl it-IT intero): conteggi settimanali raggruppati.
+  const fmtCount = (n: number) => `${n < 0 ? "-" : ""}${groupThousands(String(Math.trunc(Math.abs(n))))}`;
+  // fmtHours (dashboard.js): 1 decimale, virgola, NESSUNA unità ("3,5").
+  const fmtHours = (n: number) => String(Math.round(n * 10) / 10).replace(".", ",");
+
+  const weekRange = `${weekStart.slice(8, 10)}/${weekStart.slice(5, 7)}/${weekStart.slice(0, 4)} - ${weekEnd.slice(8, 10)}/${weekEnd.slice(5, 7)}/${weekEnd.slice(0, 4)}`;
+  const zeroSeries = Array.from({ length: 7 }, (_, i) => {
+    const date = addDaysIso(weekStart, i);
+    return { date, label: `${date.slice(8, 10)}/${date.slice(5, 7)}`, revenue: 0 };
+  });
+
+  // Fail-closed (tenant multi-sede senza sede selezionata): come dashboard.php
+  // azzera i KPI, restituisce l'empty response settimanale (delta 0.0, serie a
+  // zero) e nasconde le card "Prossimi appuntamenti" e "Scadenziario e Costi".
+  if (failClosed) {
+    return {
+      stats: [
+        { label: "Clienti", value: "0", detail: "anagrafiche attive" },
+        { label: "Appuntamenti oggi", value: "0", detail: "agenda operativa" },
+        { label: "Vendite ultimi 30gg", value: fmtEuro(0), detail: "vendite attive" },
+      ],
+      weekly: {
+        range: weekRange,
+        metrics: [
+          { label: "Appuntamenti", value: "0", deltaPct: 0 },
+          { label: "Ricavi", value: fmtEuro(0), deltaPct: 0 },
+          { label: "Ore lavorate", value: fmtHours(0), deltaPct: 0 },
+          { label: "Nuovi clienti", value: "0", deltaPct: 0 },
+        ],
+        series: zeroSeries,
+      },
+      upcoming: null,
+      costs: null,
+    };
+  }
+
   const apptTable = await tenantTable(slug, "appointments");
   const T = apptTable.tenantId ?? 0;
   const clientsTable = await tenantTable(slug, "clients");
   const salesTable = await tenantTable(slug, "sales");
-  const today = isoLocal(new Date());
 
   // --- KPI Clienti (dashboard.php:59-95) ---
   let kpiClients = 0;
@@ -113,25 +178,43 @@ export async function getManageDashboard(
   const kpiSales30 = round2(num(sales30Rows[0]?.s));
 
   // --- Statistica settimanale (api_dashboard_performance.php:82-245) ---
-  // Settimana corrente lun->dom + settimana precedente per i delta; conta SOLO
-  // status='scheduled' ("Prenotato"); ricavi dai servizi degli appuntamenti.
-  const weekStart = mondayOf(today);
-  const weekEnd = addDaysIso(weekStart, 6);
-  const prevStart = addDaysIso(weekStart, -7);
-  const prevEnd = addDaysIso(weekStart, -1);
+  // Conta SOLO status='scheduled' ("Prenotato"); ricavi dai servizi degli
+  // appuntamenti. (weekStart/weekEnd/prevStart/prevEnd calcolati sopra.)
   const asTable = await tenantTable(slug, "appointment_services");
   const svcTable = await tenantTable(slug, "services");
   const hasAsQty = await columnExists(asTable.name, "qty");
+  const hasApptServiceId = await columnExists(apptTable.name, "service_id");
+
+  // Ricavi: LEFT JOIN sui servizi dell'appuntamento; se l'appuntamento NON ha
+  // righe servizio, fallback sul prezzo del servizio legacy (a.service_id) —
+  // port fedele del CASE di api_dashboard_performance. qty: NULLIF(qty,0)->1.
+  const qtyExpr = hasAsQty ? "COALESCE(NULLIF(sv.qty, 0), 1)" : "1";
+  const revExpr = `CASE WHEN sv.appointment_id IS NOT NULL THEN COALESCE(sv.price, 0) * ${qtyExpr} ELSE ${hasApptServiceId ? "COALESCE(s.price, 0)" : "0"} END`;
+  const revJoin = `LEFT JOIN ${quoteIdentifier(asTable.name)} sv ON sv.appointment_id = a.id AND sv.tenant_id = a.tenant_id${hasApptServiceId ? `\n         LEFT JOIN ${quoteIdentifier(svcTable.name)} s ON s.id = a.service_id AND s.tenant_id = a.tenant_id` : ""}`;
+
+  // Nuovi clienti per sede: come _dashboard_perf (client_location_sql) il legacy
+  // considera il cliente "della sede" se ha la sua location OPPURE un
+  // appuntamento (location o NULL) o una vendita in quella sede.
+  const hasClientLoc = await columnExists(clientsTable.name, "location_id");
+  const hasApptLoc = await columnExists(apptTable.name, "location_id");
+  const hasSalesLoc = await columnExists(salesTable.name, "location_id");
+  let clientLocSql = "";
+  if (locationId > 0) {
+    const parts: string[] = [];
+    if (hasClientLoc) parts.push(`c.location_id = ${locationId}`);
+    if (hasApptLoc) parts.push(`EXISTS (SELECT 1 FROM ${quoteIdentifier(apptTable.name)} a WHERE a.client_id = c.id AND a.tenant_id = c.tenant_id AND (a.location_id = ${locationId} OR a.location_id IS NULL))`);
+    if (hasSalesLoc) parts.push(`EXISTS (SELECT 1 FROM ${quoteIdentifier(salesTable.name)} s WHERE s.client_id = c.id AND s.tenant_id = c.tenant_id AND s.location_id = ${locationId})`);
+    if (parts.length) clientLocSql = ` AND (${parts.join(" OR ")})`;
+  }
 
   const weekAgg = async (from: string, to: string) => {
     const where = `a.tenant_id = ${T} AND LOWER(TRIM(COALESCE(a.status,''))) = 'scheduled' AND a.starts_at >= ? AND a.starts_at < ?${locFilter("a", locationId)}`;
     const params = [`${from} 00:00:00`, `${addDaysIso(to, 1)} 00:00:00`];
     const cntRows = await dbQuery<RowDataPacket[]>(`SELECT COUNT(DISTINCT a.id) AS c FROM ${quoteIdentifier(apptTable.name)} a WHERE ${where}`, params).catch(() => [] as RowDataPacket[]);
     const revRows = await dbQuery<RowDataPacket[]>(
-      `SELECT COALESCE(SUM(COALESCE(sv.price, s.price, 0) * ${hasAsQty ? "COALESCE(sv.qty, 1)" : "1"}),0) AS r
+      `SELECT COALESCE(SUM(${revExpr}),0) AS r
          FROM ${quoteIdentifier(apptTable.name)} a
-         JOIN ${quoteIdentifier(asTable.name)} sv ON sv.appointment_id = a.id AND sv.tenant_id = a.tenant_id
-         LEFT JOIN ${quoteIdentifier(svcTable.name)} s ON s.id = sv.service_id AND s.tenant_id = a.tenant_id
+         ${revJoin}
         WHERE ${where}`,
       params,
     ).catch(() => [] as RowDataPacket[]);
@@ -139,7 +222,7 @@ export async function getManageDashboard(
       `SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (a.ends_at - a.starts_at)) / 60), 0) AS m FROM ${quoteIdentifier(apptTable.name)} a WHERE ${where} AND a.ends_at IS NOT NULL`,
       params,
     ).catch(() => [] as RowDataPacket[]);
-    const clientWhere = `c.tenant_id = ${T} AND c.created_at::date >= ? AND c.created_at::date <= ?${locationId > 0 ? ` AND (c.location_id = ${locationId} OR c.location_id IS NULL)` : ""}`;
+    const clientWhere = `c.tenant_id = ${T} AND c.created_at::date >= ? AND c.created_at::date <= ?${clientLocSql}`;
     const newRows = await dbQuery<RowDataPacket[]>(`SELECT COUNT(*) AS c FROM ${quoteIdentifier(clientsTable.name)} c WHERE ${clientWhere}`, [from, to]).catch(() => [] as RowDataPacket[]);
     return {
       appointments: num(cntRows[0]?.c),
@@ -150,12 +233,12 @@ export async function getManageDashboard(
   };
   const [cur, prev] = await Promise.all([weekAgg(weekStart, weekEnd), weekAgg(prevStart, prevEnd)]);
 
-  // Serie ricavi giornalieri (api_dashboard_performance.php:216-245).
+  // Serie ricavi giornalieri (api_dashboard_performance.php:216-245): stesso
+  // LEFT JOIN + CASE fallback della statistica settimanale.
   const dailyRows = await dbQuery<RowDataPacket[]>(
-    `SELECT a.starts_at::date AS d, COALESCE(SUM(COALESCE(sv.price, s.price, 0) * ${hasAsQty ? "COALESCE(sv.qty, 1)" : "1"}),0) AS r
+    `SELECT a.starts_at::date AS d, COALESCE(SUM(${revExpr}),0) AS r
        FROM ${quoteIdentifier(apptTable.name)} a
-       JOIN ${quoteIdentifier(asTable.name)} sv ON sv.appointment_id = a.id AND sv.tenant_id = a.tenant_id
-       LEFT JOIN ${quoteIdentifier(svcTable.name)} s ON s.id = sv.service_id AND s.tenant_id = a.tenant_id
+       ${revJoin}
       WHERE a.tenant_id = ${T} AND LOWER(TRIM(COALESCE(a.status,''))) = 'scheduled'
         AND a.starts_at >= ? AND a.starts_at < ?${locFilter("a", locationId)}
       GROUP BY a.starts_at::date`,
@@ -166,9 +249,6 @@ export async function getManageDashboard(
     const date = addDaysIso(weekStart, i);
     return { date, label: `${date.slice(8, 10)}/${date.slice(5, 7)}`, revenue: revenueByDate.get(date) ?? 0 };
   });
-
-  const fmtEuro = (n: number) => `${n.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} euro`;
-  const fmtHours = (n: number) => `${n.toLocaleString("it-IT", { maximumFractionDigits: 1 })} h`;
 
   // --- Prossimi appuntamenti (dashboard.php:214-237) ---
   let upcoming: ManageDashboardPayload["upcoming"] = null;
@@ -203,26 +283,35 @@ export async function getManageDashboard(
     if (costsTable) {
       const hasPaidAmount = await columnExists(costsTable.name, "paid_amount");
       const residual = hasPaidAmount ? "GREATEST(COALESCE(amount,0) - COALESCE(paid_amount,0), 0)" : "COALESCE(amount,0)";
+      // dashboard.php:159/170: con paid_amount conta solo residui > 0.00001.
+      const residualFilter = hasPaidAmount ? ` AND ${residual} > 0.00001` : "";
       const monthStart = `${today.slice(0, 7)}-01`;
       const nextMonth = new Date(`${monthStart}T12:00:00`);
       nextMonth.setMonth(nextMonth.getMonth() + 1);
       const monthEnd = addDaysIso(isoLocal(nextMonth), -1);
-      const locSql = locationId > 0 && (await columnExists(costsTable.name, "location_id")) ? ` AND (location_id = ${locationId} OR location_id IS NULL)` : "";
+      // Filtro sede STRETTO come il legacy (dashboard.php:148 'AND location_id=?').
+      const locSql = locationId > 0 && (await columnExists(costsTable.name, "location_id")) ? ` AND location_id = ${locationId}` : "";
       const overdueRows = await dbQuery<RowDataPacket[]>(
-        `SELECT COALESCE(SUM(${residual}),0) AS s, COUNT(*) AS c FROM ${quoteIdentifier(costsTable.name)}
-          WHERE tenant_id = ${costsTable.tenantId ?? 0} AND COALESCE(is_paid,0) = 0 AND due_date < ?${locSql}`,
+        `SELECT COALESCE(SUM(${residual}),0) AS s, COUNT(*) AS c, MIN(due_date) AS min_due FROM ${quoteIdentifier(costsTable.name)}
+          WHERE tenant_id = ${costsTable.tenantId ?? 0} AND COALESCE(is_paid,0) = 0 AND due_date < ?${locSql}${residualFilter}`,
         [today],
       ).catch(() => [] as RowDataPacket[]);
       const monthRows = await dbQuery<RowDataPacket[]>(
         `SELECT COALESCE(SUM(${residual}),0) AS s, COUNT(*) AS c FROM ${quoteIdentifier(costsTable.name)}
-          WHERE tenant_id = ${costsTable.tenantId ?? 0} AND COALESCE(is_paid,0) = 0 AND due_date >= ? AND due_date <= ?${locSql}`,
+          WHERE tenant_id = ${costsTable.tenantId ?? 0} AND COALESCE(is_paid,0) = 0 AND due_date >= ? AND due_date <= ?${locSql}${residualFilter}`,
         [monthStart, monthEnd],
       ).catch(() => [] as RowDataPacket[]);
+      const minDue = String(overdueRows[0]?.min_due ?? "").slice(0, 10);
       costs = {
         overdueAmount: round2(num(overdueRows[0]?.s)),
         overdueCount: num(overdueRows[0]?.c),
+        // Link "Vedi scaduti": from = MIN(due_date) (fallback inizio mese), to = oggi.
+        overdueFrom: /^\d{4}-\d{2}-\d{2}$/.test(minDue) ? minDue : monthStart,
+        overdueTo: today,
         monthAmount: round2(num(monthRows[0]?.s)),
         monthCount: num(monthRows[0]?.c),
+        monthFrom: monthStart,
+        monthTo: monthEnd,
       };
     }
   }
@@ -234,12 +323,12 @@ export async function getManageDashboard(
       { label: "Vendite ultimi 30gg", value: fmtEuro(kpiSales30), detail: "vendite attive" },
     ],
     weekly: {
-      range: `${weekStart.slice(8, 10)}/${weekStart.slice(5, 7)}/${weekStart.slice(0, 4)} - ${weekEnd.slice(8, 10)}/${weekEnd.slice(5, 7)}/${weekEnd.slice(0, 4)}`,
+      range: weekRange,
       metrics: [
-        { label: "Appuntamenti", value: String(cur.appointments), deltaPct: pctChange(cur.appointments, prev.appointments) },
+        { label: "Appuntamenti", value: fmtCount(cur.appointments), deltaPct: pctChange(cur.appointments, prev.appointments) },
         { label: "Ricavi", value: fmtEuro(cur.revenue), deltaPct: pctChange(cur.revenue, prev.revenue) },
         { label: "Ore lavorate", value: fmtHours(cur.hours), deltaPct: pctChange(cur.hours, prev.hours) },
-        { label: "Nuovi clienti", value: String(cur.newClients), deltaPct: pctChange(cur.newClients, prev.newClients) },
+        { label: "Nuovi clienti", value: fmtCount(cur.newClients), deltaPct: pctChange(cur.newClients, prev.newClients) },
       ],
       series,
     },

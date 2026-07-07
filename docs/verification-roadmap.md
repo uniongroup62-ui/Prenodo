@@ -7207,3 +7207,63 @@ una nuova richiesta action=pending (la lista si ricarica).
 Il sistema notifiche è ora COMPLETO: card ricche + Approva/Modifica/Annulla, sezione
 Tessere Fidelity, notifiche browser (permesso + preferenze + feed con tutti i tipi),
 Modifica -> drawer edit, auto-refresh post-salvataggio. Nessun residuo.
+
+
+---
+
+## Dashboard: fedeltà 1:1 con dashboard.php + api_dashboard_performance.php (2026-07-07)
+
+Analisi approfondita di TUTTA la dashboard (KPI, statistica settimanale, grafico,
+prossimi appuntamenti, avvisi, costi) vs il legacy. La struttura, la tabella
+appuntamenti e i 6 avvisi (ordine/key/icone/gating identici) erano già fedeli; le
+divergenze erano concentrate nella statistica settimanale e nei link. Chiuse tutte:
+
+### Ricavi settimanali/serie: LEFT JOIN + fallback (era INNER JOIN)
+Il port usava `JOIN appointment_services` (inner): gli appuntamenti senza righe
+servizio contribuivano 0. Ora port fedele del CASE legacy — `LEFT JOIN
+appointment_services` e, se l'appuntamento non ha righe servizio, fallback su
+`services.price` via `a.service_id` (join guardato da columnExists). qty:
+`COALESCE(NULLIF(sv.qty,0),1)` (0 -> 1, come il legacy). Applicato sia alla
+settimana sia alla serie giornaliera. VERIFICATO live: Ricavi settimana "€ 12,00",
+serie con 12 su 10/07.
+
+### Formattazione numerica it-IT (raggruppamento manuale server-side)
+Node non raggruppa 1000-9999 con toLocaleString('it-IT'): aggiunti formattatori
+manuali. Ricavi/Vendite = "€ 1.234,56" (simbolo PRIMA, come fmt_money/fmtEUR);
+Appuntamenti/Nuovi clienti = fmtNum raggruppato; Ore lavorate = "3,5" SENZA " h"
+(era "3,5 h"). VERIFICATO live: Ore "1" senza unità.
+
+### Delta a 1 decimale (era intero)
+pctChange restituisce ora la percentuale GREZZA; il rendering (deltaText, port di
+setDelta) arrotonda a 1 decimale con virgola ("+12,5%"). Colori invariati
+(success/danger/muted). VERIFICATO live: delta "—" (null) e "-100%".
+
+### Grafico ricavi: stile 1:1 con dashboard.js
+Colore #2f63f4 (era #0d6efd), tension 0.4 (curva morbida, era 0 spezzata), point
+radius 2.5/hover 4, borderWidth 2.25, interaction index, tooltip con valuta it-IT,
+assi con griglie/colori #405693 e tick asse Y "€ N" (Intl it-IT, 0 decimali).
+VERIFICATO live (Playwright): borderColor #2f63f4, tension 0.4, canvas dipinto.
+
+### Nuovi clienti per sede: EXISTS cross-tabella
+Il conteggio per sede considerava solo `clients.location_id`; ora (come il legacy
+client_location_sql) conta il cliente se ha la sua location OPPURE un appuntamento
+(location o NULL) o una vendita in quella sede (EXISTS guardati da columnExists,
+tenant-safe).
+
+### Costi: filtro residuo, MIN(due_date), sede stretta, link con date
+Aggiunto `AND residuo > 0.00001` (quando esiste paid_amount, come il legacy),
+filtro sede STRETTO `location_id=?` (era permissivo OR NULL), MIN(due_date) per il
+link "scaduti". I due link ora portano le date: "Vedi scaduti" from=MIN(due_date)
+(fallback inizio mese) to=oggi; "Vedi mese" from=inizio mese to=fine mese (prima
+erano identici e senza date). VERIFICATO live: from/to presenti su entrambi.
+
+### Fail-closed statistica settimanale + KPI
+Come dashboard.php ($dashboardLocationFailClosed): tenant multi-sede senza sede
+selezionata -> KPI a 0, empty response settimanale (delta 0.0, serie a zero),
+card "Prossimi appuntamenti" e "Costi" nascoste. Prima Next azzerava solo gli
+avvisi e calcolava i KPI/settimanali su tutte le sedi.
+
+VERIFICA LIVE: GET /api/manage/dashboard (centroesteticoelite, sede 21) ->
+Clienti 6, Vendite 30gg "€ 40,00", settimana 06/07-12/07 con Ricavi "€ 12,00";
+render pagina 200, nessun errore JS, grafico dipinto. Nessuna scrittura DB
+(solo SELECT), residuo test = 0.
