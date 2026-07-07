@@ -1,5 +1,24 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Pagamenti AUDIT-2 batch 4b: date/ora ancorate a Europe/Rome (Pagamenti) (2026-07-07)
+
+Il legacy usa date()/DateTimeZone('Europe/Rome'); il Next su Amplify/Lambda gira in UTC, quindi
+gli helper "oggi/adesso" sfasavano di un giorno nella finestra serale (23-24 UTC = 01-02 Rome).
+Nuovo modulo `lib/business-datetime.ts` (businessTodayIso / businessNowDateTime via
+Intl.DateTimeFormat timeZone:'Europe/Rome', con normalizzazione mezzanotte 24->00). Instradati
+gli helper in scope PAGAMENTI:
+- manage-pos.ts todayIso/nowDateTime (date prepagati, prime scadenze rate, timestamp note).
+- db-repositories.ts todayIso (ERA toISOString()=UTC: boundary "oggi/scaduto" rate + data-cutoff
+  adesione fedelta').
+- manage-commissions.ts nowDateTime (movement_datetime commissioni).
+No-op sul dev (gia' TZ italiana), CORRETTO su prod UTC. VERIFICATO: businessTodayIso(23:30 UTC)
+= giorno Rome corretto (UTC darebbe il giorno prima); mezzanotte Rome -> "...00:00:00".
+Regressione 21/21 (checkout 8, D1 4, report 4, storno 3, giftcard 2).
+NON instradati (fuori scope Pagamenti, campagna TZ app-wide separata): appointment-engine,
+manage-calendar, gift-issue, manage-costs, manage-products, manage-resources, public-booking
+todayIso*, computeExpiry (aritmetica mesi/anni) e fidelity-lots dayStart/dayEnd (toccano la
+scadenza punti — da fare con verifica dedicata).
+
 ## Pagamenti AUDIT-2 batch 4a: guardie Tier 2 tractabili (2026-07-07)
 
 Due fix puliti dell'audit Tier 2:

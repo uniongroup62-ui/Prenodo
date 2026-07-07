@@ -2,6 +2,7 @@ import "server-only";
 
 import { randomBytes } from "node:crypto";
 import type { RowDataPacket } from "@/lib/tenant-db";
+import { businessTodayIso, businessNowDateTime } from "@/lib/business-datetime";
 import type {
   ManagedClient,
   ManagedProduct,
@@ -6377,17 +6378,17 @@ function formatMoney(value: number): string {
   return roundMoney(value).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// Data odierna Europe/Rome (non il fuso del server): il legacy usa date('Y-m-d') su Rome, e su
+// Amplify/UTC un new Date() locale sfaserebbe di un giorno nella finestra serale. Vedi
+// business-datetime.ts.
 function todayIso(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  return businessTodayIso();
 }
 
-// "YYYY-MM-DD HH:MM:SS" for the local now — matches the legacy date('Y-m-d H:i:s') used for
+// "YYYY-MM-DD HH:MM:SS" nel fuso Europe/Rome — come il legacy date('Y-m-d H:i:s') usato per
 // client_prepaid_service_usages.used_at.
 function nowDateTime(): string {
-  const now = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())} ${p(now.getHours())}:${p(now.getMinutes())}:${p(now.getSeconds())}`;
+  return businessNowDateTime();
 }
 
 // A manual (out-of-appointment) prepaid usage note, faithful to

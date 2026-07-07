@@ -3,6 +3,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 
 import type { RowDataPacket } from "@/lib/tenant-db";
+import { businessNowDateTime } from "@/lib/business-datetime";
 import { columnExists, dbQuery, quoteIdentifier, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
 
 // Commission SETTINGS + module toggle — faithful port of the Commissions.php settings layer
@@ -317,10 +318,10 @@ function normalizeDateTimeValue(value: unknown, fallback = ""): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+// Datetime Europe/Rome (movement_datetime commissioni) — non il fuso del server. Vedi
+// business-datetime.ts.
 function nowDateTime(): string {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return businessNowDateTime();
 }
 
 // A produced commission entry (before persistence), shared by the POS

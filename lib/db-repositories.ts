@@ -2,6 +2,7 @@ import "server-only";
 
 import { createHash, randomBytes } from "crypto";
 import type { RowDataPacket } from "@/lib/tenant-db";
+import { businessTodayIso } from "@/lib/business-datetime";
 import type { Location } from "@/lib/demo-data";
 import type { AppointmentStatus, AppointmentWithMeta } from "@/lib/appointment-engine";
 import type {
@@ -22765,8 +22766,10 @@ function roundMoney(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
+// Data odierna Europe/Rome (era toISOString()=UTC, che su server UTC sfasa il boundary
+// "oggi"/"scaduto" delle rate e la data-cutoff dell'adesione fedelta'). Vedi business-datetime.ts.
 function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+  return businessTodayIso();
 }
 
 // Port of clients.php normalize_date(): accepts a strict YYYY-MM-DD string and
