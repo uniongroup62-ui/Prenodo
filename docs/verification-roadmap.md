@@ -24,8 +24,23 @@ BATCH 1 fix (tutti verificati live 7/7, nessuna regressione sul 19/19):
   api_appt_active_status_sql (pending/scheduled/done + sinonimi) al posto della blacklist NOT
   IN ('canceled','cancelled'); inoltre i SEGMENTI ora sono filtrati per stato-attivo del padre
   (prima il segmento di un no_show teneva occupato lo slot). Simmetrico pubblico/interno.
-Residue (batch successivi): messaggi verbatim conflitto/time-off (#4/#5), auto-assegnazione
-operatore unico + guard "Seleziona un operatore per X" (#6), + minori elencati nell'audit.
+BATCH 2 fix (messaggi verbatim del SAVE backend, verificati live 4/4, nessuna regressione):
+- #4 Conflitto operatore: assertAppointmentSlotAvailable ora lancia il messaggio backend
+  "Conflitto: l'operatore ha già un altro appuntamento in quell'orario." (single) /
+  "...uno degli operatori..." (multi, >1 segmento) invece di quello del wizard pubblico.
+  api_appointments.php:11202/12713. NB: la funzione è usata SOLO da manage save + planner,
+  non dal pubblico, quindi il messaggio pubblico resta invariato. Aggiornata la regex del
+  planner (reasonFromGuardError) per matchare anche "conflitto".
+- #5 Time-off/turno: buildTimeoffMessage (port di timeoff_user_message :3568) usa il NOME
+  dell'operatore e, se il servizio è gestito da un SOLO operatore (uniqueStaffForService,
+  port di unique_staff_for_service :3511, staff_services filtrati per sede), la variante
+  "il servizio \"X\" è gestito solo da {nome}... Per procedere, abbina un altro operatore...".
+  Aggiunto serviceId ad AppointmentSlotSegment (popolato in create/update).
+Residue (opzionali): #6 auto-assegnazione operatore unico + guard "Seleziona un operatore
+per X" (in pratica MOOT: il drawer Next auto-seleziona l'operatore quando è l'unico
+eleggibile e lo invia; il gap resta solo via API diretta) + i 🟡/🟢 minori dell'audit
+(qb_residui giftbox/pacchetti verbatim, filtro slot past-time/cabine, staff_for_service
+hold-exclude, floor durata 5vs10min, DIV-1 fidLabel, DIV-2 storno punti done→cancel).
 
 Verifica end-to-end che il Next (localhost:3000, Supabase) replichi il PHP
 (localhost, MySQL): logiche, funzioni, dati e grafica. Metodo: sessioni live su

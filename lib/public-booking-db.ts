@@ -1986,6 +1986,9 @@ export type AppointmentSlotSegment = {
   staffId: number | null;
   startsAt: string;
   endsAt: string;
+  // Servizio del segmento — usato dal messaggio time-off per la variante "servizio
+  // gestito solo da {operatore}" (timeoff_user_message, api_appointments.php:3568).
+  serviceId?: number | null;
   locationId?: number | null;
   // H2: the cabin this segment occupies (appointments.cabin_id primary / per-segment
   // cabin). Optional so legacy callers compile; a positive value enables the cabin
@@ -2012,6 +2015,67 @@ export type AppointmentSlotSegment = {
 // Excludes the appointment being edited (excludeAppointmentId) and the booking's own
 // active hold (excludeHoldToken). Best-effort throughout: a failed/missing-table query
 // never blocks a booking — only a REAL detected conflict throws.
+// Operatore UNICO per un servizio (port di unique_staff_for_service,
+// api_appointments.php:3511-3563): operatori attivi non-SSO abbinati al servizio in
+// staff_services, filtrati per sede (STRICT, app_filter_staff_ids_by_location). Ritorna
+// l'id se esattamente uno, altrimenti null. Query tenant-safe via tenantSelect.
+async function uniqueStaffForService(slug: string, serviceId: number, locationId: number | null): Promise<number | null> {
+  if (!(serviceId > 0)) return null;
+  const ssRows = await tenantSelect<RowDataPacket>({ slug, table: "staff_services", columns: "staff_id", where: "service_id = ?", params: [serviceId] }).catch(() => [] as RowDataPacket[]);
+  const staffIds = [...new Set(ssRows.map((r) => Number(r.staff_id ?? 0)).filter((n) => n > 0))];
+  if (staffIds.length === 0) return null;
+  const activeRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "staff",
+    columns: "id",
+    where: `id IN (${staffIds.map(() => "?").join(",")}) AND COALESCE(is_active,1) = 1 AND full_name <> 'SSO'`,
+    params: staffIds,
+  }).catch(() => [] as RowDataPacket[]);
+  let ids = activeRows.map((r) => Number(r.id ?? 0)).filter((n) => n > 0);
+  if (locationId && locationId > 0 && ids.length) {
+    const slRows = await tenantSelect<RowDataPacket>({ slug, table: "staff_locations", columns: "staff_id, location_id", where: `staff_id IN (${ids.map(() => "?").join(",")})`, params: ids }).catch(() => [] as RowDataPacket[]);
+    // STRICT ma con la stessa safety anti-vuoto del calendario: se NESSUNO ha righe,
+    // non filtrare (feature non configurata); altrimenti tieni solo gli ammessi in sede.
+    if (slRows.length) {
+      const allowedHere = new Set<number>();
+      for (const r of slRows) { if (Number(r.location_id ?? 0) === locationId) allowedHere.add(Number(r.staff_id ?? 0)); }
+      ids = ids.filter((id) => allowedHere.has(id));
+    }
+  }
+  return ids.length === 1 ? ids[0] : null;
+}
+
+async function staffFullNameById(slug: string, staffId: number): Promise<string> {
+  if (!(staffId > 0)) return "";
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "staff", columns: "full_name", where: "id = ?", params: [staffId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  return String(rows[0]?.full_name ?? "");
+}
+
+async function serviceNameById(slug: string, serviceId: number): Promise<string> {
+  if (!(serviceId > 0)) return "";
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "name", where: "id = ?", params: [serviceId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  return String(rows[0]?.name ?? "").trim();
+}
+
+// Messaggio time-off/turno del SAVE backend (port di timeoff_user_message,
+// api_appointments.php:3568-3596): usa il NOME dell'operatore e, se il servizio è
+// gestito da un SOLO operatore, la variante che invita ad abbinarne un altro.
+async function buildTimeoffMessage(slug: string, staffId: number, serviceId: number | null | undefined, locationId: number | null | undefined, reason: string): Promise<string> {
+  const who = (await staffFullNameById(slug, staffId)) || "Operatore";
+  const svcId = Number(serviceId ?? 0) || 0;
+  if (svcId > 0) {
+    const uniq = await uniqueStaffForService(slug, svcId, locationId ?? null).catch(() => null);
+    if (uniq !== null && uniq === staffId) {
+      const svcName = await serviceNameById(slug, svcId).catch(() => "");
+      const base = svcName
+        ? `Prenotazione non creata: il servizio "${svcName}" è gestito solo da ${who} e risulta non disponibile (${reason}) nel giorno/orario selezionato.`
+        : `Prenotazione non creata: il servizio è gestito solo da ${who} e risulta non disponibile (${reason}) nel giorno/orario selezionato.`;
+      return `${base} Per procedere, abbina un altro operatore a questo servizio nella pagina del servizio (Servizi → Modifica servizio).`;
+    }
+  }
+  return `Prenotazione non creata: ${who} risulta non disponibile (${reason}) nel giorno/orario selezionato.`;
+}
+
 export async function assertAppointmentSlotAvailable({
   slug,
   date,
@@ -2032,7 +2096,8 @@ export async function assertAppointmentSlotAvailable({
       const staffId = typeof seg.staffId === "number" && (seg.staffId ?? 0) > 0 ? (seg.staffId as number) : 0;
       const cabinId = nullableNumber(seg.cabinId === undefined ? null : seg.cabinId) ?? 0;
       const locationId = seg.locationId === undefined ? null : nullableNumber(seg.locationId);
-      return { start, end, staffId, cabinId, locationId };
+      const serviceId = Number(seg.serviceId ?? 0) || 0;
+      return { start, end, staffId, cabinId, locationId, serviceId };
     })
     .filter((seg) => Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.end > seg.start);
   if (normSegments.length === 0) return;
@@ -2055,8 +2120,12 @@ export async function assertAppointmentSlotAvailable({
     if (!busyRanges.length) break;
     const conflict = firstConflictingRange(seg.staffId, seg.start, seg.end, seg.locationId, busyRanges);
     if (conflict) {
+      // Messaggio conflitto del SAVE backend (api_appointments.php:11202 single /
+      // :12713 multi), non quello del wizard pubblico. Multi-servizio = >1 segmento.
       throw new Error(
-        `Operatore già occupato dalle ${minutesToTime(conflict.start)} alle ${minutesToTime(conflict.end)}. Scegli un altro orario o operatore.`,
+        normSegments.length > 1
+          ? "Conflitto: uno degli operatori ha già un altro appuntamento in quell'orario."
+          : "Conflitto: l'operatore ha già un altro appuntamento in quell'orario.",
       );
     }
   }
@@ -2094,9 +2163,7 @@ export async function assertAppointmentSlotAvailable({
     // HARD time-off (always enforced).
     const timeoffReason = await staffTimeoffReasonForRange(slug, seg.staffId, date, seg.start, seg.end);
     if (timeoffReason) {
-      throw new Error(
-        `Prenotazione non creata: l'operatore risulta non disponibile (${timeoffReason}) nel giorno/orario selezionato.`,
-      );
+      throw new Error(await buildTimeoffMessage(slug, seg.staffId, seg.serviceId, seg.locationId, timeoffReason));
     }
 
     // SOFT shift: only when the segment fits inside the day's business hours.
@@ -2105,9 +2172,7 @@ export async function assertAppointmentSlotAvailable({
     if (!includeSchedule) continue;
     const shiftReason = await staffScheduleReasonForRange(slug, seg.staffId, date, seg.start, seg.end, seg.locationId);
     if (shiftReason) {
-      throw new Error(
-        `Prenotazione non creata: l'operatore risulta non disponibile (${shiftReason}) nel giorno/orario selezionato.`,
-      );
+      throw new Error(await buildTimeoffMessage(slug, seg.staffId, seg.serviceId, seg.locationId, shiftReason));
     }
   }
 }

@@ -2697,7 +2697,7 @@ export async function createDbAppointment({
   await assertAppointmentSlotAvailable({
     slug,
     date,
-    segments: plan.segments.map((seg) => ({ staffId: seg.staffId, startsAt: seg.startsAt, endsAt: seg.endsAt, locationId, cabinId: seg.cabinId })),
+    segments: plan.segments.map((seg) => ({ staffId: seg.staffId, startsAt: seg.startsAt, endsAt: seg.endsAt, serviceId: Number(seg.service?.id ?? 0) || null, locationId, cabinId: seg.cabinId })),
     excludeHoldToken: token || null,
   });
   // RISORSE CONDIVISE (V4, port di ensure_shared_resources_available_for_sequence):
@@ -3088,7 +3088,7 @@ export async function updateDbAppointment({
   await assertAppointmentSlotAvailable({
     slug,
     date,
-    segments: plan.segments.map((seg) => ({ staffId: seg.staffId, startsAt: seg.startsAt, endsAt: seg.endsAt, locationId, cabinId: seg.cabinId })),
+    segments: plan.segments.map((seg) => ({ staffId: seg.staffId, startsAt: seg.startsAt, endsAt: seg.endsAt, serviceId: Number(seg.service?.id ?? 0) || null, locationId, cabinId: seg.cabinId })),
     excludeAppointmentId: id,
     excludeHoldToken: token || null,
   });

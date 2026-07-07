@@ -485,7 +485,7 @@ function reasonFromGuardError(error: unknown): string {
   const msg = error instanceof Error ? error.message : String(error ?? "");
   if (/cabina/i.test(msg)) return "Cabina non disponibile";
   if (/non disponibile|time.?off/i.test(msg)) return "Operatore non disponibile";
-  if (/occupat/i.test(msg)) return "Operatore occupato";
+  if (/occupat|conflitto/i.test(msg)) return "Operatore occupato";
   return msg || "Slot non disponibile";
 }
 
