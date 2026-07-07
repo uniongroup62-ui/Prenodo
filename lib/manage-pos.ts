@@ -6014,11 +6014,17 @@ function summarizeSales(sales: PosSale[]): PosSummary {
       if (item.type === "product") productTotal = roundMoney(productTotal + item.total);
     }
   }
+  // RICAVO NETTO per vendita = total al netto dei residui (wallet credito + giftcard):
+  // il legacy memorizza sales.total gia' al netto, quindi ogni SUM(total) legacy e' NETTO.
+  // Il Next memorizza total LORDO (per il netFactor Commissioni), percio' qui i residui vanno
+  // sottratti — altrimenti l'"incasso"/KPI conterebbe DUE VOLTE il credito (gia' incassato
+  // alla vendita della ricarica/giftcard).
+  const netTotal = (sale: PosSale): number => roundMoney(sale.total - paymentAmount(sale.payments, "wallet") - paymentAmount(sale.payments, "giftcard"));
   return {
     saleCount: activeSales.length,
-    grossTotal: roundMoney(sales.reduce((sum, sale) => sum + sale.total, 0)),
-    activeTotal: roundMoney(activeSales.reduce((sum, sale) => sum + sale.total, 0)),
-    cancelledTotal: roundMoney(cancelledSales.reduce((sum, sale) => sum + sale.total, 0)),
+    grossTotal: roundMoney(sales.reduce((sum, sale) => sum + netTotal(sale), 0)),
+    activeTotal: roundMoney(activeSales.reduce((sum, sale) => sum + netTotal(sale), 0)),
+    cancelledTotal: roundMoney(cancelledSales.reduce((sum, sale) => sum + netTotal(sale), 0)),
     paymentTotals,
     serviceTotal,
     productTotal,

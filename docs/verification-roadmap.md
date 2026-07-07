@@ -1,5 +1,31 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Pagamenti AUDIT-2 batch 2: ricavo NETTO nei report (no doppio conteggio) (2026-07-07)
+
+Il legacy MEMORIZZA sales.total gia' al netto dei residui (pos.php:4585/4605: $total -=
+giftcard_used -= credit_used), quindi ogni SUM(total)/AVG(total) legacy nei report e' NETTO.
+Il Next memorizza total LORDO — scelta CORRETTA e DA MANTENERE perche' il netFactor delle
+Commissioni (manage-commissions netFactor = saleTotal/subtotal) vuole subtotal-sconto, NON
+netto-di-residui (il base commissioni legacy `allocated_net`, Commissions.php:2123-2124, netta
+solo lo SCONTO, non i residui: flippare lo stored total a netto ROMPEREBBE le commissioni).
+Ma i report di Next leggevano s.total LORDO → l'Incasso/Venduto/KPI contava DUE VOLTE il
+credito (gia' incassato quando la ricarica/giftcard fu venduta). FIX: ricavo netto ricostruito
+ESPLICITAMENTE negli aggregati, lasciando lo stored total lordo:
+- manage-reports.ts: nuova costante NET_SALE_REV = total - credit_used - giftcard_used, usata
+  nel modello incassi (collection instant), nel riepilogo vendite (sold/avg_ticket), nei top
+  clienti e negli operatori (SUM/AVG). Il "Lordo" resta SUM(subtotal); credit_used/giftcard_used
+  restano voci separate come nel legacy (reports.php:777-778).
+- manage-pos.ts summarizeSales: netTotal = total - wallet - giftcard (via paymentAmount).
+- db-repositories.ts posDbSummary: la sua mapSale accorpa i pagamenti in un unico tender 'card'
+  (payments non granulari), quindi il netto e' calcolato via AGGREGATO SQL sulle righe vendita
+  (CASE su status per active/cancelled, match con mapSale: solo 'cancelled' esatto = annullata).
+VERIFICATO live 4/4: inserita una vendita controllata (total 100, credito 40, giftcard 10 =>
+netto 50) → KPI revenue, Incasso (collection) e Venduto crescono di 50 NETTO (non 100);
+vendita test rimossa. Regressione OK (checkout 8/8, D1 4/4, storno ricarica 3/3). Commissioni
+NON toccate (stored total invariato).
+NON fatto (fuori scope doppio-conteggio): posDbSummary.paymentTotals accorpa tutto su 'card'
+(ripartizione metodo grezza) — la ripartizione fedele e' gia' in getManageReports.payment_methods.
+
 ## Pagamenti AUDIT-2 batch 1: guardia saldo storno ricarica (2026-07-07)
 
 Audit completo dei Pagamenti (6 aree, diff riga-per-riga legacy↔Next). Primo fix: la

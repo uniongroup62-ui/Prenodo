@@ -33,6 +33,14 @@ const APPT_NO_SHOW = ["no_show", "no show", "no-show", "noshow", "non presentato
 // Ordine legacy dei metodi di pagamento (reports.php:750).
 const PAYMENT_ORDER = ["Contanti", "Carte", "Assegno", "Bonifico", "Non indicato"];
 
+// RICAVO NETTO per vendita = total al netto dei residui (credito + giftcard). Il legacy
+// MEMORIZZA sales.total gia' al netto (pos.php:4585/4605: $total -= giftcard_used -= credit_used),
+// quindi ogni SUM(s.total)/AVG(s.total) legacy nei report e' NETTO. Il Next memorizza total LORDO
+// (per non alterare il netFactor delle Commissioni, che vuole subtotal-sconto), percio' qui il
+// netto va ricostruito esplicitamente — altrimenti l'Incasso/Venduto conterebbe DUE VOLTE il
+// credito (gia' incassato quando la ricarica/giftcard fu venduta). Alias vendite = `s`.
+const NET_SALE_REV = "(COALESCE(s.total,0) - COALESCE(s.credit_used,0) - COALESCE(s.giftcard_used,0))";
+
 export type ReportRow = { name: string; type?: string; revenue: number; qty?: number; saleCount?: number };
 export type ManageReports = {
   from: string;
@@ -196,7 +204,7 @@ export async function getManageReports(
       ? ` AND NOT EXISTS (SELECT 1 FROM ${quoteIdentifier((await tenantTable(slug, "sale_installment_plans")).name)} p WHERE p.sale_id = s.id AND p.tenant_id = s.tenant_id)`
       : "";
     const instant = await dbQuery<RowDataPacket[]>(
-      `SELECT s.sale_date::date d, s.total amt, s.notes FROM ${quoteIdentifier(sales.name)} s WHERE ${winWhere} AND COALESCE(s.total,0) > 0${noPlan}`,
+      `SELECT s.sale_date::date d, ${NET_SALE_REV} amt, s.notes FROM ${quoteIdentifier(sales.name)} s WHERE ${winWhere} AND ${NET_SALE_REV} > 0${noPlan}`,
       winParams,
     ).catch(() => [] as RowDataPacket[]);
     for (const row of instant) push(dayOf(row.d), row.amt, paymentLabelFromNotes(row.notes, row.payment_method));
@@ -232,9 +240,9 @@ export async function getManageReports(
   // --- Riepilogo vendite (reports.php 771-796) ---------------------------
   const salesSummary = async (winFrom: string, winToExclusive: string) => {
     const rows = await dbQuery<RowDataPacket[]>(
-      `SELECT COUNT(*) cnt, COALESCE(SUM(s.total),0) sold, COALESCE(SUM(s.subtotal),0) gross,
+      `SELECT COUNT(*) cnt, COALESCE(SUM(${NET_SALE_REV}),0) sold, COALESCE(SUM(s.subtotal),0) gross,
               COALESCE(SUM(s.discount),0) discount_total, COALESCE(SUM(s.fidelity_discount),0) fidelity_discount,
-              COALESCE(AVG(s.total),0) avg_ticket,
+              COALESCE(AVG(${NET_SALE_REV}),0) avg_ticket,
               COUNT(DISTINCT CASE WHEN COALESCE(s.client_id,0) > 0 THEN s.client_id END) served
          FROM ${quoteIdentifier(sales.name)} s WHERE ${scopeSql} AND s.sale_date >= ? AND s.sale_date < ?`,
       [...scopeParams, winFrom, winToExclusive],
@@ -310,7 +318,7 @@ export async function getManageReports(
   const topClientRows = await dbQuery<RowDataPacket[]>(
     `SELECT s.client_id,
             COALESCE(NULLIF(TRIM(c.full_name),''), CASE WHEN COALESCE(s.client_id,0) > 0 THEN CONCAT('Cliente #', s.client_id) ELSE 'Cliente non associato' END) name,
-            COUNT(*) cnt, COALESCE(SUM(s.total),0) rev
+            COUNT(*) cnt, COALESCE(SUM(${NET_SALE_REV}),0) rev
        FROM ${quoteIdentifier(sales.name)} s
        LEFT JOIN ${quoteIdentifier(clientsTable.name)} c ON c.id = s.client_id AND c.tenant_id = s.tenant_id
       WHERE ${baseWhere}
@@ -374,7 +382,7 @@ export async function getManageReports(
   // --- Operatori: vendite + ore lavorate (fusione legacy 1146-1189) ------
   const opRows = await dbQuery<RowDataPacket[]>(
     `SELECT COALESCE(NULLIF(TRIM(s.operator_name),''),'Non indicato') op, COUNT(*) cnt,
-            COALESCE(SUM(s.total),0) rev, COALESCE(AVG(s.total),0) avg_ticket
+            COALESCE(SUM(${NET_SALE_REV}),0) rev, COALESCE(AVG(${NET_SALE_REV}),0) avg_ticket
        FROM ${quoteIdentifier(sales.name)} s WHERE ${baseWhere} GROUP BY op ORDER BY rev DESC, cnt DESC LIMIT 50`,
     baseParams,
   ).catch(() => [] as RowDataPacket[]);

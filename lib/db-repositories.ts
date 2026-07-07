@@ -5414,11 +5414,32 @@ export async function posDbSummary(slug: string): Promise<PosSummary> {
     }
   }
 
+  // RICAVO NETTO: mapSale qui accorpa i pagamenti in un unico tender "card", quindi il netto
+  // (total - residui) NON e' ricavabile dagli oggetti — va letto dalle RIGHE vendita
+  // (credit_used/giftcard_used) via SQL. Il legacy memorizza sales.total gia' al netto, cosi'
+  // ogni SUM(total) legacy e' NETTO; il Next memorizza LORDO (per il netFactor Commissioni),
+  // percio' il KPI Incasso qui sottrae i residui — altrimenti conterebbe DUE VOLTE il credito
+  // (gia' incassato quando la ricarica/giftcard fu venduta). Match dello status con mapSale
+  // (solo 'cancelled' esatto e' annullata; NULL/altro => attiva).
+  const salesT = await tenantTable(slug, "sales");
+  const netExpr = "(COALESCE(total,0) - COALESCE(credit_used,0) - COALESCE(giftcard_used,0))";
+  const scoped = salesT.mode === "shared" && salesT.tenantId ? "tenant_id = ?" : "1=1";
+  const scopedParams = salesT.mode === "shared" && salesT.tenantId ? [salesT.tenantId] : [];
+  const aggRows = await dbQuery<RowDataPacket[]>(
+    `SELECT
+       COALESCE(SUM(CASE WHEN COALESCE(status,'') <> 'cancelled' THEN ${netExpr} ELSE 0 END),0) active_net,
+       COALESCE(SUM(CASE WHEN COALESCE(status,'') = 'cancelled' THEN ${netExpr} ELSE 0 END),0) cancelled_net,
+       COALESCE(SUM(${netExpr}),0) gross_net
+     FROM ${quoteIdentifier(salesT.name)} WHERE ${scoped}`,
+    scopedParams,
+  ).catch(() => [] as RowDataPacket[]);
+  const agg = aggRows[0] ?? {};
+
   return {
     saleCount: activeSales.length,
-    grossTotal: roundMoney(sales.reduce((total, sale) => total + sale.total, 0)),
-    activeTotal: roundMoney(activeSales.reduce((total, sale) => total + sale.total, 0)),
-    cancelledTotal: roundMoney(cancelledSales.reduce((total, sale) => total + sale.total, 0)),
+    grossTotal: roundMoney(Number(agg.gross_net ?? 0)),
+    activeTotal: roundMoney(Number(agg.active_net ?? 0)),
+    cancelledTotal: roundMoney(Number(agg.cancelled_net ?? 0)),
     paymentTotals,
     serviceTotal,
     productTotal,
