@@ -1,5 +1,24 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Pagamenti AUDIT-2 batch 4a: guardie Tier 2 tractabili (2026-07-07)
+
+Due fix puliti dell'audit Tier 2:
+- normalizeCommissionPercent (manage-commissions.ts): port fedele di Commissions::normalizePercent
+  (797-808) — ora rimuove PRIMA '%' e spazi, poi ','->'.' (input "10%"/"10 %" davano NaN->0,
+  ora 10). Typecheck ok.
+- #15 promo senza cliente (manage-pos.ts evalPromotionById): una promo con per_customer_limit>0
+  su vendita senza cliente ora e' rifiutata con il messaggio verbatim (Promotions.php:5146)
+  "Richiede un cliente selezionato per applicare il limite per cliente.". Caso raggiungibile solo
+  nel path stretto giftbox-only + promotionId + senza cliente (per servizi/prodotti il cliente e'
+  gia' obbligatorio a monte, assertCartExclusivityRules:4208), ma allinea al legacy.
+Regressione checkout 8/8.
+
+RESTANTI Tier 2 (piu' grandi/rischiosi, da prioritizzare): #11 storico filter-then-limit
+(full-stack UI+API+query), #12 dedup transazioni fedelta' (tocca il ledger wallet), #16 periodi
+commissione (staff_commission_periods, complesso), fuso orario Europe/Rome (infra su piu' helper;
+sul dev in TZ italiana non e' verificabile a runtime), #9/#10 validazioni rate (cambio di UX:
+throw invece di clamp/fallback). Da fare come sotto-batch dedicati con verifica mirata.
+
 ## Pagamenti AUDIT-2 batch 3: scarico stock ATOMICO (anti-oversell) (2026-07-07)
 
 `adjustProductStock` faceva read-compute-write (leggeva la giacenza, calcolava next, poi

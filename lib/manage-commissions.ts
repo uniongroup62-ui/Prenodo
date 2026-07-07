@@ -52,7 +52,9 @@ export function normalizeCommissionCalculationMode(value: unknown): CommissionCa
 
 // normalizePercent (Commissions.php ~797): clamp to [0, 100], 2 decimals, IT/EN decimal tolerant.
 export function normalizeCommissionPercent(value: unknown): number {
-  let n = Number(String(value ?? "").replace(",", ".").trim());
+  // Port di Commissions::normalizePercent (797-808): rimuove PRIMA '%' e spazi, poi ','->'.'
+  // (senza lo strip, un input "10%" o "10 %" diventava NaN->0 invece di 10).
+  let n = Number(String(value ?? "").replace(/[%\s]/g, "").replace(",", "."));
   if (!Number.isFinite(n) || n < 0) n = 0;
   if (n > 100) n = 100;
   return Math.round(n * 100) / 100;

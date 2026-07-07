@@ -571,6 +571,18 @@ export async function checkoutManageSale(
   const promoDate = promoNow.toISOString().slice(0, 10);
   const promoTime = `${String(promoNow.getHours()).padStart(2, "0")}:${String(promoNow.getMinutes()).padStart(2, "0")}`;
   const evalPromotionById = async (promotionId: number, code?: string): Promise<{ discount: number; applied: PosPromoApplied }> => {
+    // #15 (Promotions::reserveSaleUse, Promotions.php:5145-5146): una promo con
+    // per_customer_limit > 0 su una vendita SENZA cliente non e' applicabile — il filtro
+    // per-cliente e il conteggio limite del motore si saltano con clientId<=0, percio' va
+    // rifiutata QUI con il messaggio verbatim (altrimenti il Next la applicherebbe).
+    if (client.id <= 0) {
+      const limRows = await tenantSelect<RowDataPacket>({
+        slug, table: "promotions", columns: "per_customer_limit", where: "id=?", params: [promotionId], limit: 1,
+      }).catch(() => [] as RowDataPacket[]);
+      if ((Number(limRows[0]?.per_customer_limit ?? 0) || 0) > 0) {
+        throw new Error("Richiede un cliente selezionato per applicare il limite per cliente.");
+      }
+    }
     const evaluated = await evaluatePromotionsForCart(slug, promoCart, promoDate, promoTime, client.id, locationId);
     const chosen = evaluated.promotions.find((p) => p.promotionId === promotionId);
     if (!chosen || !chosen.eligible || chosen.discount <= 0) throw new Error("La promozione selezionata non è applicabile a questa vendita.");
