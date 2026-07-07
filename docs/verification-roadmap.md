@@ -7457,3 +7457,18 @@ corrisponde (apptInvolvesStaff/apptIncludesService), non solo il primario — co
 filtro server staff_id/service_id. VERIFICATO live: filtrando per "test2" (servizio
 non primario di #42806) l'appuntamento resta visibile; total conta 1 (distinto) con 2
 segmenti; filtro stato canceled -> 0. M2 (servizi per sede) non rilevante (1 sede).
+
+## Calendario batch 4: note vista Mese (2026-07-07)
+
+- M19: il marker nota in vista Mese ora APRE le note del giorno (onClick +
+  stopPropagation) invece della prenotazione rapida (prima il click ricadeva sulla
+  cella). VERIFICATO live: click marker -> modale note aperta, drawer quick-book NON
+  aperto.
+- M22: il "periodo visibile" delle note in Mese è il MESE ESATTO (1..ultimo), non la
+  griglia di 42 giorni (periodNotes); marker solo sui giorni del mese (no spillover);
+  badge/conteggio esatto-mese. VERIFICATO: 1 marker + badge "1" su nota del 15/07.
+- M23: la data della nuova nota è prefillata sul giorno CLICCATO (resetNotesForm(iso))
+  invece del giorno focalizzato. VERIFICATO: form date "2026-07-15".
+- L24: etichetta "Periodo visibile" mostra il range della vista (settimana/mese),
+  non sempre un singolo giorno.
+Nota: a-capo note preservati (M18 batch 1) riconfermato live ("Riga 1\nRiga 2").

@@ -1393,10 +1393,20 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
     return dates.reduce((sum, d) => sum + (rangeApptsByDate[d]?.length ?? 0), 0);
   }, [view, visibleAppts, rangeApptsByDate, date]);
   const totalLabel = totalAppts === 1 ? "appuntamento totale" : "appuntamenti totali";
-  const notesCount = notes.length;
+  // M22: nella vista MESE il "periodo visibile" delle note è il MESE ESATTO
+  // (1..ultimo), non la griglia di 42 giorni usata per il fetch/gli appuntamenti
+  // (Settimana/Giorno hanno già un fetch esatto).
+  const periodNotes = useMemo(() => {
+    if (view !== "dayGridMonth") return notes;
+    const d = new Date(`${date}T12:00:00`);
+    const first = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-01`;
+    const last = isoLocal(new Date(d.getFullYear(), d.getMonth() + 1, 0));
+    return notes.filter((n) => n.noteDate >= first && n.noteDate <= last);
+  }, [notes, view, date]);
+  const notesCount = periodNotes.length;
   // GAP 5: the notes actually shown in the modal — all visible-period notes, or just the
   // single selected day when a marker was clicked.
-  const displayNotes = notesFilterDate ? notes.filter((n) => n.noteDate === notesFilterDate) : notes;
+  const displayNotes = notesFilterDate ? notes.filter((n) => n.noteDate === notesFilterDate) : periodNotes;
   const gridHeight = (rows.length - 1) * ROW_HEIGHT + ROW_HEIGHT;
   const weekGridHeight = (weekRows.length - 1) * ROW_HEIGHT + ROW_HEIGHT;
   // The 7 Week column dates (Mon..Sun) + today, lifted to component scope so the Week
@@ -2103,7 +2113,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
 
   // Reset the notes form to "new note" mode for the current day (clears id, hides
   // the Delete button) — mirrors the legacy #calendarNotesNewBtn behavior.
-  const resetNotesForm = useCallback(() => {
+  const resetNotesForm = useCallback((prefillDate?: string) => {
     if (typeof document === "undefined") return;
     const root = notesModalRef.current ?? document.getElementById("calendarNotesModal");
     if (!root) return;
@@ -2113,7 +2123,9 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
     const textEl = root.querySelector<HTMLTextAreaElement>("#calendar_note_text");
     const deleteBtn = root.querySelector<HTMLButtonElement>("#calendarNoteDeleteBtn");
     if (idEl) idEl.value = "";
-    if (dateEl) dateEl.value = date;
+    // M23: prefill del giorno CLICCATO quando si apre da un marker, altrimenti il
+    // giorno focalizzato (apertura dal pulsante in testata).
+    if (dateEl) dateEl.value = prefillDate || date;
     if (titleEl) titleEl.value = "";
     if (textEl) textEl.value = "";
     deleteBtn?.classList.add("d-none");
@@ -2254,7 +2266,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
   // the week view), switching the caption to "Giorno selezionato".
   const openNotesModalForDate = useCallback((iso: string) => {
     setNotesFilterDate(iso);
-    resetNotesForm();
+    resetNotesForm(iso); // M23: prefill del giorno cliccato
     setNotesAlert(null);
     showNotesModal();
   }, [resetNotesForm]);
@@ -2845,8 +2857,18 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                     <a className="fc-daygrid-day-number" style={{ textDecoration: "none", color: "inherit", fontSize: 12, fontWeight: 600 }}>
                       {dnum}
                     </a>
-                    {noteCount > 0 ? (
-                      <span className="calendar-note-marker-wrap">
+                    {/* M22: marker solo sui giorni DEL MESE (non sugli spillover della
+                        griglia 42gg), coerente col conteggio esatto-mese del modale. */}
+                    {inMonth && noteCount > 0 ? (
+                      <span
+                        className="calendar-note-marker-wrap"
+                        role="button"
+                        tabIndex={0}
+                        // M19: il marker apre le NOTE del giorno (prima il click
+                        // ricadeva sulla cella -> quick-book). stopPropagation evita
+                        // che la cella apra la prenotazione rapida.
+                        onClick={(e) => { e.stopPropagation(); openNotesModalForDate(iso); }}
+                      >
                         <span className="calendar-note-marker" role="img" aria-label={`${noteCount} note`}>
                           <i className="bi bi-stickies" aria-hidden="true" />
                           <span>{noteCount}</span>
@@ -4058,7 +4080,15 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                         {notesFilterDate ? "Giorno selezionato" : "Periodo visibile"}
                       </div>
                       <div className="fw-semibold" id="calendarNotesRangeLabel">
-                        {longTitle(notesFilterDate ?? date)}
+                        {/* L24: "Giorno selezionato" -> il giorno; "Periodo visibile"
+                            -> l'etichetta del periodo della vista (giorno/settimana/mese). */}
+                        {notesFilterDate
+                          ? longTitle(notesFilterDate)
+                          : view === "timeGridWeek"
+                            ? weekRangeTitle(date)
+                            : view === "dayGridMonth"
+                              ? monthViewTitle(date)
+                              : longTitle(date)}
                       </div>
                       <div className="small text-muted" id="calendarNotesRangeHint">
                         {notesFilterDate
