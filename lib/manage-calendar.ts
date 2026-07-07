@@ -159,6 +159,14 @@ export async function calendarContext(input: {
     ? await filterStaffByLocation(input.slug, staff, currentLocationId)
     : staff;
 
+  // Tendina SERVIZI del filtro calendario PER SEDE (calendar.php:30-38 +
+  // app_service_location_allowed): un servizio assegnato SOLO ad un'altra sede non
+  // compare tra i filtri della sede attiva. PERMISSIVO (a differenza dello staff):
+  // un servizio senza righe service_locations resta disponibile ovunque.
+  const scopedServices = currentLocationId > 0
+    ? await filterServicesByLocation(input.slug, services, currentLocationId)
+    : services;
+
   return {
     date,
     start,
@@ -167,7 +175,7 @@ export async function calendarContext(input: {
     staffOrder,
     currentStaffId: resolveCurrentStaffId(scopedStaff, input.userEmail, input.userName),
     locations,
-    services,
+    services: scopedServices,
     appointments: scopedAppointments,
     notes: notesPayload.notes,
     countByDate: notesPayload.countByDate,
@@ -219,6 +227,49 @@ async function filterStaffByLocation<T extends { id: number }>(
   // STRICT: tiene solo gli operatori con riga per la sede corrente (array_filter su
   // $allowed nel legacy). Chi ha righe solo per altre sedi -> rimosso.
   return staff.filter((s) => allowedHere.has(Number(s.id)));
+}
+
+// Filtro TENDINA servizi PER SEDE — port di app_service_location_allowed /
+// app_filter_service_ids_by_location (Helpers.php:1160-1210). PERMISSIVO (a differenza
+// dello staff): un servizio SENZA righe service_locations è disponibile OVUNQUE; un
+// servizio CON righe è mostrato solo nelle sedi elencate. Best-effort su tabella/colonna
+// assenti o su errore -> lista invariata (installazioni legacy).
+async function filterServicesByLocation<T extends { id: number }>(
+  slug: string,
+  services: T[],
+  locationId: number,
+): Promise<T[]> {
+  if (!(locationId > 0) || services.length === 0) return services;
+  const ids = services.map((s) => Number(s.id)).filter((n) => n > 0);
+  if (ids.length === 0) return services;
+  try {
+    if (
+      !(await tableExists("service_locations")) ||
+      !(await columnExists("service_locations", "service_id")) ||
+      !(await columnExists("service_locations", "location_id"))
+    ) {
+      return services;
+    }
+  } catch {
+    return services;
+  }
+  const rows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "service_locations",
+    columns: "service_id, location_id",
+    where: `service_id IN (${ids.map(() => "?").join(",")})`,
+    params: ids,
+  }).catch(() => [] as RowDataPacket[]);
+  const hasRows = new Set<number>();      // servizi CON almeno una riga (ristretti)
+  const allowedHere = new Set<number>();  // servizi con riga per la sede corrente
+  for (const r of rows) {
+    const sid = Number(r.service_id ?? 0);
+    if (sid <= 0) continue;
+    hasRows.add(sid);
+    if (Number(r.location_id ?? 0) === locationId) allowedHere.add(sid);
+  }
+  // PERMISSIVO: servizio senza righe -> mostrato ovunque; con righe -> solo per la sede.
+  return services.filter((s) => !hasRows.has(Number(s.id)) || allowedHere.has(Number(s.id)));
 }
 
 export async function listCalendarNotes({

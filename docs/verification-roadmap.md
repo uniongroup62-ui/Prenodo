@@ -7625,10 +7625,8 @@ VERIFICATO live (12/12, token firmati ad hoc): (feed) ristretto a Sede1 [21] ved
 l'appuntamento della sua sede, nasconde il Sede2; admin vede entrambi. (refresh) status
 del ristretto sul proprio Sede1 -> lista di ritorno esclude il Sede2 (count 10 vs admin
 11). Appuntamenti di test creati e rimossi (residuo=0, inclusi reminder da status).
-Residuo noto (fedeltà UI, non-leak): la tendina SERVIZI del calendario non è ancora
-filtrata per sede (app_service_location_allowed) — voci in più ma nessun dato di altra
-sede e il booking cross-sede è già bloccato lato save. Le COLONNE staff sono ora
-filtrate per sede (vedi voce dedicata sotto).
+Le COLONNE staff e la TENDINA servizi del calendario sono ora entrambe filtrate per
+sede (vedi voci dedicate sotto). Multi-sede calendario: nessun residuo di filtro sede.
 
 ## Calendario multi-sede: filtro COLONNE operatore per sede (2026-07-07)
 
@@ -7646,3 +7644,17 @@ tendina Operatore e il resolve currentStaffId (tutti da context.staff). VERIFICA
 entrambi presenti; Sede2 -> solo 22, il 56 filtrato via. NB: le colonne restano PER
 TUTTI gli operatori ammessi nella sede (non "solo loggato"); un operatore ammesso senza
 appuntamenti mostra colonna vuota, corretto.
+
+## Calendario multi-sede: filtro TENDINA servizi per sede (2026-07-07)
+
+Chiuso l'ultimo residuo sede del calendario: la tendina "Servizio" del filtro mostrava
+tutti i servizi. Portato app_service_location_allowed / app_filter_service_ids_by_location
+(Helpers.php:1160-1210) come helper filterServicesByLocation in calendarContext,
+applicato a context.services. PERMISSIVO (a differenza dello staff che è strict): un
+servizio SENZA righe service_locations resta disponibile ovunque; un servizio CON righe
+è mostrato solo nelle sedi elencate. currentLocationId<=0 -> tutti. TRAPPOLA: il param
+locationId di listDbServices NON basta — mapService imposta sempre locationIds:[] quindi
+quel filtro è un no-op; per questo si interroga service_locations direttamente. Tocca
+SOLO la tendina filtro del calendario (il drawer QB è il componente globale separato
+quick-booking-drawer.tsx, non usa context.services). VERIFICATO live (4/4, dati
+esistenti): Sede1 -> servizi 9 (21+51) e 82 (solo 21); Sede2 -> solo 9, l'82 filtrato via.
