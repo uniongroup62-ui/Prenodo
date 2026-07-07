@@ -7099,3 +7099,37 @@ rimossi (residuo 0). typecheck pulito.
 
 UNICO residuo del wizard: nota OMAGGIO Fidelity ("Puoi ottenere in gift…") — legata
 al sottosistema Gifts v2 (istanze dinamiche per cliente), non portato (come GiftBox).
+
+
+---
+
+## Pagina Notifiche "Appuntamenti in attesa" — port fedele (2026-07-07)
+
+La pagina notifiche Next era un port SUPERFICIALE: card ridotte a titolo+messaggio+
+"Apri" da una lista generica (listDbNotifications, che includeva anche gli scheduled),
+senza dettagli né azioni. Portata 1:1 a notifications.php:
+
+- **Backend** listNotificationPendingAppointments(slug, locationId): appuntamenti
+  SOLO in attesa (pending/in sospeso/in attesa/attesa), tenant-safe (tenantSelect +
+  batch query), con cliente (nome/tel/email), operatore (nome/tel/email), sede
+  (nome/indirizzo), servizi (nomi + totale), sconto coupon dalle note
+  (extractCouponMetaFromNotes), riepilogo pacchetto/prepagato (appointmentList
+  Decorations), filtro sede corrente.
+- **Route** action=pending: pending + gruppi Tessere Fidelity (riusa
+  notificationFidelityCardGroups) + canManage + locationLabel.
+- **Component**: card RICCHE 1:1 (servizio/data/ora, codice prenotazione,
+  pacchetto/prepagato, operatore, sede, cliente, totale) + azioni Approva/Modifica/
+  Annulla; Approva/Annulla riusano /api/manage/appointments (action=status) con
+  l'INTERA lifecycle (restore hold su cancel + email approved/rejected). Sezione
+  Tessere Fidelity in scadenza/scadute. Sottotitolo "Sede: <label>" dalla sede corrente.
+
+VERIFICA LIVE (Playwright + sessione manage firmata, tenant 25 con appuntamento
+pending di test): action=pending -> 5 card ricche (cliente Luca Rossi, operatore
+luca+email, Sede1 Via Tremiti 6, totale € 12,00, codice); Approva -> lo stato passa
+a scheduled; UI 1:1 col legacy ("Appuntamenti in attesa", Approva/Modifica/Annulla,
+"Mostrando appuntamenti da 1 a N di N totali"). Appuntamento di test rimosso (residuo 0).
+
+RESIDUO: il wiring completo delle NOTIFICHE BROWSER (permesso desktop + persistenza
+preferenze + feed polling) resta un sottosistema JS a sé (BrowserNotifications.php);
+i controlli sono presenti come markup. Modifica linka al calendario (il drawer
+quick-booking inline non è portato in questa pagina).

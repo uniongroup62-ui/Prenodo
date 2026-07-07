@@ -1,20 +1,44 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 // Faithful port of the PHP notifications page (app/pages/notifications.php):
-// "Centro notifiche" header with browser-notification actions + settings modal,
-// and the "Appuntamenti in attesa" section (pending appointments / empty state).
-// Fed by the existing DB-backed /api/manage/notifications route.
+// "Centro notifiche" header + browser-notification actions/modal, the
+// "Appuntamenti in attesa" section with RICH cards (servizio/data, codice,
+// pacchetto/prepagato, operatore, sede, cliente, totale + sconto coupon) and the
+// Approva / Modifica / Annulla actions, plus "Tessere Fidelity in scadenza/scadute".
+// Fed by /api/manage/notifications?action=pending; le azioni riusano
+// /api/manage/appointments (action=status) con l'intera lifecycle (email inclusa).
 
-type NotificationItem = {
+type PendingAppointment = {
   id: number;
-  type: "appointment" | "cost" | "quote" | "fidelity" | "system";
+  publicCode: string;
+  serviceName: string;
+  dateLabel: string;
+  timeLabel: string;
+  endLabel: string;
+  staffName: string;
+  staffPhone: string;
+  staffEmail: string;
+  locationName: string;
+  locationAddress: string;
+  clientName: string;
+  clientPhone: string;
+  clientEmail: string;
+  total: number;
+  couponCode: string;
+  packageSummary: string;
+  prepaidSummary: string;
+};
+
+type FidelityGroup = {
+  key: string;
+  kind: "warning" | "info" | "danger";
   title: string;
-  message: string;
-  read: boolean;
+  text: string;
   link: string;
-  createdAt: string;
+  lines: string[];
+  linesMore: number;
 };
 
 const BROWSER_NOTIFICATION_PREFS = [
@@ -29,39 +53,84 @@ function tenantSlug(): string {
   return window.location.pathname.split("/")[1] || "";
 }
 
+// number_format it-IT: separatore migliaia '.' + decimale ',' (fmt_money legacy).
+function fmtMoney(value: number): string {
+  const rounded = Math.round((value + Number.EPSILON) * 100) / 100;
+  const [intPart, decPart] = Math.abs(rounded).toFixed(2).split(".");
+  return `${rounded < 0 ? "-" : ""}${intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${decPart}`;
+}
+
 export function NotificationsContent({ slug: slugProp }: { slug?: string } = {}) {
-  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
-  // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
 
-  const [pending, setPending] = useState<NotificationItem[]>([]);
+  const [pending, setPending] = useState<PendingAppointment[]>([]);
+  const [fidelityGroups, setFidelityGroups] = useState<FidelityGroup[]>([]);
+  const [canManage, setCanManage] = useState(false);
+  const [locationLabel, setLocationLabel] = useState("");
   const [prefs, setPrefs] = useState<Record<string, boolean>>({});
+  const [busyId, setBusyId] = useState(0);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  useEffect(() => {
-    fetch(`/api/manage/notifications?slug=${encodeURIComponent(slug)}`, {
+  const load = useCallback(() => {
+    fetch(`/api/manage/notifications?action=pending&slug=${encodeURIComponent(slug)}`, {
       headers: { "x-tenant-slug": slug },
     })
       .then((r) => r.json())
       .then((j) => {
-        const list: NotificationItem[] = Array.isArray(j.notifications) ? j.notifications : [];
-        setPending(list.filter((n) => n.type === "appointment"));
+        if (!j?.ok) return;
+        setPending(Array.isArray(j.pending) ? j.pending : []);
+        setFidelityGroups(Array.isArray(j.fidelityGroups) ? j.fidelityGroups : []);
+        setCanManage(Boolean(j.canManage));
+        setLocationLabel(String(j.locationLabel ?? ""));
       })
-      .catch(() => setPending([]));
+      .catch(() => undefined);
   }, [slug]);
 
-  function href(page: string): string {
-    return `/${encodeURIComponent(slug)}/${`${page}`.replace("&", "?")}`;
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // Approva (scheduled) / Annulla (canceled): riusa la route appuntamenti che
+  // applica l'intera lifecycle (restore hold su cancel + email approved/rejected).
+  async function act(id: number, status: "scheduled" | "canceled") {
+    setBusyId(id);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-tenant-slug": slug },
+        body: JSON.stringify({ action: "status", id, status }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false) {
+        setMsg({ ok: false, text: String(data?.error || "Operazione non valida") });
+      } else {
+        setMsg({ ok: true, text: status === "scheduled" ? "Appuntamento approvato" : "Appuntamento annullato" });
+      }
+    } catch {
+      setMsg({ ok: false, text: "Operazione non valida" });
+    } finally {
+      setBusyId(0);
+      load();
+    }
   }
 
   return (
     <div className="container-fluid">
       <link rel="stylesheet" href="/assets/css/pages/notifications_cards.css" />
 
+      {msg ? (
+        <div className={`alert ${msg.ok ? "alert-success" : "alert-warning"} alert-dismissible`} role="alert">
+          {msg.text}
+          <button type="button" className="btn-close" aria-label="Chiudi" onClick={() => setMsg(null)} />
+        </div>
+      ) : null}
+
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Centro notifiche</div>
           <h1 className="bs-page-title">Notifiche</h1>
-          <div className="bs-page-subtitle">Sede: Sede1</div>
+          <div className="bs-page-subtitle">{locationLabel ? `Sede: ${locationLabel}` : "Centro notifiche operativo."}</div>
         </div>
         <div className="bs-page-actions">
           <div className="d-flex flex-wrap justify-content-end gap-2">
@@ -163,22 +232,150 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
           </div>
         </div>
       ) : (
-        <div className="d-grid gap-3">
-          {pending.map((item) => (
-            <div className="card notification-card p-4" key={item.id}>
-              <div className="notification-main notification-main--primary">
-                <div className="fw-semibold">{item.title}</div>
-                <div className="text-muted small mt-1">{item.message}</div>
-              </div>
-              <div className="mt-3">
-                <a className="btn btn-sm btn-primary" href={href(item.link)}>
-                  Apri
-                </a>
+        <>
+          {pending.map((a) => (
+            <div className="card mb-3 notification-card" key={a.id}>
+              <div className="d-flex flex-wrap">
+                <div className="p-3 flex-grow-1 notification-main notification-main--primary">
+                  <div className="fw-bold fs-5 mb-1">{a.serviceName || "—"}</div>
+                  {a.dateLabel ? (
+                    <>
+                      <div className="text-primary fw-semibold">{a.dateLabel}</div>
+                      <div className="text-muted small">
+                        {a.timeLabel}
+                        {a.endLabel ? ` - ${a.endLabel}` : ""}
+                      </div>
+                    </>
+                  ) : null}
+                  {a.publicCode ? (
+                    <div className="text-muted small mt-3">
+                      Codice prenotazione: <code>#{a.publicCode}</code>
+                    </div>
+                  ) : null}
+                  {a.packageSummary ? (
+                    <div className="small text-primary fw-semibold mt-2">
+                      <i className="bi bi-box-seam me-1" />
+                      {a.packageSummary}
+                    </div>
+                  ) : null}
+                  {a.prepaidSummary ? (
+                    <div className="small text-primary fw-semibold mt-2">
+                      <i className="bi bi-credit-card-2-front me-1" />
+                      {a.prepaidSummary}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="p-3 flex-grow-1 notification-detail notification-detail--compact">
+                  <div className="text-muted small">Operatore</div>
+                  <div className="fw-semibold">{a.staffName || "—"}</div>
+                  {a.staffPhone ? <div className="text-muted small">Telefono: {a.staffPhone}</div> : null}
+                  {a.staffEmail ? <div className="text-muted small">Email: {a.staffEmail}</div> : null}
+
+                  <div className="mt-3 text-muted small">Posizione</div>
+                  <div className="fw-semibold">{a.locationName || "—"}</div>
+                  {a.locationAddress ? <div className="text-muted small">{a.locationAddress}</div> : null}
+                </div>
+
+                <div className="p-3 flex-grow-1 notification-detail notification-detail--compact">
+                  <div className="text-muted small">Cliente</div>
+                  <div className="fw-semibold">{a.clientName || "—"}</div>
+                  {a.clientPhone ? <div className="text-muted small">Telefono: {a.clientPhone}</div> : null}
+                  {a.clientEmail ? <div className="text-muted small">Email: {a.clientEmail}</div> : null}
+
+                  <div className="mt-3">
+                    <div className="text-muted small">Totale stimato</div>
+                    <div className="fw-bold">€ {fmtMoney(a.total)}</div>
+                  </div>
+                </div>
+
+                <div className="p-3 notification-action notification-action--compact">
+                  {canManage ? (
+                    <div className="d-grid gap-2">
+                      <button
+                        className="btn btn-link text-success fw-semibold text-decoration-none"
+                        type="button"
+                        disabled={busyId === a.id}
+                        onClick={() => act(a.id, "scheduled")}
+                      >
+                        <i className="bi bi-check2 me-1" />
+                        Approva
+                      </button>
+                      <a
+                        className="btn btn-link text-primary fw-semibold text-decoration-none"
+                        href={`/${encodeURIComponent(slug)}/calendario`}
+                      >
+                        <i className="bi bi-pencil-square me-1" />
+                        Modifica
+                      </a>
+                      <button
+                        className="btn btn-link text-danger fw-semibold text-decoration-none"
+                        type="button"
+                        disabled={busyId === a.id}
+                        onClick={() => {
+                          if (typeof window !== "undefined" && window.confirm("Annullare la prenotazione?")) act(a.id, "canceled");
+                        }}
+                      >
+                        <i className="bi bi-x-lg me-1" />
+                        Annulla
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="small text-muted">Permesso Appuntamenti richiesto per gestire la richiesta.</div>
+                  )}
+                </div>
               </div>
             </div>
           ))}
-        </div>
+
+          <div className="text-muted small mt-2">
+            Mostrando appuntamenti da 1 a {pending.length} di {pending.length} totali
+          </div>
+        </>
       )}
+
+      {fidelityGroups.length > 0 ? (
+        <>
+          <hr className="my-4" />
+          <div className="d-flex justify-content-between align-items-center mb-3" id="fidelity_cards_notifications">
+            <div>
+              <div className="text-muted small">Fidelity / Adesione</div>
+              <h2 className="h5 fw-bold m-0">Tessere Fidelity in scadenza / scadute</h2>
+            </div>
+            <a className="btn btn-outline-primary btn-sm" href={`/${encodeURIComponent(slug)}/fidelity_membership`}>
+              <i className="bi bi-box-arrow-up-right me-1" />
+              Apri Fidelity / Adesione
+            </a>
+          </div>
+          {fidelityGroups.map((group) => (
+            <div className="card mb-3 notification-card" key={group.key}>
+              <div className="d-flex flex-wrap">
+                <div className="p-3 flex-grow-1 notification-main notification-main--info">
+                  <div className="fw-bold fs-5 mb-1">{group.title}</div>
+                  <div className="text-muted small">{group.text}</div>
+                </div>
+                <div className="p-3 flex-grow-1 notification-detail">
+                  <div className="text-muted small mb-1">Anteprima</div>
+                  {group.lines.map((line, i) => (
+                    <div className="text-muted small" key={i}>
+                      {line}
+                    </div>
+                  ))}
+                  {group.linesMore > 0 ? <div className="text-muted small">…e altre {group.linesMore}</div> : null}
+                </div>
+                <div className="p-3 notification-action">
+                  <div className="d-grid gap-2">
+                    <a className="btn btn-outline-primary btn-sm" href={group.link || `/${encodeURIComponent(slug)}/fidelity_membership`}>
+                      <i className="bi bi-box-arrow-up-right me-1" />
+                      Apri in Fidelity / Adesione
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </>
+      ) : null}
     </div>
   );
 }

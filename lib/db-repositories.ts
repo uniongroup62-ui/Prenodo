@@ -21710,6 +21710,152 @@ export async function appointmentListDecorations(
   return out;
 }
 
+export type NotificationPendingAppointment = {
+  id: number;
+  publicCode: string;
+  serviceName: string;
+  dateLabel: string;
+  timeLabel: string;
+  endLabel: string;
+  staffName: string;
+  staffPhone: string;
+  staffEmail: string;
+  locationName: string;
+  locationAddress: string;
+  clientName: string;
+  clientPhone: string;
+  clientEmail: string;
+  total: number;
+  couponCode: string;
+  packageSummary: string;
+  prepaidSummary: string;
+};
+
+// Port di notifications.php "Appuntamenti in attesa": appuntamenti SOLO in attesa
+// (pending/in sospeso/in attesa/attesa) con dettagli completi cliente/operatore/
+// sede/servizi/totale (+ sconto coupon dalle note, riepilogo pacchetto/prepagato).
+// Tenant-safe (tenantSelect aggiunge tenant_id) + filtro sede corrente in JS.
+export async function listNotificationPendingAppointments(slug: string, currentLocationId: number): Promise<NotificationPendingAppointment[]> {
+  const allPending = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "appointments",
+    where: "LOWER(TRIM(COALESCE(status,''))) IN ('pending','in sospeso','in attesa','attesa')",
+    orderBy: "starts_at ASC",
+  }).catch(() => [] as RowDataPacket[]);
+  const apptRows = allPending.filter((r) => {
+    if (currentLocationId <= 0) return true;
+    const loc = r.location_id;
+    return loc === null || loc === undefined || Number(loc) === currentLocationId;
+  });
+  if (!apptRows.length) return [];
+
+  const ids = apptRows.map((r) => Number(r.id));
+  const inIds = ids.map(() => "?").join(",");
+  const uniq = (arr: number[]) => Array.from(new Set(arr.filter((n) => n > 0)));
+
+  // Cliente (nome, telefono, email)
+  const clientById = new Map<number, { name: string; phone: string; email: string }>();
+  const clientIds = uniq(apptRows.map((r) => Number(r.client_id)));
+  if (clientIds.length) {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, full_name, phone, email", where: `id IN (${clientIds.map(() => "?").join(",")})`, params: clientIds }).catch(() => [] as RowDataPacket[]);
+    for (const r of rows) clientById.set(Number(r.id), { name: String(r.full_name ?? ""), phone: String(r.phone ?? ""), email: String(r.email ?? "") });
+  }
+
+  // Servizi per appuntamento (nomi + totale) da appointment_services
+  const svcNameById = new Map<number, string>();
+  const svcByAppt = new Map<number, { names: string[]; total: number }>();
+  const apsRows = await tenantSelect<RowDataPacket>({ slug, table: "appointment_services", columns: "appointment_id, service_id, price, qty", where: `appointment_id IN (${inIds})`, params: ids }).catch(() => [] as RowDataPacket[]);
+  const allSvcIds = uniq([...apsRows.map((r) => Number(r.service_id)), ...apptRows.map((r) => Number(r.service_id))]);
+  if (allSvcIds.length) {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, name", where: `id IN (${allSvcIds.map(() => "?").join(",")})`, params: allSvcIds }).catch(() => [] as RowDataPacket[]);
+    for (const r of rows) svcNameById.set(Number(r.id), String(r.name ?? ""));
+  }
+  for (const r of apsRows) {
+    const aid = Number(r.appointment_id);
+    if (!svcByAppt.has(aid)) svcByAppt.set(aid, { names: [], total: 0 });
+    const e = svcByAppt.get(aid)!;
+    const nm = svcNameById.get(Number(r.service_id)) ?? "";
+    if (nm && !e.names.includes(nm)) e.names.push(nm);
+    e.total += Math.max(0, Number(r.price ?? 0)) * Math.max(1, Number(r.qty ?? 1));
+  }
+
+  // Operatori per appuntamento (nomi/telefoni/email) da appointment_staff+staff
+  const staffByAppt = new Map<number, { names: string[]; phones: string[]; emails: string[] }>();
+  const astRows = await tenantSelect<RowDataPacket>({ slug, table: "appointment_staff", columns: "appointment_id, staff_id", where: `appointment_id IN (${inIds})`, params: ids }).catch(() => [] as RowDataPacket[]);
+  const staffById = new Map<number, { name: string; phone: string; email: string }>();
+  const staffIds = uniq(astRows.map((r) => Number(r.staff_id)));
+  if (staffIds.length) {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "staff", columns: "id, full_name, phone, email", where: `id IN (${staffIds.map(() => "?").join(",")})`, params: staffIds }).catch(() => [] as RowDataPacket[]);
+    for (const r of rows) staffById.set(Number(r.id), { name: String(r.full_name ?? ""), phone: String(r.phone ?? ""), email: String(r.email ?? "") });
+  }
+  for (const r of astRows) {
+    const aid = Number(r.appointment_id);
+    const st = staffById.get(Number(r.staff_id));
+    if (!st) continue;
+    if (!staffByAppt.has(aid)) staffByAppt.set(aid, { names: [], phones: [], emails: [] });
+    const e = staffByAppt.get(aid)!;
+    if (st.name && !e.names.includes(st.name)) e.names.push(st.name);
+    if (st.phone && !e.phones.includes(st.phone)) e.phones.push(st.phone);
+    if (st.email && !e.emails.includes(st.email)) e.emails.push(st.email);
+  }
+
+  // Sedi (nome/indirizzo) + fallback business
+  const locById = new Map<number, { name: string; address: string }>();
+  const locIds = uniq([...apptRows.map((r) => Number(r.location_id)), currentLocationId]);
+  if (locIds.length) {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "id, name, address", where: `id IN (${locIds.map(() => "?").join(",")})`, params: locIds }).catch(() => [] as RowDataPacket[]);
+    for (const r of rows) locById.set(Number(r.id), { name: String(r.name ?? ""), address: String(r.address ?? "") });
+  }
+  const bizRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "name, address", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const bizName = String(bizRows[0]?.name ?? "");
+  const bizAddress = String(bizRows[0]?.address ?? "");
+
+  const decorations = await appointmentListDecorations(slug, ids).catch(() => new Map<number, { packageSummary: string; prepaidSummary: string; staffColor: string }>());
+
+  return apptRows.map((r) => {
+    const aid = Number(r.id);
+    const cl = clientById.get(Number(r.client_id)) ?? { name: "", phone: "", email: "" };
+    const sv = svcByAppt.get(aid);
+    const primaryName = svcNameById.get(Number(r.service_id)) ?? "";
+    const serviceName = (sv && sv.names.length ? sv.names.join(", ") : primaryName) || "(nessun servizio)";
+    let total = sv ? sv.total : 0;
+    const coupon = extractCouponMetaFromNotes(r.notes);
+    let couponCode = "";
+    if (coupon.discount > 0.00001) {
+      total = Math.max(0, total - coupon.discount);
+      couponCode = coupon.code;
+    }
+    const staff = staffByAppt.get(aid);
+    const locId = Number(r.location_id ?? 0) || currentLocationId;
+    const loc = locById.get(locId);
+    const dec = decorations.get(aid) ?? { packageSummary: "", prepaidSummary: "" };
+    const starts = toDate(r.starts_at);
+    const ends = r.ends_at === null || r.ends_at === undefined ? null : toDate(r.ends_at);
+    const dateIso = dateIsoLocal(starts);
+    const [yy, mm, dd] = dateIso.split("-");
+    return {
+      id: aid,
+      publicCode: String(r.public_code ?? "").trim(),
+      serviceName,
+      dateLabel: `${dd}/${mm}/${yy}`,
+      timeLabel: timeLocal(starts),
+      endLabel: ends ? timeLocal(ends) : "",
+      staffName: staff && staff.names.length ? staff.names.join(", ") : "",
+      staffPhone: staff && staff.phones.length ? staff.phones.join(", ") : "",
+      staffEmail: staff && staff.emails.length ? staff.emails.join(", ") : "",
+      locationName: (loc?.name || bizName || "").trim() || "—",
+      locationAddress: (loc?.address || bizAddress || "").trim(),
+      clientName: cl.name || "—",
+      clientPhone: cl.phone || "",
+      clientEmail: cl.email || "",
+      total: roundMoney(total),
+      couponCode,
+      packageSummary: String(dec.packageSummary ?? ""),
+      prepaidSummary: String(dec.prepaidSummary ?? ""),
+    };
+  });
+}
+
 // Per-service segments (appointment_segments) with resolved staff names, exposed on
 // the calendar payload when the appointment has MORE THAN ONE segment — the legacy
 // list API builds one calendar event PER SEGMENT via HAVING COUNT(*) > 1

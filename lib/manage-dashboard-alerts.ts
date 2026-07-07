@@ -347,7 +347,7 @@ async function getInstallmentDueAlertGroups(
 // fidelity_expiry_reminder_enabled + an optional reminder-days setting. When the
 // reminder is disabled the legacy helper returns no groups.
 // ---------------------------------------------------------------------------
-type FidelityGroup = {
+export type FidelityGroup = {
   key: string;
   kind: DashboardAlertKind;
   title: string;
@@ -522,6 +522,13 @@ async function getFidelityCardAlertGroups(slug: string, tenantId: number | null)
 }
 
 // ---------------------------------------------------------------------------
+// Gruppi "Tessere Fidelity in scadenza/scadute" per la pagina notifiche (riusa il
+// port dashboard): risolve il tenant e delega a getFidelityCardAlertGroups.
+export async function notificationFidelityCardGroups(slug: string): Promise<FidelityGroup[]> {
+  const tenantId = await tenantIdForSlug(slug).catch(() => null);
+  return getFidelityCardAlertGroups(slug, tenantId).catch(() => []);
+}
+
 // Top-level builder — assembles the 6 alert types in legacy order, honouring
 // the same permission + location gating, skipping empty types.
 // ---------------------------------------------------------------------------

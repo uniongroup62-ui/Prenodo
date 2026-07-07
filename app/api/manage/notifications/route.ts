@@ -1,6 +1,7 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import { getAutomationSettings, saveClientBirthdayAlertDays } from "@/lib/automation-reminders";
-import { listDbNotifications, markDbNotificationRead } from "@/lib/db-repositories";
+import { listDbNotifications, listNotificationPendingAppointments, markDbNotificationRead } from "@/lib/db-repositories";
+import { notificationFidelityCardGroups } from "@/lib/manage-dashboard-alerts";
 import { currentManageSession } from "@/lib/manage-auth";
 import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -31,6 +32,24 @@ export async function GET(request: Request) {
         locationContext.needsLocationSelection,
       );
       return Response.json({ ok: true, ...summary }, { headers: { "Cache-Control": "no-store" } });
+    }
+
+    // Port di notifications.php: "Appuntamenti in attesa" (dettagli completi) +
+    // "Tessere Fidelity in scadenza/scadute", filtrati per la sede corrente.
+    if (action === "pending") {
+      const locationContext = await getManageLocationContext(tenantSlug);
+      const pending = await listNotificationPendingAppointments(tenantSlug, locationContext.currentLocationId);
+      const fidelityGroups = can(session.user.perms, "fidelity.membership")
+        ? await notificationFidelityCardGroups(tenantSlug)
+        : [];
+      const locationLabel = locationContext.locations.find((l) => l.id === locationContext.currentLocationId)?.name ?? "";
+      return Response.json({
+        ok: true,
+        pending,
+        fidelityGroups,
+        canManage: can(session.user.perms, "appointments.manage"),
+        locationLabel,
+      }, { headers: { "Cache-Control": "no-store" } });
     }
 
     // Impostazioni avvisi lette dalle pagine notifiche (giorni compleanni/rate).
