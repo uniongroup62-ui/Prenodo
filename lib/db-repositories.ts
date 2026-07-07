@@ -2430,7 +2430,9 @@ async function generateUniqueAppointmentPublicCode(slug: string): Promise<string
     const table = await tenantTable(slug, "appointments");
     if (!(await columnExists(table.name, "public_code"))) return null;
     for (let attempt = 0; attempt < 25; attempt++) {
-      const code = String(Math.floor(10000 + Math.random() * 90000));
+      // 5 cifre indipendenti 0-9 con zeri iniziali conservati (port di
+      // generate_public_code, Helpers.php:7921 — es. "04812"), NON [10000-99999].
+      const code = Array.from({ length: 5 }, () => Math.floor(Math.random() * 10)).join("");
       const rows = await tenantSelect<RowDataPacket>({
         slug,
         table: "appointments",
@@ -4957,6 +4959,15 @@ export async function deleteDbAppointment(slug: string, id: number): Promise<boo
   await deleteAppointmentChildren(slug, "appointment_staff", appointmentId);
   await deleteAppointmentChildren(slug, "appointment_locations", appointmentId);
   await deleteAppointmentChildren(slug, "appointment_gift_items", appointmentId);
+  // TUTTI i reminder dell'appuntamento (legacy appointments.php:259/470 fa
+  // `DELETE FROM reminders WHERE appointment_id=?` su ogni stato, non solo pending).
+  await deleteAppointmentChildren(slug, "reminders", appointmentId);
+  // Tabelle-link QB legacy (appointments.php:181-192/397-408): il modello nativo Next
+  // non le popola, ma i DATI MIGRATI sì — vanno pulite per non lasciare righe orfane
+  // che gonfiano i residui "prenotato". Best-effort (no-op se assenti/vuote).
+  await deleteAppointmentChildren(slug, "appointment_giftbox_items", appointmentId);
+  await deleteAppointmentChildren(slug, "appointment_package_items", appointmentId);
+  await deleteAppointmentChildren(slug, "appointment_prepaid_service_items", appointmentId);
 
   // 3b) Rilascia la prenotazione promozione (per_customer_limit) come il legacy
   //     appointments.php:256/469 — altrimenti la riga promotion_redemptions

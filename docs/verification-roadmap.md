@@ -7540,3 +7540,17 @@ nativi, elencate per riferimento): save senza validazione sede-servizio/sede-ope
 giftbox/package/prepaid (solo dati migrati), guard per-sede su delete/edit (multi-sede),
 points_storno_mode/preview blockers (TODO nel codice), notes non specchia staff_notes,
 public_code [10000-99999] senza zeri iniziali, reminders cleanup solo pending.
+
+## Appuntamenti: fix universali (public_code + cleanup delete) (2026-07-07)
+
+Batch di fix a impatto universale (anche dati nativi/mono-sede), basso rischio:
+- public_code: 5 CIFRE INDIPENDENTI 0-9 con zeri iniziali conservati (port di
+  generate_public_code, Helpers.php:7921 — es. "04812"), non più [10000-99999].
+  VERIFICATO: ~10% dei codici con zero iniziale (prima 0%).
+- deleteDbAppointment ora cancella TUTTI i reminder dell'appuntamento (legacy
+  appointments.php:259/470 `DELETE FROM reminders WHERE appointment_id=?`, non solo i
+  pending) + le tabelle-link QB legacy appointment_giftbox_items/appointment_package_
+  items/appointment_prepaid_service_items (dati MIGRATI; best-effort, no-op sui nativi).
+  VERIFICATO live: reminder 'sent' + appointment_package_items rimossi all'elimina.
+NB: gli orfani reminders pre-esistenti (da eliminazioni precedenti) NON toccati (dati
+non creati in sessione); il fix previene nuovi orfani.
