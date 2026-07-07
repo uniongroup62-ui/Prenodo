@@ -48,8 +48,12 @@ const CANCELLED_SALE = ["cancelled", "canceled", "annullata", "annullato"];
 
 const apptActiveSql = (alias: string) => `LOWER(TRIM(COALESCE(${alias}.status,''))) NOT IN (${CANCELLED_APPT.map((s) => `'${s}'`).join(",")})`;
 const saleActiveSql = (alias: string) => `LOWER(TRIM(COALESCE(${alias}.status,''))) NOT IN (${CANCELLED_SALE.map((s) => `'${s}'`).join(",")})`;
-// Filtro sede PERMISSIVO legacy (dashboard.php:41-56): include location NULL.
+// Filtro sede PERMISSIVO legacy (dashboard.php:41-56): include location NULL —
+// usato SOLO per gli appuntamenti (dashboardApptLocationFilter).
 const locFilter = (alias: string, locationId: number) => (locationId > 0 ? ` AND (${alias}.location_id = ${locationId} OR ${alias}.location_id IS NULL)` : "");
+// Filtro sede STRETTO legacy: il ramo clients/sales del KPI Clienti e la Vendite
+// 30gg usano `location_id=?` (dashboard.php:66,75,110) — NIENTE OR IS NULL.
+const locStrict = (alias: string, locationId: number) => (locationId > 0 ? ` AND ${alias}.location_id = ${locationId}` : "");
 
 // _pct_change (api_dashboard_performance:16-22): null quando prev=0 e cur>0.
 // Restituisce la percentuale GREZZA (l'arrotondamento a 1 decimale è fatto in
@@ -97,12 +101,16 @@ export async function getManageDashboard(
   // Formattatori it-IT con raggruppamento MANUALE: Node non raggruppa 1000-9999
   // con toLocaleString('it-IT'), mentre number_format PHP / Intl browser sì.
   const groupThousands = (intDigits: string) => intDigits.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-  // fmt_money / Intl currency: simbolo PRIMA ("€ 1.234,56").
-  const fmtEuro = (n: number) => {
+  const money = (n: number) => {
     const v = round2(n);
     const [ip, dp] = Math.abs(v).toFixed(2).split(".");
-    return `€ ${v < 0 ? "-" : ""}${groupThousands(ip)},${dp}`;
+    return `${v < 0 ? "-" : ""}${groupThousands(ip)},${dp}`;
   };
+  // KPI "Vendite 30gg": simbolo PRIMA come il legacy `€ fmt_money()` (dashboard.php:508).
+  const fmtEuroBefore = (n: number) => `€ ${money(n)}`;
+  // KPI settimanale "Ricavi": simbolo DOPO come dashboard.js fmtEUR (Intl currency
+  // it-IT = "1.234,56 €").
+  const fmtEuroAfter = (n: number) => `${money(n)} €`;
   // fmtNum (Intl it-IT intero): conteggi settimanali raggruppati.
   const fmtCount = (n: number) => `${n < 0 ? "-" : ""}${groupThousands(String(Math.trunc(Math.abs(n))))}`;
   // fmtHours (dashboard.js): 1 decimale, virgola, NESSUNA unità ("3,5").
@@ -122,19 +130,22 @@ export async function getManageDashboard(
       stats: [
         { label: "Clienti", value: "0", detail: "anagrafiche attive" },
         { label: "Appuntamenti oggi", value: "0", detail: "agenda operativa" },
-        { label: "Vendite ultimi 30gg", value: fmtEuro(0), detail: "vendite attive" },
+        { label: "Vendite ultimi 30gg", value: fmtEuroBefore(0), detail: "vendite attive" },
       ],
       weekly: {
         range: weekRange,
         metrics: [
           { label: "Appuntamenti", value: "0", deltaPct: 0 },
-          { label: "Ricavi", value: fmtEuro(0), deltaPct: 0 },
+          { label: "Ricavi", value: fmtEuroAfter(0), deltaPct: 0 },
           { label: "Ore lavorate", value: fmtHours(0), deltaPct: 0 },
           { label: "Nuovi clienti", value: "0", deltaPct: 0 },
         ],
         series: zeroSeries,
       },
-      upcoming: null,
+      // Legacy (dashboard.php:214-215,594): in fail-closed la card "Prossimi
+      // appuntamenti" resta VISIBILE ma VUOTA se calendar.view; i Costi restano
+      // nascosti (il widget è dentro !failClosed && canAny(costs)).
+      upcoming: opts.canSeeCalendar ? [] : null,
       costs: null,
     };
   }
@@ -148,10 +159,12 @@ export async function getManageDashboard(
   let kpiClients = 0;
   if (locationId > 0) {
     const rows = await dbQuery<RowDataPacket[]>(
+      // Rami clients/sales STRETTI (location_id=?), ramo appointments PERMISSIVO
+      // (location_id=? OR NULL) — esattamente come dashboard.php:66/71/75.
       `SELECT COUNT(DISTINCT client_id) AS c FROM (
-         SELECT id AS client_id FROM ${quoteIdentifier(clientsTable.name)} WHERE tenant_id = ${T} AND (location_id = ${locationId} OR location_id IS NULL)
+         SELECT id AS client_id FROM ${quoteIdentifier(clientsTable.name)} WHERE tenant_id = ${T} AND location_id = ${locationId}
          UNION SELECT a.client_id FROM ${quoteIdentifier(apptTable.name)} a WHERE a.tenant_id = ${T} AND a.client_id IS NOT NULL${locFilter("a", locationId)}
-         UNION SELECT s.client_id FROM ${quoteIdentifier(salesTable.name)} s WHERE s.tenant_id = ${T} AND s.client_id IS NOT NULL${locFilter("s", locationId)}
+         UNION SELECT s.client_id FROM ${quoteIdentifier(salesTable.name)} s WHERE s.tenant_id = ${T} AND s.client_id IS NOT NULL${locStrict("s", locationId)}
        ) u WHERE client_id IS NOT NULL`,
       [],
     ).catch(() => [] as RowDataPacket[]);
@@ -172,7 +185,7 @@ export async function getManageDashboard(
   // --- KPI Vendite ultimi 30gg (dashboard.php:105-130) ---
   const sales30Rows = await dbQuery<RowDataPacket[]>(
     `SELECT COALESCE(SUM(s.total),0) AS s FROM ${quoteIdentifier(salesTable.name)} s
-      WHERE s.tenant_id = ${T} AND s.sale_date >= NOW() - interval '30 days' AND ${saleActiveSql("s")}${locFilter("s", locationId)}`,
+      WHERE s.tenant_id = ${T} AND s.sale_date >= NOW() - interval '30 days' AND ${saleActiveSql("s")}${locStrict("s", locationId)}`,
     [],
   ).catch(() => [] as RowDataPacket[]);
   const kpiSales30 = round2(num(sales30Rows[0]?.s));
@@ -227,7 +240,10 @@ export async function getManageDashboard(
     return {
       appointments: num(cntRows[0]?.c),
       revenue: round2(num(revRows[0]?.r)),
-      hours: round2(num(hourRows[0]?.m) / 60),
+      // Ore GREZZE (no round2): il legacy calcola il delta sul valore non
+      // arrotondato (api_dashboard_performance.php:208-209,262); il rendering
+      // arrotonda a 1 decimale (fmtHours).
+      hours: num(hourRows[0]?.m) / 60,
       newClients: num(newRows[0]?.c),
     };
   };
@@ -253,16 +269,24 @@ export async function getManageDashboard(
   // --- Prossimi appuntamenti (dashboard.php:214-237) ---
   let upcoming: ManageDashboardPayload["upcoming"] = null;
   if (opts.canSeeCalendar) {
+    // Nome servizio come il legacy COALESCE(sv.services_name, s.name): usa lo
+    // SNAPSHOT appointment_services.service_name (fallback al nome corrente del
+    // servizio), e se l'appuntamento non ha righe servizio ricade su a.service_id.
+    const hasAsServiceName = await columnExists(asTable.name, "service_name");
+    const svcNameExpr = hasAsServiceName ? "COALESCE(NULLIF(TRIM(sv.service_name), ''), s.name)" : "s.name";
+    const fallbackJoin = hasApptServiceId ? `\n         LEFT JOIN ${quoteIdentifier(svcTable.name)} s2 ON s2.id = a.service_id AND s2.tenant_id = a.tenant_id` : "";
+    const fallbackCoalesce = hasApptServiceId ? ", s2.name" : "";
+    const fallbackGroupBy = hasApptServiceId ? ", s2.name" : "";
     const rows = await dbQuery<RowDataPacket[]>(
       `SELECT a.starts_at, c.full_name AS client_name,
-              COALESCE(NULLIF(STRING_AGG(DISTINCT s.name, ', '), ''), '') AS services
+              COALESCE(NULLIF(STRING_AGG(DISTINCT ${svcNameExpr}, ', '), '')${fallbackCoalesce}, '') AS services
          FROM ${quoteIdentifier(apptTable.name)} a
          LEFT JOIN ${quoteIdentifier(clientsTable.name)} c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
          LEFT JOIN ${quoteIdentifier(asTable.name)} sv ON sv.appointment_id = a.id AND sv.tenant_id = a.tenant_id
-         LEFT JOIN ${quoteIdentifier(svcTable.name)} s ON s.id = sv.service_id AND s.tenant_id = a.tenant_id
+         LEFT JOIN ${quoteIdentifier(svcTable.name)} s ON s.id = sv.service_id AND s.tenant_id = a.tenant_id${fallbackJoin}
         WHERE a.tenant_id = ${T} AND a.starts_at >= NOW() AND a.starts_at < NOW() + interval '7 days'
           AND LOWER(TRIM(COALESCE(a.status,''))) IN ('pending','scheduled')${locFilter("a", locationId)}
-        GROUP BY a.id, a.starts_at, c.full_name
+        GROUP BY a.id, a.starts_at, c.full_name${fallbackGroupBy}
         ORDER BY a.starts_at ASC
         LIMIT 10`,
       [],
@@ -320,13 +344,13 @@ export async function getManageDashboard(
     stats: [
       { label: "Clienti", value: String(kpiClients), detail: "anagrafiche attive" },
       { label: "Appuntamenti oggi", value: String(kpiApptToday), detail: "agenda operativa" },
-      { label: "Vendite ultimi 30gg", value: fmtEuro(kpiSales30), detail: "vendite attive" },
+      { label: "Vendite ultimi 30gg", value: fmtEuroBefore(kpiSales30), detail: "vendite attive" },
     ],
     weekly: {
       range: weekRange,
       metrics: [
         { label: "Appuntamenti", value: fmtCount(cur.appointments), deltaPct: pctChange(cur.appointments, prev.appointments) },
-        { label: "Ricavi", value: fmtEuro(cur.revenue), deltaPct: pctChange(cur.revenue, prev.revenue) },
+        { label: "Ricavi", value: fmtEuroAfter(cur.revenue), deltaPct: pctChange(cur.revenue, prev.revenue) },
         { label: "Ore lavorate", value: fmtHours(cur.hours), deltaPct: pctChange(cur.hours, prev.hours) },
         { label: "Nuovi clienti", value: fmtCount(cur.newClients), deltaPct: pctChange(cur.newClients, prev.newClients) },
       ],

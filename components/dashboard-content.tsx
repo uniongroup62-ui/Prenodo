@@ -81,6 +81,9 @@ function deltaText(deltaPct: number | null): string {
 export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: string }) {
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState("");
+  // Port di setPerfError (dashboard.js:42-52,83-85): messaggio d'errore dedicato
+  // per il grafico quando Chart.js non è disponibile.
+  const [chartError, setChartError] = useState("");
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const chartRef = useRef<any>(null);
@@ -105,12 +108,20 @@ export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const w = window as any;
     let stop = false;
+    // Attesa di Chart.js con LIMITE (~3s): oltre il quale mostra il fallback
+    // legacy invece di ritentare in silenzio all'infinito.
+    let attempts = 0;
     const draw = () => {
       if (stop) return;
       if (!w.Chart) {
+        if (attempts++ >= 20) {
+          setChartError("Grafico non disponibile al momento.");
+          return;
+        }
         setTimeout(draw, 150);
         return;
       }
+      setChartError("");
       if (chartRef.current) chartRef.current.destroy();
       chartRef.current = new w.Chart(canvasRef.current, {
         type: "line",
@@ -232,6 +243,13 @@ export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: 
                     <div className="small text-muted">Andamento ricavi (giornaliero)</div>
                     <div className="small text-muted">{data?.weekly.range}</div>
                   </div>
+                  {/* Port di #perfError (dashboard.php:523): avviso inline se il grafico
+                      non è disponibile. */}
+                  {chartError ? (
+                    <div className="alert alert-warning py-2" role="alert">
+                      {chartError}
+                    </div>
+                  ) : null}
                   <div className="dashboard-chart-canvas">
                     <canvas ref={canvasRef} id="perfChart" height={120} />
                   </div>
@@ -315,7 +333,12 @@ export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: 
                                   {al.lines.map((line, li) => (
                                     <div key={li}>• {line}</div>
                                   ))}
-                                  {al.linesMore && al.linesMore > 0 ? <div>…e altre {al.linesMore}</div> : null}
+                                  {/* staff_off usa il blocco dedicato legacy "…e altri"
+                                      (maschile, dashboard.php:668); gli altri gruppi il
+                                      generico "…e altre" (dashboard.php:654). */}
+                                  {al.linesMore && al.linesMore > 0 ? (
+                                    <div>{al.key === "staff_off" ? "…e altri" : "…e altre"} {al.linesMore}</div>
+                                  ) : null}
                                 </div>
                               ) : null}
                             </div>

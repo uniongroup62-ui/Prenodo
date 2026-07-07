@@ -2,6 +2,7 @@ import "server-only";
 
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { dbQuery, tenantIdForSlug, tenantSelect } from "@/lib/tenant-db";
+import { fidelityAddCardDurationYmd, fidelityCardExpiryNotificationConfig } from "@/lib/db-repositories";
 import { can } from "@/lib/role-permissions";
 import {
   automationAlertDays,
@@ -357,37 +358,23 @@ export type FidelityGroup = {
   linesMore: number;
 };
 
-type FidelityConfig = { mode: "disabled" | "reminder" | "renewal"; value: number; unit: "days" | "weeks" | "months" };
+type FidelityConfig = { mode: "disabled" | "reminder" | "renewal"; value: number; unit: "days" | "months" | "years" };
 
 async function getFidelityConfig(slug: string): Promise<FidelityConfig> {
-  // Port of fidelity_card_expiry_notification_config(): when the reminder is
-  // disabled, the helper short-circuits and returns no groups. When enabled,
-  // the reminder window is N days (we read the configured alert-days, clamped).
-  try {
-    if (!(await tenantColumnExists(slug, "automation_settings", "fidelity_expiry_reminder_enabled"))) {
-      return { mode: "disabled", value: 0, unit: "days" };
-    }
-    // Tenant-scoped (tenantSelect adds tenant_id in shared mode), mirroring the
-    // legacy single-row automation_settings read.
-    const rows = await tenantSelect<RowDataPacket>({
-      slug,
-      table: "automation_settings",
-      columns: "fidelity_expiry_reminder_enabled",
-      orderBy: "id ASC",
-      limit: 1,
-    });
-    const enabled = Number(rows[0]?.fidelity_expiry_reminder_enabled ?? 0) === 1;
-    if (!enabled) return { mode: "disabled", value: 0, unit: "days" };
-    // The legacy default reminder window is the generic alert-days (7) when no
-    // dedicated card-reminder window is stored.
-    const days = await automationAlertDays(slug, "installment_alert_days");
-    return { mode: "reminder", value: days, unit: "days" };
-  } catch {
-    return { mode: "disabled", value: 0, unit: "days" };
-  }
+  // Port FEDELE di fidelity_card_expiry_notification_config(): la sorgente è
+  // businesses.fidelity_adhesion_json (durata/rinnovo/expiry_reminder_days), NON
+  // il toggle email automation_settings.fidelity_expiry_reminder_enabled (che era
+  // la sorgente sbagliata e causava falsi negativi/positivi). 'disabled' quando la
+  // scadenza tessera è spenta; altrimenti 'renewal' (rinnovo attivo) o 'reminder'.
+  return fidelityCardExpiryNotificationConfig(slug).catch(
+    () => ({ mode: "disabled", value: 0, unit: "days" }) as FidelityConfig,
+  );
 }
 
-async function getFidelityCardAlertGroups(slug: string, tenantId: number | null): Promise<FidelityGroup[]> {
+// previewLimit: righe di anteprima per gruppo. La DASHBOARD usa 3
+// (fidelity_card_notification_groups(3), dashboard.php:363); la pagina NOTIFICHE usa
+// 5 (notifications.php:322).
+async function getFidelityCardAlertGroups(slug: string, tenantId: number | null, previewLimit = 3): Promise<FidelityGroup[]> {
   try {
     if (!(await tenantTableExists(slug, "cards"))) return [];
     const hasExpiresAt = await tenantColumnExists(slug, "cards", "expires_at");
@@ -401,7 +388,6 @@ async function getFidelityCardAlertGroups(slug: string, tenantId: number | null)
     const hasStatus = await tenantColumnExists(slug, "cards", "status");
     const hasIsActive = await tenantColumnExists(slug, "cards", "is_active");
 
-    const previewLimit = 3;
     const tenantFc = tenantId !== null ? " AND fc.tenant_id=?" : "";
     const params: unknown[] = [];
     if (tenantId !== null) params.push(tenantId);
@@ -440,20 +426,30 @@ async function getFidelityCardAlertGroups(slug: string, tenantId: number | null)
       if (!isExpired && !isActive) continue;
 
       const days = daysBetweenYmd(today, expiresAt);
+      // Modalità 'renewal' (rinnovo automatico): status "In finestra rinnovo" e
+      // inclusione se oggi ∈ [scadenza - finestra, scadenza] (Helpers.php:5262-5279).
+      const isRenewal = cfg.mode === "renewal" && cfg.value > 0;
       const item: Item = {
         clientName: String(row.client_name ?? "").trim() || "Cliente",
         expiresAt,
         expiresLabel: formatYmdLabel(expiresAt),
-        statusLabel: isExpired ? "Scaduta" : days === 0 ? "Scade oggi" : "In scadenza",
+        statusLabel: isExpired ? "Scaduta" : isRenewal ? "In finestra rinnovo" : days === 0 ? "Scade oggi" : "In scadenza",
       };
 
       if (isExpired) {
         expiredRows.push(item);
         continue;
       }
-      // reminder mode: include cards expiring within `value` days.
-      const reminderDays = Math.max(0, cfg.value);
-      const include = reminderDays > 0 && days >= 0 && days <= reminderDays;
+      let include = false;
+      if (isRenewal) {
+        // Finestra di rinnovo: da (scadenza - value unità) fino alla scadenza.
+        const windowStart = fidelityAddCardDurationYmd(expiresAt, -Math.abs(cfg.value), cfg.unit);
+        include = !!windowStart && today >= windowStart && today <= expiresAt;
+      } else {
+        // reminder mode: tessere in scadenza entro `value` giorni.
+        const reminderDays = Math.max(0, cfg.value);
+        include = reminderDays > 0 && days >= 0 && days <= reminderDays;
+      }
       if (!include) continue;
       const bucket = dueBuckets.get(days) ?? [];
       bucket.push(item);
@@ -526,7 +522,8 @@ async function getFidelityCardAlertGroups(slug: string, tenantId: number | null)
 // port dashboard): risolve il tenant e delega a getFidelityCardAlertGroups.
 export async function notificationFidelityCardGroups(slug: string): Promise<FidelityGroup[]> {
   const tenantId = await tenantIdForSlug(slug).catch(() => null);
-  return getFidelityCardAlertGroups(slug, tenantId).catch(() => []);
+  // Pagina notifiche: anteprima di 5 righe come il legacy (notifications.php:322).
+  return getFidelityCardAlertGroups(slug, tenantId, 5).catch(() => []);
 }
 
 // Gruppi "Rate in scadenza/scadute" per il feed notifiche browser.
@@ -743,5 +740,9 @@ function formatYmdLabel(value: string): string {
 
 // number_format(value, 2, ',', '.') — Italian thousands/decimals.
 function formatMoneyIt(value: number): string {
-  return value.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // Raggruppamento MANUALE: Node non raggruppa 1000-9999 con toLocaleString('it-IT'),
+  // mentre number_format PHP sì (SaleInstallments::formatAlertInstallmentLine).
+  const neg = value < 0;
+  const [ip, dp] = Math.abs(value).toFixed(2).split(".");
+  return `${neg ? "-" : ""}${ip.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${dp}`;
 }

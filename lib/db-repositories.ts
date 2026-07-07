@@ -17717,6 +17717,45 @@ function parseCardRenewalWindowConfig(raw: unknown): { enabled: boolean; value: 
   return { enabled, value: enabled ? value : 0, unit };
 }
 
+// Finestra promemoria scadenza tessera (port di fidelity_card_expiry_reminder_days,
+// Helpers.php:4086-4095): legge expiry_reminder_days da fidelity_adhesion_json,
+// clamp 0..36500.
+function parseExpiryReminderDays(raw: unknown): number {
+  const s = String(raw ?? "").trim();
+  let data: Record<string, unknown> = {};
+  if (s !== "") { try { const p = JSON.parse(s); if (p && typeof p === "object" && !Array.isArray(p)) data = p as Record<string, unknown>; } catch { data = {}; } }
+  let days = Math.trunc(Number(data.expiry_reminder_days ?? 0) || 0);
+  if (days < 0) days = 0;
+  if (days > 36500) days = 36500;
+  return days;
+}
+
+// Config notifiche scadenza tessera (port FEDELE di fidelity_card_expiry_notification_config,
+// Helpers.php:4252-4284): sorgente = businesses.fidelity_adhesion_json (NON il toggle
+// email delle automazioni). 'disabled' se la scadenza tessera è spenta (durata<=0);
+// altrimenti 'renewal' (rinnovo attivo & finestra>0) oppure 'reminder' (expiry_reminder_days).
+export type FidelityCardExpiryMode = "disabled" | "renewal" | "reminder";
+export async function fidelityCardExpiryNotificationConfig(
+  slug: string,
+): Promise<{ mode: FidelityCardExpiryMode; value: number; unit: "days" | "months" | "years" }> {
+  const bizRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_adhesion_json", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const raw = bizRows[0]?.fidelity_adhesion_json;
+  const validity = parseCardValidityConfig(raw);
+  if (!validity.enabled || validity.value <= 0) return { mode: "disabled", value: 0, unit: "days" };
+  const renewal = parseCardRenewalWindowConfig(raw);
+  if (renewal.enabled && renewal.value > 0) {
+    const unit = (["days", "months", "years"].includes(renewal.unit) ? renewal.unit : "days") as "days" | "months" | "years";
+    return { mode: "renewal", value: renewal.value, unit };
+  }
+  return { mode: "reminder", value: parseExpiryReminderDays(raw), unit: "days" };
+}
+
+// Aggiunge una durata (days/months/years) a una data Y-m-d — riuso di addCardDuration
+// per la finestra di rinnovo negli avvisi dashboard.
+export function fidelityAddCardDurationYmd(baseYmd: string, value: number, unit: string): string {
+  return addCardDuration(baseYmd, value, unit);
+}
+
 // Rinnovo automatico tessera su attività (port of fidelity_card_try_auto_renew_by_activity,
 // Helpers.php ~4975): quando un earn da vendita/appuntamento cade nella finestra di
 // rinnovo (tra scadenza-finestra e scadenza), la tessera ATTIVA del cliente viene

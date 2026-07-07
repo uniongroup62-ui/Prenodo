@@ -7338,3 +7338,60 @@ adversariale (3 verificatori Playwright indipendenti sul codice live): (A) 6 cli
 2,0,2,0,2,0 figlie visibili + freccia che gira, 0 errori; (B) click utente + reload →
 2 figlie col contenuto esatto in entrambe le sessioni; (C) 0 tr.ms-child da chiuso,
 toggle solo sulle righe multi, nessun errore duplicate-key, badge presente.
+
+
+---
+
+## Dashboard: 2° audit completo (workflow) — residui chiusi (2026-07-07)
+
+Audit indipendente (workflow: 6 lettori paralleli per sotto-area + verifica
+adversariale di ogni divergenza; 28 confermate su 31 candidate, 3 già-risolte).
+Verifica numerica live PASS (ogni valore API == ricalcolo dal DB). Chiusi i residui
+materiali; le cosmetiche (BETWEEN vs semiaperto, guardia pct_change) e il modello
+location cross-cutting (userHasNoLocations) lasciati come deliberati.
+
+### KPI: filtro sede STRETTO su clients/sales/Vendite30 (era permissivo)
+Il legacy usa `location_id=?` STRETTO per i rami clients (dashboard.php:66) e sales
+(:75) dell'UNION Clienti e per Vendite 30gg (:110); solo il ramo appuntamenti è
+permissivo (:71/48). Il Next li aveva resi tutti permissivi (OR IS NULL) →
+sovrastima con anagrafiche/vendite a sede NULL. Aggiunto helper locStrict; ramo
+appuntamenti resta locFilter. VERIFICATO live: Clienti 6→4, identico al ricalcolo
+STRETTO legacy (2 clienti sede-NULL senza appuntamenti/vendite in sede correttamente
+esclusi).
+
+### Ricavi settimanali: simbolo € DOPO (Intl it-IT)
+Il KPI settimanale "Ricavi" del legacy usa dashboard.js fmtEUR = Intl currency it-IT
+= "1.234,56 €" (simbolo DOPO), mentre il KPI "Vendite 30gg" usa `€ fmt_money` (PRIMA).
+Erano stati unificati a "€ ...". Separati: fmtEuroBefore (Vendite 30gg) / fmtEuroAfter
+(Ricavi settimanale). VERIFICATO live: Vendite "€ 40,00", Ricavi "24,00 €".
+
+### Avviso Tessere Fidelity: gate su sorgente corretta + renewal + reminder-days
+getFidelityConfig leggeva automation_settings.fidelity_expiry_reminder_enabled (toggle
+EMAIL) invece della config scadenza tessera da businesses.fidelity_adhesion_json →
+falsi negativi/positivi. Nuovo fidelityCardExpiryNotificationConfig (db-repositories,
+port di fidelity_card_expiry_notification_config): disabled se scadenza spenta,
+altrimenti renewal (rinnovo attivo) o reminder (expiry_reminder_days). Aggiunta
+modalità renewal in getFidelityCardAlertGroups (finestra [scadenza-window, scadenza],
+status "In finestra rinnovo") e window/segno via fidelityAddCardDurationYmd. Verifica
+adversariale (agente indipendente): FEDELE punti 1-6. No-op per tenant senza tessere.
+
+### Prossimi appuntamenti: nome servizio snapshot + fallback a.service_id
+Usato lo SNAPSHOT appointment_services.service_name (fallback nome corrente) e, se
+l'appuntamento non ha righe servizio, fallback su a.service_id → services.name (come
+COALESCE(sv.services_name, s.name) legacy). Prima gli appuntamenti senza righe
+mostravano "—" e i servizi rinominati il nome corrente.
+
+### Altri residui
+- Fail-closed: card "Prossimi appuntamenti" resta VISIBILE ma VUOTA (upcoming [])
+  se calendar.view, invece che nascosta (dashboard.php:214-215,594).
+- Ore lavorate: delta sul valore GREZZO (no round2) come il legacy.
+- Avvisi: overflow "…e altri" per staff_off (maschile, dashboard.php:668) vs "…e
+  altre" per gli altri (:654).
+- Importo rate: raggruppamento migliaia MANUALE (trappola toLocaleString it-IT Node).
+- Grafico: fallback "Grafico non disponibile al momento." + elemento #perfError se
+  Chart.js non carica entro ~3s (port di setPerfError).
+- previewLimit parametrizzato (3 dashboard / 5 pagina notifiche, notifications.php:322)
+  — fix collaterale trovato dalla verifica adversariale.
+
+VERIFICATO: tsc pulito; render Playwright senza errori console; KPI/€/grafico/avvisi
+corretti; nessuna scrittura DB (solo letture).
