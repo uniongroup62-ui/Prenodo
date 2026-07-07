@@ -7445,3 +7445,15 @@ mini-picker. VERIFICATO live entrambi.
 ### Note read-only (M21)
 I controlli di scrittura (Nuova / Salva nota / Elimina) sono nascosti senza
 appointments.manage — completa il gate note lato client.
+
+## Calendario batch 3: filtri (2026-07-07)
+
+Filtro Operatore (Giorno): non riduce più le colonne (M6) — tutte visibili come il
+legacy STAFF_DAY_COLS; è applicato agli EVENTI (visibleAppts) come il filtro
+server-side staff_id, così il totale lo riflette (M7). Conteggio per colonna =
+appuntamenti DISTINTI, non i blocchi/segmenti (M8). Filtri Operatore e Servizio
+SEGMENT-AWARE (M16/M17): un multi-servizio matcha se un QUALSIASI segmento/servizio
+corrisponde (apptInvolvesStaff/apptIncludesService), non solo il primario — come il
+filtro server staff_id/service_id. VERIFICATO live: filtrando per "test2" (servizio
+non primario di #42806) l'appuntamento resta visibile; total conta 1 (distinto) con 2
+segmenti; filtro stato canceled -> 0. M2 (servizi per sede) non rilevante (1 sede).

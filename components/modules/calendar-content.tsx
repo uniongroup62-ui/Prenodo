@@ -155,6 +155,23 @@ type Appointment = {
 
 type CalendarView = "staffTimeGridDay" | "timeGridWeek" | "dayGridMonth";
 
+// Match SEGMENT-AWARE per i filtri calendario. Il legacy filtra lato server per
+// staff_id / service_id, che matchano QUALSIASI operatore/servizio dell'appuntamento
+// (anche di un segmento non primario), non solo il primario.
+function apptInvolvesStaff(a: Appointment, staffName: string): boolean {
+  const t = staffName.trim().toLowerCase();
+  if (!t) return true;
+  if ((a.operator || "").trim().toLowerCase() === t) return true;
+  return (a.segments ?? []).some((seg) => (seg.staffName || "").trim().toLowerCase() === t);
+}
+function apptIncludesService(a: Appointment, serviceName: string): boolean {
+  const t = serviceName.trim().toLowerCase();
+  if (!t) return true;
+  if ((a.service || "").trim().toLowerCase() === t) return true;
+  if ((a.services ?? []).some((s) => (s.name || "").trim().toLowerCase() === t)) return true;
+  return (a.segments ?? []).some((seg) => (seg.serviceName || "").trim().toLowerCase() === t);
+}
+
 function tenantSlug(): string {
   if (typeof window === "undefined") return "";
   return window.location.pathname.split("/")[1] || "";
@@ -1253,47 +1270,48 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
   // faithful to STAFF_DAY_COLS). The filter composes with the order: the pinned
   // (logged-in) operator is first, then the saved order of the others, then the rest.
   const staffCols = useMemo(() => {
-    const filtered = filterStaff ? staff.filter((s) => String(s.id) === filterStaff) : staff;
-    return applyStaffDayColumnsOrdering(filtered, currentStaffId, savedStaffOrder);
-  }, [staff, filterStaff, currentStaffId, savedStaffOrder]);
+    // Colonne = TUTTI gli operatori (legacy STAFF_DAY_COLS): il filtro Operatore
+    // NON riduce le colonne (M6), filtra gli EVENTI (vedi visibleAppts) come il
+    // filtro server-side staff_id del legacy.
+    return applyStaffDayColumnsOrdering(staff, currentStaffId, savedStaffOrder);
+  }, [staff, currentStaffId, savedStaffOrder]);
 
   // Shared filter predicate (operator/service/status) WITHOUT any date constraint —
-  // applied by Week/Month so the toolbar filters affect those views too.
+  // applied by Week/Month so the toolbar filters affect those views too. Operatore e
+  // servizio sono SEGMENT-AWARE (M16/M17): un multi-servizio matcha se un QUALSIASI
+  // segmento corrisponde (come il filtro server staff_id/service_id).
   const passesFilters = useCallback(
     (a: Appointment): boolean => {
       if (filterStaff) {
         const s = staff.find((st) => String(st.id) === filterStaff);
-        if (s && (a.operator || "").trim().toLowerCase() !== s.name.trim().toLowerCase()) return false;
+        if (s && !apptInvolvesStaff(a, s.name)) return false;
       }
       if (filterStatus) {
         if (statusKeyFromLabel(a.statusCode ?? a.status).key !== filterStatus) return false;
       }
       if (filterService) {
         const svc = services.find((s) => String(s.id) === filterService);
-        if (svc && a.service && a.service.trim().toLowerCase() !== svc.name.trim().toLowerCase()) return false;
+        if (svc && !apptIncludesService(a, svc.name)) return false;
       }
       return true;
     },
     [filterStaff, filterStatus, filterService, staff, services],
   );
 
-  // Appointments visible for the current real day, after filters (Day view). The
-  // operator filter is applied per-column via staffCols in the Day grid, so it is
-  // intentionally NOT applied here (keeps the Day total/columns unchanged).
+  // Appointments visible for the current real day, after filters (Day view). Il
+  // filtro Operatore è applicato QUI sugli eventi (come il filtro server-side
+  // legacy), così il totale (M7) lo riflette e tutte le colonne restano visibili.
   const visibleAppts = useMemo(() => {
+    const staffName = filterStaff ? staff.find((s) => String(s.id) === filterStaff)?.name ?? "" : "";
+    const svcName = filterService ? services.find((s) => String(s.id) === filterService)?.name ?? "" : "";
     return appointments.filter((a) => {
       if (a.date && a.date !== date) return false;
-      if (filterStatus) {
-        const k = statusKeyFromLabel(a.statusCode ?? a.status).key;
-        if (k !== filterStatus) return false;
-      }
-      if (filterService) {
-        const svc = services.find((s) => String(s.id) === filterService);
-        if (svc && a.service && a.service.trim().toLowerCase() !== svc.name.trim().toLowerCase()) return false;
-      }
+      if (filterStatus && statusKeyFromLabel(a.statusCode ?? a.status).key !== filterStatus) return false;
+      if (svcName && !apptIncludesService(a, svcName)) return false;
+      if (staffName && !apptInvolvesStaff(a, staffName)) return false;
       return true;
     });
-  }, [appointments, date, filterStatus, filterService, services]);
+  }, [appointments, date, filterStatus, filterService, filterStaff, staff, services]);
 
   // Range-filtered appointments (Week/Month) — all filters incl. operator, no
   // single-day constraint. Grouped by ISO date for fast per-cell/per-column lookup,
@@ -3393,7 +3411,9 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                           staffCols.map((s, colIndex) => {
                             const first = (Array.from(s.name.trim())[0] || "O").toUpperCase();
                             const colAppts = apptsForStaff(s.name);
-                            const colCount = colAppts.length;
+                            // Conteggio = appuntamenti DISTINTI (non i blocchi/segmenti):
+                            // un multi-servizio con 2 segmenti nella stessa colonna conta 1 (M8).
+                            const colCount = new Set(colAppts.map((b) => b.id)).size;
                             return (
                               <div
                                 key={s.id}
