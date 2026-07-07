@@ -1,5 +1,30 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Pagamenti AUDIT-2 batch 3: scarico stock ATOMICO (anti-oversell) (2026-07-07)
+
+`adjustProductStock` faceva read-compute-write (leggeva la giacenza, calcolava next, poi
+UPDATE) → NON atomico: due casse concorrenti sullo stesso prodotto/sede leggevano la stessa
+giacenza e scrivevano entrambe → OVERSELL. Il legacy usa `app_product_stock_adjust` con
+check+decrement atomico ("Hardening: evita oversell in caso di concorrenza"). FIX: decremento
+ATOMICO via UPDATE condizionale con il guard nel WHERE (`COALESCE(stock,0)+delta >= -eps`),
+sia sul ramo product_stocks sia sul fallback products; se 0 righe toccate → "Giacenza
+insufficiente per {nome}." (il DB serializza gli UPDATE sulla riga, quindi il secondo vede il
+decremento del primo). VERIFICATO live 4/4 con test di CONCORRENZA REALE: stock=1, due checkout
+paralleli sull'ultima unità → esattamente 1 riesce, l'altro "Giacenza insufficiente", stock
+finale 0 (mai negativo); regressione checkout 8/8 + report netto 4/4.
+
+TRANSAZIONALITA' checkout/annullo + errore piano rate (#8) — NON FATTO in questo batch,
+richiede infrastruttura: checkout/cancel NON sono avvolti in transazione (il legacy usa un
+unico $pdo->beginTransaction/commit/rollBack). Esiste gia' `withTenantTransaction` (tenant-db.ts)
+ma checkout usa i primitivi pool-based (tenantInsert/dbExecute) in ~15 funzioni annidate:
+renderlo atomico richiede o (a) filtrare il client `q` per tutte le funzioni, o (b) un context
+AsyncLocalStorage nel layer DB CORE — entrambi con blast radius APP-WIDE (ogni pagina) e
+regressione app-wide. Il test di concorrenza sopra CONFERMA il gap: il checkout perdente aveva
+gia' inserito una vendita ORFANA prima del throw sullo stock. #8 (errore creazione piano rate
+ingoiato dal catch{}) e' entangled: senza transazione, la vendita e' gia' committata prima del
+piano, quindi ne un-swallow ne compensazione sono sicuri. Da fare come task infrastrutturale
+dedicato con regressione app-wide (non solo Pagamenti).
+
 ## Pagamenti AUDIT-2 batch 2: ricavo NETTO nei report (no doppio conteggio) (2026-07-07)
 
 Il legacy MEMORIZZA sales.total gia' al netto dei residui (pos.php:4585/4605: $total -=

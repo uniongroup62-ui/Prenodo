@@ -4511,16 +4511,27 @@ async function adjustProductStock(slug: string, productId: number, locationId: n
         is_enabled: 1,
       }));
     }
-    const current = await currentProductStock(slug, productId, locationId);
-    const next = roundQuantity(current + delta);
-    if (next < -0.00001) throw new Error(`Giacenza insufficiente per ${productDisplayName(String(product.name ?? "Prodotto"), String(product.sku ?? ""))}.`);
-    await updateProductStockRow(slug, productId, locationId, { stock: Math.max(0, next), is_enabled: 1 });
+    // Decremento/incremento ATOMICO (port di app_product_stock_adjust — "Hardening: evita
+    // oversell in caso di concorrenza"): il guard sulla giacenza sta nel WHERE, quindi due casse
+    // concorrenti sullo stesso prodotto/sede non possono scendere sotto zero (il secondo UPDATE
+    // non tocca righe -> "Giacenza insufficiente"). Sostituisce il vecchio read-compute-write.
+    const decScope = await tenantScope(stocksTable, ["product_id=?", "location_id=?", "COALESCE(stock,0) + ? >= -0.00001"], [productId, locationId, delta]);
+    const decRes = await dbExecute(
+      `UPDATE ${quoteIdentifier(stocksTable.name)} SET stock=GREATEST(0, COALESCE(stock,0) + ?), is_enabled=1${decScope.where}`,
+      [delta, ...decScope.params],
+    );
+    if ((decRes.affectedRows ?? 0) === 0) throw new Error(`Giacenza insufficiente per ${productDisplayName(String(product.name ?? "Prodotto"), String(product.sku ?? ""))}.`);
     await refreshProductAggregateStock(slug, productId);
     return;
   }
-  const next = roundQuantity((Number(product.stock ?? 0) || 0) + delta);
-  if (next < -0.00001) throw new Error(`Giacenza insufficiente per ${productDisplayName(String(product.name ?? "Prodotto"), String(product.sku ?? ""))}.`);
-  await tenantUpdate({ slug, table: "products", id: productId, values: { stock: Math.max(0, next) } });
+  // Fallback senza product_stocks: stesso decremento atomico su products.stock.
+  const prodTable = await tenantTable(slug, "products");
+  const prodScope = await tenantScope(prodTable, ["id=?", "COALESCE(stock,0) + ? >= -0.00001"], [productId, delta]);
+  const prodRes = await dbExecute(
+    `UPDATE ${quoteIdentifier(prodTable.name)} SET stock=GREATEST(0, COALESCE(stock,0) + ?)${prodScope.where}`,
+    [delta, ...prodScope.params],
+  );
+  if ((prodRes.affectedRows ?? 0) === 0) throw new Error(`Giacenza insufficiente per ${productDisplayName(String(product.name ?? "Prodotto"), String(product.sku ?? ""))}.`);
 }
 
 async function updateProductStockRow(slug: string, productId: number, locationId: number, values: Record<string, unknown>): Promise<void> {
