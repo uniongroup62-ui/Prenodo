@@ -140,6 +140,10 @@ type Appointment = {
   // service). Absent/empty -> the blocks fall back to the single `service`.
   services?: { serviceId: number; name: string; price?: string }[];
   operator: string;
+  // Id dell'operatore primario (appointment_staff). Il calendario piazza i blocchi
+  // nella colonna PER ID (come il legacy per staff_id): il solo `operator` (nome) non
+  // distingue due operatori omonimi. Assente sui dati vecchi -> fallback al nome.
+  operatorId?: number;
   room?: string;
   price?: string;
   status: string;
@@ -155,15 +159,41 @@ type Appointment = {
 
 type CalendarView = "staffTimeGridDay" | "timeGridWeek" | "dayGridMonth";
 
+// Un blocco/segmento appartiene alla colonna operatore `col` se corrisponde per ID
+// (robusto agli operatori OMONIMI, come il legacy che piazza per staff_id); fallback
+// al NOME solo quando l'id non è disponibile su uno dei due lati (dati vecchi).
+function staffColMatches(col: { id: number; name: string }, staffId: number | undefined, staffName: string | undefined): boolean {
+  if (col.id > 0 && staffId && staffId > 0) return staffId === col.id;
+  const t = (col.name || "").trim().toLowerCase();
+  if (!t) return false;
+  return (staffName || "").trim().toLowerCase() === t;
+}
+
 // Match SEGMENT-AWARE per i filtri calendario. Il legacy filtra lato server per
 // staff_id / service_id, che matchano QUALSIASI operatore/servizio dell'appuntamento
 // (anche di un segmento non primario), non solo il primario.
-function apptInvolvesStaff(a: Appointment, staffName: string): boolean {
-  const t = staffName.trim().toLowerCase();
-  if (!t) return true;
-  if ((a.operator || "").trim().toLowerCase() === t) return true;
-  return (a.segments ?? []).some((seg) => (seg.staffName || "").trim().toLowerCase() === t);
+function apptInvolvesStaff(a: Appointment, col: { id: number; name: string }): boolean {
+  if (!(col.id > 0) && !col.name.trim()) return true;
+  if (staffColMatches(col, a.operatorId, a.operator)) return true;
+  return (a.segments ?? []).some((seg) => staffColMatches(col, seg.staffId, seg.staffName));
 }
+// Risolve l'operatore (pallino colore/foto nelle viste Settimana/Mese) PER ID quando
+// disponibile — due operatori OMONIMI mostrano così il colore corretto; fallback al
+// nome per i dati senza id.
+function findOperatorStaff(
+  staff: CalendarStaff[],
+  block: { operatorId?: number; segStaffId?: number; operator?: string },
+): CalendarStaff | undefined {
+  const id = Number(block.segStaffId ?? block.operatorId ?? 0) || 0;
+  if (id > 0) {
+    const byId = staff.find((s) => s.id === id);
+    if (byId) return byId;
+  }
+  const t = (block.operator || "").trim().toLowerCase();
+  if (!t) return undefined;
+  return staff.find((s) => (s.name || "").trim().toLowerCase() === t);
+}
+
 function apptIncludesService(a: Appointment, serviceName: string): boolean {
   const t = serviceName.trim().toLowerCase();
   if (!t) return true;
@@ -1316,7 +1346,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
     (a: Appointment): boolean => {
       if (filterStaff) {
         const s = staff.find((st) => String(st.id) === filterStaff);
-        if (s && !apptInvolvesStaff(a, s.name)) return false;
+        if (s && !apptInvolvesStaff(a, s)) return false;
       }
       if (filterStatus) {
         if (statusKeyFromLabel(a.statusCode ?? a.status).key !== filterStatus) return false;
@@ -1334,13 +1364,13 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
   // filtro Operatore è applicato QUI sugli eventi (come il filtro server-side
   // legacy), così il totale (M7) lo riflette e tutte le colonne restano visibili.
   const visibleAppts = useMemo(() => {
-    const staffName = filterStaff ? staff.find((s) => String(s.id) === filterStaff)?.name ?? "" : "";
+    const staffCol = filterStaff ? staff.find((s) => String(s.id) === filterStaff) : undefined;
     const svcName = filterService ? services.find((s) => String(s.id) === filterService)?.name ?? "" : "";
     return appointments.filter((a) => {
       if (a.date && a.date !== date) return false;
       if (filterStatus && statusKeyFromLabel(a.statusCode ?? a.status).key !== filterStatus) return false;
       if (svcName && !apptIncludesService(a, svcName)) return false;
-      if (staffName && !apptInvolvesStaff(a, staffName)) return false;
+      if (staffCol && !apptInvolvesStaff(a, staffCol)) return false;
       return true;
     });
   }, [appointments, date, filterStatus, filterService, filterStaff, staff, services]);
@@ -1362,8 +1392,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
     return map;
   }, [appointments, passesFilters]);
 
-  function apptsForStaff(staffName: string): CalBlock[] {
-    const target = staffName.trim().toLowerCase();
+  function apptsForStaff(col: { id: number; name: string }): CalBlock[] {
     const out: CalBlock[] = [];
     for (const a of visibleAppts) {
       // Segmented appointment (>1 segment, legacy per-segment events): one VIRTUAL
@@ -1371,10 +1400,10 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
       // column would look free while they are busy on their own segment. The virtual
       // block keeps the appointment id (click still opens the same edit drawer) but
       // takes the segment's window/service/operator + the segment identity for the
-      // drag-move delta payload.
+      // drag-move delta payload. Match PER ID (operatori omonimi), fallback al nome.
       if (a.segments && a.segments.length > 1) {
         for (const seg of a.segments) {
-          if ((seg.staffName || "").trim().toLowerCase() !== target) continue;
+          if (!staffColMatches(col, seg.staffId, seg.staffName)) continue;
           out.push({
             ...a,
             time: seg.time,
@@ -1388,7 +1417,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
         }
         continue;
       }
-      if ((a.operator || "").trim().toLowerCase() === target) out.push(a);
+      if (staffColMatches(col, a.operatorId, a.operator)) out.push(a);
     }
     return out;
   }
@@ -1819,7 +1848,11 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
         );
         return;
       }
-      const sameOperator = (block.operator || "").trim().toLowerCase() === targetStaffName.trim().toLowerCase();
+      // Stesso operatore PER ID (robusto agli omonimi); fallback al nome se l'id manca.
+      const blockStaffId = Number(block.segStaffId ?? block.operatorId ?? 0) || 0;
+      const sameOperator = targetStaffId > 0 && blockStaffId > 0
+        ? blockStaffId === targetStaffId
+        : (block.operator || "").trim().toLowerCase() === targetStaffName.trim().toLowerCase();
       if (block.time === newTime && sameOperator) return; // no-op sullo stesso slot/colonna
       void postMove(
         {
@@ -2718,7 +2751,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                     // Tema soft per STATO (port di applyCalendarSoftAppointmentStyle);
                     // il colore operatore resta solo sul pallino.
                     const theme = statusThemeOf(a.statusCode ?? a.status);
-                    const op = staff.find((s) => (s.name || "").trim().toLowerCase() === (a.operator || "").trim().toLowerCase());
+                    const op = findOperatorStaff(staff, a);
                     const accent = op?.color || "#2f63d8";
                     // MS group meta + adaptive density (tiny <28px, compact 28-54px).
                     const msCount = msCountOf(a);
@@ -2937,7 +2970,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                     {expandSegments(dayAppts).map((a) => {
                       const st = statusKeyFromLabel(a.statusCode ?? a.status);
                       const theme = statusThemeOf(a.statusCode ?? a.status);
-                      const op = staff.find((s) => (s.name || "").trim().toLowerCase() === (a.operator || "").trim().toLowerCase());
+                      const op = findOperatorStaff(staff, a);
                       const accent = op?.color || "#2f63d8";
                       const msCount = msCountOf(a);
                       const msAccent = msCount > 1 ? msAccentByAppt[a.id] : "";
@@ -3473,7 +3506,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                         ) : (
                           staffCols.map((s, colIndex) => {
                             const first = (Array.from(s.name.trim())[0] || "O").toUpperCase();
-                            const colAppts = apptsForStaff(s.name);
+                            const colAppts = apptsForStaff(s);
                             // Conteggio = appuntamenti DISTINTI (non i blocchi/segmenti):
                             // un multi-servizio con 2 segmenti nella stessa colonna conta 1 (M8).
                             const colCount = new Set(colAppts.map((b) => b.id)).size;

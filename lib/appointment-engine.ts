@@ -24,6 +24,10 @@ export type Appointment = {
 export type AppointmentWithMeta = Appointment & {
   date?: string;
   locationId?: number | null;
+  // ID dell'operatore primario (appointment_staff) — il campo `operator` è solo il
+  // NOME e non basta a distinguere due operatori omonimi: il calendario deve piazzare
+  // il blocco nella colonna per ID (come il legacy per staff_id), non per nome.
+  operatorId?: number;
   holdToken?: string;
   // End time HH:MM (from appointments.ends_at) so the calendar can render a block at
   // its REAL persisted duration instead of a fixed default — additive, ignored by

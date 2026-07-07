@@ -21719,7 +21719,7 @@ async function mapAppointment(slug: string, row: RowDataPacket): Promise<Appoint
   // `service`/`price` summary so the row is unchanged for single-service appointments.
   const serviceLines = await appointmentServiceLines(slug, row);
   const primary = serviceLines[0] ?? { serviceId: 0, name: "Servizio", price: 0 };
-  const staffName = await appointmentStaffName(slug, appointmentId);
+  const staffRef = await appointmentStaffRef(slug, appointmentId);
   const startsAt = toDate(row.starts_at);
   // End time HH:MM (additive) so the calendar can render a block at its real
   // persisted duration; null/missing ends_at leaves it undefined (the grid then
@@ -21734,7 +21734,9 @@ async function mapAppointment(slug: string, row: RowDataPacket): Promise<Appoint
     endTime: endsAt ? timeLocal(endsAt) : undefined,
     client: clientName,
     service: primary.name,
-    operator: staffName,
+    operator: staffRef.name,
+    // Id operatore primario per il match colonna-per-id nel calendario (omonimi).
+    operatorId: staffRef.id,
     room: row.cabin_id ? `Cabina #${row.cabin_id}` : "-",
     price: `${roundMoney(primary.price)} euro`,
     status: uiStatus(String(row.status ?? "")),
@@ -22191,15 +22193,18 @@ async function appointmentClientName(slug: string, clientId: number): Promise<st
   }
 }
 
-async function appointmentStaffName(slug: string, appointmentId: number): Promise<string> {
+// Operatore primario dell'appuntamento (appointment_staff): NOME + ID. L'id serve al
+// calendario per piazzare il blocco nella colonna giusta anche con operatori omonimi
+// (il legacy piazza per staff_id, non per nome).
+async function appointmentStaffRef(slug: string, appointmentId: number): Promise<{ id: number; name: string }> {
   try {
     const rows = await tenantSelect<RowDataPacket>({ slug, table: "appointment_staff", columns: "staff_id", where: "appointment_id = ?", params: [appointmentId], limit: 1 });
     const staffId = Number(rows[0]?.staff_id ?? 0);
-    if (staffId <= 0) return "";
+    if (staffId <= 0) return { id: 0, name: "" };
     const staff = await tenantSelect<RowDataPacket>({ slug, table: "staff", columns: "full_name", where: "id = ?", params: [staffId], limit: 1 });
-    return String(staff[0]?.full_name ?? "");
+    return { id: staffId, name: String(staff[0]?.full_name ?? "") };
   } catch {
-    return "";
+    return { id: 0, name: "" };
   }
 }
 

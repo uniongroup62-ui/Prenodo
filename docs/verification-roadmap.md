@@ -7589,6 +7589,23 @@ di test creati e rimossi (residuo=0, inclusi i reminder generati dalle chiamate 
 Nota: la sessione è interamente serializzata nel cookie firmato, quindi locationIds/role
 vengono letti dal token (impostati al login da loginLocationState su user_locations).
 
+## Calendario: match colonna operatore PER ID (bug operatori omonimi) (2026-07-07)
+
+BUG (emerso creando un 2° operatore quasi omonimo, "luca" id22 / "Luca" id56): il
+calendario assegnava gli appuntamenti alle colonne PER NOME operatore (case-insensitive),
+non per staff_id come il legacy → un appuntamento dell'operatore 22 compariva DUPLICATO
+anche nella colonna dell'operatore 56 (stesso nome). FIX: match per ID con fallback al
+nome (dati senza id). (1) mapAppointment espone operatorId (da appointment_staff, la
+tabella appointments non ha staff_id) — appointmentStaffName→appointmentStaffRef {id,name};
+AppointmentWithMeta.operatorId. (2) client calendar-content: helper staffColMatches(col,
+staffId, staffName) usato in apptsForStaff (colonne Giorno, per-segmento seg.staffId +
+singolo a.operatorId), apptInvolvesStaff (filtro Operatore), moveBlockDay (no-op drag
+"stesso operatore" per id), findOperatorStaff (pallino colore/foto Settimana/Mese per id).
+VERIFICATO live (4/4): l'API espone operatorId=22 + segments[].staffId; simulando il
+matching, appt 408 → colonna 22 PRESENTE (2 segmenti), colonna 56 ASSENTE (no duplicato).
+NB: le colonne restano PER TUTTI gli operatori (legacy STAFF_DAY_COLS) — un operatore
+senza appuntamenti mostra colonna vuota, corretto; NON "solo operatore loggato".
+
 ## Appuntamenti multi-sede: scope per-sede in LETTURA (calendario + refresh) (2026-07-07)
 
 Chiuso il leak cross-sede in lettura: il feed legacy (api_appointments.php action=list
