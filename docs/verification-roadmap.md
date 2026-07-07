@@ -1,5 +1,30 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Pagamenti AUDIT-2 batch 6: #16 periodi commissione (gate attività) (2026-07-07)
+
+Il motore commissioni Next accumulava su TUTTE le vendite/appuntamenti nel range ignorando le
+finestre attive per operatore → commissioni calcolate anche su periodi in cui l'operatore era
+DISATTIVATO. Il legacy commissiona un movimento solo se il suo datetime cade in un PERIODO
+APERTO dell'operatore (isCommissionActiveAt, Commissions.php:2156/2361). Le tabelle
+staff_commission_periods / _module_periods ESISTEVANO ma erano VUOTE (Next non le scriveva).
+PORT COMPLETO (manage-commissions.ts):
+- bootstrapCommissionModulePeriods / bootstrapCommissionStaffPeriods: seminano il periodo iniziale
+  (modulo: epoch 1970 al primo ON → copre lo storico; staff: created_at della config), chiudono
+  gli aperti su disabilitato, dedup multi-open.
+- synchronizeCommissionStaffPeriod / synchronizeCommissionModulePeriod: apri/chiudi ai TOGGLE
+  (wiring in saveCommissionSettings per-staff su transizione is_enabled + setCommissionModuleEnabled).
+- loadCommissionActivity + commissionActiveAt: gate PER-MOVIMENTO su SOLI periodi STAFF (fallback
+  is_enabled se nessun periodo) — fedele al legacy (i periodi MODULO sono bookkeeping, il gate
+  modulo è l'outer "if moduleEnabled"). Applicato come POST-FILTRO sulle ProducedEntry (staffId+
+  datetime) in buildCommissionDashboard, PRIMA di syncEntrySnapshots.
+VERIFICATO live: **gate 4/4** (staff con P1[gen-giu 2025 chiuso]+P2[ago aperto]: vendita marzo→
+commissione €10, vendita LUGLIO nel GAP→NON commissionata, vendita settembre→€10) + **toggle
+6/6** (modulo/staff on→periodo aperto, off→chiuso, on→nuovo aperto = GAP). Test con staff a nome
+UNIVOCO (la collisione omonimi luca/Luca sul match-per-nome è limite pre-esistente, non di #16).
+NON regressivo finché le tabelle erano vuote (fallback is_enabled). Tenant 25 ripristinato
+(modulo OFF, 0 periodi/settings, nessun residuo). NB comportamento fedele: il seed staff da
+created_at esclude retroattivamente i movimenti pre-configurazione (come il legacy).
+
 ## Pagamenti AUDIT-2 batch 5: storico #11 filtro data SERVER-SIDE (2026-07-07)
 
 Lo storico Movimenti caricava le 250 vendite piu' recenti e filtrava date/tipo/cliente/servizio

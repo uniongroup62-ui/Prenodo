@@ -140,12 +140,15 @@ export async function getCommissionSettings(slug: string): Promise<CommissionSet
 // block; here we own the is_enabled flag. Returns the refreshed settings.
 export async function setCommissionModuleEnabled(slug: string, enabled: boolean, userId: number | null): Promise<CommissionSettings> {
   const table = await tenantTable(slug, "staff_commission_module_settings");
-  const rows = await tenantSelect<RowDataPacket>({ slug, table: table.name, columns: "id", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: table.name, columns: "id, is_enabled", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const wasEnabled = Number(rows[0]?.is_enabled ?? 0) === 1;
   if (rows[0]) {
     await tenantUpdate({ slug, table: "staff_commission_module_settings", id: Number(rows[0].id ?? 1), values: { is_enabled: enabled ? 1 : 0, updated_by: userId, updated_at: new Date() } });
   } else {
     await tenantInsert(table, { id: 1, is_enabled: enabled ? 1 : 0, created_by: userId, updated_by: userId });
   }
+  // #16: apri/chiudi il periodo MODULO sulla transizione (bookkeeping, port setModuleEnabled:1080-1093).
+  await synchronizeCommissionModulePeriod(slug, wasEnabled, enabled, userId);
   return getCommissionSettings(slug);
 }
 
@@ -159,9 +162,15 @@ export async function saveCommissionSettings(
   const staff = await listCommissionStaff(slug);
   const validIds = new Set(staff.map((s) => s.id));
   const table = await tenantTable(slug, "staff_commission_settings");
-  const existing = await tenantSelect<RowDataPacket>({ slug, table: table.name, columns: "id, staff_id" }).catch(() => [] as RowDataPacket[]);
-  const existingByStaff = new Map<number, number>();
-  for (const r of existing) existingByStaff.set(Number(r.staff_id ?? 0), Number(r.id ?? 0));
+  const existing = await tenantSelect<RowDataPacket>({ slug, table: table.name, columns: "id, staff_id, is_enabled, created_at, updated_at" }).catch(() => [] as RowDataPacket[]);
+  const existingByStaff = new Map<number, { id: number; wasEnabled: boolean; stamp: string }>();
+  for (const r of existing) {
+    existingByStaff.set(Number(r.staff_id ?? 0), {
+      id: Number(r.id ?? 0),
+      wasEnabled: Number(r.is_enabled ?? 0) === 1,
+      stamp: normalizeDateTimeValue(r.updated_at, "") || normalizeDateTimeValue(r.created_at, ""),
+    });
+  }
 
   for (const [key, cfg] of Object.entries(rows ?? {})) {
     const staffId = Math.max(0, Number(key) || 0);
@@ -178,14 +187,171 @@ export async function saveCommissionSettings(
       updated_by: userId,
       updated_at: new Date(),
     };
-    const existingId = existingByStaff.get(staffId);
-    if (existingId && existingId > 0) {
-      await tenantUpdate({ slug, table: "staff_commission_settings", id: existingId, values });
+    const prev = existingByStaff.get(staffId);
+    if (prev && prev.id > 0) {
+      await tenantUpdate({ slug, table: "staff_commission_settings", id: prev.id, values });
     } else {
       await tenantInsert(table, { ...values, created_by: userId });
     }
+    // #16: apri/chiudi il periodo dell'operatore sulla transizione is_enabled (port synchronizePeriodsForStaff).
+    await synchronizeCommissionStaffPeriod(slug, staffId, prev?.wasEnabled ?? false, !!cfg.isEnabled, userId, prev?.stamp ?? "");
   }
   return getCommissionSettings(slug);
+}
+
+// ===========================================================================
+// COMMISSION ACTIVITY PERIODS (#16) — port di bootstrapCommissionPeriods (848-907),
+// bootstrapModulePeriods (979-1035), synchronizePeriodsForStaff (909-955),
+// isCommissionActiveAt (1139-1158).
+//
+// Un movimento (vendita/appuntamento) e' commissionabile solo se il suo datetime cade in un
+// PERIODO APERTO dell'OPERATORE. I periodi si aprono/chiudono ai toggle (modulo + per-staff);
+// il bootstrap semina il periodo iniziale (modulo: epoch al primo ON cosi' copre lo storico;
+// staff: created_at della configurazione). Senza periodi -> fallback su is_enabled.
+// NOTA fedele al legacy: il gate PER-MOVIMENTO usa SOLO i periodi STAFF (isCommissionActiveAt,
+// chiamato a Commissions.php:2156/2361); i periodi MODULO sono bookkeeping (scritti ai toggle ma
+// NON usati come gate per-movimento — il gate modulo e' l'outer "if moduleEnabled" dell'accrual).
+// ===========================================================================
+
+const COMMISSION_EPOCH = "1970-01-01 00:00:00";
+
+type CommissionPeriod = { started: string; ended: string };
+type CommissionActivity = { staffPeriods: Map<number, CommissionPeriod[]>; staffEnabled: Map<number, boolean> };
+
+// Un datetime cade in un periodo se >= started e (ended vuoto oppure <= ended).
+function commissionPeriodCovers(periods: CommissionPeriod[], datetime: string): boolean {
+  for (const p of periods) {
+    if (!p.started) continue;
+    if (datetime < p.started) continue;
+    if (p.ended && datetime > p.ended) continue;
+    return true;
+  }
+  return false;
+}
+
+// Semina/normalizza il periodo MODULO (bookkeeping) — port di bootstrapModulePeriods:1005-1034.
+async function bootstrapCommissionModulePeriods(slug: string, moduleEnabled: boolean): Promise<void> {
+  const table = await tenantTable(slug, "staff_commission_module_periods").catch(() => null);
+  if (!table) return;
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: table.name, columns: "id, started_at, ended_at", orderBy: "started_at ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
+  const open = rows.filter((r) => !normalizeDateTimeValue(r.ended_at, ""));
+  const now = businessNowDateTime();
+  if (moduleEnabled) {
+    if (!open.length) {
+      const startAt = rows.length ? now : COMMISSION_EPOCH; // primo ON -> epoch (copre lo storico)
+      await tenantInsert(table, { started_at: startAt, ended_at: null, started_by: null, ended_by: null, created_at: now, updated_at: now }).catch(() => 0);
+    } else if (open.length > 1) {
+      const keep = Number(open[0].id ?? 0);
+      for (const extra of open.slice(1)) { const id = Number(extra.id ?? 0); if (id > 0 && id !== keep) await tenantUpdate({ slug, table: table.name, id, values: { ended_at: now, updated_at: now } }).catch(() => 0); }
+    }
+  } else if (open.length) {
+    for (const o of open) { const id = Number(o.id ?? 0); if (id > 0) await tenantUpdate({ slug, table: table.name, id, values: { ended_at: now, updated_at: now } }).catch(() => 0); }
+  }
+}
+
+// Semina/normalizza i periodi STAFF — port di bootstrapCommissionPeriods:860-906.
+async function bootstrapCommissionStaffPeriods(slug: string, staffRows: Array<{ staffId: number; isEnabled: boolean; createdAt: string; updatedAt: string }>): Promise<void> {
+  const table = await tenantTable(slug, "staff_commission_periods").catch(() => null);
+  if (!table) return;
+  const now = businessNowDateTime();
+  for (const st of staffRows) {
+    if (st.staffId <= 0) continue;
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: table.name, columns: "id, started_at, ended_at", where: "staff_id=?", params: [st.staffId], orderBy: "started_at ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
+    const open = rows.filter((r) => !normalizeDateTimeValue(r.ended_at, ""));
+    if (st.isEnabled) {
+      if (!open.length) {
+        // mai avuti periodi -> parte dalla creazione della config (o updated_at); altrimenti ora.
+        const startAt = rows.length ? now : (normalizeDateTimeValue(st.createdAt, "") || normalizeDateTimeValue(st.updatedAt, "") || now);
+        await tenantInsert(table, { staff_id: st.staffId, started_at: startAt, ended_at: null, started_by: null, ended_by: null, created_at: now, updated_at: now }).catch(() => 0);
+      } else if (open.length > 1) {
+        const keep = Number(open[0].id ?? 0);
+        for (const extra of open.slice(1)) { const id = Number(extra.id ?? 0); if (id > 0 && id !== keep) await tenantUpdate({ slug, table: table.name, id, values: { ended_at: now, updated_at: now } }).catch(() => 0); }
+      }
+    } else if (open.length) {
+      for (const o of open) { const id = Number(o.id ?? 0); if (id > 0) await tenantUpdate({ slug, table: table.name, id, values: { ended_at: now, updated_at: now } }).catch(() => 0); }
+    }
+  }
+}
+
+// Transizione periodo su TOGGLE di un singolo operatore — port di synchronizePeriodsForStaff:921-954.
+async function synchronizeCommissionStaffPeriod(slug: string, staffId: number, wasEnabled: boolean, nowEnabled: boolean, userId: number | null, existingCreatedOrUpdated: string): Promise<void> {
+  if (staffId <= 0) return;
+  const table = await tenantTable(slug, "staff_commission_periods").catch(() => null);
+  if (!table) return;
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: table.name, columns: "id, started_at, ended_at", where: "staff_id=?", params: [staffId], orderBy: "started_at ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
+  const open = rows.filter((r) => !normalizeDateTimeValue(r.ended_at, ""));
+  const now = businessNowDateTime();
+  if (nowEnabled) {
+    if (!open.length) {
+      const startAt = (!rows.length && wasEnabled) ? (normalizeDateTimeValue(existingCreatedOrUpdated, "") || now) : now;
+      await tenantInsert(table, { staff_id: staffId, started_at: startAt, ended_at: null, started_by: userId, ended_by: null, created_at: now, updated_at: now }).catch(() => 0);
+    } else if (open.length > 1) {
+      const keep = Number(open[0].id ?? 0);
+      for (const extra of open.slice(1)) { const id = Number(extra.id ?? 0); if (id > 0 && id !== keep) await tenantUpdate({ slug, table: table.name, id, values: { ended_at: now, ended_by: userId, updated_at: now } }).catch(() => 0); }
+    }
+  } else {
+    for (const o of open) { const id = Number(o.id ?? 0); if (id > 0) await tenantUpdate({ slug, table: table.name, id, values: { ended_at: now, ended_by: userId, updated_at: now } }).catch(() => 0); }
+  }
+}
+
+// Transizione periodo su TOGGLE del modulo — port di setModuleEnabled:1080-1093.
+async function synchronizeCommissionModulePeriod(slug: string, wasEnabled: boolean, nowEnabled: boolean, userId: number | null): Promise<void> {
+  const table = await tenantTable(slug, "staff_commission_module_periods").catch(() => null);
+  if (!table) return;
+  const now = businessNowDateTime();
+  if (nowEnabled && !wasEnabled) {
+    const openRows = await tenantSelect<RowDataPacket>({ slug, table: table.name, columns: "id", where: "ended_at IS NULL" }).catch(() => [] as RowDataPacket[]);
+    if (!openRows.length) await tenantInsert(table, { started_at: now, ended_at: null, started_by: userId, ended_by: null, created_at: now, updated_at: now }).catch(() => 0);
+  } else if (!nowEnabled && wasEnabled) {
+    const openRows = await tenantSelect<RowDataPacket>({ slug, table: table.name, columns: "id", where: "ended_at IS NULL" }).catch(() => [] as RowDataPacket[]);
+    for (const o of openRows) { const id = Number(o.id ?? 0); if (id > 0) await tenantUpdate({ slug, table: table.name, id, values: { ended_at: now, ended_by: userId, updated_at: now } }).catch(() => 0); }
+  }
+}
+
+// Carica il gate attivita': bootstrap (semina i periodi per lo stato corrente) + periodi STAFF
+// + flag is_enabled per il fallback. Port di periodsMap()+bootstrap (957-977).
+async function loadCommissionActivity(slug: string, moduleEnabled: boolean): Promise<CommissionActivity> {
+  const settingsTable = await tenantTable(slug, "staff_commission_settings").catch(() => null);
+  const staffRows = settingsTable
+    ? await tenantSelect<RowDataPacket>({ slug, table: settingsTable.name, columns: "staff_id, is_enabled, created_at, updated_at" }).catch(() => [] as RowDataPacket[])
+    : [];
+  const staffSettings = staffRows.map((r) => ({
+    staffId: Number(r.staff_id ?? 0) || 0,
+    isEnabled: Number(r.is_enabled ?? 0) === 1,
+    createdAt: normalizeDateTimeValue(r.created_at, ""),
+    updatedAt: normalizeDateTimeValue(r.updated_at, ""),
+  }));
+  await bootstrapCommissionModulePeriods(slug, moduleEnabled);
+  await bootstrapCommissionStaffPeriods(slug, staffSettings);
+
+  const perTable = await tenantTable(slug, "staff_commission_periods").catch(() => null);
+  const perRows = perTable
+    ? await tenantSelect<RowDataPacket>({ slug, table: perTable.name, columns: "staff_id, started_at, ended_at", orderBy: "staff_id ASC, started_at ASC, id ASC" }).catch(() => [] as RowDataPacket[])
+    : [];
+  const staffPeriods = new Map<number, CommissionPeriod[]>();
+  for (const r of perRows) {
+    const sid = Number(r.staff_id ?? 0) || 0;
+    if (sid <= 0) continue;
+    const started = normalizeDateTimeValue(r.started_at, "");
+    if (!started) continue;
+    if (!staffPeriods.has(sid)) staffPeriods.set(sid, []);
+    staffPeriods.get(sid)!.push({ started, ended: normalizeDateTimeValue(r.ended_at, "") });
+  }
+  const staffEnabled = new Map<number, boolean>();
+  for (const s of staffSettings) staffEnabled.set(s.staffId, s.isEnabled);
+  return { staffPeriods, staffEnabled };
+}
+
+// Gate per-movimento — port di isCommissionActiveAt:1139-1158 (SOLO periodi staff + fallback).
+function commissionActiveAt(activity: CommissionActivity, staffId: number, datetime: string): boolean {
+  if (staffId <= 0) return false;
+  const dt = normalizeDateTimeValue(datetime, "");
+  const periods = activity.staffPeriods.get(staffId) ?? [];
+  if (periods.length) {
+    if (dt === "") return activity.staffEnabled.get(staffId) ?? false;
+    return commissionPeriodCovers(periods, dt);
+  }
+  return activity.staffEnabled.get(staffId) ?? false;
 }
 
 // ===========================================================================
@@ -1044,9 +1210,14 @@ export async function buildCommissionDashboard(slug: string, rawParams: Commissi
   // upserts its own entries (no reconcile).
   if (settings.moduleEnabled && from && to) {
     const resolveLocationName = await locationNameResolver(slug);
+    // #16: carica i periodi commissione (bootstrap + gate). Ogni entry prodotta e' commissionabile
+    // solo se il suo datetime cade in un periodo APERTO dell'operatore (isCommissionActiveAt) —
+    // cosi' i movimenti in una finestra in cui l'operatore era disattivato NON vengono commissionati.
+    const activity = await loadCommissionActivity(slug, settings.moduleEnabled);
+    const activeOnly = (produced: ProducedEntry[]): ProducedEntry[] => produced.filter((e) => commissionActiveAt(activity, e.staffId, e.datetime));
 
     if (source === "all" || source === "pos") {
-      const producedPos = await buildPosEntriesFromSales(slug, { from, to, staffId, locationId }, staffByName, resolveLocationName);
+      const producedPos = activeOnly(await buildPosEntriesFromSales(slug, { from, to, staffId, locationId }, staffByName, resolveLocationName));
       if (staffId <= 0) {
         await syncEntrySnapshots(slug, { from, to, locationId }, producedPos, "pos");
       } else {
@@ -1055,7 +1226,7 @@ export async function buildCommissionDashboard(slug: string, rawParams: Commissi
     }
 
     if (source === "all" || source === "appointments") {
-      const producedAppt = await buildAppointmentEntries(slug, { from, to, staffId, locationId }, staffById, resolveLocationName);
+      const producedAppt = activeOnly(await buildAppointmentEntries(slug, { from, to, staffId, locationId }, staffById, resolveLocationName));
       if (staffId <= 0) {
         await syncEntrySnapshots(slug, { from, to, locationId }, producedAppt, "appointments");
       } else {
