@@ -2019,7 +2019,7 @@ export type AppointmentSlotSegment = {
 // api_appointments.php:3511-3563): operatori attivi non-SSO abbinati al servizio in
 // staff_services, filtrati per sede (STRICT, app_filter_staff_ids_by_location). Ritorna
 // l'id se esattamente uno, altrimenti null. Query tenant-safe via tenantSelect.
-async function uniqueStaffForService(slug: string, serviceId: number, locationId: number | null): Promise<number | null> {
+export async function uniqueStaffForService(slug: string, serviceId: number, locationId: number | null): Promise<number | null> {
   if (!(serviceId > 0)) return null;
   const ssRows = await tenantSelect<RowDataPacket>({ slug, table: "staff_services", columns: "staff_id", where: "service_id = ?", params: [serviceId] }).catch(() => [] as RowDataPacket[]);
   const staffIds = [...new Set(ssRows.map((r) => Number(r.staff_id ?? 0)).filter((n) => n > 0))];

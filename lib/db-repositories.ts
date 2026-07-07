@@ -62,7 +62,7 @@ import {
 } from "@/lib/fidelity-lots";
 import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
 import { giftPersistGlobalResetMarker, giftRecalcClient, giftRollbackAppointmentSelection } from "@/lib/gifts-engine";
-import { assertAppointmentSlotAvailable, busyCabinRangesForDate, busyRangesForDate, sharedResourcesContext, staffTimeoffReasonForRange, type CabinBusyRange } from "@/lib/public-booking-db";
+import { assertAppointmentSlotAvailable, busyCabinRangesForDate, busyRangesForDate, sharedResourcesContext, staffTimeoffReasonForRange, uniqueStaffForService, type CabinBusyRange } from "@/lib/public-booking-db";
 
 export async function listDbLocations(slug: string): Promise<Location[]> {
   const table = await tenantTable(slug, "locations");
@@ -2031,6 +2031,7 @@ async function planAppointmentServices({
   staffMap,
   cabinMap,
   start,
+  locationId = null,
 }: {
   slug: string;
   serviceName: string;
@@ -2040,6 +2041,7 @@ async function planAppointmentServices({
   staffMap: Record<number, number>;
   cabinMap: Record<number, number>;
   start: string;
+  locationId?: number | null;
 }): Promise<AppointmentServicePlan> {
   // Resolve services in order. Backward compatible: when serviceNames is empty
   // fall back to the single serviceName (single-service path unchanged).
@@ -2068,7 +2070,16 @@ async function planAppointmentServices({
     // Per-service staff: the explicit staffMap entry wins, else the single
     // operator (single-service path). 0 means "unassigned" → null segment staff.
     const mappedStaff = Number(staffMap[serviceId] ?? 0) || 0;
-    const segStaffId = mappedStaff > 0 ? mappedStaff : operatorStaffId;
+    let segStaffId = mappedStaff > 0 ? mappedStaff : operatorStaffId;
+    // Auto-assegnazione dell'operatore UNICO quando nessuno è stato indicato (port di
+    // unique_staff_for_service, api_appointments.php:10893-10896/10916-10919): il drawer
+    // disabilita la select operatore quando c'è un solo eleggibile e NON la invia, quindi
+    // il segmento resterebbe senza operatore. Additivo e sicuro: se non c'è un operatore
+    // unico (0 o 2+ eleggibili, o servizio no_operator) resta invariato.
+    if (!(Number(segStaffId ?? 0) > 0)) {
+      const unique = await uniqueStaffForService(slug, serviceId, locationId).catch(() => null);
+      if (unique && unique > 0) segStaffId = unique;
+    }
     // Per-service cabin: cabinMap entry, else the explicit drawer cabin, else
     // the service's own cabin (mirrors the legacy candidate fallback chain).
     const mappedCabin = Number(cabinMap[serviceId] ?? 0) || 0;
@@ -2659,6 +2670,7 @@ export async function createDbAppointment({
     staffMap,
     cabinMap,
     start,
+    locationId,
   });
   const end = plan.end;
   const token = (holdToken ?? "").trim();
@@ -3047,6 +3059,7 @@ export async function updateDbAppointment({
     staffMap,
     cabinMap,
     start,
+    locationId,
   });
   const end = plan.end;
   const token = (holdToken ?? "").trim();
