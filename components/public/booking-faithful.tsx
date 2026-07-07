@@ -27,7 +27,7 @@
  * The legacy `_csrf` hidden input is intentionally dropped.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 const CSS_LINKS = [
   "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css",
@@ -588,6 +588,10 @@ export function BookingFaithful({
     pointsLabel: string;
     // Punti che il cliente MATURA con questa prenotazione (nota "guadagnerai N").
     earnPoints: number;
+    // Saldo GREZZO punti (può essere negativo) + credito in sospeso + codici.
+    balancePoints: number;
+    pendingCredit: number;
+    pendingCreditCodes: string[];
   };
   const [custBenefits, setCustBenefits] = useState<CustomerBenefits | null>(null);
   const [useFidelity, setUseFidelity] = useState(false);
@@ -616,6 +620,9 @@ export function BookingFaithful({
           suggestedPoints: Number(j.points_used ?? 0) || 0,
           suggestedDiscount: Number(j.discount ?? 0) || 0,
           earnPoints: Number(j.earn_points ?? 0) || 0,
+          balancePoints: Number(j.balance_points ?? 0) || 0,
+          pendingCredit: Number(j.pending_credit ?? 0) || 0,
+          pendingCreditCodes: Array.isArray(j.pending_credit_codes) ? j.pending_credit_codes.map(String) : [],
           creditAvailable: Number(j.credit_available ?? 0) || 0,
           giftcards: Array.isArray(j.giftcards) ? j.giftcards : [],
           pointsLabel: String(j.points_label ?? "").trim() || "Punti",
@@ -718,6 +725,33 @@ export function BookingFaithful({
     }
     return <>{euroRecap(nowP)}</>;
   };
+
+  // Parti della nota Fidelity del recap (booking-wizard.js 2794-2896), in ordine:
+  // saldo negativo -> credito in sospeso -> maturazione punti -> riserva riscatto.
+  const fidelityNoteParts: ReactNode[] = [];
+  if (custBenefits) {
+    const lbl = custBenefits.pointsLabel;
+    if (custBenefits.balancePoints < -0.00001) {
+      const debt = Math.round(Math.abs(custBenefits.balancePoints) * 100) / 100;
+      fidelityNoteParts.push(<>Il tuo saldo {lbl} è negativo di <strong>{debt}</strong>. I {lbl} disponibili restano a 0 finché non vengono compensati da nuovi accrediti.</>);
+    }
+    if (custBenefits.pendingCredit > 0.00001) {
+      const codes = custBenefits.pendingCreditCodes;
+      const shown = codes.slice(0, 3);
+      const codesNode = shown.length
+        ? (<>{shown.map((code, i) => <span key={code}>{i > 0 ? ", " : ""}<strong>#{code}</strong></span>)}{codes.length > shown.length ? ` e altri ${codes.length - shown.length}` : ""}</>)
+        : null;
+      const whereNode = codes.length === 1 && codesNode ? <> nella prenotazione {codesNode}</> : codes.length > 1 && codesNode ? <> nelle prenotazioni {codesNode}</> : null;
+      const doneVerb = codes.length === 1 ? "sarà eseguita" : "saranno eseguite";
+      fidelityNoteParts.push(<>Hai <strong>{euroRecap(custBenefits.pendingCredit)}</strong> di credito in sospeso{whereNode}. Finché non {doneVerb}, questo credito non sarà disponibile per nuove prenotazioni.</>);
+    }
+    if (custBenefits.earnPoints > 0) {
+      fidelityNoteParts.push(<>Se questa prenotazione sarà eseguita, guadagnerai <strong>{custBenefits.earnPoints}</strong> {lbl}.</>);
+    }
+  }
+  if (fidelityDiscountApplied > 0) {
+    fidelityNoteParts.push(<>Verranno prenotati {custBenefits?.suggestedPoints ?? 0} Punti Fidelity: saranno scalati quando l&apos;appuntamento sarà eseguito.</>);
+  }
 
   const isFinalStep = step === 7;
   const canContinue = computeCanContinue();
@@ -2155,18 +2189,17 @@ export function BookingFaithful({
                 </div>
 
                 {/* Nota punti Fidelity (legacy #recFidelityNote, booking-wizard.js
-                    2851-2896): avviso di MATURAZIONE ("guadagnerai N Punti", con
-                    campagna earn attiva) + riserva dei punti riscattati. */}
-                <div id="recFidelityNote" className={`alert alert-info p-2 mt-2${(custBenefits?.earnPoints ?? 0) > 0 || fidelityDiscountApplied > 0 ? "" : " d-none"}`}>
+                    2794-2896): saldo negativo, credito in sospeso, maturazione punti,
+                    riserva riscatto — righe multiple separate da <br>. */}
+                <div id="recFidelityNote" className={`alert alert-info p-2 mt-2${fidelityNoteParts.length ? "" : " d-none"}`}>
                   <div className="small">
                     <i className="bi bi-info-circle me-1" />
-                    {(custBenefits?.earnPoints ?? 0) > 0 ? (
-                      <>Se questa prenotazione sarà eseguita, guadagnerai <strong>{custBenefits?.earnPoints ?? 0}</strong> {custBenefits?.pointsLabel ?? "Punti"}.</>
-                    ) : null}
-                    {(custBenefits?.earnPoints ?? 0) > 0 && fidelityDiscountApplied > 0 ? <br /> : null}
-                    {fidelityDiscountApplied > 0 ? (
-                      <>Verranno prenotati {custBenefits?.suggestedPoints ?? 0} Punti Fidelity: saranno scalati quando l&apos;appuntamento sarà eseguito.</>
-                    ) : null}
+                    {fidelityNoteParts.map((part, idx) => (
+                      <span key={idx}>
+                        {idx > 0 ? <br /> : null}
+                        {part}
+                      </span>
+                    ))}
                   </div>
                 </div>
 

@@ -227,7 +227,10 @@ export async function GET(request: Request) {
         points_used: preview.fidelity.suggestedPoints,
         discount: preview.fidelity.suggestedDiscount,
         points_label: preview.fidelity.label,
+        balance_points: preview.fidelity.balancePoints,
         credit_available: preview.creditAvailable,
+        pending_credit: preview.pendingCredit,
+        pending_credit_codes: preview.pendingCreditCodes,
         giftcards: preview.giftcards,
       });
     }

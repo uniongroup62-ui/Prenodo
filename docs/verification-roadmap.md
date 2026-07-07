@@ -7075,3 +7075,27 @@ prenotazione sarà eseguita, guadagnerai 1 Punti." Campagna/tessera di test rimo
 RESIDUI FIDELITY rimasti (note niche/blocked): saldo NEGATIVO + credito in sospeso
 (richiedono i dettagli wallet nella preview), e la nota OMAGGIO ("Puoi ottenere in
 gift…") legata a Gifts v2 (sottosistema non portato).
+
+
+---
+
+## Wizard booking: note Fidelity saldo negativo + credito in sospeso — CHIUSO (2026-07-07)
+
+Chiuse le ultime due note Fidelity portabili del recap (booking-wizard.js 2794-2836).
+#recFidelityNote è ora una nota MULTI-RIGA (saldo negativo → credito in sospeso →
+maturazione → riserva riscatto), non più singola.
+
+- **Backend**: fidelity_preview espone balance_points (saldo GREZZO, può essere
+  negativo, da dbWalletBalance) + pending_credit/pending_credit_codes (credito
+  usato su appuntamenti pending/scheduled del cliente, con i public_code).
+- **Wizard**: fidelityNoteParts costruisce le righe: "Il tuo saldo <label> è
+  negativo di N…" e "Hai €X di credito in sospeso nella/nelle prenotazione/i
+  #code…. Finché non sarà/saranno eseguita/e…" (codici slice 0-3 + "e altri N").
+
+VERIFICA LIVE (Playwright, client9 punti=-5 + appuntamento pending credit 10 #ZZ-PEND):
+Conferma → "Il tuo saldo Punti è negativo di 5…" + "Hai 10,00 € di credito in
+sospeso nella prenotazione #ZZ-PEND. Finché non sarà eseguita…". Dati di test
+rimossi (residuo 0). typecheck pulito.
+
+UNICO residuo del wizard: nota OMAGGIO Fidelity ("Puoi ottenere in gift…") — legata
+al sottosistema Gifts v2 (istanze dinamiche per cliente), non portato (come GiftBox).

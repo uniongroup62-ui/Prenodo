@@ -51,6 +51,28 @@ export type PublicBookingBenefitResolution = {
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const moneyIt = (n: number) => n.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// Credito "in sospeso": importo (+ codici pubblici) del credito già usato su
+// appuntamenti del cliente ancora pending/scheduled (non eseguiti). Alimenta la
+// nota "Hai €X di credito in sospeso …" del recap (booking-wizard.js 2806-2836).
+async function pendingReservedCredit(slug: string, clientId: number): Promise<{ amount: number; codes: string[] }> {
+  if (clientId <= 0) return { amount: 0, codes: [] };
+  const rows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "appointments",
+    columns: "credit_used, public_code",
+    where: "client_id = ? AND status IN ('pending','scheduled') AND COALESCE(credit_used, 0) > 0",
+    params: [clientId],
+  }).catch(() => [] as RowDataPacket[]);
+  let amount = 0;
+  const codes: string[] = [];
+  for (const row of rows) {
+    amount += Math.max(0, Number(row.credit_used ?? 0) || 0);
+    const code = String(row.public_code ?? "").trim();
+    if (code) codes.push(code);
+  }
+  return { amount: round2(amount), codes };
+}
+
 // Legacy booking_resolve_client_id_for_promos: best-effort client match by
 // email first, then phone (for the promo target rules new/inactive/birthday).
 export async function resolvePublicClientIdForPromos(
@@ -257,9 +279,15 @@ export type PublicCustomerBenefitsPreview = {
     // Etichetta unità punti (businesses.fidelity_points_label, default 'Punti'):
     // usata dove il legacy usa fidLabel ("Disponibili: N <label>").
     label: string;
+    // Saldo GREZZO dei punti (può essere NEGATIVO) per l'avviso "saldo negativo".
+    balancePoints: number;
   };
   // Credito panel (#recCreditUseBox): the client's spendable wallet credit.
   creditAvailable: number;
+  // Credito RISERVATO su appuntamenti pending/scheduled (nota "credito in sospeso"):
+  // importo + codici pubblici degli appuntamenti (booking-wizard.js 2806-2836).
+  pendingCredit: number;
+  pendingCreditCodes: string[];
   // GiftCard panel (#recGiftcardUseBox): the client's active spendable cards.
   giftcards: Array<{ id: number; code: string; balance: number }>;
 };
@@ -277,8 +305,10 @@ export async function publicCustomerBenefitsPreview({
 }): Promise<PublicCustomerBenefitsPreview> {
   const out: PublicCustomerBenefitsPreview = {
     ok: true,
-    fidelity: { enabled: false, redeemEnabled: false, pointsAvailable: 0, euroPerPoint: 0.1, minPoints: 0, suggestedPoints: 0, suggestedDiscount: 0, label: "Punti" },
+    fidelity: { enabled: false, redeemEnabled: false, pointsAvailable: 0, euroPerPoint: 0.1, minPoints: 0, suggestedPoints: 0, suggestedDiscount: 0, label: "Punti", balancePoints: 0 },
     creditAvailable: 0,
+    pendingCredit: 0,
+    pendingCreditCodes: [],
     giftcards: [],
   };
   if (clientId <= 0) return out;
@@ -314,10 +344,15 @@ export async function publicCustomerBenefitsPreview({
     // fidelity panel simply stays hidden
   }
 
-  // --- Credito (client wallet credit) ---
+  // --- Credito (client wallet credit) + saldo GREZZO punti (per l'avviso saldo
+  //     negativo) + credito in sospeso su appuntamenti non ancora eseguiti. ---
   try {
     const wallet = await dbWalletBalance(clientId, slug);
     out.creditAvailable = round2(Math.max(0, Number(wallet.credit ?? 0) || 0));
+    out.fidelity.balancePoints = Math.round(Number(wallet.points ?? 0) || 0);
+    const pending = await pendingReservedCredit(slug, clientId).catch(() => ({ amount: 0, codes: [] as string[] }));
+    out.pendingCredit = round2(pending.amount);
+    out.pendingCreditCodes = pending.codes;
   } catch {
     out.creditAvailable = 0;
   }
