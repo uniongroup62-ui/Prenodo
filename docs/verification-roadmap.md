@@ -7191,3 +7191,19 @@ Stato "In attesa", note — il drawer completo prefillato.
 RESIDUO minore: il drawer Next non gestisce data-qb-reload-on-save, quindi dopo un
 salvataggio dal drawer la lista pending non si auto-aggiorna (refresh manuale o
 Approva/Annulla la aggiorna). Il sistema notifiche è per il resto completo.
+
+
+---
+
+## Notifiche: auto-refresh lista dopo salvataggio dal drawer (2026-07-07)
+
+Chiuso l'ultimo residuo minore: dopo un salvataggio/modifica dal drawer quick-
+booking la lista "Appuntamenti in attesa" si aggiorna. Il component ascolta
+l'evento "qb:appointments-changed" (già emesso dal drawer, come per il calendario)
+e ri-carica action=pending — più fedele/reattivo del reload di pagina del legacy
+(data-qb-reload-on-save). VERIFICATO live (Playwright): dispatch dell'evento ->
+una nuova richiesta action=pending (la lista si ricarica).
+
+Il sistema notifiche è ora COMPLETO: card ricche + Approva/Modifica/Annulla, sezione
+Tessere Fidelity, notifiche browser (permesso + preferenze + feed con tutti i tipi),
+Modifica -> drawer edit, auto-refresh post-salvataggio. Nessun residuo.

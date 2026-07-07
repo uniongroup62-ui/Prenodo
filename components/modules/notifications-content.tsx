@@ -228,6 +228,16 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
     load();
   }, [load]);
 
+  // Dopo un salvataggio/modifica dal drawer quick-booking (o altrove) la lista si
+  // aggiorna: il drawer emette "qb:appointments-changed" (come per il calendario),
+  // più fedele del reload di pagina del legacy (data-qb-reload-on-save).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onChanged = () => load();
+    window.addEventListener("qb:appointments-changed", onChanged);
+    return () => window.removeEventListener("qb:appointments-changed", onChanged);
+  }, [load]);
+
   // Approva (scheduled) / Annulla (canceled): riusa la route appuntamenti che
   // applica l'intera lifecycle (restore hold su cancel + email approved/rejected).
   async function act(id: number, status: "scheduled" | "canceled") {
