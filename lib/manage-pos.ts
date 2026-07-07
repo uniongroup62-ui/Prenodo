@@ -34,6 +34,7 @@ import {
   type PromoCartLine,
 } from "@/lib/db-repositories";
 import { expireClientLots, fidelityLotsSettings } from "@/lib/fidelity-lots";
+import { prepaidExpiryForPurchaseDate } from "@/lib/manage-pos-settings";
 import { giftInvalidateSource, giftRecordSale } from "@/lib/gifts-engine";
 import { giftRedeemAppointmentSelectionIfAny } from "@/lib/gifts-instances";
 import { getManageLocationContext } from "@/lib/manage-locations";
@@ -527,6 +528,10 @@ async function getFidelityRedeemSettings(slug: string): Promise<FidelityRedeemSe
   }
 }
 
+// Promozione applicata alla vendita (via promotion_id o via codice). `code` presente
+// solo quando applicata da un codice (nota "Promozione: NAME (CODE)").
+type PosPromoApplied = { id: number; name: string; nonDiscountedSubtotal: number; stackableWithFidelity: boolean; code?: string };
+
 export async function checkoutManageSale(
   slug: string,
   input: PosCheckoutInput,
@@ -556,42 +561,75 @@ export async function checkoutManageSale(
   // promotion discount joins the sale discount like a coupon; the applied promo + its
   // discount are stamped on the sale and a promotion_redemptions row is recorded below.
   let promoDiscount = 0;
-  let promoApplied: { id: number; name: string; nonDiscountedSubtotal: number; stackableWithFidelity: boolean } | null = null;
-  if (input.promotionId && input.promotionId > 0) {
-    const now = new Date();
-    const promoCart: PromoCartLine[] = items
-      .filter((it) => (it.type === "service" || it.type === "product") && it.refId > 0 && it.unitPrice > 0)
-      .map((it) => ({ type: it.type === "product" ? "product" : "service", id: it.refId, qty: it.quantity, unitPrice: it.unitPrice }));
-    const evaluated = await evaluatePromotionsForCart(slug, promoCart, now.toISOString().slice(0, 10), `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`, client.id, locationId);
-    const chosen = evaluated.promotions.find((p) => p.promotionId === input.promotionId);
+  let promoApplied: PosPromoApplied | null = null;
+  // Carrello promo (servizi/prodotti con prezzo) + data/ora, condivisi dal path
+  // promotion_id e dal path PROMO-CON-CODICE.
+  const promoNow = new Date();
+  const promoCart: PromoCartLine[] = items
+    .filter((it) => (it.type === "service" || it.type === "product") && it.refId > 0 && it.unitPrice > 0)
+    .map((it) => ({ type: it.type === "product" ? "product" : "service", id: it.refId, qty: it.quantity, unitPrice: it.unitPrice }));
+  const promoDate = promoNow.toISOString().slice(0, 10);
+  const promoTime = `${String(promoNow.getHours()).padStart(2, "0")}:${String(promoNow.getMinutes()).padStart(2, "0")}`;
+  const evalPromotionById = async (promotionId: number, code?: string): Promise<{ discount: number; applied: PosPromoApplied }> => {
+    const evaluated = await evaluatePromotionsForCart(slug, promoCart, promoDate, promoTime, client.id, locationId);
+    const chosen = evaluated.promotions.find((p) => p.promotionId === promotionId);
     if (!chosen || !chosen.eligible || chosen.discount <= 0) throw new Error("La promozione selezionata non è applicabile a questa vendita.");
-    promoDiscount = Math.min(subtotal, chosen.discount);
     // nonDiscountedSubtotal ESATTO dal motore (righe con sconto unitario nullo, pos.php
     // 1620-1639) + cumulabilità con la Fidelity (bitmask stackable) per il cap punti.
-    promoApplied = { id: chosen.promotionId, name: chosen.title, nonDiscountedSubtotal: chosen.nonDiscountedSubtotal, stackableWithFidelity: chosen.stackableWithFidelity };
+    return {
+      discount: Math.min(subtotal, chosen.discount),
+      applied: { id: chosen.promotionId, name: chosen.title, nonDiscountedSubtotal: chosen.nonDiscountedSubtotal, stackableWithFidelity: chosen.stackableWithFidelity, code },
+    };
+  };
+  if (input.promotionId && input.promotionId > 0) {
+    const r = await evalPromotionById(input.promotionId);
+    promoDiscount = r.discount;
+    promoApplied = r.applied;
   }
 
   const couponCode = clean(input.couponCode, 40);
   let couponDiscount = 0;
   if (couponCode) {
-    // Validazione legacy completa (pos.php ~4340-4400): coupon_validate_row con
-    // cliente (limite per-cliente) e sede POS + coupon_eval_discount sul carrello
-    // reale (apply_scope). I messaggi eval usano le varianti Cassa verbatim.
-    const couponItems = items
-      .filter((it) => (it.type === "service" || it.type === "product") && it.refId > 0 && it.total > 0)
-      .map((it) => ({ type: it.type === "product" ? ("product" as const) : ("service" as const), id: it.refId, line: it.total }));
-    const coupon = await previewDbCoupon(couponCode, subtotal, slug, {
-      items: couponItems.length ? couponItems : undefined,
-      clientId: client.id > 0 ? client.id : 0,
-      locationId,
-    });
-    if (!coupon.valid) {
-      let reason = coupon.reason || "Coupon non valido o non applicabile.";
-      if (reason.startsWith("Importo minimo richiesto:")) reason = `Coupon non applicabile: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`;
-      else if (reason === "Nessun servizio/prodotto selezionato rientra nel coupon.") reason = "Coupon non applicabile agli articoli presenti nel carrello.";
-      throw new Error(reason);
+    // PROMO-CON-CODICE (pos.php:4304-4336): un codice che coincide con una
+    // promotions.coupon_code ATTIVA si applica come PROMOZIONE (non coupon), come nel
+    // booking; solo se NON è una promo si fa fallback al coupon classico. Non sovrascrive
+    // una promozione già scelta via promotion_id.
+    const promoRows = !promoApplied
+      ? await tenantSelect<RowDataPacket>({
+          slug,
+          table: "promotions",
+          columns: "id",
+          where: "UPPER(TRIM(COALESCE(coupon_code,''))) = ? AND COALESCE(is_active,0) = 1",
+          params: [couponCode.toUpperCase()],
+          orderBy: "priority DESC, id ASC",
+          limit: 1,
+        }).catch(() => [] as RowDataPacket[])
+      : [];
+    const promoIdFromCode = Number(promoRows[0]?.id ?? 0) || 0;
+    if (promoIdFromCode > 0) {
+      const r = await evalPromotionById(promoIdFromCode, couponCode.toUpperCase());
+      promoDiscount = r.discount;
+      promoApplied = r.applied;
+    } else {
+      // Fallback COUPON classico. Validazione legacy completa (pos.php ~4340-4400):
+      // coupon_validate_row con cliente (limite per-cliente) e sede POS +
+      // coupon_eval_discount sul carrello reale (apply_scope), messaggi Cassa verbatim.
+      const couponItems = items
+        .filter((it) => (it.type === "service" || it.type === "product") && it.refId > 0 && it.total > 0)
+        .map((it) => ({ type: it.type === "product" ? ("product" as const) : ("service" as const), id: it.refId, line: it.total }));
+      const coupon = await previewDbCoupon(couponCode, subtotal, slug, {
+        items: couponItems.length ? couponItems : undefined,
+        clientId: client.id > 0 ? client.id : 0,
+        locationId,
+      });
+      if (!coupon.valid) {
+        let reason = coupon.reason || "Coupon non valido o non applicabile.";
+        if (reason.startsWith("Importo minimo richiesto:")) reason = `Coupon non applicabile: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`;
+        else if (reason === "Nessun servizio/prodotto selezionato rientra nel coupon.") reason = "Coupon non applicabile agli articoli presenti nel carrello.";
+        throw new Error(reason);
+      }
+      couponDiscount = coupon.discount;
     }
-    couponDiscount = coupon.discount;
   }
   // FIDELITY points redemption: convert the requested points into an euro discount,
   // capped by the client balance + the amount still payable after manual + promo + coupon.
@@ -617,8 +655,11 @@ export async function checkoutManageSale(
   // RATEIZZAZIONE (P5 semantica acconto): con un piano rate attivo in cassa entra
   // solo l'ACCONTO — il residuo è finanziato dalle rate (il legacy non valida
   // affatto gli importi: il floor sull'acconto è la traduzione fedele del flusso).
+  // La scelta "unica soluzione" SCARTA esplicitamente il piano rate (pos.php:4633-4636:
+  // installment_choice_mode === 'single' -> installment_plan_enabled=false, json=''), così
+  // un payload con piano residuo non genera comunque rate su una vendita a saldo unico.
   const activePlan =
-    input.installmentPlan && client.id > 0 && total > 0.00001 && Math.max(1, Math.round(input.installmentPlan.count)) >= 2
+    input.installmentPlan && input.installmentChoice !== "single" && client.id > 0 && total > 0.00001 && Math.max(1, Math.round(input.installmentPlan.count)) >= 2
       ? input.installmentPlan
       : null;
   // Semantica legacy: il piano rate è calcolato sul totale NETTO dei residui applicati
@@ -704,7 +745,10 @@ export async function checkoutManageSale(
   // della vendita raccontano lo scontrino come nel PHP (visibili nel dettaglio vendita).
   const legacyNoteLines: string[] = [];
   if (promoApplied && promoDiscount > 0.00001) {
-    legacyNoteLines.push(`Promozione: ${promoApplied.name || "PROMO"} -${formatMoney(promoDiscount)}`);
+    // Promo applicata via CODICE -> "NAME (CODE)" come il legacy (pos.php:4304-4336);
+    // via promotion_id -> solo "NAME".
+    const promoLabel = promoApplied.code ? `${promoApplied.name || "PROMO"} (${promoApplied.code})` : (promoApplied.name || "PROMO");
+    legacyNoteLines.push(`Promozione: ${promoLabel} -${formatMoney(promoDiscount)}`);
   }
   if (couponCode && couponDiscount > 0.00001) {
     legacyNoteLines.push(`Coupon: ${couponCode.toUpperCase()}`);
@@ -902,7 +946,7 @@ export async function checkoutManageSale(
   // unchanged: the plan only schedules the financing (the down payment is collected at the
   // sale, the remainder over the installments). A bench sale (no client) or a single payment
   // skips this — mirroring the legacy `client_id <= 0` guard in createPlan.
-  const plan = input.installmentPlan;
+  const plan = activePlan;
   if (plan && client.id > 0 && total > 0.00001 && Math.max(1, Math.round(plan.count)) >= 2) {
     await createManageInstallmentPlan(slug, {
       saleId,
@@ -4826,6 +4870,12 @@ async function reverseIssuedSaleRecharges(
 async function issuePrepaidFromSale(slug: string, saleId: number, saleItemId: number, clientId: number, item: PosSaleItem): Promise<void> {
   const table = await tenantTable(slug, "client_prepaid_services").catch(() => null);
   if (!table) return;
+  // Scadenza + data d'acquisto come il legacy ClientPrepaidServices::syncSale
+  // (:369-397): expires_at = PosSettings::prepaidExpiryForPurchaseDate(purchaseDate);
+  // senza questi campi i prepagati venduti dal Next non scadono mai. filterColumns
+  // scarta le colonne assenti, quindi è sicuro anche su schemi più vecchi.
+  const purchaseDate = todayIso();
+  const expiresAt = await prepaidExpiryForPurchaseDate(slug, purchaseDate).catch(() => null);
   await tenantInsert(table, await filterColumns(table.name, {
     client_id: clientId,
     sale_id: saleId,
@@ -4836,6 +4886,8 @@ async function issuePrepaidFromSale(slug: string, saleId: number, saleItemId: nu
     remaining_qty: item.quantity,
     unit_price: item.unitPrice,
     total_paid: item.total,
+    purchase_date: purchaseDate,
+    expires_at: expiresAt,
     status: "active",
   })).catch(() => undefined);
 }
@@ -4976,11 +5028,13 @@ async function issueRechargeFromSale(
   // points accrue only under the ACTIVE fidelity campaign for today (no campaign => 0),
   // applying its step/tiers + min_spend + card-level eligibility.
   const earnSettings = await getFidelityEarnSettings(slug);
-  // Eligibility ricariche (F2 — credit_wallet_recharge_points_eligible): programma
-  // attivo E cliente ADERENTE (tessera attiva), come nel legacy.
-  const eligible = earnPointsFlag && earnSettings.enabled && (await fidelityIsClientAdhering(slug, clientId));
-  const earnBase = earnSettings.earnOnBonus ? totalAmount : baseAmount;
-  const pointsEarned = eligible ? (await computeCampaignEarn(slug, earnBase, clientId, earnSettings.earnStep)).points : 0;
+  // Idoneità punti ricariche = SOLO programma attivo + cliente ADERENTE (tessera attiva),
+  // NON il flag earn_points del template (port di $pointsEligible, pos.php:5570-5575). Il
+  // flag decide SOLO la BASE: attivo -> base+bonus; disattivo -> sola base. Prima il Next
+  // includeva il flag in `eligible`, quindi col flag OFF un cliente idoneo riceveva ZERO punti.
+  const pointsEligible = earnSettings.enabled && (await fidelityIsClientAdhering(slug, clientId));
+  const earnBase = earnPointsFlag ? totalAmount : baseAmount;
+  const pointsEarned = pointsEligible ? (await computeCampaignEarn(slug, earnBase, clientId, earnSettings.earnStep)).points : 0;
 
   const note = rechargeNote(baseAmount, bonusAmount, pointsEarned, item.note);
 
@@ -4995,7 +5049,7 @@ async function issueRechargeFromSale(
     bonus_value: bonusValue,
     bonus_amount: bonusAmount,
     total_amount: totalAmount,
-    earn_points: eligible ? 1 : 0,
+    earn_points: earnPointsFlag ? 1 : 0,
     points_earned: pointsEarned,
     note,
     is_void: 0,

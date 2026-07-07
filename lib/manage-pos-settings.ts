@@ -263,6 +263,18 @@ function computeExpiry(value: unknown, amount: number, unit: ExpiryUnit): string
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:${String(date.getSeconds()).padStart(2, "0")}`;
 }
 
+// Scadenza prepagati per una data d'acquisto (port di
+// PosSettings::prepaidExpiryForPurchaseDate, PosSettings.php:247): purchaseDate +
+// prepaids_expiry_value × unità alle 23:59:59, oppure null se la scadenza prepagati è
+// disattiva o value<=0. Usata al checkout in issuePrepaidFromSale.
+export async function prepaidExpiryForPurchaseDate(slug: string, purchaseDate: string): Promise<string | null> {
+  const s = await settingsRow(slug).catch(() => null);
+  if (!s || !s.prepaids_expiry_enabled) return null;
+  const value = normalizeValue(s.prepaids_expiry_value);
+  if (value <= 0) return null;
+  return computeExpiry(purchaseDate, value, s.prepaids_expiry_unit);
+}
+
 function dateTimeString(value: unknown): string {
   if (!value) return new Date().toISOString();
   if (value instanceof Date) return value.toISOString();

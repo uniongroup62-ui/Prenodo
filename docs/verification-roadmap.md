@@ -1,5 +1,29 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Pagamenti AUDIT + fix batch 1 (2026-07-07)
+
+Ri-audit completo di Pagamenti (5 analisi parallele + test live). Core checkout verificato
+live 8/8; sotto-pagine e logiche pacchetti/giftcard/giftbox/rate/cap-punti fedeli. FIX
+applicati (verificati live 5/5 dove testabile, nessuna regressione sul 8/8):
+- P1 (🔴) PROMO-CON-CODICE nel POS: un codice che coincide con una promotions.coupon_code
+  ATTIVA ora si applica come PROMOZIONE (non coupon), con fallback al coupon classico
+  (port di pos.php:4304-4336; riusa evaluatePromotionsForCart via lookup coupon_code->id).
+  Nota "Promozione: NAME (CODE) -importo". VERIFICATO live (sconto 50%, nota col codice).
+- R5 (🟡) piano rate SCARTATO con scelta "unica soluzione" (installment_choice='single'):
+  activePlan ora null se single (pos.php:4633-4636). VERIFICATO: nessun piano, niente nota.
+- R2 (🟡) vendita PREPAGATI: issuePrepaidFromSale ora imposta expires_at (+ purchase_date)
+  da prepaidExpiryForPurchaseDate (port di PosSettings::prepaidExpiryForPurchaseDate/
+  computeExpiry, PosSettings.php:247/209) — prima i prepagati non scadevano mai. VERIFICATO
+  con scadenza attiva (+6 mesi).
+- R1 (🔴) RICARICHE: punti ora maturano quando il cliente è idoneo (programma attivo +
+  aderente) A PRESCINDERE dal flag earn_points del template; il flag decide solo la BASE
+  (attivo=base+bonus, disattivo=sola base) — port di pos.php:5570-5575. Prima col flag OFF
+  un cliente idoneo riceveva ZERO punti. Fix a livello codice (fidelity disabilitata su
+  questo tenant, non live-testabile qui).
+Residui (batch successivi / opzionali): D1 (decisione storno punti per-prenotazione
+nell'annullo), R3 (blocco prepagato scaduto in exec manuale), F1/F2 (cap riscatto su
+saldo-prenotati + hint modale), C2 (preorder_expires_at), + messaggi verbatim 🟢.
+
 ## Quick Booking drawer: stile grigio dei campi disabilitati (2026-07-07)
 
 Fedeltà UI: nel legacy i select non ancora cliccabili del drawer (Operatore prima del
