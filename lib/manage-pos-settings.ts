@@ -282,6 +282,17 @@ export async function prepaidsExpiryEnabled(slug: string): Promise<boolean> {
   return Boolean(s && s.prepaids_expiry_enabled && normalizeValue(s.prepaids_expiry_value) > 0);
 }
 
+// Scadenza ritiro preordine per una data d'acquisto (port di
+// PosSettings::preorderExpiryForPurchaseDate, PosSettings.php): usata al checkout per le
+// righe prodotto in stato 'ordered'. null se la scadenza preordini è disattiva o value<=0.
+export async function preorderExpiryForPurchaseDate(slug: string, purchaseDate: string): Promise<string | null> {
+  const s = await settingsRow(slug).catch(() => null);
+  if (!s || !s.preorders_expiry_enabled) return null;
+  const value = normalizeValue(s.preorders_expiry_value);
+  if (value <= 0) return null;
+  return computeExpiry(purchaseDate, value, s.preorders_expiry_unit);
+}
+
 function dateTimeString(value: unknown): string {
   if (!value) return new Date().toISOString();
   if (value instanceof Date) return value.toISOString();

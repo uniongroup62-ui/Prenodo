@@ -34,7 +34,7 @@ import {
   type PromoCartLine,
 } from "@/lib/db-repositories";
 import { expireClientLots, fidelityLotsSettings } from "@/lib/fidelity-lots";
-import { prepaidExpiryForPurchaseDate, prepaidsExpiryEnabled } from "@/lib/manage-pos-settings";
+import { prepaidExpiryForPurchaseDate, prepaidsExpiryEnabled, preorderExpiryForPurchaseDate } from "@/lib/manage-pos-settings";
 import { giftInvalidateSource, giftRecordSale } from "@/lib/gifts-engine";
 import { giftRedeemAppointmentSelectionIfAny } from "@/lib/gifts-instances";
 import { getManageLocationContext } from "@/lib/manage-locations";
@@ -4291,6 +4291,14 @@ async function insertSaleItem(slug: string, saleId: number, item: PosSaleItem): 
       : item.refId > 0 && (item.type === "product" || item.type === "service" || item.type === "prepaid" || item.type === "package")
         ? item.refId
         : null;
+  // Scadenza ritiro preordine (pos.php:686-701 pos_insert_sale_item): per una riga
+  // PRODOTTO in stato 'ordered' con la scadenza preordini attiva, snapshot di
+  // preorder_expires_at (deadline di ritiro / base per l'auto-scadenza). Prima assente
+  // -> i preordini non avevano scadenza. filterColumns scarta la colonna se assente.
+  let preorderExpiresAt: string | null = null;
+  if (item.type === "product" && String(item.status ?? "").toLowerCase() === "ordered") {
+    preorderExpiresAt = await preorderExpiryForPurchaseDate(slug, todayIso()).catch(() => null);
+  }
   return tenantInsert(table, await filterColumns(table.name, {
     sale_id: saleId,
     item_type: storedType,
@@ -4300,6 +4308,7 @@ async function insertSaleItem(slug: string, saleId: number, item: PosSaleItem): 
     unit_price: item.unitPrice,
     line_total: item.total,
     item_status: item.status,
+    preorder_expires_at: preorderExpiresAt,
   }));
 }
 
