@@ -2742,14 +2742,30 @@ async function saleCancelLinkedAppointments(slug: string, saleId: number): Promi
   const out: PosCancelSummary["linkedAppointments"] = [];
   for (const a of appts) {
     const status = String(a.status ?? "").trim().toLowerCase();
-    if (status === "canceled" || status === "cancelled") continue; // annullata -> non blocca
     const id = Number(a.id ?? 0) || 0;
     const code = clean(a.public_code, 40) || `#${id}`;
-    const source = [...(sources.get(id) ?? [])].join(", ") || "questa vendita";
-    const blocker = status === "done"
-      ? `Prenotazione ${code} in stato Eseguito collegata a ${source}: annulla/storna prima la prenotazione o rimuovi manualmente il collegamento.`
-      : `Prenotazione ${code} collegata a ${source}: apri la prenotazione e rimuovi manualmente il servizio/credito oppure annulla la prenotazione prima di annullare la vendita.`;
-    out.push({ id, code, status, source, blocker });
+    const srcSet = sources.get(id) ?? new Set<string>();
+    const source = [...srcSet].join(", ") || "questa vendita";
+    const canceled = status === "canceled" || status === "cancelled";
+    if (!canceled) {
+      // Attiva/eseguita -> gestione manuale richiesta (port :1952-1980).
+      out.push({
+        id, code, status, source,
+        blocker: status === "done"
+          ? `Prenotazione ${code} in stato Eseguito collegata a ${source}: annulla/storna prima la prenotazione o rimuovi manualmente il collegamento.`
+          : `Prenotazione ${code} collegata a ${source}: apri la prenotazione e rimuovi manualmente il servizio/credito oppure annulla la prenotazione prima di annullare la vendita.`,
+      });
+    } else if (srcSet.has("GiftCard")) {
+      // Già annullata ma CONSERVA ANCORA la GiftCard della vendita come credito
+      // (la giftcard è nel branch solo con giftcard_used>0) -> BLOCKER (port di
+      // AppointmentLifecycle.php:1996-2005): va ripulita prima, altrimenti si
+      // annullerebbe la vendita lasciando il credito applicato alla prenotazione.
+      out.push({
+        id, code, status, source,
+        blocker: `Prenotazione ${code} già annullata ma con credito ancora applicato a ${source}: ripulisci manualmente la prenotazione prima di annullare la vendita.`,
+      });
+    }
+    // else: annullata senza credito residuo -> nessun blocker (preserve history).
   }
   return out;
 }

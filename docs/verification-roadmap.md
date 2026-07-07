@@ -23,10 +23,18 @@ Estesa poi la copertura del blocker anche alla sorgente GIFTCARD (appointments.g
 giftcard_used>0, giftcard emesse dalla vendita via marker 'issue' in giftcard_transactions;
 port di appt_lifecycle_load_giftcard_linked_appointments) — VERIFICATO 2/2. Il blocker copre
 ora pacchetti/prepagati/giftbox/giftcard.
+PARTE 2 (2026-07-07): gestita anche la prenotazione GIÀ ANNULLATA che conserva ancora la
+giftcard della vendita come credito (giftcard_used>0) — port di AppointmentLifecycle.php:
+1996-2005. saleCancelLinkedAppointments non salta più incondizionatamente le annullate: se
+una annullata è nel branch GiftCard (quindi giftcard_used>0 = credito residuo) diventa BLOCKER
+verbatim "Prenotazione {code} già annullata ma con credito ancora applicato a {source}:
+ripulisci manualmente la prenotazione prima di annullare la vendita."; le annullate di
+pacchetto/giftbox/prepagato o pulite (giftcard_used=0) restano consentite (preserve history,
+:2007-2020). VERIFICATO 2/2: annullo bloccato con prenotazione annullata-con-credito; consentito
+con annullata pulita. Regressione OK (checkout 8/8, D1 package 4/4, D1 giftcard 2/2). Residuo 0.
 RESIDUI D1 non fatti: sorgente RICARICA (credito fungibile, nessun loader legacy dedicato —
-escluso come nel legacy); decisione storno punti PER-prenotazione per prenotazioni GIÀ
-ANNULLATE collegate (i radio negative/skip) — richiede il flusso di rilascio giftcard/
-credito/ricarica dell'annullata.
+escluso come nel legacy); decisione storno punti PER-prenotazione con i radio negative/skip
+sulle annullate (deriva dall'enrichment non tracciato, marginale/rara — non portata).
 
 ## Pagamenti AUDIT + fix batch 1 (2026-07-07)
 
