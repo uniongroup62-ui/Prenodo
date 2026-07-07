@@ -1609,6 +1609,14 @@ async function locationWeekHours(slug: string, locationId: number | null): Promi
 // "legacy-appointments-missing-a-segment" handling). The no-staff-range-blocks-everyone
 // rule is preserved by candidateFree (a range with an empty staffIds list blocks any
 // operator).
+// Whitelist stati "attivi" (occupanti) — port di api_appt_active_status_sql
+// (api_appointments.php:28-57): pending/scheduled/done (+ sinonimi legacy). Gli stati
+// NON in whitelist (canceled/cancelled/no_show/rejected/...) LIBERANO lo slot, come nel
+// legacy sia pubblico (booking.php) sia backend. Prima il Next usava una blacklist
+// `status NOT IN ('canceled','cancelled')` che teneva erroneamente occupato un no_show.
+const ACTIVE_APPOINTMENT_STATUS_SQL =
+  "LOWER(TRIM(COALESCE(status,''))) IN ('pending','scheduled','done','prenotato','prenotata','confirmed','confermato','confermata','approved','booked','in sospeso','in attesa','attesa','eseguito','eseguita','executed','completed','completato','completata')";
+
 export async function busyRangesForDate(
   slug: string,
   date: string,
@@ -1618,8 +1626,8 @@ export async function busyRangesForDate(
   const excludeHoldToken = (options.excludeHoldToken ?? "").trim();
 
   const appointmentWhere = excludeAppointmentId
-    ? "starts_at::date = ? AND status NOT IN ('canceled','cancelled') AND id <> ?"
-    : "starts_at::date = ? AND status NOT IN ('canceled','cancelled')";
+    ? `starts_at::date = ? AND ${ACTIVE_APPOINTMENT_STATUS_SQL} AND id <> ?`
+    : `starts_at::date = ? AND ${ACTIVE_APPOINTMENT_STATUS_SQL}`;
   const appointmentParams = excludeAppointmentId ? [date, excludeAppointmentId] : [date];
 
   const segmentWhere = excludeAppointmentId
@@ -1656,6 +1664,16 @@ export async function busyRangesForDate(
     }).catch(() => [] as RowDataPacket[]),
   ]);
 
+  // Un segmento occupa SOLO se il suo appuntamento padre è in uno stato ATTIVO
+  // (whitelist api_appt_active_status_sql, applicata dal legacy anche alla query
+  // segmenti di staff_has_conflict_in_range). La query appuntamenti sopra è già
+  // filtrata per whitelist, quindi i suoi id sono l'insieme attivo: un no_show/annullato
+  // non compare e i suoi segmenti vanno scartati (altrimenti terrebbero occupato lo slot).
+  const activeAppointmentIds = new Set<number>(
+    appointmentRows.map((row) => Number(row.id ?? 0)).filter((id) => id > 0),
+  );
+  const activeSegmentRows = segmentRows.filter((row) => activeAppointmentIds.has(Number(row.appointment_id ?? 0)));
+
   // Per-segment ranges (M3). Each segment contributes a busy range for ITS OWN
   // staff only. Segments WITHOUT a real operator (staff_id 0/null — the "Senza
   // Operatore" case) do NOT constrain any specific operator and are dropped: the
@@ -1664,7 +1682,7 @@ export async function busyRangesForDate(
   // so an unassigned segment must NOT block everyone. The conservative
   // "no-staff-range-blocks-everyone" rule applies only to legacy whole-appointment
   // ranges (the fallback below) and holds, mirroring the legacy clause 3.
-  const segmentRanges: BusyRange[] = segmentRows
+  const segmentRanges: BusyRange[] = activeSegmentRows
     .filter((row) => nullableNumber(row.staff_id))
     .map((row) => ({
       start: timeToMinutes(timeFromSql(row.starts_at)),
@@ -1675,7 +1693,7 @@ export async function busyRangesForDate(
   // Appointment ids that already have at least one segment row for the date — those
   // appointments are represented by their segments, so we skip their rolled-up span.
   const appointmentsWithSegments = new Set<number>(
-    segmentRows.map((row) => Number(row.appointment_id ?? 0)).filter((id) => id > 0),
+    activeSegmentRows.map((row) => Number(row.appointment_id ?? 0)).filter((id) => id > 0),
   );
 
   // Appointment-span fallback ONLY for appointments missing segments (legacy bookings).
@@ -1718,8 +1736,8 @@ export async function busyCabinRangesForDate(
   const excludeHoldToken = (options.excludeHoldToken ?? "").trim();
 
   const appointmentWhere = excludeAppointmentId
-    ? "starts_at::date = ? AND status NOT IN ('canceled','cancelled') AND id <> ?"
-    : "starts_at::date = ? AND status NOT IN ('canceled','cancelled')";
+    ? `starts_at::date = ? AND ${ACTIVE_APPOINTMENT_STATUS_SQL} AND id <> ?`
+    : `starts_at::date = ? AND ${ACTIVE_APPOINTMENT_STATUS_SQL}`;
   const appointmentParams = excludeAppointmentId ? [date, excludeAppointmentId] : [date];
 
   const segmentWhere = excludeAppointmentId
@@ -1758,8 +1776,16 @@ export async function busyCabinRangesForDate(
 
   const out: CabinBusyRange[] = [];
 
+  // Solo i segmenti di appuntamenti ATTIVI occupano una cabina (come per lo staff:
+  // un no_show/annullato libera anche la cabina). La query appuntamenti è già filtrata
+  // per whitelist -> i suoi id sono l'insieme attivo.
+  const activeAppointmentIds = new Set<number>(
+    appointmentRows.map((row) => Number(row.id ?? 0)).filter((id) => id > 0),
+  );
+  const activeSegmentRows = segmentRows.filter((row) => activeAppointmentIds.has(Number(row.appointment_id ?? 0)));
+
   // (1) Per-segment cabins.
-  for (const row of segmentRows) {
+  for (const row of activeSegmentRows) {
     const cabinId = nullableNumber(row.cabin_id);
     if (!cabinId) continue;
     out.push({
@@ -1772,7 +1798,7 @@ export async function busyCabinRangesForDate(
 
   // (2) Appointment-level cabin for appointments WITHOUT segments (legacy fallback).
   const appointmentsWithSegments = new Set<number>(
-    segmentRows.map((row) => Number(row.appointment_id ?? 0)).filter((id) => id > 0),
+    activeSegmentRows.map((row) => Number(row.appointment_id ?? 0)).filter((id) => id > 0),
   );
   for (const row of appointmentRows) {
     if (appointmentsWithSegments.has(Number(row.id ?? 0))) continue;

@@ -839,12 +839,25 @@ export async function POST(request: Request) {
       return jsonError("Permesso Prenotazione rapida richiesto.", 403);
     }
     const operator = String(body.staff_name ?? body.operator ?? "");
-    const locationId = await resolveManageLocationId({
+    const rawLocationId = body.location_id === undefined ? null : String(body.location_id);
+    const resolvedLocationId = await resolveManageLocationId({
       slug: tenantSlug,
-      raw: body.location_id === undefined ? null : String(body.location_id),
+      raw: rawLocationId,
       fallbackCurrent: true,
-    }) || null;
+    });
+    // Sede esplicita non valida/non disponibile (api_appointments.php:9974-9976): un
+    // location_id positivo che non risolve a una sede accessibile è un errore, non un
+    // silenzioso "nessuna sede".
+    if (rawLocationId !== null && Number.parseInt(rawLocationId, 10) > 0 && !(resolvedLocationId > 0)) {
+      return jsonError("Sede non valida o non disponibile.", 400);
+    }
+    const locationId = resolvedLocationId || null;
     const date = String(body.date ?? todayIso());
+    // Inizio/fine obbligatori (api_appointments.php:10940): il drawer invia date+time;
+    // un orario vuoto porterebbe al default 09:00 invece dell'errore legacy.
+    if (!String(body.time ?? "").trim()) {
+      return jsonError("Inserisci inizio e fine.", 400);
+    }
     const holdToken = emptyToNull(String(body.appointment_hold_token ?? body.hold_token ?? ""));
 
     // MULTI-SERVICE: the drawer may send `service_ids` (ordered, robust) and/or

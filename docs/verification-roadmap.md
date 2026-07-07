@@ -1,5 +1,32 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Quick Booking AUDIT + comunicazione booking pubblico (2026-07-07)
+
+Audit completo del quick booking (4 analisi parallele + test live) e verifica della
+comunicazione col booking pubblico. **Comunicazione CONFERMATA CORRETTA (19/19 test live)**:
+QB interno e pubblico condividono lo stesso motore (busyRangesForDate + holdPublicBookingSlot
++ publicBookingSlots, stessa tabella appointment_holds senza filtro per canale). T1 appt
+interno blocca slot pubblico+manage; T2 hold pubblico blocca pubblico+manage; T3 hold interno
+(backend 300s) blocca pubblico; T4 conferma pubblica visibile e bloccante lato manage. Nessun
+bug di isolamento hold.
+
+BATCH 1 fix (tutti verificati live 7/7, nessuna regressione sul 19/19):
+- #1 Cliente obbligatorio: resolveClientForAppointment lancia "Seleziona un cliente." se manca
+  id E nome (prima creava un cliente spazzatura "Cliente"). api_appointments.php:9992.
+- #2 Servizio obbligatorio: planAppointmentServices lancia "Seleziona almeno un servizio." se
+  nessun nome (prima prenotava il primo servizio attivo). api_appointments.php:10047.
+- #8 Sede non valida: route.ts save -> "Sede non valida o non disponibile." per un location_id
+  positivo che non risolve (prima procedeva senza sede). api_appointments.php:9974.
+- #9 Ora obbligatoria: route.ts save -> "Inserisci inizio e fine." per time vuoto (prima
+  default 09:00); + "Durata servizio non valida." in planAppointmentServices per durata 0.
+  api_appointments.php:10940/10952.
+- #3 no_show LIBERA lo slot: busyRangesForDate/busyCabinRangesForDate portano la WHITELIST
+  api_appt_active_status_sql (pending/scheduled/done + sinonimi) al posto della blacklist NOT
+  IN ('canceled','cancelled'); inoltre i SEGMENTI ora sono filtrati per stato-attivo del padre
+  (prima il segmento di un no_show teneva occupato lo slot). Simmetrico pubblico/interno.
+Residue (batch successivi): messaggi verbatim conflitto/time-off (#4/#5), auto-assegnazione
+operatore unico + guard "Seleziona un operatore per X" (#6), + minori elencati nell'audit.
+
 Verifica end-to-end che il Next (localhost:3000, Supabase) replichi il PHP
 (localhost, MySQL): logiche, funzioni, dati e grafica. Metodo: sessioni live su
 entrambi (login tenant `centroesteticoelite`), confronto pagina-per-pagina

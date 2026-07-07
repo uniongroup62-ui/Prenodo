@@ -2044,6 +2044,12 @@ async function planAppointmentServices({
   // Resolve services in order. Backward compatible: when serviceNames is empty
   // fall back to the single serviceName (single-service path unchanged).
   const orderedNames = serviceNames.length > 0 ? serviceNames : [serviceName];
+  // Servizio obbligatorio (api_appointments.php:10047-10049): senza alcun servizio il
+  // legacy rifiuta con "Seleziona almeno un servizio." Il Next, prima, risolveva un
+  // nome vuoto al PRIMO servizio attivo (booking silenzioso del servizio sbagliato).
+  if (!orderedNames.some((n) => String(n ?? "").trim())) {
+    throw new Error("Seleziona almeno un servizio.");
+  }
   const services: RowDataPacket[] = [];
   for (const name of orderedNames) {
     services.push(await resolveServiceForAppointment(slug, name));
@@ -2073,6 +2079,12 @@ async function planAppointmentServices({
     if (segStaffId && segStaffId > 0) staffIdSet.add(segStaffId);
     cursor = segEnd;
     totalDuration += duration;
+  }
+
+  // Durata totale non valida (api_appointments.php:10952-10954): un insieme di servizi
+  // a durata nulla non deve produrre un appuntamento di durata 0.
+  if (totalDuration <= 0) {
+    throw new Error("Durata servizio non valida.");
   }
 
   return {
@@ -22209,6 +22221,12 @@ async function appointmentStaffRef(slug: string, appointmentId: number): Promise
 }
 
 async function resolveClientForAppointment(slug: string, clientName: string, locationId: number | null, clientId?: number | null): Promise<{ id: number; name: string }> {
+  // Cliente obbligatorio (api_appointments.php:9992-9993): senza un id selezionato E
+  // senza un nome, il legacy rifiuta con "Seleziona un cliente." Il Next, prima, creava
+  // silenziosamente un cliente spazzatura chiamato "Cliente".
+  if (!(clientId && clientId > 0) && !String(clientName ?? "").trim()) {
+    throw new Error("Seleziona un cliente.");
+  }
   // Prefer the SELECTED client id (the drawer posts #qb_client_id) so the save binds to the
   // exact client chosen — resolving by name alone binds to the FIRST match, which is wrong
   // when clients share a name (and would also create a duplicate when the name doesn't exist).
