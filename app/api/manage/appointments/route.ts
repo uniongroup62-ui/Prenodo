@@ -314,8 +314,18 @@ export async function GET(request: Request) {
     // clause. `date` (single day) still takes priority when present (Day view).
     const from = url.searchParams.get("from") ?? undefined;
     const to = url.searchParams.get("to") ?? undefined;
+    // Filtro sede della lista/calendario legacy (appointments.php: filterLocationId
+    // via app_resolve_location_id, permissivo location_id=? OR NULL). Risolve la sede
+    // corrente della sessione (o quella passata) e la propaga a listDbAppointments.
+    const listLocationId = await resolveManageLocationId({
+      slug: tenantSlug,
+      raw: url.searchParams.get("location_id"),
+      fallbackCurrent: true,
+    }) || 0;
     const appointments = await listDbAppointments(
-      date ? { slug: tenantSlug, date } : { slug: tenantSlug, start: from, end: to },
+      date
+        ? { slug: tenantSlug, date, locationId: listLocationId }
+        : { slug: tenantSlug, start: from, end: to, locationId: listLocationId },
     );
     // Decorazioni della lista legacy (appointments.php): riepilogo pacchetti/
     // prepagati sotto il servizio + colore operatore per il pallino. Best-effort.

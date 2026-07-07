@@ -567,6 +567,16 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
                           : appt.staffColor
                             ? [appt.staffColor]
                             : [];
+                        // Operatore riga padre ($opSummary legacy): multi-servizio con
+                        // operatori DIVERSI -> nomi uniti "A, B"; altrimenti l'unico nome.
+                        const parentStaffNames = isMulti
+                          ? ([...new Set(lines.map((l) => l.staffName).filter(Boolean))] as string[])
+                          : [];
+                        const operatorText = isMulti
+                          ? parentStaffNames.length > 1
+                            ? parentStaffNames.join(", ")
+                            : parentStaffNames[0] || "—"
+                          : appt.operator || "—";
                         const summaries = (
                           <>
                             {appt.packageSummary ? (
@@ -641,7 +651,7 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
                                 {dotColors.map((color, index) => (
                                   <OpColorDot color={color} key={`${appt.id}-dot-${index}`} />
                                 ))}
-                                {appt.operator || "—"}
+                                {operatorText}
                               </td>
                               <td>
                                 <span className={`appointments-status-badge ${badge.className}`}>{badge.label}</span>

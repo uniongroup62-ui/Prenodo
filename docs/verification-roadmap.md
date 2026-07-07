@@ -7267,3 +7267,46 @@ VERIFICA LIVE: GET /api/manage/dashboard (centroesteticoelite, sede 21) ->
 Clienti 6, Vendite 30gg "€ 40,00", settimana 06/07-12/07 con Ricavi "€ 12,00";
 render pagina 200, nessun errore JS, grafico dipinto. Nessuna scrittura DB
 (solo SELECT), residuo test = 0.
+
+
+---
+
+## Lista appuntamenti: filtro sede + segmenti duplicati + operatore riga padre (2026-07-07)
+
+Analisi/confronto approfondito di appointments.php vs il port Next
+(components/modules/appointments-content.tsx + app/api/manage/appointments +
+listDbAppointments/appointmentServiceLines). Il MULTI-SERVIZIO era già completo e
+funzionante (riga padre "Multi-servizio (N)" espandibile + figli con orari/
+operatore per segmento + riordino ↑/↓ swap_segment): non compariva solo perché il
+tenant di test ha UN solo servizio. Dimostrato con test live (2° servizio temp +
+prenotazione multi-servizio → rendering + riordino OK, poi ripristino, residuo=0).
+
+Chiuse le 3 divergenze reali trovate:
+
+### #1 Filtro sede nella lista (era assente)
+listDbAppointments non filtrava per sede → elencava gli appuntamenti di TUTTE le
+sedi (il legacy filtra per la sede corrente, permissivo location_id=? OR NULL).
+Aggiunto il parametro opzionale `locationId` (guardato da columnExists) e il route
+GET (lista + calendario) ora risolve la sede corrente via resolveManageLocationId e
+la propaga. VERIFICATO live: un appuntamento spostato su una sede diversa (9999)
+sparisce dalla lista (sede corrente 21), mentre gli appuntamenti loc 21/NULL restano.
+
+### #3 Righe segmento per servizio DUPLICATO (collisione)
+appointmentServiceLines mappava i segmenti per service_id: due segmenti dello STESSO
+servizio nello stesso appuntamento collidevano (il 2° ereditava segmentId/orario del
+1°, riordino rotto). Riscritto per costruire UNA RIGA PER SEGMENTO in ordine di
+posizione (come il legacy che raggruppa per segmento), nome/prezzo risolti da
+appointment_services con fallback su services. VERIFICATO live: "test,test" ora dà 2
+segmentId distinti (319/320) con orari 09:00-10:00 e 10:00-11:00.
+
+### #2 Operatore riga padre multi-operatore
+La cella operatore della riga padre mostrava solo il primo operatore; il legacy
+($opSummary) con operatori DIVERSI mostra i nomi uniti "A, B", altrimenti l'unico
+nome. Portato 1:1 (parentStaffNames dai segmenti). Verificato via typecheck (non
+testabile live: il tenant ha un solo operatore).
+
+Confermate fedeli senza modifiche: filtri Dal/Al/Cerca, badge stato, codice
+prenotazione, azioni Modifica/Elimina (solo Annullati) + guard, bulk delete +
+messaggi/contatori, riepiloghi pacchetto/prepagato, pallini colore, stati vuoti,
+deep-link, conferme, toast riordino. Nessuna scrittura DB residua (test ripristinati,
+residuo=0).

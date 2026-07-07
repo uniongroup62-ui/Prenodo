@@ -1815,11 +1815,16 @@ export async function listDbAppointments({
   date,
   start,
   end,
+  locationId,
 }: {
   slug: string;
   date?: string;
   start?: string;
   end?: string;
+  // Filtro sede della lista legacy (appointments.php 751-763): permissivo come il
+  // legacy — include gli appuntamenti senza sede (location_id = ? OR IS NULL).
+  // Assente/0 => nessun filtro (comportamento storico).
+  locationId?: number;
 }): Promise<AppointmentWithMeta[]> {
   const clauses: string[] = [];
   const params: unknown[] = [];
@@ -1834,6 +1839,13 @@ export async function listDbAppointments({
     if (end) {
       clauses.push("starts_at < ?");
       params.push(`${end} 00:00:00`);
+    }
+  }
+  if (locationId && locationId > 0) {
+    const apptTable = await tenantTable(slug, "appointments").catch(() => null);
+    if (apptTable && (await columnExists(apptTable.name, "location_id"))) {
+      clauses.push("(location_id = ? OR location_id IS NULL)");
+      params.push(locationId);
     }
   }
 
@@ -21919,34 +21931,41 @@ async function appointmentServiceLines(
       params: [appointmentId],
       orderBy: "service_id ASC",
     });
-    if (serviceRows.length > 0) {
-      // Segment ids + POSITION order (the legacy child rows follow the segment
-      // sequence and carry data-seg for the ↑/↓ reorder buttons) + gli orari e
-      // l'operatore per segmento (le righe figlie legacy mostrano "↳ HH:MM → HH:MM"
-      // e il nome operatore col pallino colore).
-      const segRows = await tenantSelect<RowDataPacket>({
-        slug,
-        table: "appointment_segments",
-        columns: "id, service_id, position, starts_at, ends_at, staff_id",
-        where: "appointment_id = ?",
-        params: [appointmentId],
-        orderBy: "position ASC, id ASC",
-      }).catch(() => [] as RowDataPacket[]);
-      const segByService = new Map<number, { id: number; position: number; time: string; endTime: string; staffId: number }>();
-      for (const seg of segRows) {
-        const sid = Number(seg.service_id ?? 0);
-        if (sid > 0 && !segByService.has(sid)) {
-          segByService.set(sid, {
-            id: Number(seg.id ?? 0),
-            position: Number(seg.position ?? 0),
-            time: seg.starts_at ? timeLocal(toDate(seg.starts_at)) : "",
-            endTime: seg.ends_at ? timeLocal(toDate(seg.ends_at)) : "",
-            staffId: Number(seg.staff_id ?? 0),
-          });
-        }
+    // Segmenti (multi-servizio) ordinati per POSIZIONE: nel legacy ogni SEGMENTO è
+    // una riga figlia (con data-seg per il riordino ↑/↓ + "↳ HH:MM → HH:MM" +
+    // operatore). Costruiamo una riga PER SEGMENTO (non per service_id) così due
+    // segmenti dello STESSO servizio non collidono e ognuno tiene il proprio
+    // segmentId/orario/operatore (parità col legacy che raggruppa per segmento).
+    const segRows = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "appointment_segments",
+      columns: "id, service_id, position, starts_at, ends_at, staff_id",
+      where: "appointment_id = ?",
+      params: [appointmentId],
+      orderBy: "position ASC, id ASC",
+    }).catch(() => [] as RowDataPacket[]);
+
+    if (segRows.length > 0) {
+      // Nome/prezzo per service_id dallo snapshot appointment_services (prima
+      // occorrenza); i servizi non presenti lì vengono risolti da `services`.
+      const svcMeta = new Map<number, { name: string; price: number }>();
+      for (const r of serviceRows) {
+        const sid = Number(r.service_id ?? 0);
+        if (sid > 0 && !svcMeta.has(sid)) svcMeta.set(sid, { name: String(r.service_name ?? ""), price: Number(r.price ?? 0) });
+      }
+      const missingServiceIds = [...new Set(segRows.map((s) => Number(s.service_id ?? 0)).filter((sid) => sid > 0 && !svcMeta.has(sid)))];
+      if (missingServiceIds.length) {
+        const svcRows = await tenantSelect<RowDataPacket>({
+          slug,
+          table: "services",
+          columns: "id, name, price",
+          where: `id IN (${missingServiceIds.map(() => "?").join(",")})`,
+          params: missingServiceIds,
+        }).catch(() => [] as RowDataPacket[]);
+        for (const r of svcRows) svcMeta.set(Number(r.id), { name: String(r.name ?? ""), price: Number(r.price ?? 0) });
       }
       // Nomi + colori operatore dei segmenti (batch): pallino colore legacy.
-      const segStaffIds = [...new Set([...segByService.values()].map((s) => s.staffId).filter((n) => n > 0))];
+      const segStaffIds = [...new Set(segRows.map((s) => Number(s.staff_id ?? 0)).filter((n) => n > 0))];
       const segStaffById = new Map<number, { name: string; color: string }>();
       if (segStaffIds.length) {
         const staffRows = await tenantSelect<RowDataPacket>({
@@ -21961,24 +21980,34 @@ async function appointmentServiceLines(
           segStaffById.set(Number(r.id), { name: String(r.full_name ?? ""), color: /^#[0-9a-fA-F]{6}$/.test(color) ? color : "" });
         }
       }
-      const lines = serviceRows.map((row) => {
-        const serviceId = Number(row.service_id ?? 0);
-        const seg = segByService.get(serviceId);
-        const staff = seg && seg.staffId > 0 ? segStaffById.get(seg.staffId) : undefined;
+      // Una riga per segmento, già in ordine di posizione.
+      return segRows.map((seg) => {
+        const serviceId = Number(seg.service_id ?? 0);
+        const meta = svcMeta.get(serviceId);
+        const staffId = Number(seg.staff_id ?? 0);
+        const staff = staffId > 0 ? segStaffById.get(staffId) : undefined;
         return {
           serviceId,
-          name: String(row.service_name ?? "Servizio"),
-          price: Number(row.price ?? 0),
-          segmentId: seg ? seg.id : null,
-          time: seg?.time || undefined,
-          endTime: seg?.endTime || undefined,
+          name: meta?.name || "Servizio",
+          price: meta?.price ?? 0,
+          segmentId: Number(seg.id ?? 0) || null,
+          time: seg.starts_at ? timeLocal(toDate(seg.starts_at)) : undefined,
+          endTime: seg.ends_at ? timeLocal(toDate(seg.ends_at)) : undefined,
           staffName: staff?.name || undefined,
           staffColor: staff?.color || undefined,
-          _position: seg ? seg.position : Number.MAX_SAFE_INTEGER,
         };
       });
-      lines.sort((a, b) => a._position - b._position || a.serviceId - b.serviceId);
-      return lines.map(({ _position, ...line }) => line);
+    }
+
+    if (serviceRows.length > 0) {
+      // Nessun segmento: una riga per riga appointment_services (dati legacy senza
+      // segmenti; il riordino non si applica → segmentId null).
+      return serviceRows.map((row) => ({
+        serviceId: Number(row.service_id ?? 0),
+        name: String(row.service_name ?? "Servizio"),
+        price: Number(row.price ?? 0),
+        segmentId: null as number | null,
+      }));
     }
   } catch {
     // fallback below
