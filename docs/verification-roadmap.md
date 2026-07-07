@@ -19,9 +19,14 @@ a referenziarlo (incoerenza, riprodotta abilitando temporaneamente fidelity+camp
 VERIFICATO live 4/4: annullo bloccato con prenotazione scheduled collegata; consentito dopo
 averla annullata; nessuna regressione (checkout/cancel 8/8). Setup fidelity di test
 (campagna+carta+template) creato e RIMOSSO (residuo 0, cliente 9 invariato).
-RESIDUI D1 non fatti (più profondi/rari): sorgenti giftcard/ricarica (meccanismi diversi);
-decisione storno punti PER-prenotazione per prenotazioni GIÀ ANNULLATE collegate (i radio
-negative/skip) — richiede il flusso di rilascio giftcard/credito/ricarica dell'annullata.
+Estesa poi la copertura del blocker anche alla sorgente GIFTCARD (appointments.giftcard_id +
+giftcard_used>0, giftcard emesse dalla vendita via marker 'issue' in giftcard_transactions;
+port di appt_lifecycle_load_giftcard_linked_appointments) — VERIFICATO 2/2. Il blocker copre
+ora pacchetti/prepagati/giftbox/giftcard.
+RESIDUI D1 non fatti: sorgente RICARICA (credito fungibile, nessun loader legacy dedicato —
+escluso come nel legacy); decisione storno punti PER-prenotazione per prenotazioni GIÀ
+ANNULLATE collegate (i radio negative/skip) — richiede il flusso di rilascio giftcard/
+credito/ricarica dell'annullata.
 
 ## Pagamenti AUDIT + fix batch 1 (2026-07-07)
 

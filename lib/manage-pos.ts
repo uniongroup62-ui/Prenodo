@@ -2720,6 +2720,22 @@ async function saleCancelLinkedAppointments(slug: string, saleId: number): Promi
   await addLinks("appointment_package_items", "client_package_id", packageIds, "Pacchetti");
   await addLinks("appointment_giftbox_items", "instance_id", giftboxInstanceIds, "GiftBox");
   await addLinks("appointment_prepaid_service_items", "client_prepaid_service_id", prepaidIds, "Servizi prepagati");
+  // GIFTCARD emessa dalla vendita usata come pagamento in una prenotazione
+  // (appointments.giftcard_id + giftcard_used>0; port di appt_lifecycle_load_giftcard_
+  // linked_appointments, AppointmentLifecycle.php:1610). Le giftcard emesse si trovano via il
+  // marker 'issue' in giftcard_transactions (stesso linkage di summarizeIssuedGiftcards).
+  const apptTable = await tenantTable(slug, "appointments").catch(() => null);
+  if (apptTable && (await columnExists(apptTable.name, "giftcard_id")) && (await columnExists(apptTable.name, "giftcard_used"))) {
+    const txTable = await tenantTable(slug, "giftcard_transactions").catch(() => null);
+    if (txTable) {
+      const gcRows = await tenantSelect<RowDataPacket>({ slug, table: txTable.name, columns: "giftcard_id", where: "type = 'issue' AND (meta_json LIKE ? OR note LIKE ?)", params: [`%"sale_id":${saleId}%`, `%${GIFTCARD_SALE_MARKER}${saleId}]%`] }).catch(() => [] as RowDataPacket[]);
+      const gcIds = [...new Set(gcRows.map((r) => Number(r.giftcard_id ?? 0)).filter((n) => n > 0))];
+      if (gcIds.length) {
+        const rows = await tenantSelect<RowDataPacket>({ slug, table: apptTable.name, columns: "id", where: `giftcard_id IN (${gcIds.map(() => "?").join(",")}) AND COALESCE(giftcard_used,0) > 0`, params: gcIds }).catch(() => [] as RowDataPacket[]);
+        for (const r of rows) { const aid = Number(r.id ?? 0) || 0; if (aid > 0) { if (!sources.has(aid)) sources.set(aid, new Set()); sources.get(aid)!.add("GiftCard"); } }
+      }
+    }
+  }
   const apptIds = [...sources.keys()];
   if (!apptIds.length) return [];
   const appts = await tenantSelect<RowDataPacket>({ slug, table: "appointments", columns: "id, public_code, status", where: `id IN (${apptIds.map(() => "?").join(",")})`, params: apptIds, orderBy: "id ASC" }).catch(() => [] as RowDataPacket[]);
