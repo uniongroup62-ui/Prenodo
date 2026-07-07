@@ -3331,16 +3331,99 @@ export async function getDbAppointmentCustomerVisibleSnapshot(slug: string, id: 
   return { date: dateIsoLocal(startsAt), time: timeLocal(startsAt), serviceNames };
 }
 
-// Conflitti residui (port LITE di qb_collect_qb_residui_conflicts,
-// api_appointments.php:1870-2113): chiamato dalla modale Residui allo SPUNTA di
-// un residuo, PRIMA di collegarlo. Regole:
+// --- Label helpers per i messaggi Residui (port di qb_service_name/qb_package_name/
+// qb_giftbox_instance_label/qb_giftbox_item_label, api_appointments.php:1456-1565). ---
+async function qbServiceName(slug: string, serviceId: number): Promise<string> {
+  if (!(serviceId > 0)) return "Servizio";
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "name", where: "id = ?", params: [serviceId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const n = String(rows[0]?.name ?? "").trim();
+  return n || `Servizio #${serviceId}`;
+}
+async function qbPackageName(slug: string, pkgId: number): Promise<string> {
+  if (!(pkgId > 0)) return "Pacchetto";
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "client_packages", columns: "package_name", where: "id = ?", params: [pkgId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const n = String(rows[0]?.package_name ?? "").trim();
+  return n || `Pacchetto #${pkgId}`;
+}
+async function qbGiftboxInstanceLabel(slug: string, instanceId: number): Promise<string> {
+  if (!(instanceId > 0)) return "GiftBox";
+  let label = `GiftBox #${instanceId}`;
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "giftbox_instances", columns: "id, code, giftbox_id", where: "id = ?", params: [instanceId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const row = rows[0];
+  if (row) {
+    const code = String(row.code ?? "").trim();
+    if (code) label = `GiftBox ${code}`;
+    const gbid = Number(row.giftbox_id ?? 0) || 0;
+    if (gbid > 0) {
+      const gb = await tenantSelect<RowDataPacket>({ slug, table: "giftboxes", columns: "name", where: "id = ?", params: [gbid], limit: 1 }).catch(() => [] as RowDataPacket[]);
+      const n = String(gb[0]?.name ?? "").trim();
+      if (n) label += ` (${n})`;
+    }
+  }
+  return label;
+}
+async function qbGiftboxItemLabel(slug: string, itemId: number): Promise<string> {
+  if (!(itemId > 0)) return "Voce GiftBox";
+  let label = `Voce GiftBox #${itemId}`;
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "giftbox_items", columns: "id, item_type, service_id, product_id, custom_label", where: "id = ?", params: [itemId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const row = rows[0];
+  if (row) {
+    const type = String(row.item_type ?? "").trim().toLowerCase();
+    const sid = Number(row.service_id ?? 0) || 0;
+    const pid = Number(row.product_id ?? 0) || 0;
+    const cl = String(row.custom_label ?? "").trim();
+    if (type === "service" && sid > 0) label = await qbServiceName(slug, sid);
+    else if (type === "product" && pid > 0) {
+      const p = await tenantSelect<RowDataPacket>({ slug, table: "products", columns: "name", where: "id = ?", params: [pid], limit: 1 }).catch(() => [] as RowDataPacket[]);
+      const pn = String(p[0]?.name ?? "").trim();
+      label = pn || `Prodotto #${pid}`;
+    } else if (cl) label = cl;
+    else if (type === "custom") label = "Voce personalizzata";
+  }
+  return label;
+}
+
+// Riferimenti (codici prenotazione) delle ALTRE prenotazioni ATTIVE che già collegano
+// il residuo, escluso l'appuntamento corrente (port della raccolta reservation-aware
+// qb_collect_active_*_reservations). Ref = public_code, fallback "#id".
+async function qbActiveRefs(slug: string, linkTable: string, conds: Array<{ col: string; val: number }>, excludeAppointmentId: number): Promise<string[]> {
+  const link = await tenantTable(slug, linkTable).catch(() => null);
+  const appt = await tenantTable(slug, "appointments").catch(() => null);
+  if (!link || !appt) return [];
+  const condSql = conds.map((c) => `li.${c.col} = ?`).join(" AND ");
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT DISTINCT a.id, a.public_code FROM ${quoteIdentifier(link.name)} li JOIN ${quoteIdentifier(appt.name)} a ON a.id = li.appointment_id AND a.tenant_id = li.tenant_id WHERE li.tenant_id = ? AND ${condSql} AND a.status IN ('pending','scheduled') AND a.id <> ?`,
+    [link.tenantId ?? 0, ...conds.map((c) => c.val), excludeAppointmentId > 0 ? excludeAppointmentId : 0],
+  ).catch(() => [] as RowDataPacket[]);
+  return rows.map((r) => { const c = String(r.public_code ?? "").trim(); return c || `#${Number(r.id ?? 0)}`; }).filter(Boolean).slice(0, 8);
+}
+
+// L'appuntamento CORRENTE (in edit) collega già questo residuo? -> la riselezione dello
+// stesso residuo non deve bloccare (nel modello Next il consumo è al create, quindi il
+// pool è già scalato da questo stesso appuntamento).
+async function qbCurrentAppointmentLinks(slug: string, linkTable: string, appointmentId: number, conds: Array<{ col: string; val: number }>): Promise<boolean> {
+  if (!(appointmentId > 0)) return false;
+  const link = await tenantTable(slug, linkTable).catch(() => null);
+  if (!link) return false;
+  const condSql = conds.map((c) => `${c.col} = ?`).join(" AND ");
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT 1 FROM ${quoteIdentifier(link.name)} WHERE tenant_id = ? AND appointment_id = ? AND ${condSql} LIMIT 1`,
+    [link.tenantId ?? 0, appointmentId, ...conds.map((c) => c.val)],
+  ).catch(() => [] as RowDataPacket[]);
+  return rows.length > 0;
+}
+
+// Conflitti residui (port di qb_collect_qb_residui_conflicts, api_appointments.php:
+// 1870-2113): chiamato dalla modale Residui allo SPUNTA di un residuo, PRIMA di
+// collegarlo. Adattato al modello Next (consumo al CREATE, pool già al netto):
+//   • PACCHETTI/PREPAGATI: blocco quando il pool non ha più unità libere
+//     (sessions_remaining/remaining_qty <= 0), ESCLUDENDO l'appuntamento corrente in
+//     edit (se lo collega già, la riselezione è consentita); messaggi verbatim con
+//     nome + refs delle altre prenotazioni.
+//   • GIFTBOX: blocco quando la voce è già collegata a un'ALTRA prenotazione attiva
+//     (reservation-aware), con la stessa esclusione dell'appuntamento corrente.
 //   • OMAGGI (regola stretta legacy): la stessa reward (instance+reward_item_index)
 //     collegata a un'ALTRA prenotazione ATTIVA (pending/scheduled) blocca.
-//   • PACCHETTI/PREPAGATI: blocco quando il pool non ha più unità libere
-//     (sessions_remaining/remaining_qty <= 0 — nei nostri flussi il consumo
-//     avviene al save, quindi il pool è già al netto delle prenotazioni attive).
-//   • GIFTBOX: nessun blocco lato check (la quantità per item è validata al save
-//     dall'apply, e il render lista solo item con qty residua) — LITE deliberato.
 // Risposta nella shape legacy {packages, giftboxes, services, gifts, messages}.
 export async function qbResiduiConflictsLite(
   slug: string,
@@ -3358,23 +3441,53 @@ export async function qbResiduiConflictsLite(
 
   for (const item of sel.packages) {
     const pkgId = Number(item.client_package_id ?? 0) || 0;
+    const svcId = Number(item.service_id ?? 0) || 0;
     if (pkgId <= 0) continue;
+    if (await qbCurrentAppointmentLinks(slug, "appointment_package_items", appointmentId, [{ col: "client_package_id", val: pkgId }])) continue;
     const rows = await tenantSelect<RowDataPacket>({ slug, table: "client_packages", columns: "id, package_name, sessions_remaining", where: "id = ?", params: [pkgId], limit: 1 }).catch(() => [] as RowDataPacket[]);
     const remaining = Number(rows[0]?.sessions_remaining ?? 0) || 0;
     if (!rows[0] || remaining <= 0) {
-      out.packages.push({ client_package_id: pkgId, service_id: Number(item.service_id ?? 0) || 0, reserved_qty: 0, available_qty: remaining });
-      out.messages.push("Questa seduta del pacchetto è già presente in un'altra prenotazione.");
+      const refs = await qbActiveRefs(slug, "appointment_package_items", [{ col: "client_package_id", val: pkgId }], appointmentId);
+      out.packages.push({ client_package_id: pkgId, service_id: svcId, reserved_qty: 0, available_qty: remaining, refs });
+      const pkgName = await qbPackageName(slug, pkgId);
+      const svcName = await qbServiceName(slug, svcId);
+      out.messages.push(refs.length
+        ? `Pacchetto "${pkgName}" • "${svcName}": già presente nella prenotazione ${refs.join(", ")}.`
+        : `Pacchetto "${pkgName}" • "${svcName}": già presente in un'altra prenotazione.`);
     }
   }
 
   for (const item of sel.services) {
     const prepaidId = Number(item.client_prepaid_service_id ?? 0) || 0;
+    const svcId = Number(item.service_id ?? 0) || 0;
     if (prepaidId <= 0) continue;
+    if (await qbCurrentAppointmentLinks(slug, "appointment_prepaid_service_items", appointmentId, [{ col: "client_prepaid_service_id", val: prepaidId }])) continue;
     const rows = await tenantSelect<RowDataPacket>({ slug, table: "client_prepaid_services", columns: "id, service_name, remaining_qty", where: "id = ?", params: [prepaidId], limit: 1 }).catch(() => [] as RowDataPacket[]);
     const remaining = Number(rows[0]?.remaining_qty ?? 0) || 0;
     if (!rows[0] || remaining <= 0) {
-      out.services.push({ client_prepaid_service_id: prepaidId, service_id: Number(item.service_id ?? 0) || 0, reserved_qty: 0, available_qty: remaining });
-      out.messages.push("Questo servizio prepagato è già presente in un'altra prenotazione.");
+      const refs = await qbActiveRefs(slug, "appointment_prepaid_service_items", [{ col: "client_prepaid_service_id", val: prepaidId }], appointmentId);
+      out.services.push({ client_prepaid_service_id: prepaidId, service_id: svcId, reserved_qty: 0, available_qty: remaining, refs });
+      const svcLabel = String(rows[0]?.service_name ?? "").trim() || (await qbServiceName(slug, svcId));
+      out.messages.push(refs.length
+        ? `Servizio prepagato "${svcLabel}": già presente nella prenotazione ${refs.join(", ")}.`
+        : `Servizio prepagato "${svcLabel}": già presente in un'altra prenotazione.`);
+    }
+  }
+
+  // GIFTBOX (#10, prima non verificato): blocca se la voce è già collegata a un'ALTRA
+  // prenotazione attiva (reservation-aware, esclude l'appuntamento corrente in edit).
+  for (const item of sel.giftboxes) {
+    const instanceId = Number(item.instance_id ?? 0) || 0;
+    const giftboxItemId = Number(item.giftbox_item_id ?? 0) || 0;
+    if (instanceId <= 0 || giftboxItemId <= 0) continue;
+    const conds = [{ col: "instance_id", val: instanceId }, { col: "giftbox_item_id", val: giftboxItemId }];
+    if (await qbCurrentAppointmentLinks(slug, "appointment_giftbox_items", appointmentId, conds)) continue;
+    const refs = await qbActiveRefs(slug, "appointment_giftbox_items", conds, appointmentId);
+    if (refs.length > 0) {
+      out.giftboxes.push({ instance_id: instanceId, giftbox_item_id: giftboxItemId, service_id: Number(item.service_id ?? 0) || 0, refs });
+      const gbLbl = await qbGiftboxInstanceLabel(slug, instanceId);
+      const itLbl = await qbGiftboxItemLabel(slug, giftboxItemId);
+      out.messages.push(`${gbLbl} • "${itLbl}": già presente nella prenotazione ${refs.join(", ")}.`);
     }
   }
 

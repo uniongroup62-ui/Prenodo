@@ -45,11 +45,23 @@ BATCH 3 fix (verificato live 2/2, nessuna regressione):
   preservato. NON portato il guard hard "Seleziona un operatore per X" né l'auto-pick del
   primo operatore libero (appt_auto_staff_for_single_service) — più rischiosi e coperti
   dal drawer che auto-seleziona.
-Residue (opzionali, minori 🟡/🟢): qb_residui giftbox/pacchetti verbatim + esclusione
-appuntamento in edit (#10/#11), filtro slot past-time backend (#12), modello cabine
-slot primaria-vs-any (#13), staff_for_service hold-exclude (#14, richiede plumbing drawer,
-basso impatto), floor durata 5vs10min (#15), DIV-1 fidLabel hardcoded "Punti", DIV-2
-storno punti done→cancel, #7 __new__ inline client (il drawer pre-crea il cliente).
+BATCH 4 fix (#10/#11 qb_residui_check, verificato live 6/6, nessuna regressione):
+- #10 GIFTBOX: la modale Residui ora VERIFICA i conflitti giftbox (prima non controllati):
+  blocca se la voce (instance_id+giftbox_item_id) è già collegata a un'altra prenotazione
+  attiva (reservation-aware), con label verbatim "GiftBox {code} ({nome}) • \"{voce}\": ...".
+- #11 Pacchetti/prepagati: ESCLUSIONE dell'appuntamento corrente in edit (se lo collega già,
+  la riselezione NON blocca — nel modello Next il consumo è al create, quindi il pool è già
+  scalato da questo stesso appuntamento) + messaggi VERBATIM con nome + refs delle altre
+  prenotazioni ("Pacchetto \"X\" • \"Y\": già presente nella prenotazione {codici}." /
+  "Servizio prepagato \"X\": ..."). Portati i label helper qb_service_name/qb_package_name/
+  qb_giftbox_instance_label/qb_giftbox_item_label (api_appointments.php:1456-1565) + refs
+  (public_code delle prenotazioni attive collegate, escluso il corrente).
+Residue (opzionali, DISCUTIBILI/RISCHIOSI/NULLI, lasciati per scelta): filtro slot
+past-time backend (#12, il comportamento Next è probabilmente migliore), modello cabine
+slot primaria-vs-any (#13, complesso/rischioso), staff_for_service hold-exclude (#14,
+plumbing drawer, basso impatto), floor durata 5vs10min (#15, zero impatto su dati attuali),
+DIV-1 fidLabel hardcoded "Punti" (solo se il tenant rinomina la fidelity), DIV-2 storno
+punti done→cancel (complesso/edge), #7 __new__ inline client (moot: il drawer pre-crea).
 
 Verifica end-to-end che il Next (localhost:3000, Supabase) replichi il PHP
 (localhost, MySQL): logiche, funzioni, dati e grafica. Metodo: sessioni live su
