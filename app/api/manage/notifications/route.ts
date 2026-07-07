@@ -1,11 +1,11 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import { getAutomationSettings, saveClientBirthdayAlertDays } from "@/lib/automation-reminders";
 import { listDbNotifications, listNotificationPendingAppointments, markDbNotificationRead } from "@/lib/db-repositories";
-import { notificationFidelityCardGroups } from "@/lib/manage-dashboard-alerts";
+import { notificationFidelityCardGroups, notificationInstallmentGroups } from "@/lib/manage-dashboard-alerts";
 import { currentManageSession } from "@/lib/manage-auth";
 import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
-import { getNotificationSummary } from "@/lib/manage-shell-context";
+import { countUnseenQuoteDecisions, countUpcomingBirthdays, getNotificationSummary } from "@/lib/manage-shell-context";
 import { can, canAny } from "@/lib/role-permissions";
 
 export const dynamic = "force-dynamic";
@@ -52,27 +52,47 @@ export async function GET(request: Request) {
       }, { headers: { "Cache-Control": "no-store" } });
     }
 
-    // Port di BrowserNotifications::feed (evento "appuntamento in attesa"): la
-    // lista degli appuntamenti pending come eventi {key,title,body,url} per le
-    // notifiche desktop del browser (il tipo "appointments" è sempre attivo).
+    // Port di BrowserNotifications::feed: eventi {key,type,title,body,url} per le
+    // notifiche desktop. Il tipo "appointment_pending" è sempre attivo; gli altri
+    // (quotes/installments/birthdays/fidelity_cards) sono filtrati lato client
+    // secondo le preferenze utente. Gated dai permessi come il legacy.
     if (action === "feed") {
       const locationContext = await getManageLocationContext(tenantSlug);
-      const pending = await listNotificationPendingAppointments(tenantSlug, locationContext.currentLocationId);
-      const events = pending.map((a) => {
+      const loc = locationContext.currentLocationId;
+      const perms = session.user.perms;
+      const events: Array<{ key: string; type: string; title: string; body: string; url: string }> = [];
+
+      const pending = await listNotificationPendingAppointments(tenantSlug, loc);
+      for (const a of pending) {
         const when = a.dateLabel ? `${a.dateLabel} ${a.timeLabel}${a.endLabel ? ` - ${a.endLabel}` : ""}` : "";
         const parts = [a.clientName];
         if (when) parts.push(when);
         if (a.publicCode) parts.push(`#${a.publicCode}`);
         if (a.packageSummary) parts.push(a.packageSummary);
         if (a.prepaidSummary) parts.push(a.prepaidSummary);
-        return {
-          key: `appointment_pending:${a.id}`,
-          type: "appointment_pending",
-          title: "Nuova prenotazione in attesa",
-          body: `${a.serviceName} - ${parts.join(" - ")}`,
-          url: `/${tenantSlug}/notifications`,
-        };
-      });
+        events.push({ key: `appointment_pending:${a.id}`, type: "appointment_pending", title: "Nuova prenotazione in attesa", body: `${a.serviceName} - ${parts.join(" - ")}`, url: `/${tenantSlug}/notifications` });
+      }
+
+      if (can(perms, "quotes.manage")) {
+        const qc = await countUnseenQuoteDecisions(tenantSlug, loc).catch(() => 0);
+        if (qc > 0) events.push({ key: `quote_response:count:${qc}`, type: "quote_response", title: qc === 1 ? "Risposta a un preventivo" : "Risposte ai preventivi", body: qc === 1 ? "1 preventivo con risposta del cliente da leggere." : `${qc} preventivi con risposta del cliente da leggere.`, url: `/${tenantSlug}/notifications_quotes` });
+      }
+
+      if (can(perms, "installments.manage")) {
+        for (const g of await notificationInstallmentGroups(tenantSlug, loc)) {
+          events.push({ key: g.key, type: "installment_due", title: g.title, body: g.text, url: `/${tenantSlug}/notifications_installments` });
+        }
+      }
+
+      const bc = await countUpcomingBirthdays(tenantSlug).catch(() => 0);
+      if (bc > 0) events.push({ key: `client_birthday:count:${bc}`, type: "client_birthday", title: bc === 1 ? "Compleanno cliente" : "Compleanni clienti", body: bc === 1 ? "1 cliente compie gli anni a breve." : `${bc} clienti compiono gli anni a breve.`, url: `/${tenantSlug}/notifications_birthdays` });
+
+      if (can(perms, "fidelity.membership")) {
+        for (const g of await notificationFidelityCardGroups(tenantSlug)) {
+          events.push({ key: g.key, type: "fidelity_cards", title: g.title, body: g.text, url: `/${tenantSlug}/fidelity_membership` });
+        }
+      }
+
       return Response.json({ ok: true, events }, { headers: { "Cache-Control": "no-store" } });
     }
 

@@ -188,7 +188,7 @@ function formatStaffOffLine(p: { fullName: string; reason: string; endsAt: strin
 // installments_* — SaleInstallments::getDueAlertGroups($days, 3, $locationId).
 // Faithful port of SaleInstallments.php lines 1097-1195 + the dueAlert* helpers.
 // ---------------------------------------------------------------------------
-type InstallmentGroup = {
+export type InstallmentGroup = {
   key: string;
   kind: DashboardAlertKind;
   icon: string;
@@ -527,6 +527,12 @@ async function getFidelityCardAlertGroups(slug: string, tenantId: number | null)
 export async function notificationFidelityCardGroups(slug: string): Promise<FidelityGroup[]> {
   const tenantId = await tenantIdForSlug(slug).catch(() => null);
   return getFidelityCardAlertGroups(slug, tenantId).catch(() => []);
+}
+
+// Gruppi "Rate in scadenza/scadute" per il feed notifiche browser.
+export async function notificationInstallmentGroups(slug: string, currentLocationId: number): Promise<InstallmentGroup[]> {
+  const tenantId = await tenantIdForSlug(slug).catch(() => null);
+  return getInstallmentDueAlertGroups(slug, tenantId, currentLocationId).catch(() => []);
 }
 
 // Top-level builder — assembles the 6 alert types in legacy order, honouring

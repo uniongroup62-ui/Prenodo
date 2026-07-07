@@ -148,10 +148,19 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
         }
         const seenSet = new Set(seen.map(String));
         const hydrated = window.localStorage.getItem(hydratedKey) === "1";
-        for (const ev of j.events as Array<{ key: string; title: string; body: string; url: string }>) {
+        // Il tipo appointment_pending è sempre attivo; gli altri seguono le preferenze.
+        const typeEnabled = (type: string): boolean => {
+          if (type === "appointment_pending") return true;
+          if (type === "quote_response") return Boolean(prefs.quotes);
+          if (type === "installment_due") return Boolean(prefs.installments);
+          if (type === "client_birthday") return Boolean(prefs.birthdays);
+          if (type === "fidelity_cards") return Boolean(prefs.fidelity_cards);
+          return false;
+        };
+        for (const ev of j.events as Array<{ key: string; type: string; title: string; body: string; url: string }>) {
           if (seenSet.has(ev.key)) continue;
           seenSet.add(ev.key);
-          if (hydrated) {
+          if (hydrated && typeEnabled(ev.type)) {
             try {
               const n = new Notification(ev.title, { body: ev.body, tag: ev.key });
               n.onclick = () => {
@@ -180,7 +189,7 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
       stopped = true;
       window.clearInterval(id);
     };
-  }, [notifPerm, slug]);
+  }, [notifPerm, slug, prefs]);
 
   const permLabel =
     notifPerm === "unsupported"

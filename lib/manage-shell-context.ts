@@ -203,7 +203,7 @@ async function countInstallmentDueAlertGroups(slug: string, currentLocationId: n
 // Port of client_birthday_notification_count(): count clients whose next
 // birthday falls within `daysAhead`. The legacy code computes the next
 // occurrence in PHP (Feb-29 -> Feb-28 fallback), so we mirror that in JS.
-async function countUpcomingBirthdays(slug: string): Promise<number> {
+export async function countUpcomingBirthdays(slug: string): Promise<number> {
   try {
     if (!(await tenantTableExists(slug, "clients")) || !(await tenantColumnExists(slug, "clients", "birth_date"))) {
       return 0;
