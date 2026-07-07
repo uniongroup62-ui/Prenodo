@@ -1180,6 +1180,12 @@ export async function cancelManageSale(
   if (isCancelledStatus(saleRow.status)) throw new Error("Vendita già annullata.");
   const reason = clean(input.reason, 255);
   if (!reason) throw new Error("La motivazione è obbligatoria per annullare una vendita.");
+  // BLOCKER prenotazioni collegate (D1): se un pacchetto/giftbox/prepagato emesso dalla
+  // vendita è ancora collegato a una prenotazione NON annullata, l'annullo è impedito
+  // (altrimenti si annullerebbe il residuo lasciando la prenotazione a referenziarlo).
+  // Enforcement server-side, non solo UI (port di appt_lifecycle_apply_sale_cancel_reservation_policy).
+  const linkedActiveAppts = await saleCancelLinkedAppointments(slug, input.saleId);
+  if (linkedActiveAppts.length > 0) throw new Error(linkedActiveAppts[0].blocker);
   const sale = await mapSale(slug, saleRow);
   const locationId = Number(saleRow.location_id ?? sale.locationId ?? 0) || 0;
   const productItems = sale.items.filter((item) => item.type === "product" && item.refId > 0 && item.status !== "ordered");
@@ -1465,6 +1471,11 @@ export type PosCancelSummary = {
   prepaidServices: Array<{ id: number; name: string; purchasedQty: number; remainingQty: number }>;
   recharges: Array<{ id: number; totalAmount: number; earnedStorno: number; isVoid: boolean }>;
   installmentPlans: Array<{ id: number; status: string }>;
+  // Prenotazioni NON annullate collegate a un pacchetto/giftbox/prepagato emesso dalla
+  // vendita (port di appt_lifecycle_apply_sale_cancel_reservation_policy, AppointmentLifecycle
+  // .php:1931): finché sono attive/eseguite, l'annullo è BLOCCATO (blocker) — vanno prima
+  // gestite manualmente (annulla la prenotazione o rimuovi il collegamento).
+  linkedAppointments: Array<{ id: number; code: string; status: string; source: string; blocker: string }>;
   // Residui RESTORED on void (re-credited credit / refunded giftcard / refunded points).
   creditRestored: number;
   giftcardResidualRefunded: number;
@@ -2119,6 +2130,14 @@ async function buildCancelSummary(slug: string, saleId: number, row: RowDataPack
     }
   }
 
+  // Prenotazioni collegate ancora attive/eseguite: BLOCCANO l'annullo finché non
+  // vengono gestite manualmente (port di appt_lifecycle_apply_sale_cancel_reservation_policy).
+  const linkedAppointments = await saleCancelLinkedAppointments(slug, saleId);
+  for (const la of linkedAppointments) blockers.push(la.blocker);
+  if (linkedAppointments.length) {
+    summary.push(`Prenotazioni collegate: ${linkedAppointments.map((la) => la.code).join(", ")} — gestione manuale richiesta prima dell'annullo.`);
+  }
+
   return {
     products,
     requiresStockDecision,
@@ -2128,6 +2147,7 @@ async function buildCancelSummary(slug: string, saleId: number, row: RowDataPack
     prepaidServices,
     recharges,
     installmentPlans,
+    linkedAppointments,
     creditRestored,
     giftcardResidualRefunded,
     giftcardResidualCode,
@@ -2666,6 +2686,54 @@ async function summarizeIssuedGiftboxes(slug: string, saleId: number, blockers: 
     const fullyRedeemed = status === "redeemed" || redemption.fullyRedeemed;
     if (fullyRedeemed) blockers.push(`GiftBox ${code}: gia riscattata`);
     out.push({ id: instanceId, code, status, fullyRedeemed, redeemedItems: redemption.redeemedItems, remainingItems: redemption.remainingItems });
+  }
+  return out;
+}
+
+// Prenotazioni collegate a un pacchetto/giftbox/prepagato EMESSO dalla vendita e ancora
+// NON annullate (port di appt_lifecycle_apply_sale_cancel_reservation_policy,
+// AppointmentLifecycle.php:1931-1980). Finché una prenotazione collegata è attiva o eseguita,
+// l'annullo della vendita è bloccato: va prima gestita manualmente (altrimenti il pacchetto/
+// giftbox verrebbe annullato lasciando la prenotazione a referenziare un residuo inesistente).
+// Le prenotazioni GIÀ annullate NON bloccano (il rilascio è demandato al flusso di annullo
+// prenotazione). Sorgenti coperte: pacchetti/prepagati (client_*_.sale_id) + giftbox (marker).
+async function saleCancelLinkedAppointments(slug: string, saleId: number): Promise<PosCancelSummary["linkedAppointments"]> {
+  if (saleId <= 0) return [];
+  const packageIds = (await tenantSelect<RowDataPacket>({ slug, table: "client_packages", columns: "id", where: "sale_id = ?", params: [saleId] }).catch(() => [] as RowDataPacket[])).map((r) => Number(r.id ?? 0)).filter((n) => n > 0);
+  const prepaidIds = (await tenantSelect<RowDataPacket>({ slug, table: "client_prepaid_services", columns: "id", where: "sale_id = ?", params: [saleId] }).catch(() => [] as RowDataPacket[])).map((r) => Number(r.id ?? 0)).filter((n) => n > 0);
+  let giftboxInstanceIds: number[] = [];
+  const gbTable = await tenantTable(slug, "giftbox_instances").catch(() => null);
+  if (gbTable && (await columnExists(gbTable.name, "note"))) {
+    giftboxInstanceIds = (await tenantSelect<RowDataPacket>({ slug, table: gbTable.name, columns: "id", where: "note = ?", params: [`${GIFTBOX_SALE_MARKER}${saleId}`] }).catch(() => [] as RowDataPacket[])).map((r) => Number(r.id ?? 0)).filter((n) => n > 0);
+  }
+  const sources = new Map<number, Set<string>>();
+  const addLinks = async (table: string, col: string, ids: number[], label: string): Promise<void> => {
+    if (!ids.length) return;
+    const rows = await tenantSelect<RowDataPacket>({ slug, table, columns: "appointment_id", where: `${col} IN (${ids.map(() => "?").join(",")})`, params: ids }).catch(() => [] as RowDataPacket[]);
+    for (const r of rows) {
+      const aid = Number(r.appointment_id ?? 0) || 0;
+      if (aid <= 0) continue;
+      if (!sources.has(aid)) sources.set(aid, new Set());
+      sources.get(aid)!.add(label);
+    }
+  };
+  await addLinks("appointment_package_items", "client_package_id", packageIds, "Pacchetti");
+  await addLinks("appointment_giftbox_items", "instance_id", giftboxInstanceIds, "GiftBox");
+  await addLinks("appointment_prepaid_service_items", "client_prepaid_service_id", prepaidIds, "Servizi prepagati");
+  const apptIds = [...sources.keys()];
+  if (!apptIds.length) return [];
+  const appts = await tenantSelect<RowDataPacket>({ slug, table: "appointments", columns: "id, public_code, status", where: `id IN (${apptIds.map(() => "?").join(",")})`, params: apptIds, orderBy: "id ASC" }).catch(() => [] as RowDataPacket[]);
+  const out: PosCancelSummary["linkedAppointments"] = [];
+  for (const a of appts) {
+    const status = String(a.status ?? "").trim().toLowerCase();
+    if (status === "canceled" || status === "cancelled") continue; // annullata -> non blocca
+    const id = Number(a.id ?? 0) || 0;
+    const code = clean(a.public_code, 40) || `#${id}`;
+    const source = [...(sources.get(id) ?? [])].join(", ") || "questa vendita";
+    const blocker = status === "done"
+      ? `Prenotazione ${code} in stato Eseguito collegata a ${source}: annulla/storna prima la prenotazione o rimuovi manualmente il collegamento.`
+      : `Prenotazione ${code} collegata a ${source}: apri la prenotazione e rimuovi manualmente il servizio/credito oppure annulla la prenotazione prima di annullare la vendita.`;
+    out.push({ id, code, status, source, blocker });
   }
   return out;
 }

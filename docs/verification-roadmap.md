@@ -1,5 +1,28 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Pagamenti D1: blocker annullo con prenotazioni collegate (2026-07-07)
+
+Chiuso il nucleo di integrità dati di D1 (port di appt_lifecycle_apply_sale_cancel_
+reservation_policy, AppointmentLifecycle.php:1931-1980). PRIMA: annullare una vendita che
+aveva emesso un pacchetto/giftbox/prepagato NON bloccava, anche se una prenotazione
+ATTIVA/ESEGUITA lo usava ancora → il residuo diventava 'canceled' lasciando la prenotazione
+a referenziarlo (incoerenza, riprodotta abilitando temporaneamente fidelity+campagna). ORA:
+- saleCancelLinkedAppointments(slug, saleId) raccoglie le prenotazioni collegate a
+  pacchetti/prepagati (client_*_.sale_id) + giftbox (marker note) via le tabelle-link
+  appointment_package_items / appointment_giftbox_items / appointment_prepaid_service_items;
+  le prenotazioni NON annullate diventano BLOCKER con messaggi verbatim ("Prenotazione {code}
+  collegata a {source}: apri la prenotazione e rimuovi manualmente il servizio/credito oppure
+  annulla la prenotazione..." / "...in stato Eseguito...: annulla/storna prima...").
+- buildCancelSummary espone linkedAppointments + aggiunge i blocker (canCancel=false; il
+  modale già rende blockers + disabilita il submit).
+- cancelManageSale ENFORCE server-side (throw) — non solo UI.
+VERIFICATO live 4/4: annullo bloccato con prenotazione scheduled collegata; consentito dopo
+averla annullata; nessuna regressione (checkout/cancel 8/8). Setup fidelity di test
+(campagna+carta+template) creato e RIMOSSO (residuo 0, cliente 9 invariato).
+RESIDUI D1 non fatti (più profondi/rari): sorgenti giftcard/ricarica (meccanismi diversi);
+decisione storno punti PER-prenotazione per prenotazioni GIÀ ANNULLATE collegate (i radio
+negative/skip) — richiede il flusso di rilascio giftcard/credito/ricarica dell'annullata.
+
 ## Pagamenti AUDIT + fix batch 1 (2026-07-07)
 
 Ri-audit completo di Pagamenti (5 analisi parallele + test live). Core checkout verificato
