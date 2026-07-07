@@ -7318,3 +7318,11 @@ segmenti hanno lo STESSO servizio (es. appt 175: 2 segmenti service_id 9 →
 delle righe figlie ora usa il segmentId (univoco) + index invece del serviceId.
 VERIFICATO live (Playwright): espansione di appt 175 senza errori console, 2 righe
 figlie corrette (↳ 14:00→15:00 test/luca, ↳ 13:50→14:50 test/—) con riordino.
+
+### Follow-up: toggle multi-servizio ("non accade nulla" al click sulla freccia)
+Il pulsante di espansione aveva SIA data-bs-toggle="collapse"/data-bs-target (plugin
+Bootstrap Collapse, caricato globalmente) SIA l'onClick React (toggleExpanded): due
+handler sullo stesso click che si annullavano nel browser reale → la riga non si
+apriva. Rimossi gli attributi Bootstrap: l'apertura è ora gestita SOLO da React
+(stato expanded + classe show + display inline sulle righe figlie). VERIFICATO
+(Playwright): click ripetuti 0→2→0→2 righe visibili, freccia chevron-right/down.

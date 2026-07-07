@@ -611,10 +611,12 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
                                   />
                                   {isMulti ? (
                                     <button
+                                      // NB: niente data-bs-toggle/data-bs-target — l'apertura
+                                      // è gestita da React (toggleExpanded). Con gli attributi
+                                      // Bootstrap, il plugin Collapse intercettava lo stesso
+                                      // click e annullava il toggle React ("non accade nulla").
                                       className="btn btn-sm btn-link p-0 ms-toggle"
                                       type="button"
-                                      data-bs-toggle="collapse"
-                                      data-bs-target={`.ms-children-${appt.id}`}
                                       aria-expanded={expanded}
                                       aria-label="Mostra/Nascondi dettagli multi-servizio"
                                       onClick={(e) => {
