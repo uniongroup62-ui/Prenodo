@@ -26,12 +26,22 @@ searchPlans + ORDER BY, stati sintetici (Aperte/Scadute/Completate), stats, fuso
   mark_paid (prima solo su mark_pending) -> plan.updated_by aggiornato come il legacy.
 - **minore formato it-IT**: fmtMoney del componente ora usa un formatter MANUALE (raggruppa sempre
   le migliaia, fedele a number_format) invece di toLocaleString (trappola 1000-9999).
+- **bug FILTRO DATE (due_from/due_to) SISTEMATO**: l'EXISTS in searchDbInstallmentPlans usava
+  `i.plan_id = p.id` ma tenantSelect NON aliasa la tabella esterna -> `p` inesistente -> query in
+  ERRORE ogni volta che si filtrava per data. Riscritto come IN-subquery NON correlata
+  (`id IN (SELECT plan_id FROM sale_installments WHERE tenant AND due_date >= ? AND <= ?)`),
+  tenant-scoped. Verificato: filtro data sulle rate future ritorna i piani giusti; range vuoto ->
+  nessun piano (niente errore).
+VERIFICA COMPLETA (2026-07-08, 68 check totali, 0 fail): test-rate-fixes 10/10 (paymentType/scope
+sede/updated_by/formato), test-rate-full 15/15 (filtri stato open/overdue/paid/cancelled/all +
+filtro date + client/sale/q + campi/stati piani), e2e-installments-manage 43/43 (create via
+checkout, GET campi/filtri, guardie incasso importo/data/tipo/not-found, incasso + re-incasso
+idempotente, completamento, riapertura, annullo->cancelled con nota standard + rata [ANNULLATA],
+guardie su annullata, badge). Cleanup CLEAN.
 NON fatti (residui deliberati): reset filtri post-azione (il Next preserva i filtri, comportamento
 difendibile); deep-link ?plan_id fuori dal filtro corrente (edge); flash lista non filtrata nella
 risposta POST (transiente, la UI ri-fetcha scoped); stato "tabelle rateizzazione mancanti" (non
-riproducibile su Supabase). NOTA bug latente separato: l'EXISTS due_from/due_to in
-searchDbInstallmentPlans usa `p.id` ma tenantSelect non aliasa la tabella (referenza non valida) —
-fuori scope, la pagina usa raramente il filtro date.
+riproducibile su Supabase).
 
 
 ## Pagamenti AUDIT-2 batch 6: #16 periodi commissione (gate attività) (2026-07-07)

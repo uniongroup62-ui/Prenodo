@@ -15629,26 +15629,28 @@ export async function searchDbInstallmentPlans(
   const dueFrom = normalizeClientDate(filters.dueFrom);
   const dueTo = normalizeClientDate(filters.dueTo);
   if (dueFrom || dueTo) {
-    // Faithful EXISTS on sale_installments.due_date; scope the subquery to the
-    // resolved tenant table + tenant_id so it never leaks cross-tenant.
+    // Piani con almeno una rata nel range di scadenza (port dell'EXISTS legacy su
+    // sale_installments.due_date). IN-subquery NON correlata: `tenantSelect` non aliasa la
+    // tabella esterna, quindi il vecchio `EXISTS (... WHERE i.plan_id = p.id ...)` referenziava
+    // un alias `p` inesistente (query in errore). `id IN (SELECT plan_id ...)` evita la
+    // correlazione. Subquery tenant-scoped per non fare leak cross-tenant.
     const instTable = await tenantTable(slug, "sale_installments");
     const scoped = instTable.mode === "shared" && (await columnExists(instTable.name, "tenant_id"));
-    const subClauses: string[] = ["i.plan_id = p.id"];
+    const subClauses: string[] = [];
     const subParams: unknown[] = [];
     if (scoped) {
-      subClauses.push("i.tenant_id = ?");
+      subClauses.push("tenant_id = ?");
       subParams.push(instTable.tenantId ?? 0);
     }
     if (dueFrom) {
-      subClauses.push("i.due_date >= ?");
+      subClauses.push("due_date >= ?");
       subParams.push(dueFrom);
     }
     if (dueTo) {
-      subClauses.push("i.due_date <= ?");
+      subClauses.push("due_date <= ?");
       subParams.push(dueTo);
     }
-    clauses.push(`EXISTS (SELECT 1 FROM ${quoteIdentifier(instTable.name)} i WHERE ${subClauses.join(" AND ")})`);
-    // EXISTS params must precede the other where params: rebuild ordering.
+    clauses.push(`id IN (SELECT plan_id FROM ${quoteIdentifier(instTable.name)}${subClauses.length ? ` WHERE ${subClauses.join(" AND ")}` : ""})`);
     params.push(...subParams);
   }
 
