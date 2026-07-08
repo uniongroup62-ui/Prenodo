@@ -8548,9 +8548,12 @@ typecheck 0. Modifiche isolate al path giftbox: app/api/manage/giftboxes/route.t
 delega + rimozione issue/redeem) + lib/manage-pos.ts (service_snapshot_json in issueGiftboxFromSale).
 Residui ZZ=0; produzione intatta (template id16 + istanza id15); 5 clienti reali intatti.
 REGRESSION cross-modulo VERDE (dopo drain del pooler): test-pkg-pos 8/8, test-pos-checkout 8/8,
-test-preventivi 25/25, test-giftbox 27/27. La suite esistente e2e-giftbox è 61/63: i 2 fail
-(movimento riscatto locationLabel="-" + stock prodotto per-sede non scalato) sono PRE-ESISTENTI
-e NON causati da questo fix — verificato rieseguendo la suite col codice pre-fix (revert a
-5964360): stesso identico esito 61/63. Sono un problema di risoluzione sede della sessione in
-quel vecchio test (la scalatura product_stocks è per-sede e la current location non risulta la
-Sede1), indipendente dalle modifiche GiftBox.
+test-preventivi 25/25, test-giftbox 27/27, e2e-giftbox 64/64.
+I 2 fail iniziali di e2e-giftbox (movimento riscatto locationLabel="-" + stock prodotto per-sede
+non scalato) NON erano un bug dell'app (verificato col codice pre-fix: stesso esito) ma un difetto
+di SETUP del test: il login reale lascia needsLocationSelection=true / currentLocationId=0 e il
+test non selezionava la sede, mentre il riscatto per-sede (movimento + scalo product_stocks) la
+richiede. Verificato empiricamente che l'app è corretta con una sede attiva: Sede21 -> scala
+product_stocks(21) e movimento Sede1; Sede51 -> blocca "Prodotto non abbinato alla sede
+selezionata"; nessuna sede -> salta la scalatura per-sede. Fix applicato al TEST (selezione sede
+Sede1 dopo il login via POST /api/manage/locations), come il flusso reale operatore -> e2e-giftbox 64/64.
