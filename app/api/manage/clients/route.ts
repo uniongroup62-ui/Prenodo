@@ -260,6 +260,17 @@ export async function GET(request: Request) {
   }
 }
 
+// Data-calendario valida: formato YYYY-MM-DD ED esistente (come checkdate del legacy
+// normalize_date). Con il solo regex "2020-99-99" passava e il cliente veniva creato
+// con la data nulled in silenzio, invece del messaggio d'errore legacy.
+function isValidClientCalendarDate(s: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!m) return false;
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d;
+}
+
 // Validazioni server verbatim di clients.php POST new/edit (ordine legacy):
 // nome, email, PEC, date. Ritorna il messaggio d'errore o null.
 function legacyClientValidationError(body: Record<string, string>): string | null {
@@ -272,11 +283,11 @@ function legacyClientValidationError(body: Record<string, string>): string | nul
   if (email !== "" && !emailRe.test(email)) return "Email non valida.";
   const pec = String(body.pec ?? "").trim();
   if (pec !== "" && !emailRe.test(pec)) return "PEC non valida.";
-  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  // regex + validità calendario (checkdate), fedele a normalize_date del legacy.
   const birth = String(body.birth_date ?? "").trim();
-  if (birth !== "" && !dateRe.test(birth)) return "Data di nascita non valida.";
+  if (birth !== "" && !isValidClientCalendarDate(birth)) return "Data di nascita non valida.";
   const reg = String(body.registration_date ?? "").trim();
-  if (reg !== "" && !dateRe.test(reg)) return "Data iscrizione non valida.";
+  if (reg !== "" && !isValidClientCalendarDate(reg)) return "Data iscrizione non valida.";
   return null;
 }
 

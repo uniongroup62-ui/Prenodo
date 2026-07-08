@@ -1,5 +1,35 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Clienti: audit + fix tag case-insensitive + validazione data-calendario (2026-07-08)
+
+Audit dedicato Clienti/anagrafica (clients.php 3897 vs Next clients/route.ts + db-repositories client
+fns + componenti) con 2 agenti. VERDETTO: port largamente fedele — campi (full_name derivato da
+first+last, phone/email, gender M/F, birth_date/birth_place, registration_date def oggi, indirizzo
+completo, job_title=professione, company/vat/tax/sdi/pec, notes, location_id; NO source/marketing/
+lingua come il legacy), validazioni verbatim ("Nome e cognome obbligatori", "Email/PEC non valida.",
+"Seleziona una sede valida."), NESSUNA unicita' phone/email (duplicati ammessi come il legacy),
+block/unblock (nota interna OBBLIGATORIA), delete HARD a cascata (~20 tabelle, motivazione + conferma
+"ELIMINA", stock_restore_mode, log, riepilogo ~33 contatori), listing (ILIKE full_name/phone/email/
+phone_home/phone2, sede, created_at DESC LIMIT 200), tag M:N. Verificato live: 24 check (test-clienti,
+5 clienti reali intatti). Fix applicati:
+- **Tag find-or-create CASE-INSENSITIVE**: `addManageClientTag` cercava il tag con `name=?` (Postgres
+  case-sensitive) mentre `customer_tags` ha UNIQUE(tenant_id,name) MySQL general_ci (case-insensitive)
+  -> il Next creava "VIP" e "vip" come tag DISTINTI (il legacy ne riusa uno). FIX: `LOWER(name)=
+  LOWER(?)` (riusa il tag esistente con la sua grafia). Stessa classe del fix Fornitori.
+- **Validazione DATA-CALENDARIO**: la validazione date (birth_date/registration_date) usava solo il
+  regex `^\d{4}-\d{2}-\d{2}$` -> "2020-99-99" passava e il cliente veniva creato con la data nulled in
+  SILENZIO, invece del messaggio legacy. Il legacy normalize_date usa regex + checkdate. FIX: aggiunto
+  `isValidClientCalendarDate` (regex + esistenza calendario) -> "2020-99-99" ora rifiutato con "Data
+  di nascita/iscrizione non valida." come il legacy.
+Divergenze deliberate/note (NON fixate): unblock azzera blocked_at/blocked_internal_note (il legacy li
+lascia come storico — Next piu' pulito); action `archive` = alias di block con nota fissa, NON usato
+dalla UI (residuo); email validata via regex Next vs FILTER_VALIDATE_EMAIL PHP (equivalente sui casi
+comuni). OSSERVAZIONE (piu' rilevante, non fixata): l'accesso per-SEDE su edit/delete/detail NON e'
+applicato a livello DB in Next (getDbClient/update/block/delete sono tenant-scoped ma non sede-scoped),
+mentre il legacy usa client_can_access_id — per tenant multi-sede con staff ristretto a una sede e' una
+divergenza di isolamento (richiede il port di app_client_location_access_where; cambio piu' ampio).
+
+
 ## Buoni (Coupon): audit — port FEDELE, nessun fix necessario (2026-07-08)
 
 Audit dedicato di "Buoni" (= modulo Coupon; legacy coupons.php 1253 + Helpers.php coupon_*; Next

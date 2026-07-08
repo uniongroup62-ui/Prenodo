@@ -1019,7 +1019,11 @@ export async function addManageClientTag(slug: string, clientId: number, tagName
   if (clientId <= 0) throw new Error("Cliente non valido.");
   const name = String(tagName ?? "").trim();
   if (name === "") return getDbClientTags(slug, clientId);
-  const existing = await tenantSelect<RowDataPacket>({ slug, table: "customer_tags", columns: "id", where: "name = ?", params: [name], limit: 1 });
+  // find-or-create CASE-INSENSITIVE come il legacy: customer_tags ha UNIQUE(tenant_id,name) in
+  // MySQL utf8mb4_general_ci (case-insensitive), quindi "VIP"=="vip" -> un solo tag riusato.
+  // Con `name=?` (Postgres, case-sensitive) il Next avrebbe creato tag doppioni per sola differenza
+  // di maiuscole. Riusa il tag esistente (con la sua grafia originale). [[pg-case-sensitivity-trap]]
+  const existing = await tenantSelect<RowDataPacket>({ slug, table: "customer_tags", columns: "id", where: "LOWER(name) = LOWER(?)", params: [name], limit: 1 });
   let tagId = existing[0] ? Number(existing[0].id ?? 0) : 0;
   if (tagId <= 0) tagId = await tenantInsert(await tenantTable(slug, "customer_tags"), { name });
   if (tagId <= 0) throw new Error("Impossibile creare il tag.");
