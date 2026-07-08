@@ -1,5 +1,33 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Commissioni: risoluzione operatore POS per EMAIL + fallback appointment_staff (2026-07-08)
+
+Completato l'ULTIMO residuo dell'audit Commissioni (prima "fuori scope"): il meccanismo di
+abbinamento vendita→operatore. Verificato live: 15 check (test-operator 8, test-operator-regress 7),
+typecheck 0, nessun residuo, 2 righe payments pre-esistenti INTATTE.
+- **POS: created_by → users.email → staff.email (era operator_name → staff.full_name)**. Il legacy
+  (`Commissions.php:2293-2294` buildPosEntries + `resolveSaleOperator` 2446-2492) risolve l'operatore
+  della vendita per EMAIL: `sales.created_by` (utente loggato) → `users.email` → `staff.email`
+  (LOWER+TRIM). Il Next confrontava invece la STRINGA `operator_name` col `full_name` normalizzato.
+  NON era solo cosmetico: nel tenant reale esistono due staff OMONIMI — #22 'luca' info@artebrand.it
+  (user 20) e #56 'Luca' info@vivamed.it (user 52). Il match-per-nome li fondeva (`LOWER('luca')==
+  LOWER('Luca')`) → tutte le vendite finivano all'UNICO staff scelto dal tie-break, potenzialmente
+  quello SBAGLIATO. L'email è univoca: le 4 vendite reali (`created_by=20`) risolvono correttamente a
+  #22. FIX: `buildStaffByUserId(slug, staff)` mappa `users.id → staff` per email (una query
+  tenant-scoped su `public.users`); `resolveSaleStaffByUser(created_by, staffByUserId)` sostituisce
+  `resolveSaleStaff(operator_name, staffByName)`. Display operatore = `staff.full_name` (poi
+  operator_name), fedele a `resolved_operator_name = COALESCE(stop.full_name, s.operator_name, uop.name)`.
+  Verificato: SA(created_by 20)→#22, SB(created_by 52)→#56 (staff DIVERSI, impossibile per-nome),
+  created_by NULL→nessuna commissione.
+- **Appuntamenti: fallback `appointment_staff`**. Il legacy (`Commissions.php:2097-2098,2131-2133`):
+  se una prestazione non ha un `appointment_segments.staff_id`, ripiega sul PRIMO `appointment_staff`
+  dell'appuntamento. Il Next saltava (nessuna commissione). FIX: caricato `appointment_staff`,
+  costruita `fallbackStaffByAppt` (primo staff ordinato), usata quando la coda-segmenti è vuota.
+  Verificato: servizio senza segmento ma con appointment_staff→commissione al fallback; senza→niente.
+- **Display omonimi in mapPersistedEntry**: la risoluzione del nome per una entry persistita senza
+  operator_name ora usa `staffById.get(id)` (lookup esatto) invece di iterare una mappa per-nome che
+  poteva aver scartato l'omonimo. Rimossa la mappa `staffByName` e il suo tie-break (superati dall'email).
+
 ## Commissioni: audit + fix (bug reali + config + Sede UI + BUG FUSO #16) (2026-07-08)
 
 Audit di Commissioni (Commissions.php 2890 + commissions.php ~900) con 3 agenti. VERDETTO: port
@@ -28,11 +56,12 @@ test-comm-fixes 5, test-comm-sede 5, test-commission-periods 4, test-comm-toggle
 - **zero-rate auto-disable**: saveCommissionSettings auto-disabilita (is_enabled=0) un operatore con
   TUTTE le % <=0 (port normalizeZeroRateSettings) + chiude il periodo.
 - **OMONIMI (tie-break staffByName)**: a parita' di nome vince lo staff ABILITATO (prima "luca"/"Luca"
-  -> l'omonimo non configurato rubava la risoluzione). NON il cambio meccanismo (created_by->email, fuori scope).
+  -> l'omonimo non configurato rubava la risoluzione). [SUPERATO il 2026-07-08 dal passaggio alla
+  risoluzione per EMAIL created_by->users.email->staff.email — vedi entry in cima.]
 - **Sede UI**: buildCommissionDashboard ritorna `locations`; il componente ha il dropdown "Tutte le
   sedi"/per-sede (multi-sede) che invia location_id + la colonna "Sede" nel dettaglio.
-NON fatti (fuori scope per scelta): cambio meccanismo risoluzione operatore (created_by->email vs
-operator_name->nome); default sede corrente (il Next default = tutte); entry_key appuntamento diverso
+NON fatti (fuori scope per scelta): [cambio meccanismo risoluzione operatore -> FATTO il 2026-07-08,
+vedi entry in cima]; default sede corrente (il Next default = tutte); entry_key appuntamento diverso
 (rileva solo migrando snapshot legacy, non accade); atomicita' saveSettings; display "annullate"
 (Next piu' corretto del legacy). NB SSO id: l'agente lo segnalava mancante ma is_sso_staff(id) =
 staff con full_name='SSO' esatto, gia' coperto dal filtro-nome normalizzato del Next.

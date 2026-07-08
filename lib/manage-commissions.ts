@@ -556,18 +556,56 @@ type ProducedEntry = {
   note: string;
 };
 
-// Resolve a sales row's operator_name (trimmed, case-insensitive) to an ENABLED
-// commission staff row. Returns null when no enabled staff matches — the sale is
-// then skipped (no commission), faithful to resolveSaleOperator + the settings gate.
-function resolveSaleStaff(
-  operatorName: string,
-  staffByName: Map<string, CommissionStaffSetting>,
+// Resolve a sales row's operator to an ENABLED commission staff — faithful to the legacy
+// created_by → users.email → staff.email chain (Commissions.php:2293-2294 + resolveSaleOperator
+// 2446-2492), NON al vecchio confronto per stringa operator_name. `staffByUserId` mappa un
+// users.id allo staff la cui email combacia (LOWER+TRIM) con quella dell'utente. Ritorna null
+// quando created_by manca, l'utente non ha uno staff con email combaciante, o quello staff non
+// e' abilitato — la vendita e' allora saltata (nessuna commissione).
+// PERCHE' PER EMAIL E NON PER NOME: due staff OMONIMI (es. "luca" info@artebrand.it e "Luca"
+// info@vivamed.it) hanno lo stesso nome normalizzato ma email diverse; il match-per-nome li
+// confondeva e poteva assegnare la commissione all'operatore SBAGLIATO. L'email e' univoca.
+function resolveSaleStaffByUser(
+  userId: number,
+  staffByUserId: Map<number, CommissionStaffSetting>,
 ): CommissionStaffSetting | null {
-  const key = String(operatorName ?? "").trim().toLowerCase();
-  if (key === "") return null;
-  const staff = staffByName.get(key);
+  if (userId <= 0) return null;
+  const staff = staffByUserId.get(userId);
   if (!staff || !staff.isEnabled) return null;
   return staff;
+}
+
+// buildStaffByUserId — mappa users.id → lo staff commissione con email combaciante (LOWER+TRIM,
+// non vuota): il legacy created_by → users.email → staff.email (Commissions.php:2293-2294).
+// Costruita una volta per dashboard; poi il created_by della vendita risolve l'operatore per
+// EMAIL, non per la stringa operator_name di display.
+async function buildStaffByUserId(
+  slug: string,
+  staffSettings: CommissionStaffSetting[],
+): Promise<Map<number, CommissionStaffSetting>> {
+  const emailToStaff = new Map<string, CommissionStaffSetting>();
+  for (const s of staffSettings) {
+    const key = String(s.email ?? "").trim().toLowerCase();
+    if (key === "") continue;
+    // A parita' di email (non dovrebbe capitare: email univoca) vince lo staff ABILITATO.
+    const prev = emailToStaff.get(key);
+    if (!prev || (s.isEnabled && !prev.isEnabled)) emailToStaff.set(key, s);
+  }
+  const byUserId = new Map<number, CommissionStaffSetting>();
+  if (emailToStaff.size === 0) return byUserId;
+  // users.email dei soli utenti del tenant (tenantSelect scoping) — 'users' risolve a public.users.
+  const users = await tenantSelect<RowDataPacket>({ slug, table: "users", columns: "id, email" }).catch(
+    () => [] as RowDataPacket[],
+  );
+  for (const u of users) {
+    const uid = Number(u.id ?? 0) || 0;
+    if (uid <= 0) continue;
+    const key = String(u.email ?? "").trim().toLowerCase();
+    if (key === "") continue;
+    const staff = emailToStaff.get(key);
+    if (staff) byUserId.set(uid, staff);
+  }
+  return byUserId;
 }
 
 // Resolve a location name for display (locations.name), memoised per call.
@@ -598,7 +636,7 @@ async function locationNameResolver(slug: string): Promise<(id: number) => Promi
 async function buildPosEntriesFromSales(
   slug: string,
   params: { from: string; to: string; staffId: number; locationId: number },
-  staffByName: Map<string, CommissionStaffSetting>,
+  staffByUserId: Map<number, CommissionStaffSetting>,
   resolveLocationName: (id: number) => Promise<string>,
 ): Promise<ProducedEntry[]> {
   const { from, to, staffId, locationId } = params;
@@ -665,10 +703,14 @@ async function buildPosEntriesFromSales(
     const saleId = Number(sale.id ?? 0) || 0;
     if (saleId <= 0) continue;
 
-    const operatorName = String(sale.operator_name ?? "").trim();
-    const staff = resolveSaleStaff(operatorName, staffByName);
-    if (!staff) continue; // operator not an enabled commission staff → no commission
+    // Operatore = created_by risolto per EMAIL (created_by → users.email → staff.email). Il display
+    // preferisce il full_name dello staff risolto, poi operator_name (legacy resolved_operator_name
+    // = COALESCE(stop.full_name, s.operator_name, uop.name), Commissions.php:2296-2299).
+    const createdBy = Number(sale.created_by ?? 0) || 0;
+    const staff = resolveSaleStaffByUser(createdBy, staffByUserId);
+    if (!staff) continue; // created_by senza staff (email) abilitato → nessuna commissione
     if (staffId > 0 && staff.staffId !== staffId) continue;
+    const operatorName = staff.name.trim() || String(sale.operator_name ?? "").trim();
 
     const items = itemsBySale.get(saleId) ?? [];
     if (!items.length) continue;
@@ -838,9 +880,13 @@ async function buildAppointmentEntries(
   const apptIds = appts.map((a) => Number(a.id ?? 0) || 0).filter((id) => id > 0);
   const servicesByAppt = new Map<number, RowDataPacket[]>();
   const segmentsByAppt = new Map<number, RowDataPacket[]>();
+  // fallbackStaffByAppt: il PRIMO appointment_staff dell'appuntamento (ordinato) — usato quando
+  // una prestazione non ha un segmento con staff (legacy $fallbackStaff, Commissions.php:2097-2098,
+  // 2131-2133). Senza questo, un servizio senza segmento non generava mai commissione.
+  const fallbackStaffByAppt = new Map<number, number>();
   if (apptIds.length) {
     const placeholders = apptIds.map(() => "?").join(",");
-    const [svcRows, segRows] = await Promise.all([
+    const [svcRows, segRows, staffRows] = await Promise.all([
       tenantSelect<RowDataPacket>({
         slug,
         table: "appointment_services",
@@ -855,6 +901,13 @@ async function buildAppointmentEntries(
         params: apptIds,
         orderBy: "appointment_id ASC, position ASC, id ASC",
       }).catch(() => [] as RowDataPacket[]),
+      tenantSelect<RowDataPacket>({
+        slug,
+        table: "appointment_staff",
+        where: `appointment_id IN (${placeholders})`,
+        params: apptIds,
+        orderBy: "appointment_id ASC, staff_id ASC",
+      }).catch(() => [] as RowDataPacket[]),
     ]);
     for (const svc of svcRows) {
       const aid = Number(svc.appointment_id ?? 0) || 0;
@@ -867,6 +920,12 @@ async function buildAppointmentEntries(
       if (aid <= 0) continue;
       if (!segmentsByAppt.has(aid)) segmentsByAppt.set(aid, []);
       segmentsByAppt.get(aid)!.push(seg);
+    }
+    for (const st of staffRows) {
+      const aid = Number(st.appointment_id ?? 0) || 0;
+      const sid = Number(st.staff_id ?? 0) || 0;
+      if (aid <= 0 || sid <= 0) continue;
+      if (!fallbackStaffByAppt.has(aid)) fallbackStaffByAppt.set(aid, sid); // primo (ordinato) vince
     }
   }
 
@@ -948,7 +1007,9 @@ async function buildAppointmentEntries(
       if (queue && queue.length) {
         lineStaffId = queue.length > 1 ? (queue.shift() ?? 0) : queue[0];
       }
-      if (lineStaffId <= 0) continue; // no segment → no staff → no commission
+      // Fallback legacy: nessun segmento per questo servizio → primo appointment_staff dell'appt.
+      if (lineStaffId <= 0) lineStaffId = fallbackStaffByAppt.get(apptId) ?? 0;
+      if (lineStaffId <= 0) continue; // né segmento né fallback → no staff → no commission
 
       const staff = resolveStaffById(lineStaffId, staffById);
       if (!staff) continue; // staff not an enabled commission operator → no commission
@@ -1121,19 +1182,17 @@ async function syncEntrySnapshots(
 }
 
 // Map a persisted staff_commission_payments row → CommissionEntry (entryFromPersistedRow).
-function mapPersistedEntry(row: RowDataPacket, staffByName: Map<string, CommissionStaffSetting>): CommissionEntry {
+function mapPersistedEntry(row: RowDataPacket, staffById: Map<number, CommissionStaffSetting>): CommissionEntry {
   const staffId = Number(row.staff_id ?? 0) || 0;
   const sourceGroup = String(row.source_group ?? "") === "pos" ? "pos" : "appointments";
   let sourceLabel = String(row.source_label ?? "").trim();
   if (sourceLabel === "") sourceLabel = sourceGroup === "pos" ? "POS" : "Appuntamento";
   let operatorName = String(row.operator_name ?? "").trim();
   if (operatorName === "" && staffId > 0) {
-    for (const s of staffByName.values()) {
-      if (s.staffId === staffId) {
-        operatorName = s.name;
-        break;
-      }
-    }
+    // Lookup esatto per id (non piu' iterazione su una mappa per-nome che poteva aver scartato
+    // un omonimo): mostra il full_name dello staff anche per operatori con lo stesso nome.
+    const s = staffById.get(staffId);
+    if (s) operatorName = s.name;
   }
   const datetime = normalizeDateTimeValue(row.movement_datetime ?? row.created_at ?? "", "");
   const entryStatus = String(row.entry_status ?? "active").trim() || "active";
@@ -1166,7 +1225,7 @@ function mapPersistedEntry(row: RowDataPacket, staffByName: Map<string, Commissi
 async function loadPersistedEntries(
   slug: string,
   params: { from: string; to: string; staffId: number; source: string; locationId: number },
-  staffByName: Map<string, CommissionStaffSetting>,
+  staffById: Map<number, CommissionStaffSetting>,
 ): Promise<CommissionEntry[]> {
   const table = await tenantTable(slug, "staff_commission_payments");
   const clauses = ["DATE(COALESCE(movement_datetime, created_at)) BETWEEN ? AND ?"];
@@ -1190,7 +1249,7 @@ async function loadPersistedEntries(
     params: queryParams,
     orderBy: "COALESCE(movement_datetime, created_at) DESC, id DESC",
   }).catch(() => [] as RowDataPacket[]);
-  return rows.map((row) => mapPersistedEntry(row, staffByName));
+  return rows.map((row) => mapPersistedEntry(row, staffById));
 }
 
 function emptySummary(): CommissionSummary {
@@ -1244,19 +1303,14 @@ export async function buildCommissionDashboard(slug: string, rawParams: Commissi
   const to = String(rawParams.to ?? "").trim();
 
   const settings = await getCommissionSettings(slug);
-  const staffByName = new Map<string, CommissionStaffSetting>();
   const staffById = new Map<number, CommissionStaffSetting>();
   for (const s of settings.staff) {
-    const key = s.name.trim().toLowerCase();
-    // OMONIMI (es. "luca"/"Luca"): a parità di nome vince lo staff ABILITATO alle commissioni —
-    // altrimenti un omonimo NON configurato (0%) rubava la risoluzione al vero operatore. Tie-break
-    // interno al match-per-nome (NON il cambio di meccanismo created_by→email, fuori scope).
-    if (key) {
-      const prev = staffByName.get(key);
-      if (!prev || (s.isEnabled && !prev.isEnabled)) staffByName.set(key, s);
-    }
     if (s.staffId > 0) staffById.set(s.staffId, s);
   }
+  // POS: risoluzione operatore per EMAIL via created_by (created_by → users.email → staff.email),
+  // fedele al legacy. Disambigua gli OMONIMI (due staff "luca"/"Luca" con email diverse) che il
+  // vecchio match-per-nome poteva assegnare all'operatore sbagliato. Appuntamenti restano per id.
+  const staffByUserId = await buildStaffByUserId(slug, settings.staff);
 
   // Accrue only when the module is enabled and a date range is set. POS and
   // APPOINTMENTS are each produced + reconciled against their OWN source_group only
@@ -1277,7 +1331,7 @@ export async function buildCommissionDashboard(slug: string, rawParams: Commissi
       produced.filter((e) => moduleActiveAt(activity, e.datetime) && commissionActiveAt(activity, e.staffId, e.datetime));
 
     if (source === "all" || source === "pos") {
-      const producedPos = activeOnly(await buildPosEntriesFromSales(slug, { from, to, staffId, locationId }, staffByName, resolveLocationName));
+      const producedPos = activeOnly(await buildPosEntriesFromSales(slug, { from, to, staffId, locationId }, staffByUserId, resolveLocationName));
       if (staffId <= 0) {
         await syncEntrySnapshots(slug, { from, to, locationId }, producedPos, "pos");
       } else {
@@ -1296,7 +1350,7 @@ export async function buildCommissionDashboard(slug: string, rawParams: Commissi
   }
 
   // Load persisted entries in scope (active + cancelled) for display.
-  const entries = from && to ? await loadPersistedEntries(slug, { from, to, staffId, source, locationId }, staffByName) : [];
+  const entries = from && to ? await loadPersistedEntries(slug, { from, to, staffId, source, locationId }, staffById) : [];
 
   // Sort: datetime DESC, operator ASC, item_label ASC (faithful to buildDashboard usort).
   entries.sort((a, b) => {
