@@ -56,6 +56,8 @@ type CommissionDashboard = {
   operatorSummary: CommissionOperatorSummary[];
   summary: Omit<CommissionOperatorSummary, "staffId" | "operatorName">;
   staffOptions: Array<{ id: number; name: string; isActive: boolean }>;
+  locations: Array<{ id: number; name: string }>;
+  activeLocationId: number;
   hasStoredHistory: boolean;
   hasSourceInScope: boolean;
 };
@@ -100,6 +102,8 @@ const EMPTY_DASHBOARD: CommissionDashboard = {
   operatorSummary: [],
   summary: EMPTY_SUMMARY,
   staffOptions: [],
+  locations: [],
+  activeLocationId: 0,
   hasStoredHistory: false,
   hasSourceInScope: false,
 };
@@ -141,7 +145,7 @@ function currentMonthRange(): { from: string; to: string } {
 
 // I filtri legacy dalla query GET (from/to valide con swap, source whitelist,
 // detail agganciato allo staff filtrato come nel PHP).
-function filtersFromQuery(q: CommissionsQuery): { from: string; to: string; staffId: number; source: CommissionSource; detailStaffId: number } {
+function filtersFromQuery(q: CommissionsQuery): { from: string; to: string; staffId: number; source: CommissionSource; detailStaffId: number; locationId: number } {
   const range = currentMonthRange();
   const isDate = (v?: string) => /^\d{4}-\d{2}-\d{2}$/.test(String(v ?? ""));
   let from = isDate(q.from) ? String(q.from) : range.from;
@@ -151,10 +155,11 @@ function filtersFromQuery(q: CommissionsQuery): { from: string; to: string; staf
   const staffId = Number.parseInt(String(q.staff_id ?? "0"), 10) || 0;
   let detailStaffId = Number.parseInt(String(q.detail_staff_id ?? "0"), 10) || 0;
   if (staffId > 0 && detailStaffId > 0 && detailStaffId !== staffId) detailStaffId = staffId;
-  return { from, to, staffId: Math.max(0, staffId), source, detailStaffId: Math.max(0, detailStaffId) };
+  const locationId = Math.max(0, Number.parseInt(String((q as Record<string, unknown>).location_id ?? "0"), 10) || 0);
+  return { from, to, staffId: Math.max(0, staffId), source, detailStaffId: Math.max(0, detailStaffId), locationId };
 }
 
-type AppliedFilters = { from: string; to: string; staffId: number; source: CommissionSource };
+type AppliedFilters = { from: string; to: string; staffId: number; source: CommissionSource; locationId: number };
 
 export function CommissionsContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: CommissionsQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
@@ -172,7 +177,8 @@ export function CommissionsContent({ slug: slugProp, initialQuery }: { slug?: st
   const [to, setTo] = useState(initial.to);
   const [staffId, setStaffId] = useState(initial.staffId);
   const [source, setSource] = useState<CommissionSource>(initial.source);
-  const appliedRef = useRef<AppliedFilters>({ from: initial.from, to: initial.to, staffId: initial.staffId, source: initial.source });
+  const [locationId, setLocationId] = useState(initial.locationId);
+  const appliedRef = useRef<AppliedFilters>({ from: initial.from, to: initial.to, staffId: initial.staffId, source: initial.source, locationId: initial.locationId });
 
   // The operator whose detail entries are shown below (client-side filter of entries).
   const [selectedStaffId, setSelectedStaffId] = useState(initial.detailStaffId);
@@ -189,6 +195,7 @@ export function CommissionsContent({ slug: slugProp, initialQuery }: { slug?: st
   const syncUrl = useCallback((filters: AppliedFilters, detailStaffId: number) => {
     if (typeof window === "undefined") return;
     const sp = new URLSearchParams({ tab: "overview", from: filters.from, to: filters.to, staff_id: String(filters.staffId), source: filters.source });
+    if (filters.locationId > 0) sp.set("location_id", String(filters.locationId));
     if (detailStaffId > 0) sp.set("detail_staff_id", String(detailStaffId));
     window.history.replaceState(null, "", `${window.location.pathname}?${sp.toString()}`);
   }, []);
@@ -204,6 +211,7 @@ export function CommissionsContent({ slug: slugProp, initialQuery }: { slug?: st
         staff_id: String(filters.staffId),
         source: filters.source,
       });
+      if (filters.locationId > 0) qs.set("location_id", String(filters.locationId));
       fetch(`/api/manage/commissions?${qs.toString()}`, { headers: { "x-tenant-slug": slug } })
         .then((r) => r.json())
         .then((j: DashboardResponse) => {
@@ -229,7 +237,7 @@ export function CommissionsContent({ slug: slugProp, initialQuery }: { slug?: st
   );
 
   useEffect(() => {
-    fetchData({ from: initial.from, to: initial.to, staffId: initial.staffId, source: initial.source });
+    fetchData({ from: initial.from, to: initial.to, staffId: initial.staffId, source: initial.source, locationId: initial.locationId });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchData]);
 
@@ -243,7 +251,7 @@ export function CommissionsContent({ slug: slugProp, initialQuery }: { slug?: st
     // Regola legacy: il dettaglio aperto resta solo se compatibile col filtro operatore.
     const nextDetail = staffId > 0 && selectedStaffId > 0 && selectedStaffId !== staffId ? staffId : selectedStaffId;
     setSelectedStaffId(nextDetail);
-    const filters: AppliedFilters = { from: f, to: t, staffId, source };
+    const filters: AppliedFilters = { from: f, to: t, staffId, source, locationId };
     load(filters);
     syncUrl(filters, nextDetail);
   }
@@ -475,6 +483,18 @@ export function CommissionsContent({ slug: slugProp, initialQuery }: { slug?: st
                   <option value="pos">Pagamenti</option>
                 </select>
               </div>
+              {dashboard.locations.length > 1 ? (
+                <div className="col-xl-3 col-md-6">
+                  {/* Filtro Sede (port di $commissionLocationMap): solo con >1 sede. */}
+                  <label className="form-label small text-muted">Sede</label>
+                  <select className="form-select" name="location_id" value={locationId} onChange={(e) => setLocationId(Number(e.target.value) || 0)}>
+                    <option value={0}>Tutte le sedi</option>
+                    {dashboard.locations.map((l) => (
+                      <option key={l.id} value={l.id}>{l.name}</option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
               <div className="col-12 d-flex gap-2 flex-wrap">
                 <button className="btn btn-outline-primary" type="submit" disabled={loading}>
                   Aggiorna
@@ -653,6 +673,7 @@ export function CommissionsContent({ slug: slugProp, initialQuery }: { slug?: st
                       <th>Cliente</th>
                       <th>Voce</th>
                       <th>Riferimento</th>
+                      {dashboard.locations.length > 1 ? <th>Sede</th> : null}
                       <th className="text-end">Base</th>
                       <th className="text-end">%</th>
                       <th className="text-end">Commissione</th>
@@ -664,7 +685,7 @@ export function CommissionsContent({ slug: slugProp, initialQuery }: { slug?: st
                   <tbody>
                     {detailEntries.length === 0 ? (
                       <tr>
-                        <td colSpan={11} className="text-muted p-3">
+                        <td colSpan={dashboard.locations.length > 1 ? 12 : 11} className="text-muted p-3">
                           Nessun movimento commissionabile per l&rsquo;operatore selezionato nel periodo indicato.
                         </td>
                       </tr>
@@ -678,6 +699,7 @@ export function CommissionsContent({ slug: slugProp, initialQuery }: { slug?: st
                             <td>{row.clientName || "—"}</td>
                             <td>{row.itemLabel}</td>
                             <td className="text-muted small">{row.sourceReference}</td>
+                            {dashboard.locations.length > 1 ? <td className="small">{row.locationName || "—"}</td> : null}
                             <td className="text-end">&euro; {fmtMoney(row.baseAmount)}</td>
                             <td className="text-end">{fmtMoney(row.percent)}%</td>
                             <td className="text-end fw-semibold">&euro; {fmtMoney(row.commissionAmount)}</td>

@@ -1,5 +1,42 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Commissioni: audit + fix (bug reali + config + Sede UI + BUG FUSO #16) (2026-07-08)
+
+Audit di Commissioni (Commissions.php 2890 + commissions.php ~900) con 3 agenti. VERDETTO: port
+largamente fedele (messaggi verbatim, aggregazione dashboard, mark-paid, snapshot lifecycle, formato
+it-IT, isolamento tenant, periodi STAFF del #16). Fix applicati (verificati live: 52 check —
+test-comm-fixes 5, test-comm-sede 5, test-commission-periods 4, test-comm-toggles 6, e2e-commissions 32):
+- **BUG FUSO periodi (#16, il piu' grave)**: i confini dei periodi commissione erano seminati con
+  `businessNowDateTime()` (Europe/Rome) ma il DB e' UTC e `sale_date`/`starts_at` sono in UTC ->
+  offset 1-2h -> un movimento creato "adesso" (UTC) risultava PRIMA del periodo appena aperto (Rome)
+  -> MAI commissionato. Non emerso nei test #16 (usavano date 2025 manuali). FIX: helper
+  `commissionNowUtc()` (UTC) al posto di businessNowDateTime nei 4 punti periodo + nowDateTime.
+- **#16 completo — gate periodi MODULO per-movimento**: il legacy buildDashboard NON ha outer guard
+  sul flag; gate ogni movimento con isModuleActiveAt (periodi MODULO) E isCommissionActiveAt (staff).
+  Il Next aveva solo il gate staff + outer `if moduleEnabled`. FIX: loadCommissionActivity carica i
+  periodi modulo, aggiunto `moduleActiveAt`, rimosso l'outer guard (reconcile anche a modulo OFF),
+  filtro accrual su ENTRAMBI i gate. Verificato: vendita nel GAP tra periodi modulo NON commissionata.
+- **sconto 100% (total=0)**: il netFactor faceva fallback `total>0?total:subtotal` -> con total=0 dava
+  netFactor=1 -> commissione sull'intero importo di una vendita a costo zero. FIX: base =
+  `commercialNet = max(0, subtotal-discount)` come il legacy (usa discount, non il total col fallback).
+  Verificato: sconto 100% -> nessuna commissione.
+- **bucket pos_other**: classifyPosItem ora richiede item_id CATALOGO > 0 per product/service;
+  altrimenti (item_id=0 free-text, non-catalogo) -> pos_other (pos_other_percent) come il legacy.
+- **list_price fallback**: appuntamenti in modalita' list_price con list_price=0 -> ora fallback a price.
+- **redemption needle**: allineata al legacy esatto (['pacchetto','giftbox','gift','servizio',
+  'giftcard','prepag']) — 'omaggio' rimossa (gli omaggi hanno comunque le FK esplicite).
+- **zero-rate auto-disable**: saveCommissionSettings auto-disabilita (is_enabled=0) un operatore con
+  TUTTE le % <=0 (port normalizeZeroRateSettings) + chiude il periodo.
+- **OMONIMI (tie-break staffByName)**: a parita' di nome vince lo staff ABILITATO (prima "luca"/"Luca"
+  -> l'omonimo non configurato rubava la risoluzione). NON il cambio meccanismo (created_by->email, fuori scope).
+- **Sede UI**: buildCommissionDashboard ritorna `locations`; il componente ha il dropdown "Tutte le
+  sedi"/per-sede (multi-sede) che invia location_id + la colonna "Sede" nel dettaglio.
+NON fatti (fuori scope per scelta): cambio meccanismo risoluzione operatore (created_by->email vs
+operator_name->nome); default sede corrente (il Next default = tutte); entry_key appuntamento diverso
+(rileva solo migrando snapshot legacy, non accade); atomicita' saveSettings; display "annullate"
+(Next piu' corretto del legacy). NB SSO id: l'agente lo segnalava mancante ma is_sso_staff(id) =
+staff con full_name='SSO' esatto, gia' coperto dal filtro-nome normalizzato del Next.
+
 ## Scadenziario e Costi: audit + fix 2 BLOCKER + parse + 3 minori (2026-07-08)
 
 Audit di "Scadenziario e Costi" (costs.php 2829 righe) con 2 agenti (backend/ricorrenze + UI/form/

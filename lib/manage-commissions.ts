@@ -3,7 +3,6 @@ import "server-only";
 import { createHash } from "node:crypto";
 
 import type { RowDataPacket } from "@/lib/tenant-db";
-import { businessNowDateTime } from "@/lib/business-datetime";
 import { columnExists, dbQuery, quoteIdentifier, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
 
 // Commission SETTINGS + module toggle — faithful port of the Commissions.php settings layer
@@ -175,14 +174,23 @@ export async function saveCommissionSettings(
   for (const [key, cfg] of Object.entries(rows ?? {})) {
     const staffId = Math.max(0, Number(key) || 0);
     if (!validIds.has(staffId) || !cfg) continue;
+    const apptPct = normalizeCommissionPercent(cfg.appointmentPercent);
+    const posProductPct = normalizeCommissionPercent(cfg.posProductPercent);
+    const posServicePct = normalizeCommissionPercent(cfg.posServicePercent);
+    const posOtherPct = normalizeCommissionPercent(cfg.posOtherPercent);
+    // ZERO-RATE (port di normalizeZeroRateSettings 735-788): un operatore abilitato con TUTTE le
+    // percentuali <=0 viene AUTO-DISABILITATO (is_enabled=0) — non ha senso "abilitato a 0". Il
+    // valore effettivo guida sia il salvataggio sia la chiusura del periodo (synchronize sotto).
+    const allZero = apptPct <= 0 && posProductPct <= 0 && posServicePct <= 0 && posOtherPct <= 0;
+    const effectiveEnabled = !!cfg.isEnabled && !allZero;
     const values: Record<string, unknown> = {
       staff_id: staffId,
-      is_enabled: cfg.isEnabled ? 1 : 0,
+      is_enabled: effectiveEnabled ? 1 : 0,
       calculation_mode: normalizeCommissionCalculationMode(cfg.calculationMode),
-      appointment_percent: normalizeCommissionPercent(cfg.appointmentPercent),
-      pos_product_percent: normalizeCommissionPercent(cfg.posProductPercent),
-      pos_service_percent: normalizeCommissionPercent(cfg.posServicePercent),
-      pos_other_percent: normalizeCommissionPercent(cfg.posOtherPercent),
+      appointment_percent: apptPct,
+      pos_product_percent: posProductPct,
+      pos_service_percent: posServicePct,
+      pos_other_percent: posOtherPct,
       notes: String(cfg.notes ?? "").slice(0, 255),
       updated_by: userId,
       updated_at: new Date(),
@@ -193,8 +201,8 @@ export async function saveCommissionSettings(
     } else {
       await tenantInsert(table, { ...values, created_by: userId });
     }
-    // #16: apri/chiudi il periodo dell'operatore sulla transizione is_enabled (port synchronizePeriodsForStaff).
-    await synchronizeCommissionStaffPeriod(slug, staffId, prev?.wasEnabled ?? false, !!cfg.isEnabled, userId, prev?.stamp ?? "");
+    // #16: apri/chiudi il periodo dell'operatore sulla transizione is_enabled EFFETTIVA (port synchronizePeriodsForStaff).
+    await synchronizeCommissionStaffPeriod(slug, staffId, prev?.wasEnabled ?? false, effectiveEnabled, userId, prev?.stamp ?? "");
   }
   return getCommissionSettings(slug);
 }
@@ -208,15 +216,22 @@ export async function saveCommissionSettings(
 // PERIODO APERTO dell'OPERATORE. I periodi si aprono/chiudono ai toggle (modulo + per-staff);
 // il bootstrap semina il periodo iniziale (modulo: epoch al primo ON cosi' copre lo storico;
 // staff: created_at della configurazione). Senza periodi -> fallback su is_enabled.
-// NOTA fedele al legacy: il gate PER-MOVIMENTO usa SOLO i periodi STAFF (isCommissionActiveAt,
-// chiamato a Commissions.php:2156/2361); i periodi MODULO sono bookkeeping (scritti ai toggle ma
-// NON usati come gate per-movimento — il gate modulo e' l'outer "if moduleEnabled" dell'accrual).
+// GATE PER-MOVIMENTO (fedele al legacy buildDashboard, SENZA outer guard sul flag corrente): un
+// movimento e' commissionabile solo se il suo datetime cade in un PERIODO MODULO aperto
+// (isModuleActiveAt, Commissions.php:2066/2338) E in un PERIODO STAFF aperto (isCommissionActiveAt,
+// 2156/2361). Cosi' un movimento in una finestra storica in cui il MODULO era spento non e'
+// commissionato anche se il flag e' ora ON, e il reconcile gira anche a modulo OFF.
 // ===========================================================================
 
 const COMMISSION_EPOCH = "1970-01-01 00:00:00";
 
 type CommissionPeriod = { started: string; ended: string };
-type CommissionActivity = { staffPeriods: Map<number, CommissionPeriod[]>; staffEnabled: Map<number, boolean> };
+type CommissionActivity = {
+  staffPeriods: Map<number, CommissionPeriod[]>;
+  staffEnabled: Map<number, boolean>;
+  modulePeriods: CommissionPeriod[];
+  moduleEnabled: boolean;
+};
 
 // Un datetime cade in un periodo se >= started e (ended vuoto oppure <= ended).
 function commissionPeriodCovers(periods: CommissionPeriod[], datetime: string): boolean {
@@ -229,13 +244,21 @@ function commissionPeriodCovers(periods: CommissionPeriod[], datetime: string): 
   return false;
 }
 
+// "YYYY-MM-DD HH:MM:SS" nel fuso UTC (come il DB memorizza sale_date/starts_at/created_at). I
+// confini dei periodi DEVONO essere nello stesso fuso dei datetime dei movimenti, altrimenti il
+// gate sbaglia: businessNowDateTime() (Europe/Rome) e' 1-2h AVANTI rispetto a `sale_date` (UTC),
+// e un movimento creato "adesso" risulterebbe PRIMA del periodo appena aperto -> mai commissionato.
+function commissionNowUtc(): string {
+  return new Date().toISOString().slice(0, 19).replace("T", " ");
+}
+
 // Semina/normalizza il periodo MODULO (bookkeeping) — port di bootstrapModulePeriods:1005-1034.
 async function bootstrapCommissionModulePeriods(slug: string, moduleEnabled: boolean): Promise<void> {
   const table = await tenantTable(slug, "staff_commission_module_periods").catch(() => null);
   if (!table) return;
   const rows = await tenantSelect<RowDataPacket>({ slug, table: table.name, columns: "id, started_at, ended_at", orderBy: "started_at ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
   const open = rows.filter((r) => !normalizeDateTimeValue(r.ended_at, ""));
-  const now = businessNowDateTime();
+  const now = commissionNowUtc();
   if (moduleEnabled) {
     if (!open.length) {
       const startAt = rows.length ? now : COMMISSION_EPOCH; // primo ON -> epoch (copre lo storico)
@@ -253,7 +276,7 @@ async function bootstrapCommissionModulePeriods(slug: string, moduleEnabled: boo
 async function bootstrapCommissionStaffPeriods(slug: string, staffRows: Array<{ staffId: number; isEnabled: boolean; createdAt: string; updatedAt: string }>): Promise<void> {
   const table = await tenantTable(slug, "staff_commission_periods").catch(() => null);
   if (!table) return;
-  const now = businessNowDateTime();
+  const now = commissionNowUtc();
   for (const st of staffRows) {
     if (st.staffId <= 0) continue;
     const rows = await tenantSelect<RowDataPacket>({ slug, table: table.name, columns: "id, started_at, ended_at", where: "staff_id=?", params: [st.staffId], orderBy: "started_at ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
@@ -280,7 +303,7 @@ async function synchronizeCommissionStaffPeriod(slug: string, staffId: number, w
   if (!table) return;
   const rows = await tenantSelect<RowDataPacket>({ slug, table: table.name, columns: "id, started_at, ended_at", where: "staff_id=?", params: [staffId], orderBy: "started_at ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
   const open = rows.filter((r) => !normalizeDateTimeValue(r.ended_at, ""));
-  const now = businessNowDateTime();
+  const now = commissionNowUtc();
   if (nowEnabled) {
     if (!open.length) {
       const startAt = (!rows.length && wasEnabled) ? (normalizeDateTimeValue(existingCreatedOrUpdated, "") || now) : now;
@@ -298,7 +321,7 @@ async function synchronizeCommissionStaffPeriod(slug: string, staffId: number, w
 async function synchronizeCommissionModulePeriod(slug: string, wasEnabled: boolean, nowEnabled: boolean, userId: number | null): Promise<void> {
   const table = await tenantTable(slug, "staff_commission_module_periods").catch(() => null);
   if (!table) return;
-  const now = businessNowDateTime();
+  const now = commissionNowUtc();
   if (nowEnabled && !wasEnabled) {
     const openRows = await tenantSelect<RowDataPacket>({ slug, table: table.name, columns: "id", where: "ended_at IS NULL" }).catch(() => [] as RowDataPacket[]);
     if (!openRows.length) await tenantInsert(table, { started_at: now, ended_at: null, started_by: userId, ended_by: null, created_at: now, updated_at: now }).catch(() => 0);
@@ -339,10 +362,22 @@ async function loadCommissionActivity(slug: string, moduleEnabled: boolean): Pro
   }
   const staffEnabled = new Map<number, boolean>();
   for (const s of staffSettings) staffEnabled.set(s.staffId, s.isEnabled);
-  return { staffPeriods, staffEnabled };
+
+  // Periodi MODULO (per il gate per-movimento isModuleActiveAt) — port di modulePeriods:1102-1121.
+  const modTable = await tenantTable(slug, "staff_commission_module_periods").catch(() => null);
+  const modRows = modTable
+    ? await tenantSelect<RowDataPacket>({ slug, table: modTable.name, columns: "started_at, ended_at", orderBy: "started_at ASC, id ASC" }).catch(() => [] as RowDataPacket[])
+    : [];
+  const modulePeriods: CommissionPeriod[] = [];
+  for (const r of modRows) {
+    const started = normalizeDateTimeValue(r.started_at, "");
+    if (!started) continue;
+    modulePeriods.push({ started, ended: normalizeDateTimeValue(r.ended_at, "") });
+  }
+  return { staffPeriods, staffEnabled, modulePeriods, moduleEnabled };
 }
 
-// Gate per-movimento — port di isCommissionActiveAt:1139-1158 (SOLO periodi staff + fallback).
+// Gate per-movimento STAFF — port di isCommissionActiveAt:1139-1158 (periodi staff + fallback).
 function commissionActiveAt(activity: CommissionActivity, staffId: number, datetime: string): boolean {
   if (staffId <= 0) return false;
   const dt = normalizeDateTimeValue(datetime, "");
@@ -352,6 +387,13 @@ function commissionActiveAt(activity: CommissionActivity, staffId: number, datet
     return commissionPeriodCovers(periods, dt);
   }
   return activity.staffEnabled.get(staffId) ?? false;
+}
+
+// Gate per-movimento MODULO — port di isModuleActiveAt:1123-1137 (periodi modulo + fallback su flag).
+function moduleActiveAt(activity: CommissionActivity, datetime: string): boolean {
+  const dt = normalizeDateTimeValue(datetime, "");
+  if (dt === "" || activity.modulePeriods.length === 0) return activity.moduleEnabled;
+  return commissionPeriodCovers(activity.modulePeriods, dt);
 }
 
 // ===========================================================================
@@ -431,6 +473,9 @@ export type CommissionDashboard = {
   // Lista COMPLETA operatori per il select filtro (legacy $staffRows: tutti gli
   // staff non tecnici, anche senza movimenti).
   staffOptions: Array<{ id: number; name: string; isActive: boolean }>;
+  // Sedi del tenant per il filtro Sede (legacy $commissionLocationMap): mostrate solo con >1 sede.
+  locations: Array<{ id: number; name: string }>;
+  activeLocationId: number;
   // Probe legacy per i 3 empty-state (commissions.php ~198-253): storico snapshot
   // nel periodo/filtri e dati sorgente (appuntamenti done / vendite) nel periodo.
   hasStoredHistory: boolean;
@@ -456,15 +501,14 @@ function commissionEntryKey(raw: string): string {
   return createHash("sha1").update(raw).digest("hex");
 }
 
-// classifyPosItem (Commissions.php ~2874): product+id → pos_product, service+id →
-// pos_service, else pos_other. In the Next binary item_type model, item_id may be
-// null for a free-text line; we treat any 'product'/'service' type as its bucket
-// (the id>0 guard is relaxed vs legacy because the Next stores item_id nullable and
-// the percent still applies to the line by type). Non product/service → pos_other.
-function classifyPosItem(itemType: string): "pos_product" | "pos_service" | "pos_other" {
+// classifyPosItem (Commissions.php ~2874): product + item_id CATALOGO > 0 → pos_product; service +
+// item_id > 0 → pos_service; ALTRIMENTI (free-text, item_id=0, righe non-catalogo tipo giftcard/
+// pacchetti a POS) → pos_other, cosi' usa pos_other_percent come il legacy (prima la guardia id>0
+// era rilassata e pos_other risultava irraggiungibile → righe item_id=0 commissionsate al %prodotto).
+function classifyPosItem(itemType: string, itemId: number): "pos_product" | "pos_service" | "pos_other" {
   const type = String(itemType ?? "").trim().toLowerCase();
-  if (type === "product") return "pos_product";
-  if (type === "service") return "pos_service";
+  if (type === "product" && itemId > 0) return "pos_product";
+  if (type === "service" && itemId > 0) return "pos_service";
   return "pos_other";
 }
 
@@ -484,10 +528,9 @@ function normalizeDateTimeValue(value: unknown, fallback = ""): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-// Datetime Europe/Rome (movement_datetime commissioni) — non il fuso del server. Vedi
-// business-datetime.ts.
+// Datetime del movimento (movement_datetime) in UTC, coerente con sale_date/starts_at del DB.
 function nowDateTime(): string {
-  return businessNowDateTime();
+  return commissionNowUtc();
 }
 
 // A produced commission entry (before persistence), shared by the POS
@@ -630,14 +673,17 @@ async function buildPosEntriesFromSales(
     const items = itemsBySale.get(saleId) ?? [];
     if (!items.length) continue;
 
-    // subtotal = sales.subtotal (fallback Σ line_total); saleTotal = sales.total
-    // (fallback subtotal); netFactor = subtotal>0 ? saleTotal/subtotal : 1.
+    // BASE pagato per-riga: allocazione proporzionale del NETTO COMMERCIALE come il legacy
+    // (commercialNet = max(0, subtotal - discount); allocateNetAmounts ripartisce per line_total).
+    // netFactor = commercialNet/subtotal. NB: usare `discount` (non `total` col fallback >0) evita
+    // il landmine dello sconto 100% (total=0 -> il vecchio fallback dava netFactor=1 -> commissione
+    // sull'intero importo di una vendita a costo zero).
     const lineSum = items.reduce((sum, it) => sum + Math.max(0, Number(it.line_total ?? 0) || 0), 0);
     let subtotal = Number(sale.subtotal ?? 0) || 0;
     if (!(subtotal > 0)) subtotal = lineSum;
-    let saleTotal = Number(sale.total ?? 0) || 0;
-    if (!(saleTotal > 0)) saleTotal = subtotal;
-    const netFactor = subtotal > 0 ? saleTotal / subtotal : 1;
+    const discount = Math.max(0, Number(sale.discount ?? 0) || 0);
+    const commercialNet = Math.max(0, subtotal - discount);
+    const netFactor = subtotal > 0 ? commercialNet / subtotal : 0;
 
     const saleLocationId = Number(sale.location_id ?? 0) || 0;
     const saleLocationName = saleLocationId > 0 ? await resolveLocationName(saleLocationId) : "";
@@ -646,7 +692,7 @@ async function buildPosEntriesFromSales(
     for (const item of items) {
       const itemId = Number(item.id ?? 0) || 0;
       if (itemId <= 0) continue;
-      const kind = classifyPosItem(String(item.item_type ?? ""));
+      const kind = classifyPosItem(String(item.item_type ?? ""), Number(item.item_id ?? 0) || 0);
 
       const percent =
         kind === "pos_product" ? staff.posProductPercent : kind === "pos_service" ? staff.posServicePercent : staff.posOtherPercent;
@@ -711,7 +757,9 @@ function looksLikeAppointmentRedemption(row: RowDataPacket, gross: number, listB
   }
   const badge = String(row.discount_badge ?? "").trim().toLowerCase();
   if (badge !== "") {
-    for (const needle of ["pacchetto", "giftbox", "gift", "giftcard", "prepag", "omaggio"]) {
+    // Needle IDENTICA al legacy (Commissions.php:2867) — include 'servizio', esclude 'omaggio'
+    // (gli omaggi sono comunque intercettati dalle FK esplicite sopra).
+    for (const needle of ["pacchetto", "giftbox", "gift", "servizio", "giftcard", "prepag"]) {
       if (badge.includes(needle)) return true;
     }
   }
@@ -838,7 +886,8 @@ async function buildAppointmentEntries(
     for (const line of serviceRows) {
       const qty = Math.max(1, Number(line.qty ?? 1) || 1);
       const price = roundMoney(Math.max(0, Number(line.price ?? 0) || 0));
-      const listPrice = roundMoney(Math.max(0, Number(line.list_price ?? 0) || 0));
+      let listPrice = roundMoney(Math.max(0, Number(line.list_price ?? 0) || 0));
+      if (listPrice <= 0.00001) listPrice = price; // fallback legacy (Commissions.php:2107): list_price assente/0 -> price
       const lineGross = roundMoney(price * qty);
       const listBase = roundMoney(listPrice * qty);
       if (looksLikeAppointmentRedemption(line, lineGross, listBase)) continue;
@@ -883,7 +932,8 @@ async function buildAppointmentEntries(
       const svcId = Number(line.service_id ?? 0) || 0;
       const qty = Math.max(1, Number(line.qty ?? 1) || 1);
       const price = roundMoney(Math.max(0, Number(line.price ?? 0) || 0));
-      const listPrice = roundMoney(Math.max(0, Number(line.list_price ?? 0) || 0));
+      let listPrice = roundMoney(Math.max(0, Number(line.list_price ?? 0) || 0));
+      if (listPrice <= 0.00001) listPrice = price; // fallback legacy (Commissions.php:2107): list_price assente/0 -> price
       const lineGross = roundMoney(price * qty);
       const listBase = roundMoney(listPrice * qty);
       const currentIndex = lineIndex;
@@ -1198,7 +1248,13 @@ export async function buildCommissionDashboard(slug: string, rawParams: Commissi
   const staffById = new Map<number, CommissionStaffSetting>();
   for (const s of settings.staff) {
     const key = s.name.trim().toLowerCase();
-    if (key) staffByName.set(key, s);
+    // OMONIMI (es. "luca"/"Luca"): a parità di nome vince lo staff ABILITATO alle commissioni —
+    // altrimenti un omonimo NON configurato (0%) rubava la risoluzione al vero operatore. Tie-break
+    // interno al match-per-nome (NON il cambio di meccanismo created_by→email, fuori scope).
+    if (key) {
+      const prev = staffByName.get(key);
+      if (!prev || (s.isEnabled && !prev.isEnabled)) staffByName.set(key, s);
+    }
     if (s.staffId > 0) staffById.set(s.staffId, s);
   }
 
@@ -1208,13 +1264,17 @@ export async function buildCommissionDashboard(slug: string, rawParams: Commissi
   // reconcile-cancel is gated on a FULL accrual (staffId<=0), faithful to the legacy
   // $canCancelStaleAppointments = $staffId <= 0 gate — a per-operator view only
   // upserts its own entries (no reconcile).
-  if (settings.moduleEnabled && from && to) {
+  // NIENTE outer guard sul flag corrente (fedele al legacy buildDashboard che non ne ha): l'accrual
+  // gira sempre e riconcilia anche a modulo OFF; ogni movimento e' filtrato per-datetime sul gate.
+  if (from && to) {
     const resolveLocationName = await locationNameResolver(slug);
-    // #16: carica i periodi commissione (bootstrap + gate). Ogni entry prodotta e' commissionabile
-    // solo se il suo datetime cade in un periodo APERTO dell'operatore (isCommissionActiveAt) —
-    // cosi' i movimenti in una finestra in cui l'operatore era disattivato NON vengono commissionati.
+    // #16 (completo): carica i periodi commissione (bootstrap + gate). Una entry prodotta e'
+    // commissionabile solo se il suo datetime cade in un periodo MODULO aperto (isModuleActiveAt) E
+    // in un periodo APERTO dell'operatore (isCommissionActiveAt) — cosi' i movimenti in una finestra
+    // in cui il MODULO o l'OPERATORE erano disattivati NON vengono commissionati.
     const activity = await loadCommissionActivity(slug, settings.moduleEnabled);
-    const activeOnly = (produced: ProducedEntry[]): ProducedEntry[] => produced.filter((e) => commissionActiveAt(activity, e.staffId, e.datetime));
+    const activeOnly = (produced: ProducedEntry[]): ProducedEntry[] =>
+      produced.filter((e) => moduleActiveAt(activity, e.datetime) && commissionActiveAt(activity, e.staffId, e.datetime));
 
     if (source === "all" || source === "pos") {
       const producedPos = activeOnly(await buildPosEntriesFromSales(slug, { from, to, staffId, locationId }, staffByName, resolveLocationName));
@@ -1383,6 +1443,8 @@ export async function buildCommissionDashboard(slug: string, rawParams: Commissi
     probeSourceInScope(slug, { from, to, source, locationId }).catch(() => false),
   ]);
 
+  const dashLocations = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "id, name", orderBy: "name ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
+
   return {
     moduleEnabled: settings.moduleEnabled,
     configuredRates: settings.configuredRates,
@@ -1390,6 +1452,8 @@ export async function buildCommissionDashboard(slug: string, rawParams: Commissi
     operatorSummary,
     summary,
     staffOptions: settings.staff.map((s) => ({ id: s.staffId, name: s.name || (s.email || `Operatore #${s.staffId}`), isActive: s.isActive })),
+    locations: dashLocations.map((r) => ({ id: Number(r.id ?? 0) || 0, name: String(r.name ?? "").trim() })).filter((l) => l.id > 0),
+    activeLocationId: locationId,
     hasStoredHistory,
     hasSourceInScope,
   };
