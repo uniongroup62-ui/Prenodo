@@ -8547,6 +8547,10 @@ VERIFICATO: test-giftbox 27/27 (incl. emissione POS con snapshot + redeem_full c
 typecheck 0. Modifiche isolate al path giftbox: app/api/manage/giftboxes/route.ts (redeem_full
 delega + rimozione issue/redeem) + lib/manage-pos.ts (service_snapshot_json in issueGiftboxFromSale).
 Residui ZZ=0; produzione intatta (template id16 + istanza id15); 5 clienti reali intatti.
-NB: la regression cross-modulo (checkout servizi/prodotti/pacchetti) è stata bloccata da
-saturazione transitoria del pooler Supabase (max 15 conn, dev server); le modifiche non toccano
-quei path (issueGiftboxFromSale gira solo per righe type='giftbox').
+REGRESSION cross-modulo VERDE (dopo drain del pooler): test-pkg-pos 8/8, test-pos-checkout 8/8,
+test-preventivi 25/25, test-giftbox 27/27. La suite esistente e2e-giftbox è 61/63: i 2 fail
+(movimento riscatto locationLabel="-" + stock prodotto per-sede non scalato) sono PRE-ESISTENTI
+e NON causati da questo fix — verificato rieseguendo la suite col codice pre-fix (revert a
+5964360): stesso identico esito 61/63. Sono un problema di risoluzione sede della sessione in
+quel vecchio test (la scalatura product_stocks è per-sede e la current location non risulta la
+Sede1), indipendente dalle modifiche GiftBox.
