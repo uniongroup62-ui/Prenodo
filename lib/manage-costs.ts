@@ -163,17 +163,19 @@ async function hasAnyCostsInScope(slug: string, locationId: number, locations: C
 // Edit-form prefill: return ONE cost's editable fields for one id. Port of
 // costs.php action=edit ($editCost). Mirrors the CostRow shape used by the list
 // so the faithful cost_form-content.tsx can hydrate every field.
-export async function getManageCost(slug: string, costId: number): Promise<CostRow | null> {
+export async function getManageCost(slug: string, costId: number, locationId = 0): Promise<CostRow | null> {
   if (costId <= 0) return null;
-  const rows = await tenantSelect<RowDataPacket>({ slug, table: "costs", where: "id=?", params: [costId], limit: 1 }).catch(() => []);
-  if (!rows[0]) return null;
-  return mapCost(rows[0]);
+  // SCOPE SEDE: un costo di un'altra sede non e' recuperabile (come il legacy loadCost scoped).
+  const row = await getCostById(slug, costId, locationId).catch(() => null);
+  return row ? mapCost(row) : null;
 }
 
-export async function saveCost(slug: string, body: Record<string, string>): Promise<ManageCostsContext> {
+export async function saveCost(slug: string, body: Record<string, string>, scopeLocationId = 0): Promise<ManageCostsContext> {
   const table = await tenantTable(slug, "costs");
   const id = parseInteger(body.id ?? body.cost_id, 0);
-  const existing = id > 0 ? await getCostById(slug, id) : null;
+  // In modifica, il costo esistente deve appartenere alla sede dell'utente (scope) -> altrimenti
+  // "Costo non trovato" (impedisce a un utente di una sede di modificare/spostare costi di altre).
+  const existing = id > 0 ? await getCostById(slug, id, scopeLocationId) : null;
   const input = await normalizeCostInput(slug, body, existing);
   const values = await filterColumns(table.name, {
     title: input.title,
@@ -208,7 +210,7 @@ export async function saveCost(slug: string, body: Record<string, string>): Prom
 export async function deleteCost(slug: string, costId: number, locationId = 0): Promise<ManageCostsContext> {
   // Messaggio pagina legacy (redirect ?err=Costo non trovato) per id invalido o mancante.
   if (costId <= 0) throw new Error("Costo non trovato");
-  const row = await getCostById(slug, costId);
+  const row = await getCostById(slug, costId, locationId);
   await tenantDelete({ slug, table: "costs", id: costId });
   await deleteCostAttachmentObject(row).catch(() => undefined);
   return getManageCostsContext(slug, { locationId, status: "open" });
@@ -223,7 +225,7 @@ export async function deleteCostsBulk(slug: string, costIds: number[], locationI
   if (ids.length === 0) throw new Error("Seleziona almeno una voce");
   let deleted = 0;
   for (const id of ids) {
-    const row = await getCostById(slug, id).catch(() => null);
+    const row = await getCostById(slug, id, locationId).catch(() => null);
     if (row) {
       await tenantDelete({ slug, table: "costs", id }).catch(() => 0);
       await deleteCostAttachmentObject(row).catch(() => undefined);
@@ -244,7 +246,7 @@ async function deleteCostAttachmentObject(row: RowDataPacket): Promise<void> {
 }
 
 export async function toggleCostPaid(slug: string, costId: number, locationId = 0): Promise<ManageCostsContext> {
-  const row = await getCostById(slug, costId);
+  const row = await getCostById(slug, costId, locationId);
   const isPaid = Number(row.is_paid ?? 0) === 1;
 
   if (isPaid) {
@@ -413,7 +415,9 @@ async function listCostCategories(slug: string): Promise<CostCategoryRow[]> {
     return {
       id,
       name: String(row.name ?? ""),
-      color: String(row.color ?? "#0f766e"),
+      // Colore GREZZO (vuoto se NULL) come il legacy: la UI mostra "—" nel badge e usa #6c757d
+      // come default nell'edit. Prima iniettava "#0f766e" -> badge colorato invece di "—".
+      color: row.color ? String(row.color) : "",
       isActive: Number(row.is_active ?? 1) === 1,
       costCount: counts.get(id) ?? 0,
     };
@@ -575,8 +579,19 @@ async function ensureSupplierUsable(slug: string, supplierId: number, locationId
   }
 }
 
-async function getCostById(slug: string, id: number): Promise<RowDataPacket> {
-  const rows = await tenantSelect<RowDataPacket>({ slug, table: "costs", where: "id=?", params: [id], limit: 1 });
+async function getCostById(slug: string, id: number, locationId = 0): Promise<RowDataPacket> {
+  // SCOPE SEDE (port del $costBuildLocationScope legacy applicato a ogni fetch-by-id): un costo
+  // di un'altra sede -> row assente -> "Costo non trovato" (come il legacy). NULL-permissiva.
+  let where = "id=?";
+  const params: unknown[] = [id];
+  if (locationId > 0) {
+    const table = await tenantTable(slug, "costs");
+    if (await columnExists(table.name, "location_id")) {
+      where += " AND (location_id = ? OR location_id IS NULL)";
+      params.push(locationId);
+    }
+  }
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "costs", where, params, limit: 1 });
   if (!rows[0]) throw new Error("Costo non trovato");
   return rows[0];
 }
@@ -775,12 +790,21 @@ function normalizeLocationId(value: number, locations: CostLocationRow[]): numbe
 
 function nextDueDate(value: string, interval: number, unit: RecurrenceUnit): string {
   const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
-  const date = new Date(year, month - 1, day);
-  if (unit === "day") date.setDate(date.getDate() + interval);
-  if (unit === "week") date.setDate(date.getDate() + interval * 7);
-  if (unit === "month") date.setMonth(date.getMonth() + interval);
-  if (unit === "year") date.setFullYear(date.getFullYear() + interval);
-  return dateString(date);
+  if (unit === "day" || unit === "week") {
+    const date = new Date(year, month - 1, day);
+    date.setDate(date.getDate() + interval * (unit === "week" ? 7 : 1));
+    return dateString(date);
+  }
+  // month/year: aggiungi i mesi e CLAMPA il giorno all'ultimo del mese risultante (port del
+  // $addMonthsSafe legacy: $td = min($d, cal_days_in_month)). Date.setMonth/setFullYear farebbe
+  // OVERFLOW (es. 31 gen +1 mese -> 3 mar invece di 28 feb; 29 feb +1 anno -> 1 mar invece di 28 feb).
+  const monthsToAdd = unit === "year" ? interval * 12 : interval;
+  const total = (month - 1) + monthsToAdd;
+  const ny = year + Math.floor(total / 12);
+  const nm = ((total % 12) + 12) % 12; // mese 0-based risultante
+  const lastDay = new Date(ny, nm + 1, 0).getDate(); // giorno 0 del mese successivo = ultimo giorno di nm
+  const nd = Math.min(day, lastDay);
+  return dateString(new Date(ny, nm, nd));
 }
 
 function normalizeRecurrenceUnit(value: unknown): RecurrenceUnit {
@@ -825,15 +849,33 @@ function parseMoneyOrNull(value: unknown, allowBlank = false): number | null {
   let raw = String(value ?? "").trim().replace(/[ \s]/g, "");
   if (!raw) return allowBlank ? 0 : null;
   if (!/^[+-]?[0-9.,]+$/.test(raw)) return null;
-  const comma = raw.lastIndexOf(",");
-  const dot = raw.lastIndexOf(".");
-  if (comma >= 0 && dot >= 0) {
-    raw = comma > dot ? raw.replace(/\./g, "").replace(",", ".") : raw.replace(/,/g, "");
-  } else if (comma >= 0) {
-    raw = raw.replace(",", ".");
-  } else if ((raw.match(/\./g) ?? []).length > 1) {
-    raw = raw.replace(/\./g, "");
+  // Port FEDELE di $parseMoney (costs.php:47-90) inclusa l'euristica MIGLIAIA a separatore singolo:
+  // un separatore seguito da ESATTAMENTE 3 cifre con parte intera 1-3 cifre e' un raggruppamento
+  // migliaia ("1.234"/"1,234" = 1234), non un decimale. Prima mancava -> "1.234" veniva letto 1,23.
+  const commaCount = (raw.match(/,/g) ?? []).length;
+  const dotCount = (raw.match(/\./g) ?? []).length;
+  if (commaCount > 0 && dotCount > 0) {
+    // L'ultimo separatore e' il decimale; l'altro sono le migliaia.
+    raw = raw.lastIndexOf(",") > raw.lastIndexOf(".") ? raw.replace(/\./g, "").replace(/,/g, ".") : raw.replace(/,/g, "");
+  } else if (commaCount > 0) {
+    if (commaCount > 1) {
+      if (!/^[+-]?\d{1,3}(,\d{3})+$/.test(raw)) return null; // migliaia malformate -> invalido
+      raw = raw.replace(/,/g, "");
+    } else {
+      const [left, right] = raw.split(",");
+      raw = right.length === 3 && /^[+-]?\d{1,3}$/.test(left) ? left + right : `${left}.${right}`;
+    }
+  } else if (dotCount > 0) {
+    if (dotCount > 1) {
+      if (!/^[+-]?\d{1,3}(\.\d{3})+$/.test(raw)) return null;
+      raw = raw.replace(/\./g, "");
+    } else {
+      const [left, right] = raw.split(".");
+      raw = right.length === 3 && /^[+-]?\d{1,3}$/.test(left) ? left + right : raw;
+    }
   }
+  // Deve restare un numero con al massimo 2 decimali, altrimenti invalido (come il legacy).
+  if (!/^[+-]?\d+(?:\.\d{1,2})?$/.test(raw)) return null;
   const parsed = Number.parseFloat(raw);
   if (!Number.isFinite(parsed)) return null;
   return roundMoney(parsed);

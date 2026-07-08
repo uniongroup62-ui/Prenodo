@@ -167,6 +167,22 @@ export function CostsContent({ slug: slugProp, initialQuery }: { slug?: string; 
   const [flash, setFlash] = useState("");
   const [error, setError] = useState("");
 
+  // Legge il flash dai query param dopo un redirect (es. dal form costo: ?msg=Costo%20creato)
+  // e ripulisce l'URL, come il legacy che mostra $_GET['msg']/['err'].
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    const msg = sp.get("msg") ?? "";
+    const err = sp.get("err") ?? "";
+    if (msg) setFlash(msg);
+    if (err) setError(err);
+    if (msg || err) {
+      sp.delete("msg");
+      sp.delete("err");
+      const qs = sp.toString();
+      window.history.replaceState(null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
+    }
+  }, []);
+
   // Bulk selection (scadenziario): the checked cost ids for "Elimina selezionati".
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);

@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { jsonError } from "@/lib/api-utils";
 import { currentManageSession } from "@/lib/manage-auth";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
+import { resolveManageLocationId } from "@/lib/manage-locations";
 import { canAny } from "@/lib/role-permissions";
 import {
   STORAGE_NOT_CONFIGURED_ERROR,
@@ -11,7 +12,7 @@ import {
   storagePrivateConfigured,
 } from "@/lib/storage";
 import type { RowDataPacket } from "@/lib/tenant-db";
-import { tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
+import { columnExists, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -38,13 +39,24 @@ function isR2Key(path: string): boolean {
   return /^t\d+\//.test(path);
 }
 
-async function loadCost(slug: string, id: number): Promise<RowDataPacket | null> {
+async function loadCost(slug: string, id: number, locationId = 0): Promise<RowDataPacket | null> {
+  // SCOPE SEDE: un costo di un'altra sede non è accessibile (download/upload) — allineato al
+  // check app_location_allowed_for_user del legacy cost_attachment.php. NULL-permissiva.
+  let where = "id = ?";
+  const params: unknown[] = [id];
+  if (locationId > 0) {
+    const table = await tenantTable(slug, "costs");
+    if (await columnExists(table.name, "location_id")) {
+      where += " AND (location_id = ? OR location_id IS NULL)";
+      params.push(locationId);
+    }
+  }
   const rows = await tenantSelect<RowDataPacket>({
     slug,
     table: "costs",
-    columns: "id, attachment_path, attachment_mime, attachment_name",
-    where: "id = ?",
-    params: [id],
+    columns: "id, attachment_path, attachment_mime, attachment_name, location_id",
+    where,
+    params,
     limit: 1,
   });
   return rows[0] ?? null;
@@ -62,7 +74,8 @@ export async function GET(request: Request) {
   if (id <= 0) return jsonError("Costo non valido.", 400);
 
   try {
-    const cost = await loadCost(tenantSlug, id);
+    const scopeLocationId = await resolveManageLocationId({ slug: tenantSlug, raw: url.searchParams.get("location_id"), fallbackCurrent: true });
+    const cost = await loadCost(tenantSlug, id, scopeLocationId);
     if (!cost) return jsonError("Costo non trovato.", 404);
     const path = String(cost.attachment_path ?? "").trim();
     if (!path) return jsonError("Nessun allegato per questo costo.", 404);
@@ -94,7 +107,8 @@ export async function POST(request: Request) {
   if (costId <= 0) return jsonError("Costo non valido.", 400);
 
   try {
-    const cost = await loadCost(tenantSlug, costId);
+    const scopeLocationId = await resolveManageLocationId({ slug: tenantSlug, raw: form.get("location_id") as string | null, fallbackCurrent: true });
+    const cost = await loadCost(tenantSlug, costId, scopeLocationId);
     if (!cost) return jsonError("Costo non trovato.", 404);
     const oldPath = String(cost.attachment_path ?? "").trim();
 

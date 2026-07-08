@@ -1,5 +1,40 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Scadenziario e Costi: audit + fix 2 BLOCKER + parse + 3 minori (2026-07-08)
+
+Audit di "Scadenziario e Costi" (costs.php 2829 righe) con 2 agenti (backend/ricorrenze + UI/form/
+allegati/export). VERDETTO: port molto fedele (badge/filtri/colonne/form/categorie/allegati MIME+
+size/export CSV+PDF/validazioni tutte verbatim/stats/copia campi ricorrenza/isolamento tenant). Fix
+applicati (verificati live: fixes 14/14 + minori 4/4 + e2e-costs 52/0):
+- **BLOCKER ricorrenza clamp fine-mese** (manage-costs.ts nextDueDate): `setMonth`/`setFullYear`
+  facevano OVERFLOW -> un costo ricorrente mensile/annuale con scadenza 29/30/31 (o 29 feb)
+  generava l'occorrenza con data SBAGLIATA (31 gen +1m -> 3 mar invece di 28 feb; 29 feb +1y ->
+  1 mar invece di 28 feb). Riscritto: aggiungi i mesi e CLAMPA il giorno all'ultimo del mese
+  risultante (port $addMonthsSafe). Verificato 31gen->28feb, 29feb->28feb, 30mag->30giu, 15->15.
+- **BLOCKER scope per-sede** (getCostById + getManageCost + saveCost/toggle/delete/bulk + download/
+  upload allegato): nessun filtro sede sui fetch-by-id -> su tenant multi-sede un utente ristretto
+  poteva GET/toggle/delete/MODIFICARE-SPOSTARE/scaricare-allegato costi di altre sedi. Aggiunto scope
+  `(location_id = ? OR location_id IS NULL)` su getCostById (propagato locationId da tutti i
+  chiamanti + saveCost scopeLocationId) e su loadCost del cost-attachment; la route risolve la sede
+  con resolveManageLocationId. Costo di altra sede -> "Costo non trovato" (come il legacy). Verificato
+  Sede1 bloccato / Sede2 consentito su get/toggle/delete/allegato.
+- **MAJOR parse importo migliaia** (parseMoneyOrNull): mancava l'euristica migliaia a separatore
+  SINGOLO -> "1.234" (=1234 IT) letto 1,23; "1,234,567" -> 1,23. Portato fedelmente $parseMoney
+  (separatore + esattamente 3 cifre con parte intera 1-3 = migliaia; multi-sep validato; max 2
+  decimali o invalido). Verificato "1.234"->1234, "1,234,567"->1234567, "1.234,56"->1234.56.
+- **minore colore categoria**: listCostCategories iniettava "#0f766e" su colore NULL -> badge
+  colorato invece di "—" e edit inline #0f766e invece di #6c757d. Ora ritorna "" (la UI gia'
+  gestisce vuoto: badge "—", edit default #6c757d). Verificato.
+- **minore flash post-salvataggio**: dopo Salva costo mancava "Costo creato/aggiornato". Ora
+  backToList passa ?msg e costs-content lo legge (mount-effect) + ripulisce l'URL.
+- **minore download allegato scope-sede**: incluso nel BLOCKER scope (loadCost scoped su GET+POST).
+NON fatti (rinviati/annotati): ricerca accent-insensitive (Postgres `unaccent` NON disponibile nel
+DB -> serve estensione, problema TRASVERSALE a tutte le ricerche dell'app); opzione fornitore
+inattivo pre-selezionata in modifica (UI+context, edge, irriproducibile su tenant 25 con 0
+fornitori); "Tutte le sedi" (all_locations, residuo multi-sede noto come nelle Rate); MIME sniffed
+vs declared (R2, robustezza inferiore); fuso TODAY UTC vs Rome (tema sistemico, dipende dal runtime).
+
+
 ## Gestione Rate: audit + fix 2 MAJOR + 2 minori (2026-07-08)
 
 Audit della pagina "Gestione Rate" (installments_manage.php) con 2 agenti paralleli (pagina UI +

@@ -199,8 +199,11 @@ export function CostFormContent({ slug: slugProp }: { slug?: string } = {}) {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
-  function backToList() {
-    window.location.href = `/${encodeURIComponent(slug)}/costs?tab=scadenziario`;
+  function backToList(msg = "") {
+    // Flash legacy dopo il salvataggio ("Costo creato"/"Costo aggiornato"): passato via ?msg,
+    // letto dalla lista (costs.php redirect con msg=Costo%20creato).
+    const q = msg ? `&msg=${encodeURIComponent(msg)}` : "";
+    window.location.href = `/${encodeURIComponent(slug)}/costs?tab=scadenziario${q}`;
   }
 
   // Legacy: il select Sede compare quando la colonna location esiste, anche con
@@ -323,7 +326,7 @@ export function CostFormContent({ slug: slugProp }: { slug?: string } = {}) {
         }
       }
 
-      backToList();
+      backToList(form.id > 0 ? "Costo aggiornato" : "Costo creato");
     } catch {
       setError("Errore nel salvataggio del costo.");
       setSaving(false);

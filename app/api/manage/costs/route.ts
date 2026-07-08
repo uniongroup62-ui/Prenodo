@@ -53,7 +53,9 @@ export async function GET(request: Request) {
       if (!canAny(session.user.perms, workPerms)) return jsonError("Permesso Scadenziario richiesto.", 403);
       const costId = parseInteger(url.searchParams.get("id"), 0);
       if (costId <= 0) return jsonError("ID costo mancante.");
-      const cost = await getManageCost(tenantSlug, costId);
+      // SCOPE SEDE anche sul prefill di modifica: un costo di altra sede -> "Costo non trovato".
+      const getScopeLocationId = await resolveManageLocationId({ slug: tenantSlug, raw: url.searchParams.get("location_id"), fallbackCurrent: true });
+      const cost = await getManageCost(tenantSlug, costId, getScopeLocationId);
       if (!cost) return jsonError("Costo non trovato.", 404);
       return Response.json({ ok: true, source: "costs?action=get", sourceMode: "database", cost });
     }
@@ -203,7 +205,7 @@ export async function POST(request: Request) {
       case "save_cost":
       case "cost_save":
         if (!canAny(session.user.perms, workPerms)) return jsonError("Permesso Scadenziario richiesto.", 403);
-        return Response.json(await saveCost(tenantSlug, { ...body, location_id: body.location_id || String(locationId) }));
+        return Response.json(await saveCost(tenantSlug, { ...body, location_id: body.location_id || String(locationId) }, locationId));
 
       case "delete":
       case "cost_delete":
