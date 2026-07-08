@@ -17,7 +17,6 @@ import type {
   PosSaleItemStatus,
   PosSaleItemType,
   PosSummary,
-  Quote,
 } from "@/lib/tenant-store";
 import {
   addDbWalletMovement,
@@ -25,7 +24,6 @@ import {
   dbWalletBalance,
   evaluatePromotionsForCart,
   getDbAppointmentForEdit,
-  listDbQuotes,
   fidelityIsClientAdhering,
   fidelityReservedPoints,
   listFidelityCampaigns,
@@ -439,10 +437,11 @@ export async function getManagePosAppointmentCart(slug: string, appointmentId: n
 
 // IN-POS QUOTE IMPORT pre-load (faithful to pos.php ?quote_id=N → quote_sale_load_quote +
 // quote_sale_load_quote_items). Returns the LOCKED cart seed for a quote: the client + one line
-// per quote line (type/refId/name/qty carried, unitPrice TRUSTED from the quote snapshot — NOT
-// re-derived from the catalog, mirroring the legacy). Gated: the quote must exist and not be
-// already converted. The UI seeds a locked cart from this, then a normal checkout with
-// sourceQuoteId records sales.source_quote_id + flips the quote to 'converted'.
+// per quote line (item_type REALE — i pacchetti restano 'package' per essere emessi in cassa;
+// prezzo = line_total/qty, IVA+sconto inclusi). Gate legacy: la vendita è possibile SOLO per
+// preventivi ACCETTATI e non già trasformati in vendita. La UI carica un carrello bloccato da
+// qui, poi un normale checkout con sourceQuoteId registra sales.source_quote_id + porta il
+// preventivo a 'paid' (quote_sale_mark_quote_paid).
 export type ManagePosQuoteCart = {
   ok: boolean;
   quoteId: number;
@@ -460,28 +459,84 @@ export async function getManagePosQuoteCart(slug: string, quoteId: number): Prom
   const empty: ManagePosQuoteCart = { ok: false, quoteId: 0, code: null, clientId: 0, clientName: "", discount: 0, locked: true, items: [] };
   if (id <= 0) return empty;
 
-  const quote = (await listDbQuotes(slug).catch(() => [] as Quote[])).find((q) => q.id === id);
+  const quotesTable = await tenantTable(slug, "quotes").catch(() => null);
+  if (!quotesTable) return { ...empty, error: "Preventivo non trovato." };
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "quotes", where: "id = ?", params: [id], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  const quote = rows[0];
   if (!quote) return { ...empty, error: "Preventivo non trovato." };
-  if (quote.status === "converted") return { ...empty, quoteId: id, error: "Preventivo gia convertito." };
+
+  // Idempotenza (pos.php ~2116/2996 "Questo preventivo è già stato trasformato in vendita"):
+  // se esiste già una vendita ATTIVA collegata (source_quote_id) l'import è bloccato. NON ci
+  // basiamo sullo status del preventivo perché quoteAutoExpireAndSyncPaid lo porta da
+  // 'converted'/accepted a 'paid' e la vecchia guardia status==='converted' non scattava più
+  // (doppia conversione possibile).
+  if (await quoteHasActiveLinkedSale(slug, id)) {
+    return { ...empty, quoteId: id, error: "Questo preventivo è già stato trasformato in vendita." };
+  }
+
+  // Solo i preventivi ACCETTATI sono convertibili (pos.php ~2122 "Solo i preventivi in stato
+  // Accettato possono essere riportati in Pagamenti"). Un accepted resta convertibile anche
+  // oltre valid_until: l'expiry effettivo vale solo per 'sent'.
+  const status = String(quote.status ?? "").trim().toLowerCase();
+  if (status !== "accepted") {
+    return { ...empty, quoteId: id, error: "Solo i preventivi in stato Accettato possono essere riportati in Pagamenti." };
+  }
+
+  // Righe dal preventivo con item_type REALE: i pacchetti restano 'package' così vengono
+  // emessi come client_packages in cassa (pos.php ~3667); 'custom' -> service (la cassa non ha
+  // un tipo 'custom'). Prezzo unitario effettivo = line_total/qty (IVA e sconto già inclusi,
+  // come pos_quote_import_effective_unit_price), quindi lo sconto carrello resta 0.
+  const itemRows = await tenantSelect<RowDataPacket>({ slug, table: "quote_items", where: "quote_id = ?", params: [id], orderBy: "position ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
+  const items = itemRows
+    .filter((r) => Number(r.qty ?? 0) > 0)
+    .map((r) => {
+      const qty = Math.max(1, Math.round(Number(r.qty ?? 1) || 1));
+      const lineTotal = Number(r.line_total ?? 0) || 0;
+      const unit = lineTotal > 0 ? roundMoney(lineTotal / qty) : roundMoney(Math.max(0, Number(r.unit_price ?? 0) || 0));
+      return {
+        type: quotePosItemType(String(r.item_type ?? "")),
+        refId: Math.max(0, Number(r.item_id ?? 0) || 0),
+        name: String(r.description ?? "").trim() || "Riga preventivo",
+        unitPrice: unit,
+        quantity: qty,
+      };
+    });
+  if (items.length === 0) return { ...empty, quoteId: id, error: "Il preventivo selezionato non contiene righe." };
 
   return {
     ok: true,
     quoteId: id,
-    code: quote.code || null,
-    clientId: Math.max(0, Number(quote.clientId ?? 0) || 0),
-    clientName: String(quote.clientName ?? "").trim(),
-    discount: roundMoney(Math.max(0, Number(quote.discount ?? 0) || 0)),
+    code: String(quote.number ?? "").trim() || null,
+    clientId: Math.max(0, Number(quote.client_id ?? 0) || 0),
+    clientName: String(quote.client_name ?? "").trim(),
+    discount: 0,
     locked: true,
-    items: quote.lines
-      .filter((line) => Number(line.quantity ?? 0) > 0)
-      .map((line) => ({
-        type: line.type,
-        refId: Math.max(0, Number(line.refId ?? 0) || 0),
-        name: String(line.name ?? "").trim() || "Riga preventivo",
-        unitPrice: roundMoney(Math.max(0, Number(line.unitPrice ?? 0) || 0)),
-        quantity: Math.max(1, Number(line.quantity ?? 1) || 1),
-      })),
+    items,
   };
+}
+
+// Tipo item POS da item_type preventivo: 'package' resta 'package' (emesso in cassa come
+// client_package), 'custom' -> 'service' (la cassa non ha un tipo 'custom').
+function quotePosItemType(itemType: string): PosSaleItemType {
+  const s = String(itemType ?? "").trim().toLowerCase();
+  if (s === "product") return "product";
+  if (s === "package") return "package";
+  return "service";
+}
+
+// Il preventivo ha già una vendita ATTIVA collegata? Primario: sales.source_quote_id;
+// fallback (installazioni senza la colonna): marker nota "Preventivo #id". Esclude le vendite
+// annullate. Port del gate anti-doppia-conversione (quote_sale_find_linked_sale).
+async function quoteHasActiveLinkedSale(slug: string, quoteId: number): Promise<boolean> {
+  const salesTable = await tenantTable(slug, "sales").catch(() => null);
+  if (!salesTable) return false;
+  const active = "LOWER(COALESCE(status,'')) NOT IN ('cancelled','canceled','annullata','annullato','void','deleted')";
+  if (await columnExists(salesTable.name, "source_quote_id")) {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "sales", columns: "id", where: `source_quote_id = ? AND ${active}`, params: [quoteId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    return rows.length > 0;
+  }
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "sales", columns: "id", where: `notes LIKE ? AND ${active}`, params: [`%Preventivo #${quoteId}%`], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  return rows.length > 0;
 }
 
 // Parse a POS catalog price label ("12,00 euro" / "12.00") into a number. Mirrors the
@@ -1006,8 +1061,11 @@ async function markQuoteConvertedFromSale(slug: string, quoteId: number, saleId:
   const rows = await tenantSelect<RowDataPacket>({ slug, table: quoteTable.name, columns: "id, status", where: "id=?", params: [quoteId], limit: 1 }).catch(() => [] as RowDataPacket[]);
   const current = rows[0];
   if (!current) return;
-  if (String(current.status ?? "").toLowerCase() === "converted") return;
-  const values: Record<string, unknown> = { status: "converted" };
+  const cur = String(current.status ?? "").toLowerCase();
+  // Il legacy (quote_sale_mark_quote_paid) porta il preventivo a 'paid' (NON 'converted', che
+  // non esiste nel dizionario stati legacy). Non tocca i preventivi annullati.
+  if (cur === "paid" || cur === "canceled" || cur === "cancelled") return;
+  const values: Record<string, unknown> = { status: "paid" };
   if (await columnExists(quoteTable.name, "converted_sale_id")) values.converted_sale_id = saleId;
   if (await columnExists(quoteTable.name, "converted_at")) values.converted_at = new Date();
   if (await columnExists(quoteTable.name, "updated_at")) values.updated_at = new Date();

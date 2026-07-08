@@ -8415,3 +8415,57 @@ VERIFICATO live:
 - Regression: test-pos-checkout 8/8 (checkout servizi/sconto/annulla/elimina intatto),
   test-magazzino 41/41, typecheck 0 errori.
 Residui ZZ=0 in services/products/packages/client_packages/sale_items/stock_docs; 5 clienti reali intatti.
+
+## Preventivi: audit completo + fix conversione POS (accepted-only, idempotenza, pacchetti, prezzo, stato paid) (2026-07-08)
+
+Audit 1:1 del modulo Preventivi confrontato con quotes.php (2647 righe) + QuoteSale/
+QuotePackage/QuoteAvailability/QuotePdf + il flusso di conversione in pos.php. Due famiglie
+di funzioni nel Next: quelle "Legacy-fedeli" (cablate nella UI) e quelle "compat" (non
+cablate nella UI). La route /api/manage/quotes usa le Legacy per next_number/list/view/print/
+form/save/send/delete; la conversione avviene dalla UI via "Vai a Pagamenti" -> import POS
+(pos?quote_id=X), NON via l'azione compat action=convert.
+
+FEDELI e verificati LIVE (test-preventivi 18/18): numerazione N/YYYY = MAX(seq)+1 per anno
+(anno da quote_date), formula totali (subtotal = imponibili GIA' scontati, IVA sull'imponibile
+scontato, round per riga prima di sommare), PREZZO CATALOGO BLOCCATO per righe service/
+product/package (unit_price dal catalogo, non dal POST), validazioni con messaggi verbatim
+(sede obbligatoria, numero >32, duplicato, riga senza item_id, "Aggiungi almeno una riga"),
+lista con filtri + badge stato effettivo, view/print (biz + snapshot sede + terms fallback),
+edit-lock su accepted ("Preventivo in stato ... non modificabile"), send-guard valid_until
+scaduto ("Aggiorna la data di validita"), delete solo-bozza (messaggi verbatim), stati
+effettivi (paid via vendita collegata, expired per sent scaduto).
+
+CONVERSIONE (import POS getManagePosQuoteCart + checkoutManageSale sourceQuoteId) — 5
+divergenze trovate e corrette (test-preventivi 25/25):
+1. PRECONDIZIONE: il Next permetteva l'import di qualsiasi preventivo (unica guardia
+   status==='converted'). Il legacy (pos.php ~2122) consente SOLO gli 'accepted'. Fix:
+   gate su status effettivo 'accepted' ("Solo i preventivi in stato Accettato possono essere
+   riportati in Pagamenti"). Un accepted resta convertibile anche oltre valid_until.
+2. IDEMPOTENZA (bug reale): dopo la conversione quoteAutoExpireAndSyncPaid porta lo stato da
+   'converted' a 'paid' al load lista; la vecchia guardia status==='converted' non scattava
+   piu' -> RE-IMPORT e DOPPIA CONVERSIONE possibili. Fix: blocco su vendita ATTIVA collegata
+   (sales.source_quote_id, fallback marker nota), come il legacy ("Questo preventivo e' gia'
+   stato trasformato in vendita").
+3. PACCHETTI non esplosi: quoteLines (mapper compat) collassa item_type package->service, quindi
+   convertire un preventivo con riga pacchetto NON emetteva il client_package. Fix:
+   getManagePosQuoteCart legge quote_items grezzi con item_type REALE (package resta package ->
+   emesso in cassa via issuePackageFromSale; custom->service).
+4. PREZZO import: usava unit_price grezzo + discount_total (perdeva l'IVA). Fix: prezzo effettivo
+   = line_total/qty (IVA+sconto inclusi, come pos_quote_import_effective_unit_price), sconto
+   carrello 0 -> il totale vendita coincide col totale preventivo.
+5. STATO post-conversione: markQuoteConvertedFromSale scriveva status='converted' (non nel
+   dizionario stati legacy -> label grezza). Fix: status='paid' come quote_sale_mark_quote_paid.
+
+VERIFICATO live: test-preventivi 25/25 (18 fedeli + F0-F6 conversione: pacchetto emesso sedute 2,
+sede collegata, stato paid, re-import bloccato, draft bloccato). Regression: e2e-quotes 80/80,
+test-pos-checkout 8/8, test-pkg-pos 8/8, typecheck 0. Residui ZZ=0 (quotes/quote_items/services/
+products/packages/client_packages/sale_items); 5 clienti reali intatti.
+
+RESIDUI DELIBERATI (documentati, non UI-cablati / fuori scope):
+- Endpoint compat non usati dalla UI: action=convert (convertDbQuoteToSale), create (createDbQuote,
+  numerazione Q-00042), update (updateDbQuote). Divergenti ma irraggiungibili dalla UI (che usa
+  save/POS import). Da rimuovere o rendere fedeli in un intervento dedicato.
+- Accettazione/rifiuto PUBBLICO del cliente: la pagina pubblica Next (/api/public/quote) e'
+  read-only (view + PDF + stampa); l'email preventivo punta al sito pubblico legacy
+  (PRENODO_PUBLIC_BASE_URL/.../quote_public) per la decisione cliente. Il writer Next di
+  customer_decision_at/status non e' cablato. Da portare se/quando il pubblico passa a Next.
