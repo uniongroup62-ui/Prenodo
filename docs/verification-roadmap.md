@@ -8706,3 +8706,53 @@ VERIFICATO: test-recharges 32/32, typecheck 0; regressione VERDE test-pos-checko
 8/8, test-giftcard 22/22, test-giftbox 27/27, test-fidelity 42/42. Produzione tenant 25 intatta
 (baseline: recharge_templates=0, recharges=1, transactions=82, credit_adjustments=49, point_lots=36,
 cards=0, clients=5 — tutti ripristinati dopo il cleanup).
+
+## Portafoglio (Punti): audit completo — modulo FEDELE, nessun bug (2026-07-09)
+
+Audit 1:1 del "Portafoglio" vs il hub wallet.php (2 tile: Portafoglio Punti + Movimenti Credito) +
+la pagina sostanziale fidelity_wallet.php (1288 righe) + Fidelity::reservedPoints/availablePointsRaw/
+clientPoints/expiringSoonPoints. Il lato Credito (credit_movements) è già coperto nell'audit Fidelity;
+qui il focus è il Portafoglio PUNTI. Route: app/api/manage/fidelity action=wallet (GET) + wallet_move
+(POST). Funzioni: getFidelityWallet / getFidelityWalletDetail / fidelityReservedPoints /
+fidelityWalletManualMove (db-repositories) + expireClientLots / pointLotsSchedule / expiringSoonPoints
+(fidelity-lots). UI: components/modules/fidelity_wallet-content.tsx.
+
+FEDELI e verificati LIVE (test-portafoglio 14/14):
+- VISTA ELENCO: clienti = titolari tessera (JOIN cards, anche disattiva), label "Punti".
+- SALDO/RISERVATO/DISPONIBILE: saldo = clients.points (normalizzato int); riservato = SUM(
+  fidelity_points_used + fidelity_gift_points_used) sulle prenotazioni APERTE; disponibile RAW =
+  saldo - riservato, NON clampato (può essere negativo, come availablePointsRaw). Verificato:
+  scheduled(used30+gift10)+pending(used15+gift5) -> riservato 60; done/canceled con punti NON
+  riservano; disponibile negativo quando riservato > saldo.
+- MOVIMENTI: transactions paginati 20/pagina ORDER id DESC, con Sede e tipo 'kind • source #id'.
+- PUNTI IN SOSPESO: prenotazioni pending/scheduled con punti, LIMIT 200, totali sconto/omaggio,
+  lock refs inline (primi 3 + "+N") e title (tutti) "Prenotazione #<code>".
+- CALENDARIO SCADENZE: lotti per giorno (23:59:59), lock-lots, prossima scadenza.
+- OPERAZIONE MANUALE (wallet_move): add (kind 'manual') / remove (kind 'adjust'), source_type
+  'manual'; interi (floor), min 1 "Inserisci un numero intero di punti valido.", cap 1e8, adesione
+  "Cliente non aderisce alla Fidelity (tessera non attiva/scaduta)."; rimozione protegge i punti
+  riservati (rimuove solo il free = saldo - riservato; lockedReserved = min(riservato, remainder),
+  missing = remainder - lockedReserved) con messaggi verbatim ("Rimossi N Punti", "N Punti non
+  rimossi perché prenotati su appuntamenti in sospeso/prenotati.", "... per saldo insufficiente.",
+  "Impossibile rimuovere N Punti: i punti disponibili sono già prenotati ...", "... saldo
+  insufficiente (disponibili X).") + warnLocked. Guardie Fidelity off / Punti off verbatim.
+
+ANALISI DIVERGENZE (nessun fix funzionale necessario):
+1. SET STATI "riservati": il legacy Fidelity::reservedPoints usa un set AMPIO
+   (pending/scheduled/in sospeso/in attesa/attesa/prenotato/prenotata/confirmed/confermato/
+   confermata/approved/booked, case/spazio-insensibile) per gestire i dati MySQL un-normalizzati.
+   Il Next usa ('pending','scheduled'): è PROVATAMENTE COMPLETO perché il CHECK
+   appointments_status_check ammette SOLO {pending,scheduled,done,canceled,no_show} e solo
+   pending+scheduled trattengono punti non regolati (done=regolato, canceled/no_show=rilasciato).
+   Le varianti IT/EN del legacy NON possono esistere nel DB Next. Aggiunto solo un COMMENTO che
+   documenta il ragionamento (evita "widening" errati futuri); nessun cambio logico. Verificato:
+   done/canceled con punti NON riservano.
+2. expiringSoonPoints: il legacy cappa la KPI "in scadenza" a availablePoints() (clampato); il Next
+   somma i lotti in finestra senza cap. Divergenza solo se riservato>0 (feature redenzione-in-
+   prenotazione attualmente inerte, 0 appuntamenti con punti in tutti i tenant) e comunque solo di
+   display KPI. Documentata, non modificata (expiringSoonPoints è un helper condiviso; il cap
+   introdurrebbe accoppiamento con availablePoints per un caso non raggiungibile).
+
+VERIFICATO: test-portafoglio 14/14, typecheck 0; regressione test-fidelity 42/42 (path wallet_move
+F1-F5). Produzione tenant 25 intatta (baseline transactions=82/point_lots=36/appointments=9/cards=0/
+clients=5, ripristinato dopo cleanup). Nessun dato di produzione modificato.

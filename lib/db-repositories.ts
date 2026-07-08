@@ -18568,6 +18568,12 @@ export async function fidelityIsClientAdhering(slug: string, clientId: number): 
 // SUM(fidelity_points_used + fidelity_gift_points_used) over pending/scheduled appts).
 export async function fidelityReservedPoints(slug: string, clientId: number): Promise<number> {
   if (clientId <= 0) return 0;
+  // Punti "prenotati" = somma di fidelity_points_used + fidelity_gift_points_used sulle
+  // prenotazioni APERTE, port di Fidelity::reservedPoints. Il set di stati "aperti" del legacy
+  // (pendingReservedStatusSql) è ampio (varianti IT/EN un-normalizzate MySQL), ma qui è completo
+  // con ('pending','scheduled'): il CHECK appointments_status_check ammette SOLO
+  // pending/scheduled/done/canceled/no_show, e solo pending+scheduled trattengono punti non
+  // ancora regolati (done=regolato, canceled/no_show=rilasciato). Idem la lista "in sospeso".
   const rows = await tenantSelect<RowDataPacket>({
     slug,
     table: "appointments",
