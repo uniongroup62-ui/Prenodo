@@ -15733,8 +15733,14 @@ export async function searchDbInstallmentPlans(
 export async function createDbInstallmentPlan(
   input: { saleId?: number; clientId?: number; clientName?: string; total?: number; count?: number },
   slug: string,
+  scopeLocationId = 0,
 ): Promise<InstallmentPlan> {
   const sale = input.saleId && input.saleId > 0 ? await getSaleRow(slug, input.saleId) : null;
+  // Guardia per-sede: un operatore ristretto non puo' creare un piano su una vendita di altra sede.
+  if (scopeLocationId > 0 && sale) {
+    const loc = Number(sale.location_id ?? 0) || 0;
+    if (loc > 0 && loc !== scopeLocationId) throw new Error("Vendita non disponibile per la sede corrente.");
+  }
   const client = await resolveSaleClientForDb(slug, input.clientId ?? Number(sale?.client_id ?? 0), input.clientName);
   const total = roundMoney(Math.max(1, Number(input.total ?? sale?.total ?? 0)));
   const count = Math.max(1, Math.round(Number(input.count ?? 3)));
@@ -15780,12 +15786,22 @@ export async function cancelDbInstallmentPlan(
   reason: string,
   userId: number | null = null,
   allowPaid = false,
+  scopeLocationId = 0,
 ): Promise<InstallmentPlan> {
   if (planId <= 0) throw new Error("Piano rateale non valido.");
   const planTable = await tenantTable(slug, "sale_installment_plans");
   const planRows = await tenantSelect<RowDataPacket>({ slug, table: planTable.name, where: "id = ?", params: [planId], limit: 1 });
   const plan = planRows[0];
   if (!plan) throw new Error("Piano rateale non trovato.");
+  // Guardia per-sede: il piano deve appartenere a una vendita della sede corrente (o senza sede).
+  if (scopeLocationId > 0) {
+    const saleId = Number(plan.sale_id ?? 0) || 0;
+    if (saleId > 0) {
+      const saleRows = await tenantSelect<RowDataPacket>({ slug, table: "sales", columns: "location_id", where: "id = ?", params: [saleId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+      const loc = Number(saleRows[0]?.location_id ?? 0) || 0;
+      if (loc > 0 && loc !== scopeLocationId) throw new Error("Piano rateale non trovato.");
+    }
+  }
   if (String(plan.status ?? "").toLowerCase() === "cancelled") throw new Error("Piano rateale gia annullato.");
 
   const installmentRows = await tenantSelect<RowDataPacket>({

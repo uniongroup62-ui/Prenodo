@@ -93,6 +93,71 @@ export function resolveCurrentManageLocationId<T extends { id: number }>(
   return locations.length === 1 ? locations[0]?.id ?? 0 : 0;
 }
 
+// ---- Guardia accesso-record per-SEDE (condivisa) --------------------------------------------
+// Un operatore ristretto a un sottoinsieme di sedi non puo' aprire/modificare/eliminare record
+// di ALTRE sedi via id diretto. Cardine legacy: app_location_allowed_for_user(loc,user).
+
+// Sedi consentite dell'operatore per il controllo accesso: [] = admin o utente senza restrizioni
+// (tutte le sedi); altrimenti le sedi assegnate (session.user.locationIds).
+export function sessionAllowedLocationIds(
+  session: { user: { role?: string; locationIds?: number[] } } | null,
+): number[] {
+  if (!session) return [];
+  if (String(session.user.role ?? "").toLowerCase() === "admin") return [];
+  return session.user.locationIds ?? [];
+}
+
+// Regola record: allowedLocationIds vuoto = nessuna restrizione; location_id NULL/0 = accessibile a
+// tutti (includeNoLocation legacy); altrimenti deve essere in una sede consentita.
+export function locationAllowedForSedi(locationId: number, allowedLocationIds: number[]): boolean {
+  const allowed = (allowedLocationIds ?? []).map((n) => Number(n) || 0).filter((n) => n > 0);
+  if (allowed.length === 0) return true;
+  const loc = Number(locationId) || 0;
+  if (loc <= 0) return true;
+  return allowed.includes(loc);
+}
+
+// Verifica un RECORD con colonna `location_id` diretta. Record inesistente -> ritorna (lo gestisce
+// il chiamante con il suo "non trovato"); non accessibile -> throw con il messaggio dato.
+export async function assertLocationAccessById(
+  slug: string,
+  table: string,
+  id: number,
+  allowedLocationIds: number[],
+  message = "Record non disponibile per le tue sedi.",
+): Promise<void> {
+  if (id <= 0) return;
+  const allowed = (allowedLocationIds ?? []).map((n) => Number(n) || 0).filter((n) => n > 0);
+  if (allowed.length === 0) return;
+  const rows = await tenantSelect<RowDataPacket>({ slug, table, columns: "location_id", where: "id = ?", params: [id], limit: 1 }).catch(
+    () => [] as RowDataPacket[],
+  );
+  if (!rows[0]) return;
+  if (!locationAllowedForSedi(Number(rows[0].location_id ?? 0) || 0, allowed)) throw new Error(message);
+}
+
+// Come assertLocationAccessById ma la sede e' EREDITATA da un record PADRE via una FK (es. un
+// preordine = sale_item la cui sede sta su sales.location_id). Se il padre manca -> nessun blocco.
+export async function assertLocationAccessViaParent(
+  slug: string,
+  childTable: string,
+  childId: number,
+  parentFkColumn: string,
+  parentTable: string,
+  allowedLocationIds: number[],
+  message = "Record non disponibile per le tue sedi.",
+): Promise<void> {
+  if (childId <= 0) return;
+  const allowed = (allowedLocationIds ?? []).map((n) => Number(n) || 0).filter((n) => n > 0);
+  if (allowed.length === 0) return;
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: childTable, columns: parentFkColumn, where: "id = ?", params: [childId], limit: 1 }).catch(
+    () => [] as RowDataPacket[],
+  );
+  const parentId = Number(rows[0]?.[parentFkColumn] ?? 0) || 0;
+  if (parentId <= 0) return;
+  await assertLocationAccessById(slug, parentTable, parentId, allowed, message);
+}
+
 export type ManageLocationEdit = {
   id: number;
   name: string;

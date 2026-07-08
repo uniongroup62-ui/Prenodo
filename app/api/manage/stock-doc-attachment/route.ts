@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { jsonError } from "@/lib/api-utils";
 import { currentManageSession } from "@/lib/manage-auth";
+import { locationAllowedForSedi, sessionAllowedLocationIds } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can } from "@/lib/role-permissions";
 import {
@@ -41,7 +42,7 @@ async function loadStockDoc(slug: string, id: number): Promise<RowDataPacket | n
   const rows = await tenantSelect<RowDataPacket>({
     slug,
     table: "stock_docs",
-    columns: "id, attachment_path, attachment_mime, attachment_name",
+    columns: "id, attachment_path, attachment_mime, attachment_name, location_id",
     where: "id = ?",
     params: [id],
     limit: 1,
@@ -63,6 +64,8 @@ export async function GET(request: Request) {
   try {
     const doc = await loadStockDoc(tenantSlug, id);
     if (!doc) return jsonError("File non trovato", 404);
+    // Guardia per-sede: un operatore ristretto non puo' scaricare l'allegato di un documento di altra sede.
+    if (!locationAllowedForSedi(Number(doc.location_id ?? 0) || 0, sessionAllowedLocationIds(session))) return jsonError("File non trovato", 404);
     const path = String(doc.attachment_path ?? "").trim();
     if (!path) return jsonError("File non trovato", 404);
     if (!isR2Key(path)) {
@@ -95,6 +98,8 @@ export async function POST(request: Request) {
   try {
     const doc = await loadStockDoc(tenantSlug, docId);
     if (!doc) return jsonError("File non trovato", 404);
+    // Guardia per-sede: niente upload/rimozione dell'allegato di un documento di altra sede.
+    if (!locationAllowedForSedi(Number(doc.location_id ?? 0) || 0, sessionAllowedLocationIds(session))) return jsonError("File non trovato", 404);
     const oldPath = String(doc.attachment_path ?? "").trim();
 
     // --- RIMOZIONE ---

@@ -1,6 +1,6 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
 import { currentManageSession } from "@/lib/manage-auth";
-import { resolveManageLocationId } from "@/lib/manage-locations";
+import { assertLocationAccessViaParent, resolveManageLocationId, sessionAllowedLocationIds } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { collectDbPreorder, createDbPreorder, listDbPreorders } from "@/lib/db-repositories";
 import { can } from "@/lib/role-permissions";
@@ -63,7 +63,10 @@ export async function POST(request: Request) {
     }
 
     if (action === "collect" || action === "mark_collected") {
-      const preorder = await collectDbPreorder(parseInteger(body.id ?? body.sale_item_id), tenantSlug);
+      const saleItemId = parseInteger(body.id ?? body.sale_item_id);
+      // Guardia per-sede: il preordine (sale_item) eredita la sede dalla vendita.
+      await assertLocationAccessViaParent(tenantSlug, "sale_items", saleItemId, "sale_id", "sales", sessionAllowedLocationIds(session), "Preordine non disponibile per le tue sedi.");
+      const preorder = await collectDbPreorder(saleItemId, tenantSlug);
       return Response.json({
         ok: true,
         source: "pos_preorders?action=collect",

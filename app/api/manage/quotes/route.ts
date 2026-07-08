@@ -17,7 +17,7 @@ import {
   type QuoteSaveInput,
 } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
-import { getManageLocationContext } from "@/lib/manage-locations";
+import { assertLocationAccessById, getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can } from "@/lib/role-permissions";
 import { columnExists, dbExecute, tenantTable } from "@/lib/tenant-db";
@@ -188,6 +188,9 @@ export async function POST(request: Request) {
     }
 
     if (action === "convert") {
+      // Guardia per-sede: un operatore ristretto non puo' convertire un preventivo di altra sede.
+      const ctx = await quoteLocationCtx(tenantSlug);
+      await assertLocationAccessById(tenantSlug, "quotes", id, ctx.locationIds, "Preventivo non disponibile per le sedi abilitate.");
       const result = await convertDbQuoteToSale(id, tenantSlug, parseInteger(body.location_id, 0));
       return Response.json({ ok: true, source: "quotes?action=convert", sourceMode: "database", ...result, quotes: await listDbQuotes(tenantSlug) });
     }

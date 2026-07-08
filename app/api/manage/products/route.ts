@@ -1,6 +1,6 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import { currentManageSession } from "@/lib/manage-auth";
-import { resolveManageLocationId } from "@/lib/manage-locations";
+import { assertLocationAccessById, locationAllowedForSedi, resolveManageLocationId, sessionAllowedLocationIds } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import {
   cancelStockDocument,
@@ -190,13 +190,21 @@ export async function POST(request: Request) {
 
       case "move_stock":
       case "stock_move_save":
-      case "stock_doc_save":
+      case "stock_doc_save": {
         if (!can(session.user.perms, "stock_moves.manage")) return jsonError("Permesso Carico / Scarico richiesto.", 403);
+        // Guardia per-sede: un operatore ristretto non puo' registrare un movimento in una sede non sua.
+        const wantLoc = parseInteger(body.location_id, 0);
+        if (wantLoc > 0 && !locationAllowedForSedi(wantLoc, sessionAllowedLocationIds(session))) {
+          return jsonError("Sede non disponibile per le tue sedi.", 403);
+        }
         return Response.json(await saveStockMovement(tenantSlug, body, session.user.name, session.user.id));
+      }
 
       case "stock_doc_cancel":
       case "stock_move_cancel":
         if (!can(session.user.perms, "stock_moves.manage")) return jsonError("Permesso Carico / Scarico richiesto.", 403);
+        // Guardia per-sede: niente annullo di un documento di magazzino di un'altra sede.
+        await assertLocationAccessById(tenantSlug, "stock_docs", parseInteger(body.id ?? body.stock_doc_id, 0), sessionAllowedLocationIds(session), "Documento non disponibile per le tue sedi.");
         return Response.json(await cancelStockDocument(tenantSlug, parseInteger(body.id ?? body.stock_doc_id, 0), session.user.name, session.user.id));
 
       case "supplier_save":

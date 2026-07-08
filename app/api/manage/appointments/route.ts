@@ -104,6 +104,10 @@ export async function GET(request: Request) {
     const id = Number.parseInt(String(url.searchParams.get("id") ?? "0"), 10);
     if (!Number.isFinite(id) || id <= 0) return jsonError("ID mancante", 400);
     try {
+      // Guardia per-sede: un operatore ristretto non puo' aprire un appuntamento di altra sede.
+      if (!(await appointmentLocationAllowedForUser(tenantSlug, session.user, id))) {
+        return jsonError("Prenotazione non trovata o non disponibile nella sede corrente.", 403);
+      }
       const appointment = await getDbAppointmentForEdit(tenantSlug, id);
       if (!appointment) return jsonError("Appuntamento non trovato.", 404);
       return Response.json({
@@ -129,6 +133,9 @@ export async function GET(request: Request) {
     }
     const id = Number.parseInt(String(url.searchParams.get("id") ?? "0"), 10);
     if (!Number.isFinite(id) || id <= 0) return jsonError("ID mancante", 400);
+    if (!(await appointmentLocationAllowedForUser(tenantSlug, session.user, id))) {
+      return jsonError("Prenotazione non trovata o non disponibile nella sede corrente.", 403);
+    }
     const rawTarget = String(url.searchParams.get("target_status") ?? "canceled").trim();
     const targetStatus = appointmentPhpStatus(rawTarget) === "no_show" ? "no_show" : "canceled";
     try {
@@ -430,6 +437,9 @@ export async function POST(request: Request) {
       if (id <= 0 || segmentId <= 0) return jsonError("Dati mancanti", 400);
       const direction = String(body.direction ?? "").trim();
       if (direction !== "up" && direction !== "down") return jsonError("Direzione non valida", 400);
+      if (!(await appointmentLocationAllowedForUser(tenantSlug, session.user, id))) {
+        return jsonError("Prenotazione non trovata o non disponibile nella sede corrente.", 403);
+      }
       try {
         await swapDbAppointmentSegment(tenantSlug, id, segmentId, direction);
         return Response.json({ ok: true });
@@ -680,6 +690,9 @@ export async function POST(request: Request) {
       const id = Number.parseInt(String(body.id ?? url.searchParams.get("id") ?? "0"), 10);
       if (!Number.isFinite(id) || id <= 0) {
         return Response.json({ ok: false, error: "ID mancante" }, { status: 400 });
+      }
+      if (!(await appointmentLocationAllowedForUser(tenantSlug, session.user, id))) {
+        return jsonError("Prenotazione non trovata o non disponibile nella sede corrente.", 403);
       }
       // Target status: default 'canceled'; 'no_show' is the only other accepted target
       // (cancelDoneAppointment re-validates this and rejects anything else).

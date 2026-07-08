@@ -1,5 +1,30 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Accesso-per-sede: chiusi i 7 GAP DI FEDELTA' (2026-07-08)
+
+Implementati i 7 gap di fedelta' della mappa accesso-sede (dove il PHP GIA' restringe e il Next no o
+parziale). Helper condivisi in `lib/manage-locations.ts`: `sessionAllowedLocationIds(session)` ([] =
+admin/tutte le sedi), `locationAllowedForSedi(loc, allowed)`, `assertLocationAccessById(slug, table,
+id, allowed, msg)` (record con location_id diretta), `assertLocationAccessViaParent(...)` (sede
+ereditata dal padre, es. preordine=sale_item -> sales). Moduli chiusi:
+- **appointments**: guardia `appointmentLocationAllowedForUser` aggiunta su GET `action=get`,
+  `cancel_done`, `swap_segment` (prima solo su edit/delete/status/move).
+- **quotes**: guardia su `convert` (era l'unico buco).
+- **installments**: `createDbInstallmentPlan`/`cancelDbInstallmentPlan` accettano `scopeLocationId`
+  (via la vendita padre), coerente con mark_paid/pending; cancel_plan e create ora scoped.
+- **packages**: guardia record `client_packages` su view/client_get/use/update_expiry/usage_add/
+  client_save ("Pacchetto cliente non disponibile per la sede selezionata.").
+- **preorders**: guardia su `collect` (via `sale_items` -> `sales.location_id`).
+- **stock-doc-attachment**: guardia su download/upload/remove (`stock_docs.location_id`) -> 404
+  "File non trovato".
+- **products**: guardia su `stock_doc_cancel` (annullo documento di altra sede) + `move_stock`
+  (registrazione in una sede non propria).
+Semantica: admin o `locationIds` vuoto = nessuna restrizione (invariato). Verificato live: 16 check
+(test-sede-guards: op(Sede1) NEGATO su ogni record Sede2, admin/Sede1 OK, record intatti dopo i
+tentativi) + regressione magazzino 41/41 (flusso admin invariato), typecheck 0, 5 clienti reali intatti.
+Restano gli 8 ENHANCEMENT (coupons/promotions/resources/giftcard/giftbox/gift/commissions/fidelity) —
+il PHP non li restringe, opzionali (vedi mappa in cima all'audit precedente).
+
 ## MAPPA accesso-per-sede: dove serve la guardia record (audit completo 2026-07-08)
 
 Dopo l'aggiunta della guardia per-sede sui Clienti (`assertClientAccessibleForSedi`), audit completo

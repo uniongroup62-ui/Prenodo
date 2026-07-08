@@ -1,7 +1,10 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import { addManageClientPackageUsage, consumeDbClientPackage, deleteManagePackageCatalog, getClientPackageCancelInfo, getManageClientPackage, getManageClientPackageForEdit, getManagePackageCatalog, getManagePackagesFilters, getPackageCatalogFormContext, issueDbClientPackage, listDbPackageState, listManageClientPackages, listManagePackageCatalog, saveManageClientPackage, saveManagePackageCatalog, updateManageClientPackageExpiry } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
-import { getManageLocationContext } from "@/lib/manage-locations";
+import { assertLocationAccessById, getManageLocationContext, sessionAllowedLocationIds } from "@/lib/manage-locations";
+
+// Messaggio legacy per un pacchetto cliente di un'altra sede (packages.php).
+const PKG_SEDE_ERR = "Pacchetto cliente non disponibile per la sede selezionata.";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can, canAny } from "@/lib/role-permissions";
 
@@ -55,6 +58,7 @@ export async function GET(request: Request) {
     // contents (servizi+prodotti con riserve) + movimenti (reali+virtuali) +
     // voci registrabili + availability + expiry-edit flags.
     if (url.searchParams.get("action") === "view" || url.searchParams.get("action") === "client_view") {
+      await assertLocationAccessById(tenantSlug, "client_packages", parseInteger(url.searchParams.get("id"), 0), sessionAllowedLocationIds(session), PKG_SEDE_ERR);
       const detail = await getManageClientPackage(tenantSlug, parseInteger(url.searchParams.get("id"), 0));
       // Messaggio querystring legacy (senza punto).
       if (!detail) return jsonError("Pacchetto cliente non trovato", 404);
@@ -75,6 +79,7 @@ export async function GET(request: Request) {
 
     // Prefill form client_edit (tab=clients action=client_edit).
     if (url.searchParams.get("action") === "client_get") {
+      await assertLocationAccessById(tenantSlug, "client_packages", parseInteger(url.searchParams.get("id"), 0), sessionAllowedLocationIds(session), PKG_SEDE_ERR);
       const edit = await getManageClientPackageForEdit(tenantSlug, parseInteger(url.searchParams.get("id"), 0));
       if (!edit) return jsonError("Pacchetto non trovato", 404);
       return Response.json({ ok: true, sourceMode: "database", edit });
@@ -160,6 +165,7 @@ export async function POST(request: Request) {
 
     if (action === "use") {
       const id = parseInteger(body.id);
+      await assertLocationAccessById(tenantSlug, "client_packages", id, sessionAllowedLocationIds(session), PKG_SEDE_ERR);
       const sessions = parseInteger(body.sessions, 1);
       const clientPackage = await consumeDbClientPackage(id, sessions, tenantSlug);
       return Response.json({ ok: true, source: "packages?action=use", sourceMode: "database", clientPackage, ...await listDbPackageState(tenantSlug) });
@@ -176,6 +182,7 @@ export async function POST(request: Request) {
     // Esiti legacy: msg "Scadenza pacchetto aggiornata" / err "Errore: <detail>".
     if (action === "update_expiry" || action === "update_client_package_expiry") {
       const cpId = parseInteger(body.client_package_id ?? body.id, 0);
+      await assertLocationAccessById(tenantSlug, "client_packages", cpId, sessionAllowedLocationIds(session), PKG_SEDE_ERR);
       try {
         await updateManageClientPackageExpiry(tenantSlug, cpId, String(body.expires_at ?? ""));
       } catch (error) {
@@ -190,6 +197,7 @@ export async function POST(request: Request) {
     // riserve) e prodotti (ritiro/ripristino con stock + documento magazzino).
     if (action === "usage_add") {
       const cpId = parseInteger(body.client_package_id ?? body.id, 0);
+      await assertLocationAccessById(tenantSlug, "client_packages", cpId, sessionAllowedLocationIds(session), PKG_SEDE_ERR);
       const locationContext = await getManageLocationContext(tenantSlug).catch(() => null);
       const result = await addManageClientPackageUsage(
         tenantSlug,
@@ -213,6 +221,7 @@ export async function POST(request: Request) {
     // Salvataggio edit pacchetto cliente (client_edit). client_new è bloccato
     // dal legacy ("La vendita/assegnazione dei pacchetti avviene solo da Pagamenti.").
     if (action === "client_save") {
+      await assertLocationAccessById(tenantSlug, "client_packages", parseInteger(body.id ?? body.client_package_id, 0), sessionAllowedLocationIds(session), PKG_SEDE_ERR);
       const result = await saveManageClientPackage(tenantSlug, body);
       return Response.json({ ok: true, source: "packages?action=client_save", sourceMode: "database", ...result });
     }

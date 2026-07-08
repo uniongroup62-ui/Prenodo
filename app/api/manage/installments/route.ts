@@ -81,7 +81,7 @@ export async function POST(request: Request) {
         clientName: body.client_name,
         total: parseNumber(body.total, 0),
         count: parseInteger(body.count, 3),
-      }, tenantSlug);
+      }, tenantSlug, scopeLocationId);
       return Response.json({ ok: true, source: "installments?action=create", sourceMode: "database", plan, plans: await listDbInstallmentPlans(tenantSlug) });
     }
 
@@ -112,6 +112,7 @@ export async function POST(request: Request) {
         body.reason ?? "",
         session.user.id,
         ["1", "true", "yes"].includes(String(body.allow_paid ?? "").toLowerCase()),
+        scopeLocationId,
       );
       return Response.json({ ok: true, source: "installments?action=cancel", sourceMode: "database", plan, plans: await listDbInstallmentPlans(tenantSlug) });
     }
