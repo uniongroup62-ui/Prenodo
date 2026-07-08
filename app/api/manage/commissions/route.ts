@@ -9,6 +9,7 @@ import {
   type CommissionStaffSettingInput,
 } from "@/lib/manage-commissions";
 import { currentManageSession } from "@/lib/manage-auth";
+import { assertLocationAccessById, sessionAllowedLocationIds } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can } from "@/lib/role-permissions";
 
@@ -91,6 +92,8 @@ export async function POST(request: Request) {
   try {
     if (action === "pay") {
       const id = parseInteger(body.id);
+      // Guardia per-sede: niente mark-paid su una commissione di un'altra sede.
+      await assertLocationAccessById(tenantSlug, "staff_commission_payments", id, sessionAllowedLocationIds(session), "Movimento commissione non trovato nel filtro selezionato.");
       const commission = await markDbCommissionPaid(id, tenantSlug);
       return Response.json({
         ok: true,
@@ -118,7 +121,7 @@ export async function POST(request: Request) {
     if (action === "toggle_commission_paid") {
       const entryKey = String(body.entry_key ?? "").trim();
       const markPaid = ["1", "true", "yes", "on"].includes(String(body.mark_paid ?? "").toLowerCase());
-      await markCommissionEntryPaid(tenantSlug, entryKey, markPaid, session.user.id);
+      await markCommissionEntryPaid(tenantSlug, entryKey, markPaid, session.user.id, sessionAllowedLocationIds(session));
       const range = currentMonthRange();
       const from = String(body.from ?? "").trim() || range.from;
       const to = String(body.to ?? "").trim() || range.to;

@@ -17,7 +17,7 @@ import {
   updateGiftCardInternalNote,
 } from "@/lib/gift-issue-details";
 import { currentManageSession } from "@/lib/manage-auth";
-import { getManageLocationContext } from "@/lib/manage-locations";
+import { assertLocationAccessById, getManageLocationContext, sessionAllowedLocationIds } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can, canAny } from "@/lib/role-permissions";
 
@@ -43,6 +43,7 @@ export async function GET(request: Request) {
       // Best-effort legacy a ogni load: expire-due + invii programmati.
       await expireDueGiftCards(tenantSlug);
       await sendDueScheduledGiftCards(tenantSlug, 20, session.user.id).catch(() => null);
+      await assertLocationAccessById(tenantSlug, "giftcards", parseInteger(url.searchParams.get("id"), 0), sessionAllowedLocationIds(session), "Gift card non disponibile per le tue sedi.");
       const detail = await getGiftCardFull(tenantSlug, parseInteger(url.searchParams.get("id"), 0));
       if (!detail) return jsonError("GiftCard non trovata", 404);
       const clients = (await listDbClients({ slug: tenantSlug })).map((c) => ({ id: c.id, name: c.name }));
@@ -114,6 +115,12 @@ export async function POST(request: Request) {
     Response.json({ ok: false, error: (error instanceof Error ? error.message : "") || fallback });
 
   try {
+    // Guardia per-sede: le azioni su una gift card esistente (per id) sono negate se l'istanza e' di
+    // un'altra sede (location_id valorizzato solo se venduta al POS; NULL = accessibile ovunque).
+    const gcInstanceActions = new Set(["update", "update_expiry", "update_internal_note", "update_note", "redeem", "redeem_item", "topup", "cancel", "send_email"]);
+    if (gcInstanceActions.has(String(action))) {
+      await assertLocationAccessById(tenantSlug, "giftcards", parseInteger(body.id, 0), sessionAllowedLocationIds(session), "Gift card non disponibile per le tue sedi.");
+    }
     if (action === "issue") {
       const input = {
         clientId: parseInteger(body.client_id, 0),

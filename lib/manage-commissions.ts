@@ -2,6 +2,7 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 
+import { locationAllowedForSedi } from "@/lib/manage-locations";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { columnExists, dbQuery, quoteIdentifier, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
 
@@ -1596,6 +1597,7 @@ export async function markCommissionEntryPaid(
   entryKey: string,
   isPaid: boolean,
   userId: number | null,
+  allowedLocationIds: number[] = [],
 ): Promise<void> {
   const key = String(entryKey ?? "").trim();
   if (key === "") throw new Error("Movimento commissione non valido.");
@@ -1604,7 +1606,7 @@ export async function markCommissionEntryPaid(
   const rows = await tenantSelect<RowDataPacket>({
     slug,
     table: table.name,
-    columns: "id, entry_status",
+    columns: "id, entry_status, location_id",
     where: "entry_key=?",
     params: [key],
     limit: 1,
@@ -1612,6 +1614,10 @@ export async function markCommissionEntryPaid(
   const row = rows[0];
   // Messaggio pagina legacy: l'entry viene cercata nel dataset del filtro POSTato.
   if (!row) throw new Error("Movimento commissione non trovato nel filtro selezionato.");
+  // Guardia per-sede: un operatore ristretto non puo' marcare una commissione di altra sede.
+  if (!locationAllowedForSedi(Number(row.location_id ?? 0) || 0, allowedLocationIds)) {
+    throw new Error("Movimento commissione non trovato nel filtro selezionato.");
+  }
   if (String(row.entry_status ?? "active").trim() === "cancelled") {
     throw new Error("La commissione annullata non può essere modificata.");
   }

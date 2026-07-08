@@ -1,8 +1,8 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
-import { addDbWalletMovement, dbWalletBalance, deleteFidelityCampaign, deleteFidelityCard, fidelityCampaignPreview, fidelityDisableImpact, fidelityLinkedAppointmentsDetailed, fidelityWalletManualMove, getFidelityEnabled, getFidelityLevelsEditorData, getFidelityMembership, getFidelityPointsSettings, getFidelityPointsStats, getFidelityWallet, getManageCreditMovements, issueFidelityCard, listDbClients, listDbWalletMovements, listFidelityCampaigns, manualCreditDebit, previewFidelityLevelDelete, previewFidelityLevelThresholds, reactivateFidelityCard, saveFidelityCampaign, saveFidelityLevels, saveFidelityPointsSettings, setFidelityEnabled, toggleFidelityCampaign, updateFidelityCardStatus } from "@/lib/db-repositories";
+import { addDbWalletMovement, assertClientAccessibleForSedi, dbWalletBalance, deleteFidelityCampaign, deleteFidelityCard, fidelityCampaignPreview, fidelityDisableImpact, fidelityLinkedAppointmentsDetailed, fidelityWalletManualMove, getFidelityEnabled, getFidelityLevelsEditorData, getFidelityMembership, getFidelityPointsSettings, getFidelityPointsStats, getFidelityWallet, getManageCreditMovements, issueFidelityCard, listDbClients, listDbWalletMovements, listFidelityCampaigns, manualCreditDebit, previewFidelityLevelDelete, previewFidelityLevelThresholds, reactivateFidelityCard, saveFidelityCampaign, saveFidelityLevels, saveFidelityPointsSettings, setFidelityEnabled, toggleFidelityCampaign, updateFidelityCardStatus } from "@/lib/db-repositories";
 import { searchGiftRecipientClients } from "@/lib/gift-issue-details";
 import { currentManageSession } from "@/lib/manage-auth";
-import { getManageLocationContext } from "@/lib/manage-locations";
+import { getManageLocationContext, sessionAllowedLocationIds } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can, canAny } from "@/lib/role-permissions";
 import type { WalletMovementType } from "@/lib/tenant-store";
@@ -97,6 +97,7 @@ export async function GET(request: Request) {
     // con la pagina movimenti (?p=N, 20/pagina come il legacy).
     if (url.searchParams.get("action") === "wallet") {
       if (!can(session.user.perms, "fidelity.wallet") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso portafoglio fidelity mancante.", 403);
+      await assertClientAccessibleForSedi(tenantSlug, parseInteger(url.searchParams.get("client_id"), 0), sessionAllowedLocationIds(session));
       return Response.json({
         ok: true,
         sourceMode: "database",
@@ -108,6 +109,7 @@ export async function GET(request: Request) {
     // paginato 20/pagina come il legacy (?page=N).
     if (url.searchParams.get("action") === "credit") {
       if (!can(session.user.perms, "credit_movements.manage") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso movimenti credito mancante.", 403);
+      await assertClientAccessibleForSedi(tenantSlug, parseInteger(url.searchParams.get("client_id"), 0), sessionAllowedLocationIds(session));
       return Response.json({
         ok: true,
         sourceMode: "database",
@@ -203,6 +205,8 @@ export async function POST(request: Request) {
     // per le colonne location_id/location_name su credit_adjustments.
     if (body.action === "credit_debit" || body._mode === "manual_credit_debit") {
       if (!can(session.user.perms, "credit_movements.manage") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso movimenti credito mancante.", 403);
+      // Guardia per-sede: niente movimenti di credito su un cliente non accessibile dalle sedi dell'operatore.
+      await assertClientAccessibleForSedi(tenantSlug, parseInteger(body.client_id, 0), sessionAllowedLocationIds(session));
       const locationContext = await getManageLocationContext(tenantSlug);
       const currentLocation = locationContext.locations.find((loc) => loc.id === locationContext.currentLocationId);
       const result = await manualCreditDebit(tenantSlug, parseInteger(body.client_id, 0), body.amount, String(body.note ?? ""), session.user.id, {
@@ -218,6 +222,7 @@ export async function POST(request: Request) {
     if (body.action === "wallet_move" || body._mode === "manual_move_points") {
       if (!can(session.user.perms, "fidelity.wallet") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso portafoglio fidelity mancante.", 403);
       try {
+        await assertClientAccessibleForSedi(tenantSlug, parseInteger(body.client_id, 0), sessionAllowedLocationIds(session));
         const result = await fidelityWalletManualMove(tenantSlug, parseInteger(body.client_id, 0), String(body.op ?? "add"), body.points, String(body.note ?? ""), session.user.id);
         return Response.json({ sourceMode: "database", ...result });
       } catch (error) {
@@ -232,6 +237,7 @@ export async function POST(request: Request) {
       if (!can(session.user.perms, "fidelity.membership") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso adesione fidelity mancante.", 403);
       const cardId = parseInteger(body.card_id, 0);
       if (cardAction === "card_create" || cardAction === "create_card") {
+        await assertClientAccessibleForSedi(tenantSlug, parseInteger(body.client_id, 0), sessionAllowedLocationIds(session));
         const result = await issueFidelityCard(tenantSlug, body);
         return Response.json({ sourceMode: "database", ...result, membership: await getFidelityMembership(tenantSlug, "") });
       }
@@ -272,6 +278,7 @@ export async function POST(request: Request) {
       note: body.note,
       source: body.source ?? "manual",
     };
+    await assertClientAccessibleForSedi(tenantSlug, input.clientId, sessionAllowedLocationIds(session));
     const movement = await addDbWalletMovement(input, tenantSlug);
     return Response.json({ ok: true, source: "wallet?action=movement", sourceMode: "database", movement, movements: await listDbWalletMovements(tenantSlug) });
   } catch (error) {

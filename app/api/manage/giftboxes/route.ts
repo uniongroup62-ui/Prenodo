@@ -26,7 +26,7 @@ import {
   updateGiftBoxInstanceInternalNote,
 } from "@/lib/gift-issue-details";
 import { currentManageSession } from "@/lib/manage-auth";
-import { getManageLocationContext } from "@/lib/manage-locations";
+import { assertLocationAccessById, getManageLocationContext, sessionAllowedLocationIds } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can, canAny } from "@/lib/role-permissions";
 
@@ -82,6 +82,7 @@ export async function GET(request: Request) {
     // completa (riepilogo, dati, riscatto per-item, movimenti con sede/operatore).
     if (action === "view" || action === "edit_instance") {
       await expireDueGiftBoxInstances(tenantSlug);
+      await assertLocationAccessById(tenantSlug, "giftbox_instances", parseInteger(url.searchParams.get("id"), 0), sessionAllowedLocationIds(session), "GiftBox non disponibile per le tue sedi.");
       const detail = await getGiftBoxInstanceFull(tenantSlug, parseInteger(url.searchParams.get("id"), 0));
       if (!detail) return jsonError("Istanza non trovata", 404);
       const clients = (await listDbClients({ slug: tenantSlug })).map((c) => ({ id: c.id, name: c.name }));
@@ -150,6 +151,12 @@ export async function POST(request: Request) {
   const action = body.action ?? "issue";
 
   try {
+    // Guardia per-sede sulle azioni relative a un'ISTANZA esistente (per id); i template sono
+    // tenant-wide (nessuna location). location_id istanza valorizzato solo al riscatto/POS; NULL = ok.
+    const gbInstanceActions = new Set(["redeem", "redeem_full", "redeem_instance", "update_instance", "update_instance_expiry", "redeem_instance_partial", "update_instance_internal_note", "send_email", "cancel", "cancel_instance"]);
+    if (gbInstanceActions.has(String(action))) {
+      await assertLocationAccessById(tenantSlug, "giftbox_instances", parseInteger(body.id, 0), sessionAllowedLocationIds(session), "GiftBox non disponibile per le tue sedi.");
+    }
     // Faithful giftbox TEMPLATE editor save (port of giftbox.php POST
     // action=new|edit / GiftBox::saveGiftBox). id=0 creates, id>0 updates.
     if (action === "save" || action === "new" || action === "edit") {

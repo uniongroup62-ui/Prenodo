@@ -25,6 +25,28 @@ tentativi) + regressione magazzino 41/41 (flusso admin invariato), typecheck 0, 
 Restano gli 8 ENHANCEMENT (coupons/promotions/resources/giftcard/giftbox/gift/commissions/fidelity) —
 il PHP non li restringe, opzionali (vedi mappa in cima all'audit precedente).
 
+## Accesso-per-sede: chiusi anche gli 8 ENHANCEMENT (2026-07-08)
+
+Completata la copertura: aggiunta la guardia accesso-record per-sede anche dove il PHP NON restringe
+(enhancement, come i Clienti). Nuovo helper `assertLocationAccessByJunction(slug, junctionTable,
+fkColumn, id, allowed, msg)` per le entita' con sedi via tabella di giunzione (accessibile se ha una
+riga in una sede consentita OPPURE nessuna riga = tutte le sedi). Moduli:
+- **fidelity**: guardia sul CLIENTE (riuso `assertClientAccessibleForSedi`) su credit_debit, wallet_move,
+  card_create, movimento default, GET wallet/credit.
+- **commissions**: `markDbCommissionPaid` (route pay) via `staff_commission_payments.location_id`;
+  `markCommissionEntryPaid` (toggle) accetta `allowedLocationIds` e verifica la location dell'entry.
+- **giftcards / giftboxes / gifts**: guardia istanze via location_id diretta (`giftcards`,
+  `giftbox_instances`, `gift_instances`) su view/detail + tutte le mutazioni per-id (blocco unico per
+  route). NB: location_id istanza spesso NULL (valorizzato solo al riscatto/POS) -> NULL = accessibile.
+- **coupons / promotions**: junction `coupon_locations`/`promotion_locations` su get/save(edit)/delete/
+  cancel(coupon) e get/toggle/delete/save(promo).
+- **resources**: cabine via `cabins.location_id` (diretta) + staff via `staff_locations` + risorse via
+  `resource_locations` (junction), su get/save/delete di ciascuna sotto-entita'.
+Semantica invariata: admin/`locationIds` vuoto = tutte le sedi. Verificato live: 18 check
+(test-enh-guards: op(Sede1) NEGATO su ogni record Sede2, admin OK, entita' senza-sede accessibile,
+record intatti) + regressione buoni 33/33, commissioni 30/30, sede-guards 16/16, typecheck 0, 5 clienti
+reali intatti. COPERTURA COMPLETA: tutti i moduli con record per-sede ora bloccano l'accesso cross-sede.
+
 ## MAPPA accesso-per-sede: dove serve la guardia record (audit completo 2026-07-08)
 
 Dopo l'aggiunta della guardia per-sede sui Clienti (`assertClientAccessibleForSedi`), audit completo

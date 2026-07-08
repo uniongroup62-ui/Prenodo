@@ -2,7 +2,7 @@ import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/ap
 import { addManageGiftExcludedClient, deleteManageGift, getManageGift, giftFormCatalog, giftStructureBlockReason, issueDbGift, listDbGifts, listManageGiftPage, listManageGifts, redeemDbGift, removeManageGiftExcludedClient, saveManageGift, toggleManageGift, updateManageGiftTerms } from "@/lib/db-repositories";
 import { assignGiftManual, cancelGiftInstance, checkGiftManualAssignmentEligibility, deleteClosedGiftInstance, getGiftInstanceDetail, giftCampaignSummaryStats, listGiftInstances, redeemGiftInstanceItems, sendGiftVoucherEmailManage, updateGiftInstanceInternalNote, updateGiftInstanceNote } from "@/lib/gifts-instances";
 import { currentManageSession } from "@/lib/manage-auth";
-import { getManageLocationContext } from "@/lib/manage-locations";
+import { assertLocationAccessById, getManageLocationContext, sessionAllowedLocationIds } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can, canAny } from "@/lib/role-permissions";
 
@@ -94,6 +94,7 @@ export async function GET(request: Request) {
     // con stato derivato + auto-scadenza alla lettura.
     if (action === "instance") {
       if (!can(session.user.perms, "gifts.manage")) return jsonError("Permesso omaggi mancante.", 403);
+      await assertLocationAccessById(tenantSlug, "gift_instances", parseInteger(url.searchParams.get("id"), 0), sessionAllowedLocationIds(session), "Omaggio non disponibile per le tue sedi.");
       const detail = await getGiftInstanceDetail(tenantSlug, parseInteger(url.searchParams.get("id"), 0));
       if (!detail) return jsonError("Omaggio non trovato.", 404);
       return Response.json({ ok: true, sourceMode: "database", instance: detail });
@@ -192,6 +193,8 @@ export async function POST(request: Request) {
     if (instanceActions.includes(String(action))) {
       if (!can(session.user.perms, "gifts.manage")) return jsonError("Permesso omaggi mancante.", 403);
       const instanceId = parseInteger(body.instance_id ?? body.id, 0);
+      // Guardia per-sede: azioni su un'istanza omaggio di un'altra sede negate (location NULL = ok).
+      await assertLocationAccessById(tenantSlug, "gift_instances", instanceId, sessionAllowedLocationIds(session), "Omaggio non disponibile per le tue sedi.");
 
       // Riscatto manuale/parziale: redeem_qty_json = {"<reward_item_index>": qty}
       // (stringa JSON: parseRequestBody appiattisce i valori non-stringa).

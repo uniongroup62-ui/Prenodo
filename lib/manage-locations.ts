@@ -158,6 +158,30 @@ export async function assertLocationAccessViaParent(
   await assertLocationAccessById(slug, parentTable, parentId, allowed, message);
 }
 
+// Guardia per entita' con sedi via TABELLA DI GIUNZIONE (es. coupon_locations, promotion_locations,
+// staff_locations, resource_locations): accessibile se ha una riga-giunzione in una sede consentita
+// OPPURE NON ha righe (= abilitata a TUTTE le sedi, come app_*_location_allowed con COUNT=0). NB:
+// `entityFkColumn` e' un identificatore costante nei call-site (mai input utente).
+export async function assertLocationAccessByJunction(
+  slug: string,
+  junctionTable: string,
+  entityFkColumn: string,
+  entityId: number,
+  allowedLocationIds: number[],
+  message = "Record non disponibile per le tue sedi.",
+): Promise<void> {
+  if (entityId <= 0) return;
+  const allowed = (allowedLocationIds ?? []).map((n) => Number(n) || 0).filter((n) => n > 0);
+  if (allowed.length === 0) return;
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: junctionTable, columns: "location_id", where: `${entityFkColumn} = ?`, params: [entityId] }).catch(
+    () => [] as RowDataPacket[],
+  );
+  const locs = rows.map((r) => Number(r.location_id ?? 0) || 0).filter((n) => n > 0);
+  if (locs.length === 0) return; // nessuna sede associata -> abilitata ovunque
+  if (locs.some((l) => allowed.includes(l))) return;
+  throw new Error(message);
+}
+
 export type ManageLocationEdit = {
   id: number;
   name: string;

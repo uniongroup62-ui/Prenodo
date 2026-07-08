@@ -1,7 +1,11 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
 import { addManagePromotionExcludedClient, deleteManagePromotion, evaluatePromotionsForCart, getManagePromotion, listDbPromotions, listManagePromotionPage, previewDbPromotion, promotionFormContext, promotionStructuralBlockReason, removeManagePromotionExcludedClient, saveManagePromotion, toggleManagePromotion, updateManagePromotionConditions, type PromoCartLine } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
+import { assertLocationAccessByJunction, sessionAllowedLocationIds } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
+
+// Guardia per-sede promozione (junction promotion_locations, [] = tutte le sedi).
+const PROMO_SEDE_ERR = "Promozione non disponibile per le tue sedi.";
 import { can, canAny } from "@/lib/role-permissions";
 
 export const dynamic = "force-dynamic";
@@ -43,6 +47,7 @@ export async function GET(request: Request) {
       if (!can(session.user.perms, "promotions.manage")) return jsonError("Permesso promozioni mancante.", 403);
       const promotionId = parseInteger(url.searchParams.get("id"), 0);
       if (promotionId <= 0) return jsonError("ID promozione mancante.");
+      await assertLocationAccessByJunction(tenantSlug, "promotion_locations", "promotion_id", promotionId, sessionAllowedLocationIds(session), PROMO_SEDE_ERR);
       const promotion = await getManagePromotion(tenantSlug, promotionId);
       if (!promotion) return jsonError("Promozione non trovata.", 404);
       return Response.json({ ok: true, source: "promotions?action=get", sourceMode: "database", promotion });
@@ -70,6 +75,7 @@ export async function POST(request: Request) {
   try {
     if (action === "toggle") {
       if (!can(session.user.perms, "promotions.manage")) return jsonError("Permesso promozioni mancante.", 403);
+      await assertLocationAccessByJunction(tenantSlug, "promotion_locations", "promotion_id", id, sessionAllowedLocationIds(session), PROMO_SEDE_ERR);
       const active = ["1", "true", "yes", "on"].includes((body.active ?? "").toLowerCase());
       const promotion = await toggleManagePromotion(tenantSlug, id, active, session.user.id);
       return Response.json({
@@ -99,6 +105,7 @@ export async function POST(request: Request) {
     // Delete a promotion (port of promotions.php action=delete / Promotions::delete).
     if (action === "delete") {
       if (!can(session.user.perms, "promotions.manage")) return jsonError("Permesso promozioni mancante.", 403);
+      await assertLocationAccessByJunction(tenantSlug, "promotion_locations", "promotion_id", id, sessionAllowedLocationIds(session), PROMO_SEDE_ERR);
       const result = await deleteManagePromotion(tenantSlug, id);
       return Response.json({
         source: "promotions?action=delete",
@@ -148,6 +155,7 @@ export async function POST(request: Request) {
     // id=0 creates, id>0 updates the core promotion record.
     if (action === "save" || action === "new" || action === "edit" || action === "update") {
       if (!can(session.user.perms, "promotions.manage")) return jsonError("Permesso promozioni mancante.", 403);
+      await assertLocationAccessByJunction(tenantSlug, "promotion_locations", "promotion_id", id, sessionAllowedLocationIds(session), PROMO_SEDE_ERR);
       const promotion = await saveManagePromotion(tenantSlug, body, id);
       const isClone = (parseInteger(body.replace_source_id, 0) || 0) > 0;
       return Response.json({
