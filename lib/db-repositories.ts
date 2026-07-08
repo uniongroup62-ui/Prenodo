@@ -18547,8 +18547,13 @@ export type FidelityWalletData = {
 
 // Fidelity points are always integers (port of Fidelity::normalizePoints).
 function normalizeFidelityPoints(n: unknown): number {
+  // Invariante Fidelity (port di Fidelity::normalizePoints): i punti sono SEMPRE interi con
+  // floor(+1e-9) sui positivi e ceil(-1e-9) sui negativi — MAI round() (un round arrotonderebbe
+  // per eccesso i frazionari, accreditando punti in più). Allineato a fidelity-lots.normPoints
+  // e manage-pos.normalizePoints.
   const v = Number(String(n ?? "").toString().replace(",", "."));
-  return Number.isFinite(v) ? Math.round(v) : 0;
+  if (!Number.isFinite(v)) return 0;
+  return v >= 0 ? Math.floor(v + 1e-9) : Math.ceil(v - 1e-9);
 }
 
 // A client "adheres" to Fidelity when they hold an active, non-expired card

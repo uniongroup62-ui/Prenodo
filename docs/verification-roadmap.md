@@ -8603,3 +8603,53 @@ VERIFICATO: test-giftcard 22/22, e2e-giftcard 94/94 (dopo aver aggiunto al vecch
 sede post-login, come per e2e-giftbox: era l'unica falla, un problema di setup del test - la lista a
 filtro sede STRETTO richiede una sede attiva), test-pos-checkout 8/8, test-pkg-pos 8/8, typecheck 0.
 Residui ZZ=0; tenant 25 giftcards baseline=0 preservato; 5 clienti reali intatti.
+
+## Fidelity: audit completo + fix invariante punti normalizeFidelityPoints (2026-07-09)
+
+Audit 1:1 del modulo Fidelity vs Fidelity.php (~104KB) + le pagine fidelity.php / fidelity_points.php
+/ fidelity_levels.php / fidelity_membership.php / fidelity_wallet.php / credit_movements.php. Modello:
+transactions (ledger punti, kind earn/redeem/manual/adjust/expire, delta_points, idempotenza
+client+kind+source), point_lots (FIFO+scadenza con lock@YYYYMMDDHHMMSS), clients.points (saldo),
+clients.credit_balance (portafoglio €), clients.fidelity_level, cards (adesione active|inactive),
+credit_adjustments (ledger credito €), fidelity_campaigns, card_code_registry (anti-riuso permanente),
+settings fidelity_* su businesses. La route app/api/manage/fidelity è interamente cablata alle
+funzioni FEDELI (getFidelity*/save*/issueFidelityCard/fidelityWalletManualMove/manualCreditDebit/
+*Campaign*); i rami compat legacy (_mode=manual_move / save_rule / delete_rule) rispondono con i
+messaggi legacy di reindirizzamento ("Il movimento manuale e stato spostato in Portafoglio", ecc.).
+
+CORRETTO:
+1. INVARIANTE PUNTI (unica divergenza confermata): db-repositories.normalizeFidelityPoints usava
+   Math.round(v), mentre l'invariante legacy Fidelity::normalizePoints (Fidelity.php:28-33) è
+   floor(+1e-9) sui positivi / ceil(-1e-9) sui negativi, MAI round (un round arrotonderebbe per
+   eccesso i frazionari, accreditando punti in più). Fix: allineata a v>=0 ? floor(v+1e-9) :
+   ceil(v-1e-9), coerente con fidelity-lots.normPoints e manage-pos.normalizePoints. Impatto pratico
+   ~nullo (i punti sono sempre interi: fidelity_points_used/earned, clients.points, aggregati) —
+   floor/ceil di un intero = l'intero — ma è la corretta incarnazione dell'invariante 1:1 e difende
+   da qualsiasi input frazionario futuro. I molti Math.round residui operano tutti su valori STORED
+   già interi (nessuna divergenza pratica) e non sono stati toccati per non introdurre churn.
+
+NON bug (valutati e scartati): (a) gli statuti prenotazione "reserved" non esistono nel Next (solo
+pending/scheduled/canceled) quindi nessun ramo mancante; (b) i vari Math.round su interi memorizzati
+sono equivalenti a floor/ceil.
+
+FEDELI e verificati LIVE (test-fidelity 42/42, con cliente ZZ usa-e-getta + ripristino settings da
+baseline): letture state/points_settings(+stats)/campaigns/levels/membership/client_search/wallet/
+credit; save_points_settings (validazione "scadenza > 0" + save/restore euro_per_point); save_levels
+(guardia duplicati "Non puoi salvare due livelli card con gli stessi punti necessari" senza persist);
+campagne CRUD (create inattiva, tiers senza scaglioni, fine<inizio, overlap "Esiste gia una campagna
+punti attiva nello stesso periodo" su toggle E su save attiva, hard-delete a 0 riferimenti);
+tessere CRUD (create + adesione, doppione "Questo cliente ha già una tessera", codice riusato
+"gia utilizzato in passato", reactivate "La tessera non è scaduta", delete che azzera punti/livello/
+tx/lots ma MANTIENE il codice nel registry); wallet manual move (add +50 tx manual, remove -20 tx
+adjust, rimozione PARZIALE fedele con segnalazione mancanti, "saldo insufficiente (disponibili 0)",
+"Inserisci un numero intero di punti valido", "Cliente non aderisce alla Fidelity"); credit_debit
+(scalo -30 con credit_adjustments direction=debit, "Inserisci una nota", "Credito insufficiente",
+"Inserisci un importo valido"); POS earn campagna-aware (checkout 80€ -> floor(80/10)=8 punti,
+tx kind=earn source=sale, campagna 37 stampata).
+
+VERIFICATO: test-fidelity 42/42, typecheck 0; regressione VERDE test-pos-checkout 8/8, test-giftcard
+22/22, test-giftbox 27/27 (il fix floor/ceil non tocca gli interi). PRODUZIONE INTATTA: dopo il
+cleanup i conteggi tornano esatti alla baseline (transactions=82, point_lots=36, credit_adjustments=49,
+fidelity_campaigns=1 [campagna 37 attiva/amount/aperta preservata], cards=0, card_code_registry=11,
+clients=5) e le settings fidelity_* ripristinate al valore originale (euro_per_point 0.10, levels 0,
+enabled 1, points 1). Nessun dato di produzione modificato in via definitiva.
