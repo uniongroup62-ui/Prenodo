@@ -1,5 +1,41 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Buoni (Coupon): audit — port FEDELE, nessun fix necessario (2026-07-08)
+
+Audit dedicato di "Buoni" (= modulo Coupon; legacy coupons.php 1253 + Helpers.php coupon_*; Next
+lib/db-repositories.ts funzioni coupon + coupons/route.ts + coupon_form/coupons-content) con 2 agenti.
+VERDETTO: **port fedele su tutta la linea, nessun bug reale trovato.** Verificato live: 33 check
+(test-buoni). Aree confermate 1:1:
+- **Campi**: code, description, discount_type(percent|fixed), discount_value, min_subtotal, valid_from/
+  valid_to, is_active, usage_limit (= limite PER-CLIENTE, 0=illim.), apply_scope + *_ids_json, coupon_
+  locations(M:N), created/cancelled/deleted audit. NESSUN client_id/max_discount/used_count/stackable
+  (identico al legacy; l'uso e' calcolato a runtime).
+- **Validazioni verbatim**: "Inserisci un codice.", "Codice non valido. Usa solo lettere, numeri, - e
+  _. (Max 40)" (regex ^[A-Z0-9][A-Z0-9_-]{0,39}$), "Inserisci un valore valido.", percent cap 100,
+  "Formato data non valido.", ordine date, "Seleziona almeno una sede abilitata." + scope-specifici,
+  unicita' su coupons ("Esiste gia un coupon...") E su promotions ("...gia utilizzato da una
+  Promozione..."), codice IMMUTABILE in edit.
+- **Generazione codice**: charset ABCDEFGHJKMNPQRSTUVWXYZ23456789 (no 0/1/I/L/O), 10 char, 50 tentativi
+  unici vs coupons+promotions, fallback rand(12).
+- **Formula sconto**: percent = eligibleSubtotal×value/100, fixed = value; floor 0; cap eligible poi
+  subtotal; NESSUN max_discount; spesa minima su minimumBase (subtotal se scope=all, altrimenti
+  eligible); eligibleSubtotal per apply_scope.
+- **Validita' riscatto**: "Coupon disattivato." / "Coupon scaduto per la data selezionata." / "Coupon
+  non ancora attivo..." / "Seleziona un cliente per usare questo coupon." / "Limite di utilizzo per
+  cliente raggiunto (N/M)." — limite conteggiato a runtime da sales.coupon_code + marker note
+  "Coupon: CODE" (UPPER(...) LIKE, case-insensitive) su sales+appointments, esclusi annullati.
+- **Cancel/Delete cascata**: cancel = is_active=0 + cancelled_* ("Coupon gia disattivato." se off);
+  delete = blocca se prenotazioni aperte -> soft-delete (deleted_at) se usato -> hard-delete +
+  coupon_locations se mai usato. Badge Attiva/Programmato/Scaduto/Disattivato. Listing esclude
+  soft-deleted, ORDER BY id DESC.
+- **Scope tenant + sede** (coupon_locations, [] = tutte le sedi).
+Divergenze deliberate/innocue (NON bug): endpoint `create` quick-create Next-specifico (usage_limit
+def 100, valid_to +30gg, description=code) NON usato dal form (che usa `save` fedele) ne' dal POS;
+messaggio preview "Nessun servizio/prodotto selezionato rientra..." vs legacy "...del carrello..."
+(equivalente). Il POS Next non crea buoni via API (applica coupon esistenti scrivendo coupon_code +
+marker note), a differenza della bozza-Buono legacy a chiusura vendita.
+
+
 ## Fornitori: audit + fix univocita' nome case-insensitive (2026-07-08)
 
 Audit dedicato Fornitori (suppliers.php 865 + Helpers.php app_supplier_*) vs Next (manage-products.ts
