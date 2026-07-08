@@ -78,7 +78,7 @@ export type CostsQuery = {
   q?: string;
 };
 
-type Filters = { cat: string; from: string; to: string; status: string; q: string };
+type Filters = { cat: string; from: string; to: string; status: string; q: string; allLocations: boolean };
 
 function tenantSlug(): string {
   if (typeof window === "undefined") return "";
@@ -121,6 +121,7 @@ function filtersFromQuery(q: CostsQuery): Filters {
     to: isDate(q.to) ? String(q.to) : lastOfMonth(),
     status: ["open", "overdue", "paid", "all"].includes(status) ? status : "open",
     q: String(q.q ?? "").trim(),
+    allLocations: String((q as Record<string, unknown>).all_locations ?? "") === "1",
   };
 }
 
@@ -161,6 +162,7 @@ export function CostsContent({ slug: slugProp, initialQuery }: { slug?: string; 
   const [to, setTo] = useState(initial.to);
   const [status, setStatus] = useState(initial.status);
   const [q, setQ] = useState(initial.q);
+  const [allLoc, setAllLoc] = useState(initial.allLocations);
   const appliedRef = useRef<Filters>(initial);
 
   // Flash legacy (?msg / ?err dopo i redirect): success sopra, danger sotto.
@@ -202,6 +204,7 @@ export function CostsContent({ slug: slugProp, initialQuery }: { slug?: string; 
         status: filters.status,
         q: filters.q,
       });
+      if (filters.allLocations) params.set("all_locations", "1");
       fetch(`/api/manage/costs?${params.toString()}`, {
         headers: { "x-tenant-slug": slug },
       })
@@ -243,20 +246,26 @@ export function CostsContent({ slug: slugProp, initialQuery }: { slug?: string; 
 
   // Applica il draft (submit "Filtra") e riscrive l'URL come il GET legacy.
   function applyFilters() {
-    const filters: Filters = { cat, from, to, status, q };
+    const filters: Filters = { cat, from, to, status, q, allLocations: allLoc };
     load(filters);
     if (typeof window !== "undefined") {
       const sp = new URLSearchParams({ tab: "scadenziario", cat: filters.cat, from: filters.from, to: filters.to, status: filters.status, q: filters.q });
+      if (filters.allLocations) sp.set("all_locations", "1");
       window.history.replaceState(null, "", `${window.location.pathname}?${sp.toString()}`);
     }
   }
 
   async function postAction(payload: Record<string, unknown>): Promise<CostsResponse> {
     try {
+      // In "Tutte le sedi" le mutazioni (toggle/delete/bulk) devono agire nello stesso scope
+      // multi-sede della vista, altrimenti un costo di sede non-corrente darebbe "Costo non trovato".
+      const body = appliedRef.current?.allLocations && payload.all_locations === undefined
+        ? { ...payload, all_locations: "1" }
+        : payload;
       const res = await fetch(`/api/manage/costs?slug=${encodeURIComponent(slug)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(body),
       });
       const j = await res.json();
       return { ...j, ok: res.ok && j.ok !== false };
@@ -449,6 +458,16 @@ export function CostsContent({ slug: slugProp, initialQuery }: { slug?: string; 
                   placeholder="Titolo / documento"
                 />
               </div>
+              {locations.length > 1 ? (
+                <div className="col-xl-2 col-lg-3 col-md-6 d-flex align-items-end">
+                  <div className="form-check">
+                    {/* "Tutte le sedi" (port del checkbox legacy all_locations): mostra i costi di
+                        tutte le sedi permesse invece della sola corrente. Applicato su "Filtra". */}
+                    <input className="form-check-input" type="checkbox" id="costsAllLocations" name="all_locations" checked={allLoc} onChange={(e) => setAllLoc(e.target.checked)} />
+                    <label className="form-check-label" htmlFor="costsAllLocations">Tutte le sedi</label>
+                  </div>
+                </div>
+              ) : null}
               <div className="col-xl-3 col-lg-4 col-md-6 d-flex gap-2 app-filter-actions">
                 <button className="btn btn-outline-primary flex-grow-1 app-filter-submit" type="submit">
                   <i className="bi bi-search me-1" />

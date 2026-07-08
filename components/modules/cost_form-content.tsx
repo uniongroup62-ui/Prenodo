@@ -105,6 +105,9 @@ export function CostFormContent({ slug: slugProp }: { slug?: string } = {}) {
   const [form, setForm] = useState<CostForm>(emptyForm());
   const [categories, setCategories] = useState<CostCategory[]>([]);
   const [suppliers, setSuppliers] = useState<CostSupplier[]>([]);
+  // Nome del fornitore del costo in modifica: se e' inattivo/non elencato, va comunque mostrato
+  // e pre-selezionato (port legacy "Nome (non attivo o non abilitato)"), per non perderlo al salvataggio.
+  const [editSupplierName, setEditSupplierName] = useState("");
   const [locations, setLocations] = useState<CostLocation[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -182,6 +185,7 @@ export function CostFormContent({ slug: slugProp }: { slug?: string } = {}) {
             recurrence_end_date: String(c.recurrenceEndDate ?? "").slice(0, 10),
           });
           setCurrentAttachmentName(String(c.attachmentName ?? "").trim());
+          setEditSupplierName(String(c.supplierName ?? "").trim());
         })
         .catch(() => setError("Errore nel caricamento del costo."))
         .finally(() => setLoading(false));
@@ -454,6 +458,10 @@ export function CostFormContent({ slug: slugProp }: { slug?: string } = {}) {
                 <label className="form-label">Fornitore</label>
                 <select className="form-select" name="supplier_id" value={form.supplier_id} onChange={(e) => set("supplier_id", Number(e.target.value) || 0)}>
                   <option value={0}>(nessuno)</option>
+                  {/* Fornitore del costo non piu' attivo/abilitato: mantienilo selezionabile (legacy). */}
+                  {form.supplier_id > 0 && !suppliers.some((s) => s.id === form.supplier_id) ? (
+                    <option value={form.supplier_id}>{`${editSupplierName || "Fornitore"} (non attivo o non abilitato)`}</option>
+                  ) : null}
                   {suppliers.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name}

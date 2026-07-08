@@ -14,7 +14,7 @@ import {
   toggleCostCategory,
   toggleCostPaid,
 } from "@/lib/manage-costs";
-import { resolveManageLocationId } from "@/lib/manage-locations";
+import { getManageLocationContext, resolveManageLocationId } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can, canAny } from "@/lib/role-permissions";
 
@@ -22,6 +22,15 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const workPerms = ["costs.manage", "costs.items"];
+
+// "Tutte le sedi" (all_locations): filtro/scope su TUTTE le sedi permesse dell'utente invece
+// della sola sede corrente (port del checkbox legacy $costAllLocations).
+function isAllLocations(value: unknown): boolean {
+  return ["1", "true", "yes", "on"].includes(String(value ?? "").toLowerCase());
+}
+async function allowedLocationIds(slug: string): Promise<number[]> {
+  return (await getManageLocationContext(slug)).locations.map((l) => l.id).filter((id) => id > 0);
+}
 
 // Parse the bulk cost-id selection. parseRequestBody flattens body values to strings, so cost_ids
 // arrives as a JSON array string ("[1,2,3]") or a comma-separated list ("1,2,3") — accept both.
@@ -54,8 +63,10 @@ export async function GET(request: Request) {
       const costId = parseInteger(url.searchParams.get("id"), 0);
       if (costId <= 0) return jsonError("ID costo mancante.");
       // SCOPE SEDE anche sul prefill di modifica: un costo di altra sede -> "Costo non trovato".
+      // In "Tutte le sedi" lo scope e' l'insieme delle sedi permesse.
       const getScopeLocationId = await resolveManageLocationId({ slug: tenantSlug, raw: url.searchParams.get("location_id"), fallbackCurrent: true });
-      const cost = await getManageCost(tenantSlug, costId, getScopeLocationId);
+      const getAllowed = isAllLocations(url.searchParams.get("all_locations")) ? await allowedLocationIds(tenantSlug) : null;
+      const cost = await getManageCost(tenantSlug, costId, getScopeLocationId, getAllowed);
       if (!cost) return jsonError("Costo non trovato.", 404);
       return Response.json({ ok: true, source: "costs?action=get", sourceMode: "database", cost });
     }
@@ -72,6 +83,7 @@ export async function GET(request: Request) {
       query: url.searchParams.get("q") ?? "",
       categoryId: parseInteger(url.searchParams.get("category_id") ?? url.searchParams.get("cat"), 0),
       locationId,
+      allLocations: isAllLocations(url.searchParams.get("all_locations")),
     });
 
     // EXPORT CSV/PDF — port di costs.php action=export (tab scadenziario): stessi
@@ -198,6 +210,10 @@ export async function POST(request: Request) {
       raw: body.location_id === undefined ? url.searchParams.get("location_id") : body.location_id,
       fallbackCurrent: true,
     });
+    // "Tutte le sedi": in questa modalita' le mutazioni sono scopate all'insieme delle sedi
+    // permesse (non alla sola sede corrente), cosi' un costo visibile nella vista "tutte" e'
+    // anche gestibile. null = modalita' singola sede.
+    const allowedIds = isAllLocations(body.all_locations ?? url.searchParams.get("all_locations")) ? await allowedLocationIds(tenantSlug) : null;
 
     switch (action) {
       case "create":
@@ -205,23 +221,23 @@ export async function POST(request: Request) {
       case "save_cost":
       case "cost_save":
         if (!canAny(session.user.perms, workPerms)) return jsonError("Permesso Scadenziario richiesto.", 403);
-        return Response.json(await saveCost(tenantSlug, { ...body, location_id: body.location_id || String(locationId) }, locationId));
+        return Response.json(await saveCost(tenantSlug, { ...body, location_id: body.location_id || String(locationId) }, locationId, allowedIds));
 
       case "delete":
       case "cost_delete":
         if (!canAny(session.user.perms, workPerms)) return jsonError("Permesso Scadenziario richiesto.", 403);
-        return Response.json(await deleteCost(tenantSlug, parseInteger(body.id ?? body.cost_id, 0), locationId));
+        return Response.json(await deleteCost(tenantSlug, parseInteger(body.id ?? body.cost_id, 0), locationId, allowedIds));
 
       case "bulk_delete":
       case "bulk_delete_costs":
         if (!canAny(session.user.perms, workPerms)) return jsonError("Permesso Scadenziario richiesto.", 403);
-        return Response.json(await deleteCostsBulk(tenantSlug, parseCostIds(body.cost_ids ?? body.ids), locationId));
+        return Response.json(await deleteCostsBulk(tenantSlug, parseCostIds(body.cost_ids ?? body.ids), locationId, allowedIds));
 
       case "pay":
       case "toggle_paid":
       case "cost_toggle_paid":
         if (!canAny(session.user.perms, workPerms)) return jsonError("Permesso Scadenziario richiesto.", 403);
-        return Response.json(await toggleCostPaid(tenantSlug, parseInteger(body.id ?? body.cost_id, 0), locationId));
+        return Response.json(await toggleCostPaid(tenantSlug, parseInteger(body.id ?? body.cost_id, 0), locationId, allowedIds));
 
       case "save_category":
       case "category_save":

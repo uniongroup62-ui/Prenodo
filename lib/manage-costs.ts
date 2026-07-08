@@ -2,6 +2,7 @@ import "server-only";
 
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { emptyToNull, parseInteger } from "@/lib/api-utils";
+import { businessTodayIso } from "@/lib/business-datetime";
 import { getManageLocationContext } from "@/lib/manage-locations";
 import {
   columnExists,
@@ -112,10 +113,13 @@ export async function getManageCostsContext(
     query?: string;
     categoryId?: number;
     locationId?: number;
+    allLocations?: boolean;
   } = {},
 ): Promise<ManageCostsContext> {
   const locations = await listCostLocations(slug);
-  const activeLocationId = normalizeLocationId(options.locationId ?? 0, locations);
+  // "Tutte le sedi" (all_locations): locationId=0 -> buildLocationScope scopa a IN(sedi permesse)
+  // OR NULL. Altrimenti forza la sede corrente (normalizeLocationId).
+  const activeLocationId = options.allLocations ? 0 : normalizeLocationId(options.locationId ?? 0, locations);
   const filters = normalizeCostFilters(options);
   const [costs, categories, suppliers, hasAnyCosts] = await Promise.all([
     listCosts(slug, { ...filters, locationId: activeLocationId, locations }),
@@ -163,19 +167,26 @@ async function hasAnyCostsInScope(slug: string, locationId: number, locations: C
 // Edit-form prefill: return ONE cost's editable fields for one id. Port of
 // costs.php action=edit ($editCost). Mirrors the CostRow shape used by the list
 // so the faithful cost_form-content.tsx can hydrate every field.
-export async function getManageCost(slug: string, costId: number, locationId = 0): Promise<CostRow | null> {
+export async function getManageCost(slug: string, costId: number, locationId = 0, allowedIds: number[] | null = null): Promise<CostRow | null> {
   if (costId <= 0) return null;
   // SCOPE SEDE: un costo di un'altra sede non e' recuperabile (come il legacy loadCost scoped).
-  const row = await getCostById(slug, costId, locationId).catch(() => null);
-  return row ? mapCost(row) : null;
+  const row = await getCostById(slug, costId, locationId, allowedIds).catch(() => null);
+  if (!row) return null;
+  // getCostById fa SELECT * (nessun JOIN): recupera il NOME del fornitore per il prefill di modifica
+  // (serve al form per mostrare/preservare un fornitore inattivo con "(non attivo o non abilitato)").
+  if (row.supplier_id && !row.supplier_name) {
+    const sup = await tenantSelect<RowDataPacket>({ slug, table: "suppliers", columns: "name", where: "id=?", params: [Number(row.supplier_id)], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    if (sup[0]) row.supplier_name = sup[0].name;
+  }
+  return mapCost(row);
 }
 
-export async function saveCost(slug: string, body: Record<string, string>, scopeLocationId = 0): Promise<ManageCostsContext> {
+export async function saveCost(slug: string, body: Record<string, string>, scopeLocationId = 0, allowedIds: number[] | null = null): Promise<ManageCostsContext> {
   const table = await tenantTable(slug, "costs");
   const id = parseInteger(body.id ?? body.cost_id, 0);
   // In modifica, il costo esistente deve appartenere alla sede dell'utente (scope) -> altrimenti
   // "Costo non trovato" (impedisce a un utente di una sede di modificare/spostare costi di altre).
-  const existing = id > 0 ? await getCostById(slug, id, scopeLocationId) : null;
+  const existing = id > 0 ? await getCostById(slug, id, scopeLocationId, allowedIds) : null;
   const input = await normalizeCostInput(slug, body, existing);
   const values = await filterColumns(table.name, {
     title: input.title,
@@ -207,10 +218,10 @@ export async function saveCost(slug: string, body: Record<string, string>, scope
   return getManageCostsContext(slug, { locationId: input.locationId, status: "open" });
 }
 
-export async function deleteCost(slug: string, costId: number, locationId = 0): Promise<ManageCostsContext> {
+export async function deleteCost(slug: string, costId: number, locationId = 0, allowedIds: number[] | null = null): Promise<ManageCostsContext> {
   // Messaggio pagina legacy (redirect ?err=Costo non trovato) per id invalido o mancante.
   if (costId <= 0) throw new Error("Costo non trovato");
-  const row = await getCostById(slug, costId, locationId);
+  const row = await getCostById(slug, costId, locationId, allowedIds);
   await tenantDelete({ slug, table: "costs", id: costId });
   await deleteCostAttachmentObject(row).catch(() => undefined);
   return getManageCostsContext(slug, { locationId, status: "open" });
@@ -220,12 +231,12 @@ export async function deleteCost(slug: string, costId: number, locationId = 0): 
 // that exists + is accessible; missing/foreign ids are silently skipped (the legacy tolerance), and
 // if NONE are deletable it errors like the legacy "Nessuna voce autorizzata da eliminare". Like the
 // legacy file cleanup, each deleted cost's R2 attachment object is removed best-effort.
-export async function deleteCostsBulk(slug: string, costIds: number[], locationId = 0): Promise<ManageCostsContext> {
+export async function deleteCostsBulk(slug: string, costIds: number[], locationId = 0, allowedIds: number[] | null = null): Promise<ManageCostsContext> {
   const ids = [...new Set(costIds.filter((id) => Number.isInteger(id) && id > 0))];
   if (ids.length === 0) throw new Error("Seleziona almeno una voce");
   let deleted = 0;
   for (const id of ids) {
-    const row = await getCostById(slug, id, locationId).catch(() => null);
+    const row = await getCostById(slug, id, locationId, allowedIds).catch(() => null);
     if (row) {
       await tenantDelete({ slug, table: "costs", id }).catch(() => 0);
       await deleteCostAttachmentObject(row).catch(() => undefined);
@@ -245,8 +256,8 @@ async function deleteCostAttachmentObject(row: RowDataPacket): Promise<void> {
   await deletePrivateObject(path);
 }
 
-export async function toggleCostPaid(slug: string, costId: number, locationId = 0): Promise<ManageCostsContext> {
-  const row = await getCostById(slug, costId, locationId);
+export async function toggleCostPaid(slug: string, costId: number, locationId = 0, allowedIds: number[] | null = null): Promise<ManageCostsContext> {
+  const row = await getCostById(slug, costId, locationId, allowedIds);
   const isPaid = Number(row.is_paid ?? 0) === 1;
 
   if (isPaid) {
@@ -370,10 +381,12 @@ async function listCosts(
     params.push(options.categoryId);
   }
 
-  // Legacy: la ricerca copre SOLO titolo e numero documento (non il fornitore).
+  // Legacy: la ricerca copre SOLO titolo e numero documento (non il fornitore). Accent-insensitive
+  // via translate() (folding) su colonna e termine, come utf8_general_ci del legacy.
   if (options.query) {
-    clauses.push("(LOWER(c.title) LIKE ? OR LOWER(COALESCE(c.doc_number,'')) LIKE ?)");
-    params.push(`%${options.query}%`, `%${options.query}%`);
+    const q = `%${foldCostAccents(options.query)}%`;
+    clauses.push(`(${foldCostAccentsSql("c.title")} LIKE ? OR ${foldCostAccentsSql("COALESCE(c.doc_number,'')")} LIKE ?)`);
+    params.push(q, q);
   }
 
   if (hasLocation) {
@@ -579,14 +592,21 @@ async function ensureSupplierUsable(slug: string, supplierId: number, locationId
   }
 }
 
-async function getCostById(slug: string, id: number, locationId = 0): Promise<RowDataPacket> {
+async function getCostById(slug: string, id: number, locationId = 0, allowedIds: number[] | null = null): Promise<RowDataPacket> {
   // SCOPE SEDE (port del $costBuildLocationScope legacy applicato a ogni fetch-by-id): un costo
   // di un'altra sede -> row assente -> "Costo non trovato" (come il legacy). NULL-permissiva.
+  // - modalita "Tutte le sedi" (allowedIds != null): scope alle sedi PERMESSE dell'utente.
+  // - modalita singola sede (allowedIds == null): scope alla sede corrente.
   let where = "id=?";
   const params: unknown[] = [id];
-  if (locationId > 0) {
-    const table = await tenantTable(slug, "costs");
-    if (await columnExists(table.name, "location_id")) {
+  const table = await tenantTable(slug, "costs");
+  if (await columnExists(table.name, "location_id")) {
+    if (allowedIds !== null) {
+      if (allowedIds.length > 0) {
+        where += ` AND (location_id IN (${allowedIds.map(() => "?").join(",")}) OR location_id IS NULL)`;
+        params.push(...allowedIds);
+      }
+    } else if (locationId > 0) {
       where += " AND (location_id = ? OR location_id IS NULL)";
       params.push(locationId);
     }
@@ -755,10 +775,12 @@ function buildLocationScope(columnSql: string, locationId: number, locations: Co
 }
 
 function normalizeCostFilters(options: { from?: string; to?: string; status?: string; query?: string; categoryId?: number }) {
-  const now = new Date();
-  const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-  const monthEndDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-  const monthEnd = dateString(monthEndDate);
+  // Periodo di default = mese CORRENTE nel fuso Europe/Rome (come il legacy), non del server.
+  const today = businessTodayIso(); // YYYY-MM-DD (Rome)
+  const ty = Number(today.slice(0, 4));
+  const tm = Number(today.slice(5, 7)); // 1-based
+  const monthStart = `${today.slice(0, 7)}-01`;
+  const monthEnd = dateString(new Date(ty, tm, 0)); // giorno 0 del mese successivo = ultimo del mese corrente
   const status = ["open", "overdue", "paid", "all"].includes(String(options.status ?? "")) ? String(options.status) as "open" | "overdue" | "paid" | "all" : "open";
   return {
     from: normalizeDate(options.from) ?? monthStart,
@@ -839,7 +861,27 @@ function dateTimeString(value: unknown): string {
 }
 
 function todayIso(): string {
-  return dateString(new Date());
+  // Data "oggi" nel fuso dell'attivita' (Europe/Rome), come il legacy date('Y-m-d'). Prima usava
+  // il fuso del server (UTC su Amplify) -> lo stato scaduto/da-pagare e i filtri open/overdue erano
+  // mis-etichettati attorno a mezzanotte italiana.
+  return businessTodayIso();
+}
+
+// Ricerca ACCENT-INSENSITIVE (come MySQL utf8_general_ci del legacy): l'estensione Postgres
+// `unaccent` non e' disponibile, quindi pieghiamo le vocali/consonanti accentate italiane con
+// translate() lato SQL e la stessa piega lato JS sul termine di ricerca ("societa" trova "società").
+const COST_ACCENT_FROM = "àáâãäèéêëìíîïòóôõöùúûüçñ";
+const COST_ACCENT_TO = "aaaaaeeeeiiiiooooouuuucn";
+function foldCostAccents(value: string): string {
+  let out = "";
+  for (const ch of value) {
+    const i = COST_ACCENT_FROM.indexOf(ch);
+    out += i >= 0 ? COST_ACCENT_TO[i] : ch;
+  }
+  return out;
+}
+function foldCostAccentsSql(columnSql: string): string {
+  return `translate(LOWER(${columnSql}), '${COST_ACCENT_FROM}', '${COST_ACCENT_TO}')`;
 }
 
 // Port di $parseMoney (costs.php ~47-98): accetta SOLO cifre e separatori

@@ -28,11 +28,21 @@ applicati (verificati live: fixes 14/14 + minori 4/4 + e2e-costs 52/0):
 - **minore flash post-salvataggio**: dopo Salva costo mancava "Costo creato/aggiornato". Ora
   backToList passa ?msg e costs-content lo legge (mount-effect) + ripulisce l'URL.
 - **minore download allegato scope-sede**: incluso nel BLOCKER scope (loadCost scoped su GET+POST).
-NON fatti (rinviati/annotati): ricerca accent-insensitive (Postgres `unaccent` NON disponibile nel
-DB -> serve estensione, problema TRASVERSALE a tutte le ricerche dell'app); opzione fornitore
-inattivo pre-selezionata in modifica (UI+context, edge, irriproducibile su tenant 25 con 0
-fornitori); "Tutte le sedi" (all_locations, residuo multi-sede noto come nelle Rate); MIME sniffed
-vs declared (R2, robustezza inferiore); fuso TODAY UTC vs Rome (tema sistemico, dipende dal runtime).
+COMPLETAMENTI (2026-07-08, su richiesta "se sono da completare procedi" — verificati live 9/9 +
+regressione e2e 52/0):
+- **ricerca accent-insensitive**: `unaccent` non c'e' ma uso `translate()` (folding vocali/consonanti
+  accentate IT) su colonna + termine -> "societa" trova "società" (come utf8_general_ci legacy).
+- **fuso TODAY**: `todayIso()` e il default periodo ora usano `businessTodayIso()` (Europe/Rome)
+  invece del fuso server -> stato scaduto/da-pagare e filtri open/overdue corretti a mezzanotte IT.
+- **fornitore inattivo in modifica**: `getManageCost` recupera il `supplierName` (getCostById fa
+  SELECT * senza JOIN) e il form aggiunge l'opzione "Nome (non attivo o non abilitato)" se il
+  fornitore del costo non e' tra quelli elencati (port legacy).
+- **"Tutte le sedi" (all_locations)**: checkbox nella barra filtri (multi-sede); getManageCostsContext
+  con allLocations=true -> locationId=0 -> buildLocationScope scopa a IN(sedi permesse) OR NULL;
+  le mutazioni (toggle/delete/bulk/save/get) ricevono `allowedIds` (sedi permesse) cosi' in modalita'
+  "tutte" un costo visibile e' anche gestibile; getCostById supporta la modalita' allowedIds.
+RESTA rinviato (architetturale): MIME sniffed vs declared sull'upload allegato (R2, robustezza
+inferiore ma tipi/limiti/messaggi identici).
 
 
 ## Gestione Rate: audit + fix 2 MAJOR + 2 minori (2026-07-08)
