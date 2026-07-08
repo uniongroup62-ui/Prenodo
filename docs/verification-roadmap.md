@@ -1,5 +1,43 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## MAPPA accesso-per-sede: dove serve la guardia record (audit completo 2026-07-08)
+
+Dopo l'aggiunta della guardia per-sede sui Clienti (`assertClientAccessibleForSedi`), audit completo
+(1 agente legacy + 6 agenti Next) di TUTTI i moduli manage per mappare dove un operatore ristretto a
+un sottoinsieme di sedi puo' ancora accedere a record di ALTRE sedi via id diretto. Funzione-cardine
+legacy: `app_location_allowed_for_user(loc,user)` = loc ∈ sedi utente (admin=tutte). Regola record:
+location_id NULL/0 = accessibile a tutti; altrimenti deve essere in una sede consentita (o attivita').
+
+STATO PER MODULO (record per-sede | lista scoped alle sedi utente | guardia accesso record | legacy):
+- **GIA' OK (ENFORCED)**: clients (fatto), costs, cost-attachment, pos/sales (il piu' completo:
+  `assertSaleLocationAccess` su dettaglio + tutte le mutazioni).
+- **GAP DI FEDELTA' (il PHP restringe, il Next NO o parziale)** — priorita' ALTA:
+  - appointments: guardia su edit/delete/status/move OK, ma MANCA su GET `action=get` (dettaglio),
+    `cancel_done`, `swap_segment`.
+  - quotes: guardia su view/edit/delete/pdf/send OK, ma MANCA su `convert` (converti in vendita).
+  - installments (rate): guardia su mark_paid/pending OK, ma MANCA su `cancel_plan` e `create`.
+  - packages (pacchetti CLIENTE, `client_packages.location_id`): il PHP restringe use/edit/delete;
+    il Next e' solo LIST-ONLY -> nessuna guardia record.
+  - preorders (preordini): il PHP restringe (pos_preorders); il Next `collect` non guardato.
+  - stock-doc-attachment: il PHP blocca il download dell'allegato di un doc magazzino di altra sede;
+    il Next NON legge nemmeno `stock_docs.location_id` -> download/replace/delete cross-sede.
+  - products/stock_docs: `cancelStockDocument`/`saveStockMovement` non verificano la sede del documento.
+- **ENHANCEMENT (il PHP NON restringe l'accesso-record per sede; guardia = extra come i clienti)** —
+  priorita' MEDIA/opzionale: coupons (LIST-ONLY, per-sede via coupon_locations), promotions (NONE,
+  per-sede via promotion_locations, nessuno scoping lista), resources/cabine/staff (LIST-ONLY debole:
+  sede attiva scelta liberamente tra tutte le sedi, nessuna guardia record), giftcards/giftboxes
+  (istanze con location_id, LIST-ONLY), gifts (istanze con location_id, nessuno scoping), commissions
+  (mark-paid per id senza check; lista solo filtro utente), fidelity (wallet/credito/tessere per
+  client_id senza check).
+- **N/A (tenant-wide per design, nessun location_id)**: prepaids, recharge templates, catalogo
+  packages, template gift/giftbox, definizioni promozioni/coupon, note calendario, definizioni fidelity,
+  catalogo prodotti.
+
+Pattern gia' presenti nel Next da standardizzare: `assertSaleLocationAccess` (pos), `assertClient
+AccessibleForSedi` (clients), `appointmentLocationAllowedForUser`, `quoteUserCanAccess`, `getCostById`
+scoping. Raccomandato: un helper unico `assertLocationAccessById(slug, table, id, allowedLocationIds)`
+per i record con `location_id` diretto. Decisione scope implementazione: da concordare con l'utente.
+
 ## Clienti: audit + fix tag case-insensitive + validazione data-calendario (2026-07-08)
 
 Audit dedicato Clienti/anagrafica (clients.php 3897 vs Next clients/route.ts + db-repositories client
