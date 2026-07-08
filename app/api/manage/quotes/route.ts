@@ -1,7 +1,5 @@
-import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
+import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import {
-  convertDbQuoteToSale,
-  createDbQuote,
   deleteManageQuoteLegacy,
   getManageQuoteFormData,
   getManageQuotePrintData,
@@ -11,13 +9,10 @@ import {
   quoteNextNumber,
   saveManageQuote,
   sendManageQuoteEmailLegacy,
-  updateDbQuote,
-  type QuoteLineInput,
   type QuoteLocationCtx,
-  type QuoteSaveInput,
 } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
-import { assertLocationAccessById, getManageLocationContext } from "@/lib/manage-locations";
+import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can } from "@/lib/role-permissions";
 import { columnExists, dbExecute, tenantTable } from "@/lib/tenant-db";
@@ -165,19 +160,8 @@ export async function POST(request: Request) {
       return Response.json({ ok: true, sourceMode: "database", id: result.id, message: "Preventivo salvato" });
     }
 
-    if (action === "create") {
-      const quote = await createDbQuote(quoteSaveInputFromBody(body), tenantSlug);
-      return Response.json({ ok: true, source: "quotes?action=create", sourceMode: "database", quote, quotes: await listDbQuotes(tenantSlug) });
-    }
-
     const id = parseInteger(body.id);
     if (id <= 0) return jsonError("ID preventivo mancante.");
-
-    // Update an existing quote (compat consumer legacy del CORE editor).
-    if (action === "update") {
-      const quote = await updateDbQuote(id, quoteSaveInputFromBody(body), tenantSlug);
-      return Response.json({ ok: true, source: "quotes?action=update", sourceMode: "database", quote, quotes: await listDbQuotes(tenantSlug) });
-    }
 
     // Invio email legacy (quotes.php action=send): guardie in ordine legacy,
     // token pubblico, mark-sent solo su invio riuscito.
@@ -187,13 +171,10 @@ export async function POST(request: Request) {
       return Response.json({ ok: !result.err, sourceMode: "database", ...result });
     }
 
-    if (action === "convert") {
-      // Guardia per-sede: un operatore ristretto non puo' convertire un preventivo di altra sede.
-      const ctx = await quoteLocationCtx(tenantSlug);
-      await assertLocationAccessById(tenantSlug, "quotes", id, ctx.locationIds, "Preventivo non disponibile per le sedi abilitate.");
-      const result = await convertDbQuoteToSale(id, tenantSlug, parseInteger(body.location_id, 0));
-      return Response.json({ ok: true, source: "quotes?action=convert", sourceMode: "database", ...result, quotes: await listDbQuotes(tenantSlug) });
-    }
+    // NB: la conversione preventivo->vendita NON ha un'azione qui (come il legacy
+    // quotes.php, che non ha convert). Avviene dalla cassa via "Vai a Pagamenti"
+    // (pos?quote_id=X -> getManagePosQuoteCart + checkout con source_quote_id), che
+    // applica il gate accepted-only, l'idempotenza e l'emissione pacchetti.
 
     // Delete legacy (quotes.php action=delete): solo bozze, messaggi verbatim.
     if (action === "delete") {
@@ -206,56 +187,4 @@ export async function POST(request: Request) {
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Errore preventivi.");
   }
-}
-
-// Build the rich QuoteSaveInput (port of the quotes.php new/edit fields) from the
-// posted body: client + anagrafica snapshot + dates + notes/terms/public note +
-// the content lines (each with per-line IVA + discount%).
-function quoteSaveInputFromBody(body: Record<string, string>): QuoteSaveInput {
-  let lines: QuoteLineInput[] = [];
-  if (body.lines_json) {
-    try {
-      const parsed = JSON.parse(body.lines_json);
-      if (Array.isArray(parsed)) {
-        lines = parsed.map((l: Record<string, unknown>) => ({
-          type: (["service", "product", "package", "custom"].includes(String(l.type)) ? String(l.type) : "service") as QuoteLineInput["type"],
-          refId: Number(l.refId ?? 0) || 0,
-          name: String(l.name ?? ""),
-          sku: String(l.sku ?? ""),
-          quantity: Number(l.quantity ?? 1) || 1,
-          unitPrice: Number(l.unitPrice ?? 0) || 0,
-          taxRate: Number(l.taxRate ?? 0) || 0,
-          discountPercent: Number(l.discountPercent ?? 0) || 0,
-        }));
-      }
-    } catch {
-      // fallback below
-    }
-  }
-  if (lines.length === 0) {
-    lines = [{ type: "service", refId: parseInteger(body.service_id, 0), name: body.service_name ?? "", quantity: parseNumber(body.quantity, 1), unitPrice: body.price ? parseNumber(body.price, 0) : 0 }];
-  }
-  return {
-    clientId: parseInteger(body.client_id, 0),
-    clientName: body.client_name,
-    client: {
-      companyName: body.client_company_name,
-      vatNumber: body.client_vat_number,
-      taxCode: body.client_tax_code,
-      sdi: body.client_sdi,
-      pec: body.client_pec,
-      email: body.client_email,
-      phone: body.client_phone,
-      address: body.client_address,
-      cap: body.client_cap,
-      city: body.client_city,
-      province: body.client_province,
-    },
-    quoteDate: body.quote_date,
-    validUntil: body.valid_until,
-    notes: body.notes,
-    terms: body.terms,
-    publicNote: body.public_note,
-    lines,
-  };
 }

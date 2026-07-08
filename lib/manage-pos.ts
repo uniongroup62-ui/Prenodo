@@ -1051,10 +1051,11 @@ export async function checkoutManageSale(
   };
 }
 
-// Flip an imported quote to 'converted' + stamp converted_sale_id/at, mirroring the quotes-module
-// convertDbQuoteToSale flip (kept identical so both conversion paths leave the same quote state).
-// Guarded: reads the current status and skips if the quote is missing or already converted, so a
-// re-checkout never overwrites the original conversion.
+// Porta un preventivo importato a 'paid' (port di quote_sale_mark_quote_paid) + stampa
+// converted_sale_id/at se le colonne esistono. È l'UNICO path di conversione (il legacy non ha
+// un convert one-click; la cassa importa il preventivo e lo marca pagato). Guardato: legge lo
+// stato corrente e salta i preventivi mancanti o già paid/annullati, così un re-checkout non
+// sovrascrive la conversione originale.
 async function markQuoteConvertedFromSale(slug: string, quoteId: number, saleId: number): Promise<void> {
   const quoteTable = await tenantTable(slug, "quotes").catch(() => null);
   if (!quoteTable) return;

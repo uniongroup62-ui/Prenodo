@@ -8469,3 +8469,42 @@ RESIDUI DELIBERATI (documentati, non UI-cablati / fuori scope):
   read-only (view + PDF + stampa); l'email preventivo punta al sito pubblico legacy
   (PRENODO_PUBLIC_BASE_URL/.../quote_public) per la decisione cliente. Il writer Next di
   customer_decision_at/status non e' cablato. Da portare se/quando il pubblico passa a Next.
+
+## Preventivi: chiusura residui — accept/reject pubblico verificato + endpoint compat rimossi (2026-07-08)
+
+Seguito della voce precedente: chiusi i due "residui" indicati.
+
+1. ACCETTAZIONE/RIFIUTO PUBBLICO — NON era un buco (correzione). L'accept/reject del cliente è
+   GIÀ implementato e fedele, nell'AREA ACCOUNT cliente (non nella view token-based /api/public/
+   quote, dove la ricerca iniziale si era fermata). Componenti:
+   - decidePublicCustomerQuote (lib/public-customer-appointments.ts) — port 1:1 di booking.php
+     mode=quote_decision: ownership per client_id linkato o email; guardie + messaggi verbatim
+     (Preventivo non trovato / Non autorizzato / Preventivo scaduto [+ forza expired] / Hai gia
+     risposto a questo preventivo / Questo preventivo non e modificabile); UPDATE status +
+     customer_decision_at + customer_decision_source='booking' + customer_decision_seen_at=NULL
+     WHERE status='sent' AND customer_decision_at IS NULL.
+   - listPublicCustomerQuotes (mode=my_quotes) con gate canRespond.
+   - Route: app/api/account POST action=quotes / action=quote_decision.
+   - UI: components/public/hub-sections.tsx (pulsanti Accetta/Rifiuta su canRespond) +
+     per-tenant-hub.tsx (decideQuote -> action=quote_decision).
+   Unica deviazione documentata (già annotata nel codice): il check disponibilità catalogo
+   all'accettazione non è portato (la conversione in vendita lato manage rivalida gli articoli).
+   VERIFICATO live (test-quote-decision 10/10, sessione cliente forgiata): my_quotes con
+   canRespond; accept->accepted+decision_at+source booking; reject->rejected; ri-risposta
+   'Hai gia risposto'; scaduto 'Preventivo scaduto'+expired; non-owned 'Non autorizzato';
+   validazioni input; no-sessione 'Accesso cliente richiesto'. 9 account preesistenti + 5
+   clienti reali intatti, 0 residui.
+
+2. ENDPOINT COMPAT DIVERGENTI — RIMOSSI. Le azioni POST /api/manage/quotes action=convert
+   (convertDbQuoteToSale), create (createDbQuote, numerazione Q-00042), update (updateDbQuote)
+   erano shim divergenti non presenti nel legacy e non usati da UI/test/codice. Rimosse dalla
+   route (+ helper quoteSaveInputFromBody e import inutilizzati): ora ritornano "Azione
+   preventivi non supportata.", allineando la superficie API al legacy (save/send/delete/seen +
+   GET list/view/print/form/next_number). La conversione resta SOLO via import POS
+   (pos?quote_id=X), l'unico path fedele. Le funzioni compat restano come export morti
+   (irraggiungibili); pulizia del codice morto rimandata. Aggiornato il commento di
+   markQuoteConvertedFromSale (unico path, stato 'paid').
+
+VERIFICATO: test-preventivi 25/25, e2e-quotes 80/80, test-quote-decision 10/10, typecheck 0.
+Nessuna regressione. Modifiche: app/api/manage/quotes/route.ts (rimozione branch+helper),
+lib/manage-pos.ts (commento). NESSUN residuo aperto sui Preventivi.
