@@ -3,6 +3,7 @@ import type { ManagedClient } from "@/lib/tenant-store";
 import {
   addManageClientTag,
   archiveDbClient,
+  assertClientAccessibleForSedi,
   blockDbClient,
   createDbClient,
   deleteDbClientCascade,
@@ -49,6 +50,19 @@ export async function GET(request: Request) {
     raw: url.searchParams.get("location_id"),
     fallbackCurrent: true,
   });
+
+  // Guardia accesso per-SEDE (extra oltre il PHP, scelto 2026-07-08): un operatore ristretto a un
+  // sottoinsieme di sedi non puo' aprire/ispezionare clienti di altre sedi. Solo per le azioni
+  // cliente-specifiche per id; admin / utente senza restrizioni (locationIds vuoto) = tutte le sedi.
+  const sedeGuardedGet = ["get", "detail", "history", "delete_summary"];
+  if (sedeGuardedGet.includes(requestedAction)) {
+    const allowedSedi = String(session.user.role ?? "").toLowerCase() === "admin" ? [] : (session.user.locationIds ?? []);
+    try {
+      await assertClientAccessibleForSedi(tenantSlug, parseInteger(url.searchParams.get("id"), 0), allowedSedi);
+    } catch (error) {
+      return jsonError(error instanceof Error ? error.message : "Cliente non disponibile per le tue sedi.", 403);
+    }
+  }
 
   // Quick-booking drawer CLIENT HISTORY + RESIDUALS panels. Single GET that
   // returns BOTH the legacy `action=history` (summary) and `action=residuals`
@@ -302,6 +316,15 @@ export async function POST(request: Request) {
   const action = String(body.action ?? url.searchParams.get("action") ?? "create");
 
   try {
+    // Guardia accesso per-SEDE (extra oltre il PHP): le azioni che agiscono su un cliente esistente
+    // (per id) sono negate se il cliente non e' accessibile dalle sedi dell'operatore. `create` (nuovo
+    // cliente) e' escluso. admin / locationIds vuoto = tutte le sedi. Il throw viene reso in jsonError.
+    const sedeGuardedPost = new Set(["update", "archive", "block", "unblock", "add_tag", "remove_tag", "delete"]);
+    if (sedeGuardedPost.has(action)) {
+      const allowedSedi = String(session.user.role ?? "").toLowerCase() === "admin" ? [] : (session.user.locationIds ?? []);
+      await assertClientAccessibleForSedi(tenantSlug, parseInteger(body.id, 0), allowedSedi);
+    }
+
     if (action === "create") {
       const invalid = legacyClientValidationError(body);
       if (invalid) return jsonError(invalid);

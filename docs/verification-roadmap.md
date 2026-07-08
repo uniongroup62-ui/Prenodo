@@ -24,10 +24,28 @@ phone_home/phone2, sede, created_at DESC LIMIT 200), tag M:N. Verificato live: 2
 Divergenze deliberate/note (NON fixate): unblock azzera blocked_at/blocked_internal_note (il legacy li
 lascia come storico — Next piu' pulito); action `archive` = alias di block con nota fissa, NON usato
 dalla UI (residuo); email validata via regex Next vs FILTER_VALIDATE_EMAIL PHP (equivalente sui casi
-comuni). OSSERVAZIONE (piu' rilevante, non fixata): l'accesso per-SEDE su edit/delete/detail NON e'
-applicato a livello DB in Next (getDbClient/update/block/delete sono tenant-scoped ma non sede-scoped),
-mentre il legacy usa client_can_access_id — per tenant multi-sede con staff ristretto a una sede e' una
-divergenza di isolamento (richiede il port di app_client_location_access_where; cambio piu' ampio).
+comuni).
+CORREZIONE (2026-07-08, verifica sul codice legacy REALE): l'accesso per-SEDE su edit/delete/detail
+NON e' una divergenza. Il legacy `client_can_access_id` -> `app_client_accessible` (Helpers.php
+1139-1150) fa SOLO `SELECT 1 FROM clients WHERE id=?` (esistenza nel tenant, ignora location_id):
+il PHP NON restringe modifica/eliminazione per sede. Quindi il Next tenant-scoped e' FEDELE.
+L'unica vera (minore) divergenza sede e' nella LISTA: il Next `legacyList` filtra `location_id = ?`
+(stretto) mentre il legacy `app_client_location_access_where('c',[sede],false)` include anche i clienti
+con attivita' (appuntamenti/vendite/preventivi) in quella sede -> il Next mostra MENO clienti del PHP
+nella lista filtrata per sede (residuo minore non toccato).
+
+ENHANCEMENT applicato (scelta utente 2026-07-08 — funzione IN PIU' rispetto al PHP, non fedelta'):
+su richiesta esplicita e' stata AGGIUNTA una restrizione per-sede su modifica/eliminazione cliente
+che il PHP NON ha. `assertClientAccessibleForSedi(slug, clientId, allowedLocationIds)` (db-repositories)
+riusa la logica del filtro-sede legacy (location_id ∈ sedi utente OR senza sede NULL/0 OR attivita'
+appuntamenti/vendite/preventivi in quelle sedi) ed e' invocata dalla route su get/detail/history/
+delete_summary (GET) e update/archive/block/unblock/add_tag/remove_tag/delete (POST). Un operatore
+NON admin con `locationIds` ristretto non puo' aprire/modificare/eliminare clienti di altre sedi ->
+"Cliente non trovato o non disponibile per le tue sedi." (403). Admin o `locationIds` vuoto = tutte le
+sedi, nessuna restrizione (comportamento invariato). `create` (nuovo cliente) escluso. La LISTA resta
+gia' filtrata per sede. Verificato live: 18 check (test-clienti-sede: admin vede tutto; op(Sede1) ok su
+Sede1/NoSede/Sede2-con-attivita', NEGATO su Sede2; dati intatti dopo i tentativi) + regressione 24
+(test-clienti, sessione admin invariata).
 
 
 ## Buoni (Coupon): audit — port FEDELE, nessun fix necessario (2026-07-08)

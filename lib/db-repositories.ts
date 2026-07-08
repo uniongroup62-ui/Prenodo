@@ -222,6 +222,32 @@ export async function updateDbClient(id: number, input: Partial<ManagedClient>, 
   return getSingleClient(slug, id);
 }
 
+// assertClientAccessibleForSedi — guardia accesso per-SEDE (ENHANCEMENT oltre il PHP, richiesto
+// 2026-07-08). NB: il PHP NON restringe edit/delete per sede (client_can_access_id ->
+// app_client_accessible controlla solo l'esistenza nel tenant); questa e' una restrizione IN PIU'
+// chiesta esplicitamente. Logica del filtro-sede legacy app_client_location_access_where
+// (Helpers.php 1104-1137): un cliente e' accessibile dalle sedi consentite se la sua location_id ∈
+// sedi, OPPURE e' senza sede (NULL/0, includeNoLocation=true), OPPURE ha attivita' (appuntamenti/
+// vendite/preventivi) in una sede consentita. `allowedLocationIds` VUOTO = accesso a TUTTE le sedi
+// (admin o utente senza restrizioni) -> nessun controllo. Client inesistente -> ritorna (lo gestisce
+// il chiamante con "Cliente non trovato"); esiste ma non accessibile -> throw.
+export async function assertClientAccessibleForSedi(slug: string, clientId: number, allowedLocationIds: number[]): Promise<void> {
+  if (clientId <= 0) return;
+  const allowed = Array.from(new Set((allowedLocationIds ?? []).map((n) => Number(n) || 0).filter((n) => n > 0)));
+  if (allowed.length === 0) return; // admin / tutte le sedi -> nessuna restrizione
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "location_id", where: "id = ?", params: [clientId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  if (!rows[0]) return; // non trovato: lo gestisce il chiamante (getDbClient null -> 404)
+  const loc = Number(rows[0].location_id ?? 0) || 0;
+  if (loc === 0 || allowed.includes(loc)) return; // senza sede oppure sede consentita
+  // Attivita' del cliente in una sede consentita (appuntamenti/vendite/preventivi).
+  const ph = allowed.map(() => "?").join(",");
+  for (const tbl of ["appointments", "sales", "quotes"]) {
+    const act = await tenantSelect<RowDataPacket>({ slug, table: tbl, columns: "client_id", where: `client_id = ? AND location_id IN (${ph})`, params: [clientId, ...allowed], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    if (act[0]) return;
+  }
+  throw new Error("Cliente non trovato o non disponibile per le tue sedi.");
+}
+
 export async function archiveDbClient(id: number, slug: string): Promise<ManagedClient> {
   await tenantUpdate({ slug, table: "clients", id, values: { is_blocked: 1, blocked_at: new Date(), blocked_internal_note: "Archiviato da replica Next" } });
   return getSingleClient(slug, id);
