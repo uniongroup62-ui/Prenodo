@@ -6015,6 +6015,12 @@ async function issueGiftboxFromSale(slug: string, saleId: number, clientId: numb
     const templateItems = await giftboxTemplateItems(slug, giftboxId);
     for (const [index, tplItem] of templateItems.entries()) {
       if (tplItem.giftboxItemId <= 0) continue;
+      // Snapshot NON retroattivo del nome servizio (port di ensureInstanceItemsSnapshot ->
+      // service_master_snapshot_json): congela il nome all'emissione così il voucher/dettaglio
+      // resta corretto anche se il servizio viene poi rinominato o eliminato.
+      const serviceSnapshot = tplItem.itemType === "service" && tplItem.serviceId > 0
+        ? JSON.stringify({ name: await snapshotItemName(slug, "service", tplItem.serviceId) })
+        : null;
       await tenantInsert(itemsTable, await filterColumns(itemsTable.name, {
         instance_id: instanceId,
         giftbox_item_id: tplItem.giftboxItemId,
@@ -6024,6 +6030,7 @@ async function issueGiftboxFromSale(slug: string, saleId: number, clientId: numb
         qty: tplItem.qty,
         custom_label: tplItem.label || null,
         sort_order: index,
+        service_snapshot_json: serviceSnapshot,
       })).catch(() => undefined);
     }
   }

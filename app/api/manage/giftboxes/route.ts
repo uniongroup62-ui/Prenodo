@@ -4,12 +4,9 @@ import {
   deleteManageGiftBoxTemplate,
   getManageGiftBoxTemplate,
   giftFormCatalog,
-  issueDbGiftBox,
   listDbClients,
   listDbGiftBoxes,
   listManageGiftBoxTemplates,
-  redeemDbGiftBox,
-  redeemManageGiftBoxInstanceFull,
   saveManageGiftBoxTemplate,
 } from "@/lib/db-repositories";
 import {
@@ -153,7 +150,7 @@ export async function POST(request: Request) {
   try {
     // Guardia per-sede sulle azioni relative a un'ISTANZA esistente (per id); i template sono
     // tenant-wide (nessuna location). location_id istanza valorizzato solo al riscatto/POS; NULL = ok.
-    const gbInstanceActions = new Set(["redeem", "redeem_full", "redeem_instance", "update_instance", "update_instance_expiry", "redeem_instance_partial", "update_instance_internal_note", "send_email", "cancel", "cancel_instance"]);
+    const gbInstanceActions = new Set(["redeem_full", "redeem_instance", "update_instance", "update_instance_expiry", "redeem_instance_partial", "update_instance_internal_note", "send_email", "cancel", "cancel_instance"]);
     if (gbInstanceActions.has(String(action))) {
       await assertLocationAccessById(tenantSlug, "giftbox_instances", parseInteger(body.id, 0), sessionAllowedLocationIds(session), "GiftBox non disponibile per le tue sedi.");
     }
@@ -172,31 +169,39 @@ export async function POST(request: Request) {
       return Response.json({ ok: true, source: "giftbox?action=delete", sourceMode: "database", templates: await listManageGiftBoxTemplates(tenantSlug) });
     }
 
-    if (action === "issue") {
-      const input = {
-        clientId: parseInteger(body.client_id, 0),
-        recipientName: body.recipient_name,
-        serviceId: parseInteger(body.service_id, 0),
-        sessions: parseInteger(body.sessions, 1),
-        expiresAt: body.expires_at,
-      };
-      const giftBox = await issueDbGiftBox(input, tenantSlug);
-      return Response.json({ ok: true, source: "giftbox?action=issue", sourceMode: "database", giftBox, giftBoxes: await listDbGiftBoxes(tenantSlug) });
-    }
-
-    if (action === "redeem") {
-      const id = parseInteger(body.id);
-      const quantity = parseInteger(body.quantity, 1);
-      const giftBox = await redeemDbGiftBox(id, quantity, tenantSlug);
-      return Response.json({ ok: true, source: "giftbox?action=redeem", sourceMode: "database", giftBox, giftBoxes: await listDbGiftBoxes(tenantSlug) });
-    }
-
-    // Redeem an ENTIRE instance (port of redeem_instance): all remaining -> redeemed.
+    // Riscatto COMPLETO istanza (port di giftbox.php redeem_instance / GiftBox::redeemInstance):
+    // riscatta TUTTO il rimanente disponibile passando per il motore FEDELE del riscatto parziale,
+    // così vengono scritte le righe giftbox_redemption_items per-item e viene scalato lo stock
+    // dei prodotti (come redeemInstanceItems su tutti i rimanenti). NB: l'emissione GiftBox avviene
+    // solo dal POS (come il legacy, dove l'azione 'issue' è forzata a 'list'); niente issue/redeem
+    // quantità qui.
     if (action === "redeem_full" || action === "redeem_instance") {
       const id = parseInteger(body.instance_id ?? body.id, 0);
-      await redeemManageGiftBoxInstanceFull(tenantSlug, id, session.user.id);
       const detail = await getGiftBoxInstanceFull(tenantSlug, id);
-      return Response.json({ ok: true, source: "giftbox?action=redeem_full", sourceMode: "database", detail });
+      if (!detail) return jsonError("Istanza non trovata", 404);
+      // Guardie stato come redeemInstance legacy.
+      if (detail.status === "cancelled") return Response.json({ ok: false, error: "GiftBox annullata: non riscattabile." });
+      if (detail.status === "expired") return Response.json({ ok: false, error: "GiftBox scaduta: non riscattabile." });
+      if (detail.status === "redeemed") return Response.json({ ok: false, error: "GiftBox già riscattata." });
+      const qtyByItemId: Record<number, number> = {};
+      for (const it of detail.items) {
+        if (it.availableUnits > 0) qtyByItemId[it.giftboxItemId] = it.availableUnits;
+      }
+      const locationContext = await getManageLocationContext(tenantSlug).catch(() => null);
+      const currentLocation = locationContext?.locations.find((l) => l.id === locationContext.currentLocationId) ?? null;
+      try {
+        await redeemGiftBoxInstancePartial(
+          tenantSlug,
+          id,
+          qtyByItemId,
+          "Riscatto totale GiftBox",
+          session.user.id,
+          locationContext ? { id: locationContext.currentLocationId, name: currentLocation?.name ?? "" } : null,
+        );
+      } catch (error) {
+        return Response.json({ ok: false, error: `Errore: ${error instanceof Error ? error.message : ""}` });
+      }
+      return Response.json({ ok: true, source: "giftbox?action=redeem_full", sourceMode: "database", detail: await getGiftBoxInstanceFull(tenantSlug, id) });
     }
 
     // "Dati GiftBox" (port of _mode=update_instance): mittente/evento/nascondi

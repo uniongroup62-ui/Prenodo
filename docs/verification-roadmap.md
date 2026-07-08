@@ -8508,3 +8508,45 @@ Seguito della voce precedente: chiusi i due "residui" indicati.
 VERIFICATO: test-preventivi 25/25, e2e-quotes 80/80, test-quote-decision 10/10, typecheck 0.
 Nessuna regressione. Modifiche: app/api/manage/quotes/route.ts (rimozione branch+helper),
 lib/manage-pos.ts (commento). NESSUN residuo aperto sui Preventivi.
+
+## GiftBox: audit completo + fix riscatto-completo (stock+per-item) e snapshot; rimossi compat issue/redeem (2026-07-08)
+
+Audit 1:1 del modulo GiftBox vs giftbox.php (143KB) + GiftBox.php (193KB) + GiftBoxAvailability
++ giftbox_voucher/settings + emissione POS (Gifts.php NON contiene logica giftbox: è l'engine
+Omaggi). Tre livelli di codice Next: FEDELE (gift-issue-details, cablato UI), COMPAT (issue/redeem/
+GET-default), MORTO (updateManageGiftBoxInstance, listManageGiftboxRows). Emissione reale = solo
+POS (issueGiftboxFromSale), come il legacy dove l'azione 'issue' è forzata a 'list'.
+
+FEDELI e verificati LIVE (test-giftbox 27/27): template CRUD (validazioni verbatim: "Nome GiftBox
+obbligatorio", "seleziona almeno un livello Punti", "Aggiungi almeno un contenuto"; save items;
+soft-delete deleted_at+active=0), view dettaglio (stati Attiva/Riscattata/Scaduta/Annullata),
+riscatto PARZIALE per-item (scrive giftbox_redemption_items + scala products.stock + status
+redeemed a esaurimento), modifica istanza (evento/destinatario/nota/dedica) + update_instance_expiry
+(guardie: scaduta<oggi, annullata, riscattata) + internal_note, annullamento (guardie già
+annullata / già riscattata), send_email (guardia email), auto-expire al load (issued+scaduta ->
+expired).
+
+CORRETTO:
+1. RISCATTO COMPLETO (redeem_full / redeem_instance): redeemManageGiftBoxInstanceFull flippava
+   status='redeemed' ma NON scriveva giftbox_redemption_items né scalava lo stock prodotti ->
+   incoerenza col reader fedele (getGiftBoxInstanceFull calcola il residuo per-item dai
+   redemption_items: mostrava "Riscattata" con ogni item ancora pieno + stock non decrementato).
+   Ora la route delega al motore FEDELE redeemGiftBoxInstancePartial su tutti i rimanenti
+   disponibili (per-item + stock + note "Riscatto totale GiftBox"), come il legacy redeemInstance
+   -> redeemInstanceItems. Guardie stato preservate (annullata/scaduta/già riscattata).
+2. SNAPSHOT nome servizio all'emissione POS: issueGiftboxFromSale non popolava
+   giftbox_instance_items.service_snapshot_json (port di ensureInstanceItemsSnapshot ->
+   service_master_snapshot_json). Ora congela {name} così voucher/dettaglio restano corretti se il
+   servizio viene poi rinominato/eliminato (stessa classe di fix dei Pacchetti).
+3. RIMOSSI gli endpoint compat divergenti issue (issueDbGiftBox: stub demo che emetteva su un
+   template arbitrario - PERICOLOSO) e redeem (redeemDbGiftBox: no per-item, no stock). Non usati
+   da UI/test (la UI emette da POS e riscatta via redeem_instance_partial). Ora "Azione GiftBox
+   non supportata". Funzioni compat lasciate come export morti.
+
+VERIFICATO: test-giftbox 27/27 (incl. emissione POS con snapshot + redeem_full corretto),
+typecheck 0. Modifiche isolate al path giftbox: app/api/manage/giftboxes/route.ts (redeem_full
+delega + rimozione issue/redeem) + lib/manage-pos.ts (service_snapshot_json in issueGiftboxFromSale).
+Residui ZZ=0; produzione intatta (template id16 + istanza id15); 5 clienti reali intatti.
+NB: la regression cross-modulo (checkout servizi/prodotti/pacchetti) è stata bloccata da
+saturazione transitoria del pooler Supabase (max 15 conn, dev server); le modifiche non toccano
+quei path (issueGiftboxFromSale gira solo per righe type='giftbox').
