@@ -41,8 +41,11 @@ regressione e2e 52/0):
   con allLocations=true -> locationId=0 -> buildLocationScope scopa a IN(sedi permesse) OR NULL;
   le mutazioni (toggle/delete/bulk/save/get) ricevono `allowedIds` (sedi permesse) cosi' in modalita'
   "tutte" un costo visibile e' anche gestibile; getCostById supporta la modalita' allowedIds.
-RESTA rinviato (architetturale): MIME sniffed vs declared sull'upload allegato (R2, robustezza
-inferiore ma tipi/limiti/messaggi identici).
+- **MIME sniffing upload allegato** (FATTO): la route cost-attachment ora determina il tipo dai
+  MAGIC BYTES del contenuto (%PDF -> application/pdf; FF D8 FF -> image/jpeg) invece di fidarsi del
+  Content-Type dichiarato dal browser (port di app_detect_file_mime). Un file rinominato/non valido
+  viene rifiutato "Formato non supportato (solo PDF o JPG)"; un file valido con tipo dichiarato
+  errato viene comunque accettato col MIME reale. Verificato 5/5. Non resta nulla di rinviato.
 
 
 ## Gestione Rate: audit + fix 2 MAJOR + 2 minori (2026-07-08)

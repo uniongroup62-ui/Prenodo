@@ -39,6 +39,15 @@ function isR2Key(path: string): boolean {
   return /^t\d+\//.test(path);
 }
 
+// SNIFFING del MIME reale dai magic bytes (port di app_detect_file_mime del legacy): non ci si
+// fida del Content-Type DICHIARATO dal browser (un file rinominato .pdf/.jpg passerebbe). PDF
+// inizia con "%PDF" (25 50 44 46); JPEG con FF D8 FF (copre JFIF ed EXIF).
+function detectFileMime(bytes: Uint8Array): "application/pdf" | "image/jpeg" | null {
+  if (bytes.length >= 4 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) return "application/pdf";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  return null;
+}
+
 async function loadCost(slug: string, id: number, locationId = 0): Promise<RowDataPacket | null> {
   // SCOPE SEDE: un costo di un'altra sede non è accessibile (download/upload) — allineato al
   // check app_location_allowed_for_user del legacy cost_attachment.php. NULL-permissiva.
@@ -128,16 +137,20 @@ export async function POST(request: Request) {
     const file = form.get("attachment");
     if (!(file instanceof File) || file.size <= 0) return jsonError("Nessun file caricato.", 400);
     if (file.size > MAX_BYTES) return jsonError("File troppo grande (max 5 MB)", 400);
-    const ext = EXT_BY_MIME[String(file.type).toLowerCase()];
-    if (!ext) return jsonError("Formato non supportato (solo PDF o JPG)", 400);
+
+    const body = new Uint8Array(await file.arrayBuffer());
+    // Tipo AUTORITATIVO dal contenuto reale (magic bytes), non dal Content-Type dichiarato: un file
+    // rinominato (o con tipo browser errato) che non e' davvero PDF/JPG viene rifiutato come nel legacy.
+    const detectedMime = detectFileMime(body);
+    const ext = detectedMime ? EXT_BY_MIME[detectedMime] : undefined;
+    if (!detectedMime || !ext) return jsonError("Formato non supportato (solo PDF o JPG)", 400);
     if (!storagePrivateConfigured()) return jsonError(STORAGE_NOT_CONFIGURED_ERROR, 503);
 
     const table = await tenantTable(tenantSlug, "costs");
     const tenantId = Number(table.tenantId ?? 0);
     // Key come il legacy: costs/<id>/<random>.<ext> (base random esadecimale).
     const key = `t${tenantId}/costs/${costId}/${randomBytes(10).toString("hex")}.${ext}`;
-    const body = new Uint8Array(await file.arrayBuffer());
-    await putPrivateObject(key, body, String(file.type).toLowerCase());
+    await putPrivateObject(key, body, detectedMime);
 
     const attachmentName = String(file.name ?? `documento.${ext}`).trim().slice(0, 190) || `documento.${ext}`;
     await tenantUpdate({
@@ -146,7 +159,7 @@ export async function POST(request: Request) {
       id: costId,
       values: {
         attachment_path: key,
-        attachment_mime: String(file.type).toLowerCase(),
+        attachment_mime: detectedMime,
         attachment_name: attachmentName,
         attachment_size: file.size,
       },
