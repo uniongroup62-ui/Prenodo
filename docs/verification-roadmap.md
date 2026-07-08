@@ -8557,3 +8557,45 @@ richiede. Verificato empiricamente che l'app è corretta con una sede attiva: Se
 product_stocks(21) e movimento Sede1; Sede51 -> blocca "Prodotto non abbinato alla sede
 selezionata"; nessuna sede -> salta la scalatura per-sede. Fix applicato al TEST (selezione sede
 Sede1 dopo il login via POST /api/manage/locations), come il flusso reale operatore -> e2e-giftbox 64/64.
+
+## GiftCard: audit completo + fix ledger storno (refund->topup) e blocco issue (2026-07-08)
+
+Audit 1:1 del modulo GiftCard vs giftcard.php (91KB) + GiftCard.php (104KB) + giftcard_voucher/
+settings + emissione POS + riscatto appuntamento. Modello IBRIDO: saldo monetario (balance/
+initial_amount) + item (giftcard_items con redeemed_qty sulla riga); status 'redeemed' solo con
+balance<=0 E item residui<=0. La route usa le funzioni FEDELI (gift-issue-details) per view/
+manage_list/update/update_expiry/update_internal_note/update_note/redeem/redeem_item/send_email;
+'issue' era compat; topup/cancel già bloccati ("Operazione non disponibile", come il legacy).
+Emissione reale = solo POS (issueGiftcardFromSale). Funzioni compat/morte: redeemDbGiftCard (solo
+appuntamenti), getManageGiftCard, updateManageGiftCard, listManageGiftcardRows.
+
+FEDELI e verificati LIVE (test-giftcard 22/22): emissione POS (code GC-XXXX-XXXX-XXXX, balance,
+token 64hex), view/lista, riscatto a CREDITO (scala balance, tx 'redeem' -amount, redeemed a 0,
+"Saldo insufficiente"/"Importo non valido"), riscatto per-ITEM (redeemed_qty + scala product_stocks
+per-sede + status a esaurimento, "Quantità eccede il residuo"), modifica (evento/destinatario/
+nota/dedica) + update_expiry (guardia "GiftCard riscattata") + internal_note, lock destinatario su
+card parzialmente riscattata (balance!=initial), send_email guard, topup/cancel rifiutati.
+
+CORRETTO:
+1. LEDGER STORNO (bug reale): restoreGiftcardBalance (annullo appuntamento) e refundDbGiftCard
+   (storno vendita) inserivano giftcard_transactions.type='refund', ma il CHECK Postgres ammette
+   solo issue/redeem/topup/cancel/adjust -> l'insert falliva SILENZIOSAMENTE (il saldo veniva
+   ripristinato ma la riga di ledger andava persa = audit-trail incompleto). Il legacy usa
+   topupGiftCard (type='topup') per gli storni/rimborsi. Fix: type 'refund' -> 'topup' in entrambe.
+   Verificato (test-giftcard J2): annullo vendita pagata con giftcard -> saldo ripristinato +
+   transazione 'topup' 30 con nota "Storno vendita #N" (prima persa).
+2. EMISSIONE da gestione: 'issue' chiamava lo stub issueDbGiftCard (creava una giftcard su input
+   arbitrario). Il legacy rifiuta _mode=issue con "La creazione delle GiftCard avviene da Pagamenti
+   (pulsante GiftCard)." Fix: la route 'issue' ora ritorna quel messaggio verbatim (emissione solo POS).
+
+RESIDUO DELIBERATO (documentato): il cron app/api/cron/giftcard-send reimplementa il body email
+(buildGiftcardEmail) e OMETTE l'immagine hero evento + usa subject leggermente diversi rispetto al
+builder fedele sendGiftCardEmailManage. Il cron è un'aggiunta Next (il legacy invia i programmati
+solo al page-load, con l'unico builder). Il path primario Next (page-load sendDueScheduledGiftCards
+-> sendGiftCardEmailManage) è già fedele; il cron è un backup. Non allineato ora perché non
+live-testabile senza SES (rischio su job di produzione); da unificare a sendGiftCardEmailManage.
+
+VERIFICATO: test-giftcard 22/22, e2e-giftcard 94/94 (dopo aver aggiunto al vecchio test la selezione
+sede post-login, come per e2e-giftbox: era l'unica falla, un problema di setup del test - la lista a
+filtro sede STRETTO richiede una sede attiva), test-pos-checkout 8/8, test-pkg-pos 8/8, typecheck 0.
+Residui ZZ=0; tenant 25 giftcards baseline=0 preservato; 5 clienti reali intatti.

@@ -1,5 +1,5 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
-import { issueDbGiftCard, listDbClients, listDbGiftCards } from "@/lib/db-repositories";
+import { listDbClients, listDbGiftCards } from "@/lib/db-repositories";
 import {
   GIFT_EVENT_OPTIONS,
   expireDueGiftCards,
@@ -121,15 +121,10 @@ export async function POST(request: Request) {
     if (gcInstanceActions.has(String(action))) {
       await assertLocationAccessById(tenantSlug, "giftcards", parseInteger(body.id, 0), sessionAllowedLocationIds(session), "Gift card non disponibile per le tue sedi.");
     }
+    // Emissione GiftCard: SOLO da Pagamenti (POS). Il legacy rifiuta _mode=issue
+    // (giftcard.php:446): la creazione via questa route non esiste. Messaggio verbatim.
     if (action === "issue") {
-      const input = {
-        clientId: parseInteger(body.client_id, 0),
-        recipientName: body.recipient_name,
-        initialAmount: parseNumber(body.amount, 0),
-        expiresAt: body.expires_at,
-      };
-      const giftCard = await issueDbGiftCard(input, tenantSlug);
-      return Response.json({ ok: true, source: "giftcard?action=issue", sourceMode: "database", giftCard, giftCards: await listDbGiftCards(tenantSlug) });
+      return Response.json({ ok: false, error: "La creazione delle GiftCard avviene da Pagamenti (pulsante GiftCard)." });
     }
 
     // "Dati GiftCard" (port of _mode=update): lock destinatario server-side +

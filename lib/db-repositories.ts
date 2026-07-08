@@ -5376,9 +5376,12 @@ async function restoreGiftcardBalance(slug: string, giftcardId: number, amount: 
       values.redeemed_at = null;
     }
     await tenantUpdate({ slug, table: "giftcards", id: giftcardId, values });
+    // Storno = topupGiftCard nel legacy (movimento type='topup' con nota "Storno ..."):
+    // 'refund' NON è un tipo ammesso dal CHECK di giftcard_transactions.type e l'insert
+    // fallirebbe silenziosamente perdendo l'audit-trail.
     await tenantInsert(await tenantTable(slug, "giftcard_transactions"), {
       giftcard_id: giftcardId,
-      type: "refund",
+      type: "topup",
       amount: refund,
       note: "Storno eliminazione appuntamento",
       created_at: new Date(),
@@ -8507,9 +8510,11 @@ export async function refundDbGiftCard(id: number, amount: number, slug: string,
     values.redeemed_at = null;
   }
   await tenantUpdate({ slug, table: "giftcards", id, values });
+  // Storno = topupGiftCard nel legacy (movimento type='topup'): 'refund' non è ammesso dal
+  // CHECK di giftcard_transactions.type -> l'insert fallirebbe silenziosamente (audit perso).
   await tenantInsert(await tenantTable(slug, "giftcard_transactions"), {
     giftcard_id: id,
-    type: "refund",
+    type: "topup",
     amount: refund,
     note,
     created_at: new Date(),
