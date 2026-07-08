@@ -8588,12 +8588,16 @@ CORRETTO:
    arbitrario). Il legacy rifiuta _mode=issue con "La creazione delle GiftCard avviene da Pagamenti
    (pulsante GiftCard)." Fix: la route 'issue' ora ritorna quel messaggio verbatim (emissione solo POS).
 
-RESIDUO DELIBERATO (documentato): il cron app/api/cron/giftcard-send reimplementa il body email
-(buildGiftcardEmail) e OMETTE l'immagine hero evento + usa subject leggermente diversi rispetto al
-builder fedele sendGiftCardEmailManage. Il cron è un'aggiunta Next (il legacy invia i programmati
-solo al page-load, con l'unico builder). Il path primario Next (page-load sendDueScheduledGiftCards
--> sendGiftCardEmailManage) è già fedele; il cron è un backup. Non allineato ora perché non
-live-testabile senza SES (rischio su job di produzione); da unificare a sendGiftCardEmailManage.
+3. EMAIL CRON UNIFICATA (chiuso 2026-07-09): il cron app/api/cron/giftcard-send reimplementava il
+   body email (buildGiftcardEmail) OMETTENDO l'immagine hero evento (con un commento errato: "non
+   servita da Next" — invece public/assets/img/giftcard-events/*.png ESISTONO) e usando subject
+   diversi. Ora il cron DELEGA a sendGiftCardEmailManage (lo stesso identico builder fedele usato
+   dal page-load sendDueScheduledGiftCards e dal POS): l'email programmata è fedele per costruzione
+   (immagine hero + subject + condizioni identici). Rimossi il builder duplicato + gli helper +
+   loadBusinessSettings + import inutilizzati; SELECT ridotto ai soli campi necessari (WHERE
+   invariato). Verificato: typecheck 0, eslint pulito, GET /api/cron/giftcard-send risponde
+   {ok, job:"giftcard-send", sendEnabled:false, due:0} senza errori (il ramo d'invio SES non è
+   live-testabile in dev, ma usa ora il builder fedele già verificato dal path page-load/manage).
 
 VERIFICATO: test-giftcard 22/22, e2e-giftcard 94/94 (dopo aver aggiunto al vecchio test la selezione
 sede post-login, come per e2e-giftbox: era l'unica falla, un problema di setup del test - la lista a
