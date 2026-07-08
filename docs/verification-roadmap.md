@@ -8365,3 +8365,53 @@ quel filtro è un no-op; per questo si interroga service_locations direttamente.
 SOLO la tendina filtro del calendario (il drawer QB è il componente globale separato
 quick-booking-drawer.tsx, non usa context.services). VERIFICATO live (4/4, dati
 esistenti): Sede1 -> servizi 9 (21+51) e 82 (solo 21); Sede2 -> solo 9, l'82 filtrato via.
+
+## Pacchetti: emissione fedele — snapshot non-retroattivo, sedute solo-servizi, sede (2026-07-08)
+
+Audit completo del modulo Pacchetti (catalogo + pacchetti cliente) confrontato con
+pos.php / packages.php / ClientPackages.php / ClientPackageSnapshot.php. FEDELI e
+verificati: catalogo CRUD, formula prezzo (line_total = round(qty*unit − clamp(disc));
+total = round(Σ line − clamp(totalDisc)); sessions_total = Σ qty dei soli SERVIZI),
+validazioni (nome, ≥1 servizio, sede obbligatoria), delete-detach (package_id→NULL,
+package_name conservato, figli droppati), consume/restore per-servizio con riserve su
+prenotazioni aperte, update_expiry (guard "già utilizzato" = remaining<total o completed;
+riattivazione bloccata se un contenuto è stato eliminato), stati derivati
+(attivo/completato/scaduto/annullato), blocco creazione manuale ("solo da Pagamenti").
+
+TRE bug di EMISSIONE trovati e corretti (i prodotti dentro un pacchetto erano gestiti male):
+
+1. issueDbClientPackage (packages route action=issue). sessions_total sommava anche i
+   PRODOTTI: mapPackageCatalogItem assegna sessions=qty a OGNI item (prodotti inclusi),
+   quindi un pacchetto svcA×2 + svcB×1 + prodA×1 emetteva 4 sedute invece di 3. Ora usa il
+   sessions_total memorizzato (calcolato in salvataggio dai soli servizi).
+   insertClientPackageItemsFromCatalog riscritto: legge i package_items grezzi, snapshotta
+   ogni item col SUO item_type, crea client_package_services SOLO per i servizi. Prima
+   salvava tutto come item_type='service' → il ritiro-prodotto (usage_add product, che cerca
+   client_package_items con type='product') era ROTTO.
+
+2. issueDbPackageFromSale (conversione preventivo→vendita, via checkoutDbSale). Impostava
+   sessions_total = qty venduta e NESSUNO snapshot. Ora delega a issueDbClientPackage
+   (sedute dal catalogo + snapshot completo) e imposta location_id.
+
+3. issuePackageFromSale (checkout POS di PRODUZIONE, manage-pos). sessions_total già corretto
+   (packageSessionsTotal) e client_package_services già creati, MA nessuno snapshot
+   client_package_items — il legacy chiama ClientPackageSnapshot::snapshotFromCatalog
+   ("Snapshot contenuto pacchetti cliente (non retroattivo)"). Aggiunto
+   snapshotClientPackageItemsFromCatalog (preferisce package_items servizi+prodotti, fallback
+   sui servizi) + location_id (legacy pos_update_client_package_context $posLocationId). Senza
+   lo snapshot, se il catalogo veniva in seguito eliminato/modificato il contenuto PRODOTTI del
+   pacchetto cliente andava perso (il fallback su catalogo di clientPackageSnapshotItems non
+   aveva più il package_id) → il ritiro-prodotto smetteva di funzionare.
+
+VERIFICATO live:
+- test-pacchetti (26/26): catalogo+validazioni+formula prezzo+righe; issue (sedute 3, non 4);
+  consume/restore servizio; SNAPSHOT prodotto item_type='product' + niente riga sedute per il
+  prodotto; ritiro prodotto (stock 5→4→5); update_expiry (data valida/passata/pacchetto usato);
+  client_save edit/annullo bloccato; stati derivati; delete-detach; listing.
+- test-pkg-pos (8/8): checkout POS reale con riga pacchetto → sessions_total=3 (dal catalogo,
+  NON dalla qty), sede=21, client_package_services solo-servizi, client_package_items snapshot
+  con prodotto item_type='product'; poi DELETE catalogo → CP detached ma snapshot CONSERVATO;
+  ritiro prodotto post-delete ancora funzionante (prova del "non retroattivo").
+- Regression: test-pos-checkout 8/8 (checkout servizi/sconto/annulla/elimina intatto),
+  test-magazzino 41/41, typecheck 0 errori.
+Residui ZZ=0 in services/products/packages/client_packages/sale_items/stock_docs; 5 clienti reali intatti.

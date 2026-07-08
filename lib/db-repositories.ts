@@ -5527,7 +5527,7 @@ export async function checkoutDbSale(input: PosCheckoutInput, slug: string): Pro
       await issueDbPrepaidFromSale({ slug, saleId, saleItemId, clientId: client.id, item });
     }
     if (item.type === "package" && client.id > 0) {
-      await issueDbPackageFromSale({ slug, saleId, clientId: client.id, item });
+      await issueDbPackageFromSale({ slug, saleId, clientId: client.id, item, locationId: input.locationId ?? null });
     }
     if (item.type === "giftcard" && client.id > 0) {
       await issueDbGiftCardFromSale({ slug, clientId: client.id, recipientName: client.name, amount: item.total, locationId: input.locationId ?? null });
@@ -10049,7 +10049,10 @@ export async function issueDbClientPackage(
 
   const catalog = await mapPackageCatalog(slug, catalogRows[0]);
   const client = await resolveSaleClientForDb(slug, input.clientId ?? 0, input.clientName);
-  const totalSessions = Math.max(1, catalog.items.reduce((total, item) => total + item.sessions, 0) || Number(catalogRows[0].sessions_total ?? 1));
+  // Le sedute del pacchetto contano SOLO i servizi: usa il sessions_total memorizzato
+  // (calcolato in salvataggio dai soli item servizio), NON la somma di catalog.items
+  // che include anche i prodotti (mappati come pseudo-servizi da mapPackageCatalogItem).
+  const totalSessions = Math.max(1, Number(catalogRows[0].sessions_total ?? 0) || catalog.items.reduce((total, item) => total + item.sessions, 0));
   const expiresAt = input.expiresAt ?? addDaysDate(Number(catalogRows[0].validity_days ?? 180) || 180);
   const id = await tenantInsert(await tenantTable(slug, "client_packages"), {
     client_id: client.id,
@@ -19266,24 +19269,72 @@ function clientPackageStatus(status: string, remaining: number, expiresAt: strin
 }
 
 async function insertClientPackageItemsFromCatalog(slug: string, clientPackageId: number, catalog: PackageCatalog): Promise<void> {
-  for (const [index, item] of catalog.items.entries()) {
+  // Snapshot fedele del contenuto catalogo: ogni riga package_items (servizi E prodotti)
+  // viene copiata in client_package_items con l'item_type CORRETTO (serve item_type='product'
+  // per il ritiro prodotto). Le SEDUTE (client_package_services) esistono invece solo per i
+  // SERVIZI: i prodotti sono "ritiro prodotto", non sedute, quindi non generano righe servizio.
+  const itemRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "package_items",
+    columns: "item_type, item_id, qty, unit_price, line_total, sort_order",
+    where: "package_id = ?",
+    params: [catalog.id],
+    orderBy: "sort_order ASC, id ASC",
+  }).catch(() => [] as RowDataPacket[]);
+
+  if (itemRows.length === 0) {
+    // Catalogo legacy senza righe package_items: fallback sui servizi mappati.
+    for (const [index, item] of catalog.items.entries()) {
+      await tenantInsert(await tenantTable(slug, "client_package_items"), {
+        client_package_id: clientPackageId,
+        item_type: "service",
+        item_id: item.serviceId,
+        qty: item.sessions,
+        unit_price: 0,
+        line_total: 0,
+        sort_order: index,
+        item_name_snapshot: item.serviceName,
+      }).catch(() => 0);
+      await tenantInsert(await tenantTable(slug, "client_package_services"), {
+        client_package_id: clientPackageId,
+        service_id: item.serviceId,
+        sessions_total: item.sessions,
+        sessions_remaining: item.sessions,
+        sort_order: index,
+      }).catch(() => 0);
+    }
+    return;
+  }
+
+  let sortOrder = 0;
+  for (const row of itemRows) {
+    const itemType = String(row.item_type ?? "service").toLowerCase() === "product" ? "product" : "service";
+    const itemId = Number(row.item_id ?? 0) || 0;
+    if (itemId <= 0) continue;
+    const qty = Math.max(1, Math.round(Number(row.qty ?? 1)));
+    const name = itemType === "product"
+      ? await productNameById(slug, itemId, "Prodotto")
+      : await serviceNameById(slug, itemId, "Servizio");
     await tenantInsert(await tenantTable(slug, "client_package_items"), {
       client_package_id: clientPackageId,
-      item_type: "service",
-      item_id: item.serviceId,
-      qty: item.sessions,
-      unit_price: 0,
-      line_total: 0,
-      sort_order: index,
-      item_name_snapshot: item.serviceName,
+      item_type: itemType,
+      item_id: itemId,
+      qty,
+      unit_price: roundMoney(Number(row.unit_price ?? 0)),
+      line_total: roundMoney(Number(row.line_total ?? 0)),
+      sort_order: sortOrder,
+      item_name_snapshot: name,
     }).catch(() => 0);
-    await tenantInsert(await tenantTable(slug, "client_package_services"), {
-      client_package_id: clientPackageId,
-      service_id: item.serviceId,
-      sessions_total: item.sessions,
-      sessions_remaining: item.sessions,
-      sort_order: index,
-    }).catch(() => 0);
+    if (itemType === "service") {
+      await tenantInsert(await tenantTable(slug, "client_package_services"), {
+        client_package_id: clientPackageId,
+        service_id: itemId,
+        sessions_total: qty,
+        sessions_remaining: qty,
+        sort_order: sortOrder,
+      }).catch(() => 0);
+    }
+    sortOrder += 1;
   }
 }
 
@@ -21260,6 +21311,12 @@ async function serviceNameById(slug: string, serviceId: number, fallback: string
   return String(rows[0]?.name ?? fallback);
 }
 
+async function productNameById(slug: string, productId: number, fallback: string): Promise<string> {
+  if (productId <= 0) return fallback;
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "products", columns: "name", where: "id = ?", params: [productId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  return String(rows[0]?.name ?? fallback);
+}
+
 type ConfigDef = {
   title: string;
   source?: string;
@@ -21751,19 +21808,36 @@ async function issueDbPrepaidFromSale({ slug, saleId, saleItemId, clientId, item
   }
 }
 
-async function issueDbPackageFromSale({ slug, saleId, clientId, item }: { slug: string; saleId: number; clientId: number; item: PosSaleItem }): Promise<void> {
+async function issueDbPackageFromSale({ slug, saleId, clientId, item, locationId }: { slug: string; saleId: number; clientId: number; item: PosSaleItem; locationId?: number | null }): Promise<void> {
   try {
-    await tenantInsert(await tenantTable(slug, "client_packages"), {
-      client_id: clientId,
-      package_id: item.refId > 0 ? item.refId : null,
-      package_name: item.name,
-      purchase_date: todayIso(),
-      start_date: todayIso(),
-      sessions_total: item.quantity,
-      sessions_remaining: item.quantity,
-      status: "active",
-      sale_id: saleId,
-    });
+    const units = Math.max(1, Math.round(item.quantity || 1));
+    if (item.refId > 0) {
+      // Emissione FEDELE dal catalogo (pos.php: sessions_total dai package_services del
+      // catalogo, righe client_package_services per servizio, snapshotFromCatalog per
+      // client_package_items servizi+prodotti). issueDbClientPackage fa esattamente questo;
+      // qui aggiungiamo solo la sede (pos_update_client_package_context $posLocationId).
+      // Una emissione per unità venduta (una riga client_packages per pacchetto acquistato).
+      for (let n = 0; n < units; n += 1) {
+        const cp = await issueDbClientPackage({ packageId: item.refId, clientId, sourceSaleId: saleId }, slug);
+        if (locationId && locationId > 0 && cp && cp.id > 0) {
+          await tenantUpdate({ slug, table: "client_packages", id: cp.id, values: { location_id: locationId } }).catch(() => 0);
+        }
+      }
+    } else {
+      // Pacchetto ad-hoc senza catalogo: nessuno snapshot possibile, aggregato semplice.
+      await tenantInsert(await tenantTable(slug, "client_packages"), {
+        client_id: clientId,
+        package_id: null,
+        package_name: item.name,
+        purchase_date: todayIso(),
+        start_date: todayIso(),
+        sessions_total: units,
+        sessions_remaining: units,
+        status: "active",
+        sale_id: saleId,
+        location_id: locationId && locationId > 0 ? locationId : null,
+      });
+    }
   } catch {
     // Optional module/table can be absent in older installs.
   }

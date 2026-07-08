@@ -891,7 +891,7 @@ export async function checkoutManageSale(
     }
     if (item.type === "prepaid" && client.id > 0) await issuePrepaidFromSale(slug, saleId, saleItemId, client.id, item);
     if (item.type === "package" && client.id > 0) {
-      const clientPackageId = await issuePackageFromSale(slug, saleId, client.id, item);
+      const clientPackageId = await issuePackageFromSale(slug, saleId, client.id, item, locationId);
       if (clientPackageId > 0) createdClientPackages.push(clientPackageId);
     }
     // SELL a GiftCard: issue a real giftcards row owned by the chosen recipient (so it
@@ -5089,7 +5089,7 @@ async function issuePrepaidFromSale(slug: string, saleId: number, saleItemId: nu
   })).catch(() => undefined);
 }
 
-async function issuePackageFromSale(slug: string, saleId: number, clientId: number, item: PosSaleItem): Promise<number> {
+async function issuePackageFromSale(slug: string, saleId: number, clientId: number, item: PosSaleItem, locationId: number): Promise<number> {
   const table = await tenantTable(slug, "client_packages").catch(() => null);
   if (!table) return 0;
   // Sessions come from the package TEMPLATE (sum of package_services / package_items, or
@@ -5120,6 +5120,9 @@ async function issuePackageFromSale(slug: string, saleId: number, clientId: numb
     sessions_total: sessions,
     sessions_remaining: sessions,
     status: "active",
+    // Sede di vendita (legacy pos_update_client_package_context $posLocationId): serve al
+    // ritiro prodotto per-sede e ai filtri per sede del pacchetto cliente.
+    location_id: locationId > 0 ? locationId : null,
     notes: item.note ?? null,
   })).catch(() => 0);
 
@@ -5143,8 +5146,80 @@ async function issuePackageFromSale(slug: string, saleId: number, clientId: numb
         })).catch(() => 0);
       }
     }
+    // Snapshot FEDELE del contenuto (client_package_items) — port di
+    // ClientPackageSnapshot::snapshotFromCatalog (pos.php ~2389 snapshotFromCatalog($cpId,...,true)):
+    // congela servizi E prodotti col loro item_type al momento della vendita, così il ritiro
+    // prodotto e il dettaglio restano corretti anche se in seguito il catalogo viene
+    // modificato o eliminato ("Snapshot contenuto pacchetti cliente (non retroattivo)").
+    await snapshotClientPackageItemsFromCatalog(slug, clientPackageId, item.refId, breakdown);
   }
   return clientPackageId;
+}
+
+// Congela il contenuto del catalogo in client_package_items (port ClientPackageSnapshot::snapshotFromCatalog):
+// preferisce package_items (servizi + prodotti, con prezzi/sconti), altrimenti ripiega sulla ripartizione
+// servizi (package_services / service_id). Idempotente/best-effort come il legacy.
+async function snapshotClientPackageItemsFromCatalog(
+  slug: string,
+  clientPackageId: number,
+  packageId: number,
+  breakdown: Array<{ serviceId: number; sessions: number; sortOrder: number }>,
+): Promise<void> {
+  if (clientPackageId <= 0) return;
+  const table = await tenantTable(slug, "client_package_items").catch(() => null);
+  if (!table) return;
+  const itemRows = packageId > 0
+    ? await tenantSelect<RowDataPacket>({ slug, table: "package_items", columns: "item_type, item_id, qty, unit_price, discount_type, discount_value, line_total, sort_order", where: "package_id=?", params: [packageId], orderBy: "sort_order ASC, id ASC" }).catch(() => [] as RowDataPacket[])
+    : [];
+  if (itemRows.length > 0) {
+    let sort = 0;
+    for (const r of itemRows) {
+      const itemType = String(r.item_type ?? "service").trim().toLowerCase() === "product" ? "product" : "service";
+      const itemId = Math.max(0, Number(r.item_id ?? 0) || 0);
+      if (itemId <= 0) continue;
+      const qty = Math.max(1, Math.round(Number(r.qty ?? 1) || 1));
+      await tenantInsert(table, await filterColumns(table.name, {
+        client_package_id: clientPackageId,
+        item_type: itemType,
+        item_id: itemId,
+        qty,
+        unit_price: Number(r.unit_price ?? 0) || 0,
+        discount_type: r.discount_type ?? null,
+        discount_value: Number(r.discount_value ?? 0) || 0,
+        line_total: Number(r.line_total ?? 0) || 0,
+        sort_order: sort,
+        item_name_snapshot: (await snapshotItemName(slug, itemType, itemId)) || null,
+      })).catch(() => 0);
+      sort += 1;
+    }
+    return;
+  }
+  // Fallback legacy: nessuna riga package_items — snapshotta i soli servizi della ripartizione.
+  for (const svc of breakdown) {
+    await tenantInsert(table, await filterColumns(table.name, {
+      client_package_id: clientPackageId,
+      item_type: "service",
+      item_id: svc.serviceId,
+      qty: svc.sessions,
+      unit_price: 0,
+      line_total: 0,
+      sort_order: svc.sortOrder,
+      item_name_snapshot: (await snapshotItemName(slug, "service", svc.serviceId)) || null,
+    })).catch(() => 0);
+  }
+}
+
+// Nome snapshot di un item (servizio o prodotto), con SKU tra parentesi per i prodotti come il legacy.
+async function snapshotItemName(slug: string, itemType: string, itemId: number): Promise<string> {
+  if (itemId <= 0) return "";
+  const isProduct = itemType === "product";
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: isProduct ? "products" : "services", columns: isProduct ? "name, sku" : "name", where: "id=?", params: [itemId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  let name = String(rows[0]?.name ?? "").trim();
+  if (isProduct && name !== "") {
+    const sku = String(rows[0]?.sku ?? "").trim();
+    if (sku !== "" && !name.endsWith(`(${sku})`)) name = `${name} (${sku})`;
+  }
+  return name;
 }
 
 // Per-service breakdown for a sold package, faithful to the legacy pkReadPackageServicesBreakdown
