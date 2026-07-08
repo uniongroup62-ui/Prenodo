@@ -8653,3 +8653,56 @@ cleanup i conteggi tornano esatti alla baseline (transactions=82, point_lots=36,
 fidelity_campaigns=1 [campagna 37 attiva/amount/aperta preservata], cards=0, card_code_registry=11,
 clients=5) e le settings fidelity_* ripristinate al valore originale (euro_per_point 0.10, levels 0,
 enabled 1, points 1). Nessun dato di produzione modificato in via definitiva.
+
+## Ricariche: audit completo + fix double-earn punti in vendita (2026-07-09)
+
+Audit 1:1 del modulo Ricariche vs recharges.php (535 righe) + CreditRechargeCancel.php (940 righe,
+motore storno) + il path di emissione/annullo in pos.php. Struttura come GiftCard/GiftBox: la pagina
+Ricariche gestisce SOLO i "Modelli di ricarica" (recharge_templates); l'emissione reale avviene in
+Pagamenti (POS), lo storno tramite annullo della vendita.
+
+FEDELI e verificati LIVE (test-recharges 32/32):
+- TEMPLATE CRUD (manage-recharges.ts, route app/api/manage/recharges): create/update/delete con
+  messaggi verbatim ("Modello creato/aggiornato/eliminato.", "Modello non valido/non trovato.",
+  "Inserisci un titolo per il modello.", "Inserisci un importo ricarica valido.", massimali
+  "... troppo alto. Massimo 99.999.999,99." per importo/bonus/totale), bonus percent/fixed/none
+  (none forza bonus 0), sort_order clamp ±1000000, earn_points gated dalla Fidelity generale, prefill
+  action=get. create_recharge BLOCCATO ("Le ricariche credito si registrano dalla pagina Pagamenti.").
+- POS ISSUANCE (issueRechargeFromSale): base/bonus/total, punti campagna-aware, nota legacy
+  "Ricarica credito: € X • bonus € Y • +N Punti • nota", credito wallet +total + punti taggati sale.
+- GUARDIE PAGAMENTO ricarica (verbatim): niente credito/GiftCard/coupon-buoni-promo/sconto-manuale/
+  punti per pagare una ricarica; GiftBox+ricarica incompatibili; solo pagamento unica soluzione.
+- STORNO (annullo vendita -> reverseIssuedSaleRecharges + assertRechargeCreditFeasible + modi punti
+  skip/negative/normal): is_void/voided_at/voided_by, credito ridato indietro, punti stornati
+  (redeem/recharge), guardia fattibilità "R#N: credito insufficiente per lo storno (saldo attuale
+  € X)." quando il credito è già stato speso. Idempotente (re-void salta).
+- LEDGER: source_type "recharge" + kind redeem sullo storno + source_id NULL — convenzione del
+  Next ALLINEATA ai dati di produzione/migrati (NON i grezzi legacy 'credit_recharge'/'
+  credit_recharge_void'/'adjust'); nessuna collisione con l'indice unico transactions_uq_fid_src
+  (Postgres tratta i NULL come distinti — verificato: cliente 9 ha 13 earn/recharge + 27 earn/sale,
+  tutti source_id NULL, coesistenti).
+
+CORRETTO:
+1. DOUBLE-EARN PUNTI IN VENDITA (bug reale): la base punti a livello vendita (earnBase in
+   checkoutManageSale) usava il TOTALE vendita, che INCLUDE le righe speciali (ricarica/GiftCard/
+   GiftBox). Nel legacy la base punti (Fidelity::calcEarnPointsForCartWithCampaign su
+   $subtotal_eligible + $loyaltyClean, pos.php 3745/3960/4718) contiene SOLO servizi/prodotti/
+   pacchetti: la ricarica NON entra ("rechargesDraft"), GiftCard "non entra nel calcolo" (pos.php
+   4728), GiftBox esclusa. Conseguenza nel Next: una vendita RICARICA maturava DUE volte
+   (livello vendita + issueRechargeFromSale) e le vendite GiftCard/GiftBox maturavano punti che nel
+   legacy non maturano. Fix: earnBase = somma delle sole righe che maturano (servizi/prodotti/
+   pacchetti/prepagati; recharge/giftcard/giftbox escluse via NON_EARNING_SALE_LINE_TYPES) al netto
+   di sconto + residui. Verificato: ricarica €100+20% -> 12 punti (prima 22 = 12+10); flag OFF ->
+   10 (su base 100); GiftCard/GiftBox -> 0 punti vendita; servizi/prodotti/pacchetti INVARIATI
+   (test-pos-checkout 8/8, test-pkg-pos 8/8, test-giftcard 22/22, test-giftbox 27/27, test-fidelity
+   42/42 incl. H1 servizio €80 -> 8 punti). Nota: eventuali punti sovra-maturati in PRODUZIONE da
+   vendite ricarica/GiftCard/GiftBox passate NON vengono corretti retroattivamente (fuori scope,
+   dati di produzione preservati); le nuove vendite sono ora corrette.
+2. earn_points PERSISTITO sulla riga ricarica (micro-1:1): il Next salvava earn_points=flag del
+   modello; il legacy salva earnOnTotal = flag AND idoneità cliente (pos.php:5594). Allineato
+   (colonna mai riletta a valle -> zero impatto funzionale, puro 1:1 del dato persistito).
+
+VERIFICATO: test-recharges 32/32, typecheck 0; regressione VERDE test-pos-checkout 8/8, test-pkg-pos
+8/8, test-giftcard 22/22, test-giftbox 27/27, test-fidelity 42/42. Produzione tenant 25 intatta
+(baseline: recharge_templates=0, recharges=1, transactions=82, credit_adjustments=49, point_lots=36,
+cards=0, clients=5 — tutti ripristinati dopo il cleanup).

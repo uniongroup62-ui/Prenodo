@@ -588,6 +588,11 @@ async function getFidelityRedeemSettings(slug: string): Promise<FidelityRedeemSe
 // solo quando applicata da un codice (nota "Promozione: NAME (CODE)").
 type PosPromoApplied = { id: number; name: string; nonDiscountedSubtotal: number; stackableWithFidelity: boolean; code?: string };
 
+// Righe che NON maturano punti a livello vendita (escluse dalla base earn, come il legacy
+// pos.php: recharge/giftcard/giftbox non entrano in $subtotal_eligible/$loyaltyClean). La
+// ricarica matura a sé (issueRechargeFromSale); GiftCard/GiftBox non maturano affatto.
+const NON_EARNING_SALE_LINE_TYPES = new Set(["recharge", "giftcard", "giftbox"]);
+
 export async function checkoutManageSale(
   slug: string,
   input: PosCheckoutInput,
@@ -787,8 +792,14 @@ export async function checkoutManageSale(
   const residui = await resolveResiduiTenders(slug, payments, client.id, total);
 
   // Earn base = net after residui (see the fidelity-earn note above): the total minus the client's
-  // own credit + GiftCard redeemed, so redeemed residui never generate fresh points.
-  const earnBase = roundMoney(Math.max(0, total - residui.creditUsed - residui.giftcardUsed));
+  // own credit + GiftCard redeemed, so redeemed residui never generate fresh points. Base punti a
+  // LIVELLO VENDITA = SOLO le righe che maturano nel carrello, come il legacy ($subtotal_eligible +
+  // $loyaltyClean, pos.php 3745/3960/4718): servizi, prodotti, pacchetti, prepagati. Le righe
+  // SPECIALI sono ESCLUSE: la RICARICA matura a sé in issueRechargeFromSale (includerla qui la
+  // farebbe maturare DUE volte — bug storico), mentre GiftCard/GiftBox NON maturano punti in vendita
+  // ("non entra nel calcolo", pos.php 4728). Sconto e residui riducono comunque la base come prima.
+  const eligibleLinesTotal = roundMoney(items.reduce((sum, item) => sum + (NON_EARNING_SALE_LINE_TYPES.has(item.type) ? 0 : item.total), 0));
+  const earnBase = roundMoney(Math.max(0, eligibleLinesTotal - discount - residui.creditUsed - residui.giftcardUsed));
   // Campaign-aware earn: points accrue only under the ACTIVE campaign for the sale date
   // (no campaign => 0), using its step/tiers + min_spend + level eligibility; the
   // campaign id is stamped on the sale (sales.fidelity_campaign_id).
@@ -5364,7 +5375,12 @@ async function issueRechargeFromSale(
   // flag decide SOLO la BASE: attivo -> base+bonus; disattivo -> sola base. Prima il Next
   // includeva il flag in `eligible`, quindi col flag OFF un cliente idoneo riceveva ZERO punti.
   const pointsEligible = earnSettings.enabled && (await fidelityIsClientAdhering(slug, clientId));
-  const earnBase = earnPointsFlag ? totalAmount : baseAmount;
+  // pos.php:5570-5571 — earnOnTotal = flag del modello AND idoneità cliente. Sia la BASE punti
+  // sia il flag `earn_points` PERSISTITO sulla riga ricarica seguono earnOnTotal (non il solo
+  // flag): col flag ON ma cliente non idoneo il legacy salva earn_points=0 (nessun punto su
+  // totale). Nei casi raggiungibili il calcolo punti è identico (quando non idoneo pointsEarned=0).
+  const earnOnTotal = earnPointsFlag && pointsEligible;
+  const earnBase = earnOnTotal ? totalAmount : baseAmount;
   const pointsEarned = pointsEligible ? (await computeCampaignEarn(slug, earnBase, clientId, earnSettings.earnStep)).points : 0;
 
   const note = rechargeNote(baseAmount, bonusAmount, pointsEarned, item.note);
@@ -5380,7 +5396,7 @@ async function issueRechargeFromSale(
     bonus_value: bonusValue,
     bonus_amount: bonusAmount,
     total_amount: totalAmount,
-    earn_points: earnPointsFlag ? 1 : 0,
+    earn_points: earnOnTotal ? 1 : 0,
     points_earned: pointsEarned,
     note,
     is_void: 0,
