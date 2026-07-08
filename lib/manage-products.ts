@@ -555,7 +555,7 @@ async function listProducts(slug: string, options: { query: string; locationId: 
        ${categoryJoin}
        ${stockJoin}
       ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""}
-      ORDER BY p.name ASC, p.id ASC`,
+      ORDER BY p.id DESC`,
     [...joinParams, ...params],
   );
   const locationMap = await productLocationMap(slug, rows.map((row) => Number(row.id ?? 0)));
@@ -836,20 +836,104 @@ export async function listProductDeleteBlockers(slug: string, productId: number)
   });
 }
 
+// productDeleteBlockers — port di products_delete_blockers (ProductPageHelpers.php:333-777).
+// Il DELETE prodotto e' FISICO (hard-delete): va bloccato quando il prodotto e' ancora
+// referenziato da elementi attivi, altrimenti si orfanizzano cataloghi/pacchetti/campagne.
+// NB precedente implementazione: `sale_items/product_id` usava una colonna INESISTENTE
+// (sale_items ha item_id + item_type, non product_id) e `preorders` non esiste in questo
+// schema -> entrambi i blocchi erano MORTI (catch->0). Inoltre mancavano pacchetti/giftbox/
+// gift e il controllo giacenza. Qui i blocchi usano le colonne reali dello schema Next.
 async function productDeleteBlockers(slug: string, productId: number): Promise<string[]> {
-  const checks = [
-    ["stock_doc_items", "product_id", "movimenti di magazzino"],
-    ["stock_moves", "product_id", "movimenti storici"],
-    ["sale_items", "product_id", "vendite"],
-    ["preorders", "product_id", "preordini"],
-    ["quote_items", "item_id", "preventivi"],
-    ["promotion_products", "product_id", "promozioni"],
-  ] as const;
+  if (productId <= 0) return [];
+
+  const base = await tenantTable(slug, "products").catch(() => null);
+  const shared = base?.mode === "shared";
+  const tenantId = base?.tenantId ?? 0;
+
+  // Nome fisico della tabella per il tenant (null se assente -> blocco saltato, come il try/catch legacy).
+  const nameOf = async (t: string): Promise<string | null> => {
+    try {
+      return (await tenantTable(slug, t)).name;
+    } catch {
+      return null;
+    }
+  };
+
+  // COUNT tenant-scoped. `scopeAliases` = alias le cui tenant_id vanno fissate (shared mode). Errore -> 0.
+  const runCount = async (fromJoin: string, where: string, valueParams: unknown[], scopeAliases: string[]): Promise<number> => {
+    let sql = `SELECT COUNT(*) AS count FROM ${fromJoin} WHERE ${where}`;
+    const params = [...valueParams];
+    if (shared && scopeAliases.length) {
+      sql += " AND " + scopeAliases.map((a) => `${a}.tenant_id=?`).join(" AND ");
+      for (let i = 0; i < scopeAliases.length; i += 1) params.push(tenantId);
+    }
+    const rows = await dbQuery<RowDataPacket[]>(sql, params).catch(() => [] as RowDataPacket[]);
+    return Number(rows[0]?.count ?? 0) || 0;
+  };
+
   const blockers: string[] = [];
-  for (const [table, column, label] of checks) {
-    const count = await countRowsByColumn(slug, table, column, productId).catch(() => 0);
+  const push = (label: string, count: number) => {
     if (count > 0) blockers.push(`${label}: ${count}`);
+  };
+
+  // 1. Giacenza / in arrivo (products.stock e' il rollup SUM(product_stocks); incoming riflesso).
+  const products = await nameOf("products");
+  if (products) {
+    push("giacenza a magazzino", await runCount(`${quoteIdentifier(products)} p`,
+      `p.id=? AND (ABS(COALESCE(p.stock,0))>0.0001 OR COALESCE(p.incoming_qty,0)>0)`, [productId], ["p"]));
   }
+  // 2. Movimenti di magazzino (documenti) + 3. movimenti storici legacy.
+  const sdi = await nameOf("stock_doc_items");
+  if (sdi) push("movimenti di magazzino", await runCount(`${quoteIdentifier(sdi)} x`, `x.product_id=?`, [productId], ["x"]));
+  const sm = await nameOf("stock_moves");
+  if (sm) push("movimenti storici", await runCount(`${quoteIdentifier(sm)} x`, `x.product_id=?`, [productId], ["x"]));
+  // 4. Preordini da ritirare — sale_items(item_type=product, item_status ordered) di vendite non annullate.
+  const si = await nameOf("sale_items");
+  const sales = await nameOf("sales");
+  if (si && sales) push("preordini da ritirare", await runCount(
+    `${quoteIdentifier(si)} si JOIN ${quoteIdentifier(sales)} s ON s.id=si.sale_id`,
+    `si.item_type='product' AND si.item_id=? AND LOWER(COALESCE(si.item_status,'')) IN ('ordered','ordinato') AND LOWER(COALESCE(s.status,'')) NOT IN ('cancelled','canceled','annullata','annullato')`,
+    [productId], ["si", "s"]));
+  // 5. Pacchetti cliente attivi.
+  const cpi = await nameOf("client_package_items");
+  const cp = await nameOf("client_packages");
+  if (cpi && cp) push("pacchetti cliente attivi", await runCount(
+    `${quoteIdentifier(cpi)} cpi JOIN ${quoteIdentifier(cp)} cp ON cp.id=cpi.client_package_id`,
+    `cpi.item_type='product' AND cpi.item_id=? AND LOWER(COALESCE(cp.status,''))='active'`, [productId], ["cpi", "cp"]));
+  // 6. Preventivi accettati.
+  const qi = await nameOf("quote_items");
+  const quotes = await nameOf("quotes");
+  if (qi && quotes) push("preventivi accettati", await runCount(
+    `${quoteIdentifier(qi)} qi JOIN ${quoteIdentifier(quotes)} q ON q.id=qi.quote_id`,
+    `qi.item_type='product' AND qi.item_id=? AND LOWER(COALESCE(q.status,'')) IN ('accepted','accettato')`, [productId], ["qi", "q"]));
+  // 7. Catalogo pacchetti attivi.
+  const pki = await nameOf("package_items");
+  const pk = await nameOf("packages");
+  if (pki && pk) push("catalogo pacchetti", await runCount(
+    `${quoteIdentifier(pki)} pki JOIN ${quoteIdentifier(pk)} pk ON pk.id=pki.package_id`,
+    `pki.item_type='product' AND pki.item_id=? AND COALESCE(pk.is_active,1)=1`, [productId], ["pki", "pk"]));
+  // 8. GiftBox attive.
+  const gbi = await nameOf("giftbox_items");
+  const gb = await nameOf("giftboxes");
+  if (gbi && gb) push("giftbox attive", await runCount(
+    `${quoteIdentifier(gbi)} gbi JOIN ${quoteIdentifier(gb)} gb ON gb.id=gbi.giftbox_id`,
+    `gbi.product_id=? AND COALESCE(gb.active,1)=1 AND gb.deleted_at IS NULL`, [productId], ["gbi", "gb"]));
+  // 9. Promozioni attive.
+  const pp = await nameOf("promotion_products");
+  const pr = await nameOf("promotions");
+  if (pp && pr) push("promozioni attive", await runCount(
+    `${quoteIdentifier(pp)} pp JOIN ${quoteIdentifier(pr)} pr ON pr.id=pp.promotion_id`,
+    `pp.product_id=? AND COALESCE(pr.is_active,1)=1`, [productId], ["pp", "pr"]));
+  // 10. Campagne omaggio attive (gift che premia il prodotto).
+  const gifts = await nameOf("gifts");
+  if (gifts) push("campagne omaggio attive", await runCount(`${quoteIdentifier(gifts)} g`,
+    `g.reward_product_id=? AND COALESCE(g.active,1)=1 AND g.deleted_at IS NULL`, [productId], ["g"]));
+  // 11. Omaggi emessi non riscattati (istanze di un gift che premia il prodotto).
+  const giInst = await nameOf("gift_instances");
+  if (giInst && gifts) push("omaggi emessi", await runCount(
+    `${quoteIdentifier(giInst)} gi JOIN ${quoteIdentifier(gifts)} g ON g.id=gi.gift_id`,
+    `g.reward_product_id=? AND gi.redeemed_at IS NULL AND COALESCE(gi.is_active,1)=1`, [productId], ["gi", "g"]));
+
   return blockers;
 }
 

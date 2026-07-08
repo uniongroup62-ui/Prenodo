@@ -1,5 +1,44 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Magazzino: audit + fix delete-blockers prodotto (rotti/incompleti) + ordinamento (2026-07-08)
+
+Audit di Magazzino (products.php 1787 + stock_moves.php 1487 + suppliers.php 865 + ProductPageHelpers
+1436 + helpers) con 4 agenti. VERDETTO: port largamente fedele — campi prodotto/fornitore/categoria,
+validazioni verbatim, giacenza PER-SEDE (product_stocks, rollup SUM su products.stock), carico/scarico
+incrementale con guardia non-negativa, rettifica (Next la risolve in carico/scarico via delta),
+annullo soft (is_canceled) + storno inverso + recompute incoming dall'ultimo carico attivo, NESSUN
+costo medio ponderato (come il legacy), export CSV movimenti, allegati (R2). Fix applicati (verificati
+live: 40 check — test-magazzino: categorie 3, fornitori 3, prodotti validazioni+CRUD 8, movimenti 12,
+delete-blockers 11+2 negativi, categoria/fornitore block 2):
+- **BUG (grave): delete-blockers prodotto rotti/incompleti**. Il DELETE prodotto e' FISICO
+  (hard-delete di products + product_images + product_stocks). I blocchi erano:
+  - `sale_items/product_id` -> colonna INESISTENTE (sale_items usa `item_id`+`item_type`, non
+    `product_id`) -> blocco MORTO (catch->0).
+  - `preorders/product_id` -> tabella INESISTENTE in questo schema -> blocco MORTO.
+  - `quote_items/item_id` -> senza `item_type='product'` ne' `quotes.status accepted` -> falsi
+    positivi (collisione con item_id di servizi) e non fedele.
+  - MANCAVANO del tutto: giacenza/in-arrivo, pacchetti cliente attivi, catalogo pacchetti,
+    giftbox attive, campagne omaggio (gift), omaggi emessi.
+  Rischio: eliminare un prodotto ancora referenziato in un pacchetto/giftbox/gift/preventivo
+  attivo orfanizzava i riferimenti. FIX: riscritta `productDeleteBlockers` (port fedele di
+  products_delete_blockers, ProductPageHelpers.php:333-777) con 11 blocchi adattati allo schema
+  Next e JOIN tenant-scoped: giacenza (products.stock/incoming), stock_doc_items, stock_moves,
+  preordini (sale_items item_type=product + item_status ordered/ordinato + vendita non annullata),
+  pacchetti cliente attivi (client_packages.status='active'), preventivi accettati (quotes accepted),
+  catalogo pacchetti (packages.is_active), giftbox attive (giftboxes.active + deleted_at NULL),
+  promozioni attive (promotions.is_active), campagne omaggio (gifts.reward_product_id + active),
+  omaggi emessi (gift_instances non riscattate). Verificato: ogni blocco scatta col ref attivo;
+  bozza-preventivo ed executed-vendita NON bloccano (filtri di stato corretti); prodotto pulito
+  (0 ref, giacenza 0) resta eliminabile.
+- **Ordinamento lista prodotti**: era `ORDER BY p.name ASC` -> riportato a `ORDER BY p.id DESC`
+  (fedele a products.php:851, piu' recenti in cima).
+Divergenze deliberate/innocue (non-bug): `products.is_active` colonna extra sempre 1 (nessun toggle,
+legacy non ha stato attivo/inattivo sui prodotti); `rettifica` come tipo UI esplicito (nel DB si
+risolve comunque in carico/scarico); listing documenti magazzino `LIMIT 50` vs legacy 10/pagina
+(paginazione UI non ancora portata); storage R2 + niente compressione immagini/allegati (scelte di
+migrazione). Fornitori/categorie: gia' fedeli (delete-blockers, messaggi, univocita', scope tenant).
+
+
 ## Commissioni: risoluzione operatore POS per EMAIL + fallback appointment_staff (2026-07-08)
 
 Completato l'ULTIMO residuo dell'audit Commissioni (prima "fuori scope"): il meccanismo di
