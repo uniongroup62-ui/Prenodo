@@ -1196,7 +1196,10 @@ async function categoryExists(slug: string, id: number): Promise<boolean> {
 }
 
 async function ensureSupplierNameAvailable(slug: string, name: string, id: number): Promise<void> {
-  const rows = await tenantSelect<RowDataPacket>({ slug, table: "suppliers", columns: "id", where: "name=? AND id<>?", params: [name, id], limit: 1 }).catch(() => []);
+  // Univocita' CASE-INSENSITIVE come il legacy (suppliers MySQL utf8mb4_general_ci): "Acme"=="acme".
+  // Con `name=?` (Postgres, case-sensitive) il Next avrebbe permesso omonimi solo-maiuscole che il
+  // legacy blocca. Stesso approccio del dedup categorie (LOWER(name)=LOWER(?)).
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "suppliers", columns: "id", where: "LOWER(name)=LOWER(?) AND id<>?", params: [name, id], limit: 1 }).catch(() => []);
   if (rows[0]) throw new Error("Esiste gia un fornitore con questo nome.");
 }
 

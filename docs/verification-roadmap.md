@@ -1,5 +1,28 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Fornitori: audit + fix univocita' nome case-insensitive (2026-07-08)
+
+Audit dedicato Fornitori (suppliers.php 865 + Helpers.php app_supplier_*) vs Next (manage-products.ts
+saveSupplier/getManageSupplier/deleteSupplier + suppliers-content). VERDETTO: port fedele — campi
+(name obblig+univoco, business_name, indirizzi, cap/city/province, country def 'Italia'/ISO 'IT',
+vat_number, tax_code, sdi_code, phone/fax/mobile, email, pec, website, is_active Magazzino +
+is_active_costs Costi; NO iban/referente/note come il legacy), validazioni verbatim (sede magazzino/
+costi obbligatoria se attivo; NESSUNA validazione formato P.IVA/CF/email server-side), rename cascade
+su products.supplier_name, sync supplier_locations (warehouse_enabled/costs_enabled per sede, "Tutte"
+se nessuna riga), delete-blockers (products.supplier_name + costs.supplier_id -> "Fornitore usato in
+prodotti o costi..."), filtri listing q/scope/status/all_locations (client-side, fedeli), conteggi
+Prodotti/Costi, scope tenant. Verificato live: 17 check (test-fornitori).
+- **FIX univocita' nome CASE-INSENSITIVE**: `ensureSupplierNameAvailable` usava `name=?` (Postgres,
+  case-SENSITIVE) mentre il legacy MySQL `utf8mb4_general_ci` e' case-INSENSITIVE -> il Next
+  permetteva "Acme" e "acme" come due fornitori distinti che il legacy blocca (e il delete-blocker
+  per-nome poteva mancare il ref con case diverso). FIX: `LOWER(name)=LOWER(?)` come il dedup
+  categorie. Verificato: 'zzfornFULL' bloccato contro 'ZZFornFull' (nessun secondo record creato).
+Non-bug verificati (fedeli): is_active/is_active_costs -> il form invia sempre "1"/"0" esplicito
+(disattivazione funziona); filtri listing presenti client-side; sync sedi corretto. Divergenza
+deliberata: modello permessi (Next usa `suppliers.manage` unico invece di canSupplierWarehouse/
+canSupplierCosts separati del legacy) -> il flag attivo non e' permission-gated per-ruolo.
+
+
 ## Magazzino: audit + fix delete-blockers prodotto (rotti/incompleti) + ordinamento (2026-07-08)
 
 Audit di Magazzino (products.php 1787 + stock_moves.php 1487 + suppliers.php 865 + ProductPageHelpers
