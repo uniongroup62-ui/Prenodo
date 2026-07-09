@@ -2085,8 +2085,11 @@ async function mustFindCabin(slug: string, id: number): Promise<ResourceCabin> {
 }
 
 async function mustFindStaff(slug: string, id: number): Promise<ResourceStaff> {
-  const context = await resourceContext({ slug });
-  const item = context.staff.find((staff) => staff.id === id);
+  // Lookup per-id SENZA filtro sede: la conferma post-salvataggio deve trovare
+  // l'operatore anche se assegnato a una sede diversa da quella corrente/default
+  // (altrimenti creando un operatore su Sede2 il re-fetch via resourceContext,
+  // filtrato sulla prima sede attiva, falliva con "Operatore non trovato.").
+  const item = await getManageStaffMember(slug, id);
   if (!item) throw new Error("Operatore non trovato.");
   return item;
 }

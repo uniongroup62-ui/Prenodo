@@ -8797,3 +8797,19 @@ Regressione moduli con route toccate VERDE: test-giftcard 22/22, test-giftbox 27
 42/42, test-portafoglio 14/14. typecheck 0, eslint 0-errori. 5 clienti reali intatti; nessun dato di
 produzione modificato. NB: superate (non più valide) le voci "8 ENHANCEMENT" e "restrizione cliente"
 delle sezioni 2026-07-08 qui sopra — deliberatamente rimosse per il Modello A.
+
+## Fix editor Operatori: hydration slug + "Operatore non trovato" su sede non-default (2026-07-09)
+
+Due bug emersi testando il Modello A (creazione/assegnazione operatore a una sede):
+1. HYDRATION MISMATCH: la pagina renderizzava `<StaffFormContent />` senza `slug` (unico *Content
+   della page senza il prop), quindi il componente cadeva sul fallback window-only `tenantSlug()` =
+   "" in SSR e "centroesteticoelite" sul client -> link assoluti rotti "//staff" e albero non
+   idratato. FIX: `<StaffFormContent slug={tenantSlug} />` (app/[tenantSlug]/[...segments]/page.tsx),
+   come tutti gli altri componenti.
+2. "Operatore non trovato." al salvataggio di un operatore assegnato a una sede diversa dalla prima
+   sede attiva: `saveStaffMember` termina con `mustFindStaff`, che ri-leggeva via `resourceContext({slug})`
+   (senza locationId -> `listStaff` filtrato sulla PRIMA sede attiva, Sede1). Un operatore creato solo
+   su Sede2 non compariva -> il salvataggio riusciva ma la conferma lanciava l'errore. FIX: `mustFindStaff`
+   usa `getManageStaffMember(slug,id)` (lookup per-id SENZA filtro sede, gia' usato dal prefill edit).
+Verificato: test-staff-sede2 4/4 (crea operatore solo-Sede2 -> ok + staff_locations=[51]; update a 2
+sedi -> ok), typecheck 0, eslint 0-errori, 5 clienti reali intatti.

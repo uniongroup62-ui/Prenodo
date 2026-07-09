@@ -393,7 +393,7 @@ export default async function TenantPage({
   if (page === "staff" && (query.action === "new" || query.action === "edit")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
-        <StaffFormContent />
+        <StaffFormContent slug={tenantSlug} />
       </ManageShell>
     );
   }
