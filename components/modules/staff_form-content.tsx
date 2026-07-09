@@ -75,11 +75,13 @@ function resolveAction(): "new" | "edit" {
   return new URLSearchParams(window.location.search).get("action") === "edit" ? "edit" : "new";
 }
 
-export function StaffFormContent({ slug: slugProp }: { slug?: string } = {}) {
-  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
-  // e i link assoluti diventano protocol-relative rotti (//pagina).
+export function StaffFormContent({ slug: slugProp, action: actionProp, staffId: staffIdProp }: { slug?: string; action?: "new" | "edit"; staffId?: number } = {}) {
+  // Prop dal server preferite: il fallback window-only rende slug/action divergenti in
+  // SSR (slug="" -> link //pagina; action="new" -> titolo "Nuovo operatore" mentre il
+  // client legge "edit") -> hydration mismatch. Con le prop, server e client coincidono.
   const slug = slugProp || tenantSlug();
-  const [action] = useState<"new" | "edit">(resolveAction);
+  const [action] = useState<"new" | "edit">(() => actionProp ?? resolveAction());
+  const staffId = staffIdProp ?? 0;
   const [form, setForm] = useState<StaffForm>(emptyForm());
   const [ctx, setCtx] = useState<StaffContext>({});
   const [loading, setLoading] = useState(true);
@@ -95,9 +97,8 @@ export function StaffFormContent({ slug: slugProp }: { slug?: string } = {}) {
   // Load the staff context (locations), then prefill on edit (action=get) or
   // keep the faithful new-operator defaults.
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const act = params.get("action") === "edit" ? "edit" : "new";
-    const id = Number.parseInt(params.get("id") ?? "", 10);
+    const act = action;
+    const id = staffId > 0 ? staffId : Number.parseInt(new URLSearchParams(window.location.search).get("id") ?? "", 10);
 
     const ctxPromise = fetch(`/api/manage/resources?slug=${encodeURIComponent(slug)}&section=staff`, {
       headers: { "x-tenant-slug": slug },
@@ -143,7 +144,7 @@ export function StaffFormContent({ slug: slugProp }: { slug?: string } = {}) {
     } else {
       ctxPromise.finally(() => setLoading(false));
     }
-  }, [slug]);
+  }, [slug, action, staffId]);
 
   function set<K extends keyof StaffForm>(key: K, value: StaffForm[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));

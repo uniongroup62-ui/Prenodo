@@ -13,6 +13,7 @@ import {
   getManageCabin,
   getManageStaffMember,
   getSharedResource,
+  listManageStaffAll,
   resourceContext,
   type ResourceBlockPopup,
   saveAvailabilityEvent,
@@ -81,8 +82,12 @@ export async function GET(request: Request) {
       locationId: parseInteger(url.searchParams.get("location_id") ?? url.searchParams.get("locationId"), 0),
       date: url.searchParams.get("date") ?? undefined,
     });
+    // Pagina di gestione Operatori (section=staff): mostra TUTTI gli operatori di
+    // ogni sede (come staff.php), non solo quelli della sede corrente/default —
+    // altrimenti un operatore assegnato a un'altra sede non comparirebbe.
+    const staff = url.searchParams.get("section") === "staff" ? await listManageStaffAll(tenantSlug) : context.staff;
     // hours.php gates il bottone header "Attivita" su Auth::can('settings.location').
-    return Response.json({ ok: true, canSettingsLocation: can(activeUser.perms, "settings.location"), ...context });
+    return Response.json({ ok: true, canSettingsLocation: can(activeUser.perms, "settings.location"), ...context, staff });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Risorse non disponibili.", 400);
   }

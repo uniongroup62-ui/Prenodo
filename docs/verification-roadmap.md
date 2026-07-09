@@ -8813,3 +8813,23 @@ Due bug emersi testando il Modello A (creazione/assegnazione operatore a una sed
    usa `getManageStaffMember(slug,id)` (lookup per-id SENZA filtro sede, gia' usato dal prefill edit).
 Verificato: test-staff-sede2 4/4 (crea operatore solo-Sede2 -> ok + staff_locations=[51]; update a 2
 sedi -> ok), typecheck 0, eslint 0-errori, 5 clienti reali intatti.
+
+## Editor Operatori: hydration action + lista Operatori "tutte le sedi" (2026-07-09)
+
+Ancora sul flusso Modello A (gestione operatori multi-sede), due fix:
+1. HYDRATION su `?action=edit`: il titolo (`<h1>{title}`) era "Nuovo operatore" in SSR e "Modifica
+   operatore" sul client, perché `action` veniva risolto solo da `window.location` (`resolveAction()`
+   -> "new" in SSR). Stessa classe del bug slug. FIX: `StaffFormContent` accetta le prop `action` e
+   `staffId` dal server (`app/[tenantSlug]/[...segments]/page.tsx` le passa da `query.action`/`query.id`);
+   il componente le usa per lo stato iniziale + lo useEffect (fallback window per robustezza).
+2. "Operatore creato ma non visibile": la lista Operatori (`staff-content.tsx` -> GET
+   `resources?section=staff`) NON inviava `location_id`, quindi la route defaultava a
+   `normalizeActiveLocation(0)` = PRIMA sede attiva (Sede1); `listStaff` filtrava su Sede1 -> un
+   operatore assegnato solo a Sede2 non compariva MAI (né rispettava la sede corrente). Il legacy
+   (staff.php:1091) mostra TUTTI gli operatori (la query non filtra per sede; il filtro sede-corrente
+   è solo un default con toggle "Tutte le sedi"). FIX: nuovo `listManageStaffAll(slug)` (activeLocationId=0
+   = nessun filtro) usato dalla route quando `section=staff` -> la pagina di gestione mostra tutti gli
+   operatori di ogni sede (coerente col Modello A: lo staff non è isolato per sede). resourceContext
+   invariato per gli altri consumatori (calendario, ecc.).
+Verificato: test-staff-list 4/4 (lista include l'operatore solo-Sede2, = tutti gli operatori del
+tenant), test-staff-sede2 4/4, typecheck 0, eslint 0-errori, 5 clienti reali intatti.

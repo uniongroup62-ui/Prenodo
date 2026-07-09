@@ -190,6 +190,16 @@ export async function resourceContext({
   };
 }
 
+// Lista COMPLETA operatori (tutte le sedi) per la pagina di gestione Operatori.
+// Il legacy mostra TUTTI gli operatori (staff.php:1091 non filtra la query per sede;
+// la sede è una colonna/badge) — il filtro per sede corrente è solo un default con
+// toggle "Tutte le sedi". Qui la lista di gestione li mostra tutti (coerente col
+// Modello A: lo staff non è isolato per sede). activeLocationId=0 = nessun filtro.
+export async function listManageStaffAll(slug: string): Promise<ResourceStaff[]> {
+  const locations = await listLocations(slug);
+  return listStaff(slug, 0, locations);
+}
+
 // Prefill del form Modifica risorsa (resources.php action=edit): legge la riga
 // per id ANCHE se non abilitata nella sede corrente. Null se mancante.
 export async function getSharedResource(slug: string, id: number): Promise<SharedResource | null> {
