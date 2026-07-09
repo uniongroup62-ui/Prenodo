@@ -622,7 +622,7 @@ export default async function TenantPage({
   if (page === "staff" && !query.action) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
-        <StaffContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err, q: query.q, role: query.role, status: query.status }} />
+        <StaffContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err, q: query.q, role: query.role, status: query.status, all_locations: query.all_locations }} />
       </ManageShell>
     );
   }

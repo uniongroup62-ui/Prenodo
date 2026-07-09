@@ -49,7 +49,7 @@ function avatarLetter(name: string): string {
   return trimmed ? trimmed.charAt(0).toUpperCase() : "O";
 }
 
-type StaffQuery = { msg?: string; err?: string; q?: string; role?: string; status?: string };
+type StaffQuery = { msg?: string; err?: string; q?: string; role?: string; status?: string; all_locations?: string };
 type StaffBlockPopup = { title?: string; operator_name?: string; message?: string; services?: Array<{ service_id: number; service_name: string; service_active: number }> };
 
 export function StaffContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: StaffQuery } = {}) {
@@ -63,9 +63,12 @@ export function StaffContent({ slug: slugProp, initialQuery }: { slug?: string; 
   const appliedQ = String(initialQuery?.q ?? "");
   const appliedRole = ["admin", "staff", "altro"].includes(String(initialQuery?.role ?? "")) ? String(initialQuery?.role) : "";
   const appliedStatus = ["active", "inactive"].includes(String(initialQuery?.status ?? "")) ? String(initialQuery?.status) : "";
+  // "Tutte le sedi" (staff.php all_locations): default = filtro sede corrente lato server.
+  const appliedAllLoc = ["1", "true", "on", "yes", "all"].includes(String(initialQuery?.all_locations ?? "").toLowerCase());
   const [q, setQ] = useState(appliedQ);
   const [role, setRole] = useState(appliedRole);
   const [status, setStatus] = useState(appliedStatus);
+  const [allLoc, setAllLoc] = useState(appliedAllLoc);
   const applied = { q: appliedQ, role: appliedRole, status: appliedStatus };
 
   // Popup blocco eliminazione (staff.js showStaffDeleteBlockPopup).
@@ -77,18 +80,19 @@ export function StaffContent({ slug: slugProp, initialQuery }: { slug?: string; 
     if (appliedQ) usp.set("q", appliedQ);
     if (appliedRole) usp.set("role", appliedRole);
     if (appliedStatus) usp.set("status", appliedStatus);
+    if (appliedAllLoc) usp.set("all_locations", "1");
     return usp;
   }
 
   const load = useCallback(() => {
-    fetch(`/api/manage/resources?slug=${encodeURIComponent(slug)}&section=staff`, {
+    fetch(`/api/manage/resources?slug=${encodeURIComponent(slug)}&section=staff${appliedAllLoc ? "&all_locations=1" : ""}`, {
       headers: { "x-tenant-slug": slug },
     })
       .then((r) => r.json())
       .then((j) => setStaff(Array.isArray(j.staff) ? j.staff : []))
       .catch(() => setStaff([]))
       .finally(() => setLoading(false));
-  }, [slug]);
+  }, [slug, appliedAllLoc]);
 
   useEffect(() => {
     load();
@@ -193,6 +197,7 @@ export function StaffContent({ slug: slugProp, initialQuery }: { slug?: string; 
             if (q.trim()) usp.set("q", q.trim());
             if (role) usp.set("role", role);
             if (status) usp.set("status", status);
+            if (allLoc) usp.set("all_locations", "1");
             window.location.assign(`/${encodeURIComponent(slug)}/staff${usp.size > 0 ? `?${usp.toString()}` : ""}`);
           }}
         >
@@ -223,6 +228,12 @@ export function StaffContent({ slug: slugProp, initialQuery }: { slug?: string; 
               <option value="active">Attivi</option>
               <option value="inactive">Non attivi</option>
             </select>
+          </div>
+          <div className="col-xl-2 col-lg-3 col-md-6 d-flex align-items-end">
+            <div className="form-check pb-2">
+              <input className="form-check-input" type="checkbox" id="staffAllLocations" checked={allLoc} onChange={(e) => setAllLoc(e.target.checked)} />
+              <label className="form-check-label" htmlFor="staffAllLocations">Tutte le sedi</label>
+            </div>
           </div>
           <div className="col-xl-2 col-lg-3 col-md-6 d-flex gap-2">
             <button className="btn btn-outline-primary app-filter-submit" type="submit">

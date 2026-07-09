@@ -13,7 +13,7 @@ import {
   getManageCabin,
   getManageStaffMember,
   getSharedResource,
-  listManageStaffAll,
+  listManageStaff,
   resourceContext,
   type ResourceBlockPopup,
   saveAvailabilityEvent,
@@ -82,10 +82,14 @@ export async function GET(request: Request) {
       locationId: parseInteger(url.searchParams.get("location_id") ?? url.searchParams.get("locationId"), 0),
       date: url.searchParams.get("date") ?? undefined,
     });
-    // Pagina di gestione Operatori (section=staff): mostra TUTTI gli operatori di
-    // ogni sede (come staff.php), non solo quelli della sede corrente/default —
-    // altrimenti un operatore assegnato a un'altra sede non comparirebbe.
-    const staff = url.searchParams.get("section") === "staff" ? await listManageStaffAll(tenantSlug) : context.staff;
+    // Pagina di gestione Operatori (section=staff): filtra per la SEDE CORRENTE
+    // (come staff.php, default $staffCurrentLocationId) — un operatore compare nelle
+    // sedi a cui è abilitato (o ovunque se non ha sedi assegnate). Il toggle "Tutte
+    // le sedi" (all_locations) azzera il filtro. Prima la lista defaultava alla PRIMA
+    // sede attiva ignorando la sede corrente (bug): ora rispetta il selettore in alto.
+    const staffAllLocations = ["1", "true", "on", "yes", "all"].includes(String(url.searchParams.get("all_locations") ?? "").toLowerCase());
+    const staffFilterSede = staffAllLocations ? 0 : Number(session.user.currentLocationId ?? 0) || 0;
+    const staff = section === "staff" ? await listManageStaff(tenantSlug, staffFilterSede) : context.staff;
     // hours.php gates il bottone header "Attivita" su Auth::can('settings.location').
     return Response.json({ ok: true, canSettingsLocation: can(activeUser.perms, "settings.location"), ...context, staff });
   } catch (error) {

@@ -8833,3 +8833,17 @@ Ancora sul flusso Modello A (gestione operatori multi-sede), due fix:
    invariato per gli altri consumatori (calendario, ecc.).
 Verificato: test-staff-list 4/4 (lista include l'operatore solo-Sede2, = tutti gli operatori del
 tenant), test-staff-sede2 4/4, typecheck 0, eslint 0-errori, 5 clienti reali intatti.
+
+## Correzione lista Operatori: filtro SEDE CORRENTE + toggle "Tutte le sedi" (2026-07-09)
+
+Correzione del fix precedente (che mostrava SEMPRE tutti gli operatori): il legacy staff.php filtra
+la lista per la SEDE CORRENTE per default (`$staffFilterLocationId = $staffCurrentLocationId`), con
+una checkbox "Tutte le sedi" (all_locations) per azzerare il filtro. Ora fedele:
+- route resources GET section=staff: filtra `listManageStaff(slug, session.currentLocationId)`; con
+  `?all_locations=1` passa 0 = tutte le sedi. Uno staff senza sedi assegnate compare ovunque.
+  (Il bug originale: la lista defaultava alla PRIMA sede attiva ignorando la sede corrente.)
+- `listManageStaffAll` -> `listManageStaff(slug, locationId=0)` (generalizzata).
+- UI staff-content: checkbox "Tutte le sedi" nel form filtri (querystring all_locations, come il
+  legacy) + il fetch/i link propagano il flag.
+Verificato: test-staff-filter 4/4 (Sede1 selezionata -> solo op Sede1; Sede2 -> solo op Sede2; Tutte
+le sedi -> entrambi), typecheck 0, eslint 0-errori, 5 clienti reali intatti.
