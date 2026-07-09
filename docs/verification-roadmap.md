@@ -8847,3 +8847,36 @@ una checkbox "Tutte le sedi" (all_locations) per azzerare il filtro. Ora fedele:
   legacy) + il fetch/i link propagano il flag.
 Verificato: test-staff-filter 4/4 (Sede1 selezionata -> solo op Sede1; Sede2 -> solo op Sede2; Tutte
 le sedi -> entrambi), typecheck 0, eslint 0-errori, 5 clienti reali intatti.
+
+## Promozioni: audit completo + fix fidelity-off edit (F+G) (2026-07-09)
+
+Audit 1:1 del modulo Promozioni vs promotions.php (2271) + Promotions.php (5436 righe, il lib più
+grande) con 3 agenti (motore/CRUD/target). VERDETTO: port ECCEZIONALMENTE fedele. Verificato:
+- MOTORE `evaluateOnePromotion`/`computePromoDiscountCents` (port di evaluatePromotion): catena gate
+  (attiva→validità→blackout→finestre giorno/ora→sede→cliente escluso→target→scope), sconto in
+  centesimi (percent per-unità arrotondato, fixed pro-rata largest-remainder, cap per-unità), min_qty
+  = SOLO soglia (sconta TUTTE le unità, non N), prodotti che ereditano tipo/valore/min_qty dai servizi.
+- CAMPI MORTI confermati anche nel legacy (saveAdvanced li salva NULL / li ignora): min_subtotal,
+  discounted_qty, max_discount, stop_processing, qty_selection, total_limit, per_day_limit. Solo
+  `per_customer_limit` è enforced ("Limite utilizzi cliente raggiunto."). Il Next è fedele a ignorarli.
+- TARGET clienti (all/new/inactive[def 30]/birthday[±window su anno-1/anno/anno+1]/fidelity[points:<lvl>])
+  con messaggi verbatim; stackable bitmask (4=fidelity, 8=coupon, legacy 1→12); esclusioni inline JSON.
+- CRUD `saveManagePromotion`: validazioni verbatim, guardia anti-duplicato scope (target+validità+
+  fasce+sedi+scope sovrapposti), lock strutturale con utilizzi (clona), verifica salvataggio.
+- toggle (Campagna completata / fidelity-off riattivazione / activationContentIssues), delete (stacca
+  pending + figli), conditions/exclusions (guardie target-match + associazione), status lista
+  (Completata/Sospesa/Disattivata/Programmata/Attiva), usageCount deduplicato appt/sale/redemption.
+
+FIX (F+G, unica divergenza, `saveManagePromotion`): il Next faceva throw INCONDIZIONATO per target
+fidelity col modulo spento (con virgolette DRITTE), mentre il legacy (promotions.php 841-842 + 946-963)
+lancia l'errore SOLO passando A fidelity (target precedente != fidelity, virgolette CURVE “ ”); se la
+promo era GIÀ fidelity (edit) la salva INATTIVA con `auto_disabled_by_fidelity=(attivo desiderato)`,
+così si riattiva quando la Fidelity torna (meccanismo di restore già presente nel Next a
+setFidelityEnabled, prima irraggiungibile perché il flag non veniva mai impostato). Fix: controllo del
+target precedente, virgolette curve, `is_active` effettivo + `auto_disabled_by_fidelity` nei values.
+
+VERIFICATO: test-promozioni 44/44 (11 validazioni CRUD verbatim, anti-dup, lock strutturale+edit_guard,
+clone, toggle completed/content-issue, condizioni, esclusioni, motore percent/fixed/capped/min_qty/date/
+blackout/escluso/sede/target-new/limite-cliente/selezionati, G1 errore curve + G2 salva inattiva+flag),
+regressione test-pos-checkout 8/8, typecheck 0, eslint 0-errori. Produzione intatta: promo 71 attiva
+preservata, fidelity_enabled ripristinato a 1, 5 clienti reali; residui ZZ=0.

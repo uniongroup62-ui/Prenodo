@@ -13226,12 +13226,28 @@ export async function saveManagePromotion(slug: string, body: Record<string, str
 
   // --- Validazioni legacy aggiuntive (promotions.php 816-944) ---------------
   if (locationIds.length === 0) throw new Error("Seleziona almeno una sede per la promozione.");
+  // Target fidelity col modulo Fidelity spento (promotions.php 841-842 + 946-963):
+  // passare A fidelity (target precedente != fidelity) -> errore; se era GIA' fidelity
+  // (edit) -> consentito ma salvato INATTIVO con auto_disabled_by_fidelity = (attivo
+  // desiderato), cosi' si riattiva automaticamente quando la Fidelity torna disponibile.
+  let fidelityOffForceInactive = false;
   if (target === "fidelity") {
     const biz = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_enabled", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
     if (Number(biz[0]?.fidelity_enabled ?? 0) !== 1) {
-      throw new Error('Attiva prima la Fidelity per poter usare il target "Solo clienti con Fidelity".');
+      let previousTarget = "";
+      if (id > 0) {
+        const prev = await tenantSelect<RowDataPacket>({ slug, table: "promotions", columns: "target_type", where: "id = ?", params: [id], limit: 1 }).catch(() => [] as RowDataPacket[]);
+        previousTarget = String(prev[0]?.target_type ?? "").trim().toLowerCase();
+      }
+      if (previousTarget !== "fidelity") {
+        // Virgolette tipografiche “ ” come il flash legacy (promotions.php 842).
+        throw new Error("Attiva prima la Fidelity per poter usare il target “Solo clienti con Fidelity”.");
+      }
+      fidelityOffForceInactive = true;
     }
   }
+  // is_active effettivamente salvato: forzato inattivo nel caso fidelity-off sopra.
+  const effectiveActive = fidelityOffForceInactive ? false : isActive;
   if (prdMode === "all") {
     if (prdDiscValue <= 0) throw new Error("Inserisci uno sconto maggiore di 0 per tutti i prodotti.");
     if (prdDiscType === "percent" && prdDiscValue > 100) throw new Error("Lo sconto percentuale prodotti non puo superare 100%.");
@@ -13283,7 +13299,8 @@ export async function saveManagePromotion(slug: string, body: Record<string, str
     description: String(body.description ?? "").trim() || null,
     starts_at: startsAt !== "" ? startsAt : null,
     ends_at: endsAt !== "" ? endsAt : null,
-    is_active: isActive ? 1 : 0,
+    is_active: effectiveActive ? 1 : 0,
+    auto_disabled_by_fidelity: fidelityOffForceInactive ? (isActive ? 1 : 0) : 0,
     discount_type: discountType,
     discount_value: discountValue,
     min_qty: minQty,
@@ -13359,7 +13376,7 @@ export async function saveManagePromotion(slug: string, body: Record<string, str
   // blocca una seconda promo ATTIVA con validita' sovrapposta, stesso target
   // (+finestra numerica), stesse fasce orarie/date escluse, sedi sovrapposte e
   // scope sovrapposto. Esclude se stessa e la sorgente del clone.
-  if (isActive) {
+  if (effectiveActive) {
     await assertNoDuplicatePromotionScope(slug, {
       excludeIds: [promotionId, replaceSourceId].filter((n) => n > 0),
       startsAt, endsAt, target,
