@@ -185,7 +185,7 @@ async function buildManageUser(slug: string, dbUser: RowDataPacket): Promise<Man
   const role = String(dbUser.role ?? "");
   const isAdmin = role.toLowerCase() === "admin";
   const perms = isAdmin ? allAssignablePermissions() : await rolePermissions(slug, role);
-  const locationState = await loginLocationState(slug, Number(dbUser.id ?? 0), isAdmin);
+  const locationState = await loginLocationState(slug, Number(dbUser.id ?? 0), isAdmin, String(dbUser.email ?? ""));
 
   return {
     id: Number(dbUser.id ?? 0),
@@ -233,7 +233,15 @@ async function activeStaffAllowed(slug: string, email: string, dbUser: RowDataPa
   }
 }
 
-async function loginLocationState(slug: string, userId: number, isAdmin: boolean): Promise<{ currentLocationId: number; needsLocationSelection: boolean; locationIds: number[] }> {
+// Sedi assegnate all'operatore al login (port di app_user_location_options del PHP):
+// l'operatore vede/agisce solo sulle sedi assegnate; admin = tutte.
+// FONTE PRIMARIA = staff_locations (utente->staff via email, come il legacy), con
+// fallback compat su user_locations (popolata dal provisioning admin) e ultimo
+// fallback = tutte le sedi attive. Il fallback "tutte" quando NON c'e' assegnazione
+// e' una scelta PRUDENTE (evita di chiudere fuori un operatore senza sedi, a
+// differenza del PHP che lo bloccherebbe): l'isolamento per-sede si ATTIVA appena
+// l'admin assegna >=1 sede all'operatore nell'editor Operatori.
+async function loginLocationState(slug: string, userId: number, isAdmin: boolean, email: string): Promise<{ currentLocationId: number; needsLocationSelection: boolean; locationIds: number[] }> {
   try {
     const locations = await tenantSelect<RowDataPacket>({
       slug,
@@ -247,17 +255,49 @@ async function loginLocationState(slug: string, userId: number, isAdmin: boolean
       return { currentLocationId: locations.length === 1 ? Number(locations[0]?.id ?? 0) : 0, needsLocationSelection: locations.length > 1, locationIds: isAdmin ? [] : activeLocationIds };
     }
 
-    const userLocations = await tenantSelect<RowDataPacket>({
-      slug,
-      table: "user_locations",
-      columns: "location_id",
-      where: "user_id = ?",
-      params: [userId],
-    }).catch(async () => {
-      return [];
-    });
-    const ids = userLocations.map((row) => Number(row.location_id ?? 0)).filter((id) => id > 0);
-    const allowedIds = ids.length > 0 ? ids : activeLocationIds;
+    // 1) staff_locations (fonte legacy): utente -> staff per email -> sedi assegnate.
+    let assigned: number[] = [];
+    const normEmail = String(email ?? "").trim().toLowerCase();
+    if (normEmail) {
+      const staffRows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "staff",
+        columns: "id",
+        where: "LOWER(email) = ? AND full_name <> 'SSO'",
+        params: [normEmail],
+        orderBy: "id ASC",
+        limit: 1,
+      }).catch(() => [] as RowDataPacket[]);
+      const staffId = Number(staffRows[0]?.id ?? 0);
+      if (staffId > 0) {
+        const slRows = await tenantSelect<RowDataPacket>({
+          slug,
+          table: "staff_locations",
+          columns: "location_id",
+          where: "staff_id = ?",
+          params: [staffId],
+        }).catch(() => [] as RowDataPacket[]);
+        assigned = slRows.map((r) => Number(r.location_id ?? 0)).filter((n) => n > 0);
+      }
+    }
+
+    // 2) fallback compat: user_locations.
+    if (assigned.length === 0) {
+      const userLocations = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "user_locations",
+        columns: "location_id",
+        where: "user_id = ?",
+        params: [userId],
+      }).catch(() => [] as RowDataPacket[]);
+      assigned = userLocations.map((row) => Number(row.location_id ?? 0)).filter((id) => id > 0);
+    }
+
+    // 3) intersezione con le sedi attive; se vuota -> tutte le attive (no lockout).
+    const activeSet = new Set(activeLocationIds);
+    let allowedIds = assigned.filter((id) => activeSet.has(id));
+    if (allowedIds.length === 0) allowedIds = activeLocationIds;
+
     if (allowedIds.length === 1) return { currentLocationId: allowedIds[0], needsLocationSelection: false, locationIds: allowedIds };
     return { currentLocationId: 0, needsLocationSelection: allowedIds.length > 1, locationIds: allowedIds };
   } catch {

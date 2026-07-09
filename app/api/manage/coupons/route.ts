@@ -2,11 +2,8 @@ import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/ap
 import { todayIso } from "@/lib/appointment-engine";
 import { cancelManageCoupon, couponGenerateCode, createDbCoupon, deleteManageCoupon, evalBestPromotionForAppointment, getCouponFormContext, getManageCoupon, listDbCoupons, listManageCoupons, previewDbCoupon, redeemDbCoupon, saveManageCoupon, type CouponPreviewItem } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
-import { assertLocationAccessByJunction, getManageLocationContext, sessionAllowedLocationIds } from "@/lib/manage-locations";
+import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
-
-// Guardia per-sede coupon (junction coupon_locations, [] = valido ovunque).
-const COUPON_SEDE_ERR = "Coupon non disponibile per le tue sedi.";
 import { can, canAny } from "@/lib/role-permissions";
 
 export const dynamic = "force-dynamic";
@@ -33,7 +30,6 @@ export async function GET(request: Request) {
       // soft-deleted coupon (legacy: warning redirect to the list); a missing
       // one is the querystring "Coupon non trovato" (danger redirect).
       try {
-        await assertLocationAccessByJunction(tenantSlug, "coupon_locations", "coupon_id", couponId, sessionAllowedLocationIds(session), COUPON_SEDE_ERR);
         const coupon = await getManageCoupon(tenantSlug, couponId);
         if (!coupon) return Response.json({ ok: false, error: "Coupon non trovato", errorType: "danger" }, { status: 404 });
         return Response.json({ ok: true, source: "coupons?action=get", sourceMode: "database", coupon });
@@ -119,8 +115,6 @@ export async function POST(request: Request) {
     // creates, id>0 updates; the code is immutable on edit.
     if (action === "save" || action === "new" || action === "edit" || action === "update") {
       if (!can(session.user.perms, "coupons.manage")) return jsonError("Permesso buoni mancante.", 403);
-      // Guardia per-sede sull'edit (id>0) di un coupon di altra sede; create (id=0) non guardato.
-      await assertLocationAccessByJunction(tenantSlug, "coupon_locations", "coupon_id", parseInteger(body.id, 0), sessionAllowedLocationIds(session), COUPON_SEDE_ERR);
       const coupon = await saveManageCoupon(tenantSlug, body, parseInteger(body.id, 0), session.user.id);
       return Response.json({ ok: true, source: "coupons?action=save", sourceMode: "database", coupon, coupons: await listManageCoupons(tenantSlug) });
     }
@@ -134,7 +128,6 @@ export async function POST(request: Request) {
       // deleted -> warning on the list; open appointments -> warning flash on
       // the EDIT page (redirectEdit). Successes flash success on the list.
       try {
-        await assertLocationAccessByJunction(tenantSlug, "coupon_locations", "coupon_id", parseInteger(body.id, 0), sessionAllowedLocationIds(session), COUPON_SEDE_ERR);
         const result = await deleteManageCoupon(tenantSlug, parseInteger(body.id, 0), session.user.id);
         return Response.json({ ok: true, source: "coupons?action=delete", sourceMode: "database", mode: result.mode, message: result.message, msgType: "success", coupons: await listManageCoupons(tenantSlug) });
       } catch (error) {
@@ -151,7 +144,6 @@ export async function POST(request: Request) {
       // Legacy outcomes: not-found -> danger (list); "Coupon già disattivato."
       // -> warning flash on the edit page.
       try {
-        await assertLocationAccessByJunction(tenantSlug, "coupon_locations", "coupon_id", parseInteger(body.id, 0), sessionAllowedLocationIds(session), COUPON_SEDE_ERR);
         await cancelManageCoupon(tenantSlug, parseInteger(body.id, 0), String(body.cancel_reason ?? body.reason ?? ""), session.user.id);
         return Response.json({ ok: true, source: "coupons?action=cancel", sourceMode: "database", coupons: await listManageCoupons(tenantSlug) });
       } catch (error) {

@@ -8756,3 +8756,44 @@ ANALISI DIVERGENZE (nessun fix funzionale necessario):
 VERIFICATO: test-portafoglio 14/14, typecheck 0; regressione test-fidelity 42/42 (path wallet_move
 F1-F5). Produzione tenant 25 intatta (baseline transactions=82/point_lots=36/appointments=9/cards=0/
 clients=5, ripristinato dopo cleanup). Nessun dato di produzione modificato.
+
+## Accesso-per-sede: adottato il MODELLO A "sedi = reparti di un'unica azienda" (2026-07-09)
+
+Rivalutazione con l'utente della strategia accesso-per-sede. DECISIONE (Modello A, scelto dall'utente):
+regola unica **"le operazioni di una sede restano nella sede; il cliente e ciò che possiede lo
+seguono ovunque"**. È anche il comportamento del PHP originale. Motivazione: l'isolamento aggiunto
+oltre il legacy su clienti + 8 moduli "client-owned" (giftcard/giftbox/coupon/ecc.) creava
+incoerenza (bloccare la giftcard di un cliente ma non il cliente stesso) e rompeva flussi cross-sede
+legittimi (prenotare un cliente di un'altra sede, riscattare punti/giftcard cross-sede — la fidelity
+è già tenant-wide). Permesso di ruolo scartato: sarebbe per-RUOLO (tutti gli "staff" uguali), mentre
+serve il controllo per-OPERATORE.
+
+**1) WIRING assegnazione sedi (il vero abilitatore).** `loginLocationState` (lib/manage-auth.ts)
+leggeva `user_locations` (popolata solo dal provisioning admin) mentre l'editor Operatori scrive
+`staff_locations` → l'isolamento operatori era di fatto SPENTO (ogni operatore vedeva tutte le sedi).
+Ora il login risolve utente→staff per email→`staff_locations` (fonte legacy, port di
+app_user_location_options), con fallback compat su `user_locations` e ultimo fallback = tutte le sedi
+attive (scelta PRUDENTE anti-lockout: l'operatore senza assegnazione lavora ovunque finché l'admin
+non gli assegna ≥1 sede; il PHP invece lo bloccherebbe). Admin = tutte. Verificato sui dati reali:
+info@vivamed.it (staff, staff_locations={21}) → locationIds=[21] (ristretto a Sede1); admin → [].
+
+**2) TENANT-WIDE (guardie rimosse, = PHP).** Il "mondo cliente" torna condiviso: rimosso il lucchetto
+cliente `assertClientAccessibleForSedi` (clients GET/POST + fidelity wallet/credit/credit_debit/
+wallet_move/card_create/movimento) e le 8 guardie-record enhancement (commissions mark-paid/toggle,
+giftcards, giftbox_instances, gift_instances, coupons, promotions, resources: cabine/staff/risorse).
+Ogni operatore può aprire/prenotare qualsiasi cliente e i suoi strumenti (giftcard/giftbox/punti),
+come app_client_accessible del legacy (che ignora la sede).
+
+**3) PER-SEDE (guardie FAITHFUL tenute, il PHP le impone).** Restano isolate le OPERAZIONI di una
+sede: appuntamenti/calendario (appointmentLocationAllowedForUser), POS/vendite (assertSaleLocationAccess),
+preventivi, rate (scopeLocationId), pacchetti cliente (client_packages), preordini (sale_items→sales),
+magazzino/documenti (stock_docs), costi. Nessun file di questi moduli è stato toccato.
+
+VERIFICATO LIVE: test-model-a 12/12 — op(Sede1) ORA accede a cliente/giftcard/coupon/cabina/wallet di
+Sede2 (guardie rimosse), resta NEGATO su appuntamento/pacchetto di Sede2 (guardie tenute), admin vede
+tutto, operatore assegnato a 2 sedi opera su entrambe. test-sede-guards (guardie faithful) invariato
+15/16 (l'unico FAIL è stale: azione quotes `convert` rimossa nell'audit Preventivi, non attinente).
+Regressione moduli con route toccate VERDE: test-giftcard 22/22, test-giftbox 27/27, test-fidelity
+42/42, test-portafoglio 14/14. typecheck 0, eslint 0-errori. 5 clienti reali intatti; nessun dato di
+produzione modificato. NB: superate (non più valide) le voci "8 ENHANCEMENT" e "restrizione cliente"
+delle sezioni 2026-07-08 qui sopra — deliberatamente rimosse per il Modello A.
