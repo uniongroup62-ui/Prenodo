@@ -22335,23 +22335,35 @@ export async function listNotificationPendingAppointments(slug: string, currentL
     for (const r of rows) clientById.set(Number(r.id), { name: String(r.full_name ?? ""), phone: String(r.phone ?? ""), email: String(r.email ?? "") });
   }
 
-  // Servizi per appuntamento (nomi + totale) da appointment_services
+  // Servizi per appuntamento (nomi + totale) da appointment_services. Come la
+  // SELECT legacy (notifications.php 166-173): SUM(price*qty) SENZA clamp (qty
+  // 0 → contributo 0; righe con price/qty NULL non contribuiscono e se TUTTE le
+  // righe sono NULL il totale ricade sul prezzo del servizio primario, come
+  // COALESCE(svc.total_price, s.price, 0)); nomi DISTINTI ORDINATI
+  // (GROUP_CONCAT DISTINCT ... ORDER BY name).
   const svcNameById = new Map<number, string>();
-  const svcByAppt = new Map<number, { names: string[]; total: number }>();
+  const svcPriceById = new Map<number, number>();
+  const svcByAppt = new Map<number, { names: string[]; total: number | null }>();
   const apsRows = await tenantSelect<RowDataPacket>({ slug, table: "appointment_services", columns: "appointment_id, service_id, price, qty", where: `appointment_id IN (${inIds})`, params: ids }).catch(() => [] as RowDataPacket[]);
   const allSvcIds = uniq([...apsRows.map((r) => Number(r.service_id)), ...apptRows.map((r) => Number(r.service_id))]);
   if (allSvcIds.length) {
-    const rows = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, name", where: `id IN (${allSvcIds.map(() => "?").join(",")})`, params: allSvcIds }).catch(() => [] as RowDataPacket[]);
-    for (const r of rows) svcNameById.set(Number(r.id), String(r.name ?? ""));
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, name, price", where: `id IN (${allSvcIds.map(() => "?").join(",")})`, params: allSvcIds }).catch(() => [] as RowDataPacket[]);
+    for (const r of rows) {
+      svcNameById.set(Number(r.id), String(r.name ?? ""));
+      svcPriceById.set(Number(r.id), Number(r.price ?? 0));
+    }
   }
   for (const r of apsRows) {
     const aid = Number(r.appointment_id);
-    if (!svcByAppt.has(aid)) svcByAppt.set(aid, { names: [], total: 0 });
+    if (!svcByAppt.has(aid)) svcByAppt.set(aid, { names: [], total: null });
     const e = svcByAppt.get(aid)!;
     const nm = svcNameById.get(Number(r.service_id)) ?? "";
     if (nm && !e.names.includes(nm)) e.names.push(nm);
-    e.total += Math.max(0, Number(r.price ?? 0)) * Math.max(1, Number(r.qty ?? 1));
+    if (r.price !== null && r.price !== undefined && r.qty !== null && r.qty !== undefined) {
+      e.total = (e.total ?? 0) + Number(r.price) * Number(r.qty);
+    }
   }
+  for (const e of svcByAppt.values()) e.names.sort((a, b) => a.localeCompare(b));
 
   // Operatori per appuntamento (nomi/telefoni/email) da appointment_staff+staff
   const staffByAppt = new Map<number, { names: string[]; phones: string[]; emails: string[] }>();
@@ -22372,17 +22384,37 @@ export async function listNotificationPendingAppointments(slug: string, currentL
     if (st.phone && !e.phones.includes(st.phone)) e.phones.push(st.phone);
     if (st.email && !e.emails.includes(st.email)) e.emails.push(st.email);
   }
+  // GROUP_CONCAT DISTINCT ... ORDER BY: nomi/telefoni/email ordinati.
+  for (const e of staffByAppt.values()) {
+    e.names.sort((a, b) => a.localeCompare(b));
+    e.phones.sort((a, b) => a.localeCompare(b));
+    e.emails.sort((a, b) => a.localeCompare(b));
+  }
 
-  // Sedi (nome/indirizzo) + fallback business
-  const locById = new Map<number, { name: string; address: string }>();
+  // Sedi (riga completa: l'indirizzo mostrato è quello COMPOSTO da
+  // app_location_full_address — via, [cap città (provincia)] con precedenza
+  // ai campi legal_*) + fallback business (name/address).
+  const locById = new Map<number, RowDataPacket>();
   const locIds = uniq([...apptRows.map((r) => Number(r.location_id)), currentLocationId]);
   if (locIds.length) {
-    const rows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "id, name, address", where: `id IN (${locIds.map(() => "?").join(",")})`, params: locIds }).catch(() => [] as RowDataPacket[]);
-    for (const r of rows) locById.set(Number(r.id), { name: String(r.name ?? ""), address: String(r.address ?? "") });
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "*", where: `id IN (${locIds.map(() => "?").join(",")})`, params: locIds }).catch(() => [] as RowDataPacket[]);
+    for (const r of rows) locById.set(Number(r.id), r);
   }
   const bizRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "name, address", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
   const bizName = String(bizRows[0]?.name ?? "");
   const bizAddress = String(bizRows[0]?.address ?? "");
+  const currentLocRow = currentLocationId > 0 ? locById.get(currentLocationId) : undefined;
+  // app_location_full_address (Helpers.php 852-865).
+  const locationFullAddress = (row: RowDataPacket | undefined, fallbackAddress: string): string => {
+    const get = (key: string, alt: string) => String(row?.[key] ?? row?.[alt] ?? "").trim();
+    const address = String(row?.address ?? "").trim() || fallbackAddress.trim();
+    const cap = get("legal_cap", "cap");
+    const city = get("legal_city", "city");
+    const province = get("legal_province", "province");
+    let cityLine = [cap, city].filter((p) => p !== "").join(" ").trim();
+    if (province !== "") cityLine = `${cityLine} (${province})`.trim();
+    return [address, cityLine].filter((p) => p.trim() !== "").join(", ").trim();
+  };
 
   const decorations = await appointmentListDecorations(slug, ids).catch(() => new Map<number, { packageSummary: string; prepaidSummary: string; staffColor: string }>());
 
@@ -22392,11 +22424,17 @@ export async function listNotificationPendingAppointments(slug: string, currentL
     const sv = svcByAppt.get(aid);
     const primaryName = svcNameById.get(Number(r.service_id)) ?? "";
     const serviceName = (sv && sv.names.length ? sv.names.join(", ") : primaryName) || "(nessun servizio)";
-    let total = sv ? sv.total : 0;
+    // COALESCE(svc.total_price, s.price, 0): senza righe snapshot (o con sole
+    // righe NULL) il totale ricade sul prezzo del servizio primario.
+    let total = sv && sv.total !== null ? sv.total : (svcPriceById.get(Number(r.service_id)) ?? 0);
+    const subtotal = total;
+    // Sconto coupon dalle note (notifications.php 244-268): clampato al
+    // subtotale PRIMA della soglia — a subtotale 0 il coupon NON compare.
     const coupon = extractCouponMetaFromNotes(r.notes);
+    const discount = Math.max(0, Math.min(subtotal, coupon.discount));
     let couponCode = "";
-    if (coupon.discount > 0.00001) {
-      total = Math.max(0, total - coupon.discount);
+    if (discount > 0.00001) {
+      total = Math.max(0, subtotal - discount);
       couponCode = coupon.code;
     }
     const staff = staffByAppt.get(aid);
@@ -22407,6 +22445,12 @@ export async function listNotificationPendingAppointments(slug: string, currentL
     const ends = r.ends_at === null || r.ends_at === undefined ? null : toDate(r.ends_at);
     const dateIso = dateIsoLocal(starts);
     const [yy, mm, dd] = dateIso.split("-");
+    // Fallback legacy (notifications.php 188-198): nome dalla riga sede,
+    // poi etichetta sede corrente, poi business; indirizzo COMPOSTO dalla
+    // riga sede (o dalla riga della sede corrente) con fallback address
+    // sede-corrente → business.
+    const fallbackAddress = String(currentLocRow?.address ?? "").trim() || bizAddress;
+    const addressRow = loc ?? currentLocRow;
     return {
       id: aid,
       publicCode: String(r.public_code ?? "").trim(),
@@ -22417,8 +22461,8 @@ export async function listNotificationPendingAppointments(slug: string, currentL
       staffName: staff && staff.names.length ? staff.names.join(", ") : "",
       staffPhone: staff && staff.phones.length ? staff.phones.join(", ") : "",
       staffEmail: staff && staff.emails.length ? staff.emails.join(", ") : "",
-      locationName: (loc?.name || bizName || "").trim() || "—",
-      locationAddress: (loc?.address || bizAddress || "").trim(),
+      locationName: (String(loc?.name ?? "").trim() || String(currentLocRow?.name ?? "").trim() || bizName).trim() || "—",
+      locationAddress: locationFullAddress(addressRow, fallbackAddress),
       clientName: cl.name || "—",
       clientPhone: cl.phone || "",
       clientEmail: cl.email || "",

@@ -1,6 +1,7 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
-import { getAutomationSettings, saveClientBirthdayAlertDays } from "@/lib/automation-reminders";
-import { fidelityCardExpiryNotificationConfig, listDbNotifications, listNotificationPendingAppointments, markDbNotificationRead } from "@/lib/db-repositories";
+import { automationScheduleReminder, getAutomationSettings, saveClientBirthdayAlertDays } from "@/lib/automation-reminders";
+import { lifecycleKindForStatusChange, sendAppointmentLifecycleEmail } from "@/lib/appointment-lifecycle-email";
+import { cancelDoneAppointment, fidelityCardExpiryNotificationConfig, listNotificationPendingAppointments } from "@/lib/db-repositories";
 import { listBirthdayNotificationRows, notificationFidelityCardGroups, notificationInstallmentGroups } from "@/lib/manage-dashboard-alerts";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { columnExists, dbQuery, quoteIdentifier, tableExists, tenantSelect, tenantTable } from "@/lib/tenant-db";
@@ -63,11 +64,15 @@ export async function GET(request: Request) {
         emptyText = "Nessuna tessera è attualmente scaduta.";
       }
       const locationLabel = locationContext.locations.find((l) => l.id === locationContext.currentLocationId)?.name ?? "";
+      // $fidelityCardsTableOk (notifications.php 309-315): tabella cards
+      // assente → card dedicata 'Tessere Fidelity non disponibili.'.
+      const fidelityTableOk = await tableExists("cards").catch(() => false);
       return Response.json({
         ok: true,
         pending,
         fidelityGroups,
         fidelitySection: { enabled: canFidelity && cfg.mode !== "disabled", sectionText, emptyText },
+        fidelityTableOk,
         canManage: can(session.user.perms, "appointments.manage"),
         locationLabel,
       }, { headers: { "Cache-Control": "no-store" } });
@@ -332,14 +337,26 @@ export async function GET(request: Request) {
       });
     }
 
-    return Response.json({
-      ok: true,
-      sourceMode: "database",
-      notifications: await listDbNotifications(tenantSlug),
-    });
+    // Azione GET sconosciuta: nel legacy non esiste una lista JSON generica
+    // (la pagina HTML è il default); l'API risponde come api_user_prefs.
+    return jsonError("Azione non valida.", 400);
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Errore notifiche.");
   }
+}
+
+// appt_norm_status (Helpers.php 9758-9776): sinonimi italiani inclusi — la
+// guardia pending del POST legacy normalizza PRIMA di confrontare.
+function apptNormStatusIt(status: string): string {
+  let s = status.trim().toLowerCase();
+  if (s === "cancelled") s = "canceled";
+  if (["annullato", "annullata", "cancellato", "cancellata"].includes(s)) s = "canceled";
+  if (["rifiutato", "rifiutata", "rejected"].includes(s)) s = "canceled";
+  if (["no show", "no-show", "noshow", "non presentato", "non presentata", "cliente assente", "assente"].includes(s)) s = "no_show";
+  if (["prenotato", "prenotata", "confirmed", "confermato", "confermata", "approved", "booked"].includes(s)) s = "scheduled";
+  if (["in sospeso", "in attesa", "attesa"].includes(s)) s = "pending";
+  if (["eseguito", "eseguita", "executed", "completed", "completato", "completata"].includes(s)) s = "done";
+  return s;
 }
 
 export async function POST(request: Request) {
@@ -349,7 +366,7 @@ export async function POST(request: Request) {
   if (!can(session.user.perms, "notifications.view")) return jsonError("Permesso notifiche mancante.", 403);
 
   const body = await parseRequestBody(request);
-  const action = String(body.action ?? "read");
+  const action = String(body.action ?? "");
 
   try {
     // Port di notifications_birthdays.php action=save_settings: clamp 0..365 e
@@ -362,9 +379,86 @@ export async function POST(request: Request) {
       return Response.json({ ok: true, message: "Impostazioni salvate", days });
     }
 
-    const id = parseInteger(body.id);
-    const notification = await markDbNotificationRead(id, tenantSlug);
-    return Response.json({ ok: true, source: "notifications?action=read", sourceMode: "database", notification, notifications: await listDbNotifications(tenantSlug) });
+    // Port del POST di notifications.php (77-146): approva/annulla una
+    // RICHIESTA IN ATTESA con le guardie legacy — permesso appuntamenti
+    // ('Operazione non autorizzata'), riga visibile nella sede corrente col
+    // ramo bridge ('Operazione non valida'), stato ancora pending con i
+    // sinonimi italiani ('Appuntamento non piu in attesa' — senza accento).
+    if (action === "approve" || action === "cancel" || action === "reject") {
+      if (!can(session.user.perms, "appointments.manage")) {
+        return jsonError("Operazione non autorizzata", 403);
+      }
+      const id = parseInteger(body.id);
+      if (id <= 0) return jsonError("Operazione non valida", 400);
+
+      const locationContext = await getManageLocationContext(tenantSlug);
+      const loc = locationContext.currentLocationId;
+      const rows = await tenantSelect<RowDataPacket>({
+        slug: tenantSlug,
+        table: "appointments",
+        columns: "id, status, location_id",
+        where: "id = ?",
+        params: [id],
+        limit: 1,
+      }).catch(() => [] as RowDataPacket[]);
+      const row = rows[0];
+      let visible = Boolean(row);
+      if (row && loc > 0) {
+        const rowLoc = row.location_id === null || row.location_id === undefined ? null : Number(row.location_id);
+        if (rowLoc !== null) {
+          visible = rowLoc === loc;
+        } else {
+          // NULL: visibile se nessuna riga bridge oppure bridge verso la sede.
+          const bridge = await tenantSelect<RowDataPacket>({
+            slug: tenantSlug,
+            table: "appointment_locations",
+            columns: "location_id",
+            where: "appointment_id = ?",
+            params: [id],
+          }).catch(() => [] as RowDataPacket[]);
+          visible = bridge.length === 0 || bridge.some((b) => Number(b.location_id) === loc);
+        }
+      }
+      if (!visible) return Response.json({ ok: false, error: "Operazione non valida" });
+      if (apptNormStatusIt(String(row!.status ?? "")) !== "pending") {
+        return Response.json({ ok: false, error: "Appuntamento non piu in attesa" });
+      }
+
+      if (action === "approve") {
+        // UPDATE doppio-guardato dallo stesso set pending della lista legacy
+        // (riga 106): 0 righe toccate = approvato/annullato nel frattempo.
+        const appt = await tenantTable(tenantSlug, "appointments");
+        const updated = await dbQuery<RowDataPacket[]>(
+          `UPDATE ${quoteIdentifier(appt.name)} SET status='scheduled'
+            WHERE id = ?${appt.tenantId ? " AND tenant_id = ?" : ""}
+              AND LOWER(TRIM(COALESCE(status,''))) IN ('pending','in sospeso','in attesa','attesa')
+            RETURNING id`,
+          appt.tenantId ? [id, appt.tenantId] : [id],
+        ).catch(() => [] as RowDataPacket[]);
+        if (!updated.length) return Response.json({ ok: false, error: "Appuntamento non piu in attesa" });
+        // automation_handle_status_change(old, 'scheduled'): email 'approved'
+        // + (ri)schedulazione promemoria.
+        const kind = lifecycleKindForStatusChange("pending", "scheduled");
+        if (kind) await sendAppointmentLifecycleEmail({ slug: tenantSlug, appointmentId: id, kind });
+        await automationScheduleReminder(tenantSlug, id);
+        return Response.json({ ok: true, message: "Appuntamento approvato" });
+      }
+
+      // cancel/reject: lifecycle completa (appt_lifecycle_cancel_done_apply,
+      // allowed-from pending già verificato sopra) — restore riserve incluso.
+      try {
+        await cancelDoneAppointment(tenantSlug, id, "canceled", session.user.id);
+      } catch (error) {
+        return Response.json({ ok: false, error: error instanceof Error ? error.message : "Operazione non valida" });
+      }
+      const kind = lifecycleKindForStatusChange("pending", "canceled");
+      if (kind) await sendAppointmentLifecycleEmail({ slug: tenantSlug, appointmentId: id, kind });
+      await automationScheduleReminder(tenantSlug, id);
+      return Response.json({ ok: true, message: "Appuntamento annullato" });
+    }
+
+    // Fallback legacy (notifications.php 145): qualsiasi altro POST.
+    return jsonError("Operazione non valida", 400);
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Errore notifiche.");
   }

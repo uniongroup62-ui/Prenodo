@@ -10460,3 +10460,79 @@ PRODUZIONE INTATTA (prefs utente 20 byte-identiche, baseline 10/5).
 REGRESSIONE: notifiche 17/17, feed 10/10, shell-summary 7/7. tsc+eslint puliti.
 Residuo noto (fuori scope Notifiche): il dropdown account della topbar non
 gatta ancora le voci per permesso (View.php 830+, es. settings.general).
+
+## 2026-07-10 — Notifiche, parte 4 (hub notifications.php POST + popup annullo + lista pending): azioni e dettagli 1:1 + e2e
+
+QUARTA passata su Notifiche: riletto INTEGRALE notifications.php (812) +
+notifications_quotes.js (34) + qbAppointmentCancelDialog/qbOpenDoneCancelPreview/
+qbSubmitDoneCancel (app.js 5400-5526, 11325-11332) + api_appointments.php
+72-86 (pending_only) + api_user_prefs.php (149, integrale). Chiusi il POST
+della pagina, il popup di annullo esterno e i dettagli della lista pending.
+
+FIX:
+1) Route notifications POST — port del POST legacy (notifications.php 77-146),
+   PRIMA delegato ad appointments action=status SENZA le guardie della pagina:
+   approve/cancel/reject con permesso appointments.manage ('Operazione non
+   autorizzata'), riga visibile nella SEDE CORRENTE col ramo bridge
+   ('Operazione non valida'), stato ancora pending normalizzato coi sinonimi
+   italiani di appt_norm_status ('Appuntamento non piu in attesa' — senza
+   accento; nota: il CHECK PG appointments_status_check ammette solo i 5 stati
+   canonici, quindi i sinonimi sono difensivi/fedeli al codice); approve =
+   UPDATE doppio-guardato dal set ('pending','in sospeso','in attesa','attesa')
+   + email 'approved' + rischedulazione promemoria (automation_handle_status_
+   change); cancel/reject = lifecycle completa cancelDoneAppointment (allowed-
+   from pending) + email 'rejected'. RIMOSSE le superfici NON-legacy: GET
+   default action=list (dump listDbNotifications, tabella inesistente nel
+   legacy) → 400 'Azione non valida.'; POST default markDbNotificationRead →
+   400 'Operazione non valida' (fallback riga 145 legacy).
+2) POPUP ANNULLO della pagina (residuo dichiarato del primo audit): l'Annulla
+   legacy NON è un window.confirm — apre qbAppointmentCancelDialog
+   (anteprima conseguenze + conferma → cancel_done_apply con pending_only=1).
+   Portato: ponte esterno window.qbAppointmentCancelDialog {open,close} nel
+   quick-booking-drawer (modal preview GIÀ portato, riusato SENZA aprire
+   l'offcanvas) con gate pendingOnly all'apertura (stato preview ≠ pending →
+   toast danger 'La richiesta non e piu in attesa: aggiorna la pagina
+   Notifiche.' e chiusura, app.js 5431-5433), submit con pending_only=1,
+   toast 'Prenotazione annullata' + warnings + refetch calendario + onSuccess;
+   route appointments action=cancel_done ora accetta pending_only
+   ('1'/'true'/'yes'/'pending', api_appointments.php 72-86) e ri-verifica lo
+   stato all'apply coi messaggi verbatim. La pagina usa il ponte (classe
+   js-pending-cancel-btn + data-appointment-id come il markup legacy) con
+   fallback 'Popup annullamento non disponibile' (alert warning — 'popup' è
+   nella euristica); Approva passa dal POST della pagina.
+   normalizeApptStatus del drawer completato a qbNormStatus pieno (app.js
+   4933-4943: 'in attesa'→pending ma NON 'attesa'/'in sospeso' — bug-fedele
+   client; annullato/cancelled→canceled, eseguito/executed→done,
+   prenotato→scheduled).
+3) listNotificationPendingAppointments — 4 differenze vs la SELECT legacy
+   (notifications.php 157-198): totale con fallback al PREZZO DEL SERVIZIO
+   PRIMARIO quando mancano le righe snapshot (COALESCE(svc.total_price,
+   s.price, 0) — prima dava 0); somma prezzo×qty RAW (qty 0 conta 0 — prima
+   clampata a 1 — e righe NULL non contribuiscono, ricadendo sul fallback);
+   nomi servizi e nomi/telefoni/email operatori ORDINATI e distinti
+   (GROUP_CONCAT DISTINCT ... ORDER BY — prima in ordine di riga); sconto
+   coupon CLAMPATO al subtotale PRIMA della soglia (a subtotale 0 il coupon
+   non compare); indirizzo sede COMPOSTO con app_location_full_address
+   (via, [cap città (provincia)] con precedenza legal_*) e catena di fallback
+   riga-sede → sede corrente → business (prima solo il campo address).
+4) Hub: card 'Tessere Fidelity non disponibili.' quando la tabella cards
+   manca (fidelityTableOk nel payload, notifications.php 309-315/593-597).
+5) user-prefs: merge legacy del POST (api_user_prefs.php 120-132) —
+   `preferences` (oggetto/JSON) come base + chiavi singole flat che la
+   SOVRASCRIVONO (prima le flat erano ignorate se preferences era presente).
+
+VERIFICATO: test-notifiche-hub 16/16 live (fallback prezzo primario 12€,
+indirizzo composto 'Via Tremiti 6, 20811 Altino (Chieti)', nomi ordinati +
+qty raw + coupon clampato, fidelityTableOk, 403/guardie sede/id, approve→
+scheduled + ri-approve rifiutato, cancel con cancelled_at, pending_only su
+non-pending rifiutato col messaggio verbatim e su pending applicato, GET/POST
+ignoti a 400, merge prefs con 'yes'/flat). REGRESSIONE: notifiche 17/17,
+feed 10/10, shell 12/12, shell-summary 7/7, engine 12/12; render
+notifications+calendar 200. PRODUZIONE INTATTA (baseline 10/5, reminders 28,
+prefs byte-identiche). tsc pulito; eslint: nessun errore NUOVO (6 errori
+set-state-in-effect PRE-esistenti nel quick-booking-drawer, fuori dalle zone
+toccate — verificato lintando HEAD).
+Residui noti: eventuale nota coupon con SOLO codice (senza riga sconto) non
+ricalcola lo sconto dal motore coupon (il flusso di booking scrive sempre
+entrambe le righe; ricalcolo legato al port del modulo Buoni); dropdown
+account topbar ancora non gated per-permesso (fuori scope Notifiche).

@@ -698,6 +698,17 @@ export async function POST(request: Request) {
       // (cancelDoneAppointment re-validates this and rejects anything else).
       const rawTarget = String(body.status ?? body.target_status ?? "canceled").trim();
       const targetStatus = appointmentPhpStatus(rawTarget) === "no_show" ? "no_show" : "canceled";
+      // pending_only (api_appointments.php 72-86): la pagina Notifiche annulla
+      // SOLO richieste ancora in attesa — ri-verifica lo stato all'apply coi
+      // messaggi legacy verbatim (200 con ok:false, come j() senza http code).
+      const pendingOnlyRaw = String(body.pending_only ?? url.searchParams.get("pending_only") ?? "").trim().toLowerCase();
+      if (["1", "true", "yes", "pending"].includes(pendingOnlyRaw)) {
+        const current = await getDbAppointmentPhpStatus(tenantSlug, id);
+        if (current === null) return Response.json({ ok: false, error: "Prenotazione non trovata." });
+        if (current !== "pending") {
+          return Response.json({ ok: false, error: "La richiesta non e piu in attesa: aggiorna la pagina Notifiche." });
+        }
+      }
       // Operator's cancellation motivation (optional, max 255 — persisted to
       // appointments.cancelled_reason by cancelDoneAppointment; mirrors the legacy apply).
       const reason = String(body.reason ?? "").trim().slice(0, 255);

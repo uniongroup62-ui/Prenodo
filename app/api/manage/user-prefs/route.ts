@@ -123,8 +123,26 @@ async function handle(request: Request, method: "GET" | "POST") {
       }
       if (method !== "POST") return Response.json({ ok: false, error: "Metodo non consentito." }, { status: 405, headers: { Allow: "POST" } });
       const bodyObj = body as Record<string, unknown>;
-      // `preferences` (oggetto/JSON) oppure chiavi singole nel POST (legacy).
-      const prefs = bodyObj.preferences !== undefined ? normalizePreferences(bodyObj.preferences) : normalizePreferences(bodyObj);
+      // Merge legacy (api_user_prefs.php 120-132): `preferences` (oggetto o
+      // stringa JSON) come BASE, poi le chiavi singole presenti nel POST la
+      // SOVRASCRIVONO chiave per chiave.
+      let baseInput: Record<string, unknown> = {};
+      const rawPrefs = bodyObj.preferences;
+      if (rawPrefs !== undefined) {
+        let parsed: unknown = rawPrefs;
+        if (typeof rawPrefs === "string") {
+          try {
+            parsed = JSON.parse(rawPrefs);
+          } catch {
+            parsed = {};
+          }
+        }
+        if (parsed && typeof parsed === "object") baseInput = { ...(parsed as Record<string, unknown>) };
+      }
+      for (const key of CONFIGURABLE_NOTIF_KEYS) {
+        if (Object.prototype.hasOwnProperty.call(bodyObj, key)) baseInput[key] = bodyObj[key];
+      }
+      const prefs = normalizePreferences(baseInput);
       await tenantUpdate({ slug: tenantSlug, table: "users", id: userId, values: { browser_notification_preferences: JSON.stringify(prefs) } });
       return Response.json(preferencesResponse(prefs));
     }

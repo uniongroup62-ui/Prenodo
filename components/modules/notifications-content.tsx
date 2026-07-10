@@ -103,6 +103,7 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
   const [pending, setPending] = useState<PendingAppointment[]>([]);
   const [fidelityGroups, setFidelityGroups] = useState<FidelityGroup[]>([]);
   const [fidelitySection, setFidelitySection] = useState<FidelitySection | null>(null);
+  const [fidelityTableOk, setFidelityTableOk] = useState(true);
   const [canManage, setCanManage] = useState(false);
   const [locationLabel, setLocationLabel] = useState("");
   const [prefs, setPrefs] = useState<Record<string, boolean>>({});
@@ -267,6 +268,7 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
         setPending(Array.isArray(j.pending) ? j.pending : []);
         setFidelityGroups(Array.isArray(j.fidelityGroups) ? j.fidelityGroups : []);
         setFidelitySection(j.fidelitySection ?? null);
+        setFidelityTableOk(j.fidelityTableOk !== false);
         setCanManage(Boolean(j.canManage));
         setLocationLabel(String(j.locationLabel ?? ""));
       })
@@ -287,22 +289,24 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
     return () => window.removeEventListener("qb:appointments-changed", onChanged);
   }, [load]);
 
-  // Approva (scheduled) / Annulla (canceled): riusa la route appuntamenti che
-  // applica l'intera lifecycle (restore hold su cancel + email approved/rejected).
-  async function act(id: number, status: "scheduled" | "canceled") {
+  // Approva: POST della PAGINA legacy (notifications.php 77-146) con le sue
+  // guardie — pending-only ('Appuntamento non piu in attesa'), sede corrente,
+  // permesso ('Operazione non autorizzata') — ed email/promemoria come
+  // automation_handle_status_change.
+  async function approve(id: number) {
     setBusyId(id);
     setMsg(null);
     try {
-      const res = await fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}`, {
+      const res = await fetch(`/api/manage/notifications?slug=${encodeURIComponent(slug)}`, {
         method: "POST",
         headers: { "content-type": "application/json", "x-tenant-slug": slug },
-        body: JSON.stringify({ action: "status", id, status }),
+        body: JSON.stringify({ action: "approve", id }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data?.ok === false) {
         setMsg({ ok: false, text: String(data?.error || "Operazione non valida") });
       } else {
-        setMsg({ ok: true, text: status === "scheduled" ? "Appuntamento approvato" : "Appuntamento annullato" });
+        setMsg({ ok: true, text: String(data?.message || "Appuntamento approvato") });
       }
     } catch {
       setMsg({ ok: false, text: "Operazione non valida" });
@@ -310,6 +314,28 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
       setBusyId(0);
       load();
     }
+  }
+
+  // Annulla: popup legacy qbAppointmentCancelDialog (notifications_quotes.js
+  // 3-21) con pendingOnly — anteprima conseguenze + conferma → cancel_done
+  // pending_only=1; senza popup, il messaggio warning legacy.
+  function openCancelDialog(id: number) {
+    const dialog = (window as unknown as {
+      qbAppointmentCancelDialog?: { open: (id: number, opts: Record<string, unknown>) => void };
+    }).qbAppointmentCancelDialog;
+    if (!dialog || typeof dialog.open !== "function") {
+      setMsg({ ok: false, text: "Popup annullamento non disponibile" });
+      return;
+    }
+    dialog.open(id, {
+      external: true,
+      pendingOnly: true,
+      originalStatus: "pending",
+      onSuccess: () => {
+        setMsg({ ok: true, text: "Appuntamento annullato" });
+        load();
+      },
+    });
   }
 
   return (
@@ -502,7 +528,7 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
                         className="btn btn-link text-success fw-semibold text-decoration-none"
                         type="button"
                         disabled={busyId === a.id}
-                        onClick={() => act(a.id, "scheduled")}
+                        onClick={() => approve(a.id)}
                       >
                         <i className="bi bi-check2 me-1" />
                         Approva
@@ -519,13 +545,14 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
                         <i className="bi bi-pencil-square me-1" />
                         Modifica
                       </button>
+                      {/* Annulla: popup legacy con anteprima (js-pending-cancel-btn),
+                          NON window.confirm — pendingOnly + cancel_done. */}
                       <button
-                        className="btn btn-link text-danger fw-semibold text-decoration-none"
+                        className="btn btn-link text-danger fw-semibold text-decoration-none js-pending-cancel-btn"
                         type="button"
+                        data-appointment-id={a.id}
                         disabled={busyId === a.id}
-                        onClick={() => {
-                          if (typeof window !== "undefined" && window.confirm("Annullare la prenotazione?")) act(a.id, "canceled");
-                        }}
+                        onClick={() => openCancelDialog(a.id)}
                       >
                         <i className="bi bi-x-lg me-1" />
                         Annulla
@@ -562,7 +589,12 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
               Apri Fidelity / Adesione
             </a>
           </div>
-          {fidelityGroups.length === 0 ? (
+          {!fidelityTableOk ? (
+            <div className="card p-4">
+              <div className="fw-semibold">Tessere Fidelity non disponibili.</div>
+              <div className="text-muted small mt-1">Importa il dump SQL completo aggiornato per vedere le notifiche di scadenza.</div>
+            </div>
+          ) : fidelityGroups.length === 0 ? (
             <div className="card p-4">
               <div className="fw-semibold">Nessuna tessera in scadenza o scaduta.</div>
               <div className="text-muted small mt-1">{fidelitySection.emptyText}</div>

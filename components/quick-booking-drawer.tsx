@@ -201,12 +201,17 @@ function lower(value: string): string {
 }
 
 // Item C: normalize + map an appointment status to a Bootstrap badge (port of
-// qbNormalizeAppointmentStatus + qbBadgeForStatus, app.js ~3634-3651). Same colour classes
-// (warning/primary/success/secondary/dark) + Italian labels the legacy uses.
+// qbNormStatus, app.js 4933-4943: sinonimi italiani inclusi — 'in attesa' sì
+// ma NON 'attesa'/'in sospeso', bug-fedele al client legacy). Same colour
+// classes (warning/primary/success/secondary/dark) + Italian labels.
 function normalizeApptStatus(status: string): string {
   const s = lower(status);
+  if (s === "cancelled" || s === "annullato" || s === "annullata") return "canceled";
   if (s === "rejected" || s === "rifiutato" || s === "rifiutata") return "canceled";
   if (s === "no show" || s === "no-show" || s === "noshow" || s === "non presentato" || s === "non presentata") return "no_show";
+  if (s === "eseguito" || s === "executed") return "done";
+  if (s === "prenotato") return "scheduled";
+  if (s === "in attesa") return "pending";
   return s;
 }
 function badgeForStatus(status: string): { cls: string; label: string } {
@@ -3112,7 +3117,7 @@ export function QuickBookingDrawer() {
   // action=cancel_done_preview (compute-only), renders the preview, and gates Confirm on
   // the preview being ok with no blockers.
   const openDoneCancelModal = useCallback(
-    (id: string, target: "canceled" | "no_show"): Promise<{ reason: string } | null> => {
+    (id: string, target: "canceled" | "no_show", opts?: { pendingOnly?: boolean }): Promise<{ reason: string } | null> => {
       return new Promise((resolve) => {
         doneCancelResolveRef.current = resolve;
         setDoneCancelTarget(target);
@@ -3142,6 +3147,25 @@ export function QuickBookingDrawer() {
             const data: { ok?: boolean; error?: string; preview?: DoneCancelPreview } = await res
               .json()
               .catch(() => ({}));
+            // Gate pendingOnly della pagina Notifiche (app.js 5431-5433): se la
+            // richiesta non risulta più in attesa il popup si CHIUDE con il
+            // toast danger legacy, senza mostrare l'anteprima.
+            if (opts?.pendingOnly && normalizeApptStatus(String(data.preview?.status ?? "")) !== "pending") {
+              qbNotify("La richiesta non e piu in attesa: aggiorna la pagina Notifiche.", "danger");
+              const pendingResolve = doneCancelResolveRef.current;
+              doneCancelResolveRef.current = null;
+              const modalEl = document.getElementById("qbDoneCancelModal");
+              const modalApi = bootstrap()?.Modal;
+              if (modalEl && modalApi) {
+                try {
+                  modalApi.getOrCreateInstance(modalEl).hide();
+                } catch {
+                  /* no-op */
+                }
+              }
+              if (pendingResolve) pendingResolve(null);
+              return;
+            }
             if (data.preview) setDoneCancelPreview(data.preview);
             // Error surfaces inline in the modal AND disables Confirm (matches the legacy
             // "Annullamento non disponibile" gate).
@@ -3158,6 +3182,68 @@ export function QuickBookingDrawer() {
     },
     [slug],
   );
+
+  // Ponte esterno legacy (app.js 11325-11332 + notifications_quotes.js): la
+  // pagina Notifiche apre il popup di annullamento SENZA aprire l'offcanvas,
+  // con pendingOnly; alla conferma applica action=cancel_done con
+  // pending_only=1 e richiama onSuccess (toast 'Prenotazione annullata' +
+  // warnings + refetch calendario come qbSubmitDoneCancel 5500-5520).
+  useEffect(() => {
+    type ExternalCancelOpts = {
+      external?: boolean;
+      pendingOnly?: boolean;
+      originalStatus?: string;
+      targetStatus?: string;
+      onSuccess?: (data: unknown) => void;
+    };
+    const open = (rawId: unknown, rawOpts?: ExternalCancelOpts) => {
+      const id = Number.parseInt(String(rawId ?? "").trim(), 10) || 0;
+      if (!(id > 0)) return;
+      const opts = rawOpts && typeof rawOpts === "object" ? rawOpts : {};
+      const target = normalizeApptStatus(String(opts.targetStatus ?? "canceled")) === "no_show" ? ("no_show" as const) : ("canceled" as const);
+      void (async () => {
+        const decision = await openDoneCancelModal(String(id), target, { pendingOnly: Boolean(opts.pendingOnly) });
+        if (!decision) return;
+        try {
+          const res = await fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+            body: JSON.stringify({
+              action: "cancel_done",
+              id: String(id),
+              status: target,
+              reason: decision.reason,
+              ...(opts.pendingOnly ? { pending_only: "1" } : {}),
+            }),
+          });
+          const data: { ok?: boolean; error?: string; warnings?: string[] } = await res.json().catch(() => ({}));
+          if (!res.ok || data.ok === false || data.error) {
+            qbNotify(String(data.error || "Errore annullamento"), "danger");
+            return;
+          }
+          qbNotify(target === "no_show" ? "Prenotazione marcata No show" : "Prenotazione annullata", "success");
+          for (const w of Array.isArray(data.warnings) ? data.warnings : []) {
+            if (w) qbNotify(String(w), "warning");
+          }
+          qbRefetchCalendar();
+          if (typeof opts.onSuccess === "function") {
+            try {
+              opts.onSuccess(data);
+            } catch {
+              /* noop */
+            }
+          }
+        } catch {
+          qbNotify("Errore annullamento", "danger");
+        }
+      })();
+    };
+    const api = { open, close: () => closeDoneCancelModal(null) };
+    (window as unknown as { qbAppointmentCancelDialog?: typeof api }).qbAppointmentCancelDialog = api;
+    return () => {
+      delete (window as unknown as { qbAppointmentCancelDialog?: typeof api }).qbAppointmentCancelDialog;
+    };
+  }, [slug, openDoneCancelModal, closeDoneCancelModal]);
 
   const submitBooking = useCallback(
     async (e: React.FormEvent<HTMLFormElement>) => {
