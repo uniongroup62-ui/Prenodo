@@ -89,7 +89,8 @@ export function AutomationContent({
 
   const fidelityConfigOk = page?.fidelity?.configOk ?? false;
   const reminderEnabled = settings?.reminder_enabled ?? true;
-  const smsReminderEnabled = settings?.sms_reminder_enabled ?? true;
+  // Default legacy del toggle SMS: SPENTO (!empty($s['sms_reminder_enabled'])).
+  const smsReminderEnabled = settings?.sms_reminder_enabled ?? false;
   const approvedEnabled = settings?.approved_enabled ?? true;
   const fidelityExpiryEnabled = fidelityConfigOk && (settings?.fidelity_expiry_reminder_enabled ?? false);
   const modifiedEnabled = settings?.modified_enabled ?? true;

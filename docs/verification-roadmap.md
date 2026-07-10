@@ -9854,3 +9854,87 @@ POST 403/azione invalida/ruolo ignoto). PRODUZIONE INTATTA: permissions 61
 righe byte-identiche, role_permissions=0 (baseline), audit=4 (baseline, righe
 ZZ rimosse). REGRESSIONE: model-a 12/12. tsc pulito, eslint solo warning
 preesistenti.
+
+## 2026-07-10 — Automazione (automation.php + helper Helpers.php): audit 1:1 + 7 fix + e2e live
+
+Legacy letto INTEGRALE (diretto): app/pages/automation.php (537) + gli helper
+di Helpers.php — ensure_automation_settings (7132-7420, migrazioni+seed+
+riparazione testi legacy), automation_get/save_settings (7863-7919),
+automation_default_* (7033-7130), automation_kind_enabled (7607),
+automation_schedule_reminder + clear_pending (9304-9413), sms_credit_ensure/
+wallet/balance/segment_count (9064-9226), booking_customer_cancel_policy
+(5384), appt_norm_status (9758) + appointment_status_normalize_code (6054),
+SaasSmsBilling::plans (153-157), fidelity_card_*_config (già auditate in
+Fidelity). Next: app/api/manage/automation/route.ts (73) +
+lib/automation-reminders.ts (ora 500) + automation-content.tsx (531) +
+fidelityCardExpiryReminderConfig (manage-feature-settings). Permesso
+automation.manage ('Permesso automazione mancante.').
+
+FIX (7):
+1) GATE TOGGLE nello scheduler (automation_schedule_reminder 9317-9322):
+   con reminder_enabled/sms_reminder_enabled spenti il legacy CANCELLA le
+   righe pending (entrambi off → clear totale e uscita; canale disattivo →
+   clear del canale). Il Next schedulava sempre, accumulando pending stantie
+   che il gate del cron avrebbe solo saltato. Default fedeli: email attiva
+   se riga/valore assente (kind_enabled), SMS spenta.
+2) SCHEDULED_STATUS_SET += 'approved','booked' (appt_norm_status li mappa a
+   scheduled; la CHECK PG non li ammette sui dati nuovi ma i dati migrati
+   dal MySQL possono contenerli).
+3) starts_at non parsabile → clear pending + uscita (prima usciva senza
+   pulire, legacy 9345-9348).
+4) Upsert pending: reset COMPLETO dei campi provider (provider,
+   provider_message_id/state/price/total_price, sms_segments,
+   sms_credits_used, provider_response_json, delivered_at, last_checked_at,
+   last_error) come il legacy 9366-9380 — prima azzerava solo last_error.
+5) Il save RISCRIVE subject/body/sender coi testi di sistema byte-identici
+   (automation.php 30-51 li forza a ogni salvataggio; il Next non li
+   toccava — ora lo stato DB resta canonico anche partendo da testi legacy).
+6) Ordine pacchetti SMS: sort_order, CREDITS, id (SaasSmsBilling::plans 156;
+   mancava credits).
+7) Componente: default del toggle SMS in caricamento = SPENTO come il legacy
+   (!empty; era ?? true).
+
+CONFERMATI FEDELI: whitelist ore 3/6/12/24/48 con fallback 24 e sms=ore
+email; checkbox assenti → 0; guardia fidelity (flag salvato solo con durata
+tessera + finestra rinnovo configurate, altrimenti forzato 0 e toggle
+disabled con warning verbatim 'Fidelity → Adesione → Impostazioni tessera');
+sender SMS forzato 'Prenodo'; rischedulazione post-save dei soli appuntamenti
+FUTURI nei 6 alias storici di stato con upsert per (appuntamento, canale) e
+scheduled_at = inizio - ore (se passato → adesso+5'); avvisi annullo da
+booking_customer_cancel_policy (soglie 365/8760, singolare/plurale, ramo
+"fino all'inizio dell'appuntamento" vs 'fino a X prima'/'Annulla entro X.');
+esempio SMS composto verbatim + contatore segmenti GSM-7 (basic 1/esteso 2,
+160/153) vs UCS-2 (70/67) e etichetta '1 credito'/'N crediti'; saldo wallet
+prima riga (max 0); avviso 'Crediti SMS insufficienti...' solo con promemoria
+SMS ATTIVO (valore salvato) e saldo < segmenti esempio; pagina verbatim
+(sezioni, esempi email approvazione/modifica/rifiuto con Luca/Sede1/Via
+Tremiti 6, card destra Riepilogo credito/badge Attivo-Disattivo/Testi
+automatici/Invio automatico con note mail()/OpenAPI/cron); modale Ricarica
+crediti (Saldo attuale, griglia radio con badge Consigliato, crediti/prezzo/
+prezzo-per-credito a 4 decimali number_format, riepilogo sincronizzato,
+highlight border-primary/bg-primary-subtle, footer 'Pagamento non ancora
+disponibile' disabled); flash 'Automazione salvata'; 'Indietro' → dashboard;
+default piano = primo is_featured else primo.
+
+RESIDUI documentati (non fix): (a) ensure_automation_settings (CREATE/ALTER/
+seed/riparazione testi legacy) non gira sul GET Next — la riga viene seminata
+al primo save coi testi default e i default in lettura coprono la riga
+assente (il cron ha gli stessi default); le riparazioni una-tantum dei testi
+legacy MySQL sono coperte dalla riscrittura al save (fix 5); (b) idem
+sms_credit_wallet: il legacy INSERISCE la riga saldo-0 alla prima lettura, il
+Next legge soltanto (saldo 0 equivalente); (c) scheduled_at scritto con
+millisecondi dal driver pg vs date() legacy (cosmetico); (d) azioni API extra
+action=toggle/run su automation_rules (non-legacy, non usate dalla pagina).
+
+VERIFICATO: test-automazione 20/20 live (GET speculare al DB, businessName
+'elite', avviso annullo da policy reale 2 ore, esempio SMS verbatim +
+segmenti=contatore GSM, saldo 0, fidelity configOk=false, 4 piani ordinati
+con Standard consigliato/default e prezzi '7,00 EUR'/'0,0700 EUR', 403/401;
+scheduler con appuntamento ZZ: creazione righe email+sms a -24h, upsert
+stesse righe a -3h/-6h, reset provider completo, CANCELLAZIONE con toggle
+off, solo-email/solo-sms per canale e per contatto mancante; whitelist ore
+7→24 e 99→ore email, toggle OFF persistiti, fidelity forzata 0, testi
+riscritti byte-identici, permessi, azione ignota, alert days 7/7).
+PRODUZIONE INTATTA: automation_settings byte-identica (updated_at escluso,
+trigger PG), 20 reminders pending preesistenti INTATTE, wallet e piani non
+toccati. REGRESSIONE: model-a 12/12, ruoli 21/21. tsc + eslint puliti.

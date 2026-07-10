@@ -15,8 +15,10 @@ import { fidelityCardExpiryReminderConfig } from "@/lib/manage-feature-settings"
 // inviare le righe pending scadute. Senza questo modulo il cron Next non
 // avrebbe mai nulla da inviare.
 
-// Stati che il legacy considera "prenotato" ai fini dei promemoria
-// (normalizzazione LOWER(TRIM(status))).
+// Stati che il legacy considera "prenotato" ai fini dei promemoria: la
+// normalizzazione per-appuntamento usa appt_norm_status (Helpers.php 9758),
+// che mappa a 'scheduled' ANCHE 'approved' e 'booked' (la query di
+// rischedulazione di automation.php resta invece sui 6 alias storici).
 const SCHEDULED_STATUS_SET = new Set([
   "scheduled",
   "prenotato",
@@ -24,6 +26,8 @@ const SCHEDULED_STATUS_SET = new Set([
   "confirmed",
   "confermato",
   "confermata",
+  "approved",
+  "booked",
 ]);
 
 const REMINDER_HOUR_CHOICES = new Set([3, 6, 12, 24, 48]);
@@ -75,8 +79,14 @@ async function upsertPendingReminder(slug: string, scope: ReminderScope, appoint
     [appointmentId, channel, ...scope.params],
   );
   if (rows[0]) {
+    // Reset COMPLETO dei campi provider come il legacy (Helpers.php 9366-9380):
+    // la riga pending riutilizzata riparte pulita da un eventuale invio prima.
     await dbExecute(
-      `UPDATE \`${scope.name}\` SET scheduled_at = ?, last_error = NULL WHERE id = ?${scope.clause}`,
+      `UPDATE \`${scope.name}\` SET scheduled_at = ?, last_error = NULL, provider = NULL,
+              provider_message_id = NULL, provider_state = NULL, provider_price = NULL,
+              provider_total_price = NULL, sms_segments = NULL, sms_credits_used = NULL,
+              provider_response_json = NULL, delivered_at = NULL, last_checked_at = NULL
+        WHERE id = ?${scope.clause}`,
       [scheduledAt, Number(rows[0].id), ...scope.params],
     );
     return;
@@ -114,6 +124,20 @@ export async function automationScheduleReminder(slug: string, appointmentId: nu
       return;
     }
 
+    // Gate legacy (automation_schedule_reminder 9317-9322): con ENTRAMBI i
+    // toggle spenti le pending vengono CANCELLATE, non lasciate in coda.
+    // automation_kind_enabled('reminder'): riga/valore assente → attivo;
+    // il toggle SMS invece è spento di default.
+    const settings = await automationSettingsRow(slug);
+    const emailEnabled = !settings || settings.reminder_enabled == null
+      ? true
+      : Number(settings.reminder_enabled) === 1;
+    const smsEnabled = Boolean(settings && Number(settings.sms_reminder_enabled ?? 0) === 1);
+    if (!emailEnabled && !smsEnabled) {
+      await deletePendingChannel(scope, appointmentId);
+      return;
+    }
+
     const status = String(appointment.status ?? "").trim().toLowerCase();
     if (!SCHEDULED_STATUS_SET.has(status)) {
       await deletePendingChannel(scope, appointmentId);
@@ -121,7 +145,11 @@ export async function automationScheduleReminder(slug: string, appointmentId: nu
     }
 
     const startsAt = appointment.starts_at ? new Date(appointment.starts_at as string | number | Date) : null;
-    if (!startsAt || Number.isNaN(startsAt.getTime())) return;
+    if (!startsAt || Number.isNaN(startsAt.getTime())) {
+      // strtotime falsy → il legacy cancella le pending e esce (9345-9348).
+      await deletePendingChannel(scope, appointmentId);
+      return;
+    }
 
     const clientRows = await tenantSelect<RowDataPacket>({
       slug,
@@ -135,7 +163,6 @@ export async function automationScheduleReminder(slug: string, appointmentId: nu
     const clientEmail = String(client?.email ?? "").trim();
     const clientPhone = normalizeSmsRecipient(String(client?.phone ?? ""));
 
-    const settings = await automationSettingsRow(slug);
     const emailHours = normalizeReminderHours(settings?.reminder_hours);
     const smsHours = normalizeReminderHours(settings?.sms_reminder_hours, emailHours);
 
@@ -145,13 +172,13 @@ export async function automationScheduleReminder(slug: string, appointmentId: nu
       return target.getTime() <= Date.now() ? new Date(Date.now() + 300_000) : target;
     };
 
-    if (clientEmail) {
+    if (emailEnabled && clientEmail) {
       await upsertPendingReminder(slug, scope, appointmentId, "email", targetFor(emailHours));
     } else {
       await deletePendingChannel(scope, appointmentId, "email");
     }
 
-    if (clientPhone) {
+    if (smsEnabled && clientPhone) {
       await upsertPendingReminder(slug, scope, appointmentId, "sms", targetFor(smsHours));
     } else {
       await deletePendingChannel(scope, appointmentId, "sms");
@@ -221,12 +248,28 @@ export async function saveClientBirthdayAlertDays(slug: string, days: number): P
   return clamped;
 }
 
+// Testi di sistema (automation_default_* in Helpers.php 7033-7110): il legacy
+// li RISCRIVE nel DB a ogni salvataggio della pagina (automation.php 30-51,
+// subject/body non modificabili dall'utente) — replicati byte-identici.
+const AUTOMATION_DEFAULT_TEXTS: Record<string, string> = {
+  approved_subject: "Appuntamento approvato",
+  approved_body: "{{client_greeting}}\n\nil tuo appuntamento è stato approvato.\n{{appointment_summary}}\n{{support_contact_notice}}\n\nSaluti,\n{{business_name}}",
+  modified_subject: "Appuntamento modificato",
+  modified_body: "{{client_greeting}}\n\nil tuo appuntamento è stato modificato.\n{{appointment_summary}}\n{{support_contact_notice}}\n\nSaluti,\n{{business_name}}",
+  rejected_subject: "Appuntamento rifiutato",
+  rejected_body: "{{client_greeting}}\n\npurtroppo non possiamo confermare l'appuntamento richiesto.\n{{support_contact_notice}}\n\nSaluti,\n{{business_name}}",
+  reminder_subject: "Promemoria appuntamento",
+  reminder_body: "{{client_greeting}}\n\n{{email_reminder_details}}\n\nSaluti,\n{{business_name}}",
+  sms_reminder_body: "{{client_greeting}} ti ricordiamo l'appuntamento da {{location_name}} il {{start_date}} alle {{start_time}}. {{sms_booking_cancellation_notice}} {{sms_support_contact_notice}}",
+  fidelity_expiry_reminder_subject: "La tua tessera Fidelity sta per scadere",
+  fidelity_expiry_reminder_body: "{{client_greeting}}\n\nla tua tessera Fidelity {{card_code}} scade il {{card_expires_at}}.\nPer mantenerla attiva, effettua un acquisto o completa un appuntamento entro il {{card_expires_at}}.\nIl rinnovo verrà applicato automaticamente.\n\nSaluti,\n{{business_name}}",
+};
+
 // Port del save della pagina Automazione (automation.php 24-71): persiste i
 // toggle + le ore promemoria (3/6/12/24/48), forza il sender SMS a 'Prenodo'
-// come il legacy, poi RISCHEDULA tutti i promemoria degli appuntamenti futuri
-// in stato prenotato (automation.php 57-68). I subject/body NON sono
-// modificabili dall'utente nel legacy (vengono sempre riscritti coi default di
-// sistema); il Next li genera dal codice, quindi qui non li tocchiamo.
+// e riscrive subject/body coi default di sistema come il legacy, poi
+// RISCHEDULA tutti i promemoria degli appuntamenti futuri in stato prenotato
+// (automation.php 57-68).
 export async function saveAutomationSettings(slug: string, body: Record<string, unknown>): Promise<AutomationSettingsView> {
   const isOn = (value: unknown) => ["1", "true", "yes", "on"].includes(String(value ?? "").trim().toLowerCase());
 
@@ -240,6 +283,7 @@ export async function saveAutomationSettings(slug: string, body: Record<string, 
     sms_reminder_enabled: isOn(body.sms_reminder_enabled) ? 1 : 0,
     sms_reminder_hours: normalizeReminderHours(body.sms_reminder_hours, reminderHours),
     sms_reminder_sender: "Prenodo",
+    ...AUTOMATION_DEFAULT_TEXTS,
   };
   // Guardia legacy (automation.php 48): il toggle Fidelity viene salvato a 1
   // SOLO se durata tessera + finestra rinnovo sono configurate; il POST del
@@ -392,8 +436,9 @@ export async function getAutomationPageContext(slug: string): Promise<Automation
   let smsPlans: AutomationPageContext["smsPlans"] = [];
   let smsPlansError = "";
   try {
+    // SaasSmsBilling::plans(false): ORDER BY sort_order, credits, id (156).
     const rows = await dbQuery<RowDataPacket[]>(
-      "SELECT id, name, credits, price_gross, currency, is_featured, description FROM saas_sms_plans WHERE is_active=1 ORDER BY sort_order ASC, id ASC",
+      "SELECT id, name, credits, price_gross, currency, is_featured, description FROM saas_sms_plans WHERE is_active=1 ORDER BY sort_order ASC, credits ASC, id ASC",
     );
     smsPlans = rows.map((row) => {
       const credits = Math.max(1, Number(row.credits ?? 0) || 0);
