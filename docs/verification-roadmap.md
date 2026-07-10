@@ -9502,3 +9502,53 @@ delete con cascata gallery/mapping/log). CLEANUP: sedi 21/51 BYTE-IDENTICHE
 5 clienti; rimossi anche 7 log ZZ residui di sessioni precedenti (resta il solo
 log 'TMP Codex' dello smoke test storico). REGRESSIONE: profilo 25/25,
 model-a 12/12, orari 37/37.
+
+## 2026-07-10 — Sedi / eliminazione COMPLETA (residuo P11 chiuso): LocationDeletion 1:1 + e2e live
+
+Chiuso il residuo dichiarato nell'audit Sedi: portate le sezioni
+exclusive/shared/client_reassignments di LocationDeletion.php (763 righe, letto
+integrale) in lib/manage-business-settings.ts. Ora la delete sede e' 1:1.
+
+IMPLEMENTATO:
+- mappingSpecs (LocationDeletion 59-153) per 8 gruppi (services/staff/packages/
+  coupons/gifts/promotions/suppliers/resources) + productSpec (155-166, mappa
+  per giacenza product_stocks): master, label_column, tabella mapping e FIGLI.
+- exclusiveMappedIds/sharedMappedIds (182-220): GROUP BY sul mapping con HAVING
+  target>0 e COUNT(*)=SUM(target) (esclusivo) / COUNT>SUM (condiviso) — in PG
+  l'HAVING ripete le espressioni (niente alias).
+- PREVIEW (513-526): sezioni exclusive/shared per gruppo con label
+  ('<tabella> #<id>' fallback), gruppi vuoti filtrati; clients SEMPRE shared
+  con piano di riassegnazione per cliente.
+- bestClientReassignmentLocation (388-481): candida le sedi residue pesando
+  l'attivita del cliente su 10 tabelle (clientActivitySpecs 274-287, priority
+  80-200; appuntamenti FUTURI pending/scheduled = future_priority 300),
+  ordinamento priority desc -> ultima attivita desc -> conteggio desc ->
+  sort_order asc -> id asc; fallback prima sede residua. last_activity esposta
+  d/m/Y H:i (formato della view legacy). date GREATEST su COALESCE ::timestamp.
+- DELETE (604-634): per ogni gruppo stacca le mappature dei CONDIVISI
+  (deleteMappingRows: location+ids) ed elimina i master ESCLUSIVI con i figli
+  (deleteMappedMasters); gifts via GRAFO dedicato (677-696: gift_transactions
+  per instance_id -> appointment_gift_items -> gift_progress_resets ->
+  gift_instances -> gift_rules per rule_set_id -> gift_rule_sets ->
+  gift_locations -> gifts); prodotti: giacenze della sede per i condivisi,
+  master+stocks+images per gli esclusivi; riassegnazione clienti col piano del
+  preview + ricalcolo/fallback per-cliente, senza sede valida -> location_id
+  NULL (mai orfani).
+- LOG ITEMS (733-762): location_deletion_log_items con 'deleted_count' per
+  tabella + una voce per entita (exclusive=delete_master, shared=
+  detach_location, clients=reassign_location con il piano nel meta_json).
+
+VERIFICATO: test-sedi-p11 15/15 su sede ZZ (preview con 4 gruppi esclusivi
+etichettati + condiviso + piano cliente con priority 300 e last_activity
+d/m/Y H:i; delete: servizio esclusivo GIU' con service_locations+staff_services,
+servizio condiviso VIVO con mappatura Sede1 intatta e ZZ staccata, risorsa
+esclusiva GIU' col figlio service_resources, GRAFO GIFT azzerato
+(campagna+locations+rule_sets+rules), prodotto esclusivo GIU' con giacenze,
+cliente riassegnato a Sede1 per attivita futura, log items 4 delete_master +
+detach + reassign col meta). PRODUZIONE INTATTA: servizi 9/82 e loro
+service_locations identiche, staff 2, promo 71, locations 2, 5 clienti.
+NB: scoperte giacenze orfane di produzione (product_stocks 3..15 su Sede1
+senza riga products) — non toccate. REGRESSIONE: sedi 40/40, profilo 25/25,
+model-a 12/12. Nota dev: primo run 12/15 per compilazione HMR stale del dev
+server subito dopo l'edit (products mancante); riesecuzione e debug live
+confermano 15/15 — nessun cambio di codice tra i due run.

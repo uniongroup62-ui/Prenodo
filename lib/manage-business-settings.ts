@@ -93,6 +93,140 @@ const imageMimeToExt: Record<string, string> = {
   "image/webp": "webp",
 };
 
+// LocationDeletion::mappingSpecs (LocationDeletion.php 59-153): per ogni gruppo
+// il master, la label, la tabella di mapping sede e i FIGLI da cancellare in
+// cascata quando il master è ESCLUSIVO della sede eliminata.
+type LocationMappingSpec = {
+  table: string;
+  labelColumn: string;
+  mapping: string;
+  mappingColumn: string;
+  children: Array<{ table: string; column: string }>;
+};
+
+const locationMappingSpecs: Record<string, LocationMappingSpec> = {
+  services: {
+    table: "services",
+    labelColumn: "name",
+    mapping: "service_locations",
+    mappingColumn: "service_id",
+    children: [
+      { table: "service_locations", column: "service_id" },
+      { table: "service_cabins", column: "service_id" },
+      { table: "service_resources", column: "service_id" },
+      { table: "staff_services", column: "service_id" },
+      { table: "service_recommendations", column: "service_id" },
+    ],
+  },
+  staff: {
+    table: "staff",
+    labelColumn: "full_name",
+    mapping: "staff_locations",
+    mappingColumn: "staff_id",
+    children: [
+      { table: "staff_locations", column: "staff_id" },
+      { table: "staff_services", column: "staff_id" },
+      { table: "staff_timeoff", column: "staff_id" },
+      { table: "staff_availability", column: "staff_id" },
+      { table: "staff_commission_settings", column: "staff_id" },
+      { table: "staff_commission_periods", column: "staff_id" },
+      { table: "staff_commission_payments", column: "staff_id" },
+    ],
+  },
+  packages: {
+    table: "packages",
+    labelColumn: "name",
+    mapping: "package_locations",
+    mappingColumn: "package_id",
+    children: [
+      { table: "package_locations", column: "package_id" },
+      { table: "package_services", column: "package_id" },
+      { table: "package_items", column: "package_id" },
+      { table: "package_pricing", column: "package_id" },
+    ],
+  },
+  coupons: {
+    table: "coupons",
+    labelColumn: "code",
+    mapping: "coupon_locations",
+    mappingColumn: "coupon_id",
+    children: [{ table: "coupon_locations", column: "coupon_id" }],
+  },
+  gifts: {
+    table: "gifts",
+    labelColumn: "name",
+    mapping: "gift_locations",
+    mappingColumn: "gift_id",
+    children: [{ table: "gift_locations", column: "gift_id" }],
+  },
+  promotions: {
+    table: "promotions",
+    labelColumn: "title",
+    mapping: "promotion_locations",
+    mappingColumn: "promotion_id",
+    children: [
+      { table: "promotion_locations", column: "promotion_id" },
+      { table: "promotion_services", column: "promotion_id" },
+      { table: "promotion_products", column: "promotion_id" },
+      { table: "promotion_time_windows", column: "promotion_id" },
+      { table: "promotion_blackout_dates", column: "promotion_id" },
+      { table: "promotion_redemptions", column: "promotion_id" },
+    ],
+  },
+  suppliers: {
+    table: "suppliers",
+    labelColumn: "name",
+    mapping: "supplier_locations",
+    mappingColumn: "supplier_id",
+    children: [{ table: "supplier_locations", column: "supplier_id" }],
+  },
+  resources: {
+    table: "resources",
+    labelColumn: "name",
+    mapping: "resource_locations",
+    mappingColumn: "resource_id",
+    children: [
+      { table: "resource_locations", column: "resource_id" },
+      { table: "service_resources", column: "resource_id" },
+    ],
+  },
+};
+
+// productSpec (LocationDeletion.php 155-166): i prodotti mappano per giacenza.
+const locationProductSpec: LocationMappingSpec = {
+  table: "products",
+  labelColumn: "name",
+  mapping: "product_stocks",
+  mappingColumn: "product_id",
+  children: [
+    { table: "product_stocks", column: "product_id" },
+    { table: "product_images", column: "product_id" },
+  ],
+};
+
+// clientActivitySpecs (LocationDeletion.php 274-287): tabelle e pesi con cui
+// scegliere la sede residua migliore per ogni cliente.
+const clientActivitySpecs: Array<{
+  table: string;
+  clientColumns: string[];
+  dateColumns: string[];
+  priority: number;
+  futurePriority?: number;
+  futureColumn?: string;
+  futureStatusColumn?: string;
+}> = [
+  { table: "appointments", clientColumns: ["client_id"], dateColumns: ["starts_at", "created_at"], priority: 200, futurePriority: 300, futureColumn: "starts_at", futureStatusColumn: "status" },
+  { table: "sales", clientColumns: ["client_id"], dateColumns: ["sale_date", "created_at"], priority: 200 },
+  { table: "quotes", clientColumns: ["client_id"], dateColumns: ["quote_date", "created_at"], priority: 150 },
+  { table: "client_packages", clientColumns: ["client_id"], dateColumns: ["start_date", "purchase_date", "created_at"], priority: 120 },
+  { table: "giftcards", clientColumns: ["client_id", "recipient_client_id"], dateColumns: ["issued_at", "created_at", "redeemed_at"], priority: 120 },
+  { table: "giftbox_instances", clientColumns: ["client_id", "recipient_client_id"], dateColumns: ["issued_at", "created_at", "redeemed_at"], priority: 120 },
+  { table: "gift_instances", clientColumns: ["client_id"], dateColumns: ["unlocked_at", "redeemed_at", "created_at"], priority: 120 },
+  { table: "recharges", clientColumns: ["client_id"], dateColumns: ["created_at"], priority: 80 },
+  { table: "credit_adjustments", clientColumns: ["client_id"], dateColumns: ["created_at"], priority: 80 },
+  { table: "transactions", clientColumns: ["client_id"], dateColumns: ["created_at"], priority: 80 },
+];
+
 export async function getBusinessSettingsContext(slug: string, publicOrigin = "") {
   await ensureMarketplaceDirectoryTables();
   const tenant = await getTenant(slug);
@@ -501,6 +635,23 @@ export async function previewLocationDelete(slug: string, locationId: number) {
     if (count > 0) directCounts[table] = count;
   }
   const canDelete = locationCount > 1 && Object.keys(blockingCounts).length === 0;
+
+  // Sezioni exclusive/shared del LocationDeletion (preview 513-526): per ogni
+  // gruppo i master mappati SOLO a questa sede (eliminati) vs anche altrove
+  // (mantenuti, staccata solo la mappatura). Gruppi vuoti filtrati via.
+  const exclusive: Record<string, Record<string, string>> = {};
+  const shared: Record<string, Record<string, string>> = {};
+  for (const [key, spec] of Object.entries({ ...locationMappingSpecs, products: locationProductSpec })) {
+    const exclusiveIds = await exclusiveMappedIds(slug, spec, locationId);
+    const sharedIds = await sharedMappedIds(slug, spec, locationId);
+    const exclusiveLabels = await entityLabels(slug, spec.table, spec.labelColumn, exclusiveIds);
+    const sharedLabels = await entityLabels(slug, spec.table, spec.labelColumn, sharedIds);
+    if (Object.keys(exclusiveLabels).length) exclusive[key] = exclusiveLabels;
+    if (Object.keys(sharedLabels).length) shared[key] = sharedLabels;
+  }
+  const clients = await clientsForLocationDeletion(slug, locationId);
+  if (Object.keys(clients.shared).length) shared.clients = clients.shared;
+
   return {
     ok: true,
     location,
@@ -512,12 +663,9 @@ export async function previewLocationDelete(slug: string, locationId: number) {
       : (Object.keys(blockingCounts).length ? "La sede contiene storico operativo o contabile. Archiviala/nascondila o sposta prima i dati storici: non viene eliminata per evitare perdita di dati." : ""),
     blockingCounts,
     directCounts,
-    // Le sezioni exclusive/shared/client_reassignments del LocationDeletion
-    // legacy fanno parte del multi-sede completo (P11): shape presente per il
-    // modale, calcolo non replicato.
-    exclusive: {} as Record<string, string[]>,
-    shared: {} as Record<string, Record<string, string>>,
-    clientReassignments: {} as Record<string, { location_name?: string; activity_count?: number; last_activity?: string }>,
+    exclusive,
+    shared,
+    clientReassignments: clients.reassignments,
     confirmText: "ELIMINA",
   };
 }
@@ -533,7 +681,8 @@ export async function deleteBusinessLocation(slug: string, locationId: number, c
 
   await ensureLocationDeletionLogTables(slug);
   const locationName = clean(String(preview.location?.name ?? `Sede #${locationId}`), 190);
-  await insertLocationDeletionLog(slug, locationId, locationName, reason, preview);
+  const logId = await insertLocationDeletionLog(slug, locationId, locationName, reason, preview);
+  const deleted: Record<string, number> = {};
   // LocationDeletion 591-599: i file della gallery vengono eliminati PRIMA
   // delle righe (qui gli oggetti R2, best-effort; i path legacy /uploads via
   // deletePublicUpload).
@@ -545,34 +694,52 @@ export async function deleteBusinessLocation(slug: string, locationId: number, c
     else await deletePublicUpload(storedPath).catch(() => undefined);
   }
   for (const table of locationCleanupTables) {
-    await deleteRowsWithLocation(slug, table, locationId);
+    const count = await deleteRowsWithLocation(slug, table, locationId);
+    if (count > 0) deleted[table] = (deleted[table] ?? 0) + count;
   }
   await deleteLocationActivityCategories(slug, locationId);
-  // RIASSEGNAZIONE CLIENTI (LocationDeletion::reassignSharedClientLocations
-  // ~698-720, forma semplificata): i clienti della sede eliminata passano alla
-  // prima sede residua per sort_order (il ranking per attività del legacy è
-  // parte del multi-sede completo, P11). Mai lasciare location_id orfani.
-  try {
-    const residual = await tenantSelect<RowDataPacket>({
-      slug,
-      table: "locations",
-      columns: "id",
-      where: "id <> ?",
-      params: [locationId],
-      orderBy: "COALESCE(sort_order,999999) ASC, id ASC",
-      limit: 1,
-    });
-    const fallbackId = Number(residual[0]?.id ?? 0) || null;
-    const clientsTable = await tenantTable(slug, "clients");
-    if (await columnExists(clientsTable.name, "location_id")) {
-      await dbQuery(
-        `UPDATE ${quoteIdentifier(clientsTable.name)} SET location_id = ${fallbackId === null ? "NULL" : fallbackId} WHERE tenant_id = ? AND location_id = ?`,
-        [clientsTable.tenantId ?? 0, locationId],
-      );
+
+  // LocationDeletion 604-624: per ogni gruppo stacca le mappature dei master
+  // CONDIVISI e cancella i master ESCLUSIVI con i figli (gifts = grafo dedicato,
+  // prodotti via productSpec). Ids presi dal preview appena calcolato.
+  const exclusiveGroups = (preview.exclusive ?? {}) as Record<string, Record<string, string>>;
+  const sharedGroups = (preview.shared ?? {}) as Record<string, Record<string, string>>;
+  for (const [key, spec] of Object.entries(locationMappingSpecs)) {
+    const exclusiveIds = Object.keys(exclusiveGroups[key] ?? {}).map(Number).filter((id) => id > 0);
+    const sharedIds = Object.keys(sharedGroups[key] ?? {}).map(Number).filter((id) => id > 0);
+    if (sharedIds.length) {
+      const count = await deleteMappingRowsForLocation(slug, spec, locationId, sharedIds);
+      if (count > 0) deleted[spec.mapping] = (deleted[spec.mapping] ?? 0) + count;
     }
-  } catch { /* best-effort */ }
+    if (exclusiveIds.length) {
+      await deleteMappedMasters(slug, spec, exclusiveIds, deleted);
+    }
+  }
+  const productExclusive = Object.keys(exclusiveGroups.products ?? {}).map(Number).filter((id) => id > 0);
+  const productShared = Object.keys(sharedGroups.products ?? {}).map(Number).filter((id) => id > 0);
+  if (productShared.length) {
+    const count = await deleteMappingRowsForLocation(slug, locationProductSpec, locationId, productShared);
+    if (count > 0) deleted.product_stocks = (deleted.product_stocks ?? 0) + count;
+  }
+  if (productExclusive.length) {
+    await deleteMappedMasters(slug, locationProductSpec, productExclusive, deleted);
+  }
+
+  // RIASSEGNAZIONE CLIENTI (LocationDeletion 626-634 + 698-720): piano del
+  // preview (sede con più attività) con ricalcolo/fallback per-cliente; mai
+  // lasciare location_id orfani.
+  const clientIds = Object.keys(sharedGroups.clients ?? {}).map(Number).filter((id) => id > 0);
+  if (clientIds.length) {
+    const planned = (preview.clientReassignments ?? {}) as Record<string, { location_id?: number }>;
+    const result = await reassignSharedClientLocations(slug, clientIds, locationId, planned);
+    if (result.reassigned > 0) deleted.clients_reassigned = result.reassigned;
+    if (result.withoutLocation > 0) deleted.clients_without_location = result.withoutLocation;
+  }
+
   await tenantDelete({ slug, table: "locations", id: locationId });
+  deleted.locations = (deleted.locations ?? 0) + 1;
   await normalizeLocationOrder(slug);
+  await logLocationDeletionItems(slug, logId, preview, deleted);
   await syncMarketplaceProfile(slug, publicOrigin);
   return { ...await getBusinessSettingsContext(slug, publicOrigin), message: "Sede eliminata definitivamente" };
 }
@@ -1299,7 +1466,311 @@ async function insertLocationDeletionLog(slug: string, locationId: number, locat
     summary_json: JSON.stringify(preview),
     deleted_by: null,
   };
-  await tenantInsert(table, values);
+  return tenantInsert(table, values);
+}
+
+// exclusiveMappedIds (LocationDeletion.php 182-200): master con mappature SOLO
+// verso la sede eliminata. In PG l'HAVING non può usare gli alias del SELECT.
+async function exclusiveMappedIds(slug: string, spec: LocationMappingSpec, locationId: number) {
+  return mappedIdsByShare(slug, spec, locationId, "COUNT(*) = SUM(CASE WHEN location_id = ? THEN 1 ELSE 0 END)");
+}
+
+// sharedMappedIds (202-220): mappati a questa sede E ad altre.
+async function sharedMappedIds(slug: string, spec: LocationMappingSpec, locationId: number) {
+  return mappedIdsByShare(slug, spec, locationId, "COUNT(*) > SUM(CASE WHEN location_id = ? THEN 1 ELSE 0 END)");
+}
+
+async function mappedIdsByShare(slug: string, spec: LocationMappingSpec, locationId: number, totalClause: string) {
+  if (!await tableExistsForTenant(slug, spec.mapping)) return [] as number[];
+  const target = await tenantTable(slug, spec.mapping);
+  if (!await columnExists(target.name, spec.mappingColumn) || !await columnExists(target.name, "location_id")) return [] as number[];
+  const scope = await tenantScope(target, [], []);
+  const col = quoteIdentifier(spec.mappingColumn);
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT ${col} AS entity_id
+       FROM ${quoteIdentifier(target.name)}${scope.where}
+      GROUP BY ${col}
+     HAVING SUM(CASE WHEN location_id = ? THEN 1 ELSE 0 END) > 0 AND ${totalClause}`,
+    [...scope.params, locationId, locationId],
+  ).catch(() => [] as RowDataPacket[]);
+  return rows.map((row) => Number(row.entity_id ?? 0)).filter((id) => id > 0);
+}
+
+// labels (222-237): id -> etichetta, fallback '<tabella> #<id>'.
+async function entityLabels(slug: string, table: string, labelColumn: string, ids: number[]) {
+  const out: Record<string, string> = {};
+  const unique = Array.from(new Set(ids.filter((id) => id > 0)));
+  if (!unique.length || !await tableExistsForTenant(slug, table)) return out;
+  const target = await tenantTable(slug, table);
+  const select = await columnExists(target.name, labelColumn) ? quoteIdentifier(labelColumn) : "id";
+  const scope = await tenantScope(target, [`id IN (${unique.map(() => "?").join(",")})`], unique);
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT id, ${select} AS label FROM ${quoteIdentifier(target.name)}${scope.where}`,
+    scope.params,
+  ).catch(() => [] as RowDataPacket[]);
+  for (const row of rows) {
+    const id = Number(row.id ?? 0);
+    if (id > 0) out[String(id)] = String(row.label ?? "").trim() || `${table} #${id}`;
+  }
+  return out;
+}
+
+// clientsForLocation (239-272): i clienti della sede sono sempre 'shared' con
+// un piano di riassegnazione (sede con più attività, fallback prima residua).
+async function clientsForLocationDeletion(slug: string, locationId: number) {
+  const out = { shared: {} as Record<string, string>, reassignments: {} as Record<string, Record<string, unknown>> };
+  if (!await tableExistsForTenant(slug, "clients")) return out;
+  const clientsTable = await tenantTable(slug, "clients");
+  if (!await columnExists(clientsTable.name, "location_id")) return out;
+  const fallback = await fallbackClientReassignmentLocation(slug, locationId);
+  const cols = ["id"];
+  for (const col of ["full_name", "first_name", "last_name", "name"]) {
+    if (await columnExists(clientsTable.name, col)) cols.push(col);
+  }
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: Array.from(new Set(cols)).join(","), where: "location_id = ?", params: [locationId] }).catch(() => [] as RowDataPacket[]);
+  for (const row of rows) {
+    const id = Number(row.id ?? 0);
+    if (id <= 0) continue;
+    let label = String(row.full_name ?? row.name ?? "").trim();
+    if (!label) label = `${String(row.first_name ?? "").trim()} ${String(row.last_name ?? "").trim()}`.trim();
+    if (!label) label = `Cliente #${id}`;
+    out.shared[String(id)] = label;
+    const best = await bestClientReassignmentLocation(slug, id, locationId) ?? fallback;
+    if (best) out.reassignments[String(id)] = { client_id: id, client_label: label, ...best };
+  }
+  return out;
+}
+
+async function remainingLocationsForDeletion(slug: string, excludeLocationId: number) {
+  const rows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "locations",
+    columns: "id, name, COALESCE(sort_order,999999) AS sort_order",
+    where: excludeLocationId > 0 ? "id <> ?" : "",
+    params: excludeLocationId > 0 ? [excludeLocationId] : [],
+    orderBy: "COALESCE(sort_order,999999) ASC, id ASC",
+  }).catch(() => [] as RowDataPacket[]);
+  const out = new Map<number, { id: number; name: string; sort_order: number }>();
+  for (const row of rows) {
+    const id = Number(row.id ?? 0);
+    if (id > 0) out.set(id, { id, name: String(row.name ?? "").trim() || `Sede #${id}`, sort_order: Number(row.sort_order ?? 999999) });
+  }
+  return out;
+}
+
+async function fallbackClientReassignmentLocation(slug: string, deletedLocationId: number) {
+  const locations = await remainingLocationsForDeletion(slug, deletedLocationId);
+  const first = locations.values().next().value;
+  if (!first) return null;
+  return { location_id: first.id, location_name: first.name, sort_order: first.sort_order, priority: 0, activity_count: 0, last_activity: "" };
+}
+
+// bestClientReassignmentLocation (388-481): candida ogni sede residua con
+// priorità per tipo attività (appuntamenti FUTURI pending/scheduled pesano di
+// più), poi ultima attività, conteggio, sort_order, id.
+async function bestClientReassignmentLocation(slug: string, clientId: number, deletedLocationId: number) {
+  const locations = await remainingLocationsForDeletion(slug, deletedLocationId);
+  if (clientId <= 0 || deletedLocationId <= 0 || !locations.size) return null;
+  const candidates = new Map<number, { location_id: number; location_name: string; sort_order: number; priority: number; activity_count: number; last_activity: string }>();
+
+  for (const spec of clientActivitySpecs) {
+    if (!await tableExistsForTenant(slug, spec.table)) continue;
+    const target = await tenantTable(slug, spec.table);
+    if (!await columnExists(target.name, "location_id")) continue;
+    const clientColumns: string[] = [];
+    for (const col of spec.clientColumns) {
+      if (await columnExists(target.name, col)) clientColumns.push(col);
+    }
+    if (!clientColumns.length) continue;
+
+    const dateParts: string[] = [];
+    for (const col of spec.dateColumns) {
+      if (await columnExists(target.name, col)) dateParts.push(`COALESCE(t.${quoteIdentifier(col)}::timestamp, TIMESTAMP '1970-01-01 00:00:00')`);
+    }
+    const dateExpr = dateParts.length === 0 ? "TIMESTAMP '1970-01-01 00:00:00'" : (dateParts.length === 1 ? dateParts[0] : `GREATEST(${dateParts.join(",")})`);
+
+    let futureExpr = "0";
+    if (spec.futureColumn && await columnExists(target.name, spec.futureColumn)) {
+      let statusSql = "";
+      if (spec.futureStatusColumn && await columnExists(target.name, spec.futureStatusColumn)) {
+        statusSql = ` AND COALESCE(t.${quoteIdentifier(spec.futureStatusColumn)},'') IN ('pending','scheduled')`;
+      }
+      futureExpr = `CASE WHEN t.${quoteIdentifier(spec.futureColumn)} >= NOW()${statusSql} THEN 1 ELSE 0 END`;
+    }
+
+    const clientWhere = clientColumns.map((col) => `t.${quoteIdentifier(col)} = ?`).join(" OR ");
+    const params: unknown[] = [...clientColumns.map(() => clientId)];
+    const clauses = [`(${clientWhere})`, "t.location_id > 0", "t.location_id <> ?"];
+    params.push(deletedLocationId);
+    if (target.mode === "shared" && await columnExists(target.name, "tenant_id")) {
+      clauses.unshift("t.tenant_id = ?");
+      params.unshift(target.tenantId ?? 0);
+    }
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT t.location_id,
+              COUNT(*) AS activity_count,
+              MAX(${dateExpr}) AS last_activity,
+              MAX(${futureExpr}) AS future_activity
+         FROM ${quoteIdentifier(target.name)} t
+        WHERE ${clauses.join(" AND ")}
+        GROUP BY t.location_id`,
+      params,
+    ).catch(() => [] as RowDataPacket[]);
+
+    for (const row of rows) {
+      const locId = Number(row.location_id ?? 0);
+      const location = locations.get(locId);
+      if (!location) continue;
+      let priority = spec.priority;
+      if (Number(row.future_activity ?? 0) > 0 && spec.futurePriority) priority = Math.max(priority, spec.futurePriority);
+      const current = candidates.get(locId) ?? { location_id: locId, location_name: location.name, sort_order: location.sort_order, priority: 0, activity_count: 0, last_activity: "" };
+      current.priority = Math.max(current.priority, priority);
+      current.activity_count += Number(row.activity_count ?? 0);
+      const lastActivity = normalizeActivityTimestamp(row.last_activity);
+      if (lastActivity && lastActivity > current.last_activity) current.last_activity = lastActivity;
+      candidates.set(locId, current);
+    }
+  }
+
+  if (!candidates.size) return null;
+  const items = Array.from(candidates.values()).sort((a, b) =>
+    (b.priority - a.priority)
+    || (Date.parse(b.last_activity || "1970-01-01") - Date.parse(a.last_activity || "1970-01-01"))
+    || (b.activity_count - a.activity_count)
+    || (a.sort_order - b.sort_order)
+    || (a.location_id - b.location_id));
+  const best = items[0];
+  // Il modale mostra last_activity com'è: formato d/m/Y H:i come la view legacy.
+  return { ...best, last_activity: best.last_activity ? formatActivityDmy(best.last_activity) : "" };
+}
+
+function normalizeActivityTimestamp(value: unknown): string {
+  if (value instanceof Date) {
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${value.getFullYear()}-${p(value.getMonth() + 1)}-${p(value.getDate())} ${p(value.getHours())}:${p(value.getMinutes())}:${p(value.getSeconds())}`;
+  }
+  return String(value ?? "").trim();
+}
+
+function formatActivityDmy(raw: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(raw);
+  if (!m) return raw;
+  return `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`;
+}
+
+// deleteMappingRows (654-659): stacca le mappature della sede per i CONDIVISI.
+async function deleteMappingRowsForLocation(slug: string, spec: LocationMappingSpec, locationId: number, ids: number[]) {
+  if (!ids.length || !await tableExistsForTenant(slug, spec.mapping)) return 0;
+  const target = await tenantTable(slug, spec.mapping);
+  const scope = await tenantScope(target, [`location_id = ?`, `${quoteIdentifier(spec.mappingColumn)} IN (${ids.map(() => "?").join(",")})`], [locationId, ...ids]);
+  const result = await dbExecute(`DELETE FROM ${quoteIdentifier(target.name)}${scope.where}`, scope.params);
+  return result.affectedRows;
+}
+
+async function deleteByIdsScoped(slug: string, table: string, ids: number[], column = "id") {
+  const unique = Array.from(new Set(ids.filter((id) => id > 0)));
+  if (!unique.length || !await tableExistsForTenant(slug, table)) return 0;
+  const target = await tenantTable(slug, table);
+  if (!await columnExists(target.name, column)) return 0;
+  const scope = await tenantScope(target, [`${quoteIdentifier(column)} IN (${unique.map(() => "?").join(",")})`], unique);
+  const result = await dbExecute(`DELETE FROM ${quoteIdentifier(target.name)}${scope.where}`, scope.params);
+  return result.affectedRows;
+}
+
+// deleteMappedMasters (661-675): figli poi master; i gifts passano dal grafo.
+async function deleteMappedMasters(slug: string, spec: LocationMappingSpec, ids: number[], deleted: Record<string, number>) {
+  if (spec.table === "gifts") {
+    await deleteGiftGraphForLocation(slug, ids, deleted);
+    return;
+  }
+  for (const child of spec.children) {
+    const count = await deleteByIdsScoped(slug, child.table, ids, child.column);
+    if (count > 0) deleted[child.table] = (deleted[child.table] ?? 0) + count;
+  }
+  const count = await deleteByIdsScoped(slug, spec.table, ids);
+  if (count > 0) deleted[spec.table] = (deleted[spec.table] ?? 0) + count;
+}
+
+// deleteGiftGraph (677-696): transazioni -> voci appuntamento -> reset ->
+// istanze -> regole -> rule_sets -> mappature -> campagne.
+async function deleteGiftGraphForLocation(slug: string, giftIds: number[], deleted: Record<string, number>) {
+  const ids = Array.from(new Set(giftIds.filter((id) => id > 0)));
+  if (!ids.length) return;
+  const instanceRows = await tenantSelect<RowDataPacket>({ slug, table: "gift_instances", columns: "id", where: `gift_id IN (${ids.map(() => "?").join(",")})`, params: ids }).catch(() => [] as RowDataPacket[]);
+  const instanceIds = instanceRows.map((row) => Number(row.id ?? 0)).filter((id) => id > 0);
+  const ruleSetRows = await tenantSelect<RowDataPacket>({ slug, table: "gift_rule_sets", columns: "id", where: `gift_id IN (${ids.map(() => "?").join(",")})`, params: ids }).catch(() => [] as RowDataPacket[]);
+  const ruleSetIds = ruleSetRows.map((row) => Number(row.id ?? 0)).filter((id) => id > 0);
+
+  const steps: Array<[string, number[], string]> = [
+    ["gift_transactions", instanceIds, "instance_id"],
+    ["appointment_gift_items", ids, "gift_id"],
+    ["gift_progress_resets", ids, "gift_id"],
+    ["gift_instances", ids, "gift_id"],
+    ["gift_rules", ruleSetIds, "rule_set_id"],
+    ["gift_rule_sets", ids, "gift_id"],
+    ["gift_locations", ids, "gift_id"],
+    ["gifts", ids, "id"],
+  ];
+  for (const [table, stepIds, column] of steps) {
+    if (!stepIds.length) continue;
+    const count = await deleteByIdsScoped(slug, table, stepIds, column);
+    if (count > 0) deleted[table] = (deleted[table] ?? 0) + count;
+  }
+}
+
+// reassignSharedClientLocations (698-720): piano del preview con ricalcolo di
+// riserva; senza sede valida -> location_id NULL.
+async function reassignSharedClientLocations(slug: string, clientIds: number[], deletedLocationId: number, planned: Record<string, { location_id?: number }>) {
+  const out = { reassigned: 0, withoutLocation: 0 };
+  const clientsTable = await tenantTable(slug, "clients");
+  if (!await columnExists(clientsTable.name, "location_id")) return out;
+  for (const clientId of Array.from(new Set(clientIds.filter((id) => id > 0)))) {
+    let newLocationId = Number(planned[String(clientId)]?.location_id ?? 0);
+    if (newLocationId <= 0 || newLocationId === deletedLocationId || !await locationExistsForTenant(slug, newLocationId)) {
+      const recomputed = await bestClientReassignmentLocation(slug, clientId, deletedLocationId);
+      newLocationId = Number(recomputed?.location_id ?? 0);
+    }
+    if (newLocationId > 0 && newLocationId !== deletedLocationId && await locationExistsForTenant(slug, newLocationId)) {
+      const scope = await tenantScope(clientsTable, ["id = ?", "location_id = ?"], [clientId, deletedLocationId]);
+      const result = await dbExecute(`UPDATE ${quoteIdentifier(clientsTable.name)} SET location_id = ${newLocationId}${scope.where}`, scope.params);
+      out.reassigned += result.affectedRows;
+    } else {
+      const scope = await tenantScope(clientsTable, ["id = ?", "location_id = ?"], [clientId, deletedLocationId]);
+      const result = await dbExecute(`UPDATE ${quoteIdentifier(clientsTable.name)} SET location_id = NULL${scope.where}`, scope.params);
+      out.withoutLocation += result.affectedRows;
+    }
+  }
+  return out;
+}
+
+async function locationExistsForTenant(slug: string, locationId: number) {
+  if (locationId <= 0) return false;
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "id", where: "id = ?", params: [locationId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  return rows.length > 0;
+}
+
+// logItems (733-762): conteggi per tabella + voce per ogni entita esclusiva
+// (delete_master) / condivisa (detach_location; clients = reassign_location con
+// il piano nel meta).
+async function logLocationDeletionItems(slug: string, logId: number, preview: Record<string, unknown>, deleted: Record<string, number>) {
+  if (logId <= 0 || !await tableExistsForTenant(slug, "location_deletion_log_items")) return;
+  const table = await tenantTable(slug, "location_deletion_log_items");
+  const insert = async (values: Record<string, unknown>) => tenantInsert(table, values).catch(() => 0);
+  for (const [tableName, count] of Object.entries(deleted)) {
+    if (count <= 0) continue;
+    await insert({ log_id: logId, group_name: "deleted_count", table_name: tableName, entity_id: null, entity_label: null, action: "delete", meta_json: JSON.stringify({ count }) });
+  }
+  const reassignments = (preview.clientReassignments ?? {}) as Record<string, unknown>;
+  for (const [group, defaultAction] of [["exclusive", "delete_master"], ["shared", "detach_location"]] as const) {
+    const groups = (preview[group] ?? {}) as Record<string, Record<string, string>>;
+    for (const [tableName, rows] of Object.entries(groups)) {
+      for (const [id, label] of Object.entries(rows)) {
+        const action = group === "shared" && tableName === "clients" ? "reassign_location" : defaultAction;
+        const meta = action === "reassign_location" ? JSON.stringify(reassignments[id] ?? {}) : null;
+        await insert({ log_id: logId, group_name: group, table_name: tableName, entity_id: Number(id) || null, entity_label: label, action, meta_json: meta });
+      }
+    }
+  }
 }
 
 async function ensureMarketplaceDirectoryTables() {
