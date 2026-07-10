@@ -9040,3 +9040,51 @@ VERIFICATO: test-risorse 12/12 (validazioni, create con max-enabled, get/lista f
 delete bloccata da servizi + popup, riduzione bloccata da qty_required e da picco prenotazioni
 future con soglia esatta, aumento+rinomina, delete con cascata); nessuna modifica al codice.
 PRODUZIONE INTATTA: 0 risorse (baseline vuoto ripristinato), 5 clienti reali.
+
+## Servizi: audit completo — modulo FEDELE, nessun fix (2026-07-09)
+
+Audit 1:1 della pagina Servizi (3 tab: Servizi/Categorie/Servizi consigliati) vs services.php
+(5653 righe) con 2 agenti. Next: route services (169) + lib/manage-services (1382) +
+lib/manage-services-impacts (1299) + 4 componenti. VERDETTO: port fedele, zero modifiche.
+
+FEDELI e verificati LIVE (test-servizi 34/34):
+- VALIDAZIONI save verbatim (con l'incoerenza accenti del legacy): 'Nome servizio obbligatorio',
+  'La durata del servizio deve essere maggiore di zero', 'Il prezzo del servizio non puo essere
+  negativo', 'Seleziona almeno una cabina in cui verrà effettuato il servizio', 'Seleziona almeno
+  una sede in cui il servizio sarà disponibile', 'Seleziona almeno un operatore oppure attiva
+  "Servizio senza operatore".', compatibilita' cabina/sede ('La cabina "X" non e abilitata nelle
+  sedi selezionate.', 'Per la sede "X" seleziona almeno una cabina abilitata.'), operatore/sede,
+  risorsa/sede con quantita'.
+- PANNELLI DI CONFERMA sequenziali prioritizzati (pending + confirm_* accumulati): (1) blocco
+  disattivazione da campagne ATTIVE (promozioni scope-all incluse: con la promo di produzione 71
+  attiva su tutti i servizi la disattivazione di QUALSIASI servizio e' bloccata — fedele), (2)
+  disattivazione con prenotazioni aperte (conferma), (3) cambio NOME (impatti + snapshot: congela
+  gli storici e aggiorna i riferimenti operativi con suffisso 'nome aggiornato nei riferimenti
+  operativi: N' — verificato su appointment_services), (4) cambio PREZZO (old/new, aggiorna
+  catalogo pacchetti/promozioni), (5) modifiche scheduling (Durata/Cabine/Operatori/Risorse
+  necessarie) con appuntamenti impattati.
+- DELETE: bloccata da un set AMPIO (prenotazioni aperte, prepagati, pacchetti cliente/catalogo,
+  preventivi accettati, GiftBox attive/istanze, omaggi disponibili, promozioni ATTIVE incluse
+  scope-all, campagne gift) con popup 'Impossibile eliminare il servizio'; senza blocchi cascata
+  su tutte le junctions + service_recommendations IN ENTRAMBE le direzioni (service_id O
+  recommended_service_id) + congelamento snapshot pre-delete.
+- CATEGORIE: 'Nome categoria obbligatorio' (NESSUN check duplicati, come il legacy), move up/down
+  con swap sort_order (step 10 + normalize; primo/default immobili -> 'Impossibile spostare la
+  categoria'), delete BLOCCATA con servizi collegati (mai riassegnazione) + popup, default
+  'Non categorizzato' non eliminabile ('Non puoi eliminare la categoria di default') e sempre
+  ULTIMA nell'ordinamento.
+- ORDINE SERVIZI per categoria: CSV service_order -> sort_order denso 0-based (step 1), solo
+  servizi della categoria ('Ordine servizi aggiornato' / 'Nessun servizio da ordinare').
+- CONSIGLIATI: tabella a coppie composite (niente id), save = delete-all + reinsert ordinato
+  0-based, self-reference esclusa, ids inesistenti filtrati, 'Seleziona un servizio valido';
+  consumati SOLO dal booking (non dal POS).
+
+RESIDUI documentati (non fixati): (a) duration_min senza campo POST: legacy default 60, Next 0 ->
+errore (il form posta sempre il campo); (b) quirk colore alert legacy ('Nessun servizio da
+ordinare' renderizzato rosso, 'Seleziona un servizio valido' verde) — concern del componente;
+(c) mapping marketplace categorie = pagina separata (solo side-effect sync qui, come il legacy).
+
+VERIFICATO: test-servizi 34/34 con finestra controllata sulla promo 71 (disattivata per i test di
+delete/disattivazione e RIPRISTINATA attiva — verificato). Nessuna modifica al codice. PRODUZIONE
+INTATTA: services=2 (9 e 82 mai toccati), categoria 'genera', junctions 3/3/2, consigliati 0,
+5 clienti reali, promo 71 attiva.
