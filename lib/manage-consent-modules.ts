@@ -208,9 +208,18 @@ export async function ensureSystemGdprModule(slug: string): Promise<void> {
   if (String(row.name ?? "").trim() === "") values.name = "PDF privacy GDPR";
   if (String(row.type ?? "").trim() !== "privacy_gdpr") values.type = "privacy_gdpr";
   if (Number(row.is_system ?? 0) !== 1) values.is_system = 1;
+  // ConsentModules.php 185-188: anche il body vuoto viene riparato col
+  // template legacy del tenant.
+  if (String(row.body_template ?? "").trim() === "") {
+    const bizRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "*", orderBy: "id ASC", limit: 1 }).catch(() => []);
+    const legacyTemplate = bizRows[0] ? await privacyTemplateBody(slug, bizRows[0]).catch(() => privacyDefaultTemplate()) : privacyDefaultTemplate();
+    if (legacyTemplate.trim() !== "") values.body_template = legacyTemplate;
+  }
   if (String(row.footer_mode ?? "").trim() === "") values.footer_mode = "gdpr_consents";
   if (String(row.footer_title ?? "").trim() === "") values.footer_title = "Consenso dell'interessato";
   if (Object.keys(values).length) {
+    // updated_at: bump automatico dal trigger PG bu_consent_modules_updated_at
+    // (equivalente dell'ON UPDATE del legacy MySQL) — niente timbro esplicito.
     await tenantUpdate({ slug, table: "consent_modules", id: Number(row.id), values }).catch(() => undefined);
   }
 }
@@ -350,7 +359,11 @@ export async function saveManageConsentModule(slug: string, body: Record<string,
     moduleSlug = await uniqueSlug(slug, moduleSlug !== "" ? moduleSlug : name, existing?.id ?? 0);
   }
 
-  let isActive = body.is_active !== undefined ? (Number(body.is_active) === 1 || body.is_active === "1" ? 1 : 0) : existing?.isActive ? 1 : 0;
+  // Default legacy (consent_module_validate_payload 298): senza campo postato
+  // vale l'esistente, e in CREAZIONE il default è ATTIVO (1), non 0.
+  let isActive = body.is_active !== undefined
+    ? (Number(body.is_active) === 1 || body.is_active === "1" ? 1 : 0)
+    : (existing ? (existing.isActive ? 1 : 0) : 1);
   if (isSystem) isActive = 1;
 
   const meta = typeMeta(type);
@@ -371,6 +384,8 @@ export async function saveManageConsentModule(slug: string, body: Record<string,
 
   let moduleId: number;
   if (existing) {
+    // updated_at ('Ultima modifica' in lista): bump automatico dal trigger PG
+    // bu_consent_modules_updated_at, come l'ON UPDATE del legacy MySQL.
     await tenantUpdate({ slug, table: "consent_modules", id: existing.id, values });
     moduleId = existing.id;
   } else {
@@ -422,6 +437,9 @@ export async function deleteManageConsentModule(slug: string, moduleId: number):
     throw new Error("Il modulo ha documenti firmati collegati e non puo essere eliminato. Disattivalo per non usarlo nei nuovi consensi e conserva lo storico cliente.");
   }
 
+  // Come la transazione legacy (consent_module_delete 412-422): se la pulizia
+  // delle associazioni fallisce l'eliminazione ABORTISCE (niente catch-swallow,
+  // il modulo non va rimosso lasciando record orfani).
   const recordsTable = await tenantTable(slug, "client_consent_records").catch(() => null);
   if (recordsTable) {
     const clauses = ["module_id=?"];
@@ -430,7 +448,7 @@ export async function deleteManageConsentModule(slug: string, moduleId: number):
       clauses.unshift("tenant_id=?");
       params.unshift(recordsTable.tenantId ?? 0);
     }
-    await dbQuery(`DELETE FROM ${quoteIdentifier(recordsTable.name)} WHERE ${clauses.join(" AND ")}`, params).catch(() => undefined);
+    await dbQuery(`DELETE FROM ${quoteIdentifier(recordsTable.name)} WHERE ${clauses.join(" AND ")}`, params);
   }
 
   await tenantDelete({ slug, table: "consent_modules", id: moduleId });

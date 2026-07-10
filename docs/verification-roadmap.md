@@ -9552,3 +9552,76 @@ senza riga products) — non toccate. REGRESSIONE: sedi 40/40, profilo 25/25,
 model-a 12/12. Nota dev: primo run 12/15 per compilazione HMR stale del dev
 server subito dopo l'edit (products mancante); riesecuzione e debug live
 confermano 15/15 — nessun cambio di codice tra i due run.
+
+## 2026-07-10 — Moduli consenso (consent_modules.php + ConsentModules.php): audit 1:1 + 3 fix + e2e live
+
+Legacy letto INTEGRALE (diretto): app/pages/consent_modules.php (426) +
+app/lib/ConsentModules.php (731) + assets/js/pages/consent_modules.js (70) +
+le funzioni verbatim di PrivacyConsent.php (labels/variables/system_preview/
+default_template). Next: lib/manage-consent-modules.ts (438) + route
+configuration (module=consent_modules: lista con ensure+associationCounts,
+action=get con systemPreviewText+availableVariables, POST save_module/
+delete_module/preview_pdf) + consent_modules-content.tsx (299) +
+consent_module_form-content.tsx (526). Permesso consent_modules.manage.
+NB: client_consents.php (consensi per-cliente, 732) e consent_public.php
+(firma pubblica) sono moduli ADIACENTI con motore condiviso
+(lib/consent-records.ts) — fuori scope di questa pagina.
+
+FIX (3):
+1) ensureSystemGdprModule: aggiunta la riparazione del body_template VUOTO col
+   template legacy del tenant (ConsentModules.php 185-188 — prima il repair
+   copriva solo slug/name/type/is_system/footer).
+2) Default is_active in CREAZIONE senza campo postato: legacy validate 298 ->
+   ATTIVO (1); il Next defaultava a 0 (irraggiungibile dalla UI che posta
+   sempre, ma il payload API-level ora e' fedele).
+3) delete: la pulizia delle associazioni non e' piu' catch-swallow — se
+   fallisce l'eliminazione ABORTISCE prima di rimuovere il modulo (semantica
+   della transazione legacy 412-422, niente record orfani).
+NOTA updated_at: in PG il trigger bu_consent_modules_updated_at replica l'ON
+UPDATE del MySQL — il timbro esplicito NOW() del legacy non va replicato (il
+trigger sovrascrive qualsiasi valore); 'Ultima modifica' in lista funziona.
+
+CONFERMATI FEDELI: DUE soli tipi (privacy_gdpr di SISTEMA unico/informed_
+consent) con meta footer (gdpr_consents/"Consenso dell'interessato" vs
+signature_only/'Conferma e firma cliente'); ensure del modulo di sistema a ogni
+accesso (create col template del tenant + repair campi vuoti); ordinamento
+lista is_system DESC, sort_order, name, id; badge 'modulo di sistema' /
+Attivo/Disattivo, 'Slug: ...', 'Associato a N cliente/i', 'N modulo/i',
+'Protetto'; validazioni verbatim ('Il modulo PDF privacy GDPR e unico e non
+puo essere duplicato.', 'Il template del modulo non puo essere vuoto.',
+'Modulo consenso non trovato.'); slug unicita' con suffissi -2..-9999 e slugify
+translitterato; il NOME del modulo di sistema NON e' forzato dal validate (il
+readonly e' solo client-side: un POST diretto lo rinomina — fedele, testato);
+sempre-attivo/slug-fisso/type-fisso per il sistema; MIRROR del body su
+businesses.gdpr_template_body a ogni save privacy_gdpr; delete: sistema
+bloccato ('e di sistema e non puo essere eliminato.'), FIRMATI bloccanti
+(document_id>0 O status normalizzato signed: 'Il modulo ha documenti firmati
+collegati e non puo essere eliminato. Disattivalo per non usarlo nei nuovi
+consensi e conserva lo storico cliente.'), bozze/pending cascate col conteggio
+('Modulo consenso eliminato. Rimosse anche N associazione/i non firmate dai
+clienti.'); ANTEPRIMA PDF con dati demo Mario Rossi, fallback blocco
+sede/anagrafica verbatim ('Beauty Suite S.r.l. ...'), filename
+CONSENSO_<slug>_<NOME>_<COGNOME>.pdf vs GDPR_NOME_COGNOME.pdf, valori NON
+salvati del form accettati; editor con 'Chiusura automatica del PDF'
+(4 caselle consensi GDPR vs Data+Firma), 8 variabili verbatim (incluse
+{{dati_sede}} e {{Dati anagrafici}} con descrizione 'dell'attivita' non
+accentata), card Workflow cliente, modale eliminazione legacy (titolo col
+nome, body diverso con/senza associazioni, 'Elimina definitivamente'),
+flash 'Modulo consenso salvato con successo.' con redirect all'edit.
+
+RESIDUI documentati (non fix): (a) render PDF Next (renderPrivacyPdf) vs FPDF
+legacy — layout equivalente non byte-identico (gia' accettato negli audit
+privacy); (b) 'Nessun modulo.' empty-state della lista Next irraggiungibile
+(il modulo di sistema esiste sempre); (c) preview legacy via form POST in
+iframe vs blob URL (pattern SPA).
+
+VERIFICATO: test-consensi 25/25 (lista/permessi/get con preview-sistema e
+variabili verbatim, create con slug e default attivo, unicita' slug, body
+vuoto, GDPR duplicato, edit con slug invariato e updated_at bumped dal
+trigger, edit del modulo di SISTEMA con nome-postato/sempre-attivo/mirror e
+RIPRISTINO byte-identico, preview PDF informed+sistema con filename e %PDF,
+associazioni in lista, delete con bozza cascata / firmato bloccato / status
+signed bloccato / sistema bloccato / inesistente, riparazione body vuoto via
+ensure). PRODUZIONE INTATTA: 1 modulo (sistema id 3, body 958 byte identico,
+updated_at trigger-driven escluso dal confronto), records=0, mirror
+gdpr_template_body 958 identico, 5 clienti. SANITY: model-a 12/12.
