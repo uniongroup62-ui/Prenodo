@@ -9158,3 +9158,109 @@ staff-filter 4/4, staff-sede2 4/4, model-a 12/12, servizi 34/34 (test-staff-list
 suite obsoleta pre-correzione, superata da test-staff-filter). PRODUZIONE INTATTA:
 cabins=3 (9 pos1 attiva Sede1, 10 inattiva, 45 pos1 attiva Sede2), service_cabins=2,
 services.cabin_id 9/82 -> 9, 5 clienti reali, appuntamenti/segmenti contatori invariati.
+
+## 2026-07-10 — Operatori (staff.php + staff.js): audit 1:1 + 12 fix + e2e live
+
+Legacy letto INTEGRALE: app/pages/staff.php (1501 righe, helper inline staff_*) +
+assets/js/pages/staff.js (354) + helper foto in Helpers.php (process_uploaded_staff_photo
+10827, staff_photo_save_bytes 10788). Next: lib/manage-resources.ts (saveStaffMember,
+deleteStaffMember, listStaff/listManageStaff, getManageStaffMember, upsertStaffLoginUser,
+staffServiceLocationBlockers, staffHasAppointmentRefs) + route resources + route
+staff-photo + staff-content.tsx + staff_form-content.tsx. Permesso staff.manage.
+Collegamento staff<->users SEMPRE per EMAIL (LEFT JOIN u.email=s.email), mai FK.
+
+FIX (12):
+1) ORDINE VALIDAZIONI SAVE come staff.php 742-896: SSO -> Solo-Admin-edit ->
+   COLORE -> Solo-Admin-assegna -> owner-email -> sede obbligatoria -> guardie
+   sedi/disattivazione -> email/password/unicita (prima email/unicita venivano
+   PRIMA della sede: con violazioni doppie il messaggio era sbagliato).
+2) 'Password obbligatoria per creare l'account login dell'operatore.' ora
+   PRE-write (staff.php 956-958 dentro la tx): prima scattava DENTRO
+   upsertStaffLoginUser DOPO l'UPDATE della riga staff (modifiche persistite
+   nonostante l'errore; nel legacy non persiste nulla).
+3) BUG STALE-READ account login (pre-esistente, smascherato dai test): upsert e
+   delete dell'utente rileggevano staff.email DOPO l'update -> il CAMBIO EMAIL
+   non agganciava mai l'account esistente (chiedeva la password invece di
+   aggiornare email+email_verified_at=NULL, staff.php 970-998) e lo SVUOTAMENTO
+   email non eliminava l'utente. Ora l'oldLoginUserId e' risolto PRIMA delle
+   scritture e passato ai due helper.
+4) Email svuotata: cascata user_email_verifications + user_locations con il
+   delete dell'utente (staff.php 999-1004); guardia owner su tenantOwnerUserId
+   (non piu' sull'id 1 del legacy, sbagliato nello schema PG condiviso).
+5) DELETE operatore: rimozione best-effort dell'oggetto foto su R2 dopo il
+   delete (staff.php 699-701 elimina il file dopo il commit).
+6) COLORE prefill form: getManageStaffMember ora restituisce il colore RAW
+   ('' per NULL/invalido -> il form usa il default #93c5fd come staff.php 1266);
+   prima la palette per-indice di listStaff stampava #0f766e che il submit
+   PERSISTEVA senza che l'utente l'avesse scelto.
+7) FILTRO SEDE lista: app_filter_ids_by_location (Helpers 1058-1085, variante
+   staff) passa SOLO chi ha la riga staff_locations per la sede -> lo staff
+   senza sedi assegnate e' NASCOSTO con filtro sede attivo (prima compariva
+   ovunque); resta visibile con 'Tutte le sedi' con badge 'Tutte' (ora sul
+   locationIds reale, non sul fallback di visualizzazione).
+8) route action=get staff: ordine guardie del form edit legacy (1072-1084)
+   non trovato ('Operatore non trovato' senza punto) -> 'Solo Admin puo
+   modificare account Admin.' per attore non-admin -> 'Operatore SSO non
+   modificabile'; la riga SSO non viene piu' mascherata da 404.
+9) INVITO EMAIL 'Conferma email account': aggiunto il trigger per il path
+   edit-crea-account-tardivo (nessun utente ne' sotto la vecchia ne' sotto la
+   nuova email, staff.php 1007-1012) con la variante SENZA accenti del helper
+   staff_prepare_email_verification; i path inline (nuovo operatore / cambio
+   email) usano le frasi ACCENTATE ('il tuo account è stato creato...') —
+   incoerenza del legacy riprodotta. SES-gated (non verificabile e2e in dev).
+10) route staff-photo: messaggi verbatim 'Operatore non valido' / 'Operatore
+    SSO non modificabile' (senza punto), 'Formato non valido: carica JPG, PNG,
+    WEBP o GIF', 'Upload immagine non valido'.
+11) FORM: bottone 'Elimina immagine' IMMEDIATO (staff_action=delete_photo,
+    confirm verbatim 'Eliminare definitivamente questa immagine operatore?' +
+    flash verde 'Immagine operatore eliminata definitivamente'); wording client
+    di staff.js ('Immagine troppo grande: massimo 5 MB.' e 'Formato non valido:
+    carica JPG, PNG, WEBP o GIF.' — diversi da quelli server); owner: ruolo
+    select disabilitato su Admin + hint 'Il ruolo Admin non può essere
+    modificato.' + Attivo bloccato (hidden ui_role=admin/is_active=1 come
+    staff.php 1239/1281).
+12) LISTA: email mancante -> '—' (come phone); checkbox 'Tutte le sedi' SOLO
+    con piu' di una sede ($staffShowAllLocationsFilter, staff.php 498).
+
+CONFERMATI FEDELI: quirk msg-vs-err (validazioni vere che viaggiano come ?msg=
+VERDE: Email obbligatoria/Password obbligatoria/Email già utilizzata/Colore non
+valido/Nome operatore riservato (SSO)/Operatore SSO non modificabile/Email
+obbligatoria per Admin — flashKind 'msg' in tutta la pipeline); guardie delete
+in ordine (SSO msg -> owner 'Admin non può essere eliminato' ACCENTATO ->
+'Operatore non trovato' -> Solo Admin -> prenotazioni QUALSIASI stato 'risulta
+gia usato in prenotazioni' -> servizi con popup 'Impossibile eliminare
+l'operatore' {operator_name, services} -> storico commissioni) + hard delete
+con cascata (users condizionale se email non riusata, verifiche, user_locations,
+staff_locations, staff_availability, staff_timeoff, staff_services,
+staff_commission_settings, staff_commission_periods); guardie edit (rimozione
+sede con prenotazioni aperte/servizio orfano, disattivazione idem — messaggi
+con nome sede/servizio interpolati verbatim); ruoli admin/staff/altro
+('Personalizzato'); owner = primo utente admin del tenant (isOwner, badge
+'Protetto', mai eliminabile, sempre attivo+admin); SSO sentinella filtrata
+ovunque; bcrypt password; email_verified_at azzerata su cambio email; foto su
+R2 5MB jpeg/png/webp/gif.
+
+RESIDUI documentati (non fix): (a) crop/zoom client (photo_crop_data, canvas
+512 JPEG 0.88) non portato — immagine salvata come caricata; (b) 'Nuovo
+operatore' = pagina dedicata invece del modal legacy (#staffOperatorCreateModal)
+— struttura gia' stabilita e testata con l'utente; (c) opzione ruolo Admin
+visibile anche ai non-admin nel form (guardia cosmetica legacy; il server
+blocca); (d) owner auto-provisioning al page-load (staff.php 557-609) non
+portato (niente scritture su GET); (e) check server protettivo 'Nome operatore
+obbligatorio.' assente nel legacy (required solo client); (f) forwarding
+timeoff_action/timeoff_delete verso staff_availability = scope del modulo
+Disponibilita; (g) statuses extra 'in sospeso'/'prenotato' nel fallback
+openOnly (superset innocuo, mai persistiti); (h) filename foto {staffId}-{ts}
+su R2 vs avatar_{time}_{hex} su disco (storage diverso documentato).
+
+VERIFICATO: test-operatori 48/48 (lista/filtro sede/staff-senza-sedi/permessi,
+prefill owner isOwner+colore raw/guardie get, create con tutti gli ordini di
+validazione, edit rename/cambio-email/svuotamento-email/late-create/guardie
+sedi+disattivazione/owner-da-non-admin PRE-write, delete 7 guardie+cascata
+completa+SSO, foto upload/formato/remove/permessi/delete-con-foto). NB: la
+riga SSO di test e' stata creata e rimossa in-sessione (il tenant reale non
+ce l'ha). REGRESSIONE: staff-filter 4/4, staff-sede2 4/4, model-a 12/12,
+cabine 34/34 (suite blindata: nomi di produzione letti a runtime), risorse
+12/12. PRODUZIONE INTATTA: staff=2 (22 owner con foto R2, 56), users=2,
+staff_locations=3, staff_services=3 (inclusa riga orfana servizio 10
+pre-esistente), commissioni=2, user_locations=1, 5 clienti reali.

@@ -48,8 +48,9 @@ export async function POST(request: Request) {
     return jsonError("Invio non valido (atteso multipart/form-data).", 400);
   }
 
+  // Messaggi verbatim del legacy (staff.php 705-728, senza punto finale).
   const staffId = Number.parseInt(String(form.get("staff_id") ?? "0"), 10) || 0;
-  if (staffId <= 0) return jsonError("Operatore non valido.", 400);
+  if (staffId <= 0) return jsonError("Operatore non valido", 400);
 
   try {
     // Riga staff tenant-scoped (+ SSO guard: l'operatore tecnico non si tocca).
@@ -64,7 +65,7 @@ export async function POST(request: Request) {
     const staffRow = rows[0];
     if (!staffRow) return jsonError("Operatore non trovato.", 404);
     if (String(staffRow.full_name ?? "").trim().toUpperCase() === "SSO") {
-      return jsonError("Operatore SSO non modificabile.", 400);
+      return jsonError("Operatore SSO non modificabile", 400);
     }
     const oldPhotoUrl = String(staffRow.photo_path ?? "").trim();
 
@@ -77,11 +78,13 @@ export async function POST(request: Request) {
     }
 
     // --- UPLOAD ---
+    // process_uploaded_staff_photo (Helpers.php 10827): 'Upload immagine non
+    // valido' per file assente/corrotto, size e formato con i testi legacy.
     const file = form.get("operator_photo");
-    if (!(file instanceof File) || file.size <= 0) return jsonError("Nessuna immagine caricata.", 400);
+    if (!(file instanceof File) || file.size <= 0) return jsonError("Upload immagine non valido", 400);
     if (file.size > MAX_PHOTO_BYTES) return jsonError("Immagine troppo grande (max 5 MB).", 400);
     const ext = EXT_BY_MIME[String(file.type).toLowerCase()];
-    if (!ext) return jsonError("Formato immagine non supportato (usa JPG, PNG, WEBP o GIF).", 400);
+    if (!ext) return jsonError("Formato non valido: carica JPG, PNG, WEBP o GIF", 400);
     if (!storageConfigured()) return jsonError(STORAGE_NOT_CONFIGURED_ERROR, 503);
 
     const table = await tenantTable(tenantSlug, "staff");

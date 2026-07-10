@@ -5,6 +5,7 @@ import type { RowDataPacket } from "@/lib/tenant-db";
 import { parseInteger } from "@/lib/api-utils";
 import { dbExecute, dbQuery, quoteIdentifier, columnExists, tenantDelete, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
 import { sendStaffInviteEmailCode } from "@/lib/manage-accessibility";
+import { deletePublicObject, storageKeyFromPublicUrl } from "@/lib/storage";
 
 export type ManageResourceContext = {
   source?: string;
@@ -196,9 +197,10 @@ export async function resourceContext({
 }
 
 // Lista operatori per la pagina di gestione Operatori (staff.php).
-// locationId > 0 = solo gli operatori abilitati per QUELLA sede (default legacy =
-// $staffCurrentLocationId, la sede corrente); locationId = 0 = TUTTE le sedi (toggle
-// "Tutte le sedi"). Uno staff SENZA sedi assegnate vale ovunque (compare in ogni sede).
+// locationId > 0 = solo gli operatori con riga staff_locations per QUELLA sede
+// (default legacy = $staffCurrentLocationId, la sede corrente); locationId = 0 =
+// TUTTE le sedi (toggle "Tutte le sedi"). Uno staff SENZA sedi assegnate compare
+// SOLO senza filtro sede (semantica app_filter_ids_by_location, variante staff).
 export async function listManageStaff(slug: string, locationId = 0): Promise<ResourceStaff[]> {
   const locations = await listLocations(slug);
   return listStaff(slug, Math.max(0, Number(locationId) || 0), locations);
@@ -317,7 +319,8 @@ export async function getManageStaffMember(slug: string, id: number): Promise<Re
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "staff", columns: "*", where: "id = ?", params: [id], limit: 1 }).catch(() => []);
   const row = rows[0];
   if (!row) return null;
-  if (String(row.full_name ?? "").trim().toUpperCase() === "SSO") return null;
+  // NB: la riga SSO viene RESTITUITA — l'ordine guardie del legacy (1072-1084:
+  // non trovato -> Solo Admin -> SSO) è applicato dalla route action=get.
   const locations = await listLocations(slug);
   const email = normalizeEmail(row.email ?? "");
   const [locationsMap, serviceMap, userRows] = await Promise.all([
@@ -337,7 +340,10 @@ export async function getManageStaffMember(slug: string, id: number): Promise<Re
     email,
     role: normalizeRole(user?.role),
     isActive: Number(row.is_active ?? 1) === 1,
-    color: normalizeColor(row.calendar_color, 0),
+    // Colore RAW per il prefill del form: con NULL/invalido il form usa il
+    // default #93c5fd (staff.php 1266). La palette per-indice di listStaff qui
+    // stamperebbe un colore mai scelto che poi VERREBBE SALVATO al submit.
+    color: /^#[0-9a-f]{6}$/i.test(String(row.calendar_color ?? "").trim()) ? String(row.calendar_color ?? "").trim() : "",
     photoPath: String(row.photo_path ?? ""),
     locationIds,
     locations: resolvedLocations,
@@ -704,26 +710,25 @@ export async function saveStaffMember(slug: string, body: Record<string, string>
   let isActive = truthy(body.is_active ?? body.isActive ?? "1");
   const locationIds = parseIdList(body.location_ids ?? body.locationIds);
 
+  // ORDINE VALIDAZIONI LEGACY (staff.php 742-896): SSO -> Solo-Admin-edit ->
+  // colore -> Solo-Admin-assegna -> owner-email -> sede obbligatoria -> guardie
+  // sedi/disattivazione -> email/password/unicita.
   // SSO: operatore tecnico non gestibile da questa pagina (staff.php 754-764).
   if (id > 0) {
     const ssoRows = await tenantSelect<RowDataPacket>({ slug, table: "staff", columns: "full_name", where: "id = ?", params: [id], limit: 1 }).catch(() => []);
     if (String(ssoRows[0]?.full_name ?? "").trim().toUpperCase() === "SSO") throw staffFlashError("Operatore SSO non modificabile", "msg");
   }
+  // Check protettivo NON presente nel legacy (required solo client-side): evita
+  // insert con nome vuoto da POST diretto.
   if (!fullName) throw new Error("Nome operatore obbligatorio.");
   if (fullName.toUpperCase() === "SSO") throw staffFlashError("Nome operatore riservato (SSO)", "msg");
 
-  // Owner (primo utente admin del tenant) + gating 'Solo Admin' (staff.php 779-814).
+  // Owner (primo utente admin del tenant) + gating 'Solo Admin' (staff.php 779-781).
   const current = id > 0 ? await staffRowWithUser(slug, id) : null;
   const ownerUserId = await tenantOwnerUserId(slug);
   const isOwnerEditing = Boolean(current && ownerUserId > 0 && Number(current.user_id ?? 0) === ownerUserId && String(current.user_role ?? "") === "admin");
   if (!actorIsAdmin && current && String(current.user_role ?? "") === "admin") {
     throw new Error("Solo Admin puo modificare account Admin.");
-  }
-  if (role === "admin" && !actorIsAdmin) throw new Error("Solo Admin puo assegnare il ruolo Admin.");
-  if (isOwnerEditing) {
-    if (!email) throw staffFlashError("Email obbligatoria per Admin", "msg");
-    isActive = true;
-    role = "admin";
   }
 
   // Colore calendario: formato #RRGGBB o vuoto (staff.php 784-796, come msg).
@@ -735,9 +740,13 @@ export async function saveStaffMember(slug: string, body: Record<string, string>
     color = colorRaw;
   }
 
-  if (id <= 0 && !email) throw staffFlashError("Email obbligatoria", "msg");
-  if (id <= 0 && !password) throw staffFlashError("Password obbligatoria", "msg");
-  if (email) await ensureStaffEmailAvailable(slug, email, id);
+  if (role === "admin" && !actorIsAdmin) throw new Error("Solo Admin puo assegnare il ruolo Admin.");
+  if (isOwnerEditing) {
+    if (!email) throw staffFlashError("Email obbligatoria per Admin", "msg");
+    isActive = true;
+    role = "admin";
+  }
+
   // "Seleziona almeno una sede per l'operatore." (staff.php:823) — solo quando
   // il tenant ha sedi configurate (con la tabella assente il legacy salta il check).
   const allLocations = await listLocations(slug);
@@ -774,6 +783,13 @@ export async function saveStaffMember(slug: string, body: Record<string, string>
     }
   }
 
+  // Email/password/unicita DOPO le guardie sedi (ordine legacy 880-896 new /
+  // 947-958 edit). 'Email obbligatoria'/'Password obbligatoria'/'Email già
+  // utilizzata' viaggiano come ?msg= (alert VERDE, quirk del legacy).
+  if (id <= 0 && !email) throw staffFlashError("Email obbligatoria", "msg");
+  if (id <= 0 && !password) throw staffFlashError("Password obbligatoria", "msg");
+  if (email) await ensureStaffEmailAvailable(slug, email, id);
+
   // Capture the prior staff email and whether a login user already existed under it
   // BEFORE we write — these drive the legacy staff-invite "Conferma email account"
   // code email below (the legacy edit handler keys its email-change branch on the
@@ -786,6 +802,16 @@ export async function saveStaffMember(slug: string, body: Record<string, string>
     ? await tenantSelect<RowDataPacket>({ slug, table: "users", columns: "id", where: "LOWER(email) = ?", params: [oldStaffEmail], limit: 1 }).catch(() => [])
     : [];
   const oldLoginUserId = Number(oldLoginUser[0]?.id ?? 0);
+  const newEmailUserRows = email
+    ? await tenantSelect<RowDataPacket>({ slug, table: "users", columns: "id", where: "LOWER(email) = ?", params: [email], limit: 1 }).catch(() => [])
+    : [];
+  const newEmailUserId = Number(newEmailUserRows[0]?.id ?? 0);
+  // staff.php 956-958: in edit, email nuova senza NESSUN account esistente e
+  // senza password -> errore PRIMA di ogni scrittura (il legacy abortisce la
+  // transazione: nulla persiste).
+  if (id > 0 && email && newEmailUserId <= 0 && oldLoginUserId <= 0 && !password) {
+    throw new Error("Password obbligatoria per creare l'account login dell'operatore.");
+  }
 
   const values = await filterColumns(table.name, {
     full_name: fullName,
@@ -802,8 +828,11 @@ export async function saveStaffMember(slug: string, body: Record<string, string>
     staffId = await tenantInsert(table, values);
   }
 
-  if (email) await upsertStaffLoginUser(slug, { staffId, fullName, email, role, password });
-  else if (id > 0) await deleteLoginUserForStaffWithoutEmail(slug, id);
+  // L'utente login va risolto con l'email PRE-write (oldLoginUserId): la riga
+  // staff è già stata aggiornata, rileggerla troverebbe l'email NUOVA e il
+  // cambio-email non aggancerebbe mai l'account esistente (staff.php 970-998).
+  if (email) await upsertStaffLoginUser(slug, { staffId, fullName, email, role, password, oldLoginUserId });
+  else if (id > 0) await deleteLoginUserForStaffWithoutEmail(slug, oldLoginUserId);
   await replaceOwnerLinks(slug, "staff_locations", "staff_id", staffId, "location_id", locationIds);
 
   // Staff-invite email (port of the "Conferma email account" code mail in
@@ -815,11 +844,15 @@ export async function saveStaffMember(slug: string, body: Record<string, string>
   if (email) {
     const isNew = id <= 0;
     const emailChangedOnEdit = !isNew && oldLoginUserId > 0 && oldStaffEmail !== "" && oldStaffEmail !== email;
-    if (isNew || emailChangedOnEdit) {
+    // staff.php 1007-1012: in edit l'account creato "tardi" (nessun utente né
+    // sotto la vecchia né sotto la nuova email) manda lo stesso invito ma con
+    // la variante SENZA accenti di staff_prepare_email_verification (147-148).
+    const lateCreateOnEdit = !isNew && oldLoginUserId <= 0 && newEmailUserId <= 0;
+    if (isNew || emailChangedOnEdit || lateCreateOnEdit) {
       const userRows = await tenantSelect<RowDataPacket>({ slug, table: "users", columns: "id", where: "LOWER(email) = ?", params: [email], limit: 1 }).catch(() => []);
       const userId = Number(userRows[0]?.id ?? 0);
       if (userId > 0) {
-        await sendStaffInviteEmailCode({ slug, userId, email, updated: !isNew });
+        await sendStaffInviteEmailCode({ slug, userId, email, updated: emailChangedOnEdit, plain: lateCreateOnEdit });
       }
     }
   }
@@ -878,6 +911,9 @@ export async function deleteStaffMember(slug: string, id: number, options: { act
     await deleteByOwner(slug, tableName, "staff_id", staffId);
   }
   await tenantDelete({ slug, table: "staff", id: staffId });
+  // staff.php 699-701: il file foto rimosso DOPO il commit (best-effort, su R2).
+  const photoKey = storageKeyFromPublicUrl(String(row.photo_path ?? "").trim());
+  if (photoKey) await deletePublicObject(photoKey).catch(() => undefined);
 }
 
 export async function saveBusinessHours(slug: string, body: Record<string, string>): Promise<BusinessHourRow[]> {
@@ -1390,7 +1426,11 @@ async function listStaff(slug: string, activeLocationId: number, locations: Reso
       serviceLinks: serviceMap.get(id) ?? [],
       isOwner: ownerUserId > 0 && Number(user?.id ?? 0) === ownerUserId && String(user?.role ?? "") === "admin",
     };
-  }).filter((item) => item.id > 0 && (!activeLocationId || item.locationIds.length === 0 || item.locationIds.includes(activeLocationId)));
+  // app_filter_ids_by_location (Helpers.php 1058-1085, variante staff): passa
+  // SOLO chi ha la riga staff_locations per la sede — un operatore senza sedi
+  // assegnate NON compare con un filtro sede attivo (a differenza dei servizi,
+  // dove i non-ristretti passano: il return legacy usa solo $allowed).
+  }).filter((item) => item.id > 0 && (!activeLocationId || item.locationIds.includes(activeLocationId)));
 }
 
 async function listBusinessHours(slug: string, locationId: number): Promise<BusinessHourRow[]> {
@@ -1755,9 +1795,8 @@ async function staffEmailUsed(slug: string, email: string, currentStaffId: numbe
   return rows.length > 0;
 }
 
-async function upsertStaffLoginUser(slug: string, input: { staffId: number; fullName: string; email: string; role: string; password: string }): Promise<void> {
+async function upsertStaffLoginUser(slug: string, input: { staffId: number; fullName: string; email: string; role: string; password: string; oldLoginUserId: number }): Promise<void> {
   const users = await tenantTable(slug, "users");
-  const oldStaff = input.staffId > 0 ? await tenantSelect<RowDataPacket>({ slug, table: "staff", columns: "email", where: "id = ?", params: [input.staffId], limit: 1 }).catch(() => []) : [];
   const existing = await tenantSelect<RowDataPacket>({ slug, table: "users", columns: "id,email", where: "LOWER(email) = ?", params: [input.email], limit: 1 }).catch(() => []);
   const values: Record<string, unknown> = { name: input.fullName, email: input.email, role: input.role };
   if (input.password) values.password_hash = await bcrypt.hash(input.password, 10);
@@ -1766,10 +1805,11 @@ async function upsertStaffLoginUser(slug: string, input: { staffId: number; full
     return;
   }
 
-  const oldEmail = normalizeEmail(oldStaff[0]?.email ?? "");
-  const oldUser = oldEmail ? await tenantSelect<RowDataPacket>({ slug, table: "users", columns: "id", where: "LOWER(email) = ?", params: [oldEmail], limit: 1 }).catch(() => []) : [];
-  if (oldUser[0]?.id) {
-    await tenantUpdate({ slug, table: "users", id: Number(oldUser[0].id), values: await filterColumns(users.name, { ...values, email_verified_at: null }) });
+  // Cambio email (staff.php 970-998): l'account trovato sotto la VECCHIA email
+  // (risolto dal chiamante PRIMA delle scritture) viene aggiornato alla nuova
+  // con email_verified_at azzerata — nessuna password richiesta.
+  if (input.oldLoginUserId > 0) {
+    await tenantUpdate({ slug, table: "users", id: input.oldLoginUserId, values: await filterColumns(users.name, { ...values, email_verified_at: null }) });
     return;
   }
 
@@ -1777,16 +1817,17 @@ async function upsertStaffLoginUser(slug: string, input: { staffId: number; full
   await tenantInsert(users, await filterColumns(users.name, { ...values, email_verified_at: null }));
 }
 
-async function deleteLoginUserForStaffWithoutEmail(slug: string, staffId: number): Promise<void> {
-  const old = await staffRowWithUser(slug, staffId);
-  const userId = Number(old?.user_id ?? 0);
-  if (userId > 0 && userId !== 1) await tenantDelete({ slug, table: "users", id: userId }).catch(() => undefined);
-}
-
-async function deleteUserByEmail(slug: string, email: string): Promise<void> {
-  const rows = await tenantSelect<RowDataPacket>({ slug, table: "users", columns: "id", where: "LOWER(email) = ?", params: [email], limit: 1 }).catch(() => []);
-  const id = Number(rows[0]?.id ?? 0);
-  if (id > 0 && id !== 1) await tenantDelete({ slug, table: "users", id }).catch(() => undefined);
+// staff.php 999-1004: email svuotata in edit -> l'account login (risolto dal
+// chiamante con l'email PRE-write) viene eliminato con le verifiche email e le
+// user_locations. L'owner (primo admin del tenant, equivalente PG di users.id=1)
+// non è raggiungibile qui (email obbligatoria), ma la guardia resta per sicurezza.
+async function deleteLoginUserForStaffWithoutEmail(slug: string, userId: number): Promise<void> {
+  if (userId <= 0) return;
+  const ownerUserId = await tenantOwnerUserId(slug);
+  if (ownerUserId > 0 && userId === ownerUserId) return;
+  await deleteByOwner(slug, "user_email_verifications", "user_id", userId);
+  await deleteByOwner(slug, "user_locations", "user_id", userId);
+  await tenantDelete({ slug, table: "users", id: userId }).catch(() => undefined);
 }
 
 // Scope tenant per le query manuali (tabelle shared).

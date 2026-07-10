@@ -362,11 +362,18 @@ function resolveStaffInviteLogoUrl(logoPath: string): string {
 
 // Port of the legacy "Conferma email account" body (h() the code; HTML body fed to
 // email_build_modern_template). `updated` toggles the new-account vs email-changed
-// intro, exactly like staff_prepare_email_verification($updated).
-function buildStaffInviteEmailBody(code: string, updated: boolean): string {
-  const intro = updated
-    ? "la tua email di accesso e stata aggiornata. Confermala con questo codice:"
-    : "il tuo account e stato creato. Per completare l'attivazione inserisci questo codice:";
+// intro. I path INLINE di staff.php (nuovo operatore 927-929, cambio email
+// 991-993) usano le frasi ACCENTATE; il helper staff_prepare_email_verification
+// (147-148, usato solo dal path edit-crea-account-tardivo) quelle SENZA accenti
+// -> `plain` seleziona la variante.
+function buildStaffInviteEmailBody(code: string, updated: boolean, plain: boolean): string {
+  const intro = plain
+    ? (updated
+      ? "la tua email di accesso e stata aggiornata. Confermala con questo codice:"
+      : "il tuo account e stato creato. Per completare l'attivazione inserisci questo codice:")
+    : (updated
+      ? "la tua email di accesso è stata aggiornata. Confermala con questo codice:"
+      : "il tuo account è stato creato. Per completare l'attivazione inserisci questo codice:");
   return (
     "Ciao,<br><br>" + escapeInviteHtml(intro) + "<br><br>"
     + `<div style="font-size:28px;font-weight:800;letter-spacing:2px">${escapeInviteHtml(code)}</div>`
@@ -394,6 +401,7 @@ export async function sendStaffInviteEmailCode(args: {
   userId: number;
   email: string;
   updated: boolean;
+  plain?: boolean;
 }): Promise<void> {
   if (!emailConfigured()) return;
   const tenantSlug = normalizeTenantSlug(args.slug) ?? "";
@@ -436,7 +444,7 @@ export async function sendStaffInviteEmailCode(args: {
     const branding = await staffInviteBranding(tenantSlug);
     const bizName = branding.name.trim();
     const subject = "Conferma email account";
-    const { html, text } = buildModernEmailTemplate(subject, buildStaffInviteEmailBody(code, args.updated), {
+    const { html, text } = buildModernEmailTemplate(subject, buildStaffInviteEmailBody(code, args.updated, args.plain === true), {
       business_name: bizName,
       business_email: branding.email,
       business_logo_url: branding.logoUrl,

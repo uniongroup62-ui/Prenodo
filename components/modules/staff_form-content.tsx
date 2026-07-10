@@ -93,6 +93,9 @@ export function StaffFormContent({ slug: slugProp, action: actionProp, staffId: 
   const [photoPreview, setPhotoPreview] = useState("");
   const [currentPhotoUrl, setCurrentPhotoUrl] = useState("");
   const [removePhoto, setRemovePhoto] = useState(false);
+  // Owner (primo admin del tenant): ruolo e stato bloccati come nel legacy
+  // ($isOwnerForm, staff.php 1217/1239/1281).
+  const [isOwner, setIsOwner] = useState(false);
 
   // Load the staff context (locations), then prefill on edit (action=get) or
   // keep the faithful new-operator defaults.
@@ -138,6 +141,7 @@ export function StaffFormContent({ slug: slugProp, action: actionProp, staffId: 
             location_ids: (s.locationIds ?? []).map(Number).filter((n: number) => n > 0),
           });
           setCurrentPhotoUrl(String(s.photoPath ?? "").trim());
+          setIsOwner(Boolean(s.isOwner));
         })
         .catch(() => setError("Errore nel caricamento dell'operatore."))
         .finally(() => setLoading(false));
@@ -180,12 +184,13 @@ export function StaffFormContent({ slug: slugProp, action: actionProp, staffId: 
         action: "staff_save",
         id: String(form.id),
         full_name: fullName,
-        ui_role: form.ui_role,
+        // Owner: il legacy posta hidden ui_role=admin / is_active=1 (1239, 1281).
+        ui_role: isOwner ? "admin" : form.ui_role,
         email: form.email,
         password: form.password,
         phone: form.phone,
         calendar_color: form.calendar_color,
-        is_active: form.is_active ? "1" : "0",
+        is_active: isOwner || form.is_active ? "1" : "0",
         location_ids: form.location_ids.join(","),
       };
       const res = await fetch(`/api/manage/resources?slug=${encodeURIComponent(slug)}`, {
@@ -230,6 +235,36 @@ export function StaffFormContent({ slug: slugProp, action: actionProp, staffId: 
       window.location.assign(`/${encodeURIComponent(slug)}/staff?msg=${encodeURIComponent(String(j.msg ?? "Operatore salvato"))}`);
     } catch {
       setError("Errore nel salvataggio dell'operatore.");
+      setSaving(false);
+    }
+  }
+
+  // Port di staff_action=delete_photo (staff.php 705-728): confirm di staff.js
+  // (data-confirm, riga 1341) poi rimozione immediata + flash verde.
+  async function deletePhotoNow() {
+    if (!window.confirm("Eliminare definitivamente questa immagine operatore?")) return;
+    setError("");
+    setFlashMsg("");
+    setSaving(true);
+    try {
+      const fd = new FormData();
+      fd.set("staff_id", String(form.id));
+      fd.set("remove_photo", "1");
+      const res = await fetch(`/api/manage/staff-photo?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "x-tenant-slug": slug },
+        body: fd,
+      });
+      const j = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!res.ok || j.ok === false) {
+        setError(String(j.error ?? "Errore durante il salvataggio dell'immagine operatore"));
+        return;
+      }
+      setCurrentPhotoUrl("");
+      setRemovePhoto(false);
+      setFlashMsg("Immagine operatore eliminata definitivamente");
+      window.scrollTo(0, 0);
+    } finally {
       setSaving(false);
     }
   }
@@ -287,13 +322,15 @@ export function StaffFormContent({ slug: slugProp, action: actionProp, staffId: 
                   className="form-select"
                   name="ui_role"
                   required={action === "new"}
-                  value={form.ui_role}
+                  disabled={isOwner}
+                  value={isOwner ? "admin" : form.ui_role}
                   onChange={(e) => set("ui_role", e.target.value as StaffForm["ui_role"])}
                 >
                   <option value="staff">Staff</option>
                   <option value="admin">Admin</option>
                   <option value="altro">Personalizzato</option>
                 </select>
+                {isOwner ? <div className="form-text">Il ruolo Admin non può essere modificato.</div> : null}
               </div>
 
               {/* Foto operatore (port del box .staff-photo-field di staff.php):
@@ -333,8 +370,17 @@ export function StaffFormContent({ slug: slugProp, action: actionProp, staffId: 
                         onChange={(e) => {
                           const file = e.target.files?.[0] ?? null;
                           if (photoPreview) URL.revokeObjectURL(photoPreview);
+                          // Testi client verbatim di staff.js (135-146): wording
+                          // DIVERSO da quello server ('massimo 5 MB' vs 'max 5 MB').
                           if (file && file.size > 5242880) {
-                            setError("Immagine troppo grande (max 5 MB).");
+                            setError("Immagine troppo grande: massimo 5 MB.");
+                            setPhotoFile(null);
+                            setPhotoPreview("");
+                            e.target.value = "";
+                            return;
+                          }
+                          if (file && !/^image\/(jpeg|png|webp|gif)$/i.test(file.type)) {
+                            setError("Formato non valido: carica JPG, PNG, WEBP o GIF.");
                             setPhotoFile(null);
                             setPhotoPreview("");
                             e.target.value = "";
@@ -348,17 +394,33 @@ export function StaffFormContent({ slug: slugProp, action: actionProp, staffId: 
                       />
                       <div className="form-text">JPG, PNG, WEBP o GIF — massimo 5 MB.</div>
                       {currentPhotoUrl && !photoFile ? (
-                        <div className="form-check mt-1">
-                          <input
-                            className="form-check-input"
-                            type="checkbox"
-                            id="staffRemovePhoto"
-                            checked={removePhoto}
-                            onChange={(e) => setRemovePhoto(e.target.checked)}
-                          />
-                          <label className="form-check-label" htmlFor="staffRemovePhoto">
-                            Rimuovi foto
-                          </label>
+                        <div className="d-flex align-items-center gap-3 mt-1 flex-wrap">
+                          <div className="form-check">
+                            <input
+                              className="form-check-input"
+                              type="checkbox"
+                              id="staffRemovePhoto"
+                              checked={removePhoto}
+                              onChange={(e) => setRemovePhoto(e.target.checked)}
+                            />
+                            <label className="form-check-label" htmlFor="staffRemovePhoto">
+                              Rimuovi foto
+                            </label>
+                          </div>
+                          {/* staff.php 1341: eliminazione IMMEDIATA (staff_action=delete_photo)
+                              con confirm verbatim + flash 'Immagine operatore eliminata
+                              definitivamente'. */}
+                          {form.id > 0 ? (
+                            <button
+                              className="btn btn-sm btn-outline-danger"
+                              type="button"
+                              disabled={saving}
+                              onClick={() => void deletePhotoNow()}
+                            >
+                              <i className="bi bi-trash me-1" />
+                              Elimina immagine
+                            </button>
+                          ) : null}
                         </div>
                       ) : null}
                     </div>
@@ -427,7 +489,8 @@ export function StaffFormContent({ slug: slugProp, action: actionProp, staffId: 
                     id="staffIsActive"
                     type="checkbox"
                     name="is_active"
-                    checked={form.is_active}
+                    disabled={isOwner}
+                    checked={isOwner ? true : form.is_active}
                     onChange={(e) => set("is_active", e.target.checked)}
                   />
                   <label className="form-check-label" htmlFor="staffIsActive">

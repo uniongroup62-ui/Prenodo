@@ -52,7 +52,13 @@ export async function GET(request: Request) {
       if (section === "staff") {
         if (!can(activeUser.perms, "staff.manage")) return jsonError("Permesso Operatori richiesto.", 403);
         const staff = await getManageStaffMember(tenantSlug, id);
-        if (!staff) return jsonError("Operatore non trovato.", 404);
+        // Ordine guardie del form edit legacy (staff.php 1072-1084):
+        // non trovato -> Solo Admin -> SSO. Messaggi senza punto finale.
+        if (!staff) return jsonError("Operatore non trovato", 404);
+        if (String(activeUser.role ?? "").toLowerCase() !== "admin" && staff.role === "admin") {
+          return jsonError("Solo Admin puo modificare account Admin.", 403);
+        }
+        if (staff.fullName.trim().toUpperCase() === "SSO") return jsonError("Operatore SSO non modificabile", 400);
         return Response.json({ ok: true, source: "resources?section=staff&action=get", sourceMode: "database", staff });
       }
       if (section === "cabins") {

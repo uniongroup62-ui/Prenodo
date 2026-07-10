@@ -84,12 +84,19 @@ export function StaffContent({ slug: slugProp, initialQuery }: { slug?: string; 
     return usp;
   }
 
+  // 'Tutte le sedi' visibile SOLO con piu di una sede (staff.php 498:
+  // $staffShowAllLocationsFilter = count($staffLocations) > 1).
+  const [locationsCount, setLocationsCount] = useState(0);
+
   const load = useCallback(() => {
     fetch(`/api/manage/resources?slug=${encodeURIComponent(slug)}&section=staff${appliedAllLoc ? "&all_locations=1" : ""}`, {
       headers: { "x-tenant-slug": slug },
     })
       .then((r) => r.json())
-      .then((j) => setStaff(Array.isArray(j.staff) ? j.staff : []))
+      .then((j) => {
+        setStaff(Array.isArray(j.staff) ? j.staff : []);
+        setLocationsCount(Array.isArray(j.locations) ? j.locations.length : 0);
+      })
       .catch(() => setStaff([]))
       .finally(() => setLoading(false));
   }, [slug, appliedAllLoc]);
@@ -229,12 +236,14 @@ export function StaffContent({ slug: slugProp, initialQuery }: { slug?: string; 
               <option value="inactive">Non attivi</option>
             </select>
           </div>
-          <div className="col-xl-2 col-lg-3 col-md-6 d-flex align-items-end">
-            <div className="form-check pb-2">
-              <input className="form-check-input" type="checkbox" id="staffAllLocations" checked={allLoc} onChange={(e) => setAllLoc(e.target.checked)} />
-              <label className="form-check-label" htmlFor="staffAllLocations">Tutte le sedi</label>
+          {locationsCount > 1 ? (
+            <div className="col-xl-2 col-lg-3 col-md-6 d-flex align-items-end">
+              <div className="form-check pb-2">
+                <input className="form-check-input" type="checkbox" id="staffAllLocations" checked={allLoc} onChange={(e) => setAllLoc(e.target.checked)} />
+                <label className="form-check-label" htmlFor="staffAllLocations">Tutte le sedi</label>
+              </div>
             </div>
-          </div>
+          ) : null}
           <div className="col-xl-2 col-lg-3 col-md-6 d-flex gap-2">
             <button className="btn btn-outline-primary app-filter-submit" type="submit">
               <i className="bi bi-search me-1" />
@@ -289,10 +298,12 @@ export function StaffContent({ slug: slugProp, initialQuery }: { slug?: string; 
                       </td>
                       <td className="text-muted">
                         {s.phone ? s.phone : "—"} <br />
-                        {s.email}
+                        {s.email ? s.email : "—"}
                       </td>
                       <td className="text-muted">
-                        {s.locations.length === 0 ? (
+                        {/* Badge 'Tutte' sui locationIds REALI: per lo staff senza
+                            sedi assegnate s.locations è il fallback tutte-le-sedi. */}
+                        {s.locationIds.length === 0 ? (
                           <span className="badge text-bg-light border">Tutte</span>
                         ) : (
                           <>
