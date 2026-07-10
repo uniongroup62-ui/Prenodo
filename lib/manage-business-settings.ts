@@ -231,7 +231,9 @@ export async function saveBusinessBrandingPosition(slug: string, kind: "logo" | 
       [`${prefix}_position_y`]: clampPosition(y),
     },
   });
-  await syncMarketplaceProfile(slug, publicOrigin);
+  // Sync marketplace BEST-EFFORT come il legacy (business_profile.php 157-158,
+  // strict=false): un errore di sync non fa fallire il salvataggio posizione.
+  await syncMarketplaceProfile(slug, publicOrigin).catch(() => undefined);
   return {
     ...await getBusinessSettingsContext(slug, publicOrigin),
     message: kind === "logo" ? "Posizione logo salvata" : "Posizione copertina salvata",
@@ -281,7 +283,9 @@ export async function uploadBusinessBrandingImage(slug: string, kind: "logo" | "
   }
 
   await tenantUpdate({ slug, table: "businesses", id: Number(business.id ?? 0), values });
-  await syncMarketplaceProfile(slug, publicOrigin);
+  // strict=false come il legacy (business_profile.php 134-135): il sync
+  // marketplace non deve far fallire un upload riuscito.
+  await syncMarketplaceProfile(slug, publicOrigin).catch(() => undefined);
   return {
     ...await getBusinessSettingsContext(slug, publicOrigin),
     message: kind === "logo" ? "Logo salvato" : "Immagine di copertina salvata",
@@ -309,7 +313,8 @@ export async function deleteBusinessBrandingImage(slug: string, kind: "logo" | "
     if (await columnExists(target.name, "logo_updated_at")) values.logo_updated_at = null;
   }
   await tenantUpdate({ slug, table: "businesses", id: Number(business.id ?? 0), values });
-  await syncMarketplaceProfile(slug, publicOrigin);
+  // strict=false come il legacy (business_profile.php 168-169).
+  await syncMarketplaceProfile(slug, publicOrigin).catch(() => undefined);
   return {
     ...await getBusinessSettingsContext(slug, publicOrigin),
     message: kind === "logo" ? "Logo rimosso" : "Immagine di copertina rimossa",

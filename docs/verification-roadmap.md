@@ -9337,3 +9337,74 @@ spezzato/conflitto chiusure/upsert/delete/raggruppamenti consecutivi e non).
 REGRESSIONE: cabine 34/34, risorse 12/12, operatori 48/48. PRODUZIONE INTATTA:
 business_hours=14 righe IDENTICHE allo snapshot (7 globali NULL + 7 Sede1),
 closures=0, exceptions=0, locations=2, 5 clienti reali.
+
+## 2026-07-10 — Profilo attività (business_profile.php + business_profile.js): audit 1:1 + 1 fix + e2e live
+
+Legacy letto INTEGRALE (diretto, senza agente): app/pages/business_profile.php
+(475 righe — settings.php è solo un redirect legacy a locations) +
+assets/js/pages/business_profile.js (444) + helper branding in Helpers.php
+(process_uploaded_logo 11929, process_uploaded_branding_image 11216,
+save_business_branding_position 11186, delete_business_logo/cover, file base
+{slug}_{bizId}). Next: app/api/manage/business-settings/route.ts (condivisa con
+la pagina Sedi) + lib/manage-business-settings.ts (saveBusinessProfile,
+saveBusinessBrandingPosition, uploadBusinessBrandingImage,
+deleteBusinessBrandingImage, syncMarketplaceProfile) +
+business_profile-content.tsx (842). Permesso settings.general (GET condiviso
+canAny con settings.location; scritture profilo SOLO settings.general, 403
+'Permesso Profilo attivita richiesto.' senza accento come il titolo pagina).
+
+FIX (1): SYNC MARKETPLACE BEST-EFFORT dove il legacy usa strict=false
+(posizioni 157-158, upload 134-135, delete 168-169): un errore del sync della
+directory marketplace non fa più fallire salvataggio posizione/upload/rimozione
+(il legacy mostra solo un alert warning e completa l'operazione). Resta STRICT
+solo su save_profile_activity (115, strict=true: l'errore abortisce col wrapper).
+
+CONFERMATI FEDELI (nessun'altra modifica): dati su businesses PRIMA riga
+(ORDER BY id ASC LIMIT 1): name + booking_about_text + logo_path/cover_path +
+{logo,cover}_position_{x,y} (clamp 0-100 round, non-numerico -> 50);
+validazioni con lunghezze mb-aware e QUIRK accenti ('Il nome attività può
+contenere al massimo 190 caratteri.' ACCENTATO vs 'Il testo Chi siamo puo
+contenere al massimo 3000 caratteri.' NON accentato); wrapper errore save che
+ingloba ANCHE le validazioni ('Errore salvataggio profilo attività: ... (se
+persiste, controlla che lo schema business sia aggiornato e che il DB possa
+eseguire ALTER/UPDATE)'); ordine guardie upload (Rimuovi attuale -> Seleziona
+file -> Upload non valido -> size -> formato) con etichette per-kind ('Logo
+troppo grande (max 5 MB)' / 'Immagine di copertina troppo grande (max 5 MB)',
+'Formato non valido: carica un file JPG o PNG' logo vs 'Formato non valido'
+nudo cover; logo solo JPG/PNG, cover anche WEBP); UPLOAD RESETTA la posizione
+a 50/50 (delete NO); payload AJAX {ok, errors[], message}+branding con errori
+wrappati 'Errore upload logo/copertina: ' e 'Errore rimozione ...'; flash
+?msg= = alert-INFO (View::alert default 'info', NON success) / err danger;
+delete a immagine assente = successo no-op; sync directory marketplace
+(tenant_directory_profiles upsert con title/description/immagini/posizioni,
+category_text e featured PRESERVATI, published_at solo alla prima pubblicazione
++ sync tenant_directory_locations); componente con l'intero business_profile.js
+portato (dropzone drag&drop, card 'Da salvare' con thumb/nome/size '0,0 MB'
+virgola italiana, 'Logo pronto - X,X MB'/'Copertina pronta', clear 'Rimuovi
+anteprima', validazione client 'File troppo grande: max 5 MB.'/'Formato non
+valido: carica JPG o PNG.'/'... JPG, PNG o WEBP.' DIVERSE da quelle server,
+selezione ignorata se immagine presente, drag posizione pointer-capture con
+object-position live, 'Centra' solo client, spinner 'Salvataggio...'/
+'Rimozione...', confirm 'Rimuovere il logo?'/'Rimuovere l'immagine di
+copertina?', fallback 'Salvataggio non riuscito.'/'Rimozione non riuscita.').
+
+RESIDUI documentati (non fix): (a) storage R2 senza ricompressione GD (legacy:
+resize <=900x300 logo / <=1920x900 cover, JPEG q82/84 su sfondo bianco,
+filename deterministico {slug}_{bizId}.jpg) — immagine salvata come caricata,
+key univoca con timestamp; (b) 'Formato immagine non supportato' (getimagesize
+su file corrotto) non riproducibile senza sniffing contenuto; (c) alert warning
+'Impostazioni marketplace non disponibili: .../Aggiornamento immagini
+marketplace non disponibile: ...' non renderizzato (il sync best-effort fallisce
+in silenzio); (d) 'Tipo immagine non valido.' della route con punto e fuori
+wrapper (ramo irraggiungibile dalla UI legacy); (e) titolo tab browser
+('Profilo attività' accentato in View::header vs pageHeader non accentato).
+
+VERIFICATO: test-profilo 25/25 con SNAPSHOT/RESTORE della riga businesses e
+del directory profile (byte-identici a fine test, category 'Unghie' e featured
+preservati): GET+permessi (canAny GET, 403 scritture), wrapper errori verbatim
+(nome vuoto/191/3001), salvataggio con sync directory, 190 esatti, about->NULL,
+posizioni con clamp e default, tutti gli errori upload per-kind, ciclo COMPLETO
+cover e logo su R2 (upload con reset posizione -> blocco secondo upload ->
+delete con directory azzerata), delete no-op, permessi upload. SANITY:
+model-a 12/12. PRODUZIONE INTATTA: businesses riga identica (name 'elite',
+about NULL, path NULL, posizioni 50), tenant_directory_profiles identico.
