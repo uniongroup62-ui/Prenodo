@@ -312,12 +312,6 @@ const RESIDUAL_CONFLICT_DEFAULT: Record<ResidualKind, string> = {
   giftbox: "Questo residuo GiftBox è già presente in un'altra prenotazione.",
   gift: "Questo servizio omaggio è già presente in un'altra prenotazione.",
 };
-const RESIDUAL_CHECK_ERROR: Record<ResidualKind, string> = {
-  package: "Errore durante la verifica dei residui del pacchetto.",
-  prepaid: "Errore durante la verifica dei servizi prepagati.",
-  giftbox: "Errore durante la verifica dei residui GiftBox.",
-  gift: "Errore durante la verifica degli omaggi.",
-};
 const RESIDUAL_TOAST: Record<ResidualKind, { linked: string; added: string }> = {
   package: { linked: "Seduta pacchetto collegata: ", added: "Servizio aggiunto dal pacchetto: " },
   prepaid: { linked: "Servizio prepagato collegato: ", added: "Servizio aggiunto dai residui: " },
@@ -910,6 +904,10 @@ export function QuickBookingDrawer() {
   // always release the CURRENT hold without re-binding, and dropAndReleaseHold can read it
   // without threading the token through every setter.
   const holdTokenRef = useRef<string>("");
+  // Scadenza CLIENT-side dell'hold (port di qbHoldIsExpired): il backend usa
+  // TTL 300s; il timestamp si rinfresca alla creazione e a ogni renew riuscito.
+  const HOLD_TTL_MS = 300_000;
+  const holdExpiresRef = useRef<number>(0);
   // Booster redeem per l'EDIT: le istanze residuo consumate dalla prenotazione in
   // modifica (dal payload action=get), fuse nelle liste opzioni del cliente quando
   // il contesto arriva — le liste correnti non elencano più le unità già scalate.
@@ -953,7 +951,13 @@ export function QuickBookingDrawer() {
     };
     const renew = async () => {
       if (stopped) return;
-      if (typeof document !== "undefined" && document.hidden) return;
+      // Scheda nascosta: il legacy SALTA il rinnovo ma continua a schedulare
+      // (qbCanRenewHold false → il timer resta vivo e riparte al ritorno in
+      // primo piano); prima il loop moriva al primo tick nascosto.
+      if (typeof document !== "undefined" && document.hidden) {
+        schedule(30000);
+        return;
+      }
       try {
         const res = await fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}`, {
           method: "POST",
@@ -962,6 +966,7 @@ export function QuickBookingDrawer() {
         });
         const data: { ok?: boolean; token?: string } = await res.json().catch(() => ({}));
         if (res.ok && data.ok && String(data.token ?? "") === holdToken) {
+          holdExpiresRef.current = Date.now() + HOLD_TTL_MS;
           schedule(60000);
           return;
         }
@@ -2333,6 +2338,9 @@ export function QuickBookingDrawer() {
             // (with a working Riprova button) instead of an ad-hoc header alert.
             setEditLoading(false);
             setEditLoadError(String(data?.error || "Impossibile caricare la prenotazione."));
+            // Il legacy oltre allo stato d'errore fa ANCHE il toast (app.js
+            // 9707-9714, fallback verbatim).
+            qbNotify(String(data?.error || "Errore caricamento appuntamento"), "danger");
             return;
           }
           const a = data.appointment;
@@ -2421,11 +2429,17 @@ export function QuickBookingDrawer() {
           setFidelityUseOn(editPoints > 0);
           const editCredit = Math.max(0, Number(a.creditUsed ?? 0) || 0);
           setCreditInput(editCredit > 0 ? String(editCredit) : "");
-          if (a.coupon && a.coupon.code && Number(a.coupon.discount ?? 0) > 0) {
-            setCouponCode(String(a.coupon.code).toUpperCase());
-            setCouponInput(String(a.coupon.code).toUpperCase());
-            setCouponDiscount(Math.round((Math.max(0, Number(a.coupon.discount)) + Number.EPSILON) * 100) / 100);
+          if (a.coupon && a.coupon.code) {
+            // Prefill legacy (app.js 9482-9493): codice SEMPRE ripristinato;
+            // con sconto > 0 'Coupon applicato.', con solo codice storico
+            // 'Coupon storico preservato.'.
+            const cCode = String(a.coupon.code).toUpperCase();
+            const cDisc = Math.round((Math.max(0, Number(a.coupon.discount ?? 0)) + Number.EPSILON) * 100) / 100;
+            setCouponCode(cCode);
+            setCouponInput(cCode);
+            setCouponDiscount(cDisc);
             setCouponBoxOpen(true);
+            setCouponMsg(cDisc > 0 ? { text: "Coupon applicato.", ok: true } : { text: "Coupon storico preservato.", ok: true });
           }
           // An existing slot is already booked: no hold needed (the update reuses it).
           setHoldToken("");
@@ -2701,7 +2715,8 @@ export function QuickBookingDrawer() {
         });
         const chk: { ok?: boolean; error?: string; messages?: string[] } & Record<string, unknown> = await res.json().catch(() => ({}));
         if (!chk || chk.ok === false) {
-          qbNotify(String(chk?.error || RESIDUAL_CHECK_ERROR[kind]), "danger");
+          // Testi legacy GENERICI (app.js 810/815), non per-tipo.
+          qbNotify(String(chk?.error || "Errore durante la verifica dei residui."), "danger");
           return;
         }
         const conflicts = chk[RESIDUAL_CHECK_COLLECTION[kind]];
@@ -2711,7 +2726,7 @@ export function QuickBookingDrawer() {
           return;
         }
       } catch {
-        qbNotify(RESIDUAL_CHECK_ERROR[kind], "danger");
+        qbNotify("Errore di rete durante la verifica dei residui.", "danger");
         return;
       }
       const wasSelected = selectedServiceIds.includes(serviceId);
@@ -2905,6 +2920,7 @@ export function QuickBookingDrawer() {
         setFormError(String(data.error || "Orario non piu disponibile. Ricarica e scegli un altro slot."));
         return;
       }
+      holdExpiresRef.current = Date.now() + HOLD_TTL_MS;
       setHoldToken(data.token);
       if (data.time) setStartTime(data.time);
       // Auto-assign the operator the hold resolved (when none was chosen).
@@ -2988,7 +3004,7 @@ export function QuickBookingDrawer() {
       if (seq !== availSeqRef.current) return;
       if (!res.ok || !data.ok || !Array.isArray(data.months)) {
         setAvailMonths(null);
-        setAvailModalError(String(data.error || "Errore caricamento disponibilita."));
+        setAvailModalError(String(data.error || "Errore caricamento disponibilità."));
         return;
       }
       setAvailMonths(data.months);
@@ -3001,7 +3017,7 @@ export function QuickBookingDrawer() {
     } catch {
       if (seq === availSeqRef.current) {
         setAvailMonths(null);
-        setAvailModalError("Errore caricamento disponibilita.");
+        setAvailModalError("Errore caricamento disponibilità.");
       }
     } finally {
       if (seq === availSeqRef.current) setAvailBrowserLoading(false);
@@ -3067,6 +3083,7 @@ export function QuickBookingDrawer() {
         void loadAvailabilityPeriod(slotDate, availMode);
         return;
       }
+      holdExpiresRef.current = Date.now() + HOLD_TTL_MS;
       setHoldToken(data.token);
       setDate(slotDate);
       setStartTime(data.time || slotTime);
@@ -3270,6 +3287,20 @@ export function QuickBookingDrawer() {
     async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
       setFormError("");
+      // GUARDIA HOLD SCADUTO (app.js 11337 qbHoldIsExpired → qbHandleHoldExpired):
+      // PRIMA di ogni altra cosa, con un hold attivo oltre il TTL si puliscono
+      // token/orari/cabina e si mostra il messaggio default verbatim.
+      if (holdTokenRef.current && holdExpiresRef.current > 0 && Date.now() > holdExpiresRef.current) {
+        setHoldToken("");
+        holdTokenRef.current = "";
+        holdExpiresRef.current = 0;
+        setStartTime("");
+        setPrefillEndTime("");
+        setCabinId("");
+        setCabinPicks({});
+        qbNotify("La disponibilita selezionata e scaduta. Scegli di nuovo uno slot.", "warning");
+        return;
+      }
       // Locked-appointment guard (port of the legacy submit check on
       // qbIsCanceledLockedMode, app.js:11337): toast warning, non alert inline.
       if (apptId && (originalStatus === "canceled" || originalStatus === "no_show")) {

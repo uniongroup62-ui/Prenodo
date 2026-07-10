@@ -10845,3 +10845,57 @@ RESIDUI parte 2b (dalla diff mappa↔port, da chiudere col diff integrale):
 - credit_use_from_booking assente nella catena save Next.
 - diff testuale/flusso completo del drawer sulle due mappe (hold recovery,
   residui, availability modal, prezzi) + verifica delete/'Annulla prima'.
+
+## 2026-07-10 — Calendario, parte 2b (drawer: diff testi/flussi sulle mappe + hold watchdog)
+
+Diff sistematico del quick-booking drawer Next contro le due mappe legacy
+della 2a: 71 testi verbatim verificati a batch (apertura/edit, validazioni,
+hold, coupon, fidelity base, residui coi toast di collegamento/rimozione,
+giftcard, cabine, operatori, storico cliente, stato/lock annullato, delete
+'Annulla prima' + confirm, done/cancel popup, availability gates) — 62 già
+identici, gap chiusi:
+
+FIX:
+1) RESIDUI, errori di verifica: testi legacy GENERICI al posto dei per-tipo
+   inventati dal port — risposta non-ok → 'Errore durante la verifica dei
+   residui.' (app.js 810), errore di rete → 'Errore di rete durante la
+   verifica dei residui.' (815); rimossa la mappa per-tipo inutilizzata.
+2) COUPON, prefill in edit (app.js 9482-9493): il codice viene ripristinato
+   SEMPRE (prima solo con sconto>0) e compare il messaggio legacy — sconto>0
+   → 'Coupon applicato.', solo codice storico → 'Coupon storico preservato.'.
+3) Accento: 'Errore caricamento disponibilità.' (con accento, app.js 11182)
+   nel modale disponibilità (2 occorrenze erano senza).
+4) LOAD edit fallito: oltre allo stato d'errore con Riprova, anche il TOAST
+   legacy (fallback verbatim 'Errore caricamento appuntamento', app.js 9707).
+5) HOLD, watchdog scadenza client-side (qbHoldIsExpired → qbHandleHoldExpired,
+   app.js 11337): al submit, con hold oltre il TTL (300s, rinfrescato a
+   create/renew) si puliscono token/orari/cabina e appare il messaggio default
+   verbatim 'La disponibilita selezionata e scaduta. Scegli di nuovo uno
+   slot.' — prima si arrivava fino al rifiuto del server.
+6) HOLD, loop di rinnovo: con la scheda NASCOSTA al tick il loop MORIVA
+   (return senza reschedule) e l'hold scadeva anche a scheda riaperta; ora
+   salta il rinnovo ma rischedula (30s), come il legacy che tiene vivo il
+   timer e riprende in primo piano.
+
+ATTESTAZIONI (senza modifiche):
+- countdown hold assente = FEDELE (qbStartHoldCountdown è NO-OP deliberato nel
+  legacy: hold tecnico, niente timer utente);
+- credit_use_from_booking = flag appointments.credit_used_by_customer (posto a
+  1 solo dal booking pubblico lato cliente): il drawer backend legacy lo
+  PRESERVA rispedendo il valore letto; il Next non scrive MAI la colonna →
+  preservazione implicita equivalente in edit (il lato pubblico è del modulo
+  Booking);
+- messaggi default per-tipo dei CONFLITTI residui ('Questo residuo GiftBox è
+  già presente in un'altra prenotazione.' ecc.) già verbatim;
+- hint cabina statico presente ('Se sono libere più cabine potrai
+  scegliere…'); le varianti di stato dinamiche ('Verifico cabina
+  disponibile...', 'È libera una sola cabina: selezionata automaticamente.',
+  'Nessuna cabina configurata…') restano da rifinire (2c, solo-UI).
+
+VERIFICATO: tsc pulito, eslint drawer 0 errori/0 warning; regressione
+test-calendario 20/20. RESIDUI parte 2c: fidelity 'Scelta cliente'
+(fidelity_conflict_choice/gift_idx/gift_points_used nella catena save, 'later'
+che PRENOTA i punti col sentinel 999999999) — TODO esplicito nel componente;
+hint cabina dinamici; segment-view edit del drawer (data-qb-segment, apertura
+dal modulo Appuntamenti); deep-diff del modale availability (slot override
+gialli, DST) contro action=availability.
