@@ -297,10 +297,14 @@ export async function getManageDashboard(
     const fallbackCoalesce = hasApptServiceId ? ", s2.name" : "";
     const fallbackGroupBy = hasApptServiceId ? ", s2.name" : "";
     const rows = await dbQuery<RowDataPacket[]>(
+      // JOIN clients INNER come il legacy (dashboard.php 221): un appuntamento
+      // con cliente mancante NON compare. services può restare NULL (nessuna
+      // riga snapshot e nessun servizio primario) → '—' solo in quel caso,
+      // come il `?? '—'` PHP (riga 618).
       `SELECT a.starts_at, c.full_name AS client_name,
-              COALESCE(NULLIF(STRING_AGG(DISTINCT ${svcNameExpr}, ', ' ORDER BY ${svcNameExpr}), '')${fallbackCoalesce}, '') AS services
+              COALESCE(NULLIF(STRING_AGG(DISTINCT ${svcNameExpr}, ', ' ORDER BY ${svcNameExpr}), '')${fallbackCoalesce}) AS services
          FROM ${quoteIdentifier(apptTable.name)} a
-         LEFT JOIN ${quoteIdentifier(clientsTable.name)} c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
+         JOIN ${quoteIdentifier(clientsTable.name)} c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
          LEFT JOIN ${quoteIdentifier(asTable.name)} sv ON sv.appointment_id = a.id AND sv.tenant_id = a.tenant_id
          LEFT JOIN ${quoteIdentifier(svcTable.name)} s ON s.id = sv.service_id AND s.tenant_id = a.tenant_id${fallbackJoin}
         WHERE a.tenant_id = ${T} AND a.starts_at >= NOW() AND a.starts_at < NOW() + interval '7 days'
@@ -315,7 +319,13 @@ export async function getManageDashboard(
       const d = new Date(dt.includes("T") ? dt : dt.replace(" ", "T"));
       const p = (n2: number) => String(n2).padStart(2, "0");
       const label = Number.isNaN(d.getTime()) ? dt.slice(0, 16) : `${p(d.getDate())}/${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}`;
-      return { date: label, clientName: String(r.client_name ?? "") || "—", serviceName: String(r.services ?? "") || "—" };
+      // client_name RAW (il legacy non ha fallback '—' sul cliente); servizio
+      // '—' SOLO quando NULL (`?? '—'`), '' resta ''.
+      return {
+        date: label,
+        clientName: String(r.client_name ?? ""),
+        serviceName: r.services === null || r.services === undefined ? "—" : String(r.services),
+      };
     });
   }
 

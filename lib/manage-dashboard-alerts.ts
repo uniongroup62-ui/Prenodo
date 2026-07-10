@@ -163,9 +163,11 @@ async function getStaffOff(slug: string, tenantId: number | null, currentLocatio
         LIMIT 3`,
       baseParams,
     );
+    // Fallback con semantica ?? del PHP (dashboard.php 665): SOLO null →
+    // '—'/'Assente'; la stringa vuota resta vuota (riga '• nome ( fino a …)').
     const preview = previewRows.map((row) => ({
-      fullName: String(row.full_name ?? "—") || "—",
-      reason: String(row.reason ?? "Assente") || "Assente",
+      fullName: row.full_name === null || row.full_name === undefined ? "—" : String(row.full_name),
+      reason: row.reason === null || row.reason === undefined ? "Assente" : String(row.reason),
       endsAt: String(row.ends_at ?? ""),
     }));
     return { count, preview };

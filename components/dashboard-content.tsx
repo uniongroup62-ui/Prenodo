@@ -83,6 +83,9 @@ function deltaText(deltaPct: number | null): string {
 export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: string }) {
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState("");
+  // Auth::requirePerm legacy (Auth.php 494-505): 403 → pagina 'Accesso negato'
+  // (solo la card nel chrome, nessun contenuto dashboard).
+  const [accessDenied, setAccessDenied] = useState(false);
   // Port di setPerfError (dashboard.js:42-52,83-85): messaggio d'errore dedicato
   // per il grafico quando Chart.js non è disponibile.
   const [chartError, setChartError] = useState("");
@@ -93,10 +96,11 @@ export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: 
   useEffect(() => {
     let cancelled = false;
     fetch("/api/manage/dashboard", { headers: { "x-tenant-slug": location.pathname.split("/")[1] || "" } })
-      .then((r) => r.json())
-      .then((json) => {
+      .then(async (r) => ({ status: r.status, json: await r.json() }))
+      .then(({ status, json }) => {
         if (cancelled) return;
-        if (json.ok === false) setError(json.error || "Errore dashboard.");
+        if (status === 403) setAccessDenied(true);
+        else if (json.ok === false) setError(json.error || "Errore dashboard.");
         else setData(json);
       })
       .catch(() => !cancelled && setError("Errore dashboard."));
@@ -177,6 +181,19 @@ export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: 
 
   const upcoming = data?.upcoming ?? null;
   const alerts = data?.alerts ?? [];
+
+  // Port della pagina 403 di Auth::requirePerm: solo la card 'Accesso negato'
+  // nel chrome, senza page header Dashboard.
+  if (accessDenied) {
+    return (
+      <div className="container-fluid">
+        <div className="card p-4">
+          <div className="h4 fw-semibold mb-2">Accesso negato</div>
+          <div className="text-muted">Non hai i permessi per accedere a questa sezione.</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="container-fluid">
@@ -304,8 +321,9 @@ export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: 
                           upcoming.map((appt, i) => (
                             <tr key={i}>
                               <td>{appt.date ?? "—"}</td>
-                              <td>{appt.clientName ?? "—"}</td>
-                              <td>{appt.serviceName ?? "—"}</td>
+                              {/* Classi celle legacy (dashboard.php 617-618). */}
+                              <td className="fw-semibold">{appt.clientName ?? "—"}</td>
+                              <td className="text-muted">{appt.serviceName ?? "—"}</td>
                             </tr>
                           ))
                         )}

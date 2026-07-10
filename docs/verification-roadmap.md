@@ -10603,3 +10603,46 @@ calendar.view; serie 7 label d/m; admin sede 21 flag false payload pieno;
 multi-sede senza selezione fail-closed; 403 verbatim senza dashboard.view).
 REGRESSIONE: test-dashboard 16/16, test-shell-summary 7/7; render 200.
 tsc/eslint puliti. Produzione intatta (soli GET).
+
+## 2026-07-10 — Dashboard, parte 4 (HTML pagina + builder avvisi + gate 403): rifinitura 1:1 + e2e
+
+QUARTO passaggio su Dashboard: diff riga-per-riga dell'HTML legacy
+(dashboard.php 462-737) col componente, dei 6 builder avvisi (239-451) con
+manage-dashboard-alerts, della query upcoming (215-237) e del gate di pagina
+(Auth::requirePerm 494-505).
+
+CONFERMATI FEDELI: struttura card e testi verbatim di tutti e 6 gli avvisi
+(pending 'N da approvare'/Gestisci, preventivi 'N da leggere'/Vedi, gruppi
+tessere con chiave fidelity_cards_<titolo-sanificato> e righe
+'Cliente - scadenza - stato', low_stock 'N sotto la soglia minima'/'Vedi
+magazzino' con link low_stock=1&location_id e query per-sede su product_stocks
+(is_enabled=1 O nessuna riga stock), staff_off count DISTINCT su assenze
+attive con EXISTS staff_locations e preview 3 ORDER BY ends_at, gruppi rate
+preview 3); ordine legacy; pannello settimanale HTML (etichette/icone
+calendar-check/cash-coin/clock/person-plus, perfError, hint range); card
+Scadenziario ('€ ' prefisso, 'N voci', link con fallback Y-m-01/Y-m-t);
+page.tsx (gate email + onboarding + sede nel sottotitolo).
+
+FIX (4):
+1) Card 403 'Accesso negato' (Auth::requirePerm): senza dashboard.view il
+   componente mostrava solo un alert col messaggio API; ora la card legacy
+   'Accesso negato'/'Non hai i permessi per accedere a questa sezione.'
+   (stesso pattern di Ruoli/Report).
+2) Upcoming: JOIN clienti INNER come il legacy (era LEFT — difensivo, il
+   CHECK NOT NULL su client_id lo rende irraggiungibile in PG e il test lo
+   documenta); classi celle legacy (cliente fw-semibold, servizio text-muted);
+   cliente RAW senza fallback '—' e servizio '—' SOLO quando NULL (?? PHP —
+   prima '' diventava '—').
+3) staff_off preview: fallback con semantica ?? del PHP — SOLO null →
+   '—'/'Assente', la reason vuota resta vuota ('• nome ( fino a d/m H:i)').
+4) (verifica) la riga di anteprima staff_off nel legacy è un BLOCCO HTML
+   dedicato fuori dalle lines generiche: equivalente al port (lines
+   sull'item + '…e altri' maschile per key staff_off), nessun doppio render
+   possibile perché l'item legacy non ha lines.
+
+VERIFICATO: test-dashboard4 7/7 live (fallback servizio primario 'test' via
+s2.name, '—' solo NULL, esclusione senza-cliente non rappresentabile
+(client_id NOT NULL, documentato), riga staff_off 'luca ( fino a d/m H:i)'
+con reason '' preservata + testi verbatim, 403 API). REGRESSIONE:
+test-dashboard 16/16, test-dashboard3 5/5, test-shell-summary 7/7.
+tsc/eslint puliti. PRODUZIONE INTATTA (baseline 10/5, timeoff 0).
