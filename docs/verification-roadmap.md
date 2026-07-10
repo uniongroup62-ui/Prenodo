@@ -8880,3 +8880,54 @@ clone, toggle completed/content-issue, condizioni, esclusioni, motore percent/fi
 blackout/escluso/sede/target-new/limite-cliente/selezionati, G1 errore curve + G2 salva inattiva+flag),
 regressione test-pos-checkout 8/8, typecheck 0, eslint 0-errori. Produzione intatta: promo 71 attiva
 preservata, fidelity_enabled ripristinato a 1, 5 clienti reali; residui ZZ=0.
+
+## Punti (fidelity_points): audit completo + fix derivazione Livelli Card (2026-07-09)
+
+Audit 1:1 della pagina Fidelity -> Punti vs fidelity_points.php (3845) + fidelity_levels.php (1124,
+controller POST-only di save_levels; la UI #livelli-card vive in fidelity_points) con 2 agenti.
+Complemento dell'audit Fidelity del 2026-07-09 (che copriva settings-save, campagne CRUD base,
+guardia duplicati livelli): qui il RESTO in profondita'.
+
+FEDELI e verificati LIVE (test-punti 26/26):
+- STATISTICHE (getFidelityPointsStats): emessi = SUM di TUTTI i delta positivi (non solo kind earn),
+  usati = |SUM kind='redeem'|, scaduti = kind='expire' — SOLO questi 3 filtrati sulla sede corrente
+  (transactions.location_id); saldo circolante/clienti-con-punti/top-10 GLOBALI (label legacy
+  "globale/globali") e gated su tessera ATTIVA non scaduta (EXISTS cards); campagne attive +
+  campagna attiva oggi. Verificato con semina: 258+250=508 emessi, sede-21=7 (tx location 21).
+- CAMPAGNE: tiers parsing fedele (righe points<=0 scartate, dedup min_spend tenendo il MAX punti,
+  sort asc, min_spend forzato 0 in tiers mode); earn a scaglioni LIVE via pos recharge_points_preview
+  (60->5, 120->12, 30->0: "scaglione piu alto raggiunto") in finestra controllata (campagna 37
+  disattivata e RIPRISTINATA); campaign_preview (references = appt+sales+recharges; movimenti earn
+  via UNION su appointment/sale/credit_recharge; has_open_appointments); delete SOFT con referenze
+  (deleted_at + deleted_reason, riga preservata, esclusa dalla lista) vs hard a 0 referenze.
+- LIVELLI CARD: flusso completo save_levels — base key ESISTENTE (con migrazione = 'bronze', e un
+  nuovo livello a 0 punti scatena "Solo il livello base predefinito puo avere 0 punti."), firma
+  sha256 obbligatoria per il cambio soglie ("Conferma prima la modifica dei punti necessari dal
+  popup.", firma = sha256 del JSON ordinato {key,old,new} — preview_level_thresholds la restituisce),
+  conferma per-key "points:<key>" per l'eliminazione ('Conferma prima l'eliminazione del livello a
+  punti "NAME".'), conferme disattivazione ('all'/'points'), ricalcolo livelli TUTTI i clienti dopo
+  il save (cliA 250 maturati -> 'argento' -> 'bronze' dopo delete; clienti senza tessera restano '');
+  preview_level_delete (clients.count + next_levels + campagne/promozioni/omaggi).
+- redeemImpacted (prenotazioni aperte con sconto/scelta punti), compat manual_move/save_rule gia'
+  coperti.
+
+FIX (2 divergenze):
+1. DERIVAZIONE LIVELLI (getFidelityLevelsSettings): il Next leggeva businesses.fidelity_levels_enabled
+   + points_enabled del JSON, ma il legacy (Fidelity.php 591-594) li IGNORA in lettura e deriva
+   levels_enabled = levels_points_enabled = (fidelity_points_enabled && >=1 livello) — e con la
+   migrazione Bronze/Silver/Gold i livelli non sono mai vuoti, quindi i Livelli Card sono SEMPRE
+   operativi quando i Punti sono attivi. Il "disattiva" di save_levels e' VESTIGIALE (scrive flag
+   che la lettura ignora; il form legacy E il componente Next postano fidelity_levels_enabled=1
+   fisso). Sul tenant reale (flag 0, json NULL) il Next mostrava livelli spenti dove il PHP li
+   avrebbe operativi (bronze/silver/gold). Fix: derivazione fedele. Nessun impatto dati (0 tessere
+   attive -> fidelity_level resta '' per tutti).
+2. CHIAVI LIVELLO VALIDE per campagne (fidelityPointLevelKeys): era {'base'} + JSON — con JSON nullo
+   l'editor offriva bronze/silver/gold (migrazione) ma il save campagna li RIFIUTAVA ("Il livello
+   card selezionato non esiste piu"). Fix: chiavi dai livelli effettivi delle settings (port di
+   fidelity_page_point_level_key_set) — con migrazione il set e' {bronze,silver,gold} e 'base' NON
+   e' valido, come nel PHP.
+
+VERIFICATO: test-punti 26/26; regressione VERDE test-fidelity 42/42, test-portafoglio 14/14,
+test-promozioni 44/44, test-giftbox 27/27; typecheck 0, eslint 0-errori. PRODUZIONE INTATTA:
+baseline ripristinato (transactions=82, campagna 37 ATTIVA, 5 clienti con fidelity_level '',
+cards=0, fidelity_card_levels_json NULL, fidelity_levels_enabled 0).

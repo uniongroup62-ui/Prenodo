@@ -16860,12 +16860,15 @@ export async function fidelityCampaignPreview(slug: string, campaignId: number):
   };
 }
 
-// The set of valid point-level keys (businesses.fidelity_card_levels_json + the
-// always-present 'base'). Used to validate a campaign's eligible levels.
+// The set of valid point-level keys (port di fidelity_page_point_level_key_set):
+// le chiavi dei livelli EFFETTIVI dalle settings (inclusa la migrazione
+// Bronze/Silver/Gold quando il JSON non esiste) — NON un 'base' fisso: con i
+// livelli migrati il set è {bronze,silver,gold} e 'base' NON è valido, come nel
+// PHP. Usato per validare i livelli destinatari di una campagna punti.
 async function fidelityPointLevelKeys(slug: string): Promise<Set<string>> {
-  const keys = new Set<string>(["base"]);
-  const rows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_card_levels_json", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
-  for (const l of parseFidelityCardLevels(rows[0]?.fidelity_card_levels_json).levels) keys.add(l.key);
+  const keys = new Set<string>();
+  for (const l of (await getFidelityLevelsSettings(slug)).levels) keys.add(levelToken(l.key));
+  if (keys.size === 0) keys.add("base");
   return keys;
 }
 
@@ -16896,8 +16899,8 @@ function parseFidelityCardLevels(raw: unknown): { pointsEnabled: boolean; levels
 }
 
 export async function getFidelityLevelsSettings(slug: string): Promise<FidelityLevelsSettings> {
-  const rows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_levels_enabled, fidelity_card_levels_json, fidelity_level_period_days, fidelity_silver_threshold, fidelity_gold_threshold", orderBy: "id ASC", limit: 1 })
-    .catch(async () => tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_levels_enabled, fidelity_card_levels_json", orderBy: "id ASC", limit: 1 }));
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_levels_enabled, fidelity_points_enabled, fidelity_card_levels_json, fidelity_level_period_days, fidelity_silver_threshold, fidelity_gold_threshold", orderBy: "id ASC", limit: 1 })
+    .catch(async () => tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "fidelity_levels_enabled, fidelity_points_enabled, fidelity_card_levels_json", orderBy: "id ASC", limit: 1 }));
   const r = rows[0] ?? ({} as RowDataPacket);
   const parsed = parseFidelityCardLevels(r.fidelity_card_levels_json);
   // Migrazione legacy (Fidelity.php ~579): senza livelli JSON ricostruisce
@@ -16917,7 +16920,16 @@ export async function getFidelityLevelsSettings(slug: string): Promise<FidelityL
       { key: "gold", name: "Gold", minPoints: gold },
     ];
   }
-  return { enabled: Number(r.fidelity_levels_enabled ?? 0) === 1, pointsEnabled: parsed.pointsEnabled, levels };
+  // DERIVAZIONE legacy (Fidelity.php 591-594, port fedele): in LETTURA il flag
+  // memorizzato fidelity_levels_enabled e il points_enabled del JSON sono IGNORATI —
+  // levels_enabled = levels_points_enabled = (Punti Fidelity attivi && >=1 livello).
+  // Con la migrazione Bronze/Silver/Gold i livelli non sono mai vuoti, quindi i
+  // Livelli Card sono SEMPRE operativi quando i Punti sono attivi (il "disattiva"
+  // di save_levels è vestigiale: scrive i flag che la lettura ignora, come il PHP,
+  // e infatti il form legacy/Next posta fidelity_levels_enabled=1 fisso).
+  const pointsOn = Number(r.fidelity_points_enabled ?? 0) === 1;
+  const derived = pointsOn && levels.length > 0;
+  return { enabled: derived, pointsEnabled: derived, levels };
 }
 
 function normalizeLevelKey(v: string): string {
