@@ -159,6 +159,19 @@ type Appointment = {
 
 type CalendarView = "staffTimeGridDay" | "timeGridWeek" | "dayGridMonth";
 
+// staffColorHex (calendar.js 1052-1071): colore colonna dell'operatore, con
+// FALLBACK deterministico dalla palette pastello per abs(id)%10 quando il
+// colore salvato manca/è invalido; id<=0 (colonna fittizia/na) -> #e5e7eb.
+const STAFF_FALLBACK_PALETTE = ["#fca5a5", "#fdba74", "#fcd34d", "#fde68a", "#a7f3d0", "#6ee7b7", "#67e8f9", "#93c5fd", "#c4b5fd", "#f9a8d4"];
+function staffColorHex(staffId: number, color?: string): string {
+  const sid = Number(staffId) || 0;
+  if (sid <= 0) return "#e5e7eb";
+  let c = String(color ?? "").trim();
+  if (c && !c.startsWith("#")) c = `#${c}`;
+  if (/^#[0-9a-fA-F]{6}$/.test(c)) return c;
+  return STAFF_FALLBACK_PALETTE[Math.abs(sid) % STAFF_FALLBACK_PALETTE.length];
+}
+
 // Un blocco/segmento appartiene alla colonna operatore `col` se corrisponde per ID
 // (robusto agli operatori OMONIMI, come il legacy che piazza per staff_id); fallback
 // al NOME solo quando l'id non è disponibile su uno dei due lati (dati vecchi).
@@ -1066,8 +1079,13 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
 
   const loadContext = useCallback(
     (forDate: string, range: { from: string; to: string }) => {
-      setLoading(true);
-      setLoadError("");
+      // Reset in microtask: loadContext parte anche dall'effect di mount/nav e un
+      // setState sincrono lì innescherebbe render a cascata (lint). loading parte
+      // già true al mount; il .finally della fetch arriva sempre dopo.
+      Promise.resolve().then(() => {
+        setLoading(true);
+        setLoadError("");
+      });
       // Context (staff/services/notes/businessHours + per-date note counts) for the
       // whole visible range. `date` keeps the day-of-week business-hours fallback
       // working; start/end widen the notes window so Week/Month markers are complete.
@@ -1334,8 +1352,13 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
   const staffCols = useMemo(() => {
     // Colonne = TUTTI gli operatori (legacy STAFF_DAY_COLS): il filtro Operatore
     // NON riduce le colonne (M6), filtra gli EVENTI (vedi visibleAppts) come il
-    // filtro server-side staff_id del legacy.
-    return applyStaffDayColumnsOrdering(staff, currentStaffId, savedStaffOrder);
+    // filtro server-side staff_id del legacy. Senza operatori attivi il legacy
+    // rende UNA colonna fittizia 'Operatore' grigia (calendar.js:170 fallback
+    // STAFF_DAY_COLS), mai una vista a zero colonne.
+    const base: CalendarStaff[] = staff.length
+      ? staff
+      : [{ id: 0, name: "Operatore", email: "", color: "#999999", photoPath: "" }];
+    return applyStaffDayColumnsOrdering(base, currentStaffId, savedStaffOrder);
   }, [staff, currentStaffId, savedStaffOrder]);
 
   // Shared filter predicate (operator/service/status) WITHOUT any date constraint —
@@ -1438,8 +1461,10 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
     // accento MS collida col pallino operatore del giorno.
     const staffColorByName = (name?: string): string | null => {
       const op = staff.find((s) => (s.name || "").trim().toLowerCase() === (name || "").trim().toLowerCase());
-      const c = op?.color;
-      return c && /^#[0-9a-fA-F]{6}$/.test(c) ? c.toLowerCase() : null;
+      if (!op) return null;
+      // Come il legacy: il colore "usato" del giorno è quello EFFETTIVO del
+      // pallino (staffColorHex, palette fallback inclusa).
+      return staffColorHex(op.id, op.color).toLowerCase();
     };
     const seedDay = (day: string): Set<string> => {
       let set = usedByDay[day];
@@ -2752,7 +2777,12 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                     // il colore operatore resta solo sul pallino.
                     const theme = statusThemeOf(a.statusCode ?? a.status);
                     const op = findOperatorStaff(staff, a);
-                    const accent = op?.color || "#2f63d8";
+                    // Pallino con staffColorHex legacy: colore salvato valido, altrimenti
+                    // palette per abs(id)%10; operatore ignoto -> #e5e7eb.
+                    const accent = staffColorHex(Number(a.segStaffId ?? a.operatorId ?? op?.id ?? 0) || 0, op?.color);
+                    // editable legacy (api list :8030+8100): drag/resize SOLO con manage
+                    // E stato pending/scheduled (annullati/eseguiti non trascinabili).
+                    const canDragBlock = canManage && (st.key === "pending" || st.key === "scheduled");
                     // MS group meta + adaptive density (tiny <28px, compact 28-54px).
                     const msCount = msCountOf(a);
                     const msAccent = msCount > 1 ? msAccentByAppt[a.id] : "";
@@ -2769,7 +2799,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                         // DRAG-MOVE: a Week block is HTML5-draggable to another day column /
                         // time (changes the DATE, operator unchanged). Component-scope drag
                         // handlers keep the dragRef writes out of this render helper.
-                        draggable
+                        draggable={canDragBlock}
                         // A press on a block must not start the column drag-select.
                         onMouseDown={(e) => e.stopPropagation()}
                         onDragStart={(e) => onWeekBlockDragStart(a, e)}
@@ -2833,9 +2863,10 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                         {/* RESIZE handle (bottom edge): drag to change the end time (custom
                             duration), identical to the Day view, positioned in this day
                             column. NOT rendered on segment blocks (legacy
-                            durationEditable:false). beginResize reads the body's window
+                            durationEditable:false) né sui blocchi non-editable
+                            (annullati/eseguiti). beginResize reads the body's window
                             from its data-* attrs. */}
-                        {a.segmentId ? null : (
+                        {a.segmentId || !canDragBlock ? null : (
                           <span
                             className="cal-resize-handle"
                             role="presentation"
@@ -2971,7 +3002,8 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                       const st = statusKeyFromLabel(a.statusCode ?? a.status);
                       const theme = statusThemeOf(a.statusCode ?? a.status);
                       const op = findOperatorStaff(staff, a);
-                      const accent = op?.color || "#2f63d8";
+                      const accent = staffColorHex(Number(a.segStaffId ?? a.operatorId ?? op?.id ?? 0) || 0, op?.color);
+                      const canDragBlock = canManage && (st.key === "pending" || st.key === "scheduled");
                       const msCount = msCountOf(a);
                       const msAccent = msCount > 1 ? msAccentByAppt[a.id] : "";
                       return (
@@ -2984,8 +3016,9 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                           onMouseLeave={msAccent ? () => setMsHoverGroup(0) : undefined}
                           title={`${a.time} ${a.client} • ${serviceTitleOf(a)}${a.operator ? ` (${a.operator})` : ""} (${st.label})`}
                           // DRAG-MOVE: il chip è trascinabile su un'altra cella-giorno
-                          // (cambia la DATA, l'orario resta quello del chip).
-                          draggable
+                          // (cambia la DATA, l'orario resta quello del chip); editable
+                          // legacy = manage && pending/scheduled.
+                          draggable={canDragBlock}
                           onDragStart={(e) => onWeekBlockDragStart(a, e)}
                           onDragEnd={onWeekBlockDragEnd}
                           onClick={(e) => {
@@ -3074,10 +3107,13 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
               {notesCount}
             </span>
           </button>
-          <a className="btn btn-outline-secondary btn-sm" href={href("appointments")}>
-            <i className="bi bi-list-task me-1" />
-            Lista
-          </a>
+          {/* 'Lista' SOLO con appointments.manage (calendar.php 301-303). */}
+          {canManage ? (
+            <a className="btn btn-outline-secondary btn-sm" href={href("appointments")}>
+              <i className="bi bi-list-task me-1" />
+              Lista
+            </a>
+          ) : null}
         </div>
       </div>
 
@@ -3501,9 +3537,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                         {/* HOVER guide line spanning ALL staff columns (legacy: the
                             line is appended to .fc-timegrid-cols, crossing the grid). */}
                         {renderHoverGuideLine("day-", 44)}
-                        {staffCols.length === 0 ? (
-                          <div className="text-muted small p-4">{loading ? "Caricamento prenotazioni..." : "Nessun operatore attivo."}</div>
-                        ) : (
+                        {(
                           staffCols.map((s, colIndex) => {
                             const first = (Array.from(s.name.trim())[0] || "O").toUpperCase();
                             const colAppts = apptsForStaff(s);
@@ -3533,7 +3567,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                         <img src={s.photoPath} alt="" />
                                       </span>
                                     ) : (
-                                      <span className="staff-col-avatar staff-col-avatar-fallback" data-staff-id={s.id} style={{ background: s.color }}>
+                                      <span className="staff-col-avatar staff-col-avatar-fallback" data-staff-id={s.id} style={{ background: staffColorHex(s.id, s.color) }}>
                                         {first}
                                       </span>
                                     )}
@@ -3656,6 +3690,8 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                     // Tema soft per STATO (port di applyCalendarSoftAppointmentStyle):
                                     // sfondo/bordo/testo pastello + barra accento via CSS var.
                                     const theme = statusThemeOf(a.statusCode ?? a.status);
+                                    // editable legacy: drag/resize SOLO manage && pending/scheduled.
+                                    const canDragBlock = canManage && (st.key === "pending" || st.key === "scheduled");
                                     // MS group meta + adaptive density (legacy
                                     // applyCalendarAppointmentDensity: tiny <28px, compact 28-54px).
                                     const msCount = msCountOf(a);
@@ -3676,7 +3712,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                         onMouseEnter={msAccent ? () => setMsHoverGroup(a.id) : undefined}
                                         onMouseLeave={msAccent ? () => setMsHoverGroup(0) : undefined}
                                         title={`${a.time} ${a.client} • ${serviceTitleOf(a)}`}
-                                        draggable
+                                        draggable={canDragBlock}
                                         // Keep a press on the block from starting a column
                                         // drag-select; the HTML5 move-drag (onDragStart) and the
                                         // hover-suppress-on-block are unaffected.
@@ -3736,7 +3772,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                           <div className="appt-event">
                                             <div className="appt-time">{apptTimeLine(a.time, previewEnd ?? a.endTime)}</div>
                                             <div className="fc-event-title appt-client" style={{ lineHeight: 1.15 }}>
-                                              <span className="appt-staff-dot" title="Operatore" style={{ background: s.color }} />
+                                              <span className="appt-staff-dot" title="Operatore" style={{ background: staffColorHex(s.id, s.color) }} />
                                               <span className={`appt-status-badge status-${st.key}`} title={`Stato: ${st.label}`}>
                                                 {st.label}
                                               </span>
@@ -3758,10 +3794,11 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                         {/* RESIZE handle (bottom edge): drag to change the end
                                             time (a custom duration). NOT rendered on segment
                                             blocks (legacy durationEditable:false on per-segment
-                                            events). Not draggable itself; it uses mousedown so
+                                            events) né sui blocchi non-editable (annullati/
+                                            eseguiti). Not draggable itself; it uses mousedown so
                                             the block's HTML5 drag doesn't fire, and stops the
                                             click so neither edit nor quick-book triggers. */}
-                                        {a.segmentId ? null : (
+                                        {a.segmentId || !canDragBlock ? null : (
                                           <span
                                             className="cal-resize-handle"
                                             role="presentation"
@@ -4189,7 +4226,8 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                         <div className="fw-semibold mb-1">
                           {notesFilterDate ? "Nessuna nota per il giorno selezionato" : "Nessuna nota nel periodo visibile"}
                         </div>
-                        <div className="small">Crea una nota dal modulo a sinistra.</div>
+                        {/* Variante sola-lettura del legacy (calendar.php 627). */}
+                        <div className="small">{canManage ? "Crea una nota dal modulo a sinistra." : "Le note sono disponibili in sola lettura."}</div>
                       </div>
                     ) : (
                       groupNotesByDate(displayNotes).map((group) => (

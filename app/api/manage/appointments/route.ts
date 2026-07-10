@@ -59,10 +59,21 @@ export async function GET(request: Request) {
   const tenantSlug = manageTenantSlugFromRequest(request);
   const session = await currentManageSession(tenantSlug);
   if (!session) return jsonError("Sessione scaduta o non valida.", 401);
-  if (!canAny(session.user.perms, ["calendar.view", "appointments.manage", "appointments.plan"])) return jsonError("Permesso appuntamenti mancante.", 403);
 
   const url = new URL(request.url);
   const action = url.searchParams.get("action") ?? "list";
+
+  if (!canAny(session.user.perms, ["calendar.view", "appointments.manage", "appointments.plan"])) {
+    // Testi 403 per-azione del legacy: list 'Permesso Calendario richiesto.'
+    // (api_appointments.php 7993), get 'Permesso non sufficiente per aprire la
+    // prenotazione.' (8597); le altre GET restano sul messaggio ombrello.
+    const msg = action === "get"
+      ? "Permesso non sufficiente per aprire la prenotazione."
+      : action === "list"
+        ? "Permesso Calendario richiesto."
+        : "Permesso appuntamenti mancante.";
+    return jsonError(msg, 403);
+  }
 
   // Quick-booking context: everything the global "Nuova prenotazione" offcanvas
   // needs to render (services grouped by category, staff, locations, cabins) in a
@@ -330,6 +341,15 @@ export async function GET(request: Request) {
       raw: url.searchParams.get("location_id"),
       fallbackCurrent: true,
     }) || 0;
+    // Fail-closed legacy della list (api_appointments.php 8005-8016): sede
+    // richiesta non consentita, oppure NESSUNA sede risolta mentre l'utente ha
+    // sedi assegnate -> eventi VUOTI (le install senza sedi continuano intere).
+    if (listLocationId <= 0) {
+      const locationContext = await getManageLocationContext(tenantSlug);
+      if (locationContext.locations.length > 0) {
+        return Response.json({ ok: true, sourceMode: "database", appointments: [], holds: [] });
+      }
+    }
     const appointments = await listDbAppointments(
       date
         ? { slug: tenantSlug, date, locationId: listLocationId }

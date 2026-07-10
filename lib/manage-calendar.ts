@@ -171,7 +171,12 @@ export async function calendarContext(input: {
     date,
     start,
     end,
-    staff: orderStaff(scopedStaff, staffOrder),
+    // Ordine NATURALE (SSO ultimo + nome ASC), come $staff/$staffCols di
+    // calendar.php: la tendina filtro Operatore segue questo ordine; il
+    // riordino salvato (calendar_day_staff_order) è applicato SOLO alle
+    // colonne della vista Giorno dal client (applyStaffDayColumnsOrdering),
+    // come nel legacy. staffOrder resta nel payload per quello.
+    staff: scopedStaff,
     staffOrder,
     currentStaffId: resolveCurrentStaffId(scopedStaff, input.userEmail, input.userName),
     locations,
@@ -485,7 +490,7 @@ async function calendarStaff(slug: string): Promise<ManageCalendarStaff[]> {
     id: Number(row.id ?? 0),
     name: String(row.full_name ?? `Operatore #${index + 1}`),
     email: String(row.email ?? ""),
-    color: normalizeColor(row.calendar_color, index),
+    color: normalizeColor(row.calendar_color),
     photoPath: String(row.photo_path ?? ""),
   })).filter((staff) => staff.id > 0);
 }
@@ -691,17 +696,6 @@ function resolveCurrentStaffId(
   return 0;
 }
 
-function orderStaff(staff: ManageCalendarStaff[], order: number[]): ManageCalendarStaff[] {
-  if (!order.length) return staff;
-  const index = new Map(order.map((id, position) => [id, position]));
-  return [...staff].sort((left, right) => {
-    const leftIndex = index.get(left.id) ?? Number.MAX_SAFE_INTEGER;
-    const rightIndex = index.get(right.id) ?? Number.MAX_SAFE_INTEGER;
-    if (leftIndex !== rightIndex) return leftIndex - rightIndex;
-    return left.name.localeCompare(right.name);
-  });
-}
-
 function normalizeOrderList(value: unknown): number[] {
   const input = Array.isArray(value) ? value : [];
   const output: number[] = [];
@@ -755,11 +749,13 @@ function clean(value: string, max: number): string {
   return value.trim().slice(0, max);
 }
 
-function normalizeColor(value: unknown, index: number): string {
-  const raw = String(value ?? "").trim();
-  if (/^#[0-9a-f]{6}$/i.test(raw)) return raw;
-  const palette = ["#0f766e", "#2563eb", "#7c3aed", "#be123c", "#a16207", "#0369a1"];
-  return palette[index % palette.length] ?? "#0f766e";
+// Come $staffCols di calendar.php (83-95): normalizza '#rrggbb' (prefissa '#'
+// se manca) e restituisce '' quando non valido — il FALLBACK cromatico è del
+// CLIENT (staffColorHex: palette per abs(id)%10), non del server.
+function normalizeColor(value: unknown): string {
+  let raw = String(value ?? "").trim();
+  if (raw !== "" && !raw.startsWith("#")) raw = `#${raw}`;
+  return /^#[0-9a-f]{6}$/i.test(raw) ? raw : "";
 }
 
 function nullableNumber(value: unknown): number | null {

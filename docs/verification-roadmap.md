@@ -10717,3 +10717,74 @@ REGRESSIONE FINALE: test-dashboard 16/16, test-dashboard3 5/5,
 test-dashboard4 7/7, test-shell-summary 7/7; tsc pulito. Dominio Dashboard
 CONFERMATO COMPLETO (6 passaggi: calcoli, contatori, fail-closed, HTML/avvisi,
 sweep segmenti residui, attestazione live).
+
+## 2026-07-10 — Calendario, parte 1 (pagina + contesto + list/move/note): audit 1:1 + e2e live
+
+PRIMO audit dedicato del modulo Calendario. Legacy letto: calendar.php (677,
+integrale), api_calendar_notes.php (234, integrale), calendar.js (5204, mappa
+strutturata completa via agente + riletture mirate), api_appointments.php
+azioni calendario (list/move/get/swap_segment + include_unavailability, mappa
+con righe). Next: calendar-content.tsx (4241, integrale), lib/manage-calendar
+(791, integrale), route /api/manage/calendar (151), route appointments (list/
+move/get). Il port esistente è risultato molto fedele (griglia custom con
+classi FullCalendar, viste Giorno-a-colonne/Settimana/Mese, drag&drop/resize
+via action=move col contratto legacy inclusi i delta segmento, note, ordina
+colonne, datepicker, hover, fasce negozio/chiusure/straordinari, tema soft per
+stato, accenti multi-servizio con palette+golden-angle); chiusi i punti
+divergenti.
+
+FIX:
+1) COLORE OPERATORE (pallino + avatar colonna): port di staffColorHex
+   (calendar.js 1052-1071) — colore salvato valido, altrimenti PALETTE
+   pastello di 10 per abs(id)%10, id<=0 → #e5e7eb; il context ora restituisce
+   '' per i colori invalidi/mancanti (come $staffCols di calendar.php) invece
+   di inventare una palette per-indice diversa dal legacy. Anche il seeding
+   dei colori "usati" degli accenti MS usa il colore effettivo del pallino.
+2) STAFF VUOTO: colonna fittizia 'Operatore' #999999 (fallback STAFF_DAY_COLS,
+   calendar.js:170) al posto del messaggio 'Nessun operatore attivo.' (che nel
+   legacy non esiste).
+3) TENDINA FILTRO OPERATORE in ordine NATURALE (SSO ultimo + nome ASC): tolto
+   l'orderStaff() dal context che la riordinava secondo la preferenza colonne;
+   l'ordine salvato resta applicato SOLO alle colonne della vista Giorno dal
+   client, come nel legacy.
+4) EDITABLE PER STATO (api list 8030+8100): drag e maniglia di resize SOLO con
+   appointments.manage E stato pending/scheduled — prima i blocchi
+   annullati/eseguiti erano trascinabili (il server rifiutava, ma il legacy
+   non li rende proprio draggable). Resize già assente sui segmenti
+   (durationEditable:false).
+5) BOTTONE 'Lista' in testata SOLO con appointments.manage (calendar.php
+   301-303; prima incondizionato).
+6) NOTE, empty-state: variante sola-lettura 'Le note sono disponibili in sola
+   lettura.' senza appointments.manage (calendar.php 627).
+7) LIST fail-closed legacy (api_appointments 8005-8016): nessuna sede risolta
+   con sedi assegnate all'utente → appointments [] (prima lista tenant-wide
+   con cookie a sede revocata/non selezionata); tenant senza sedi invariato.
+8) TESTI 403 PER-AZIONE della GET appointments: list → 'Permesso Calendario
+   richiesto.' (7993), get → 'Permesso non sufficiente per aprire la
+   prenotazione.' (8597).
+9) eslint: rimosso il set-state-in-effect PRE-esistente di loadContext
+   (reset loading/error in microtask, pattern consolidato).
+
+VERIFICATO: test-calendario 20/20 live — contesto (403 'Permesso negato.',
+staff in ordine naturale FILTRATO per sede via staff_locations STRICT con
+colore '' su calendar_color NULL, currentStaffId risolto per EMAIL
+utente→staff con snapshot/restore dell'email, canManage/canCreate, roundtrip
+ordine colonne [56,22] con restore); note CRUD coi testi verbatim
+('Permesso Appuntamenti richiesto.', 'Seleziona un giorno valido.', 'Il testo
+della nota e obbligatorio.', 'Nota non trovata.', 'Nota non valida.',
+updatedAtLabel d/m/Y H:i, a-capo conservati, count_by_date); list (403
+per-azione, fail-closed a sede 0); move (403 senza manage, 'Dati mancanti',
+spostamento persistito 08:00-09:00 con staff_id, 'Conflitto: l'operatore ha
+già un altro appuntamento in quell'orario.', 'La prenotazione non e
+modificabile da calendario.' su annullato — senza accento); list del giorno
+con operatorId. REGRESSIONE: notifiche-hub 16/16, notifiche 17/17, dashboard
+16/16; render calendar 200. PRODUZIONE INTATTA (baseline 10/5/0, email staff
+22 e ordine colonne utente 20 byte-identici). tsc/eslint puliti.
+
+RESIDUI dichiarati (parti successive): quick-booking-drawer.tsx (5736) audit
+integrale dedicato coi suoi 6 eslint pre-esistenti (save/availability/residui/
+fidelity del drawer = azioni qb_* di api_appointments); vista Giorno legacy =
+timeGrid multi-giorno "finto" di FullCalendar mentre il port è una griglia
+custom con le stesse classi (equivalenza visiva/comportamentale documentata,
+non replica dell'internals FC); modal legacy #apptModal mantenuto statico
+(anche nel legacy è fallback morto quando il drawer è presente).
