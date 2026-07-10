@@ -149,7 +149,9 @@ export async function POST(request: Request) {
       return Response.json({ ok: false, error: "Link non valido o documento non disponibile." }, { status: 404 });
     }
     if (record.status !== "pending") {
-      return Response.json({ ok: false, error: "Il documento risulta gia confermato." });
+      // Legacy (consent_public.php 100): redirect con ?msg= — flash VERDE
+      // informativo, non un errore. Il client ricarica e mostra lo stato firmato.
+      return Response.json({ ok: true, alreadyConfirmed: true, message: "Il documento risulta gia confermato." });
     }
     const client = await loadClientRow(slug, Number(record.client_id ?? 0));
     if (!client) return Response.json({ ok: false, error: "Link non valido o documento non disponibile." }, { status: 404 });

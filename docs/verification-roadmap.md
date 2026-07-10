@@ -9625,3 +9625,72 @@ signed bloccato / sistema bloccato / inesistente, riparazione body vuoto via
 ensure). PRODUZIONE INTATTA: 1 modulo (sistema id 3, body 958 byte identico,
 updated_at trigger-driven escluso dal confronto), records=0, mirror
 gdpr_template_body 958 identico, 5 clienti. SANITY: model-a 12/12.
+
+## 2026-07-10 — Consensi cliente + firma pubblica (client_consents.php + consent_public.php): audit 1:1 + 1 fix + e2e live
+
+Legacy letto INTEGRALE (diretto): app/pages/client_consents.php (732) +
+assets/js/pages/client_consents.js (13, solo confirm delegato) +
+app/pages/consent_public.php (247) + le funzioni condivise di
+PrivacyConsent.php gia' verificate negli audit precedenti. Next:
+lib/consent-records.ts (380: find/byToken/forClient/create idempotente/
+updatePending/updateSigned/reset + snapshot + filename + 4 sender email) +
+app/api/manage/client-gdpr/route.ts (530: GET pageState/gdpr_print/
+consent_print + POST associate_module/consent_record_action/gdpr_action) +
+app/api/public/consent/route.ts (208) + consent-public-faithful.tsx (272) +
+client_consents-content.tsx (742, stringhe verbatim verificate a tappeto).
+Permesso client_consents.manage ('Permesso consensi cliente mancante.').
+
+FIX (1):
+1) POST pubblico su record gia' firmato: il legacy (consent_public.php 100)
+   fa redirect con ?msg= — flash VERDE informativo 'Il documento risulta gia
+   confermato.', NON un errore; il Next rispondeva ok:false (banner rosso).
+   Ora { ok:true, alreadyConfirmed:true } e il client ricarica lo stato.
+
+CONFERMATI FEDELI: guardia cliente accessibile per sede; associate_module
+idempotente + guardia sistema ('Il modulo PDF privacy GDPR e gia disponibile
+nella scheda del cliente.'); azioni record draft-only [print, send_signature,
+manual_upload, remove] con 'Il modulo e bloccato. Usa Reset per ricominciare
+la procedura.'; guardia modulo disattivato verbatim; send_signature: email
+obbligatoria (messaggio privacy_email_required verbatim), snapshot congelato +
+token 64hex + pending, ROLLBACK a bozza pulita se l'email fallisce ('Invio
+email non riuscito. Verifica la configurazione email e riprova.' — path
+testabile con SES OFF in dev); manual_upload ('Seleziona il PDF firmato da
+caricare.' / 'Il file deve essere un PDF' / 'File troppo grande' 10MB) con
+titolo '<modulo> firmato'; send_pdf con doppia guardia ('Il PDF firmato non e
+ancora disponibile.' / '...non e disponibile su disco...'); reset che
+CONSERVA il documento nei documenti cliente (messaggio verbatim); remove
+bloccata se document_id ('Questo modulo ha un documento ufficiale
+collegato...'); do=consent_print/gdpr_print con errori PLAIN-TEXT draft-only
+('Non e possibile generare un nuovo PDF [privacy] quando il GDPR/modulo e
+bloccato.') e filename CONSENSO_<SLUG>_<NOME>_<COGNOME>.pdf vs
+GDPR_NOME_COGNOME.pdf; pannello GDPR (save_consents con checkbox
+gdpr_consents[k], lock 'I dati GDPR sono bloccati...', send_signature con
+rollback sui campi clients.gdpr_*, manual_upload 'Privacy firmata',
+send_privacy con guardie, reset verbatim); PAGINA PUBBLICA: token ^[A-Fa-f0-9]
+{64}$, 404 'Link non valido o documento non disponibile.', solo
+pending/signed, PDF pending dallo snapshot con 'Firma cliente: ____' vs
+signed = documento UFFICIALE da R2 privato, firma canvas → PDF con caption
+'Firmato elettronicamente il d/m/Y H:i' + riga customer_documents + record
+signed ('Documento firmato e confermato con successo.'), firma vuota
+('Inserisci la firma nel riquadro prima di confermare.'), publicErrorMessage
+che filtra gli errori tecnici col fallback verbatim.
+
+RESIDUI documentati (non fix): (a) render PDF Next vs FPDF non byte-identico
+(gia' accettato); (b) pretty URL legacy /consenso/<token> gestita dalla
+convenzione clean-URL del proxy; (c) 3 PDF orfani microscopici nel bucket R2
+privato sotto t25/clients/28/ (righe DB eliminate dal cleanup del test, il
+client 28 non esiste piu' — irraggiungibili, innocui).
+
+VERIFICATO: test-consensi-cliente 38/38 (pageState con 4 label GDPR e moduli
+disponibili, permessi, cliente inesistente, associate + idempotenza + guardia
+sistema, consent_print bozza + blocco su pending, send_signature senza email/
+con SES OFF + rollback, azione invalida, modulo disattivato, pubblica GET
+pending + PDF snapshot + token invalido, firma vuota, FIRMA CONFERMATA con
+documento su R2 privato + record signed, doppia conferma = flash verde
+(il fix), PDF pubblico signed = ufficiale da R2, send_pdf su firmato/bozza,
+reset che conserva il documento, upload manuale non-PDF/senza file/valido,
+remove bozza, record inesistente, GDPR save_consents persistiti 1/0/1/0 +
+print + lock + upload manuale 'Privacy firmata' + send_privacy + Reset GDPR).
+PRODUZIONE INTATTA: records=0, customer_documents=0, moduli=1 (sistema id 3),
+5 clienti reali con gdpr draft. REGRESSIONE: test-consensi 25/25, model-a
+12/12. tsc + eslint puliti.
