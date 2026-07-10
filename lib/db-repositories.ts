@@ -20042,7 +20042,26 @@ export async function saveManageGift(slug: string, body: Record<string, string>,
   if (from >= to) throw new Error("Validità al deve essere almeno il giorno successivo a Validità dal.");
   // Anti-retroattività (solo creazione, saveGift ~3018): una nuova campagna non
   // può partire nel passato (la finestra eventi non deve pescare lo storico).
-  if (id <= 0 && from < todayIso()) throw new Error("Validità dal non può essere nel passato per una nuova campagna.");
+  if (id <= 0 && from < todayIso()) throw new Error("Validità dal non può essere nel passato. Imposta una data uguale o successiva a oggi.");
+
+  // REGOLA DI SBLOCCO (saveGift ~3241-3294): una sola regola, target obbligatorio
+  // per service_qty/product_qty (regola senza target = scartata -> nel legacy la
+  // lista resta vuota e scatta 'Configura una regola di sblocco.'); soglie
+  // normalizzate per tipo (qty/count >= 1 intero, total_spend <= 0 -> 1,
+  // first_visit fissa a 1).
+  const ruleType = normalizeGiftRuleType(body.rule_type);
+  const ruleServiceId = Number.parseInt(String(body.rule_service_id ?? "0"), 10) || 0;
+  const ruleProductId = Number.parseInt(String(body.rule_product_id ?? "0"), 10) || 0;
+  let ruleThreshold = Math.max(0, Number.parseFloat(String(body.rule_threshold ?? "1").replace(",", ".")) || 0);
+  if (ruleType === "service_qty" && ruleServiceId <= 0) throw new Error("Configura una regola di sblocco.");
+  if (ruleType === "product_qty" && ruleProductId <= 0) throw new Error("Configura una regola di sblocco.");
+  if (ruleType === "service_qty" || ruleType === "product_qty" || ruleType === "appointments_count") {
+    ruleThreshold = Math.max(1, Math.round(ruleThreshold));
+  } else if (ruleType === "total_spend") {
+    if (ruleThreshold <= 0) ruleThreshold = 1;
+  } else if (ruleType === "first_visit") {
+    ruleThreshold = 1;
+  }
 
   // LIVELLI PUNTI idonei (saveGift ~2900-2920): whitelist dai livelli configurati,
   // forzati a [] con eligibility all_clients, OBBLIGATORI con fidelity_only.
@@ -20110,7 +20129,7 @@ export async function saveManageGift(slug: string, body: Record<string, string>,
   } catch {
     rewardItems = [];
   }
-  if (rewardItems.length === 0) throw new Error("Aggiungi almeno un elemento da regalare.");
+  if (rewardItems.length === 0) throw new Error('Seleziona almeno un elemento in "Cosa viene regalato".');
   const firstReward = rewardItems[0];
 
   const locationIds = String(body.location_ids ?? "")
@@ -20148,27 +20167,26 @@ export async function saveManageGift(slug: string, body: Record<string, string>,
 
   // CONFLITTO CAMPAGNE (findConflictingActiveCampaign ~3052-3060): con active=1
   // e una regola su servizio/prodotto, un'altra campagna ATTIVA con lo stesso
-  // target e periodo sovrapposto blocca il salvataggio.
-  const conflictRuleServiceId = Number.parseInt(String(body.rule_service_id ?? "0"), 10) || 0;
-  const conflictRuleProductId = Number.parseInt(String(body.rule_product_id ?? "0"), 10) || 0;
-  if (effectiveActive && (conflictRuleServiceId > 0 || conflictRuleProductId > 0)) {
+  // target e periodo sovrapposto blocca il salvataggio. NB legacy: in EDIT si
+  // esclude la campagna stessa, ma il CLONE NON esclude la sorgente (un clone
+  // attivo identico a una sorgente attiva va bloccato: salvalo inattivo).
+  if (effectiveActive && (ruleServiceId > 0 || ruleProductId > 0)) {
     const giftsT = await tenantTable(slug, "gifts");
     const setsT = await tenantTable(slug, "gift_rule_sets");
     const rulesT = await tenantTable(slug, "gift_rules");
-    const target = conflictRuleServiceId > 0 ? "r.target_service_id = ?" : "r.target_product_id = ?";
-    // La sorgente di un clone è esclusa dal conflitto: viene ritirata al salvataggio.
+    const target = ruleServiceId > 0 ? "r.target_service_id = ?" : "r.target_product_id = ?";
     const conflictRows = await dbQuery<RowDataPacket[]>(
       `SELECT g.id, g.name FROM ${quoteIdentifier(giftsT.name)} g
          JOIN ${quoteIdentifier(setsT.name)} s ON s.gift_id = g.id AND s.tenant_id = g.tenant_id
          JOIN ${quoteIdentifier(rulesT.name)} r ON r.rule_set_id = s.id AND r.tenant_id = g.tenant_id
-        WHERE g.tenant_id = ? AND g.id <> ? AND g.id <> ? AND g.deleted_at IS NULL AND COALESCE(g.active,0) = 1
+        WHERE g.tenant_id = ? AND g.id <> ? AND g.deleted_at IS NULL AND COALESCE(g.active,0) = 1
           AND ${target}
           AND g.valid_from <= ? AND g.valid_to >= ?
         LIMIT 1`,
-      [giftsT.tenantId ?? 0, id > 0 ? id : 0, cloneSourceId > 0 ? cloneSourceId : 0, conflictRuleServiceId > 0 ? conflictRuleServiceId : conflictRuleProductId, to, from],
+      [giftsT.tenantId ?? 0, id > 0 ? id : 0, ruleServiceId > 0 ? ruleServiceId : ruleProductId, to, from],
     ).catch(() => [] as RowDataPacket[]);
     if (conflictRows[0]) {
-      throw new Error(`Esiste già una campagna omaggio attiva per questi servizi/prodotti nello stesso periodo (ID #${Number(conflictRows[0].id)}): ${String(conflictRows[0].name ?? "")}. Disattiva o modifica quella campagna per continuare.`);
+      throw new Error(`Esiste già una campagna omaggio attiva per questi servizi/prodotti nello stesso periodo (ID #${Number(conflictRows[0].id)}): ${String(conflictRows[0].name ?? "")}. Disattiva/modifica la campagna esistente o cambia validità/livelli/target.`);
     }
   }
 
@@ -20177,6 +20195,12 @@ export async function saveManageGift(slug: string, body: Record<string, string>,
   if (giftId > 0) {
     const existing = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "id, active", where: "id = ? AND deleted_at IS NULL", params: [giftId], limit: 1 });
     if (!existing[0]) throw new Error("Campagna non trovata.");
+    // LOCK STRUTTURALE lato save (saveGift ~3080: canEditGiftStructure): con dati
+    // operativi (istanze/collegamenti/movimenti) la campagna non si modifica —
+    // usa Clona campagna. La UI lo previene via edit_guard, ma il legacy lo
+    // impone anche nel salvataggio (POST diretto).
+    const blockReason = await giftStructureBlockReason(slug, giftId);
+    if (blockReason !== "") throw new Error(blockReason);
     wasActive = Number(existing[0].active ?? 0) === 1;
     await tenantUpdate({ slug, table: "gifts", id: giftId, values });
   } else {
@@ -20200,12 +20224,7 @@ export async function saveManageGift(slug: string, body: Record<string, string>,
   // set e regola quando la FIRMA della regola (tipo/comparatore/soglia/target) è
   // invariata: created_at è il floor anti-retroattivo della finestra eventi, e
   // un semplice risalvataggio non deve azzerare i progressi dei clienti.
-  const ruleType = normalizeGiftRuleType(body.rule_type);
-  const ruleThresholdRaw = String(body.rule_threshold ?? "1").replace(",", ".");
-  const ruleThreshold = Math.max(0, Number.parseFloat(ruleThresholdRaw) || 0);
-  const ruleServiceId = Number.parseInt(String(body.rule_service_id ?? "0"), 10) || 0;
-  const ruleProductId = Number.parseInt(String(body.rule_product_id ?? "0"), 10) || 0;
-
+  // (ruleType/ruleThreshold/ruleServiceId/ruleProductId validati in testa.)
   const setTable = await tenantTable(slug, "gift_rule_sets");
   const ruleTable = await tenantTable(slug, "gift_rules");
   const existingSets = await tenantSelect<RowDataPacket>({ slug, table: "gift_rule_sets", columns: "id, created_at", where: "gift_id = ?", params: [giftId], orderBy: "sort_order ASC, id ASC" }).catch(() => [] as RowDataPacket[]);
@@ -20419,6 +20438,44 @@ export async function toggleManageGift(slug: string, id: number, active: boolean
       if (Number(biz[0]?.fidelity_enabled ?? 0) !== 1) {
         await tenantUpdate({ slug, table: "gifts", id, values: { active: 0, auto_disabled_by_fidelity: 1, updated_by: by > 0 ? by : null, updated_at: new Date() } }).catch(() => 0);
         throw new Error("Impossibile attivare la campagna: la Fidelity è disattivata. La campagna resta sospesa.");
+      }
+    }
+    // RE-CHECK CONFLITTO all'attivazione (setGiftActive ~3780-3800): una regola
+    // sullo stesso servizio/prodotto di un'altra campagna ATTIVA con periodo
+    // sovrapposto blocca la riattivazione. Variante messaggio ASCII del legacy
+    // (setGiftActive usa 'gia'/'validita' senza accenti, a differenza di saveGift).
+    {
+      const giftRow = await tenantSelect<RowDataPacket>({ slug, table: "gifts", columns: "valid_from, valid_to", where: "id = ?", params: [id], limit: 1 }).catch(() => [] as RowDataPacket[]);
+      const myRule = await dbQuery<RowDataPacket[]>(
+        `SELECT r.target_service_id, r.target_product_id FROM ${quoteIdentifier((await tenantTable(slug, "gift_rules")).name)} r
+           JOIN ${quoteIdentifier((await tenantTable(slug, "gift_rule_sets")).name)} s ON s.id = r.rule_set_id AND s.tenant_id = r.tenant_id
+          WHERE r.tenant_id = ? AND s.gift_id = ? LIMIT 1`,
+        [(await tenantTable(slug, "gift_rules")).tenantId ?? 0, id],
+      ).catch(() => [] as RowDataPacket[]);
+      const svcId = Number(myRule[0]?.target_service_id ?? 0) || 0;
+      const prdId = Number(myRule[0]?.target_product_id ?? 0) || 0;
+      const vf = giftRow[0]?.valid_from ? sqlDateTimePrefix(giftRow[0].valid_from) : "";
+      const vt = giftRow[0]?.valid_to ? sqlDateTimePrefix(giftRow[0].valid_to) : "";
+      if ((svcId > 0 || prdId > 0) && vf !== "" && vt !== "") {
+        const giftsT = await tenantTable(slug, "gifts");
+        const setsT = await tenantTable(slug, "gift_rule_sets");
+        const rulesT = await tenantTable(slug, "gift_rules");
+        const target = svcId > 0 ? "r.target_service_id = ?" : "r.target_product_id = ?";
+        const conflictRows = await dbQuery<RowDataPacket[]>(
+          `SELECT g.id, g.name FROM ${quoteIdentifier(giftsT.name)} g
+             JOIN ${quoteIdentifier(setsT.name)} s ON s.gift_id = g.id AND s.tenant_id = g.tenant_id
+             JOIN ${quoteIdentifier(rulesT.name)} r ON r.rule_set_id = s.id AND r.tenant_id = g.tenant_id
+            WHERE g.tenant_id = ? AND g.id <> ? AND g.deleted_at IS NULL AND COALESCE(g.active,0) = 1
+              AND ${target}
+              AND g.valid_from <= ? AND g.valid_to >= ?
+            LIMIT 1`,
+          [giftsT.tenantId ?? 0, id, svcId > 0 ? svcId : prdId, vt, vf],
+        ).catch(() => [] as RowDataPacket[]);
+        if (conflictRows[0]) {
+          const e = new Error(`Esiste gia una campagna omaggio attiva per questi servizi/prodotti nello stesso periodo (ID #${Number(conflictRows[0].id)}): ${String(conflictRows[0].name ?? "")}. Disattiva/modifica la campagna esistente o cambia validita/livelli/target.`) as Error & { openSummary?: number };
+          e.openSummary = id;
+          throw e;
+        }
       }
     }
   }

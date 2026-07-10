@@ -8931,3 +8931,65 @@ VERIFICATO: test-punti 26/26; regressione VERDE test-fidelity 42/42, test-portaf
 test-promozioni 44/44, test-giftbox 27/27; typecheck 0, eslint 0-errori. PRODUZIONE INTATTA:
 baseline ripristinato (transactions=82, campagna 37 ATTIVA, 5 clienti con fidelity_level '',
 cards=0, fidelity_card_levels_json NULL, fidelity_levels_enabled 0).
+
+## Omaggi: audit completo + fix enforcement campagne (lock strutturale, conflitti, regola) (2026-07-09)
+
+Audit 1:1 del modulo Omaggi vs gifts.php (2127) + Gifts.php (12726 righe, IL lib piu' grande) +
+gift_instance.php (1188) + gift_voucher.php + GiftLoyaltyAttribution.php, con 3 agenti. NB:
+GiftLoyaltyAttribution NON e' il motore campagne (e' l'attribuzione destinatario GiftCard/GiftBox);
+il motore vero e' in Gifts.php ed e' portato in lib/gifts-engine.ts + lib/gifts-instances.ts.
+
+FEDELI e verificati LIVE (test-omaggi 49/49):
+- MOTORE (gifts-engine): eventi idempotenti su `events` (ON CONFLICT su source), regole
+  service_qty/product_qty/appointments_count/total_spend/first_visit su finestra anti-retroattiva
+  (max di valid_from/created_at gift/ultimo riscatto/reset/created_at regola), conteggio DISTINCT
+  source (non SUM qty), E2E: 2 checkout POS con servizio target -> istanza accumulo -> DISPONIBILE
+  con unlocked_at=momento sblocco + expires_at=fine giornata sblocco+expires_after_days; la campagna
+  di produzione 98 non ha generato istanze spurie.
+- ISTANZE (stati ITALIANI accumulo/disponibile/riscattato/annullato/scaduto): riscatto parziale
+  per-item (gift_transactions type=redeem + scala stock prodotto), chiusura SOLO a residuo 0
+  ('Omaggio riscattato completamente'), gate is_active PRIMA dello stato ('Omaggio non attivo' su
+  istanza riscattata, come il legacy); punti MAI scalati (points_spent=0); annullo (solo disponibile,
+  reset marker in progress_json, cascata su altre istanze attive), eliminazione istanze chiuse
+  (accumulo/annullato/scaduto con marker in gift_progress_resets, 'Gift eliminato definitivamente'),
+  note cliente/interna, email voucher (gate stati verbatim + 'Invio email non disponibile' senza SES),
+  assegnazione manuale (pre-check eligible/canForce, doppione 'Omaggio gia' disponibile', single-use
+  'Campagna gia' maturata', progress manual:true, override scadenza giorni), voucher pubblico
+  (token 64hex + API /api/public/gift-voucher + codice OM-NNNNNN).
+- CAMPAGNE: validazioni verbatim (nome/date/passato/premi/livelli), condizioni (normalizzazione
+  righe + default legacy 3 righe), esclusioni (snapshot target + istanze bloccanti + marker
+  client_exclusion_start/end + ricalcolo alla riammissione), toggle (attivata/disattivata + marker
+  campaign_disabled_start/end client_id=0, campagna completata, fidelity_only sospesa con
+  auto_disabled_by_fidelity=1 e virgolette curve), clone ('Clone campagna creato', sorgente ritirata
+  con replaced_by_gift_id + marker 'Campagna clonata'), summary stats, delete a cascata.
+
+FIX (4 divergenze enforcement + 3 messaggi):
+1. LOCK STRUTTURALE nel SAVE: il legacy blocca la modifica di campagne con dati operativi DENTRO
+   saveGift (canEditGiftStructure); il Next lo controllava solo in UI (edit_guard) -> un POST
+   diretto poteva modificare la regola di una campagna usata. Ora saveManageGift lancia
+   giftStructureBlockReason ('La campagna omaggio ha gia generato dati operativi (N istanze...):
+   usa Clona campagna...').
+2. CONFLITTO al TOGGLE: setGiftActive legacy ri-verifica il conflitto campagne all'attivazione;
+   il Next non lo faceva -> si poteva riattivare una campagna in conflitto. Aggiunto il re-check
+   con la variante messaggio ASCII del legacy ('Esiste gia ... o cambia validita/livelli/target.').
+3. REGOLA DI SBLOCCO: validazione mancante ('Configura una regola di sblocco.' per service_qty/
+   product_qty senza target) + normalizzazione soglie per tipo (qty/count >= 1 intero,
+   total_spend <= 0 -> 1, first_visit fissa 1), PRIMA del persist come il legacy.
+4. CONFLITTO del CLONE: il legacy NON esclude la sorgente dal conflitto (un clone ATTIVO identico a
+   una sorgente attiva va bloccato: si salva inattivo); il Next la escludeva. Allineato.
+5. Messaggi allineati verbatim: anti-retroattivita' ('Validita' dal non puo' essere nel passato.
+   Imposta una data uguale o successiva a oggi.'), premi vuoti ('Seleziona almeno un elemento in
+   "Cosa viene regalato".'), suffisso conflitto save ('Disattiva/modifica la campagna esistente o
+   cambia validita'/livelli/target.', variante accentata).
+
+RESIDUI documentati (non fixati): (a) molti messaggi istanza legacy sono in minuscolo ('omaggio non
+attivo', 'gift assegnato'...) mentre il Next li capitalizza — cosmetico, il testo e' identico;
+(b) deleteManageGift stacca le prenotazioni aperte in forma semplificata (azzera fidelity_gift_* +
+rimuove appointment_gift_items) invece del rollbackAppointmentSelection completo del legacy
+(ripristino prezzi righe) — copre il caso dangling-reference, il ripristino prezzi completo e'
+nell'annullo istanza; (c) gli intervalli di sospensione campagna non sono ancora esclusi dal
+conteggio eventi (nota storica del motore, invariata).
+
+VERIFICATO: test-omaggi 49/49, typecheck 0, eslint 0-errori; regressione VERDE test-fidelity 42/42,
+test-punti 26/26, test-pos-checkout 8/8. PRODUZIONE INTATTA: campagna 98 attiva + 1 regola preservate,
+gift_instances=0, 5 clienti reali, fidelity_enabled ripristinato, eventi orfani ZZ bonificati (0 residui).
