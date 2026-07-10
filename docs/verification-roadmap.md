@@ -10788,3 +10788,60 @@ timeGrid multi-giorno "finto" di FullCalendar mentre il port è una griglia
 custom con le stesse classi (equivalenza visiva/comportamentale documentata,
 non replica dell'internals FC); modal legacy #apptModal mantenuto statico
 (anche nel legacy è fallback morto quando il drawer è presente).
+
+## 2026-07-10 — Calendario, parte 2a (quick-booking drawer: igiene lint + client_id + mappe legacy complete)
+
+Avvio dell'audit del drawer prenotazione rapida. MAPPATE INTEGRALI (via agenti,
+con numeri di riga, registrate qui come base della parte 2b):
+- app.js drawer (11477 righe di IIFE): apertura new/edit/from-slot con guardie
+  request-id, caricamento edit da action=get (snapshot servizi anche fuori
+  listino, riscatti prefill, fidelity con riconciliazione scelta, lock
+  annullato con select monostato), servizi a checkbox+pills con residui,
+  cliente (search/create_quick/storico/residui), hold (hold_availability/
+  renew_hold/release_hold, countdown NO-OP deliberato, TTL 300s/min 60s),
+  fidelity (sentinel 999999999 per il massimo, scelta discount/gift/later, Cb
+  FORZATO INERTE in questo build), residui coi messaggi di conflitto verbatim,
+  promo preview SALTATA in edit, dettaglio prezzi (ordine detrazioni:
+  sconto→coupon→fidelity→Cb→giftcard→credito), delete (solo da stato
+  Annullato, confirm 'Eliminare questo appuntamento?'), submit (FormData
+  completa; staff/cabina disabled reinseriti a mano; post-save 'Appuntamento
+  salvato' + warnings + refetchEvents + reload se data-qb-reload-on-save).
+- api_appointments.php azioni drawer: save (3 rami, ramo legacy-segment
+  DISATTIVATO da flag; ordine validazioni e ~40 messaggi verbatim; create=
+  quick_booking+public_code 5 cifre, edit=manage+access con DELETE/reinsert di
+  appointment_staff/locations/services; fidelity later che PRENOTA i punti col
+  sentinel; giftcard/credito/giftbox/pacchetti/prepagati/omaggi con
+  auto-riscatto su done), availability (griglia, override gialli fuori orario,
+  DST, testi), hold_availability/release_hold/renew_hold ('Orario non piu
+  disponibile. Ricarica e scegli un altro slot.'), staff_for_service(s) e
+  cabins_for_services ('Occupato', '(occupata)'), fidelity_preview (shape
+  completa) e fidelity_gift_redeem, qb_residui_check (messaggi 'disponibili
+  solo N quantità libere; già presente nella prenotazione …'), delete
+  (rollback/detach per stato, figli poi padre).
+
+FIX (parte 2a):
+1) eslint del drawer: 6 errori PRE-esistenti chiusi (4 set-state-in-effect →
+   reset in microtask col nonce, pattern consolidato; 2 conflitti di
+   memoizzazione del React Compiler → openResidualInfo a funzione semplice,
+   closeAvailabilityModal/loadAvailabilityPeriod con i setter nelle deps) + 2
+   warning exhaustive-deps (helper data puri fmtDMY/addDaysYMD/startOfWeekYMD/
+   firstOfMonthYMD/addMonthsYMD promossi a scope di modulo). File a 0
+   errori/0 warning.
+2) SUBMIT: aggiunto client_id ESPLICITO al payload del save (#qb_client_id
+   legacy) — la route lo preferisce già al nome (commento esplicito) ma il
+   drawer inviava SOLO client_name: i clienti OMONIMI venivano legati per nome
+   (trappola 'luca'/'Luca'). Test contratto: due ZZ omonimi, save con
+   client_id del secondo → appointments.client_id = secondo (PASS, cleanup
+   baseline 10/5).
+
+VERIFICATO: tsc pulito; eslint drawer 0/0; test omonimi PASS; regressione
+test-calendario 20/20; render calendar 200.
+
+RESIDUI parte 2b (dalla diff mappa↔port, da chiudere col diff integrale):
+- fidelity GIFT/scelta conflitto nel save: il legacy invia
+  fidelity_gift_idx/fidelity_gift_points_used/fidelity_conflict_choice e il
+  ramo 'later' PRENOTA i punti (sentinel 999999999); la catena Next
+  (payload→route→create/update) non li tratta ancora.
+- credit_use_from_booking assente nella catena save Next.
+- diff testuale/flusso completo del drawer sulle due mappe (hold recovery,
+  residui, availability modal, prezzi) + verifica delete/'Annulla prima'.

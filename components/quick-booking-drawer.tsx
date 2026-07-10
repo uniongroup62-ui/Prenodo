@@ -196,6 +196,31 @@ function minToTime(min: number): string {
   return `${pad(Math.floor(clamped / 60))}:${pad(clamped % 60)}`;
 }
 
+// Helper data PURI del modale disponibilità (scope di modulo: identità stabile,
+// niente dipendenze fantasma nelle useCallback che li usano).
+function fmtDMY(ymd: string): string {
+  const m = ymd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : ymd;
+}
+function addDaysYMD(ymd: string, days: number): string {
+  const d = new Date(`${ymd}T00:00:00`);
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+function startOfWeekYMD(ymd: string): string {
+  const d = new Date(`${ymd}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return ymd;
+  return addDaysYMD(ymd, -((d.getDay() + 6) % 7)); // Monday start (legacy)
+}
+function firstOfMonthYMD(ymd: string): string {
+  return `${ymd.slice(0, 7)}-01`;
+}
+function addMonthsYMD(ymd: string, months: number): string {
+  const d = new Date(`${firstOfMonthYMD(ymd)}T00:00:00`);
+  d.setMonth(d.getMonth() + months);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-01`;
+}
+
 function lower(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -1269,15 +1294,22 @@ export function QuickBookingDrawer() {
   useEffect(() => {
     const single = selectedServiceIds.length === 1 ? selectedServiceIds[0] : 0;
     if (!single || !slug) {
-      staffSvcReqRef.current++;
-      setStaffSvcList(null);
-      setStaffChecking(false);
-      setStaffLoadFailed(false);
+      // Reset in microtask col nonce: niente setState sincroni nell'effect.
+      const clearReq = ++staffSvcReqRef.current;
+      Promise.resolve().then(() => {
+        if (clearReq !== staffSvcReqRef.current) return;
+        setStaffSvcList(null);
+        setStaffChecking(false);
+        setStaffLoadFailed(false);
+      });
       return;
     }
     const myReq = ++staffSvcReqRef.current;
-    setStaffChecking(true);
-    setStaffLoadFailed(false);
+    Promise.resolve().then(() => {
+      if (myReq !== staffSvcReqRef.current) return;
+      setStaffChecking(true);
+      setStaffLoadFailed(false);
+    });
     const params = new URLSearchParams({ slug, action: "staff_for_service", service_id: String(single) });
     if (apptId && date && startTime && endTime) {
       params.set("date", date);
@@ -1311,7 +1343,9 @@ export function QuickBookingDrawer() {
     if (isMultiService || staffChecking) return;
     const list = staffSvcList;
     if (list && list.length === 1 && String(list[0].id) !== staffId) {
-      setStaffId(String(list[0].id));
+      // setState in microtask (niente cascata sincrona nell'effect).
+      const want = String(list[0].id);
+      Promise.resolve().then(() => setStaffId(want));
     }
   }, [staffSvcList, staffChecking, isMultiService, staffId]);
 
@@ -1337,8 +1371,11 @@ export function QuickBookingDrawer() {
   useEffect(() => {
     const time = /^\d{1,2}:\d{2}/.test(startTime.trim()) ? startTime.trim().slice(0, 5) : "";
     if (!selectedServiceIds.length || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !time) {
-      cabinAvailReqRef.current++;
-      setCabinAvailability(null);
+      // Reset in microtask col nonce (niente setState sincrono nell'effect).
+      const clearReq = ++cabinAvailReqRef.current;
+      Promise.resolve().then(() => {
+        if (clearReq === cabinAvailReqRef.current) setCabinAvailability(null);
+      });
       return;
     }
     const reqId = ++cabinAvailReqRef.current;
@@ -1743,7 +1780,11 @@ export function QuickBookingDrawer() {
     const ids = selectedServiceIds;
     if (!ids.length) {
       promoKeyRef.current = "";
-      setPromoByService({});
+      // Reset in microtask col nonce (niente setState sincrono nell'effect).
+      const clearReq = ++promoReqRef.current;
+      Promise.resolve().then(() => {
+        if (clearReq === promoReqRef.current) setPromoByService({});
+      });
       return;
     }
     const cid = client?.id ? String(client.id) : "0";
@@ -2731,15 +2772,14 @@ export function QuickBookingDrawer() {
     usedAmount?: number;
   };
   const [infoModal, setInfoModal] = useState<QbInfoModalState | null>(null);
-  const openResidualInfo = useCallback(
-    (state: QbInfoModalState) => {
-      setInfoModal(state);
-      // Load the detail payload if not already fetched for this client.
-      const id = String(clientId || "").trim();
-      if (id && !residualsDetail && !residualsDetailLoading) fetchResidualsDetail(id);
-    },
-    [clientId, residualsDetail, residualsDetailLoading, fetchResidualsDetail],
-  );
+  // Funzione semplice (usata solo dalla JSX): il React Compiler la memoizza da
+  // sé; la useCallback manuale confliggeva con l'inferenza delle dipendenze.
+  const openResidualInfo = (state: QbInfoModalState) => {
+    setInfoModal(state);
+    // Load the detail payload if not already fetched for this client.
+    const id = String(clientId || "").trim();
+    if (id && !residualsDetail && !residualsDetailLoading) fetchResidualsDetail(id);
+  };
 
   // Whether the fetched residuals detail has ANY content (drives the empty-state).
   const residualsDetailHasAny = !!(
@@ -2922,29 +2962,6 @@ export function QuickBookingDrawer() {
   const [availApplying, setAvailApplying] = useState(false);
   const availSeqRef = useRef(0);
 
-  const fmtDMY = (ymd: string) => {
-    const m = ymd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    return m ? `${m[3]}/${m[2]}/${m[1]}` : ymd;
-  };
-  const addDaysYMD = (ymd: string, days: number) => {
-    const d = new Date(`${ymd}T00:00:00`);
-    d.setDate(d.getDate() + days);
-    const p = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-  };
-  const startOfWeekYMD = (ymd: string) => {
-    const d = new Date(`${ymd}T00:00:00`);
-    if (Number.isNaN(d.getTime())) return ymd;
-    return addDaysYMD(ymd, -((d.getDay() + 6) % 7)); // Monday start (legacy)
-  };
-  const firstOfMonthYMD = (ymd: string) => `${ymd.slice(0, 7)}-01`;
-  const addMonthsYMD = (ymd: string, months: number) => {
-    const d = new Date(`${firstOfMonthYMD(ymd)}T00:00:00`);
-    d.setMonth(d.getMonth() + months);
-    const p = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-01`;
-  };
-
   const loadAvailabilityPeriod = useCallback(async (anchorDate: string, mode: "day" | "week" | "month") => {
     const safeDate = mode === "month" ? firstOfMonthYMD(anchorDate) : mode === "week" ? startOfWeekYMD(anchorDate) : anchorDate;
     setAvailAnchor(safeDate);
@@ -2989,7 +3006,9 @@ export function QuickBookingDrawer() {
     } finally {
       if (seq === availSeqRef.current) setAvailBrowserLoading(false);
     }
-  }, [slug, selectedServiceIds, staffId, locationId, apptId]);
+    // I setter (stabili) sono elencati per riconciliare l'inferenza del React
+    // Compiler con la memoizzazione manuale, come closeAvailabilityModal.
+  }, [slug, selectedServiceIds, staffId, locationId, apptId, setAvailAnchor, setAvailMode, setAvailModalError, setAvailHoverTip, setAvailBrowserLoading, setAvailMonths, setAvailRangeLabel]);
 
   // Open (port of openAvailability, app.js:11088-11103): pre-check legacy come
   // TOAST warning (non alert inline), poi apertura in vista settimana.
@@ -3015,7 +3034,9 @@ export function QuickBookingDrawer() {
     availSeqRef.current++;
     setAvailModalOpen(false);
     setAvailHoverTip(null);
-  }, []);
+    // I setter sono stabili: elencarli riconcilia l'inferenza del compiler
+    // con la memoizzazione manuale (identità stabile per le deps a valle).
+  }, [setAvailModalOpen, setAvailHoverTip]);
 
   // Slot click (port of applyAvailabilitySlot): create the hold for the chosen
   // date/time, then fill the form via the RAW setters (changeDate/changeStartTime
@@ -3331,6 +3352,9 @@ export function QuickBookingDrawer() {
             // (in-place update); empty -> createDbAppointment (new booking). The
             // route reads `id` as the edit discriminator (Number.parseInt > 0).
             id: apptId,
+            // client_id ESPLICITO (#qb_client_id legacy): la route lo preferisce
+            // al nome — la sola client_name mis-lega i clienti OMONIMI.
+            client_id: client.id ? String(client.id) : "",
             client_name: client.full_name,
             // Send ids (robust, ordered) AND names (the route prefers ids).
             service_ids: selectedServiceIds.join(","),
