@@ -10346,3 +10346,48 @@ key conteggio+data e body con prima riga, limit=1 col più recente,
 browser_preferences nel payload). PRODUZIONE INTATTA: preferenze utente 20
 ripristinate byte-identiche, conteggi baseline. REGRESSIONE: test-notifiche
 17/17. tsc pulito, eslint 0 errori.
+
+## 2026-07-10 — Dashboard/topbar, parte 2 (View::notificationSummary): contatori campanelle 1:1 + e2e live
+
+COMPLETAMENTO dell'audit Dashboard di oggi: i CONTATORI CONDIVISI di
+lib/manage-shell-context.ts (badge campanelle topbar, poller action=count,
+sorgenti degli avvisi dashboard) erano stati verificati solo indirettamente.
+Legacy letto INTEGRALE: View::notificationSummary (View.php 67-193) +
+SaleInstallments::countDueAlertGroups (1195-1218). Next:
+lib/manage-shell-context.ts (465→478).
+
+CONFERMATI FEDELI (già corretti nel port): countPendingAppointments con
+status='pending' STRETTO e il filtro sede a 4 rami INCLUSO il bridge
+appointment_locations (provato live: pending NULL con bridge→Sede2 escluso,
+il filtro semplice contava +1); countUnseenQuoteDecisions (accepted/rejected
++ decisione non letta + sede stretta); countInstallmentDueAlertGroups
+(COUNT DISTINCT dei GRUPPI overdue/due_<data>, non delle rate); formula del
+badge campanella count = appuntamenti + tessere fidelity SOLTANTO (View.php
+191 — preventivi/rate/compleanni hanno le icone dedicate); gate
+notifications.view + needsLocationSelection→zeri; closure-range topbar.
+
+FIX (2):
+1) countUpcomingBirthdays: mancavano le ESCLUSIONI legacy di
+   client_birthday_notification_rows — clienti BLOCCATI (is_blocked) e
+   clienti-sconosciuto auto-creati ora esclusi anche dal BADGE compleanni
+   (la pagina era già stata corretta nell'audit Notifiche; il contatore no).
+2) countFidelityCardNotifications RISCRITTO: leggeva la config dalla fonte
+   SBAGLIATA (automation_settings.fidelity_expiry_reminder_enabled — il
+   toggle EMAIL — e addirittura installment_alert_days come finestra!). Ora
+   usa fidelity_card_expiry_notification_config su
+   businesses.fidelity_adhesion_json come il legacy, con le TRE modalità:
+   'disabled' → 0 anche con tessere scadute presenti; 'renewal' → scadute +
+   tessere con oggi dentro [scadenza − finestra, scadenza]
+   (fidelity_card_add_duration_ymd); 'reminder' → scadute + in scadenza
+   entro N giorni; scadute incluse anche se disattivate, future-ma-inattive
+   escluse.
+
+VERIFICATO: test-shell-summary 7/7 live (badge appuntamenti = SQL
+bridge-aware con esclusione del pending NULL+bridge→Sede2, compleanni senza
+il cliente bloccato, tessere: config spenta → 0 nonostante scaduta presente,
+modalità rinnovo finestra 30gg → scaduta + tessera a 10gg contano e quella a
+300gg no, count = appuntamenti + tessere, 403 verbatim su action=count senza
+permesso — requirePerm della pagina legacy — e payload con quotes/
+installments). PRODUZIONE INTATTA: fidelity_adhesion_json e conteggi
+ripristinati (cards baseline 0). REGRESSIONE: dashboard 16/16,
+notifiche-feed 10/10. tsc + eslint puliti.

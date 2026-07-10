@@ -2,6 +2,7 @@ import "server-only";
 
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { columnExists, dbQuery, tenantSelect, tenantTable } from "@/lib/tenant-db";
+import { fidelityAddCardDurationYmd, fidelityCardExpiryNotificationConfig } from "@/lib/db-repositories";
 import { can, canAny } from "@/lib/role-permissions";
 import type { ManageUser } from "@/lib/manage-auth";
 
@@ -216,7 +217,9 @@ export async function countUpcomingBirthdays(slug: string): Promise<number> {
       // birth_date è DATE su Postgres: la zero-date MySQL non può esistere e il
       // confronto con '0000-00-00' LANCIA (query sempre fallita -> compleanni 0).
       // Il filtro zero-date resta nel parser JS (birthdayDaysUntilNext).
-      where: "birth_date IS NOT NULL",
+      // Esclusioni legacy di client_birthday_notification_rows (Helpers 7550):
+      // clienti BLOCCATI e clienti-sconosciuto auto-creati NON contano.
+      where: "birth_date IS NOT NULL AND COALESCE(is_blocked,0)=0 AND NOT (LOWER(TRIM(COALESCE(full_name,'')))='sconosciuto' AND LOWER(TRIM(COALESCE(notes,''))) LIKE 'creato automaticamente (vendite giftbox/giftcard senza cliente).%')",
     });
     let count = 0;
     for (const row of rows) {
@@ -317,8 +320,11 @@ export async function getNotificationSummary(
 
 // Port count-only di fidelity_card_notification_groups (Helpers.php 5147-5356,
 // sommato dal notificationSummary a View.php:181-189): tessere gia' scadute +
-// tessere in scadenza entro la finestra promemoria. Quando il promemoria
-// scadenza fidelity e' disattivato il legacy ritorna [] (contatore 0).
+// tessere incluse dalla finestra della CONFIG TESSERA (fidelity_card_expiry_
+// notification_config su businesses.fidelity_adhesion_json — NON il toggle
+// email di automation_settings, che era la fonte sbagliata): mode 'renewal' →
+// oggi dentro [scadenza - finestra, scadenza]; mode 'reminder' → scadenza
+// entro N giorni; 'disabled' → 0.
 export async function countFidelityCardNotifications(slug: string): Promise<number> {
   try {
     if (!(await tenantTableExists(slug, "cards"))) return 0;
@@ -327,17 +333,10 @@ export async function countFidelityCardNotifications(slug: string): Promise<numb
     const expiryCol = hasExpiresAt ? "expires_at" : hasExpiryDate ? "expiry_date" : null;
     if (!expiryCol) return 0;
 
-    // fidelity_card_expiry_notification_config(): disattivato -> nessun gruppo.
-    if (!(await tenantColumnExists(slug, "automation_settings", "fidelity_expiry_reminder_enabled"))) return 0;
-    const settingsRows = await tenantSelect<RowDataPacket>({
-      slug,
-      table: "automation_settings",
-      columns: "fidelity_expiry_reminder_enabled",
-      orderBy: "id ASC",
-      limit: 1,
-    });
-    if (Number(settingsRows[0]?.fidelity_expiry_reminder_enabled ?? 0) !== 1) return 0;
-    const reminderDays = await automationAlertDays(slug, "installment_alert_days");
+    const cfg = await fidelityCardExpiryNotificationConfig(slug).catch(
+      () => ({ mode: "disabled" as const, value: 0, unit: "days" as const }),
+    );
+    if (cfg.mode === "disabled") return 0;
 
     const hasStatus = await tenantColumnExists(slug, "cards", "status");
     const hasIsActive = await tenantColumnExists(slug, "cards", "is_active");
@@ -353,10 +352,13 @@ export async function countFidelityCardNotifications(slug: string): Promise<numb
 
     const now = new Date();
     const todayUtc = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+    const pad2 = (n: number) => String(n).padStart(2, "0");
+    const todayYmd = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+    const isRenewal = cfg.mode === "renewal" && cfg.value > 0;
     let count = 0;
     for (const row of rows) {
       const raw = row.expires_at instanceof Date
-        ? `${row.expires_at.getFullYear()}-${String(row.expires_at.getMonth() + 1).padStart(2, "0")}-${String(row.expires_at.getDate()).padStart(2, "0")}`
+        ? `${row.expires_at.getFullYear()}-${pad2(row.expires_at.getMonth() + 1)}-${pad2(row.expires_at.getDate())}`
         : String(row.expires_at ?? "").slice(0, 10);
       const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
       if (!m) continue;
@@ -374,7 +376,13 @@ export async function countFidelityCardNotifications(slug: string): Promise<numb
       if (days < 0) {
         // Gia' scadute: incluse anche se disattivate (come il legacy).
         count += 1;
-      } else if (isActive && reminderDays > 0 && days <= reminderDays) {
+        continue;
+      }
+      if (!isActive) continue; // future ma non attive: escluse
+      if (isRenewal) {
+        const windowStart = fidelityAddCardDurationYmd(raw, -Math.abs(cfg.value), cfg.unit) || raw;
+        if (todayYmd >= windowStart && todayYmd <= raw) count += 1;
+      } else if (cfg.value > 0 && days <= cfg.value) {
         count += 1;
       }
     }
