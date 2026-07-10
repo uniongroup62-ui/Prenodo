@@ -100,6 +100,8 @@ export function CabinsContent({ slug: slugProp, initialQuery }: { slug?: string;
     const msg = services.some((item) => item?.block_kind === "appointment")
       ? "La cabina e associata a servizi o prenotazioni future. Rimuovi prima i collegamenti o sposta le prenotazioni e poi riprova."
       : message;
+    // Il legacy ricrea il DOM dell'accordion a ogni apertura: riparte collapsed.
+    setBlockListOpen(false);
     setBlockModal({ open: true, title, message: msg, services });
   }
 
@@ -146,14 +148,19 @@ export function CabinsContent({ slug: slugProp, initialQuery }: { slug?: string;
   );
 
   useEffect(() => {
-    load(0);
+    // Come il legacy: il ?location_id in URL vince; senza, il server usa la
+    // sede corrente di sessione (app_current_location_id).
+    const usp = new URLSearchParams(window.location.search);
+    load(Number.parseInt(usp.get("location_id") ?? "0", 10) || 0);
   }, [load]);
 
   const selectedLocation = useMemo(
     () => locations.find((l) => l.id === activeLocationId) ?? null,
     [locations, activeLocationId],
   );
-  const selectedLocationName = selectedLocation?.name ?? "";
+  // cabin_location_name: nome sede, altrimenti 'Sede #id', altrimenti 'Tutte'
+  // (sede 0 = admin in "Tutte le sedi").
+  const selectedLocationName = selectedLocation?.name ?? (activeLocationId > 0 ? `Sede #${activeLocationId}` : "Tutte");
 
   // Keep `rows` in sync with `count` (mirrors cabins.js render(): grows by
   // reusing saved cabins as fallback, shrinks by truncation).
@@ -182,9 +189,11 @@ export function CabinsContent({ slug: slugProp, initialQuery }: { slug?: string;
     setRows((prev) => prev.map((row, i) => (i === idx ? { ...row, name: value } : row)));
   }
 
-  function removeRow(idx: number) {
-    setRows((prev) => prev.filter((_, i) => i !== idx));
-    setCount((c) => Math.max(0, clampCount(c) - 1));
+  // "Rimuovi riga" legacy (cabins.js 260-263): decrementa il conteggio e
+  // ri-renderizza per indice — viene TRONCATA L'ULTIMA riga, non quella
+  // cliccata (le righe si preservano per posizione).
+  function removeRow() {
+    applyCount(clampCount(count) - 1);
   }
 
   function href(suffix: string): string {
@@ -295,12 +304,14 @@ export function CabinsContent({ slug: slugProp, initialQuery }: { slug?: string;
         if (j.popup) {
           const popup = j.popup as { title?: string; message?: string; services?: BlockerItem[] };
           openBlockPopup(String(popup.title ?? "Impossibile eliminare la cabina"), String(popup.message ?? ""), popup.services ?? []);
-          // Err flash legacy (cabins.php 467) + form ricaricato dallo stato reale.
+          // Err flash legacy (cabins.php 467).
           setError("Impostazioni non salvate: una o piu cabine sono associate a servizi o prenotazioni future.");
-          load(activeLocationId);
         } else {
           setError(String(j.error ?? "Errore nel salvataggio delle cabine."));
         }
+        // Dopo un POST fallito il legacy ricarica SEMPRE lo stato reale dal DB
+        // (cabins.php 517-520): gli edit in corso vengono scartati.
+        load(activeLocationId);
         setSaving(false);
         window.scrollTo(0, 0);
         return;
@@ -397,7 +408,7 @@ export function CabinsContent({ slug: slugProp, initialQuery }: { slug?: string;
                               type="button"
                               className="btn btn-outline-danger"
                               title="Rimuovi riga"
-                              onClick={() => removeRow(idx)}
+                              onClick={() => removeRow()}
                             >
                               <i className="bi bi-trash" />
                             </button>

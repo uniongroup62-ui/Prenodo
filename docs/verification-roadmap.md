@@ -9088,3 +9088,73 @@ VERIFICATO: test-servizi 34/34 con finestra controllata sulla promo 71 (disattiv
 delete/disattivazione e RIPRISTINATA attiva — verificato). Nessuna modifica al codice. PRODUZIONE
 INTATTA: services=2 (9 e 82 mai toccati), categoria 'genera', junctions 3/3/2, consigliati 0,
 5 clienti reali, promo 71 attiva.
+
+## 2026-07-10 — Cabine (cabins.php + cabins.js): audit 1:1 + 8 fix + e2e live
+
+Legacy letto INTEGRALE: app/pages/cabins.php (625 righe, helper inline cabin_*) +
+assets/js/pages/cabins.js (318). Next: lib/manage-resources.ts (saveCabinsBulk,
+deleteCabin, cabinDeleteBlockersLegacy, cabinBlockPopup, reorderActiveCabins,
+listCabins, getManageCabin) + app/api/manage/resources/route.ts + cabins-content.tsx.
+Permesso cabins.manage (RolePermissions gruppo Risorse); nessun form per-cabina nel
+legacy: SOLO bulk #cabinsForm (count + nomi + ids, clamp 0..50, position = ordine
+griglia i+1) + GET action=delete. Delete = SOFT (is_active=0) + cabin_reorder_active.
+
+FIX (8):
+1) SEDE DI PAGINA: la route GET usava solo il query param -> normalizeActiveLocation
+   forzava la PRIMA sede attiva. Legacy = app_current_location_id: param GET vince,
+   altrimenti sede corrente di SESSIONE; 0 = stato 'Tutte' legittimo (admin), sede
+   inesistente RESTA (nessun fallback). Ora: default = session.user.currentLocationId
+   per tutte le sezioni della route + flag rawLocation per section=cabins (niente
+   fallback prima-sede). Il componente legge ?location_id dall'URL al mount.
+2) NOME SEDE: 'Cabine - {nome}' con cabin_location_name fedele: nome sede, altrimenti
+   'Sede #id', altrimenti 'Tutte' (prima: stringa vuota).
+3) ORDINE FETCH: aggiunta la chiave legacy '(location_id IS NULL) ASC' (cabine
+   condivise location-NULL per ULTIME) in listCabins + activeRows del bulk.
+4) BLOCKERS PRENOTAZIONI: query segmenti con COALESCE a 3 livelli fedele
+   (sg.cabin_id, a.cabin_id, sv.cabin_id via sg.service_id) + gating sulle colonne
+   esistenti anche nella query diretta (prima: COALESCE a 2 livelli e a.cabin_id
+   assunto esistente).
+5) ORDINE VALIDAZIONI BULK: l'errore nomi SOVRASCRIVE l'errore sede (cabins.php
+   426-436): con entrambe le violazioni vince 'Inserisci un nome per tutte le cabine.'.
+6) 'RIMUOVI RIGA' (riga nuova): il legacy decrementa il count e ri-renderizza PER
+   INDICE -> viene troncata l'ULTIMA riga, non quella cliccata. Ora identico.
+7) POPUP BLOCCO: accordion 'Servizi collegati' riparte sempre collapsed (il legacy
+   ricrea il DOM); dopo QUALSIASI POST fallito il form ricarica lo stato reale dal
+   DB (edit scartati, cabins.php 517-520).
+8) API EXTRA RIMOSSA: action=cabin_save (salvataggio singola cabina) non esiste nel
+   legacy e permetteva cabine senza sede/inattive/senza reorder -> rimossa insieme a
+   saveCabin/mustFindCabin/nextPosition e alle cabinBlockers/futureCabinAppointmentCount
+   morte (pseudo-voce 'N prenotazioni future' superata dal port fedele).
+
+CONFERMATI FEDELI: messaggi verbatim con incoerenze accenti del legacy (flash
+'Cabina non eliminata: e associata...' / 'una o piu cabine' SENZA accento vs popup
+'La cabina è associata... finché è presente... non può' / 'Una o più cabine...'
+accentati; variante prenotazioni 'La cabina e associata a servizi o prenotazioni
+future...' sempre senza accento; frecce '→' servizi vs '->' prenotazioni; confirm
+'Eliminare X? La cabina verrà rimossa dalla configurazione, ma lo storico già creato
+resterà invariato.'); upsert bulk con stamp location SOLO su esistente con sede
+(location NULL resta NULL); id di altra sede ripresentato -> INSERT nuova riga;
+blocco rimozione = stesse guardie della delete (servizi service_cabins + legacy
+services.cabin_id, prenotazioni future pending/scheduled ends_at>=NOW via segmenti
+e diretta con dedup + esclusione segmentati); 'Prenotazione {public_code|#id}' +
+detail 'dd/mm/yyyy hh:mm - cliente - stato'; delete scoped alla sede corrente
+(id+attiva+(sede OR NULL)); reorder per sede (0 = TUTTE le attive rinumerate,
+fedele); popup shape {title,message,services}; flash 'Cabina eliminata' /
+'Impostazioni salvate'.
+
+RESIDUI documentati (non fix): (a) CSRF token legacy vs sessione HMAC cookie (pattern
+globale Next); (b) cabin_ensure_location_schema backfill single-sede non portato
+(schema PG già corretto); (c) 403 come JSON invece della pagina 'Accesso negato'
+(pattern SPA globale); (d) action=get prefill per id (read-only, senza equivalente
+legacy) mantenuto.
+
+VERIFICATO: test-cabine 34/34 (sede sessione/param/Tutte/9999, blockers cabina 9
+con servizi PRIMA e prenotazioni dopo, 403 senza permesso, bulk add/rename/swap/
+whitespace-collapse/validazioni/count=0 bloccato, rimozione bloccata da servizio e
+da prenotazione diretta, id altra sede -> INSERT, NULL-loc ultima e senza stamp,
+delete ok+reorder 1..N, delete bloccata da servizio/segmento/fallback sv.cabin_id,
+scoping sede, action=get, cabin_save rimossa). REGRESSIONE: risorse 12/12,
+staff-filter 4/4, staff-sede2 4/4, model-a 12/12, servizi 34/34 (test-staff-list =
+suite obsoleta pre-correzione, superata da test-staff-filter). PRODUZIONE INTATTA:
+cabins=3 (9 pos1 attiva Sede1, 10 inattiva, 45 pos1 attiva Sede2), service_cabins=2,
+services.cabin_id 9/82 -> 9, 5 clienti reali, appuntamenti/segmenti contatori invariati.

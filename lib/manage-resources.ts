@@ -151,14 +151,19 @@ export async function resourceContext({
   slug,
   locationId,
   date,
+  rawLocation,
 }: {
   slug: string;
   locationId?: number;
   date?: string;
+  rawLocation?: boolean;
 }): Promise<ManageResourceContext> {
   await ensureResourceColumns(slug);
   const locations = await listLocations(slug);
-  const activeLocationId = normalizeActiveLocation(locationId, locations);
+  // rawLocation (pagina Cabine): cabins.php usa app_current_location_id senza
+  // fallback alla prima sede attiva — 0 e' lo stato legittimo 'Tutte', e una
+  // sede inesistente resta tale (nome 'Sede #id', cabins.php 356-360).
+  const activeLocationId = rawLocation ? Math.max(0, Number(locationId ?? 0)) : normalizeActiveLocation(locationId, locations);
   const range = weekRange(normalizeDate(date) || todayIsoLocal());
   const [services, resourcesAll, cabins, staff, hours, closures, exceptions, availability] = await Promise.all([
     listServices(slug),
@@ -341,22 +346,10 @@ export async function getManageStaffMember(slug: string, id: number): Promise<Re
   };
 }
 
-export async function saveCabin(slug: string, body: Record<string, string>): Promise<ResourceCabin> {
-  const table = await tenantTable(slug, "cabins");
-  const id = parseInteger(body.id, 0);
-  const name = cleanName(body.name, 120);
-  const locationId = parseInteger(body.location_id ?? body.locationId, 0) || null;
-  const position = clampInt(body.position, 1, 50) || await nextPosition(slug, "cabins", locationId);
-  if (!name) throw new Error("Nome cabina obbligatorio.");
-
-  const values = await filterColumns(table.name, { name, position, is_active: truthy(body.is_active ?? body.isActive ?? "1") ? 1 : 0, location_id: locationId });
-  if (id > 0) {
-    await tenantUpdate({ slug, table: "cabins", id, values });
-    return mustFindCabin(slug, id);
-  }
-  const newId = await tenantInsert(table, values);
-  return mustFindCabin(slug, newId);
-}
+// NB: il legacy NON ha un salvataggio per singola cabina (cabins.php espone solo
+// il bulk #cabinsForm + action=delete): l'ex azione API cabin_save e' stata
+// rimossa perche' permetteva di creare cabine fuori dalle regole legacy (senza
+// sede, inattive, senza reorder).
 
 export type SaveCabinsBulkResult =
   | { ok: true; cabins: ResourceCabin[] }
@@ -389,23 +382,27 @@ export async function saveCabinsBulk(slug: string, body: Record<string, string>)
     .map((value) => Math.max(0, Number.parseInt(String(value ?? "0"), 10) || 0));
   while (ids.length < count) ids.push(0);
 
-  if (hasLocationCol && locationId <= 0) {
-    return { ok: false, error: "Seleziona una sede per configurare le cabine.", cabins: await listCabins(slug, locationId, await listLocations(slug)) };
-  }
+  // Ordine legacy (cabins.php 426-436): l'errore sede viene assegnato prima ma
+  // il check nomi lo SOVRASCRIVE — a parita' di violazioni vince 'Inserisci un
+  // nome per tutte le cabine.'.
   for (let i = 0; i < count; i++) {
     if ((names[i] ?? "") === "") {
       return { ok: false, error: "Inserisci un nome per tutte le cabine.", cabins: await listCabins(slug, locationId, await listLocations(slug)) };
     }
   }
+  if (hasLocationCol && locationId <= 0) {
+    return { ok: false, error: "Seleziona una sede per configurare le cabine.", cabins: await listCabins(slug, locationId, await listLocations(slug)) };
+  }
 
-  // Active rows for this scope, keyed by id (legacy cabin_fetch_active_rows).
+  // Active rows for this scope, keyed by id (legacy cabin_fetch_active_rows:
+  // con sede attiva le cabine location NULL ordinano per ULTIME).
   const activeRows = await tenantSelect<RowDataPacket>({
     slug,
     table: "cabins",
     columns: "*",
     where: hasLocationCol && locationId > 0 ? "COALESCE(is_active,1)=1 AND (location_id = ? OR location_id IS NULL)" : "COALESCE(is_active,1)=1",
     params: hasLocationCol && locationId > 0 ? [locationId] : [],
-    orderBy: "position ASC, id ASC",
+    orderBy: hasLocationCol && locationId > 0 ? "(location_id IS NULL) ASC, position ASC, id ASC" : "position ASC, id ASC",
   }).catch(() => []);
   const activeById = new Map<number, RowDataPacket>();
   for (const row of activeRows) {
@@ -536,6 +533,8 @@ export async function cabinDeleteBlockersLegacy(slug: string, cabinId: number, c
     const clientJoin = clients ? `LEFT JOIN ${quoteIdentifier(clients.name)} cl ON cl.id = a.client_id` : "";
     const clientSelect = clients ? "cl.full_name AS client_name" : "NULL AS client_name";
     const hasPublicCode = await columnExists(appt.name, "public_code");
+    const hasApptCabin = await columnExists(appt.name, "cabin_id");
+    const hasServiceCabin = services ? await columnExists(services.name, "cabin_id") : false;
     const scope = appt.mode === "shared" ? " AND a.tenant_id = ?" : "";
     const scopeParams = appt.mode === "shared" ? [appt.tenantId ?? 0] : [];
     const pushAppt = (row: RowDataPacket) => {
@@ -565,33 +564,61 @@ export async function cabinDeleteBlockersLegacy(slug: string, cabinId: number, c
     };
 
     const segments = await tenantTable(slug, "appointment_segments").catch(() => null);
-    if (segments && await columnExists(segments.name, "cabin_id")) {
+    const hasSegCabin = segments ? await columnExists(segments.name, "cabin_id") : false;
+    if (segments && hasSegCabin) {
+      // COALESCE legacy a 3 livelli (cabins.php 232-237): sg.cabin_id, poi
+      // a.cabin_id, poi sv.cabin_id via sg.service_id — solo se le colonne esistono.
+      const hasSegServiceId = await columnExists(segments.name, "service_id");
+      const segCabinParts = ["sg.cabin_id"];
+      if (hasApptCabin) segCabinParts.push("a.cabin_id");
+      const segSvcJoin = services && hasServiceCabin && hasSegServiceId ? `LEFT JOIN ${quoteIdentifier(services.name)} sv ON sv.id = sg.service_id` : "";
+      if (segSvcJoin) segCabinParts.push("sv.cabin_id");
+      const segCabinExpr = segCabinParts.length > 1 ? `COALESCE(${segCabinParts.join(", ")})` : segCabinParts[0];
       const rows = await dbQuery<RowDataPacket[]>(
         `SELECT DISTINCT a.id AS appointment_id, ${hasPublicCode ? "a.public_code" : "NULL AS public_code"}, a.starts_at, a.status, ${clientSelect}
            FROM ${quoteIdentifier(segments.name)} sg
            JOIN ${quoteIdentifier(appt.name)} a ON a.id = sg.appointment_id
+           ${segSvcJoin}
            ${clientJoin}
           WHERE a.status IN ('pending','scheduled') AND sg.ends_at >= NOW()
-            AND COALESCE(sg.cabin_id, a.cabin_id) = ?${scope}
+            AND ${segCabinExpr} = ?${scope}
           ORDER BY a.starts_at ASC, a.id ASC`,
         [cabinId, ...scopeParams],
       ).catch(() => [] as RowDataPacket[]);
       rows.forEach(pushAppt);
     }
-    const excludeSegmented = segments ? ` AND NOT EXISTS (SELECT 1 FROM ${quoteIdentifier(segments.name)} sg2 WHERE sg2.appointment_id = a.id)` : "";
-    const svcJoin = services && await columnExists(services.name, "cabin_id") ? `LEFT JOIN ${quoteIdentifier(services.name)} sv ON sv.id = a.service_id` : "";
-    const cabinCond = svcJoin ? "(a.cabin_id = ? OR (a.cabin_id IS NULL AND sv.cabin_id = ?))" : "a.cabin_id = ?";
-    const rows = await dbQuery<RowDataPacket[]>(
-      `SELECT DISTINCT a.id AS appointment_id, ${hasPublicCode ? "a.public_code" : "NULL AS public_code"}, a.starts_at, a.status, ${clientSelect}
-         FROM ${quoteIdentifier(appt.name)} a
-         ${svcJoin}
-         ${clientJoin}
-        WHERE a.status IN ('pending','scheduled') AND a.ends_at >= NOW()${excludeSegmented}
-          AND ${cabinCond}${scope}
-        ORDER BY a.starts_at ASC, a.id ASC`,
-      svcJoin ? [cabinId, cabinId, ...scopeParams] : [cabinId, ...scopeParams],
-    ).catch(() => [] as RowDataPacket[]);
-    rows.forEach(pushAppt);
+    // Query diretta (cabins.php 254-290): condizioni costruite per esistenza
+    // colonne; esclude gli appuntamenti gia' coperti dai segmenti.
+    if (hasApptCabin || hasServiceCabin) {
+      const excludeSegmented = segments && hasSegCabin ? ` AND NOT EXISTS (SELECT 1 FROM ${quoteIdentifier(segments.name)} sg2 WHERE sg2.appointment_id = a.id)` : "";
+      const svcJoin = services && hasServiceCabin ? `LEFT JOIN ${quoteIdentifier(services.name)} sv ON sv.id = a.service_id` : "";
+      const conditions: string[] = [];
+      const conditionParams: number[] = [];
+      if (hasApptCabin) {
+        conditions.push("a.cabin_id = ?");
+        conditionParams.push(cabinId);
+      }
+      if (hasApptCabin && svcJoin) {
+        conditions.push("(a.cabin_id IS NULL AND sv.cabin_id = ?)");
+        conditionParams.push(cabinId);
+      } else if (svcJoin) {
+        conditions.push("sv.cabin_id = ?");
+        conditionParams.push(cabinId);
+      }
+      if (conditions.length) {
+        const rows = await dbQuery<RowDataPacket[]>(
+          `SELECT DISTINCT a.id AS appointment_id, ${hasPublicCode ? "a.public_code" : "NULL AS public_code"}, a.starts_at, a.status, ${clientSelect}
+             FROM ${quoteIdentifier(appt.name)} a
+             ${svcJoin}
+             ${clientJoin}
+            WHERE a.status IN ('pending','scheduled') AND a.ends_at >= NOW()${excludeSegmented}
+              AND (${conditions.join(" OR ")})${scope}
+            ORDER BY a.starts_at ASC, a.id ASC`,
+          [...conditionParams, ...scopeParams],
+        ).catch(() => [] as RowDataPacket[]);
+        rows.forEach(pushAppt);
+      }
+    }
   }
 
   return out;
@@ -1300,12 +1327,14 @@ async function listResources(slug: string, activeLocationId: number, locations: 
 }
 
 async function listCabins(slug: string, activeLocationId: number, locations: ResourceLocation[]): Promise<ResourceCabin[]> {
+  // cabin_fetch_active_rows: con sede attiva le cabine location NULL (condivise)
+  // ordinano per ULTIME — chiave (location_id IS NULL) ASC (cabins.php 105).
   const rows = await tenantSelect<RowDataPacket>({
     slug,
     table: "cabins",
     where: activeLocationId ? "COALESCE(is_active,1)=1 AND (location_id = ? OR location_id IS NULL)" : "COALESCE(is_active,1)=1",
     params: activeLocationId ? [activeLocationId] : [],
-    orderBy: "position ASC, id ASC",
+    orderBy: activeLocationId ? "(location_id IS NULL) ASC, position ASC, id ASC" : "position ASC, id ASC",
   }).catch(() => []);
   const serviceMap = await cabinServiceLinks(slug, rows.map((row) => Number(row.id ?? 0)).filter((id) => id > 0));
   const out: ResourceCabin[] = [];
@@ -1682,37 +1711,9 @@ async function resourceFuturePeakUsage(slug: string, resourceId: number, locatio
   }
 }
 
-async function cabinBlockers(slug: string, cabinId: number): Promise<LinkedService[]> {
-  const serviceLinks = (await cabinServiceLinks(slug, [cabinId])).get(cabinId) ?? [];
-  if (serviceLinks.length) return serviceLinks;
-  const appointments = await futureCabinAppointmentCount(slug, cabinId);
-  return appointments > 0 ? [{ serviceId: 0, serviceName: `${appointments} prenotazioni future`, isActive: true }] : [];
-}
-
-async function futureCabinAppointmentCount(slug: string, cabinId: number): Promise<number> {
-  const appointments = await tenantTable(slug, "appointments").catch(() => null);
-  if (!appointments) return 0;
-  const checks: string[] = [];
-  const params: unknown[] = [];
-  if (await columnExists(appointments.name, "cabin_id")) {
-    checks.push("a.cabin_id = ?");
-    params.push(cabinId);
-  }
-  const segments = await tenantTable(slug, "appointment_segments").catch(() => null);
-  if (segments && await columnExists(segments.name, "cabin_id")) {
-    checks.push(`EXISTS (SELECT 1 FROM ${quoteIdentifier(segments.name)} sg WHERE sg.appointment_id=a.id AND sg.cabin_id=?)`);
-    params.push(cabinId);
-  }
-  if (!checks.length) return 0;
-  const clauses = [`(${checks.join(" OR ")})`, "a.ends_at >= NOW()"];
-  if (await columnExists(appointments.name, "status")) clauses.push("LOWER(COALESCE(a.status,'')) IN ('pending','scheduled','in sospeso','prenotato')");
-  if (appointments.mode === "shared" && await columnExists(appointments.name, "tenant_id")) {
-    clauses.unshift("a.tenant_id = ?");
-    params.unshift(appointments.tenantId ?? 0);
-  }
-  const rows = await dbQuery<RowDataPacket[]>(`SELECT COUNT(DISTINCT a.id) AS count FROM ${quoteIdentifier(appointments.name)} a WHERE ${clauses.join(" AND ")}`, params).catch(() => []);
-  return Number(rows[0]?.count ?? 0);
-}
+// (Le vecchie cabinBlockers/futureCabinAppointmentCount — pseudo-voce
+// 'N prenotazioni future' — sono state rimosse: superate dal port fedele
+// cabinDeleteBlockersLegacy con le voci block_kind='appointment' del legacy.)
 
 // Owner del tenant: nel legacy per-tenant è users.id=1 (primo utente creato,
 // staff.php 560-561); nello schema PG condiviso gli id sono globali, quindi
@@ -2086,13 +2087,6 @@ async function mustFindResource(slug: string, id: number): Promise<SharedResourc
   return item;
 }
 
-async function mustFindCabin(slug: string, id: number): Promise<ResourceCabin> {
-  const context = await resourceContext({ slug });
-  const item = context.cabins.find((cabin) => cabin.id === id);
-  if (!item) throw new Error("Cabina non trovata.");
-  return item;
-}
-
 async function mustFindStaff(slug: string, id: number): Promise<ResourceStaff> {
   // Lookup per-id SENZA filtro sede: la conferma post-salvataggio deve trovare
   // l'operatore anche se assegnato a una sede diversa da quella corrente/default
@@ -2127,25 +2121,6 @@ async function filterColumns(table: string, values: Record<string, unknown>): Pr
   );
   const columns = new Set(rows.map((row) => String(row.column_name ?? row.COLUMN_NAME)));
   return Object.fromEntries(Object.entries(values).filter(([key, value]) => columns.has(key) && value !== undefined));
-}
-
-async function nextPosition(slug: string, tableName: string, locationId: number | null): Promise<number> {
-  const table = await tenantTable(slug, tableName);
-  const clauses: string[] = [];
-  const params: unknown[] = [];
-  if (locationId) {
-    clauses.push("location_id = ?");
-    params.push(locationId);
-  }
-  if (table.mode === "shared" && await columnExists(table.name, "tenant_id")) {
-    clauses.unshift("tenant_id = ?");
-    params.unshift(table.tenantId ?? 0);
-  }
-  const rows = await dbQuery<RowDataPacket[]>(
-    `SELECT COALESCE(MAX(position),0)+1 AS next_position FROM ${quoteIdentifier(table.name)} ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""}`,
-    params,
-  ).catch(() => []);
-  return Number(rows[0]?.next_position ?? 1) || 1;
 }
 
 function mapHourRow(row: Record<string, unknown>): BusinessHourRow {

@@ -18,7 +18,6 @@ import {
   type ResourceBlockPopup,
   saveAvailabilityEvent,
   saveBusinessHours,
-  saveCabin,
   saveCabinsBulk,
   saveClosure,
   saveException,
@@ -77,10 +76,16 @@ export async function GET(request: Request) {
   }
 
   try {
+    // Sede attiva come nel legacy (app_current_location_id): il query param
+    // vince, altrimenti la sede corrente di SESSIONE (topbar switcher). Per la
+    // pagina Cabine (rawLocation) niente fallback alla prima sede attiva:
+    // 0 = stato 'Tutte' legittimo (cabins.php 356-361).
+    const locationParam = url.searchParams.get("location_id") ?? url.searchParams.get("locationId");
     const context = await resourceContext({
       slug: tenantSlug,
-      locationId: parseInteger(url.searchParams.get("location_id") ?? url.searchParams.get("locationId"), 0),
+      locationId: locationParam !== null ? parseInteger(locationParam, 0) : Number(session.user.currentLocationId ?? 0) || 0,
       date: url.searchParams.get("date") ?? undefined,
+      rawLocation: section === "cabins",
     });
     // Pagina di gestione Operatori (section=staff): filtra per la SEDE CORRENTE
     // (come staff.php, default $staffCurrentLocationId) — un operatore compare nelle
@@ -131,11 +136,9 @@ export async function POST(request: Request) {
       }
     }
 
-    if (action === "cabin_save") {
-      if (!can(activeUser.perms, "cabins.manage")) return jsonError("Permesso Cabine richiesto.", 403);
-      const cabin = await saveCabin(tenantSlug, body);
-      return Response.json({ ok: true, cabin });
-    }
+    // NB: nessuna azione cabin_save singola — cabins.php espone SOLO il bulk
+    // #cabinsForm (cabins_save) + action=delete; il salvataggio per singola
+    // cabina non esiste nel legacy e permetteva di aggirare le regole di sede.
 
     // Bulk cabins save (port of cabins.php #cabinsForm POST): count + names +
     // ids for the active location. Returns ok:false + blockingServices when a
