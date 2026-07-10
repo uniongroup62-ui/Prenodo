@@ -166,9 +166,16 @@ export async function POST(request: Request) {
             || inner === "Email non valida."
             || inner.endsWith(" non valido.")
             || inner === "Esiste gia una sede con questo nome."
-            || inner === "Funzione non disponibile nel piano attuale.";
+            || inner === "Funzione non disponibile per il tuo account";
           return jsonError(isValidation ? inner : `Errore salvataggio sede: ${inner}`);
         }
+
+      // Azione MORTA del legacy (locations.php 356-358): risponde sempre con
+      // l'errore fisso — il toggle attiva/disattiva non esiste più.
+      case "location_disable":
+      case "location_enable":
+        if (!can(session.user.perms, "settings.location")) return jsonError("Permesso Sedi richiesto.", 403);
+        return jsonError("La funzione Attiva/Disattiva sede non e piu disponibile. Usa Abilita in prenotazioni online oppure Elimina sede.");
 
       case "location_move": {
         if (!can(session.user.perms, "settings.location")) return jsonError("Permesso Sedi richiesto.", 403);

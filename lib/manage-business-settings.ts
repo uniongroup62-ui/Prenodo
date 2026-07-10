@@ -109,7 +109,7 @@ export async function getBusinessSettingsContext(slug: string, publicOrigin = ""
     featureFlags: {
       bookingPublicAllowed: Boolean(Number(tenant?.booking_public_allowed ?? 1)),
       marketplacePublicAllowed: Boolean(Number(tenant?.marketplace_public_allowed ?? 1)),
-      unavailableMessage: "Funzione non disponibile nel piano attuale.",
+      unavailableMessage: "Funzione non disponibile per il tuo account",
     },
     business,
     branding: {
@@ -328,7 +328,7 @@ export async function saveBusinessLocation(slug: string, input: Record<string, s
   const id = parseInteger(input.id, 0);
   const data = normalizeLocationPayload(input);
 
-  if (!bookingPublicAllowed && data.booking_enabled === 1) throw new Error("Funzione non disponibile nel piano attuale.");
+  if (!bookingPublicAllowed && data.booking_enabled === 1) throw new Error("Funzione non disponibile per il tuo account");
   if (!bookingPublicAllowed) {
     data.booking_enabled = id > 0 ? await currentLocationBookingEnabled(slug, id) : 0;
   }
@@ -375,7 +375,8 @@ export async function saveBusinessLocation(slug: string, input: Record<string, s
 
 export async function moveBusinessLocation(slug: string, locationId: number, direction: "up" | "down", publicOrigin = "") {
   const target = await tenantTable(slug, "locations");
-  if (!await columnExists(target.name, "sort_order")) throw new Error("Campo sort_order non disponibile.");
+  // Messaggio verbatim locations.php 367.
+  if (!await columnExists(target.name, "sort_order")) throw new Error("Per ordinare le sedi importa il dump SQL completo aggiornato.");
   const rows = await normalizeLocationOrder(slug);
   const index = rows.findIndex((row) => Number(row.id ?? 0) === locationId);
   // Flash legacy: msg='Ordine sedi aggiornato' se spostata, msg='La sede e gia
@@ -399,7 +400,7 @@ export async function saveLocationMarketplace(slug: string, input: Record<string
 
   let enabled = truthy(input.marketplace_enabled) ? 1 : 0;
   if (!marketplacePublicAllowed) {
-    if (enabled === 1) throw new Error("Funzione non disponibile nel piano attuale.");
+    if (enabled === 1) throw new Error("Funzione non disponibile per il tuo account");
     enabled = Number(location.marketplace_enabled ?? 0) || 0;
   }
 
@@ -450,6 +451,9 @@ export async function uploadLocationGalleryImages(slug: string, locationId: numb
 }
 
 export async function deleteLocationGalleryImage(slug: string, locationId: number, imageId: number, publicOrigin = "") {
+  // Guardie di delete_location_gallery_image (Helpers.php 11854-11868), verbatim.
+  if (locationId <= 0) throw new Error("Sede non valida");
+  if (imageId <= 0) throw new Error("Foto gallery non valida");
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "location_gallery_images", columns: "id, path", where: "id = ? AND location_id = ?", params: [imageId, locationId], limit: 1 }).catch(() => [] as RowDataPacket[]);
   if (!rows[0]) throw new Error("Foto gallery non trovata per questa sede");
   const storedPath = String(rows[0].path ?? "");
@@ -519,6 +523,9 @@ export async function previewLocationDelete(slug: string, locationId: number) {
 }
 
 export async function deleteBusinessLocation(slug: string, locationId: number, confirmText: string, reason = "", publicOrigin = "") {
+  // Ordine legacy (locations.php 488 PRIMA di LocationDeletion::delete): id
+  // non valido -> 'Sede non valida.', poi la conferma ELIMINA (case-sensitive).
+  if (locationId <= 0) throw new Error("Sede non valida.");
   if (confirmText.trim() !== "ELIMINA") throw new Error("Conferma non valida.");
   const preview = await previewLocationDelete(slug, locationId);
   if (!preview.ok) throw new Error(preview.error ?? "Sede non trovata.");
@@ -527,6 +534,16 @@ export async function deleteBusinessLocation(slug: string, locationId: number, c
   await ensureLocationDeletionLogTables(slug);
   const locationName = clean(String(preview.location?.name ?? `Sede #${locationId}`), 190);
   await insertLocationDeletionLog(slug, locationId, locationName, reason, preview);
+  // LocationDeletion 591-599: i file della gallery vengono eliminati PRIMA
+  // delle righe (qui gli oggetti R2, best-effort; i path legacy /uploads via
+  // deletePublicUpload).
+  const galleryRows = await tenantSelect<RowDataPacket>({ slug, table: "location_gallery_images", columns: "path", where: "location_id = ?", params: [locationId] }).catch(() => [] as RowDataPacket[]);
+  for (const row of galleryRows) {
+    const storedPath = String(row.path ?? "");
+    const key = storageKeyFromPublicUrl(storedPath);
+    if (key) await deletePublicObject(key).catch(() => undefined);
+    else await deletePublicUpload(storedPath).catch(() => undefined);
+  }
   for (const table of locationCleanupTables) {
     await deleteRowsWithLocation(slug, table, locationId);
   }

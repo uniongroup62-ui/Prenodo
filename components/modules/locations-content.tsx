@@ -295,7 +295,7 @@ export function LocationsContent({
         setCtx({
           locations: Array.isArray(j.locations) ? j.locations : [],
           activityCategories: Array.isArray(j.marketplace?.activityCategories) ? j.marketplace.activityCategories : [],
-          featureFlags: j.featureFlags ?? { bookingPublicAllowed: true, marketplacePublicAllowed: true, unavailableMessage: "Funzione non disponibile nel piano attuale." },
+          featureFlags: j.featureFlags ?? { bookingPublicAllowed: true, marketplacePublicAllowed: true, unavailableMessage: "Funzione non disponibile per il tuo account" },
         });
       })
       .catch(() => setCtx(null))
@@ -640,7 +640,7 @@ export function LocationsContent({
   const flags = ctx?.featureFlags;
   const bookingPublicAllowed = flags?.bookingPublicAllowed ?? true;
   const marketplacePublicAllowed = flags?.marketplacePublicAllowed ?? true;
-  const unavailableMessage = flags?.unavailableMessage ?? "Funzione non disponibile nel piano attuale.";
+  const unavailableMessage = flags?.unavailableMessage ?? "Funzione non disponibile per il tuo account";
   const isEdit = editRow !== null && editRow !== "new";
   const editData = isEdit ? (editRow as LocationRow) : null;
   // Warning booking/marketplace (locations.js refreshBookingMarketplaceWarning).

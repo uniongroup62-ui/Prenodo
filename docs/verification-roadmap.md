@@ -9408,3 +9408,97 @@ cover e logo su R2 (upload con reset posizione -> blocco secondo upload ->
 delete con directory azzerata), delete no-op, permessi upload. SANITY:
 model-a 12/12. PRODUZIONE INTATTA: businesses riga identica (name 'elite',
 about NULL, path NULL, posizioni 50), tenant_directory_profiles identico.
+
+## 2026-07-10 — Sedi (locations.php + locations.js + LocationDeletion.php): audit 1:1 + 6 fix + e2e live
+
+Legacy letto INTEGRALE (agente): app/pages/locations.php (1253) + assets/js/pages/
+locations.js (735) + app/lib/LocationDeletion.php (763) + helper gallery/marketplace
+(Helpers.php 11625-11903, Marketplace.php, TenantFeatureGate.php). Next: route
+business-settings (condivisa col Profilo attivita) + lib/manage-business-settings.ts
+(saveBusinessLocation/moveBusinessLocation/saveLocationMarketplace/gallery fns/
+previewLocationDelete/deleteBusinessLocation) + locations-content.tsx (1329) +
+location_form-content.tsx. Permesso settings.location.
+
+FIX (6):
+1) MESSAGGIO GATE PIANO verbatim: TenantFeatureGate::unavailableMessage() e'
+   'Funzione non disponibile per il tuo account' (SENZA punto,
+   TenantFeatureGate.php:7) — il Next usava ovunque 'Funzione non disponibile
+   nel piano attuale.' (lib x3, route isValidation, componente x2, featureFlags
+   del context). Sostituito in 6 punti.
+2) AZIONI MORTE location_disable/location_enable (locations.php 356-358):
+   rispondono con l'errore fisso 'La funzione Attiva/Disattiva sede non e piu
+   disponibile. Usa Abilita in prenotazioni online oppure Elimina sede.'
+   (prima: 'Azione non valida.').
+3) move senza colonna sort_order -> 'Per ordinare le sedi importa il dump SQL
+   completo aggiornato.' (locations.php 367; era un messaggio inventato).
+4) Guardie delete gallery verbatim (Helpers 11854-11868): id sede <=0 ->
+   'Sede non valida', id foto <=0 -> 'Foto gallery non valida' (prima
+   cadevano nel generico not-found).
+5) location_delete con id <=0 -> 'Sede non valida.' PRIMA della conferma
+   (ordine legacy: locations.php 488 precede LocationDeletion::delete).
+6) DELETE SEDE: gli oggetti R2 della gallery vengono rimossi PRIMA delle righe
+   (LocationDeletion 591-599 elimina i file; il Next lasciava orfani su R2).
+
+CONFERMATI FEDELI: lista TUTTE le sedi (anche inattive) ordinate
+COALESCE(sort_order,999999),id; validazioni save in ordine con stop al primo
+errore e messaggi NUDI ('Inserisci il nome della sede.', 'Email non valida.',
+'Facebook/Instagram/TikTok non valido.', 'Esiste gia una sede con questo nome.'
+case/trim-insensitive) vs wrapper 'Errore salvataggio sede: ' per gli imprevisti;
+normalizzazione social (@handle -> URL piattaforma, domini nudi https://);
+campi vuoti -> NULL; is_active SEMPRE 1; nuova sede marketplace_enabled=0 e
+sort_order=MAX+1; move con normalize 0-based + swap col vicino, 'La sede e gia
+in posizione limite.' come SUCCESS (anche per id inesistente); gate piano:
+booking bloccato NUDO su save, marketplace wrappato, enabled preservato dal DB
+quando bloccato con enabled=0; marketplace per-sede: max 5 categorie (slice
+server), primaria in-lista o prima, ordine da activity_category_order,
+'Seleziona almeno una categoria attivita per rendere visibile la sede.' /
+'Categorie attivita marketplace non valide.' / 'Sede non valida per il
+marketplace.' NUDO / 'Sede non trovata.' wrappato, delete-all+reinsert;
+gallery: multi-upload JPG/PNG/WEBP 5MB con sort step-10, 'Foto troppo grande
+(max 5 MB)' / 'Formato non valido: carica JPG, PNG o WEBP' wrappati 'Errore
+upload gallery sede: ', 'Sede non valida per la gallery.' NUDO 422, delete con
+ricompattazione a passo 10, move swap senza AJAX (componente chiude il modale
+col flash globale come il redirect legacy); DELETE SEDE: preview con blockers
+STORICI (appointments+20 tabelle con location_id: qualunque riga blocca) vs
+17 tabelle di cleanup config, canDelete = count>1 && no blockers, 'Deve restare
+almeno una sede.' / 'La sede contiene storico operativo o contabile.
+Archiviala/nascondila o sposta prima i dati storici: non viene eliminata per
+evitare perdita di dati.', conferma ELIMINA case-sensitive ('Conferma non
+valida.'), log su location_deletion_logs (name/reason/summary_json), cascata
+cleanup + purge mapping marketplace + riassegnazione clienti alla prima sede
+residua + normalize + sync directory, 'Sede eliminata definitivamente';
+componente: badge tri-stato Visibile/Bloccata/Nascosta, chip categorie /
+'Da impostare', modale sede con combobox geo (italy-geo.js iniettato), card
+categorie con contatore N/5 + badge Principale/posizione + dblclick, alert
+client 'Puoi selezionare al massimo 5 categorie per sede.' e variante JS
+'...nel marketplace.' DIVERSA dal server (fedele), gallery pending 'Da salvare'
+con Svuota, modale eliminazione con accordion 3 sezioni ('perche' senza
+accento) e reason/confirm.
+
+RESIDUI documentati (non fix): (a) sezioni exclusive/shared/client-ranking del
+LocationDeletion (master esclusivi eliminati, riassegnazione clienti per
+attivita) = P11 multi-sede completo — il Next elimina solo config/mapping e
+riassegna i clienti alla prima sede residua per sort_order; ATTENZIONE: i
+master mappati SOLO alla sede eliminata (servizi/operatori/pacchetti/...)
+restano e diventano di fatto globali finche' P11 non replica deleteMappedMasters;
+(b) niente resize GD 1600x1200 q84 per la gallery (R2 salva l'originale);
+(c) 'Campo marketplace_enabled non disponibile...' e schema-warning multi-sede
+non replicati (schema PG completo); (d) session current_location_id non
+azzerata alla delete della sede corrente (cookie fino a switch/logout);
+(e) re-check delete-time 'non puo essere eliminata in sicurezza' assorbito dal
+re-preview; (f) 'Direzione non valida' gallery-move coperta dalla coercizione
+della route; (g) pagina form separata (?action=new|edit) in aggiunta al modale.
+
+VERIFICATO: test-sedi 40/40 SU SEDE ZZ (create con socials normalizzati e
+marketplace_enabled=0, edit con vuoti->NULL, duplicati case-insensitive anche
+vs 'Sede1', move con swap/limite/id-inesistente/direzione, marketplace 2 cat +
+primaria/slice-5/categorie-inesistenti/disable/mapping Sede1 INTATTO, gallery
+upload x2 + errori + move + delete con ricompattazione + guardie, FINESTRE
+CONTROLLATE sui flag piano (booking/marketplace a 0 con messaggi verbatim e
+RIPRISTINO verificato 1/1), azioni morte, preview ZZ ok vs preview Sede1
+BLOCCATA (solo lettura, 68 appuntamenti), conferma case-sensitive, id 0,
+delete con cascata gallery/mapping/log). CLEANUP: sedi 21/51 BYTE-IDENTICHE
+(sort_order ripristinati), mapping 'Unghie' intatto, gallery 0, flag 1/1,
+5 clienti; rimossi anche 7 log ZZ residui di sessioni precedenti (resta il solo
+log 'TMP Codex' dello smoke test storico). REGRESSIONE: profilo 25/25,
+model-a 12/12, orari 37/37.
