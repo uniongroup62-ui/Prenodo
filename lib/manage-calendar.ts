@@ -197,7 +197,9 @@ export async function calendarContext(input: {
 // al legacy: se NESSUN operatore ha alcuna riga staff_locations (feature non configurata
 // o errore query) restituiamo lo staff invariato invece di azzerare le colonne (il
 // legacy mostrerebbe zero colonne). Best-effort su tabella/colonna assenti.
-async function filterStaffByLocation<T extends { id: number }>(
+// (Esportata: anche il planner Pianifica filtra il pool operatori per sede con
+// la stessa regola — planner_staff_for_service usa app_filter_staff_ids_by_location.)
+export async function filterStaffByLocation<T extends { id: number }>(
   slug: string,
   staff: T[],
   locationId: number,

@@ -82,6 +82,19 @@ export async function GET(request: Request) {
   // and lists staff/cabins). Reuses publicBookingContext (services with
   // categoryId/duration/price/noOperator/locationIds + categories + staff +
   // locations) and adds cabins, which that context omits.
+  // Flag pagina Pianifica (port del gate legacy appointments_plan.php 4-12:
+  // requirePerm('appointments.plan') + can('appointments.manage') per il link
+  // Lista + can('calendar.view') per il link Calendario). Il componente li legge
+  // al mount: canPlan=false -> card 'Accesso negato'.
+  if (action === "plan_context") {
+    return Response.json({
+      ok: true,
+      canPlan: can(session.user.perms, "appointments.plan"),
+      canManageAppointments: can(session.user.perms, "appointments.manage"),
+      canSeeCalendar: can(session.user.perms, "calendar.view"),
+    });
+  }
+
   if (action === "context") {
     try {
       const [context, cabins, locationContext] = await Promise.all([
@@ -372,6 +385,13 @@ export async function GET(request: Request) {
       sourceMode: "database",
       appointments,
       holds: [],
+      // Flag pagina Lista (appointments.php 2/20-21): requirePerm
+      // appointments.manage + varianti empty-state/bottoni per
+      // quick_booking/calendar.view. Il componente li usa per la card
+      // 'Accesso negato' e per il gating dei bottoni.
+      canManageAppointments: can(session.user.perms, "appointments.manage"),
+      canQuickBook: can(session.user.perms, "appointments.quick_booking"),
+      canSeeCalendar: can(session.user.perms, "calendar.view"),
     });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Errore appuntamenti.");
@@ -485,10 +505,11 @@ export async function POST(request: Request) {
     // the recurrence date set + per-date slot search and returns the OK/Saltato
     // table; plan_create re-runs the same search (never trusting the client),
     // creates the new client if needed, and createDbAppointment for each OK date.
-    // Both gated on appointments.plan / appointments.manage (the legacy page's
-    // permission), stricter than the POST umbrella which also admits quick_booking.
+    // Both gated on appointments.plan ONLY (legacy Auth::requirePerm('appointments.plan'),
+    // appointments_plan.php:4 — appointments.manage NON basta ad aprire il planner),
+    // stricter than the POST umbrella which also admits manage/quick_booking.
     if (action === "plan_preview" || action === "plan_create") {
-      if (!canAny(session.user.perms, ["appointments.plan", "appointments.manage"])) {
+      if (!can(session.user.perms, "appointments.plan")) {
         return jsonError("Permesso pianificazione appuntamenti mancante.", 403);
       }
       const planLocationId = await resolveManageLocationId({
@@ -521,7 +542,8 @@ export async function POST(request: Request) {
     // umbrella check above which also admits plan/quick_booking.
     if (action === "delete" || action === "bulk_delete") {
       if (!can(session.user.perms, "appointments.manage")) {
-        return jsonError("Permesso eliminazione appuntamenti mancante.", 403);
+        // api_appt_require_manage (api_appointments.php 64): testo verbatim.
+        return jsonError("Permesso Appuntamenti richiesto.", 403);
       }
 
       // Collect the target ids. `delete` takes a single id (body/query); `bulk_delete`

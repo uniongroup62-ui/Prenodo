@@ -76,8 +76,13 @@ function fmtDateIt(iso: string): string {
   return `${m[3]}/${m[2]}/${m[1]}`;
 }
 
+// Port di fmt_money legacy = number_format($n, 2, ',', '.') — virgola decimale E
+// punto di raggruppamento migliaia (toLocaleString non raggruppa 1000-9999).
 function fmtMoney(value: number): string {
-  return (Number(value) || 0).toFixed(2).replace(".", ",");
+  const n = Number(value) || 0;
+  const [int, dec] = Math.abs(n).toFixed(2).split(".");
+  const grouped = int.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return `${n < 0 ? "-" : ""}${grouped},${dec}`;
 }
 
 function tenantSlug(): string {
@@ -185,6 +190,49 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
   const [previewing, setPreviewing] = useState(false);
   const [creating, setCreating] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
+  // Alert successo da redirect (?msg — legacy appointments_plan.php 1567/2052:
+  // post-create senza appointments.manage si resta sul planner col messaggio).
+  const [planMsg, setPlanMsg] = useState<string | null>(null);
+
+  // Gate legacy (appointments_plan.php 4-12): requirePerm('appointments.plan') →
+  // card 'Accesso negato'; link Lista solo con appointments.manage, Calendario
+  // solo con calendar.view. Flag letti da action=plan_context al mount.
+  const [accessDenied, setAccessDenied] = useState(false);
+  const [canManageAppointments, setCanManageAppointments] = useState(true);
+  const [canSeeCalendar, setCanSeeCalendar] = useState(true);
+
+  // Snapshot del body usato per l'Anteprima: il form "Crea appuntamenti" legacy
+  // ri-posta i valori PREVISUALIZZATI (hidden nel secondo form), non lo stato
+  // corrente del form — solo le cabine scelte dopo l'anteprima vengono sincate
+  // (plannerSyncCabinsToCreateForm).
+  const previewBodyRef = useRef<Record<string, string> | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}&action=plan_context`, {
+      headers: { "x-tenant-slug": slug },
+    })
+      .then((r) => r.json())
+      .then((j) => {
+        if (!alive) return;
+        if (!j || j.ok !== true || j.canPlan === false) {
+          setAccessDenied(true);
+          return;
+        }
+        setCanManageAppointments(j.canManageAppointments !== false);
+        setCanSeeCalendar(j.canSeeCalendar !== false);
+      })
+      .catch(() => undefined);
+    // ?msg dal redirect legacy (in microtask: nessun setState sincrono nell'effect).
+    Promise.resolve().then(() => {
+      if (!alive || typeof window === "undefined") return;
+      const urlMsg = String(new URLSearchParams(window.location.search).get("msg") ?? "").trim();
+      if (urlMsg) setPlanMsg(urlMsg);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [slug]);
 
   // Client section state.
   const [clientId, setClientId] = useState("");
@@ -235,7 +283,8 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
       const gid = Number(svc.categoryId ?? 0);
       if (!index.has(gid)) {
         index.set(gid, groups.length);
-        groups.push({ groupId: gid, title: String(svc.categoryName ?? ""), items: [] });
+        // Categoria senza nome = 'Senza categoria' (legacy appointments_plan.php 2134).
+        groups.push({ groupId: gid, title: String(svc.categoryName ?? "").trim() || "Senza categoria", items: [] });
       }
       groups[index.get(gid) as number].items.push(svc);
     }
@@ -261,19 +310,28 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
   }
 
   // Auto-select the only operator when a service has exactly one.
+  // (Microtask: niente setState sincrono nell'effect; l'update funzionale legge
+  // comunque lo stato più recente.)
   useEffect(() => {
-    setStaffPerService((prev) => {
-      const next: Record<number, number> = {};
-      for (const svc of selectedServices) {
-        const eligible = staffForService(svc);
-        if (prev[svc.id] && eligible.some((s) => s.id === prev[svc.id])) {
-          next[svc.id] = prev[svc.id];
-        } else if (eligible.length === 1) {
-          next[svc.id] = eligible[0].id;
+    let alive = true;
+    Promise.resolve().then(() => {
+      if (!alive) return;
+      setStaffPerService((prev) => {
+        const next: Record<number, number> = {};
+        for (const svc of selectedServices) {
+          const eligible = staffForService(svc);
+          if (prev[svc.id] && eligible.some((s) => s.id === prev[svc.id])) {
+            next[svc.id] = prev[svc.id];
+          } else if (eligible.length === 1) {
+            next[svc.id] = eligible[0].id;
+          }
         }
-      }
-      return next;
+        return next;
+      });
     });
+    return () => {
+      alive = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedServiceIds, staff]);
 
@@ -299,16 +357,23 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
   // con una sola libera auto-selezionata; con zero la scelta cade.
   useEffect(() => {
     if (!preview?.cabinsEnabled) return;
-    setCabinPerService((prev) => {
-      const next: Record<number, number> = {};
-      for (const sid of selectedServiceIds) {
-        const free = preview.cabinAvail[sid] ?? [];
-        if (free.length === 0) continue;
-        const keep = prev[sid] && free.some((c) => c.id === prev[sid]) ? prev[sid] : free[0].id;
-        next[sid] = keep;
-      }
-      return next;
+    let alive = true;
+    Promise.resolve().then(() => {
+      if (!alive) return;
+      setCabinPerService((prev) => {
+        const next: Record<number, number> = {};
+        for (const sid of selectedServiceIds) {
+          const free = preview.cabinAvail[sid] ?? [];
+          if (free.length === 0) continue;
+          const keep = prev[sid] && free.some((c) => c.id === prev[sid]) ? prev[sid] : free[0].id;
+          next[sid] = keep;
+        }
+        return next;
+      });
     });
+    return () => {
+      alive = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preview]);
 
@@ -321,7 +386,16 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
   );
   const minTimeTo = useMemo(() => addMinutesToTime(timeFrom, totalDurationMin), [timeFrom, totalDurationMin]);
   useEffect(() => {
-    setTimeTo(minTimeTo);
+    // Legacy: SOLO clamp verso l'alto (if (toEl.value < min) toEl.value = min) —
+    // una finestra più ampia scelta dall'utente NON viene ristretta al minimo.
+    let alive = true;
+    Promise.resolve().then(() => {
+      if (!alive) return;
+      setTimeTo((prev) => (prev < minTimeTo ? minTimeTo : prev));
+    });
+    return () => {
+      alive = false;
+    };
   }, [minTimeTo]);
 
   // normalizeStartDate (699-788): con giorni selezionati, "Dal giorno" è ancorato al
@@ -332,7 +406,14 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
     const order = [1, 2, 3, 4, 5, 6, 0];
     const first = order.find((d) => weekdays.includes(d));
     if (first === undefined) return;
-    setStartDate((prev) => nextWeekdayOccurrence(prev, first));
+    let alive = true;
+    Promise.resolve().then(() => {
+      if (!alive) return;
+      setStartDate((prev) => nextWeekdayOccurrence(prev, first));
+    });
+    return () => {
+      alive = false;
+    };
   }, [weekdays, startDate]);
 
   // Client search inside the modal.
@@ -358,6 +439,11 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
       email: c.email ?? "",
       phone: c.phone ?? "",
     });
+    // planSetSelected legacy (appointments_plan.js 75-78): azzera i campi del
+    // nuovo cliente per evitare una creazione involontaria.
+    setNewFullName("");
+    setNewPhone("");
+    setNewEmail("");
     setFindOpen(false);
   }
 
@@ -419,12 +505,17 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
   async function submitPreview(e: React.FormEvent) {
     e.preventDefault();
     setPlanError(null);
+    setPlanMsg(null);
     setPreviewing(true);
     try {
+      // Il form "Crea" legacy ri-posta ESATTAMENTE questi valori (hidden):
+      // congelo lo snapshot; solo le cabine post-anteprima verranno sincate.
+      const body = buildBody();
+      previewBodyRef.current = body;
       const res = await fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-        body: JSON.stringify({ action: "plan_preview", ...buildBody() }),
+        body: JSON.stringify({ action: "plan_preview", ...body }),
       });
       const j = await res.json();
       if (!j.ok) {
@@ -453,12 +544,20 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
 
   async function submitCreate() {
     setPlanError(null);
+    setPlanMsg(null);
     setCreating(true);
     try {
+      // Valori PREVISUALIZZATI (snapshot) + cabine correnti: come il form create
+      // legacy (hidden dal POST di anteprima + plannerSyncCabinsToCreateForm).
+      const base = previewBodyRef.current ?? buildBody();
+      const cabinMap: Record<number, number> = {};
+      for (const [sid, cid] of Object.entries(cabinPerService)) {
+        if (Number(cid) > 0) cabinMap[Number(sid)] = Number(cid);
+      }
       const res = await fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-        body: JSON.stringify({ action: "plan_create", ...buildBody() }),
+        body: JSON.stringify({ action: "plan_create", ...base, cabin_map: JSON.stringify(cabinMap) }),
       });
       const j = await res.json();
       if (!j.ok) {
@@ -470,6 +569,13 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
       // appuntamenti appena creati restano visibili anche fuori range) e il
       // messaggio verbatim "Pianificazione completata: creati N appuntamenti".
       const created = Number(j.created ?? 0);
+      const successMessage = `Pianificazione completata: creati ${created} appuntamenti`;
+      // Senza appointments.manage il legacy resta sul planner col solo ?msg
+      // (appointments_plan.php 2025).
+      if (!canManageAppointments) {
+        window.location.href = `/${encodeURIComponent(slug)}/appointments_plan?msg=${encodeURIComponent(successMessage)}`;
+        return;
+      }
       const details = (Array.isArray(j.details) ? j.details : []) as Array<{ date?: string; ok?: boolean; appointmentId?: number }>;
       const okRows = details.filter((d) => d.ok);
       const createdIds = okRows.map((d) => Number(d.appointmentId ?? 0)).filter((n) => n > 0);
@@ -480,7 +586,7 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
         params.set("to", shiftIsoDay(okDates[okDates.length - 1], 1));
       }
       if (createdIds.length) params.set("created", createdIds.join(","));
-      params.set("msg", `Pianificazione completata: creati ${created} appuntamenti`);
+      params.set("msg", successMessage);
       window.location.href = `/${encodeURIComponent(slug)}/appointments?${params.toString()}`;
       return;
     } catch {
@@ -488,6 +594,19 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
     } finally {
       setCreating(false);
     }
+  }
+
+  // Auth::requirePerm('appointments.plan') legacy (Auth.php 494-505): 403 con
+  // card 'Accesso negato' al posto della pagina.
+  if (accessDenied) {
+    return (
+      <div className="container-fluid">
+        <div className="card p-4">
+          <div className="h4 fw-semibold mb-2">Accesso negato</div>
+          <div className="text-muted">Non hai i permessi per accedere a questa sezione.</div>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -500,17 +619,27 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
         </div>
         <div className="bs-page-actions">
           <div className="d-flex gap-2">
-            <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/appointments`}>
-              <i className="bi bi-list-task me-1" />
-              Lista
-            </a>
-            <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/calendar`}>
-              <i className="bi bi-calendar-week me-1" />
-              Calendario
-            </a>
+            {/* Link gated come nel legacy (appointments_plan.php 2039-2046). */}
+            {canManageAppointments ? (
+              <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/appointments`}>
+                <i className="bi bi-list-task me-1" />
+                Lista
+              </a>
+            ) : null}
+            {canSeeCalendar ? (
+              <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/calendar`}>
+                <i className="bi bi-calendar-week me-1" />
+                Calendario
+              </a>
+            ) : null}
           </div>
         </div>
       </div>
+
+      {/* Alert a livello pagina come il legacy (2052-2057): successo da ?msg,
+          errore dal POST — la colonna Anteprima mostra comunque l'empty-state. */}
+      {planMsg ? <div className="alert alert-success">{planMsg}</div> : null}
+      {planError ? <div className="alert alert-danger">{planError}</div> : null}
 
       <div className="row g-3">
         <div className="col-lg-5">
@@ -878,9 +1007,10 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
               <div className="col-12">
                 <button className="btn btn-primary w-100" type="submit" disabled={previewing}>
                   <i className="bi bi-magic me-1" />
-                  {previewing ? "Calcolo…" : "Anteprima"}
+                  Anteprima
                 </button>
-                <div className="form-text">Se “Dalle ore” e “Alle ore” coincidono, l’orario è fisso. Altrimenti viene scelto il primo slot libero nella finestra.</div>
+                {/* Virgolette DRITTE come nel legacy (riga 2251), non tipografiche. */}
+                <div className="form-text">Se &quot;Dalle ore&quot; e &quot;Alle ore&quot; coincidono, l&apos;orario è fisso. Altrimenti viene scelto il primo slot libero nella finestra.</div>
               </div>
             </form>
           </div>
@@ -891,9 +1021,9 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
             <div className="h5 mb-1">Anteprima</div>
             <div className="text-muted mb-3">Controllo disponibilità e riepilogo prima della creazione.</div>
 
-            {planError ? <div className="alert alert-danger">{planError}</div> : null}
-
-            {!preview && !planError ? (
+            {/* Legacy 2263: l'empty-state compare ogni volta che non c'è una
+                preview, anche accanto all'alert d'errore (a livello pagina). */}
+            {!preview ? (
               <div className="alert alert-light border">Compila il form e clicca <strong>Anteprima</strong>.</div>
             ) : null}
 
@@ -952,14 +1082,17 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
                 </div>
 
                 <div className="mt-3">
+                  {/* Legacy: il bottone è SEMPRE attivo, anche con 0 righe OK — il
+                      server risponde 'Nessuna prenotazione creabile (tutte non
+                      disponibili).' (riga 1963). */}
                   <button
                     type="button"
                     className="btn btn-success"
                     onClick={submitCreate}
-                    disabled={creating || preview.countOk < 1}
+                    disabled={creating}
                   >
                     <i className="bi bi-check2-circle me-1" />
-                    {creating ? "Creazione…" : "Crea appuntamenti"}
+                    Crea appuntamenti
                   </button>
                   <div className="form-text">Verranno creati solo quelli con esito <strong>OK</strong>.</div>
                 </div>

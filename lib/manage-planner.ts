@@ -36,6 +36,8 @@ import {
   type AppointmentSlotSegment,
   type PublicBookingContext,
 } from "@/lib/public-booking-db";
+import { businessTodayIso } from "@/lib/business-datetime";
+import { filterStaffByLocation } from "@/lib/manage-calendar";
 
 // ---------------------------------------------------------------------------
 // Form parsing (port of the $form block, appointments_plan.php:1545-1562).
@@ -137,7 +139,7 @@ export function parsePlannerForm(body: Record<string, unknown>): PlannerForm {
 // weeks, week anchored to Monday); for monthly emits one date per month.
 // ---------------------------------------------------------------------------
 
-export function generatePlannerDates(form: PlannerForm, today = new Date()): string[] {
+export function generatePlannerDates(form: PlannerForm, today = plannerToday()): string[] {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(form.startDate)) {
     throw new Error("Data di partenza non valida.");
   }
@@ -246,10 +248,20 @@ type ResolvedServices = {
 };
 
 // Resolve services (in selection order) + the final per-service staff map. Mirrors
-// the legacy staff-per-service resolution (appointments_plan.php:1640-1693): a
-// service with exactly one eligible operator is auto-assigned; otherwise the posted
-// staff_map entry must be a valid eligible operator. Throws faithful messages.
-function resolveServices(form: PlannerForm, context: PublicBookingContext): ResolvedServices {
+// the legacy staff-per-service resolution (appointments_plan.php:1640-1693 +
+// planner_staff_for_service 329-376): a service with exactly one eligible operator
+// is auto-assigned; otherwise the posted staff_map entry must be a valid eligible
+// operator. Throws faithful messages.
+// `allowedStaffIds` = pool pre-filtrato per SEDE (app_filter_staff_ids_by_location,
+// STRICT con righe staff_locations); null = nessun filtro. Regole legacy replicate:
+// SSO escluso dai pool (tranne servizi no_operator) e fallback `$rows ?: $all` —
+// un servizio senza mapping (o col mapping interamente fuori sede) apre a TUTTI
+// gli operatori attivi della sede, a prescindere dai loro mapping personali.
+function resolveServices(
+  form: PlannerForm,
+  context: PublicBookingContext,
+  allowedStaffIds: Set<number> | null = null,
+): ResolvedServices {
   if (form.serviceIds.length === 0) throw new Error("Seleziona almeno un servizio.");
 
   const ordered: ResolvedServices["ordered"] = [];
@@ -289,14 +301,15 @@ function resolveServices(form: PlannerForm, context: PublicBookingContext): Reso
       staffFinal[sid] = 0;
       continue;
     }
-    // Eligible operators: those mapped to this service (staff_services), else all.
-    const eligible = context.staff.filter(
-      (s) => s.active && (s.serviceIds.length === 0 || s.serviceIds.includes(sid)),
+    // Base = attivi, SSO escluso, dentro la sede (planner_staff_for_service:
+    // "full_name <> 'SSO'" + app_filter_staff_ids_by_location su entrambe le liste).
+    const base = context.staff.filter(
+      (s) => s.active && s.name !== "SSO" && (allowedStaffIds === null || allowedStaffIds.has(s.id)),
     );
-    // A staff with an explicit mapping list takes precedence; if NO staff maps this
-    // service at all, every active staff is eligible (legacy "no mapping → all").
-    const mapped = context.staff.filter((s) => s.active && s.serviceIds.includes(sid));
-    const pool = mapped.length > 0 ? mapped : eligible;
+    // Mapping esplicito (staff_services) prima; `$rows ?: $all`: senza mapping —
+    // o con mapping interamente filtrato via dalla sede — TUTTI gli attivi in sede.
+    const mapped = base.filter((s) => s.serviceIds.includes(sid));
+    const pool = mapped.length > 0 ? mapped : base;
     if (pool.length === 0) {
       throw new Error(`Nessun operatore disponibile per il servizio: ${svc.name}`);
     }
@@ -314,6 +327,19 @@ function resolveServices(form: PlannerForm, context: PublicBookingContext): Reso
   return { ordered, totalDuration, totalPrice, staffFinal, staffNameById };
 }
 
+// Pool operatori consentiti nella sede corrente (planner_staff_for_service usa
+// app_filter_staff_ids_by_location su eleggibili E fallback): Set di id, o null
+// quando non c'è una sede da filtrare.
+async function plannerLocationStaffIds(
+  slug: string,
+  context: PublicBookingContext,
+  locationId: number | null,
+): Promise<Set<number> | null> {
+  if (!locationId || locationId <= 0) return null;
+  const filtered = await filterStaffByLocation(slug, context.staff, locationId);
+  return new Set(filtered.map((s) => s.id));
+}
+
 // Guardie comuni preview/create (legacy appointments_plan.php 1609-1723, stesso
 // ordine): cliente bloccato, servizi non in sede, validazione/normalizzazione
 // della mappa cabine (auto-assegnazione con UNA sola cabina consentita).
@@ -324,8 +350,15 @@ async function assertPlannerGuards(
   resolved: ResolvedServices,
   locationId: number | null,
 ): Promise<{ cabinsEnabled: boolean }> {
-  // Cliente esistente bloccato (legacy 1609-1611): stessa guardia del quick booking.
-  if (form.clientId > 0) await assertClientNotBlockedForSave(slug, form.clientId);
+  // Cliente esistente: accessibilità (legacy app_client_accessible, 1606-1608, col
+  // messaggio verbatim) PRIMA della guardia bloccato (1609-1611, stessa del quick
+  // booking). I clienti sono tenant-wide (Modello A): "non disponibile" = non
+  // esiste nel tenant.
+  if (form.clientId > 0) {
+    const existing = await getDbClient(form.clientId, slug);
+    if (!existing) throw new Error("Cliente non valido o non disponibile nella sede scelta.");
+    await assertClientNotBlockedForSave(slug, form.clientId);
+  }
 
   // Servizi non disponibili nella sede corrente (legacy 1613-1621): un servizio
   // con righe service_locations deve includere la sede; senza righe vale ovunque.
@@ -346,14 +379,19 @@ async function assertPlannerGuards(
   if (cabinsEnabled) {
     for (const svcEntry of resolved.ordered) {
       const allowed = await allowedCabinIdsForServices(slug, [svcEntry.id], locationId).catch(() => [] as number[]);
+      // Catena elseif legacy (1707-1721): con UNA sola cabina consentita viene
+      // assegnata SENZA validare la scelta postata (anche se stantia/invalida);
+      // l'errore "Seleziona una cabina valida" scatta solo con più cabine.
       if (allowed.length === 0) {
         throw new Error(`Nessuna cabina disponibile per il servizio: ${svcEntry.name}`);
+      } else if (allowed.length === 1) {
+        form.cabinMap[svcEntry.id] = allowed[0];
+      } else {
+        const chosen = Number(form.cabinMap[svcEntry.id] ?? 0);
+        if (chosen > 0 && !allowed.includes(chosen)) {
+          throw new Error(`Seleziona una cabina valida per il servizio: ${svcEntry.name}`);
+        }
       }
-      const chosen = Number(form.cabinMap[svcEntry.id] ?? 0);
-      if (chosen > 0 && !allowed.includes(chosen)) {
-        throw new Error(`Seleziona una cabina valida per il servizio: ${svcEntry.name}`);
-      }
-      if (allowed.length === 1) form.cabinMap[svcEntry.id] = allowed[0];
     }
   }
   return { cabinsEnabled };
@@ -502,7 +540,7 @@ export async function planPreview(
   validatePlannerForm(form);
 
   const context = await publicBookingContext(slug);
-  const resolved = resolveServices(form, context);
+  const resolved = resolveServices(form, context, await plannerLocationStaffIds(slug, context, locationId));
   const { cabinsEnabled } = await assertPlannerGuards(slug, form, context, resolved, locationId);
 
   const dates = generatePlannerDates(form);
@@ -598,7 +636,7 @@ export async function planCreate(
   validatePlannerForm(form);
 
   const context = await publicBookingContext(slug);
-  const resolved = resolveServices(form, context);
+  const resolved = resolveServices(form, context, await plannerLocationStaffIds(slug, context, locationId));
   await assertPlannerGuards(slug, form, context, resolved, locationId);
 
   // Resolve the client. An existing client_id wins; otherwise create the new client
@@ -693,11 +731,13 @@ export async function planCreate(
 // ---------------------------------------------------------------------------
 
 function validatePlannerForm(form: PlannerForm): void {
-  if (form.clientId <= 0 && form.newFullName === "") {
-    throw new Error("Seleziona un cliente o inserisci un nuovo cliente.");
-  }
+  // Ordine legacy (appointments_plan.php 1577-1582): PRIMA l'email del nuovo
+  // cliente, POI la scelta cliente-o-nome.
   if (form.newEmail !== "" && !isValidEmail(form.newEmail)) {
     throw new Error("Email nuovo cliente non valida.");
+  }
+  if (form.clientId <= 0 && form.newFullName === "") {
+    throw new Error("Seleziona un cliente o inserisci un nuovo cliente.");
   }
   if (form.serviceIds.length === 0) throw new Error("Seleziona almeno un servizio.");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(form.startDate)) throw new Error("Data di partenza non valida.");
@@ -819,6 +859,13 @@ function roundMoney(value: number): number {
 
 // --- Date math (local time, midnight-anchored — mirrors the PHP DateTimeImmutable
 // operations, which run in the app's local timezone). ---
+
+// "Oggi" del planner ancorato al giorno-lavorativo Europe/Rome (il legacy PHP usa
+// date() nel fuso del business; su Lambda/UTC un new Date() nudo sfaserebbe il
+// clamp non-retroattivo e l'ancora weekday nella finestra serale ~23-24 UTC).
+function plannerToday(): Date {
+  return dateAtMidnight(businessTodayIso());
+}
 
 function dateAtMidnight(iso: string): Date {
   const [y, m, d] = iso.split("-").map((x) => Number.parseInt(x, 10));

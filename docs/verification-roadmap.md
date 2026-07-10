@@ -10941,3 +10941,96 @@ ATTESTAZIONI aggiuntive:
 
 VERIFICATO: tsc pulito, eslint drawer 0/0; regressione test-calendario 20/20
 + test-notifiche-hub 16/16.
+
+## 2026-07-11 — Appuntamenti (lista + Pianifica): gate/flag permessi, pool operatori per sede, validazioni e date verbatim
+
+Mappe legacy integrali: appointments.php (1211) + appointments.js (205) letti
+diretti; appointments_plan.php (2382) + appointments_plan.js (789) via agente
+(mappa con righe e testi verbatim). Next: appointments-content.tsx,
+appointments_plan-content.tsx, lib/manage-planner.ts, route appointments.
+
+FIX LISTA:
+1) Flag permessi nella risposta action=list (canManageAppointments/canQuickBook/
+   canSeeCalendar): la pagina ora replica requirePerm('appointments.manage')
+   con la card 'Accesso negato', gate del bottone Calendario e le 4 varianti
+   verbatim dell'empty-state (punto finale incluso/escluso) coi bottoni gated.
+2) 403 delete/bulk_delete -> 'Permesso Appuntamenti richiesto.'
+   (api_appt_require_manage, api_appointments.php 64).
+3) eslint set-state-in-effect sull'effect deep-link (?msg/?err/?from/?to/?q/
+   ?created) -> microtask.
+
+FIX PIANIFICA (motore lib/manage-planner.ts):
+4) GATE: plan_preview/plan_create richiedono SOLO appointments.plan (legacy
+   Auth::requirePerm, appointments_plan.php:4) — prima bastava anche
+   appointments.manage (widening). manage NON apre il planner.
+5) Nuova GET action=plan_context coi flag pagina (canPlan/canManage/canSeeCalendar).
+6) Ordine validazioni legacy: email nuovo cliente PRIMA della scelta cliente
+   (1577-1582).
+7) Guardia cliente esistente in preview E create: 'Cliente non valido o non
+   disponibile nella sede scelta.' (1606-1608) prima della guardia bloccato.
+8) Cabine: catena elseif legacy (1707-1721) — con UNA sola cabina consentita
+   assegnazione automatica anche con scelta postata stantia/invalida.
+9) POOL OPERATORI PER SEDE: planner_staff_for_service (329-376) filtra
+   eleggibili E fallback con app_filter_staff_ids_by_location (STRICT con righe
+   staff_locations) — replicato esportando filterStaffByLocation da
+   manage-calendar. In piu' fallback fedele `$rows ?: $all`: servizio senza
+   mapping (o col mapping interamente fuori sede) apre a TUTTI gli attivi della
+   sede; SSO escluso dai pool.
+10) 'Oggi' del planner ancorato Europe/Rome (businessTodayIso) per clamp
+    non-retroattivo e ancora weekday (il legacy usa date() nel fuso business).
+
+FIX PIANIFICA (componente):
+11) Card 'Accesso negato' + link header Lista/Calendario gated (2039-2046).
+12) ?msg -> alert-success; alert msg/err a LIVELLO PAGINA (2052-2057) e
+    empty-state 'Compila il form...' sempre visibile senza preview (2263),
+    anche accanto all'errore.
+13) Redirect post-create fedele (2016-2025): senza appointments.manage resta
+    sul planner con ?msg 'Pianificazione completata: creati N appuntamenti'.
+14) Il create ri-posta lo SNAPSHOT dei valori previsualizzati (secondo form
+    hidden legacy) + le cabine correnti (plannerSyncCabinsToCreateForm), non lo
+    stato corrente del form.
+15) 'Alle ore': SOLO clamp verso l'alto (una finestra piu' ampia non viene
+    ristretta quando cambiano servizi/ora inizio).
+16) pickClient azzera i campi nuovo cliente (planSetSelected 75-78).
+17) Categoria senza nome -> 'Senza categoria' (2134).
+18) fmt_money con separatore migliaia '.' (number_format) nei badge/lista prezzi.
+19) Virgolette DRITTE nell'help "Dalle ore"/"Alle ore" (2251); label bottoni
+    costanti; 'Crea appuntamenti' sempre attivo (l'errore 'Nessuna prenotazione
+    creabile' arriva dal server come nel legacy).
+20) 4 eslint set-state-in-effect pre-esistenti (auto-select operatore,
+    riconciliazione cabine, clamp orario, ancora weekday) -> microtask.
+
+ATTESTAZIONI (residui deliberati, documentati nell'header di manage-planner.ts):
+- Slot finder = RIUSO publicBookingSlots + assertAppointmentSlotAvailable
+  (griglia negli orari di apertura) al posto del DFS legacy a step 10' che
+  proponeva slot ANCHE fuori orario di apertura purche' il giorno non fosse
+  chiuso (quirk dichiarato nel legacy stesso): il port e' piu' severo (mai
+  fuori orario) e a granularita' di griglia. Reason 'Chiuso' su griglia vuota.
+- Create best-effort per data (skip riportati nei details) vs transazione
+  all-or-nothing legacy: divergenza solo su race mid-create (per data la
+  guardia e' la stessa della preview).
+- find_slot_plan singolo-servizio = codice morto anche nel legacy (mai
+  chiamato); orario FISSO from==to irraggiungibile su entrambi i lati (la
+  validazione finestra>=durata lo blocca prima); staff_id hidden '0' inerte.
+- Servizi no_operator: il legacy mostra 'SSO' come operatore in preview, il
+  port '—' (staffFinal=0, SSO-forcing al create nel motore riusato); nessun
+  servizio no-op sul tenant di test.
+- CSRF legacy -> sessione cookie HMAC (architettura Next, gia' attestato).
+
+E2E test-appuntamenti.mjs 41/41: flag list per-cookie; delete cascata figli=0,
+guardia 'stato Annullato' verbatim, 403, 'Nessun appuntamento selezionato.';
+bulk mixed contatori {deleted:1, blockedNotCanceled:1, blockedUnavailable:1}
+con utente ristretto sede 21; swap_segment finestre scambiate su DB + guardie
+('Direzione non valida', 'Spostamento non disponibile', 'Questa prenotazione
+non è multi-servizio.'); plan_context; gate 403 con solo-manage; 11 validazioni
+verbatim in ordine (email->cliente->servizi->data->orari->finestra->cliente
+fantasma->servizio fantasma->bloccato->fuori sede); pool sede (56 filtrato in
+sede 21 = auto 'luca'; in sede 51 richiede scelta; staff_map {9:56} -> 'Luca');
+date G1-G5 (weekly/weekly2/monthly con clamp fine-mese, ancora weekday
+strettamente-dopo-oggi, clamp non-retroattivo a oggi); 'Chiuso' (domenica),
+'Operatore occupato' su slot unico occupato, 'Nessuna prenotazione creabile
+(tutte non disponibili).'; create felice 2 righe scheduled (public_code 5
+cifre, cabina auto 9, snapshot servizi €12, staff 22); nuovo cliente creato
+SOLO allo step create con newClientId. Regressione: test-calendario 20/20 +
+test-notifiche-hub 16/16. Baseline 10 appuntamenti / 5 clienti / 3
+staff_services ripristinata (riga staff_services (56,9) seminata e rimossa).

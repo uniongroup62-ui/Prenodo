@@ -141,6 +141,11 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
 
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
+  // Gate pagina legacy (appointments.php:2 requirePerm appointments.manage) +
+  // varianti empty-state/bottoni (canQuickBook/canSeeCalendar, righe 20-21).
+  const [accessDenied, setAccessDenied] = useState(false);
+  const [canQuickBook, setCanQuickBook] = useState(true);
+  const [canSeeCalendar, setCanSeeCalendar] = useState(true);
 
   // Filter state (kept working client-side over the loaded appointments).
   const [from, setFrom] = useState(defaults.from);
@@ -167,12 +172,20 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
   }, []);
 
   const load = useCallback(() => {
-    setLoading(true);
+    // setLoading in microtask: load() parte anche dall'effect di mount.
+    Promise.resolve().then(() => setLoading(true));
     fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}&action=list`, {
       headers: { "x-tenant-slug": slug },
     })
       .then((r) => r.json())
-      .then((j) => setAppointments(Array.isArray(j.appointments) ? j.appointments : []))
+      .then((j) => {
+        setAppointments(Array.isArray(j.appointments) ? j.appointments : []);
+        // Gate requirePerm: la lista è servita dall'ombrello calendar.view/
+        // manage/plan, ma la PAGINA legacy richiede appointments.manage.
+        if (j.canManageAppointments === false) setAccessDenied(true);
+        if (typeof j.canQuickBook === "boolean") setCanQuickBook(j.canQuickBook);
+        if (typeof j.canSeeCalendar === "boolean") setCanSeeCalendar(j.canSeeCalendar);
+      })
       .catch(() => setAppointments([]))
       .finally(() => setLoading(false));
   }, [slug]);
@@ -187,25 +200,29 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
   useEffect(() => {
     if (typeof window === "undefined") return;
     const sp = new URLSearchParams(window.location.search);
-    // Alert da redirect legacy (?msg/?err — es. l'arrivo dal planner con
-    // "Pianificazione completata: creati N appuntamenti").
-    const urlMsg = String(sp.get("msg") ?? "").trim();
-    const urlErr = String(sp.get("err") ?? "").trim();
-    if (urlMsg) setMsg(urlMsg);
-    if (urlErr) setErr(urlErr);
-    // Filtri dal redirect legacy (?from/?to/?q, es. range ±1 giorno del planner).
-    const urlFrom = String(sp.get("from") ?? "");
-    const urlTo = String(sp.get("to") ?? "");
-    const urlQ = String(sp.get("q") ?? "");
-    if (/^\d{4}-\d{2}-\d{2}$/.test(urlFrom)) setFrom(urlFrom);
-    if (/^\d{4}-\d{2}-\d{2}$/.test(urlTo)) setTo(urlTo);
-    if (urlQ) setQ(urlQ);
-    const created = String(sp.get("created") ?? "")
-      .split(/[^0-9]+/)
-      .map((v) => Number.parseInt(v, 10))
-      .filter((n) => Number.isFinite(n) && n > 0)
-      .slice(0, 300);
-    if (created.length) setCreatedIds(created);
+    // Prefill da querystring in MICROTASK: niente setState sincroni nell'effect
+    // di mount (pattern consolidato; l'ordine resta pre-paint).
+    Promise.resolve().then(() => {
+      // Alert da redirect legacy (?msg/?err — es. l'arrivo dal planner con
+      // "Pianificazione completata: creati N appuntamenti").
+      const urlMsg = String(sp.get("msg") ?? "").trim();
+      const urlErr = String(sp.get("err") ?? "").trim();
+      if (urlMsg) setMsg(urlMsg);
+      if (urlErr) setErr(urlErr);
+      // Filtri dal redirect legacy (?from/?to/?q, es. range ±1 giorno del planner).
+      const urlFrom = String(sp.get("from") ?? "");
+      const urlTo = String(sp.get("to") ?? "");
+      const urlQ = String(sp.get("q") ?? "");
+      if (/^\d{4}-\d{2}-\d{2}$/.test(urlFrom)) setFrom(urlFrom);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(urlTo)) setTo(urlTo);
+      if (urlQ) setQ(urlQ);
+      const created = String(sp.get("created") ?? "")
+        .split(/[^0-9]+/)
+        .map((v) => Number.parseInt(v, 10))
+        .filter((n) => Number.isFinite(n) && n > 0)
+        .slice(0, 300);
+      if (created.length) setCreatedIds(created);
+    });
     const action = String(sp.get("action") ?? "");
     const editId = Number.parseInt(String(sp.get("id") ?? "0"), 10) || 0;
     if ((action === "edit" && editId > 0) || action === "new") {
@@ -386,6 +403,19 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
   // sede a prescindere dal filtro (la lista è fetchata senza date).
   const hasAny = appointments.length > 0;
 
+  // Port della pagina 403 di Auth::requirePerm('appointments.manage'): solo la
+  // card 'Accesso negato' nel chrome.
+  if (accessDenied) {
+    return (
+      <div className="container-fluid">
+        <div className="card p-4">
+          <div className="h4 fw-semibold mb-2">Accesso negato</div>
+          <div className="text-muted">Non hai i permessi per accedere a questa sezione.</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="container-fluid">
       <link rel="stylesheet" href="/assets/css/pages/appointments.css" />
@@ -400,8 +430,8 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
           <div className="bs-page-subtitle">Gestisci prenotazioni, stati e passaggio rapido al calendario.</div>
         </div>
         <div className="bs-page-actions">
-          {/* Legacy: il bottone Calendario appare solo quando esistono prenotazioni. */}
-          {hasAny || loading ? (
+          {/* Legacy (950): Calendario solo con calendar.view E prenotazioni esistenti. */}
+          {canSeeCalendar && (hasAny || loading) ? (
             <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/calendar`}>
               <i className="bi bi-calendar3 me-1"></i>Calendario
             </a>
@@ -418,17 +448,28 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
                 <i className="bi bi-calendar-plus"></i>
               </div>
               <h2>Nessuna prenotazione presente</h2>
-              <p>
-                La lista appuntamenti e ancora vuota. Crea la prima prenotazione oppure passa al calendario per
-                controllare disponibilita, operatori e cabine nella sede selezionata.
-              </p>
+              {/* Varianti verbatim per permesso (appointments.php 962-966): la
+                  variante senza-quick-book col calendario NON ha il punto finale. */}
+              {canQuickBook ? (
+                <p>
+                  {`La lista appuntamenti e ancora vuota. Crea la prima prenotazione${canSeeCalendar ? " oppure passa al calendario per controllare disponibilita, operatori e cabine nella sede selezionata" : ""}.`}
+                </p>
+              ) : (
+                <p>
+                  {`La lista appuntamenti e ancora vuota${canSeeCalendar ? ": puoi consultare il calendario per controllare disponibilita, operatori e cabine nella sede selezionata" : "."}`}
+                </p>
+              )}
               <div className="d-flex justify-content-center gap-2 flex-wrap">
-                <a className="btn btn-primary" href="#" data-qb-new="1">
-                  <i className="bi bi-plus-lg me-1"></i>Nuova prenotazione
-                </a>
-                <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/calendar`}>
-                  <i className="bi bi-grid-3x3-gap me-1"></i>Apri calendario
-                </a>
+                {canQuickBook ? (
+                  <a className="btn btn-primary" href="#" data-qb-new="1">
+                    <i className="bi bi-plus-lg me-1"></i>Nuova prenotazione
+                  </a>
+                ) : null}
+                {canSeeCalendar ? (
+                  <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/calendar`}>
+                    <i className="bi bi-grid-3x3-gap me-1"></i>Apri calendario
+                  </a>
+                ) : null}
               </div>
             </div>
           </div>
