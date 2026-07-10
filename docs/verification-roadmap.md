@@ -8993,3 +8993,50 @@ conteggio eventi (nota storica del motore, invariata).
 VERIFICATO: test-omaggi 49/49, typecheck 0, eslint 0-errori; regressione VERDE test-fidelity 42/42,
 test-punti 26/26, test-pos-checkout 8/8. PRODUZIONE INTATTA: campagna 98 attiva + 1 regola preservate,
 gift_instances=0, 5 clienti reali, fidelity_enabled ripristinato, eventi orfani ZZ bonificati (0 residui).
+
+## Risorse: audit completo — modulo FEDELE, nessun fix (2026-07-09)
+
+Audit 1:1 della pagina Risorse (risorse condivise) vs resources.php (858 righe) + helper
+shared_resources_* di Helpers.php (motore capienza prenotazioni) + resources.js. Next: route
+resources section=resources + lib/manage-resources (getSharedResource/saveSharedResource/
+deleteSharedResource/listResources/ensureResourceQtyCanChange/resourceFuturePeakUsage) +
+components/modules/resources-content.tsx. Le voci "Cabine" e "Operatori" sono pagine/sezioni
+separate (staff gia' coperto dai fix 2026-07-09).
+
+FEDELI e verificati LIVE (test-risorse 12/12):
+- MODELLO: resources (qty_total globale di compatibilita') + resource_locations (qty per sede +
+  is_enabled, PK composita) + service_resources (qty_required per servizio). Al save con config
+  sedi: qty_total = MAX delle qty delle sedi ABILITATE (0 se nessuna); clamp [0,1000000]; nome
+  con whitespace collassato; descrizione vuota -> NULL.
+- VALIDAZIONI verbatim: 'Nome risorsa obbligatorio', 'Seleziona almeno una sede in cui la risorsa
+  e disponibile.' (e senza accento), 'Errore salvataggio: verifica nome duplicato o schema DB
+  (schema aggiornato).', 'Risorsa non trovata'.
+- GUARDIE RIDUZIONE QTY (SOLO riduzioni; gli aumenti passano senza check): (a) servizi collegati
+  con qty_required > nuova qty -> blocco per-sede con l'incoerenza accenti DEL LEGACY riprodotta
+  ('Quantita non aggiornata: risorsa ancora utilizzata nei servizi della sede.' senza accenti nel
+  ramo per-sede; 'Quantità non aggiornata: risorsa ancora utilizzata nei servizi.' accentato nel
+  ramo globale); (b) PICCO prenotazioni future (sweep pending/scheduled su appointment_services x
+  service_resources, per sede) > nuova qty -> 'Quantita non aggiornata: prenotazioni esistenti
+  oltre il nuovo limite.' + 'usano fino a N unita contemporaneamente'; riduzione a qty=picco
+  CONSENTITA (blocco solo se picco > qty). Fallback old-qty per sede senza riga = qty globale.
+- DELETE: bloccata SOLO dai servizi collegati ('Risorsa non eliminata: è associata a uno o più
+  servizi.' + popup 'Impossibile eliminare la risorsa' con lista servizi/qty_required); le
+  prenotazioni future NON bloccano la delete (solo la riduzione qty); cascata resource_locations +
+  service_resources.
+- LISTA: ORDER name ASC id ASC; con sede attiva mostra SOLO le risorse abilitate in quella sede
+  (resourcesTotal = pre-filtro per l'empty-state); il filtro "Tutte le sedi" nel legacy NON si
+  renderizza MAI (bug di ordinamento variabili in resources.php:34 — $hasResourceLocationsTable
+  letto prima dell'assegnazione) e il Next coerentemente non lo ha.
+- USO ALTROVE: service_resources scritto dall'editor Servizi; la capienza per-sede limita gli slot
+  del booking pubblico (public-booking-db legge service_resources/resource_locations).
+
+RESIDUI documentati (non fixati): (a) saveResourceLocations fa DELETE+reinsert invece dell'upsert
+ON DUPLICATE del legacy — differenza solo per righe di sedi non postate (il form posta sempre
+tutte le sedi attive); (b) advisory lock MySQL GET_LOCK per (tenant,sede,risorsa) del legacy
+('Risorsa temporaneamente occupata: riprova tra pochi secondi.') non portato — edge di concorrenza
+check-then-write, mitigato dalla natura transazionale delle query Next.
+
+VERIFICATO: test-risorse 12/12 (validazioni, create con max-enabled, get/lista filtrata per sede,
+delete bloccata da servizi + popup, riduzione bloccata da qty_required e da picco prenotazioni
+future con soglia esatta, aumento+rinomina, delete con cascata); nessuna modifica al codice.
+PRODUZIONE INTATTA: 0 risorse (baseline vuoto ripristinato), 5 clienti reali.
