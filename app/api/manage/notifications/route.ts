@@ -143,6 +143,22 @@ export async function GET(request: Request) {
         } catch { /* default */ }
       }
 
+      // Guardia legacy (feed riga 93): sotto gate selezione-sede il feed
+      // risponde con metadati + summary (a zero) ed EVENTI VUOTI.
+      if (locationContext.needsLocationSelection) {
+        const summary = await getNotificationSummary(tenantSlug, session.user, loc, true);
+        return Response.json({
+          ok: true,
+          generated_at: new Date().toISOString(),
+          tenant: tenantSlug || "root",
+          user_id: Number(session.user.id ?? 0),
+          location_id: loc,
+          browser_preferences: { appointments: true, ...prefs },
+          events: [],
+          ...summary,
+        }, { headers: { "Cache-Control": "no-store" } });
+      }
+
       // appointment_pending (addPendingAppointmentEvents): ordina per
       // COALESCE(created_at, starts_at) DESC, key con seed data creazione,
       // body 'servizio - cliente - d/m/Y H:i - H:i - #codice - pacchetto - prepagato'.
@@ -285,7 +301,25 @@ export async function GET(request: Request) {
         .slice(0, limit)
         .map(({ _ts, ...e }) => e);
 
-      return Response.json({ ok: true, browser_preferences: { appointments: true, ...prefs }, events }, { headers: { "Cache-Control": "no-store" } });
+      // Payload legacy (BrowserNotifications::feed 82-90): metadati + il
+      // notificationSummary MERGIATO — il poller topbar aggiorna i badge
+      // direttamente dalla risposta del feed (renderCounts(data)).
+      const summary = await getNotificationSummary(
+        tenantSlug,
+        session.user,
+        loc,
+        locationContext.needsLocationSelection,
+      );
+      return Response.json({
+        ok: true,
+        generated_at: new Date().toISOString(),
+        tenant: tenantSlug || "root",
+        user_id: Number(session.user.id ?? 0),
+        location_id: loc,
+        browser_preferences: { appointments: true, ...prefs },
+        events,
+        ...summary,
+      }, { headers: { "Cache-Control": "no-store" } });
     }
 
     // Impostazioni avvisi lette dalle pagine notifiche (giorni compleanni/rate).

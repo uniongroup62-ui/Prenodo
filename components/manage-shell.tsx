@@ -2,14 +2,20 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { QuickBookingDrawer } from "@/components/quick-booking-drawer";
+import {
+  browserNotificationStoragePrefix,
+  createBrowserNotificationFeed,
+  type FeedEventLike,
+} from "@/lib/browser-notification-feed";
 
 // Faithful port of the PHP gestionale chrome (app/lib/View.php): app-shell ->
 // (app-sidebar + app-main -> (topbar + app-content)). Loads the SAME Bootstrap
 // 5.3.3 + Bootstrap Icons + Chart.js + app.css the PHP dashboard uses.
 // Ported app.js behaviors: sidebar collapse, sidebar submenu expand/collapse,
 // notification bell counts, the topbar location switcher, the support/closure
-// sticky alerts, the #appToastContainer + global window.notify(), and the
-// quick-booking drawer (in components/quick-booking-drawer.tsx).
+// sticky alerts, the #appToastContainer + global window.notify(), the global
+// notification poller (View.php footer script: badge live + notifiche browser),
+// and the quick-booking drawer (in components/quick-booking-drawer.tsx).
 
 type Item = { page: string; icon: string; label: string; sub?: boolean };
 type Group = { label?: string; items: Item[] };
@@ -139,6 +145,22 @@ type NotifCounts = { count: number; quotes: number; installments: number; birthd
 type ShellLocation = { id: number; name: string };
 type ShellSupport = { created_by_email?: string; reason?: string; expires_at?: string };
 type ShellClosure = { start: string; end: string };
+// Gate per-elemento della topbar (View.php 796-824): le icone/il bottone
+// esistono SOLO col permesso corrispondente, come il markup PHP condizionale.
+type ShellTopbar = {
+  canViewNotifications: boolean;
+  bellBirthdays: boolean;
+  bellInstallments: boolean;
+  bellQuotes: boolean;
+  quickBooking: boolean;
+};
+const TOPBAR_NONE: ShellTopbar = {
+  canViewNotifications: false,
+  bellBirthdays: false,
+  bellInstallments: false,
+  bellQuotes: false,
+  quickBooking: false,
+};
 
 // Bootstrap's global, loaded by the CDN <script> in the shell. Only the Toast
 // API surface notify() needs is declared, to stay strict-mode clean.
@@ -245,6 +267,8 @@ export function ManageShell({
   // The legacy chrome computes these server-side at render with no polling, so a
   // single fetch matches its semantics.
   const [notif, setNotif] = useState<NotifCounts>({ count: 0, quotes: 0, installments: 0, birthdays: 0 });
+  const [topbar, setTopbar] = useState<ShellTopbar>(TOPBAR_NONE);
+  const [viewerUserId, setViewerUserId] = useState(0);
   const [locations, setLocations] = useState<ShellLocation[]>([]);
   const [currentLocationId, setCurrentLocationId] = useState(0);
   const [needsLocationSelection, setNeedsLocationSelection] = useState(false);
@@ -252,6 +276,13 @@ export function ManageShell({
   const [supportAccess, setSupportAccess] = useState<ShellSupport | null>(null);
   const [closureRange, setClosureRange] = useState<ShellClosure | null>(null);
   const supportExpiresLabel = formatSupportExpires(supportAccess?.expires_at);
+
+  // Mirror sincrono dei contatori (per il diff del poller senza closure stale)
+  // + ref alle ancore campanella per il pulse legacy `notification-bell--changed`
+  // (renderIcon, View.php 2084-2089: remove class → reflow → add → timeout 520ms).
+  const notifCountsRef = useRef<NotifCounts>({ count: 0, quotes: 0, installments: 0, birthdays: 0 });
+  const bellRefs = useRef<Record<string, HTMLAnchorElement | null>>({});
+  const bellPulseTimers = useRef<Record<string, number>>({});
 
   useEffect(() => {
     const controller = new AbortController();
@@ -263,12 +294,25 @@ export function ManageShell({
       .then((data) => {
         if (!data || data.ok === false) return;
         const n = data.notif ?? {};
-        setNotif({
+        const counts = {
           count: Number(n.count ?? 0),
           quotes: Number(n.quotes ?? 0),
           installments: Number(n.installments ?? 0),
           birthdays: Number(n.birthdays ?? 0),
+        };
+        // Equivalente del conteggio renderizzato server-side dal PHP: primo
+        // paint SENZA pulse (il pulse scatta solo sui CAMBI rilevati dal poller).
+        notifCountsRef.current = counts;
+        setNotif(counts);
+        const t = data.topbar ?? {};
+        setTopbar({
+          canViewNotifications: Boolean(t.canViewNotifications),
+          bellBirthdays: Boolean(t.bellBirthdays),
+          bellInstallments: Boolean(t.bellInstallments),
+          bellQuotes: Boolean(t.bellQuotes),
+          quickBooking: Boolean(t.quickBooking),
         });
+        setViewerUserId(Number(data.viewerUserId ?? 0));
         setLocations(Array.isArray(data.locations) ? data.locations : []);
         setCurrentLocationId(Number(data.currentLocationId ?? 0));
         setNeedsLocationSelection(Boolean(data.needsLocationSelection));
@@ -281,6 +325,183 @@ export function ManageShell({
       });
     return () => controller.abort();
   }, [slug]);
+
+  // POLLER GLOBALE NOTIFICHE — port del footer script legacy (View.php
+  // 2000-2463), attivo su OGNI pagina manage quando l'utente ha
+  // notifications.view (il legacy emette lo script solo in quel caso e lo
+  // script esce subito se non trova icone: gate email/selezione sede → topbar
+  // assente → nessun polling). Ogni 5s: con permesso browser CONCESSO in
+  // contesto sicuro legge action=feed (badge + pubblicazione eventi con
+  // toast/nativa), altrimenti action=count (solo badge). Primo refresh a
+  // 1.5s, baseline feed a 300ms, refresh su focus/visibilitychange, e
+  // re-baseline su richiesta della pagina notifiche (evento
+  // 'bs:notifications-baseline' dopo attivazione permesso o salvataggio
+  // preferenze, come refreshNotificationFeed(true) legacy).
+  useEffect(() => {
+    if (!shellContextLoaded || !topbar.canViewNotifications || emailVerificationGate || needsLocationSelection) return;
+    if (typeof window === "undefined") return;
+    const pulseTimers = bellPulseTimers.current;
+
+    const storageGet = (key: string): string | null => {
+      try {
+        return window.localStorage.getItem(key);
+      } catch {
+        return null;
+      }
+    };
+    const storageSet = (key: string, value: string): void => {
+      try {
+        window.localStorage.setItem(key, value);
+      } catch {
+        // ignora, come storageSet legacy
+      }
+    };
+
+    const supportsBrowserNotifications = () => "Notification" in window;
+    const hasSecureNotificationContext = () =>
+      Boolean(window.isSecureContext) || window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+
+    const notificationsUrl = pageHref(slug, "notifications");
+    const resolveNotificationUrl = (url: unknown): string => {
+      try {
+        return new URL(String(url || notificationsUrl), window.location.href).href;
+      } catch {
+        return notificationsUrl;
+      }
+    };
+
+    const prefix = browserNotificationStoragePrefix(slug, viewerUserId, currentLocationId);
+    const feed = createBrowserNotificationFeed(prefix, {
+      storageGet,
+      storageSet,
+      showNative: (event: FeedEventLike): boolean => {
+        if (!browserNotificationsEnabled()) return false;
+        try {
+          const notification = new Notification(String(event.title || "Notifica"), {
+            body: String(event.body || ""),
+            tag: String(event.key || ""),
+            silent: false,
+            ...({ renotify: false } as NotificationOptions),
+          });
+          notification.onclick = () => {
+            try {
+              window.focus();
+            } catch {
+              // noop
+            }
+            window.location.href = resolveNotificationUrl(event.url);
+            notification.close();
+          };
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      showToast: (message: string, variant: string) => {
+        (window as unknown as { notify?: (m: string, v?: string) => void }).notify?.(message, variant);
+      },
+      isPageActive: () => !document.hidden && document.hasFocus(),
+      notificationsUrl,
+    });
+
+    const browserNotificationsEnabled = (): boolean => {
+      if (!supportsBrowserNotifications() || !hasSecureNotificationContext()) return false;
+      if (Notification.permission !== "granted") return false;
+      feed.markEnabled();
+      return true;
+    };
+
+    // renderCounts legacy: aggiorna SOLO le chiavi presenti nel payload e fa
+    // pulsare l'icona il cui conteggio è cambiato.
+    const pulseBell = (key: string) => {
+      const el = bellRefs.current[key];
+      if (!el) return;
+      el.classList.remove("notification-bell--changed");
+      void el.offsetWidth;
+      el.classList.add("notification-bell--changed");
+      window.clearTimeout(pulseTimers[key]);
+      pulseTimers[key] = window.setTimeout(() => el.classList.remove("notification-bell--changed"), 520);
+    };
+    const numeric = (value: unknown): number => {
+      const n = Number.parseInt(String(value ?? "0"), 10);
+      return Number.isFinite(n) ? Math.max(0, n) : 0;
+    };
+    const applyCounts = (data: Record<string, unknown>) => {
+      const prev = notifCountsRef.current;
+      const next = { ...prev };
+      for (const key of ["count", "quotes", "installments", "birthdays"] as const) {
+        if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
+        const value = numeric(data[key]);
+        if (value !== prev[key]) pulseBell(key);
+        next[key] = value;
+      }
+      notifCountsRef.current = next;
+      setNotif(next);
+    };
+
+    const refreshNotificationFeed = async (baseline: boolean): Promise<boolean> => {
+      try {
+        const res = await fetch(
+          `/api/manage/notifications?slug=${encodeURIComponent(slug)}&action=feed&limit=20&_=${Date.now()}`,
+          { credentials: "include", cache: "no-store", headers: { Accept: "application/json", "x-tenant-slug": slug } },
+        );
+        const data = await res.json();
+        if (!res.ok || !data || data.ok !== true) return false;
+        applyCounts(data);
+        feed.handleFeedEvents(data.events ?? [], Boolean(baseline));
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const refreshNotifications = async (): Promise<void> => {
+      try {
+        if (browserNotificationsEnabled()) {
+          await refreshNotificationFeed(false);
+          return;
+        }
+        const res = await fetch(
+          `/api/manage/notifications?slug=${encodeURIComponent(slug)}&action=count&_=${Date.now()}`,
+          { credentials: "include", cache: "no-store", headers: { Accept: "application/json", "x-tenant-slug": slug } },
+        );
+        const data = await res.json();
+        if (!res.ok || !data || data.ok !== true) return;
+        applyCounts(data);
+      } catch {
+        // silenzioso come il legacy
+      }
+    };
+
+    const timers: number[] = [];
+    if (browserNotificationsEnabled()) {
+      timers.push(window.setTimeout(() => void refreshNotificationFeed(!feed.isHydrated()), 300));
+    }
+    timers.push(window.setTimeout(() => void refreshNotifications(), 1500));
+    const intervalId = window.setInterval(() => void refreshNotifications(), 5000);
+
+    const onFocus = () => void refreshNotifications();
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        if (browserNotificationsEnabled()) void refreshNotificationFeed(!feed.isHydrated());
+      } else {
+        void refreshNotifications();
+      }
+    };
+    const onBaselineRequest = () => void refreshNotificationFeed(true);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("bs:notifications-baseline", onBaselineRequest);
+
+    return () => {
+      timers.forEach((t) => window.clearTimeout(t));
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("bs:notifications-baseline", onBaselineRequest);
+      Object.values(pulseTimers).forEach((t) => window.clearTimeout(t));
+    };
+  }, [slug, shellContextLoaded, topbar.canViewNotifications, emailVerificationGate, needsLocationSelection, viewerUserId, currentLocationId]);
 
   // Submenu expand/collapse state. Port of app.js's setExpandedSubmenu(): a run
   // opens by default when it contains the active child (so the active deep link
@@ -394,19 +615,23 @@ export function ManageShell({
 
   // Render a notification bell driven by a real count: `has-notifications` on
   // the anchor when count>0, and a `bell-badge` (hidden when 0, "99+" capped).
-  // Faithful port of the View.php topbar bells.
-  const renderBell = (page: string, icon: string, label: string, count: number) => {
+  // Faithful port of the View.php topbar bells (aria-label del badge inclusa,
+  // View.php 805/811/817/822); countKey aggancia il pulse del poller.
+  const renderBell = (page: string, icon: string, label: string, count: number, countKey: string, badgeNoun: string) => {
     const hasCount = count > 0;
     const display = count > 99 ? "99+" : String(count);
     return (
       <a
-        className={`icon-btn position-relative notification-bell${hasCount ? " has-notifications" : ""}`}
+        ref={(el) => {
+          bellRefs.current[countKey] = el;
+        }}
+        className={`icon-btn position-relative notification-bell${countKey !== "count" ? " notification-shortcut" : ""}${hasCount ? " has-notifications" : ""}`}
         href={pageHref(slug, page)}
         title={hasCount ? `${count} ${label.toLowerCase()}` : label}
         aria-label={hasCount ? `${label}: ${count}` : label}
       >
         <i className={`bi bi-${icon}`} />
-        <span className={`bell-badge${hasCount ? "" : " d-none"}`}>{display}</span>
+        <span className={`bell-badge${hasCount ? "" : " d-none"}`} aria-label={`${count} ${badgeNoun}`}>{display}</span>
       </a>
     );
   };
@@ -670,19 +895,29 @@ export function ManageShell({
                     ))}
                 </select>
               ) : null}
-              <button
-                className="btn btn-primary btn-pill"
-                type="button"
-                data-qb-new="1"
-                aria-label="Nuova prenotazione"
-              >
-                <i className="bi bi-plus-lg me-1" />
-                <span className="topbar-action-text">Prenotazione</span>
-              </button>
-              {renderBell("notifications_birthdays", "cake2", "Compleanni clienti", notif.birthdays)}
-              {renderBell("notifications_installments", "cash-stack", "Rate in scadenza / scadute", notif.installments)}
-              {renderBell("notifications_quotes", "file-earmark-text", "Preventivi", notif.quotes)}
-              {renderBell("notifications", "bell", "Notifiche", notif.count)}
+              {/* Gate legacy per-elemento (View.php 796-824): il bottone
+                  quick-booking e le tre campanelle scorciatoia esistono SOLO
+                  col permesso corrispondente; la campanella Notifiche con
+                  notifications.view. */}
+              {topbar.quickBooking ? (
+                <button
+                  className="btn btn-primary btn-pill"
+                  type="button"
+                  data-qb-new="1"
+                  aria-label="Nuova prenotazione"
+                >
+                  <i className="bi bi-plus-lg me-1" />
+                  <span className="topbar-action-text">Prenotazione</span>
+                </button>
+              ) : null}
+              {topbar.canViewNotifications ? (
+                <>
+                  {topbar.bellBirthdays ? renderBell("notifications_birthdays", "cake2", "Compleanni clienti", notif.birthdays, "birthdays", "compleanni") : null}
+                  {topbar.bellInstallments ? renderBell("notifications_installments", "cash-stack", "Rate in scadenza / scadute", notif.installments, "installments", "rate") : null}
+                  {topbar.bellQuotes ? renderBell("notifications_quotes", "file-earmark-text", "Preventivi", notif.quotes, "quotes", "preventivi") : null}
+                  {renderBell("notifications", "bell", "Notifiche", notif.count, "count", "notifiche")}
+                </>
+              ) : null}
               <div className="dropdown">
                 <button className="icon-btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Account">
                   <i className="bi bi-person-circle" />

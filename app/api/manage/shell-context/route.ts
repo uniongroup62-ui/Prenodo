@@ -7,6 +7,7 @@ import {
   getNotificationSummary,
   getSupportAccess,
 } from "@/lib/manage-shell-context";
+import { can, canAny } from "@/lib/role-permissions";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -29,10 +30,26 @@ export async function GET(request: Request) {
     getSupportAccess(tenantSlug),
   ]);
 
+  // Gate per-icona della topbar legacy (View.php 796-824): la campanella
+  // compleanni richiede notifications.view + canAny(clients...), rate
+  // installments.manage, preventivi quotes.manage; il bottone "+ Prenotazione"
+  // appointments.quick_booking. viewerUserId alimenta lo scope localStorage del
+  // poller notifiche browser (beautysuite_browser_notifications:tenant:user:loc).
+  const perms = session.user.perms;
+  const topbar = {
+    canViewNotifications: can(perms, "notifications.view"),
+    bellBirthdays: canAny(perms, ["clients.manage", "client_sheets.manage", "client_consents.manage"]),
+    bellInstallments: can(perms, "installments.manage"),
+    bellQuotes: can(perms, "quotes.manage"),
+    quickBooking: can(perms, "appointments.quick_booking"),
+  };
+
   return Response.json({
     ok: true,
     sourceMode: locationContext.sourceMode,
     notif,
+    topbar,
+    viewerUserId: Number(session.user.id ?? 0),
     locations: locationContext.locations.map((location) => ({ id: location.id, name: location.name })),
     currentLocationId,
     needsLocationSelection,

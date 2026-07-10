@@ -10391,3 +10391,72 @@ permesso — requirePerm della pagina legacy — e payload con quotes/
 installments). PRODUZIONE INTATTA: fidelity_adhesion_json e conteggi
 ripristinati (cards baseline 0). REGRESSIONE: dashboard 16/16,
 notifiche-feed 10/10. tsc + eslint puliti.
+
+## 2026-07-10 — Notifiche, parte 3 (poller globale del footer View.php): badge live + notifiche browser su OGNI pagina + e2e
+
+TERZO passaggio su Notifiche: chiuso il LATO CLIENT del feed, cioè lo script
+globale del footer legacy (View.php 1989-2465, letto integrale insieme alla
+topbar 796-824 e a BrowserNotifications::feed 76-115). La shell Next faceva
+UNA sola fetch di shell-context (commento che dichiarava — a torto — "no
+polling nel legacy") e la pagina Notifiche aveva un poller proprio divergente
+(15s, solo notifiche native anche a scheda attiva, niente raggruppamento,
+scope localStorage per solo slug).
+
+FIX:
+1) NUOVO lib/browser-notification-feed.ts — motore puro del feed (port 1:1
+   di View.php 2013-2021 + 2126-2288, DOM-free e quindi testabile sul codice
+   reale): chiavi viste in localStorage con scope
+   beautysuite_browser_notifications:<tenant>:<utente>:<sede> (:seen cap
+   ULTIME 180, :hydrated, :enabled write-only), idratazione al primo giro
+   (marca tutto visto SENZA notificare), pubblicazione toast quando la scheda
+   è attiva ('titolo: corpo' + severity) vs notifica NATIVA quando è
+   nascosta/senza focus, raggruppamento >3 in un solo evento 'N nuove
+   notifiche' (body = primi 3 titoli ' | ', severity primary), markSeen SOLO
+   se la pubblicazione è andata a segno (retry al giro dopo).
+2) manage-shell.tsx — POLLER GLOBALE (era assente): ogni 5s (primo a 1.5s,
+   baseline feed a 300ms) action=feed con permesso browser concesso in
+   contesto sicuro (badge + eventi) altrimenti action=count (solo badge);
+   refresh su focus e visibilitychange (hidden→baseline feed); pulse legacy
+   'notification-bell--changed' 520ms sul CAMBIO di conteggio (mai al primo
+   paint, che equivale al render server-side PHP); listener
+   'bs:notifications-baseline' per il re-baseline chiesto dalla pagina (=
+   refreshNotificationFeed(true) legacy). Poller NON attivo sotto gate email
+   o selezione sede (nel legacy lo script esce quando non trova icone).
+3) manage-shell.tsx topbar — GATE PER-ELEMENTO (View.php 796-824): campanella
+   compleanni solo con canAny(clients/client_sheets/client_consents), rate
+   solo installments.manage, preventivi solo quotes.manage, gruppo campanelle
+   solo notifications.view, bottone '+ Prenotazione' solo
+   appointments.quick_booking (prima erano TUTTI renderizzati incondizionati);
+   badge con aria-label legacy ('N compleanni/rate/preventivi/notifiche') e
+   classe notification-shortcut sulle scorciatoie.
+4) shell-context route — espone topbar {canViewNotifications, bellBirthdays,
+   bellInstallments, bellQuotes, quickBooking} + viewerUserId (scope storage).
+5) notifications route action=feed — payload legacy COMPLETO
+   (BrowserNotifications::feed 82-90): generated_at/tenant/user_id/location_id
+   + summary MERGIATO (il poller aggiorna i badge dalla risposta del feed) +
+   guardia needsLocationSelection→events=[] (riga 93 legacy).
+6) notifications-content.tsx — pagina allineata: RIMOSSO il poller di pagina
+   (doppione divergente del globale); stato bottone completo con 'Serve
+   HTTPS' (contesto non sicuro, updatePermissionButtons 2191-2196) e ri-lettura
+   permesso al focus; attivazione permesso = flusso legacy (re-baseline feed +
+   notifica di test con testi VERBATIM 'Notifiche browser attive'/'Riceverai
+   avvisi quando la scheda CRM non e in primo piano.' — senza accento — +
+   toast 'Notifica browser di test inviata'/'Notifica browser non mostrata
+   dal browser'); salvataggio preferenze col CONTRATTO legacy
+   preferences=<JSON> con echo del server riapplicato al form, re-baseline,
+   chiusura modal e toast 'Preferenze notifiche salvate'; errori INLINE nel
+   modal (incluso il messaggio 'Il server ha risposto con una pagina HTML…'
+   di readJsonResponse) invece dell'alert di pagina; 'Personalizza' ri-fetcha
+   le preferenze a ogni apertura (settingsButtons legacy).
+
+VERIFICATO: test-feed-engine 12/12 sul CODICE REALE transpilato (prefix,
+idratazione, toast vs nativa, severity default info, raggruppo 4→1, retry su
+pubblicazione fallita, cap 180 con le ultime, dedup visti, re-baseline,
+storage corrotto); test-notifiche-shell 12/12 live (flag topbar per-permesso
+con canAny compleanni, viewerUserId, payload feed con metadati+summary
+coerente con action=count, evento pending ZZ, guardia selezione-sede, prefs
+contratto legacy con echo e 'yes' truthy, 403 verbatim); render pagina 200.
+PRODUZIONE INTATTA (prefs utente 20 byte-identiche, baseline 10/5).
+REGRESSIONE: notifiche 17/17, feed 10/10, shell-summary 7/7. tsc+eslint puliti.
+Residuo noto (fuori scope Notifiche): il dropdown account della topbar non
+gatta ancora le voci per permesso (View.php 830+, es. settings.general).
