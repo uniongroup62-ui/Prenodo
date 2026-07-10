@@ -10041,3 +10041,69 @@ con sede revocata, archivio = scope SQL legacy, età 1 decimale, 403/401).
 PRODUZIONE INTATTA: baseline conteggi identici (9 vendite/1 piano/3 rate/10
 appuntamenti/0 costi/2 commissioni/5 clienti). REGRESSIONE: model-a 12/12,
 automazione 20/20. tsc pulito, eslint solo warning css preesistente.
+
+## 2026-07-10 — Booking / Impostazioni (booking.php ramo admin): audit 1:1 + 5 fix + e2e live
+
+SCOPE: la voce sidebar "Booking" = pagina IMPOSTAZIONI del gestionale
+(booking.php SENZA public=1, requirePerm('booking.manage')): il wizard
+pubblico (13665 righe) è già stato chiuso nella campagna V1-V10. Legacy letto
+INTEGRALE per il ramo admin: gate (riga 3), load+POST save (2860-2941), view
+(8758-8822), flash euristico (8742-8744), syncCustomerCancelFields di
+booking.js (1-47). Next: booking-content.tsx (ora 291) + business-settings
+route (GET section=booking / POST action=booking_settings_save) +
+lib/manage-business-settings.ts (saveBookingSettings/getBookingSettings).
+
+FIX (5):
+1) SEMANTICA CAMPI DISABLED: con l'annullo cliente spento il legacy DISABILITA
+   valore/unità (booking.js) e i campi disabled NON vengono postati → il save
+   RESETTA a 0/'hours'. Il componente Next li postava sempre (il valore
+   sopravviveva allo spegnimento): ora li omette dal payload quando il toggle
+   è OFF, e riflette il reset del server.
+2) PERMESSO: il gate accettava anche settings.general — ma è un permesso
+   FRATELLO (figlio di settings.manage), non un padre di booking.manage: nel
+   legacy non lo copre. Ora GET section=booking e POST richiedono
+   can('booking.manage') (settings.manage PADRE continua a coprire via
+   gerarchia, testato).
+3) (int) PHP a prefisso sul tempo minimo ('12abc' -> 12, 'abc' -> 0) invece
+   di Number() (NaN -> 0).
+4) businessName nel prefill section=booking: la card 'Link prenotazione
+   online' mostrava il fallback 'La mia attività' per l'utente solo-booking
+   (il contesto generale richiede settings.general/location e rispondeva 403);
+   ora il nome arriva col prefill come setting_get('name') legacy.
+5) 403 → card 'Accesso negato'/'Non hai i permessi per accedere a questa
+   sezione.' (Auth::requirePerm) + default pre-load legacy (tutto spento,
+   0 ore — prima annullo acceso/24h).
+
+CONFERMATI FEDELI: POST con checkbox isset (assente -> 0); clamp valore >=0,
+giorni<=365, ore<=8760; unità solo hours/days (invalida -> hours); UPDATE
+sulle 4 colonne booking_* della PRIMA riga businesses; flash success
+'Impostazioni booking salvate' e wrapper errore verbatim 'Errore salvataggio
+impostazioni booking: <e> (verifica schema o permessi ALTER TABLE)' con
+l'euristica alert legacy (danger se il testo contiene 'non' o 'chiusi' —
+l'errore contiene 'non riuscita' → rosso, quirk replicato); pagina verbatim
+(pageHeader Booking/Impostazioni/'Opzioni della prenotazione online.' +
+azione 'Apri pagina pubblica' target _blank; form 'Permetti al cliente di
+scegliere l'operatore' con form-text 'Se disattivato, l'operatore verrà
+assegnato automaticamente.', 'Permetti al cliente di annullare il proprio
+appuntamento' con form-text area cliente, 'Tempo minimo per annullare' con
+input-group numero+Ore/Giorni e form-text 'Esempio: 24 ore o 2 giorni...
+Imposta 0 per consentire l'annullamento fino all'inizio.', bottoni Salva
+btn-pill + Annulla -> pagina booking; card destra 'Link prenotazione online'
+con nome attività, 'Condividi questo link con i clienti per prenotare
+online.' e URL in <code>); i campi tempo minimo disabilitati live al toggle
+(syncCustomerCancelFields).
+
+RESIDUI documentati (non fix): (a) URL pubblico mostrato = clean URL
+/slug/booking?public=1 (o booking_url marketplace se presente) vs
+index.php?page=booking&public=1 legacy — convenzione clean-URL del port;
+(b) il deep-link ?msg= viene riscritto via history.replaceState (pattern SPA).
+
+VERIFICATO: test-booking-settings 13/13 live (prefill speculare al DB con
+businessName 'elite', gerarchia permessi: booking.manage OK / settings.manage
+PADRE OK / settings.general FRATELLO 403 verbatim / 401, save completo con
+messaggio, clamp 400gg->365 e 9000h->8760, negativo->0, '12abc'->12 e
+'weeks'->hours, RESET 0/hours con toggle OFF senza campi (semantica disabled
+legacy), POST gate). PRODUZIONE INTATTA: riga businesses ripristinata
+byte-identica (choose_staff 0, annullo attivo 2 ore). REGRESSIONE: report
+24/24 (stessa cancel policy negli esempi Automazione/Report), model-a 12/12.
+tsc pulito, eslint solo warning preesistenti.

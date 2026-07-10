@@ -20,11 +20,14 @@ export function BookingSettingsContent({ slug: slugProp, initialQuery }: { slug?
   const slug = slugProp || tenantSlug();
 
   // Settings form state (pre-filled on mount from the API where available).
+  // Default pre-load = riga businesses vuota nel legacy: tutto spento, 0 ore.
   const [chooseStaffEnabled, setChooseStaffEnabled] = useState(false);
-  const [customerCancelEnabled, setCustomerCancelEnabled] = useState(true);
-  const [cancelBeforeValue, setCancelBeforeValue] = useState("24");
+  const [customerCancelEnabled, setCustomerCancelEnabled] = useState(false);
+  const [cancelBeforeValue, setCancelBeforeValue] = useState("0");
   const [cancelBeforeUnit, setCancelBeforeUnit] = useState("hours");
   const [saving, setSaving] = useState(false);
+  // Auth::requirePerm legacy: 403 → pagina 'Accesso negato'.
+  const [accessDenied, setAccessDenied] = useState(false);
   // Flash legacy: View::alert PRIMA del pageHeader; danger se il messaggio
   // contiene 'non' o 'chiusi', altrimenti success (booking.php 8742-8744).
   const [flash, setFlash] = useState<string>(initialQuery?.msg ?? "");
@@ -37,16 +40,22 @@ export function BookingSettingsContent({ slug: slugProp, initialQuery }: { slug?
     event.preventDefault();
     setSaving(true);
     try {
+      // Con l'annullo spento i campi valore/unità sono DISABLED e il form
+      // legacy NON li invia → il server salva 0/'hours' (reset). Replichiamo
+      // omettendoli dal payload.
+      const payload: Record<string, string> = {
+        action: "booking_settings_save",
+        booking_choose_staff_enabled: chooseStaffEnabled ? "1" : "",
+        booking_customer_cancel_enabled: customerCancelEnabled ? "1" : "",
+      };
+      if (customerCancelEnabled) {
+        payload.booking_customer_cancel_before_value = cancelBeforeValue;
+        payload.booking_customer_cancel_before_unit = cancelBeforeUnit;
+      }
       const res = await fetch(`/api/manage/business-settings?slug=${encodeURIComponent(slug)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-        body: JSON.stringify({
-          action: "booking_settings_save",
-          booking_choose_staff_enabled: chooseStaffEnabled ? "1" : "",
-          booking_customer_cancel_enabled: customerCancelEnabled ? "1" : "",
-          booking_customer_cancel_before_value: cancelBeforeValue,
-          booking_customer_cancel_before_unit: cancelBeforeUnit,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json().catch(() => null) as { ok?: boolean; error?: string; message?: string; settings?: { booking_customer_cancel_before_value?: number; booking_customer_cancel_before_unit?: string } } | null;
       if (!res.ok || !data?.ok) {
@@ -54,7 +63,8 @@ export function BookingSettingsContent({ slug: slugProp, initialQuery }: { slug?
         window.scrollTo({ top: 0 });
         return;
       }
-      // Reflect the server clamps (e.g. hours > 8760).
+      // Reflect the server clamps (e.g. hours > 8760) e il reset a 0/'hours'
+      // quando l'annullo è spento (semantica campi disabled del legacy).
       if (data.settings) {
         setCancelBeforeValue(String(data.settings.booking_customer_cancel_before_value ?? cancelBeforeValue));
         if (data.settings.booking_customer_cancel_before_unit) setCancelBeforeUnit(data.settings.booking_customer_cancel_before_unit);
@@ -84,8 +94,13 @@ export function BookingSettingsContent({ slug: slugProp, initialQuery }: { slug?
     fetch(`/api/manage/business-settings?slug=${encodeURIComponent(slug)}&section=booking`, {
       headers: { "x-tenant-slug": slug },
     })
-      .then((r) => r.json())
+      .then((r) => {
+        if (r.status === 403) setAccessDenied(true);
+        return r.json();
+      })
       .then((j) => {
+        // Nome attività dal prefill (visibile con solo booking.manage).
+        if (j?.businessName) setBusinessName(String(j.businessName));
         const s = j?.bookingSettings;
         if (!s) return;
         setChooseStaffEnabled(Boolean(s.booking_choose_staff_enabled));
@@ -117,6 +132,18 @@ export function BookingSettingsContent({ slug: slugProp, initialQuery }: { slug?
 
   function cancelHref(): string {
     return `/${encodeURIComponent(slug)}/booking`;
+  }
+
+  // Port della pagina 403 di Auth::requirePerm (Auth.php 494-505).
+  if (accessDenied) {
+    return (
+      <div className="container-fluid">
+        <div className="card p-4">
+          <div className="h4 fw-semibold mb-2">Accesso negato</div>
+          <div className="text-muted">Non hai i permessi per accedere a questa sezione.</div>
+        </div>
+      </div>
+    );
   }
 
   return (

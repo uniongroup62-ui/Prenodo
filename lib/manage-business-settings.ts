@@ -271,7 +271,8 @@ export async function saveBookingSettings(slug: string, input: Record<string, un
   const truthy = (v: unknown) => ["1", "true", "on", "yes"].includes(String(v ?? "").trim().toLowerCase());
   const chooseStaff = truthy(input.booking_choose_staff_enabled) ? 1 : 0;
   const cancelEnabled = truthy(input.booking_customer_cancel_enabled) ? 1 : 0;
-  let cancelValue = Math.trunc(Number(input.booking_customer_cancel_before_value ?? 0)) || 0;
+  // (int) PHP: parse a prefisso ('12abc' -> 12, 'abc' -> 0), non Number().
+  let cancelValue = parseInt(String(input.booking_customer_cancel_before_value ?? 0), 10) || 0;
   if (cancelValue < 0) cancelValue = 0;
   let cancelUnit = String(input.booking_customer_cancel_before_unit ?? "hours").trim().toLowerCase();
   if (cancelUnit !== "hours" && cancelUnit !== "days") cancelUnit = "hours";
@@ -302,6 +303,12 @@ export async function saveBookingSettings(slug: string, input: Record<string, un
       booking_customer_cancel_before_unit: cancelUnit,
     },
   };
+}
+
+// setting_get('name') legacy: nome attività dalla prima riga businesses.
+export async function getBusinessName(slug: string): Promise<string> {
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "name", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  return String(rows[0]?.name ?? "").trim();
 }
 
 // Current booking settings for the settings form prefill.

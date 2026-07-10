@@ -10,6 +10,7 @@ import {
   saveBusinessBrandingPosition,
   saveBusinessLocation,
   getBookingSettings,
+  getBusinessName,
   saveBookingSettings,
   saveBusinessProfile,
   saveLocationMarketplace,
@@ -28,11 +29,14 @@ export async function GET(request: Request) {
   const session = await currentManageSession(tenantSlug);
   if (!session) return jsonError("Sessione gestionale scaduta.", 401);
   const url = new URL(request.url);
-  // Booking-settings prefill for the Prenotazioni online page (booking.manage).
+  // Booking-settings prefill (booking.php riga 3: requirePerm('booking.manage')
+  // — settings.general NON lo copre: la gerarchia permessi sale solo ai padri).
   if (url.searchParams.get("section") === "booking") {
-    if (!canAny(session.user.perms, ["booking.manage", "settings.general"])) return jsonError("Permesso negato.", 403);
+    if (!can(session.user.perms, "booking.manage")) return jsonError("Permesso Prenotazioni online richiesto.", 403);
     try {
-      return Response.json({ ok: true, bookingSettings: await getBookingSettings(tenantSlug) });
+      // businessName per la card 'Link prenotazione online' (setting_get('name')
+      // legacy, visibile a chiunque abbia booking.manage).
+      return Response.json({ ok: true, bookingSettings: await getBookingSettings(tenantSlug), businessName: await getBusinessName(tenantSlug) });
     } catch (error) {
       return jsonError(error instanceof Error ? error.message : "Impostazioni non caricate.");
     }
@@ -144,7 +148,8 @@ export async function POST(request: Request) {
       // Impostazioni Prenotazioni online (legacy booking.php admin POST):
       // choose-staff step + customer cancel policy on the businesses row.
       case "booking_settings_save":
-        if (!canAny(session.user.perms, ["booking.manage", "settings.general"])) return jsonError("Permesso Prenotazioni online richiesto.", 403);
+        // requirePerm('booking.manage') legacy: settings.general non basta.
+        if (!can(session.user.perms, "booking.manage")) return jsonError("Permesso Prenotazioni online richiesto.", 403);
         // Wrapper errore verbatim di booking.php 2926.
         try {
           return Response.json(await saveBookingSettings(tenantSlug, body));
