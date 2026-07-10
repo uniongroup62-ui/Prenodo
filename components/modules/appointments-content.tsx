@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // Port fedele della pagina "Lista appuntamenti" legacy (appointments.php), alimentata
 // dal /api/manage/appointments?action=list DB-backed.
@@ -159,6 +159,10 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
   // Deep-link legacy ?created=<id,id,...>: gli appuntamenti appena creati dal planner
   // restano in lista anche fuori dal range date.
   const [createdIds, setCreatedIds] = useState<number[]>([]);
+  // Deep-link ?action=edit|new in attesa dei flag permessi (il legacy gate
+  // action=new su quick_booking PRIMA di aprire: 'Permesso Prenotazione rapida
+  // richiesto.'). Fissato al mount, consumato una volta a load concluso.
+  const [pendingDeepLink, setPendingDeepLink] = useState<{ action: "edit" | "new"; id: number } | null>(null);
 
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [deleting, setDeleting] = useState(false);
@@ -222,25 +226,37 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
         .filter((n) => Number.isFinite(n) && n > 0)
         .slice(0, 300);
       if (created.length) setCreatedIds(created);
+      const action = String(sp.get("action") ?? "");
+      const editId = Number.parseInt(String(sp.get("id") ?? "0"), 10) || 0;
+      if (action === "edit" && editId > 0) setPendingDeepLink({ action: "edit", id: editId });
+      else if (action === "new") setPendingDeepLink({ action: "new", id: 0 });
     });
-    const action = String(sp.get("action") ?? "");
-    const editId = Number.parseInt(String(sp.get("id") ?? "0"), 10) || 0;
-    if ((action === "edit" && editId > 0) || action === "new") {
-      // Il drawer globale ascolta i click deleghi su [data-qb-edit]/[data-qb-new]:
-      // un click sintetico dopo il mount riproduce qbOpenEditAppointment/qbOpenNew.
-      const timer = setTimeout(() => {
-        const a = document.createElement("a");
-        a.href = "#";
-        if (action === "edit") a.setAttribute("data-qb-edit", String(editId));
-        else a.setAttribute("data-qb-new", "1");
-        a.style.display = "none";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      }, 450);
-      return () => clearTimeout(timer);
-    }
   }, []);
+
+  // Consuma il deep-link ?action= quando i flag permessi sono noti (load concluso):
+  // legacy GET action=new senza quick_booking -> redirect con errore verbatim; il
+  // drawer globale ascolta i click deleghi su [data-qb-edit]/[data-qb-new], quindi
+  // un click sintetico riproduce qbOpenEditAppointment/qbOpenNewAppointment.
+  const deepLinkFiredRef = useRef(false);
+  useEffect(() => {
+    if (!pendingDeepLink || loading || accessDenied || deepLinkFiredRef.current) return;
+    deepLinkFiredRef.current = true;
+    if (pendingDeepLink.action === "new" && !canQuickBook) {
+      Promise.resolve().then(() => setErr("Permesso Prenotazione rapida richiesto."));
+      return;
+    }
+    const timer = setTimeout(() => {
+      const a = document.createElement("a");
+      a.href = "#";
+      if (pendingDeepLink.action === "edit") a.setAttribute("data-qb-edit", String(pendingDeepLink.id));
+      else a.setAttribute("data-qb-new", "1");
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }, 450);
+    return () => clearTimeout(timer);
+  }, [pendingDeepLink, loading, accessDenied, canQuickBook]);
 
   // ↑/↓ segment reorder (legacy handleSegmentMove -> action=swap_segment): swap +
   // toast successo verbatim + reload (il legacy ricarica la pagina; noi rifetchiamo).
@@ -268,10 +284,10 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
     }
   }, [slug, swapBusy, load]);
 
-  // Auto-dismiss del toast (il legacy usa un toast Bootstrap con autohide).
+  // Auto-dismiss del toast (il legacy usa un toast Bootstrap con delay 4500).
   useEffect(() => {
     if (!toastText) return;
-    const timer = setTimeout(() => setToastText(""), 3500);
+    const timer = setTimeout(() => setToastText(""), 4500);
     return () => clearTimeout(timer);
   }, [toastText]);
 
@@ -306,7 +322,11 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
         const blockedNotCanceled = Math.max(0, Number(json?.blockedNotCanceled ?? 0));
         const blockedUnavailable = Math.max(0, Number(json?.blockedUnavailable ?? 0));
         if (!bulk) {
-          setMsg("Appuntamento eliminato");
+          // Legacy: id inesistente/fuori sede -> require_appointment_access
+          // redirige con l'errore; qui la delete "riuscita a vuoto" (deleted=0)
+          // deve mostrare lo stesso errore, non il successo.
+          if (deleted > 0) setMsg("Appuntamento eliminato");
+          else setErr("Prenotazione non trovata o non disponibile nella sede corrente.");
         } else {
           if (deleted > 0) setMsg(deleted === 1 ? "1 appuntamento eliminato." : `${deleted} appuntamenti eliminati.`);
           const errParts: string[] = [];
@@ -369,8 +389,10 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
         if (to && day && day > to) return false;
       }
       if (term) {
+        // LIKE legacy: SOLO nome cliente O public_code raw (cercare "#123" nel
+        // legacy non trova nulla — niente variante "#codice").
         const code = appt.publicCode ? String(appt.publicCode) : "";
-        const haystack = `${appt.client} ${code} #${code}`.toLowerCase();
+        const haystack = `${appt.client} ${code}`.toLowerCase();
         if (!haystack.includes(term)) return false;
       }
       return true;
@@ -573,6 +595,13 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
                           id="apptSelectAll"
                           aria-label="Seleziona tutti"
                           checked={allSelectableSelected}
+                          // Stato indeterminato legacy (appointments.js syncBulk):
+                          // qualche selezionata ma non tutte -> indeterminate.
+                          ref={(el) => {
+                            if (!el) return;
+                            const some = selectableIds.some((id) => selectedIds.includes(id));
+                            el.indeterminate = selectableIds.length > 0 && some && !allSelectableSelected;
+                          }}
                           onChange={(e) => toggleSelectAll(e.target.checked)}
                         />
                       </th>
@@ -597,7 +626,15 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
                         const badge = statusBadge(appt);
                         const deleteLocked = normStatusCode(appt) !== "canceled";
                         const lines = appt.services && appt.services.length > 0 ? appt.services : [{ serviceId: 0, name: appt.service, price: appt.price } as AppointmentServiceLine];
-                        const isMulti = lines.length > 1;
+                        // isMulti legacy = seg_count>1 (SOLO segmenti): un appuntamento
+                        // con più righe appointment_services ma SENZA segmenti (dati
+                        // migrati) resta una riga SINGOLA coi nomi uniti (GROUP_CONCAT
+                        // DISTINCT ... ORDER BY nome), non un padre Multi-servizio.
+                        const segmentedCount = lines.filter((l) => l.segmentId).length;
+                        const isMulti = segmentedCount > 1;
+                        const singleServiceText = [...new Set(lines.map((l) => l.name).filter(Boolean))]
+                          .sort((a, b) => a.localeCompare(b))
+                          .join(", ") || appt.service;
                         const expanded = expandedRows.includes(appt.id);
                         // Data legacy: "dd/mm/yyyy HH:MM → HH:MM".
                         const dateCell = `${fmtDate(appt.date)} ${appt.time}${appt.endTime ? ` → ${appt.endTime}` : ""}`;
@@ -684,7 +721,7 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
                                   </>
                                 ) : (
                                   <>
-                                    {lines[0]?.name ?? appt.service}
+                                    {singleServiceText}
                                     {summaries}
                                   </>
                                 )}

@@ -22269,7 +22269,9 @@ export async function appointmentListDecorations(
       }).catch(() => [] as RowDataPacket[]);
       const colorById = new Map<number, string>();
       for (const r of staffRows) {
-        const color = String(r.calendar_color ?? "").trim();
+        // Normalizzazione '#' legacy (appointments.php 561-563) prima della validazione.
+        let color = String(r.calendar_color ?? "").trim();
+        if (color !== "" && color[0] !== "#") color = `#${color}`;
         if (/^#[0-9a-fA-F]{6}$/.test(color)) colorById.set(Number(r.id), color);
       }
       for (const [aid, sid] of firstStaff) {
@@ -22582,7 +22584,10 @@ async function appointmentServiceLines(
           params: segStaffIds,
         }).catch(() => [] as RowDataPacket[]);
         for (const r of staffRows) {
-          const color = String(r.calendar_color ?? "").trim();
+          // Normalizzazione colore legacy (appointments.php 561-563): prefisso '#'
+          // quando manca, poi validazione #RRGGBB (altrimenti nessun pallino).
+          let color = String(r.calendar_color ?? "").trim();
+          if (color !== "" && color[0] !== "#") color = `#${color}`;
           segStaffById.set(Number(r.id), { name: String(r.full_name ?? ""), color: /^#[0-9a-fA-F]{6}$/.test(color) ? color : "" });
         }
       }

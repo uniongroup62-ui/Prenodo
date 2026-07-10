@@ -11034,3 +11034,70 @@ cifre, cabina auto 9, snapshot servizi €12, staff 22); nuovo cliente creato
 SOLO allo step create con newClientId. Regressione: test-calendario 20/20 +
 test-notifiche-hub 16/16. Baseline 10 appuntamenti / 5 clienti / 3
 staff_services ripristinata (riga staff_services (56,9) seminata e rimossa).
+
+## 2026-07-11 — Appuntamenti, parte 2 (lista: raggruppamento per-SEGMENTO, deep-link gated, cascata delete ricca)
+
+Rilettura INTEGRALE di appointments.php (1211) + appointments.js (205) + diff
+riga-per-riga con appointments-content.tsx, route action=list,
+listDbAppointments/mapAppointment/appointmentServiceLines/
+appointmentListDecorations/deleteDbAppointment.
+
+FIX:
+1) isMulti = SOLO SEGMENTI (legacy seg_count>1): un appuntamento con piu' righe
+   appointment_services ma SENZA segmenti (dati MIGRATI dal MySQL) e' una riga
+   SINGOLA coi nomi uniti tipo GROUP_CONCAT DISTINCT ordinati per nome
+   ('test, test2'), NON un padre Multi-servizio con figli. Prima il componente
+   usava lines.length>1 (services conta anche le righe senza segmentId).
+2) Delete singola con deleted=0 (id inesistente/gia' rimosso): il componente
+   mostrava 'Appuntamento eliminato' — ora mostra l'errore legacy 'Prenotazione
+   non trovata o non disponibile nella sede corrente.' (require_appointment_access).
+3) Ricerca 'q': tolta la variante '#codice' dall'haystack — il LIKE legacy
+   matcha SOLO nome cliente O public_code raw (cercare '#123' non trova nulla).
+4) Deep-link ?action=new GATED su quick_booking (legacy redirect con 'Permesso
+   Prenotazione rapida richiesto.'): il click sintetico che apre il drawer ora
+   attende i flag permessi dal load (pendingDeepLink + ref one-shot) e con
+   permesso mancante mostra l'alert verbatim invece di aprire il drawer.
+5) Select-all con stato INDETERMINATE legacy (syncBulk: qualche selezionata ma
+   non tutte) via ref callback.
+6) Toast riordino: autohide 4500ms come il legacy (era 3500).
+7) Colori operatore: normalizzazione '#' legacy (prefisso quando manca, poi
+   validazione #RRGGBB) in appointmentServiceLines + appointmentListDecorations.
+
+ATTESTAZIONI:
+- EDIT PER-SEGMENTO (rinvio dal Calendario 2c): data-qb-segment NON e' emesso
+  da NESSUNA pagina legacy (grep integrale htdocs: solo il lettore in app.js
+  9961 e la div #qbSegmentViewAlert in View.php) — la segment-view del drawer
+  non ha entry point nel build legacy; le righe figlie della lista hanno SOLO
+  le frecce di riordino, nessun bottone Modifica. Niente da portare.
+- POST compat action=new/edit (appointments.php 585-698): nessun form della
+  pagina lo posta (il drawer usa api_appointments action=save; #apptModal e'
+  il fallback morto gia' attestato) — validazioni equivalenti gia' portate nel
+  save del drawer (audit Calendario 2a/2b). I deep-link GET action=new/edit
+  restano portati (drawer + gate).
+- Cascata delete: deleteDbAppointment gia' copre la cascata legacy (redeem
+  restore package/prepaid/giftbox/gift + giftcard refund, figli
+  segments/services/staff/locations/gift_items/reminders + tabelle-link QB
+  giftbox/package/prepaid items + release promotion_redemptions). Le chiamate
+  legacy Fidelity::handleAppointmentStatusChange(canceled->canceled) e
+  credit_refund su appuntamento GIA' annullato sono riallineamenti no-op (il
+  cancel path ha gia' rilasciato punti/credito riservato — reserved esiste
+  solo pending/scheduled).
+- Pallini colore riga padre: il legacy filtra i colori alla SEDE corrente
+  (staffColorById costruito dallo staff location-filtered) — il port mostra il
+  colore dell'operatore del segmento a prescindere dalla sede. Residuo
+  cosmetico deliberato (il nome resta identico).
+- Orari riga padre multi: legacy min/max sui segmenti vs port dalla riga
+  appointments (mantenuta in sync dal save) — equivalenti.
+- Riga con 1 SOLO segmento: legacy usa orari/operatore del SEGMENTO, port la
+  riga appointments + primo appointment_staff — equivalente sui dati nativi
+  (stato anomalo possibile solo su dati manipolati).
+
+E2E test-appuntamenti2.mjs 8/8: shape per-segmento (segmentId/orari/operatore
+per posizione, colore NULL vs #93c5fd), public_code esposto, replica della
+logica componente (segmentato->multi, senza segmenti->'test, test2'),
+decorazioni ('Pacchetti: ZZ Pack A, ZZ Pack B' + 'Prepagato' + staffColor),
+filtro sede permissivo (NULL inclusa / sede 51 esclusa), cascata delete
+COMPLETA (segments/services/staff/locations/package/giftbox/prepaid/
+promotion_redemptions tutti a 0), delete id inesistente -> deleted=0 +
+blockedUnavailable=1. Regressione: test-appuntamenti 41/41 +
+test-calendario 20/20. Baseline 10/5 ripristinata (client_packages ZZ rimossi).
