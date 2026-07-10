@@ -10556,3 +10556,50 @@ VERIFICATO: test-topbar-dropdown 4/4 live (admin con perms VUOTE → tutti i
 flag true; staff settings.general → solo Profilo; staff con roles.manage in
 cookie → Ruoli comunque nascosto; settings.location+consent_modules.manage →
 Sedi+Moduli). REGRESSIONE: test-notifiche-shell 12/12. tsc/eslint puliti.
+
+## 2026-07-10 — Dashboard, parte 3 (fail-closed sede completo + dettagli perf): 1:1 + e2e
+
+TERZO passaggio su Dashboard: riletti al pettine fitto dashboard.php 14-135 +
+462-506 e api_dashboard_performance.php INTEGRALE (281) + dashboard.js (144)
+contro route/lib/componente. Grafico (config Chart byte-identica), KPI,
+settimanale, upcoming, costi e avvisi già fedeli dai passaggi 1-2; chiusi i
+punti rimasti:
+
+FIX:
+1) REGOLA FAIL-CLOSED COMPLETA ($dashboardLocationFailClosed, dashboard.php
+   18-27): il port copriva solo needsLocationSelection (multi-sede senza
+   scelta); il legacy fail-chiude ANCHE l'utente le cui sedi consentite sono
+   VUOTE a fronte di sedi attive esistenti (es. cookie con sedi revocate:
+   lista filtrata vuota, current 0, needsSel false) — prima il Next calcolava
+   TENANT-WIDE. Ora la route calcola hasLocationContext && (locations vuote ||
+   current<=0) e la passa a KPI/settimanale/upcoming/costi E a tutti gli
+   avvisi (la stessa regola gata le righe 60-361 del legacy). Il tenant SENZA
+   sedi attive continua a calcolare tenant-wide (hasLocationContext false).
+2) BANNER fail-closed verbatim (dashboard.php 473-477): 'Seleziona una sede
+   valida per visualizzare i dati della dashboard.' (alert-warning py-2 mb-3
+   in testa alla sezione) — flag locationFailClosed nel payload, era assente.
+3) _pct_change con <= 0 come il PHP (prima ===0): prev<=0 && cur<=0 -> 0.0,
+   prev<=0 && cur>0 -> null ('—' muted) — edge dei valori negativi.
+4) KPI Clienti: filtri COALESCE(id,0)>0 / COALESCE(client_id,0)>0 del legacy
+   sull'UNION (prima IS NOT NULL, che conterebbe un client_id=0).
+
+CONFERMATI (nessuna modifica): pannello settimanale a sede 0 — nel modello di
+sessione Next current=0 senza fail-closed è raggiungibile SOLO per tenant
+senza sedi, dove il legacy calcola pure (hasLocationContext false); la
+risposta vuota legacy per location<=0 con sedi assegnate coincide col
+fail-closed. Config grafico 1:1 (line, Ricavi, #2f63f4, tension .4, tooltip
+Intl currency, asse '€ ' senza decimali, griglie/tick identici); attesa
+Chart.js con fallback 'Grafico non disponibile al momento.'; setDelta
+(+X,Y% verde/rosso, 0 muted, null '—'); fmtNum/fmtHours/fmtEUR; hint range
+dd/mm/yyyy - dd/mm/yyyy; subtitle con 'Sede: …'; card KPI legacy senza riga
+detail (il campo extra del payload non è reso). Nota di convenzione: il
+legacy carica il pannello settimanale via API separata (perfError
+'Statistiche settimanali non disponibili al momento.' su failure parziale),
+il Next usa un payload unico — failure parziale non riproducibile.
+
+VERIFICATO: test-dashboard3 5/5 live (revocato → flag true + KPI '0'/'€ 0,00'
++ settimanale a zero delta 0.0 + avvisi [] + costs null + upcoming [] con
+calendar.view; serie 7 label d/m; admin sede 21 flag false payload pieno;
+multi-sede senza selezione fail-closed; 403 verbatim senza dashboard.view).
+REGRESSIONE: test-dashboard 16/16, test-shell-summary 7/7; render 200.
+tsc/eslint puliti. Produzione intatta (soli GET).

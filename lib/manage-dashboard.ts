@@ -55,11 +55,12 @@ const locFilter = (alias: string, locationId: number) => (locationId > 0 ? ` AND
 // 30gg usano `location_id=?` (dashboard.php:66,75,110) — NIENTE OR IS NULL.
 const locStrict = (alias: string, locationId: number) => (locationId > 0 ? ` AND ${alias}.location_id = ${locationId}` : "");
 
-// _pct_change (api_dashboard_performance:16-22): null quando prev=0 e cur>0.
+// _pct_change (api_dashboard_performance:16-22): confronti con <= 0 come il
+// PHP — prev<=0 e cur<=0 -> 0.0; prev<=0 e cur>0 -> null (reso "—" muted).
 // Restituisce la percentuale GREZZA (l'arrotondamento a 1 decimale è fatto in
 // fase di rendering, come setDelta in dashboard.js).
 function pctChange(current: number, previous: number): number | null {
-  if (previous === 0) return current === 0 ? 0 : null;
+  if (previous <= 0) return current <= 0 ? 0 : null;
   return ((current - previous) / previous) * 100;
 }
 
@@ -175,11 +176,12 @@ export async function getManageDashboard(
   if (locationId > 0) {
     const rows = await dbQuery<RowDataPacket[]>(
       // Rami clients/sales STRETTI (location_id=?), ramo appointments PERMISSIVO
-      // (location_id=? OR NULL) — esattamente come dashboard.php:66/71/75.
+      // (location_id=? OR NULL) — esattamente come dashboard.php:66/71/75, con
+      // i filtri COALESCE(id,0)>0 / COALESCE(client_id,0)>0 del legacy.
       `SELECT COUNT(DISTINCT client_id) AS c FROM (
-         SELECT id AS client_id FROM ${quoteIdentifier(clientsTable.name)} WHERE tenant_id = ${T} AND location_id = ${locationId}
-         UNION SELECT a.client_id FROM ${quoteIdentifier(apptTable.name)} a WHERE a.tenant_id = ${T} AND a.client_id IS NOT NULL${apptLoc("a")}
-         UNION SELECT s.client_id FROM ${quoteIdentifier(salesTable.name)} s WHERE s.tenant_id = ${T} AND s.client_id IS NOT NULL${locStrict("s", locationId)}
+         SELECT id AS client_id FROM ${quoteIdentifier(clientsTable.name)} WHERE tenant_id = ${T} AND location_id = ${locationId} AND COALESCE(id, 0) > 0
+         UNION SELECT a.client_id FROM ${quoteIdentifier(apptTable.name)} a WHERE a.tenant_id = ${T} AND COALESCE(a.client_id, 0) > 0${apptLoc("a")}
+         UNION SELECT s.client_id FROM ${quoteIdentifier(salesTable.name)} s WHERE s.tenant_id = ${T} AND COALESCE(s.client_id, 0) > 0${locStrict("s", locationId)}
        ) u WHERE client_id IS NOT NULL`,
       [],
     ).catch(() => [] as RowDataPacket[]);

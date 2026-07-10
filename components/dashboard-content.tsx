@@ -23,6 +23,8 @@ type DashboardAlert = {
 type DashboardData = {
   stats: Metric[];
   weekly: { range: string; metrics: WeeklyMetric[]; series: SeriesPoint[] };
+  // Banner fail-closed sede (dashboard.php 473-477).
+  locationFailClosed?: boolean;
   // null = permesso calendar.view mancante (card nascosta, come il legacy).
   upcoming: Appt[] | null;
   alerts: DashboardAlert[];
@@ -190,6 +192,13 @@ export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: 
 
       <section className="dashboard-page">
         {error ? <div className="alert alert-warning">{error}</div> : null}
+        {/* Banner fail-closed verbatim (dashboard.php 473-477): sede non valida
+            o non selezionata -> dati azzerati + avviso in testa. */}
+        {data?.locationFailClosed ? (
+          <div className="alert alert-warning py-2 mb-3">
+            Seleziona una sede valida per visualizzare i dati della dashboard.
+          </div>
+        ) : null}
 
         <div className="row g-3 dashboard-overview-grid">
           {(data?.stats ?? []).map((stat, i) => (

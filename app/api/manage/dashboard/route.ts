@@ -22,22 +22,31 @@ export async function GET(request: Request) {
 
   try {
     const locationContext = await getManageLocationContext(tenantSlug);
+    // $dashboardLocationFailClosed (dashboard.php 18-27): fail-closed quando il
+    // tenant HA sedi attive e (l'utente non ne ha di consentite — es. cookie con
+    // sedi revocate — oppure nessuna sede selezionata). Con locations.length===1
+    // la sede è auto-selezionata, quindi current>0; il tenant SENZA sedi calcola
+    // tenant-wide (hasLocationContext false, come il legacy). La stessa regola
+    // gata KPI, settimanale, upcoming, costi e TUTTI gli avvisi (righe 60-361).
+    const locationFailClosed =
+      locationContext.allLocations.length > 0 &&
+      (locationContext.locations.length === 0 || locationContext.currentLocationId <= 0);
     const [dashboard, alerts] = await Promise.all([
       getManageDashboard(tenantSlug, {
         locationId: locationContext.currentLocationId,
         canSeeCalendar: can(session.user.perms, "calendar.view"),
         canSeeCosts: canAny(session.user.perms, ["costs.manage", "costs.items"]),
-        needsLocationSelection: locationContext.needsLocationSelection,
+        needsLocationSelection: locationFailClosed,
       }),
       // Avvisi raggruppati (port dedicato con permessi + sede come dashboard.php).
       getDashboardAlerts(tenantSlug, {
         perms: session.user.perms,
         currentLocationId: locationContext.currentLocationId,
-        needsLocationSelection: locationContext.needsLocationSelection,
+        needsLocationSelection: locationFailClosed,
       }),
     ]);
 
-    return Response.json({ ok: true, sourceMode: "database", alerts, ...dashboard });
+    return Response.json({ ok: true, sourceMode: "database", locationFailClosed, alerts, ...dashboard });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Errore dashboard.");
   }
