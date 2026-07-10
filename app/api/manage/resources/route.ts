@@ -87,9 +87,12 @@ export async function GET(request: Request) {
     // pagina Cabine (rawLocation) niente fallback alla prima sede attiva:
     // 0 = stato 'Tutte' legittimo (cabins.php 356-361).
     const locationParam = url.searchParams.get("location_id") ?? url.searchParams.get("locationId");
+    const requestedLocation = locationParam !== null ? parseInteger(locationParam, 0) : Number(session.user.currentLocationId ?? 0) || 0;
     const context = await resourceContext({
       slug: tenantSlug,
-      locationId: locationParam !== null ? parseInteger(locationParam, 0) : Number(session.user.currentLocationId ?? 0) || 0,
+      // Solo hours.php passa il param da app_resolve_location_id (autorizzazione
+      // per-utente, hours.php 134-143): sede fuori lista -> ripiego.
+      locationId: section === "hours" ? resolveAllowedLocation(session.user, requestedLocation) : requestedLocation,
       date: url.searchParams.get("date") ?? undefined,
       rawLocation: section === "cabins",
     });
@@ -192,32 +195,35 @@ export async function POST(request: Request) {
       }
     }
 
-    if (action === "hours_save") {
+    // Le 5 azioni Orari risolvono la sede come il POST legacy (hours.php 137:
+    // app_resolve_location_id anche su POST — sede non autorizzata mai scritta).
+    const isHoursAction = ["hours_save", "closure_save", "closure_delete_range", "exception_save", "exception_delete_range"].includes(action);
+    if (isHoursAction) {
       if (!can(activeUser.perms, "hours.manage")) return jsonError("Permesso Orari richiesto.", 403);
+      body.location_id = String(resolveAllowedLocation(activeUser, parseInteger(body.location_id ?? body.locationId, 0)));
+    }
+
+    if (action === "hours_save") {
       const hours = await saveBusinessHours(tenantSlug, body);
       return Response.json({ ok: true, hours });
     }
 
     if (action === "closure_save") {
-      if (!can(activeUser.perms, "hours.manage")) return jsonError("Permesso Orari richiesto.", 403);
       const closures = await saveClosure(tenantSlug, body);
       return Response.json({ ok: true, closures });
     }
 
     if (action === "closure_delete_range") {
-      if (!can(activeUser.perms, "hours.manage")) return jsonError("Permesso Orari richiesto.", 403);
       const closures = await deleteClosureRange(tenantSlug, body);
       return Response.json({ ok: true, closures });
     }
 
     if (action === "exception_save") {
-      if (!can(activeUser.perms, "hours.manage")) return jsonError("Permesso Orari richiesto.", 403);
       const exceptions = await saveException(tenantSlug, body);
       return Response.json({ ok: true, exceptions });
     }
 
     if (action === "exception_delete_range") {
-      if (!can(activeUser.perms, "hours.manage")) return jsonError("Permesso Orari richiesto.", 403);
       const exceptions = await deleteExceptionRange(tenantSlug, body);
       return Response.json({ ok: true, exceptions });
     }
@@ -257,4 +263,16 @@ export async function POST(request: Request) {
 function permissionForResourceSection(section: string): string {
   if (section === "resources" || section === "hub") return "resources.manage";
   return permissionForFeature(section);
+}
+
+// app_resolve_location_id (Helpers.php 762, usato SOLO da hours.php): un
+// NON-admin con sedi assegnate non può indicare una sede fuori lista. Il
+// legacy azzera e ripiega sulla prima sede attiva GLOBALE (anche non sua —
+// bug); qui ripieghiamo sulla sede corrente di sessione, sempre autorizzata
+// (deviazione di sicurezza documentata in roadmap).
+function resolveAllowedLocation(user: { role?: string; locationIds?: number[]; currentLocationId?: number }, requested: number): number {
+  const isAdmin = String(user.role ?? "").toLowerCase() === "admin";
+  const allowed = Array.isArray(user.locationIds) ? user.locationIds.map(Number).filter((n) => n > 0) : [];
+  if (isAdmin || !allowed.length || requested <= 0 || allowed.includes(requested)) return requested;
+  return Number(user.currentLocationId ?? 0) || 0;
 }

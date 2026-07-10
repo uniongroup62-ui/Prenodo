@@ -9264,3 +9264,76 @@ cabine 34/34 (suite blindata: nomi di produzione letti a runtime), risorse
 12/12. PRODUZIONE INTATTA: staff=2 (22 owner con foto R2, 56), users=2,
 staff_locations=3, staff_services=3 (inclusa riga orfana servizio 10
 pre-esistente), commissioni=2, user_locations=1, 5 clienti reali.
+
+## 2026-07-10 — Orari (hours.php + hours.js): audit 1:1 + 2 fix + e2e live
+
+Legacy letto INTEGRALE: app/pages/hours.php (875 righe) + assets/js/pages/hours.js
+(279) + helper (ensure_default_hours 6678, _time_to_minutes, app_resolve_location_id
+762). Next: lib/manage-resources.ts (saveBusinessHours/saveClosure/saveException/
+deleteClosureRange/deleteExceptionRange + listBusinessHours/listClosureRanges/
+listExceptionRanges + grouping) + route resources (5 azioni hours.manage) +
+hours-content.tsx (3 tab: Orari/Chiusure/Straordinari). Il porting era gia' MOLTO
+fedele: 2 soli fix.
+
+FIX (2):
+1) AUTORIZZAZIONE SEDE (app_resolve_location_id, hours.php 134-143): SOLO hours.php
+   nel legacy valida che la sede richiesta (GET param E POST) sia tra quelle
+   consentite all'utente. Ora la route la risolve per section=hours e per le 5
+   azioni POST: non-admin con sedi assegnate e sede fuori lista -> ripiego sulla
+   sede corrente di SESSIONE (sempre autorizzata). DEVIAZIONE DI SICUREZZA
+   documentata: il legacy azzera e ripiega sulla PRIMA sede attiva GLOBALE (anche
+   non sua — bug del legacy che avrebbe scritto gli orari su una sede altrui).
+2) ERRORI DATABASE con testo fisso legacy (mai il raw): 'Impossibile salvare gli
+   orari: errore database.' (232) / 'Impossibile salvare la chiusura: errore
+   database.' (338) / 'Impossibile salvare lo straordinario: errore database.'
+   (470) / 'Impossibile eliminare lo straordinario: errore database.' (505).
+
+CONFERMATI FEDELI (nessuna modifica): dow 0=Domenica, settimana resa Dom->Sab;
+righe GLOBALI location NULL come fallback (lettura 'ORDER BY dow ASC,
+(location_id IS NULL) DESC' — la riga per-sede VINCE; su PG l'ordinamento NULL
+diverso da MySQL era gia' gestito); i salvataggi scrivono SOLO location_id
+concreta; liste chiusure/straordinari location-ESATTE (le globali NULL contano
+solo nelle validazioni incrociate '(location_id=? OR IS NULL)'); upsert per
+(location,dow)/(location,date); validazioni orari con semantica PHP (int)
+('aa:bb' = 00:00 SALVATO senza errore — test B7); regola spezzato o2>=c1
+(uguale CONSENTITO) e c2>o2; messaggi verbatim con refuso 'non e chiuso' e
+prefisso giorno; join errori '; ' cap 8 (orari) vs ' ' cap 3 (chiusure) vs
+' ' cap 6 (straordinari) con suffisso ' ...'; date invertite SWAP silenzioso;
+limite 370 giorni inclusivi; conflitti incrociati chiusure<->straordinari con
+date d/m/Y (max 6 + ' ...') e appuntamenti attivi (pending/scheduled/'in
+sospeso'/'prenotato') con campione unico ordinato; reason = kind + ' - ' + nota;
+delete_range chiusure CON reason cancella SOLO le righe con quel reason esatto;
+raggruppamento range consecutivi per reason (chiusure) / firma
+opens|closes|opens2|closes2|note (straordinari), display 'vecchia -> nuova' con
+freccia; straordinari sempre is_closed=0; flash tutti VERDI ?msg= ('Orari
+salvati'/'Chiusura salvata'/'Chiusura eliminata'/'Straordinario salvato'/
+'Straordinario eliminato') senza ?err= (errori inline danger); bottone header
+'Attivita' (senza accento) gated su settings.location; subtitle con variante
+multi-sede; hours.js integralmente portato nel componente (setCustomValidity +
+is-invalid + min dinamici + blocco submit con focus/reportValidity, testi client
+DIVERSI da quelli server, confirm 'Rimuovere l'orario spezzato per questo
+giorno?'/'Rimuovere l'orario spezzato?'/'Eliminare questo periodo?', spezzato
+che mantiene i valori quando il giorno e' chiuso e li azzera solo su Rimuovi).
+
+RESIDUI documentati (non fix): (a) 'Seleziona una sede.' su location mancante
+(il legacy ripiega sulla prima attiva e SALVA — pericoloso, guardia Next
+mantenuta); (b) ensure_default_hours al page-load non portato (le righe globali
+esistono gia'; il fallback default e' replicato read-side in listBusinessHours);
+(c) closure action=delete per singolo id (path legacy MAI usato dalla UI) non
+esposto; (d) 'Intervallo non valido.' per delete_range con date mancanti (il
+legacy salta in silenzio); (e) note straordinari senza cap 190 lato Next
+(varchar PG tronca/errore oltre — la UI non arriva a tanto); (f) CSRF/flash
+redirect = pattern SPA globale.
+
+VERIFICATO: test-orari 37/37 SU SEDE ZZ DEDICATA (creata e rimossa in-sessione:
+fallback globale per sede fresca, per-sede che vince sulla globale — Ven 09-16
+di Sede1 letto e MAI scritto, gating canSettingsLocation/permessi, ripiego
+autorizzazione sede su GET (A5) e POST (B8, Sede1 verificata INTATTA), save 7
+giorni con spezzato + upsert + azzeramento spezzato, tutti i messaggi verbatim
+con prefisso giorno, cap 8/3/6 con ' ...', semantica (int) PHP, o2==c1
+consentito, chiusure range/singola/swap/370/conflitti straordinari+appuntamenti/
+upsert reason/delete_range con e senza reason, straordinari validazioni/range
+spezzato/conflitto chiusure/upsert/delete/raggruppamenti consecutivi e non).
+REGRESSIONE: cabine 34/34, risorse 12/12, operatori 48/48. PRODUZIONE INTATTA:
+business_hours=14 righe IDENTICHE allo snapshot (7 globali NULL + 7 Sede1),
+closures=0, exceptions=0, locations=2, 5 clienti reali.

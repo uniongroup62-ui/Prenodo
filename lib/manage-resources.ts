@@ -927,26 +927,31 @@ export async function saveBusinessHours(slug: string, body: Record<string, strin
   if (errors.length) throw new Error(`Orari non validi: ${errors.slice(0, 8).join("; ")}${errors.length > 8 ? " ..." : ""}`);
 
   const table = await tenantTable(slug, "business_hours");
-  for (const row of rows) {
-    const existing = await tenantSelect<RowDataPacket>({
-      slug,
-      table: "business_hours",
-      columns: "id",
-      where: "location_id = ? AND dow = ?",
-      params: [locationId, row.dow],
-      limit: 1,
-    }).catch(() => []);
-    const values = await filterColumns(table.name, {
-      location_id: locationId,
-      dow: row.dow,
-      opens: hourTimeOrNull(row.opens),
-      closes: hourTimeOrNull(row.closes),
-      opens2: hourTimeOrNull(row.opens2),
-      closes2: hourTimeOrNull(row.closes2),
-      is_closed: row.is_closed,
-    });
-    if (existing[0]?.id) await tenantUpdate({ slug, table: "business_hours", id: Number(existing[0].id), values });
-    else await tenantInsert(table, values);
+  try {
+    for (const row of rows) {
+      const existing = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "business_hours",
+        columns: "id",
+        where: "location_id = ? AND dow = ?",
+        params: [locationId, row.dow],
+        limit: 1,
+      }).catch(() => []);
+      const values = await filterColumns(table.name, {
+        location_id: locationId,
+        dow: row.dow,
+        opens: hourTimeOrNull(row.opens),
+        closes: hourTimeOrNull(row.closes),
+        opens2: hourTimeOrNull(row.opens2),
+        closes2: hourTimeOrNull(row.closes2),
+        is_closed: row.is_closed,
+      });
+      if (existing[0]?.id) await tenantUpdate({ slug, table: "business_hours", id: Number(existing[0].id), values });
+      else await tenantInsert(table, values);
+    }
+  } catch {
+    // hours.php 232: rollback + testo fisso (mai l'errore DB raw).
+    throw new Error("Impossibile salvare gli orari: errore database.");
   }
   return listBusinessHours(slug, locationId);
 }
@@ -990,10 +995,15 @@ export async function saveClosure(slug: string, body: Record<string, string>): P
 
   const table = await tenantTable(slug, "closures");
   const dates = datesBetween(start!, end!);
-  for (const date of dates) {
-    const existing = await tenantSelect<RowDataPacket>({ slug, table: "closures", columns: "id", where: "location_id = ? AND date = ?", params: [locationId, date], limit: 1 }).catch(() => []);
-    if (existing[0]?.id) await tenantUpdate({ slug, table: "closures", id: Number(existing[0].id), values: { reason } });
-    else await tenantInsert(table, await filterColumns(table.name, { location_id: locationId, date, reason }));
+  try {
+    for (const date of dates) {
+      const existing = await tenantSelect<RowDataPacket>({ slug, table: "closures", columns: "id", where: "location_id = ? AND date = ?", params: [locationId, date], limit: 1 }).catch(() => []);
+      if (existing[0]?.id) await tenantUpdate({ slug, table: "closures", id: Number(existing[0].id), values: { reason } });
+      else await tenantInsert(table, await filterColumns(table.name, { location_id: locationId, date, reason }));
+    }
+  } catch {
+    // hours.php 338: testo fisso, mai l'errore DB raw.
+    throw new Error("Impossibile salvare la chiusura: errore database.");
   }
   return listClosureRanges(slug, locationId);
 }
@@ -1070,27 +1080,32 @@ export async function saveException(slug: string, body: Record<string, string>):
 
   const table = await tenantTable(slug, "business_hours_exceptions");
   const dates = datesBetween(start!, end!);
-  for (const date of dates) {
-    const existing = await tenantSelect<RowDataPacket>({
-      slug,
-      table: "business_hours_exceptions",
-      columns: "id",
-      where: "location_id = ? AND date = ?",
-      params: [locationId, date],
-      limit: 1,
-    }).catch(() => []);
-    const values = await filterColumns(table.name, {
-      location_id: locationId,
-      date,
-      opens: hourTimeOrNull(opens),
-      closes: hourTimeOrNull(closes),
-      opens2: hourTimeOrNull(opens2),
-      closes2: hourTimeOrNull(closes2),
-      is_closed: 0,
-      note: note || null,
-    });
-    if (existing[0]?.id) await tenantUpdate({ slug, table: "business_hours_exceptions", id: Number(existing[0].id), values });
-    else await tenantInsert(table, values);
+  try {
+    for (const date of dates) {
+      const existing = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "business_hours_exceptions",
+        columns: "id",
+        where: "location_id = ? AND date = ?",
+        params: [locationId, date],
+        limit: 1,
+      }).catch(() => []);
+      const values = await filterColumns(table.name, {
+        location_id: locationId,
+        date,
+        opens: hourTimeOrNull(opens),
+        closes: hourTimeOrNull(closes),
+        opens2: hourTimeOrNull(opens2),
+        closes2: hourTimeOrNull(closes2),
+        is_closed: 0,
+        note: note || null,
+      });
+      if (existing[0]?.id) await tenantUpdate({ slug, table: "business_hours_exceptions", id: Number(existing[0].id), values });
+      else await tenantInsert(table, values);
+    }
+  } catch {
+    // hours.php 470: testo fisso, mai l'errore DB raw.
+    throw new Error("Impossibile salvare lo straordinario: errore database.");
   }
   return listExceptionRanges(slug, locationId);
 }
@@ -1101,7 +1116,10 @@ export async function deleteExceptionRange(slug: string, body: Record<string, st
   const to = normalizeDate(body.to ?? body.date_to) || from;
   if (locationId <= 0 || !from || !to) throw new Error("Intervallo non valido.");
   const [start, end] = orderedDates(from, to);
-  await deleteDateRange(slug, "business_hours_exceptions", locationId, start, end);
+  // hours.php 505: errore DB con testo fisso.
+  await deleteDateRange(slug, "business_hours_exceptions", locationId, start, end).catch(() => {
+    throw new Error("Impossibile eliminare lo straordinario: errore database.");
+  });
   return listExceptionRanges(slug, locationId);
 }
 
