@@ -10205,3 +10205,81 @@ accepted+rejected con email e 'paid' esclusa, seen/seen_all coi messaggi e
 seen_at, approvazione pending→scheduled che sparisce dalla lista).
 PRODUZIONE INTATTA: conteggi baseline identici, giorni avviso ripristinati.
 REGRESSIONE: model-a 12/12, automazione 20/20. tsc pulito, eslint 0 errori.
+
+## 2026-07-10 — Dashboard (dashboard.php + api_dashboard_performance.php): audit 1:1 + 2 fix + e2e live
+
+Legacy letto INTEGRALE (diretto): app/pages/dashboard.php (737) +
+assets/js/pages/dashboard.js (144) + app/pages/api_dashboard_performance.php
+(280). Next: lib/manage-dashboard.ts (ora 385) + lib/manage-dashboard-alerts
+.ts (builder Avvisi, già port V1 con riferimenti riga) +
+app/api/manage/dashboard/route.ts (44) + components/dashboard-content.tsx
+(405) + pagina server dedicata. Il port era V1 della campagna: audit di
+ri-verifica completo.
+
+FIX (2):
+1) FILTRO SEDE APPUNTAMENTI COL RAMO BRIDGE (dashboard.php 42-47 /
+   _dashboard_perf_appt_location_filter): il Next usava il filtro semplificato
+   (location_id = sede OR IS NULL) — un appuntamento con location NULL ma
+   righe appointment_locations verso un'ALTRA sede veniva incluso a torto.
+   Ora: location diretta OPPURE (NULL con bridge della sede O NESSUNA riga
+   bridge). Applicato a: KPI Appuntamenti oggi, ramo appuntamenti dell'UNION
+   del KPI Clienti, conteggi/ricavi/ore della Statistica settimanale, serie
+   giornaliera, Prossimi appuntamenti e il ramo EXISTS-appuntamenti dei Nuovi
+   clienti (client_location_sql annidato). Provato live: appuntamento NULL con
+   bridge->Sede2 escluso dai numeri di Sede1 (il vecchio filtro contava +1).
+2) STRING_AGG dei nomi servizio in Prossimi appuntamenti senza ORDER BY
+   (ordine non deterministico in PG): ora ORDER BY come il GROUP_CONCAT
+   legacy (ORDER BY nome).
+
+CONFERMATI FEDELI: gate dashboard.view (403 'Permesso dashboard mancante.');
+KPI Clienti per-sede = COUNT DISTINCT dall'UNION clients(location strict) +
+appointments(permissivo+bridge) + sales(strict), senza sede COUNT(*);
+Appuntamenti oggi con blacklist stati annullati; Vendite ultimi 30gg =
+SUM(total) con sale_date >= NOW()-30gg e stati attivi, formato '€ fmt_money';
+Statistica settimanale = SEMPRE lun->dom corrente vs settimana precedente,
+SOLO status 'scheduled' (Prenotato), ricavi dai SERVIZI degli appuntamenti
+(price*qty con NULLIF(qty,0)->1, fallback prezzo del servizio legacy — NON le
+vendite POS), ore = somma durate/60 a 1 decimale con virgola, nuovi clienti
+su DATE(created_at) con lo scope sede a 3 rami; delta % _pct_change (0 se
+entrambi zero, NULL→'—' muted se prev=0 e cur>0, '+X,Y%' verde / rosso /
+muted); serie ricavi 7 giorni zero-fill etichette d/m + grafico Chart.js
+identico a dashboard.js (colori #2f63f4, tension .4, tooltip Intl currency,
+asse '€ N' senza decimali, 'Grafico non disponibile al momento.' se Chart
+manca); range hint d/m/Y - d/m/Y; Prossimi appuntamenti (calendar.view):
+7 giorni, SOLO pending/scheduled, LIMIT 10, servizi aggregati con snapshot
+appointment_services e fallback a.service_id, formato d/m H:i, empty
+'Nessun appuntamento in arrivo', header 'Calendario'; card Avvisi con badge
+conteggio e 'Nessun avviso.': ordine legacy pending_appts ('N da approvare',
+Gestisci) → quote_responses ('N da leggere', Vedi) → gruppi tessere Fidelity
+(preview 3, righe 'cliente - data - stato', Vedi) → low_stock ('N sotto la
+soglia minima', 'Vedi magazzino' con low_stock=1&location_id) → staff_off
+('N con un periodo di assenza attivo', Dettagli, righe '• nome (motivo fino a
+d/m H:i)' e '…e altri N' MASCHILE vs '…e altre' degli altri gruppi) → gruppi
+rate (preview 3, 'Apri Gestione Rate'), coi gate permessi legacy (quotes/
+fidelity richiedono ANCHE notifications.view); Scadenziario e Costi
+(costs.manage|costs.items): Scaduti = residuo GREATEST(amount-paid_amount,0)
+>0.00001 con is_paid=0 e due<oggi + 'Vedi scaduti' from=MIN(due) to=oggi,
+Questo mese = BETWEEN 1..ultimo giorno + 'Vedi mese', 'N voci'; fail-closed
+sede (KPI a zero, empty-response settimanale con delta 0, card nascoste);
+sottotitolo 'Stato generale della sede, appuntamenti, vendite e attività
+recenti.' + ' Sede: X'.
+
+RESIDUI documentati (non fix): (a) l'alert fail-closed 'Seleziona una sede
+valida per visualizzare i dati della dashboard.' non è reso dal componente —
+nello stato equivalente la shell Next mostra il chooser sede a schermo intero
+(pagina irraggiungibile); (b) payload con campo 'detail' extra sulle stat
+(non renderizzato); (c) BETWEEN legacy 'to 23:59:59' reso come half-open
+to+1g (equivalente al secondo).
+
+VERIFICATO: test-dashboard 16/16 live (KPI oggi = SQL bridge-aware con
+l'appuntamento NULL+bridge->Sede2 ESCLUSO e il NULL-senza-bridge INCLUSO
+(vecchio filtro = +1), KPI Clienti UNION, Vendite 30gg formattate,
+settimanale count/ricavi/ore = SQL (2 righe servizio con qty 0->1 = 100€,
+ore 1,5), delta 300% e null-coerenza, serie zero-fill con oggi = SQL,
+Prossimi appuntamenti con servizi aggregati ORDINATI e d/m H:i, avviso
+pending 'N da approvare', 'Operatori assenti' con riga verbatim 'luca (ZZ
+Ferie fino a d/m H:i)', assenza avvisi non pertinenti, Scadenziario 70/1
+voce ieri-oggi + 120/2 voci mese, upcoming/costs NULL senza permessi con
+avvisi vuoti, 403). PRODUZIONE INTATTA: baseline conteggi identici.
+REGRESSIONE: notifiche 17/17 (condivide manage-dashboard-alerts), model-a
+12/12. tsc + eslint puliti.

@@ -21,7 +21,7 @@ import "server-only";
 //  - filtro SEDE permissivo come il legacy (location_id = ? OR IS NULL).
 
 import type { RowDataPacket } from "@/lib/tenant-db";
-import { columnExists, dbQuery, quoteIdentifier, tenantTable } from "@/lib/tenant-db";
+import { columnExists, dbQuery, quoteIdentifier, tableExists, tenantTable } from "@/lib/tenant-db";
 
 const num = (v: unknown) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -155,6 +155,21 @@ export async function getManageDashboard(
   const clientsTable = await tenantTable(slug, "clients");
   const salesTable = await tenantTable(slug, "sales");
 
+  // Filtro sede appuntamenti col ramo BRIDGE legacy (dashboard.php 42-47):
+  // location diretta OPPURE NULL con riga appointment_locations della sede
+  // oppure NESSUNA riga bridge (non assegnato). Senza il ramo bridge un
+  // appuntamento NULL con bridge verso un'ALTRA sede verrebbe incluso a torto.
+  const bridgeTable = await tenantTable(slug, "appointment_locations").catch(() => null);
+  const hasBridge = bridgeTable ? await tableExists(bridgeTable.name).catch(() => false) : false;
+  const apptLoc = (alias: string): string => {
+    if (locationId <= 0) return "";
+    if (hasBridge && bridgeTable) {
+      const bn = quoteIdentifier(bridgeTable.name);
+      return ` AND (${alias}.location_id = ${locationId} OR (${alias}.location_id IS NULL AND (EXISTS (SELECT 1 FROM ${bn} al WHERE al.appointment_id = ${alias}.id AND al.location_id = ${locationId} AND al.tenant_id = ${alias}.tenant_id) OR NOT EXISTS (SELECT 1 FROM ${bn} al2 WHERE al2.appointment_id = ${alias}.id AND al2.tenant_id = ${alias}.tenant_id))))`;
+    }
+    return locFilter(alias, locationId);
+  };
+
   // --- KPI Clienti (dashboard.php:59-95) ---
   let kpiClients = 0;
   if (locationId > 0) {
@@ -163,7 +178,7 @@ export async function getManageDashboard(
       // (location_id=? OR NULL) — esattamente come dashboard.php:66/71/75.
       `SELECT COUNT(DISTINCT client_id) AS c FROM (
          SELECT id AS client_id FROM ${quoteIdentifier(clientsTable.name)} WHERE tenant_id = ${T} AND location_id = ${locationId}
-         UNION SELECT a.client_id FROM ${quoteIdentifier(apptTable.name)} a WHERE a.tenant_id = ${T} AND a.client_id IS NOT NULL${locFilter("a", locationId)}
+         UNION SELECT a.client_id FROM ${quoteIdentifier(apptTable.name)} a WHERE a.tenant_id = ${T} AND a.client_id IS NOT NULL${apptLoc("a")}
          UNION SELECT s.client_id FROM ${quoteIdentifier(salesTable.name)} s WHERE s.tenant_id = ${T} AND s.client_id IS NOT NULL${locStrict("s", locationId)}
        ) u WHERE client_id IS NOT NULL`,
       [],
@@ -177,7 +192,7 @@ export async function getManageDashboard(
   // --- KPI Appuntamenti oggi (dashboard.php:97-104) ---
   const apptTodayRows = await dbQuery<RowDataPacket[]>(
     `SELECT COUNT(*) AS c FROM ${quoteIdentifier(apptTable.name)} a
-      WHERE a.tenant_id = ${T} AND a.starts_at::date = ? AND ${apptActiveSql("a")}${locFilter("a", locationId)}`,
+      WHERE a.tenant_id = ${T} AND a.starts_at::date = ? AND ${apptActiveSql("a")}${apptLoc("a")}`,
     [today],
   ).catch(() => [] as RowDataPacket[]);
   const kpiApptToday = num(apptTodayRows[0]?.c);
@@ -215,13 +230,15 @@ export async function getManageDashboard(
   if (locationId > 0) {
     const parts: string[] = [];
     if (hasClientLoc) parts.push(`c.location_id = ${locationId}`);
-    if (hasApptLoc) parts.push(`EXISTS (SELECT 1 FROM ${quoteIdentifier(apptTable.name)} a WHERE a.client_id = c.id AND a.tenant_id = c.tenant_id AND (a.location_id = ${locationId} OR a.location_id IS NULL))`);
+    // Ramo appuntamenti col filtro bridge annidato (api_dashboard_performance
+    // client_location_sql): apptLoc restituisce ' AND (...)'.
+    if (hasApptLoc) parts.push(`EXISTS (SELECT 1 FROM ${quoteIdentifier(apptTable.name)} a WHERE a.client_id = c.id AND a.tenant_id = c.tenant_id${apptLoc("a")})`);
     if (hasSalesLoc) parts.push(`EXISTS (SELECT 1 FROM ${quoteIdentifier(salesTable.name)} s WHERE s.client_id = c.id AND s.tenant_id = c.tenant_id AND s.location_id = ${locationId})`);
     if (parts.length) clientLocSql = ` AND (${parts.join(" OR ")})`;
   }
 
   const weekAgg = async (from: string, to: string) => {
-    const where = `a.tenant_id = ${T} AND LOWER(TRIM(COALESCE(a.status,''))) = 'scheduled' AND a.starts_at >= ? AND a.starts_at < ?${locFilter("a", locationId)}`;
+    const where = `a.tenant_id = ${T} AND LOWER(TRIM(COALESCE(a.status,''))) = 'scheduled' AND a.starts_at >= ? AND a.starts_at < ?${apptLoc("a")}`;
     const params = [`${from} 00:00:00`, `${addDaysIso(to, 1)} 00:00:00`];
     const cntRows = await dbQuery<RowDataPacket[]>(`SELECT COUNT(DISTINCT a.id) AS c FROM ${quoteIdentifier(apptTable.name)} a WHERE ${where}`, params).catch(() => [] as RowDataPacket[]);
     const revRows = await dbQuery<RowDataPacket[]>(
@@ -256,7 +273,7 @@ export async function getManageDashboard(
        FROM ${quoteIdentifier(apptTable.name)} a
        ${revJoin}
       WHERE a.tenant_id = ${T} AND LOWER(TRIM(COALESCE(a.status,''))) = 'scheduled'
-        AND a.starts_at >= ? AND a.starts_at < ?${locFilter("a", locationId)}
+        AND a.starts_at >= ? AND a.starts_at < ?${apptLoc("a")}
       GROUP BY a.starts_at::date`,
     [`${weekStart} 00:00:00`, `${addDaysIso(weekEnd, 1)} 00:00:00`],
   ).catch(() => [] as RowDataPacket[]);
@@ -279,13 +296,13 @@ export async function getManageDashboard(
     const fallbackGroupBy = hasApptServiceId ? ", s2.name" : "";
     const rows = await dbQuery<RowDataPacket[]>(
       `SELECT a.starts_at, c.full_name AS client_name,
-              COALESCE(NULLIF(STRING_AGG(DISTINCT ${svcNameExpr}, ', '), '')${fallbackCoalesce}, '') AS services
+              COALESCE(NULLIF(STRING_AGG(DISTINCT ${svcNameExpr}, ', ' ORDER BY ${svcNameExpr}), '')${fallbackCoalesce}, '') AS services
          FROM ${quoteIdentifier(apptTable.name)} a
          LEFT JOIN ${quoteIdentifier(clientsTable.name)} c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
          LEFT JOIN ${quoteIdentifier(asTable.name)} sv ON sv.appointment_id = a.id AND sv.tenant_id = a.tenant_id
          LEFT JOIN ${quoteIdentifier(svcTable.name)} s ON s.id = sv.service_id AND s.tenant_id = a.tenant_id${fallbackJoin}
         WHERE a.tenant_id = ${T} AND a.starts_at >= NOW() AND a.starts_at < NOW() + interval '7 days'
-          AND LOWER(TRIM(COALESCE(a.status,''))) IN ('pending','scheduled')${locFilter("a", locationId)}
+          AND LOWER(TRIM(COALESCE(a.status,''))) IN ('pending','scheduled')${apptLoc("a")}
         GROUP BY a.id, a.starts_at, c.full_name${fallbackGroupBy}
         ORDER BY a.starts_at ASC
         LIMIT 10`,
