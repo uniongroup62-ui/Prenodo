@@ -708,8 +708,12 @@ export function QuickBookingDrawer() {
   // change; turned ON automatically on edit when the loaded appointment already used points.
   // TODO(fidelity choice): the legacy also has the advanced "Scelta cliente" radios
   // (qbApplyFidelityChoice — discount vs GIFT-reward vs redeem-later, gated by the business
-  // conflict_policy='choice') + the separate gift-points-use field. That fidelity-gift redeem is
-  // an advanced feature and is intentionally NOT ported here — only the simple on/off toggle is.
+  // conflict_policy='choice') + the separate gift-points-use field. ATTESTAZIONE (Calendario
+  // 2c): la 'Scelta cliente' è stata RIMOSSA dal legacy stesso — Fidelity.php 624-626 forza
+  // conflict_policy='discount' "per compatibilità" — quindi le radio non compaiono MAI e i
+  // rami gift/later del save sono irraggiungibili: il solo toggle punti è il port FEDELE.
+  // Le righe migrate con vecchi valori di scelta restano gestite dal lifecycle
+  // (settlement su done per choice, azzeramenti su annullo) già portato in db-repositories.
   const [fidelityUseOn, setFidelityUseOn] = useState<boolean>(false);
 
   // ---- CREDIT use (#qbCreditRow / #qb_credit_use) — Block 4 ----
@@ -1372,6 +1376,8 @@ export function QuickBookingDrawer() {
   // auto-selects when exactly ONE is free. null => context incomplete/failed,
   // fall back to the location list (all considered free).
   const [cabinAvailability, setCabinAvailability] = useState<Array<{ id: number; name: string; occupied: boolean }> | null>(null);
+  // Stato "verifico" per l'hint dinamico legacy sotto la select cabina.
+  const [cabinChecking, setCabinChecking] = useState(false);
   const cabinAvailReqRef = useRef(0);
   useEffect(() => {
     const time = /^\d{1,2}:\d{2}/.test(startTime.trim()) ? startTime.trim().slice(0, 5) : "";
@@ -1379,11 +1385,17 @@ export function QuickBookingDrawer() {
       // Reset in microtask col nonce (niente setState sincrono nell'effect).
       const clearReq = ++cabinAvailReqRef.current;
       Promise.resolve().then(() => {
-        if (clearReq === cabinAvailReqRef.current) setCabinAvailability(null);
+        if (clearReq === cabinAvailReqRef.current) {
+          setCabinAvailability(null);
+          setCabinChecking(false);
+        }
       });
       return;
     }
     const reqId = ++cabinAvailReqRef.current;
+    Promise.resolve().then(() => {
+      if (reqId === cabinAvailReqRef.current) setCabinChecking(true);
+    });
     const params = new URLSearchParams();
     params.set("slug", slug);
     params.set("action", "cabins_for_services");
@@ -1396,6 +1408,7 @@ export function QuickBookingDrawer() {
       .then((res) => res.json().catch(() => null))
       .then((data: { ok?: boolean; cabins?: Array<{ id: number; name: string; occupied: boolean }> } | null) => {
         if (reqId !== cabinAvailReqRef.current) return;
+        setCabinChecking(false);
         if (!data || !data.ok || !Array.isArray(data.cabins)) {
           setCabinAvailability(null);
           return;
@@ -1407,7 +1420,10 @@ export function QuickBookingDrawer() {
         );
       })
       .catch(() => {
-        if (reqId === cabinAvailReqRef.current) setCabinAvailability(null);
+        if (reqId === cabinAvailReqRef.current) {
+          setCabinAvailability(null);
+          setCabinChecking(false);
+        }
       });
   }, [selectedServiceIds, date, startTime, locationId, slug, apptId, holdToken]);
 
@@ -4204,7 +4220,23 @@ export function QuickBookingDrawer() {
                     </option>
                   ))}
                 </select>
-                <div className="form-text" id="qb_cabin_hint">Se sono libere più cabine potrai scegliere; se è libera solo una verrà selezionata automaticamente.</div>
+                {/* Hint DINAMICO legacy (app.js 5640/9742/8371/8408/8450-8454):
+                    varia con lo stato della verifica cabine per lo slot. */}
+                <div className="form-text" id="qb_cabin_hint">
+                  {startGateDisabled
+                    ? "Se sono libere più cabine potrai scegliere; se è libera solo una verrà selezionata automaticamente."
+                    : cabinChecking
+                      ? "Verifico la cabina disponibile per lo slot selezionato."
+                      : cabinAvailability === null
+                        ? "Seleziona prima la disponibilita (giorno e ora) per vedere le cabine disponibili."
+                        : cabinAvailability.length === 0
+                          ? "Nessuna cabina configurata per i servizi selezionati."
+                          : freeCabinOptions.length === 0
+                            ? "Nessuna cabina disponibile per l'orario selezionato."
+                            : freeCabinOptions.length === 1
+                              ? "È libera una sola cabina: selezionata automaticamente."
+                              : "Se sono libere più cabine puoi scegliere; le cabine occupate sono indicate."}
+                </div>
               </div>
             </div>
 

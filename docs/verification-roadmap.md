@@ -10899,3 +10899,45 @@ che PRENOTA i punti col sentinel 999999999) — TODO esplicito nel componente;
 hint cabina dinamici; segment-view edit del drawer (data-qb-segment, apertura
 dal modulo Appuntamenti); deep-diff del modale availability (slot override
 gialli, DST) contro action=availability.
+
+## 2026-07-10 — Calendario, parte 2c (drawer: 'Scelta cliente' = feature RIMOSSA nel legacy + hint cabine dinamici)
+
+ATTESTAZIONE PRINCIPALE — la 'Scelta cliente' fidelity (radio sconto/omaggio/
+in-negozio, fidelity_conflict_choice/gift_idx/gift_points_used nel save, ramo
+'later' che prenota i punti col sentinel) è stata RIMOSSA DAL LEGACY STESSO:
+Fidelity.php 624-626 commenta "funzionalità rimossa. Per compatibilità,
+manteniamo la chiave nelle impostazioni ma la forziamo sempre a 'discount'" e
+hardcoda $conflictPolicy='discount' (+ gifts list legacy svuotata a 631, gli
+omaggi sono le istanze v2 del modulo Omaggi). Conseguenze verificate nel
+legacy: le radio (gated su policy==='choice') non compaiono MAI, il default
+'later' in creazione (api_appointments 11966-11983 richiede policy 'choice')
+non scatta mai, i rami gift/later del save sono irraggiungibili dal form. Il
+TODO del drawer Next (solo toggle punti) è quindi il port FEDELE del
+comportamento effettivo; il commento nel componente è stato aggiornato ad
+attestazione. Le righe MIGRATE con vecchi valori di scelta restano gestite
+dal lifecycle già portato (settlement su done per choice — REDEEM_WHERE
+include 'discount'/'later' —, azzeramenti su annullo/riassegnazioni).
+In PG non esiste una colonna fidelity_conflict_policy su businesses
+(coerente con la rimozione); fidelity_gifts_json NULL sul tenant.
+
+FIX:
+1) HINT CABINA DINAMICO (app.js 5640/9742/8371/8408/8450-8454): il form-text
+   sotto la select cabina ora segue lo stato della verifica — iniziale 'Se
+   sono libere più cabine potrai scegliere; se è libera solo una verrà
+   selezionata automaticamente.', senza slot 'Seleziona prima la
+   disponibilita (giorno e ora) per vedere le cabine disponibili.', in
+   verifica 'Verifico la cabina disponibile per lo slot selezionato.',
+   nessuna configurata / nessuna libera / una sola (auto) / più di una — coi
+   testi verbatim (accenti misti inclusi). Aggiunto lo stato cabinChecking
+   nel fetch cabins_for_services (microtask + nonce, pattern consolidato).
+
+ATTESTAZIONI aggiuntive:
+- Modale disponibilità: override_slots (slot GIALLI fuori orario/giorni
+  chiusi) e relativi campi (override_slot_count, first_override_slot,
+  dst_gap/fold) GIÀ portati nell'engine (lib/public-booking-db) e resi dal
+  drawer — il deep-diff temuto era già coperto.
+- Segment-view edit (data-qb-segment): l'apertura per-segmento avviene dalla
+  LISTA appuntamenti legacy — rinviata all'audit del modulo Appuntamenti.
+
+VERIFICATO: tsc pulito, eslint drawer 0/0; regressione test-calendario 20/20
++ test-notifiche-hub 16/16.
