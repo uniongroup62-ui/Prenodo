@@ -10283,3 +10283,66 @@ voce ieri-oggi + 120/2 voci mese, upcoming/costs NULL senza permessi con
 avvisi vuoti, 403). PRODUZIONE INTATTA: baseline conteggi identici.
 REGRESSIONE: notifiche 17/17 (condivide manage-dashboard-alerts), model-a
 12/12. tsc + eslint puliti.
+
+## 2026-07-10 — Notifiche, parte 2 (BrowserNotifications.php + api_user_prefs.php): feed browser 1:1 + e2e live
+
+COMPLETAMENTO dell'audit Notifiche di oggi: nel primo passaggio il motore
+delle notifiche browser era stato verificato solo indirettamente. Legacy
+letto INTEGRALE: app/lib/BrowserNotifications.php (485: defaultPreferences/
+normalize/save su users.browser_notification_preferences + feed con 5
+generatori di eventi) + app/pages/api_user_prefs.php (148: get/set preferenze
+notifiche + ordine colonne calendario). Next:
+app/api/manage/notifications/route.ts (feed RISCRITTO, ora 358) +
+app/api/manage/user-prefs/route.ts (già fedele — aggiunto solo 'yes' tra i
+truthy come filter_var BOOLEAN) + notifications-content.tsx (typeEnabled).
+
+FIX (riscrittura del ramo action=feed):
+1) GATING PREFERENZE LATO SERVER (BrowserNotifications::feed 97-100): i tipi
+   quotes/installments/birthdays/fidelity_cards vengono generati SOLO se la
+   preferenza salvata dell'utente è attiva (prima il server mandava tutto e
+   filtrava solo il client); appointment_pending sempre attivo.
+2) CHIAVI CON SEED legacy: appointment_pending:<id>:<seed data creazione>,
+   quote_response:<id>:<stato>:<seed decisione>, installments:<slug>:<count>:
+   <slug date_label>, birthdays:<oggi>:<count>:<seed prima data>,
+   fidelity_cards:<slug titolo>:<count>:<slug date_label> — al cambio di
+   conteggio/data l'evento RI-NOTIFICA (prima le chiavi statiche notificavano
+   una sola volta per sempre).
+3) PREVENTIVI PER-QUOTE (addQuoteResponseEvents): un evento per preventivo
+   con titolo 'Preventivo accettato'/'Preventivo rifiutato' e body
+   'cliente - #numero - EUR importo' (prima un aggregato conteggio con testi
+   non legacy).
+4) COMPLEANNI: evento singolo con testi verbatim ('<nome> compie gli anni
+   d/m/Y' al singolare, 'N compleanni clienti nel periodo configurato' al
+   plurale) e gate canAny(clients/schede/consensi) che prima MANCAVA.
+5) RATE: gruppi con anteprima 2 e max 4 come il feed legacy, body = testo +
+   prima riga ('N rata già scaduta - cliente • rata N • data • € importo').
+6) FIDELITY: tipo 'fidelity_card' SINGOLARE come il legacy (il client filtrava
+   su 'fidelity_cards' e non avrebbe mai mostrato nulla col tipo giusto),
+   anteprima 2/max 4, body = testo + primo cliente.
+7) Ordinamento created_at DESC (poi key desc), pending per data creazione
+   DESC cap 20, ?limit clampato 1..50 default 20, payload con
+   browser_preferences e campi created_at/severity per evento.
+
+CONFERMATI FEDELI: user-prefs route (normalize con appointments SEMPRE true e
+'locked', chiavi configurabili quotes/installments/birthdays/fidelity_cards,
+JSON su users.browser_notification_preferences, messaggi 'Impossibile
+leggere/salvare le preferenze notifiche. Aggiornare lo schema DB.', 405
+Metodo non consentito, 'Azione non valida.', calendar_day_staff_order con
+dedup/max 200); il poller del componente hub (localStorage seen + hydrated,
+click→focus+url) con filtro client-side ora allineato al tipo singolare.
+
+RESIDUI documentati: (a) envelope legacy extra del feed (generated_at/tenant/
+user_id/location_id + merge del summary) non replicato — il client Next non
+lo consuma; (b) intervallo di polling 15s del componente (il legacy non
+fissa un intervallo nella pagina).
+
+VERIFICATO: test-notifiche-feed 10/10 live (prefs default con lock e
+configurable, set con '1'/'yes' filter_var e JSON a 4 chiavi persistito,
+appointment_pending con seed e body verbatim 'servizio - cliente - d/m/Y
+H:i - H:i - #codice', quote_response per-quote 'ZZ Feed Cli - #91001/2099 -
+EUR 120,00', compleanno singolo verbatim con data, rate ASSENTI con pref off
+nonostante permesso+rata scaduta (gating server) e PRESENTI con pref on con
+key conteggio+data e body con prima riga, limit=1 col più recente,
+browser_preferences nel payload). PRODUZIONE INTATTA: preferenze utente 20
+ripristinate byte-identiche, conteggi baseline. REGRESSIONE: test-notifiche
+17/17. tsc pulito, eslint 0 errori.

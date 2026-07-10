@@ -159,12 +159,15 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
         const seenSet = new Set(seen.map(String));
         const hydrated = window.localStorage.getItem(hydratedKey) === "1";
         // Il tipo appointment_pending è sempre attivo; gli altri seguono le preferenze.
+        // Il server gatta già i tipi sulle preferenze salvate (come il feed
+        // legacy); questo filtro copre solo la finestra tra un cambio prefs e
+        // il salvataggio. Tipo fidelity SINGOLARE come BrowserNotifications.
         const typeEnabled = (type: string): boolean => {
           if (type === "appointment_pending") return true;
           if (type === "quote_response") return Boolean(prefs.quotes);
           if (type === "installment_due") return Boolean(prefs.installments);
           if (type === "client_birthday") return Boolean(prefs.birthdays);
-          if (type === "fidelity_cards") return Boolean(prefs.fidelity_cards);
+          if (type === "fidelity_card") return Boolean(prefs.fidelity_cards);
           return false;
         };
         for (const ev of j.events as Array<{ key: string; type: string; title: string; body: string; url: string }>) {

@@ -54,7 +54,8 @@ function normalizePreferences(raw: unknown): Record<string, boolean> {
   const out: Record<string, boolean> = {};
   for (const key of CONFIGURABLE_NOTIF_KEYS) {
     const value = obj[key];
-    out[key] = value === true || value === 1 || value === "1" || value === "true" || value === "on";
+    // filter_var BOOLEAN legacy: accetta anche 'yes'.
+    out[key] = value === true || value === 1 || value === "1" || value === "true" || value === "on" || value === "yes";
   }
   return out;
 }
