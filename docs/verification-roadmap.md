@@ -10687,3 +10687,33 @@ HTML pagina + builder avvisi + gate 403 (parte 4), sweep finale (parte 5) —
 nessuna superficie legacy nota resta non verificata (dashboard.php 737 righe,
 api_dashboard_performance.php 281, dashboard.js 144: tutte lette integrali e
 diffate).
+
+## 2026-07-10 — Dashboard, parte 6 (attestazione su dati LIVE): equivalenza API ↔ query legacy, nessuna modifica
+
+SESTO passaggio su Dashboard, di sola ATTESTAZIONE (nessun cambiamento al
+codice: zero drift verificato da 3a9b42e). Test di tipo NUOVO — niente seed:
+le query legacy di dashboard.php / api_dashboard_performance.php, tradotte in
+PG ed eseguite in modo INDIPENDENTE sui dati di produzione del tenant (sede
+21), confrontate CAMPO PER CAMPO con la risposta dell'API Next.
+
+test-dashboard-attest 9/9 PASS:
+- KPI Clienti = union legacy (clients strict + appointments bridge + sales
+  strict) = 4; Appuntamenti oggi (blacklist+bridge) = 1; Vendite 30gg
+  formattate '€ 80,00';
+- settimanale: 4 metriche formattate identiche ('2', '24,00 €', '3', '0') e
+  delta % GREZZI identici incluso il caso null/'—' (prev=0, cur>0) e il
+  -100 (prev>0, cur=0);
+- serie ricavi giornalieri identica punto-a-punto ([0,12,0,0,12,0,0]);
+- upcoming: cardinalità = SQL legacy (7gg, pending+scheduled, JOIN clienti);
+- avviso pending coerente ('4 da approvare');
+- costi scaduti/mese = SQL legacy (residuo GREATEST, soglia 0.00001).
+
+NOTA (comportamento identico nei due software, osservato dal vivo): su un
+errore DB transiente il KPI Clienti si azzera silenziosamente — è il port del
+catch legacy (dashboard.php 85-95: errore con hasLocationContext → 0); al
+retry la stessa query torna il valore corretto. Non è una divergenza.
+
+REGRESSIONE FINALE: test-dashboard 16/16, test-dashboard3 5/5,
+test-dashboard4 7/7, test-shell-summary 7/7; tsc pulito. Dominio Dashboard
+CONFERMATO COMPLETO (6 passaggi: calcoli, contatori, fail-closed, HTML/avvisi,
+sweep segmenti residui, attestazione live).
