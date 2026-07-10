@@ -9781,3 +9781,76 @@ esenzione SSO + sync staff + scadenza + resend su scaduta + azione ignota).
 PRODUZIONE INTATTA: users=2 (20,52), staff=2 (22,56), verifications=0,
 password_resets=0. REGRESSIONE: model-a 12/12, consensi-cliente 38/38.
 tsc pulito, eslint solo warning css preesistenti.
+
+## 2026-07-10 — Ruoli (roles.php + RolePermissions.php): audit 1:1 + 5 fix + e2e live
+
+Legacy letto INTEGRALE (diretto): app/pages/roles.php (310) +
+app/lib/RolePermissions.php (584, catalogo+motore) + assets/js/pages/roles.js
+(153, eredità/moduli client-side) + Auth::can/requirePerm (Auth.php 356-374 e
+494-505). Next: lib/role-permissions.ts (380: catalogo 61 definizioni 1:1 —
+perm/label/gruppo/sort/parents/display_parent/assignable — + can/parentMap/
+normalize/validate/moduleAccessRules) + app/api/manage/permissions/route.ts
+(ora 384) + roles-content.tsx (ora 500) con albero client-side fedele a
+groupedTree/renderPermNode e sync eredità/moduli fedele a roles.js.
+
+FIX (5):
+1) GATE: la route (GET e POST) ora replica Auth::can legacy — i permessi NON
+   assegnabili restano riservati all'Admin anche se una vecchia riga di ruolo
+   li contenesse (roles.manage è assignable:false → la pagina Ruoli è di
+   fatto SOLO-Admin; prima il GET era aperto a qualsiasi sessione e il POST
+   accettava un non-admin con roles.manage nei perms). Messaggio 403 verbatim
+   della pagina legacy: 'Non hai i permessi per accedere a questa sezione.'
+2) Card 'Accesso negato' nel componente su 403 (port della pagina
+   Auth::requirePerm: h4 'Accesso negato' + testo, senza page header Ruoli).
+3) ensureDb PORTATO (RolePermissions::ensureDb, girava a ogni accesso e
+   mancava del tutto): sync della tabella `permissions` col catalogo
+   (reinserimento righe mancanti + riallineamento label/gruppo/ordine),
+   AUTO-GRANT una-tantum allo staff dei sotto-permessi NUOVI quando il ruolo
+   aveva già il padre, e migrazione legacy-full packages.manage → access+3
+   figli con rimozione della riga legacy. Best-effort try/catch come il PHP;
+   gira su GET e POST (roles.php riga 10 precede il blocco POST). Adattamento
+   documentato: la sync confronta le righe lette e scrive solo le differenze
+   (stato finale identico ai 61 upsert per-riga del PHP).
+4) AUDIT: old_perms ora è la lettura RAW del DB (roles.php 111-116, inclusi
+   alias legacy non assegnabili) — prima veniva usata la vista normalizzata,
+   che alterava il confronto old==new (skip) e il contenuto dello storico.
+   Ordinamento per code-unit (SORT_STRING) invece di localeCompare.
+5) Errore DB nel replace → flash verbatim 'Impossibile aggiornare i permessi:
+   verifica schema DB e riprova.' (prima usciva il messaggio PG raw).
+
+CONFERMATI FEDELI: catalogo 61 permessi identico (incl. assignable:false su
+packages.manage/accessibility.manage/roles.manage e display_parent '' che
+mantiene radice resources/cabins); manageableRoles Staff/Altro con
+normalizzazione a 'staff' dei ruoli ignoti (GET e POST); normalizeSelected
+(scarta non assegnabili, AUTO-AGGIUNGE packages.access se un figlio è
+selezionato, SCARTA i permessi ereditati da un padre assegnato);
+validateSelectedPerms verbatim ('Per attivare Pacchetti seleziona almeno una
+funzione del modulo.'); ordine gruppi preferito (Generale→…→Amministrazione)
+e radici per sort_order/label natcase; albero con figli display_parent,
+badge 'Modulo'/'Ereditato', freccia ↳, checkbox modulo sempre disabled e
+spuntata al primo figlio, ereditati checked+disabled con propagazione
+transitiva (roles.js syncInheritedChildren); flash successo client-side
+'Permessi <Label> aggiornati' come il redirect legacy; audit best-effort con
+actor user/name/email e skip se old==new; delete+insert per ruolo; testi
+pagina verbatim (card sinistra Admin/Staff/Altro, 'Configura permessi',
+'Permessi ruolo: X', note storico tecnico, bottone 'Salva permessi X').
+
+RESIDUI documentati (non fix): (a) il tree Next è costruito dal catalogo in
+codice mentre il legacy fonde le righe DB (mergeDbRows) — equivalente dopo la
+sync ensureDb; eventuali permessi custom extra in DB sarebbero comunque
+invisibili anche nel legacy (non assegnabili → nodo non renderizzato);
+(b) niente transazione sul delete+insert (pattern del port; l'errore produce
+comunque il flash legacy); (c) risposta GET include contesto tenant/user
+extra usato solo dal client (adattamento SPA).
+
+VERIFICATO: test-ruoli 21/21 live (catalogo/gruppi/ordine, ?role= e
+normalizzazione ruolo ignoto, gate 403 staff anche CON roles.manage nei
+perms, 401, ensureDb no-op su tabella allineata + riparazione riga manomessa
+e reinserimento riga cancellata + auto-grant nuovo sotto-permesso con display
+invariato (ereditato) + migrazione packages.manage→4 righe, save con figlio
+ereditato scartato, validazione modulo con DB invariato, auto-access da
+figlio, audit RAW old_perms + skip su salvataggio identico, save vuoto,
+POST 403/azione invalida/ruolo ignoto). PRODUZIONE INTATTA: permissions 61
+righe byte-identiche, role_permissions=0 (baseline), audit=4 (baseline, righe
+ZZ rimosse). REGRESSIONE: model-a 12/12. tsc pulito, eslint solo warning
+preesistenti.

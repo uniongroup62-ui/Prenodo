@@ -151,6 +151,8 @@ export function RolesContent({
   const [loading, setLoading] = useState(true);
   const [activeRole, setActiveRole] = useState<string>(initialRole);
   const [saving, setSaving] = useState(false);
+  // Auth::requirePerm legacy: 403 → pagina 'Accesso negato' (card nel chrome).
+  const [accessDenied, setAccessDenied] = useState(false);
   // Flash legacy (View::alert msg success / err danger PRIMA del page header).
   const [flash, setFlash] = useState<Flash | null>(() => {
     if (initialQuery?.err) return { text: String(initialQuery.err), type: "danger" };
@@ -173,7 +175,10 @@ export function RolesContent({
       fetch(`/api/manage/permissions?slug=${encodeURIComponent(slug)}&role=${encodeURIComponent(role)}`, {
         headers: { "x-tenant-slug": slug },
       })
-        .then((r) => r.json())
+        .then((r) => {
+          if (r.status === 403) setAccessDenied(true);
+          return r.json();
+        })
         .then((j) => {
           const rp: RolePermissions | null = j?.rolePermissions ?? null;
           setData(rp);
@@ -302,6 +307,19 @@ export function RolesContent({
     } finally {
       setSaving(false);
     }
+  }
+
+  // Port della pagina 403 di Auth::requirePerm (Auth.php 494-505): solo la
+  // card 'Accesso negato' nel chrome, senza page header Ruoli.
+  if (accessDenied) {
+    return (
+      <div className="container-fluid">
+        <div className="card p-4">
+          <div className="h4 fw-semibold mb-2">Accesso negato</div>
+          <div className="text-muted">Non hai i permessi per accedere a questa sezione.</div>
+        </div>
+      </div>
+    );
   }
 
   return (
