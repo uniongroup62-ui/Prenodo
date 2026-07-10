@@ -10646,3 +10646,44 @@ s2.name, '—' solo NULL, esclusione senza-cliente non rappresentabile
 con reason '' preservata + testi verbatim, 403 API). REGRESSIONE:
 test-dashboard 16/16, test-dashboard3 5/5, test-shell-summary 7/7.
 tsc/eslint puliti. PRODUZIONE INTATTA (baseline 10/5, timeoff 0).
+
+## 2026-07-10 — Dashboard, parte 5 (sweep finale): ultimi segmenti + attestazione di chiusura dominio
+
+QUINTO e ultimo passaggio su Dashboard: chiusi i tre segmenti legacy mai
+diffati nelle parti 1-4 — intestazione (dashboard.php 1-13), builder del
+widget costi (132-206) e helper appointment_service_name_expr (Helpers.php
+6118-6150) usato dalla query upcoming.
+
+FIX (1):
+- Widget costi su ERRORE SQL: il legacy azzera l'intero widget (catch ->
+  $costsWidget = null, card NASCOSTA, righe 202-204); il port catturava gli
+  errori per-query e mostrava la card CON GLI ZERI. Ora il fallimento di una
+  delle due query nasconde la card (difensivo: raggiungibile solo con schema
+  drift).
+
+ATTESTAZIONI (verificate senza modifiche):
+- Semantiche NULL del legacy (is_paid=0 secco che esclude NULL;
+  GREATEST(amount-paid_amount,0) SENZA COALESCE che scarta le righe con
+  paid_amount NULL) vs il port con COALESCE: IRRAGGIUNGIBILI in PG —
+  amount/paid_amount/is_paid sono NOT NULL DEFAULT 0 (probe
+  information_schema).
+- appointment_service_name_expr = CASE su whitelist di stati THEN
+  COALESCE(NULLIF(snapshot,''), s.name) ELSE s.name: col CHECK PG
+  (appointments_status_check, 5 stati canonici tutti in whitelist) il ramo
+  snapshot è SEMPRE preso -> equivale al port COALESCE(NULLIF(TRIM(snap),''),
+  s.name); il TRIM in più è difensivo (snapshot solo-spazi, mai scritto
+  dall'app).
+- overdue_from: doppio fallback legacy (min_due ?? Y-m-01 al build; ''/
+  '0000-00-00' -> Y-m-01 al render) = fallback unico del port.
+- Convenzione TZ: $today = date('Y-m-d') (TZ server) = isoLocal(new Date())
+  del port — stessa convenzione di manage-reports (POS/commissioni usano
+  l'orologio business dedicato; scelta consolidata negli audit precedenti).
+
+VERIFICATO: batteria completa Dashboard — test-dashboard 16/16,
+test-dashboard3 5/5, test-dashboard4 7/7, test-shell-summary 7/7. tsc/eslint
+puliti. DOMINIO DASHBOARD COMPLETO in 5 passaggi: lib calcoli (V1 + parte 1),
+contatori condivisi topbar (parte 2), fail-closed sede + banner (parte 3),
+HTML pagina + builder avvisi + gate 403 (parte 4), sweep finale (parte 5) —
+nessuna superficie legacy nota resta non verificata (dashboard.php 737 righe,
+api_dashboard_performance.php 281, dashboard.js 144: tutte lette integrali e
+diffate).

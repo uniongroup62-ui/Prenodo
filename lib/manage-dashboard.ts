@@ -344,28 +344,34 @@ export async function getManageDashboard(
       const monthEnd = addDaysIso(isoLocal(nextMonth), -1);
       // Filtro sede STRETTO come il legacy (dashboard.php:148 'AND location_id=?').
       const locSql = locationId > 0 && (await columnExists(costsTable.name, "location_id")) ? ` AND location_id = ${locationId}` : "";
-      const overdueRows = await dbQuery<RowDataPacket[]>(
-        `SELECT COALESCE(SUM(${residual}),0) AS s, COUNT(*) AS c, MIN(due_date) AS min_due FROM ${quoteIdentifier(costsTable.name)}
-          WHERE tenant_id = ${costsTable.tenantId ?? 0} AND COALESCE(is_paid,0) = 0 AND due_date < ?${locSql}${residualFilter}`,
-        [today],
-      ).catch(() => [] as RowDataPacket[]);
-      const monthRows = await dbQuery<RowDataPacket[]>(
-        `SELECT COALESCE(SUM(${residual}),0) AS s, COUNT(*) AS c FROM ${quoteIdentifier(costsTable.name)}
-          WHERE tenant_id = ${costsTable.tenantId ?? 0} AND COALESCE(is_paid,0) = 0 AND due_date >= ? AND due_date <= ?${locSql}${residualFilter}`,
-        [monthStart, monthEnd],
-      ).catch(() => [] as RowDataPacket[]);
-      const minDue = String(overdueRows[0]?.min_due ?? "").slice(0, 10);
-      costs = {
-        overdueAmount: round2(num(overdueRows[0]?.s)),
-        overdueCount: num(overdueRows[0]?.c),
-        // Link "Vedi scaduti": from = MIN(due_date) (fallback inizio mese), to = oggi.
-        overdueFrom: /^\d{4}-\d{2}-\d{2}$/.test(minDue) ? minDue : monthStart,
-        overdueTo: today,
-        monthAmount: round2(num(monthRows[0]?.s)),
-        monthCount: num(monthRows[0]?.c),
-        monthFrom: monthStart,
-        monthTo: monthEnd,
-      };
+      // Su ERRORE SQL il legacy azzera l'intero widget (catch -> $costsWidget
+      // = null, card NASCOSTA, dashboard.php 202-204) — niente card a zero.
+      try {
+        const overdueRows = await dbQuery<RowDataPacket[]>(
+          `SELECT COALESCE(SUM(${residual}),0) AS s, COUNT(*) AS c, MIN(due_date) AS min_due FROM ${quoteIdentifier(costsTable.name)}
+            WHERE tenant_id = ${costsTable.tenantId ?? 0} AND COALESCE(is_paid,0) = 0 AND due_date < ?${locSql}${residualFilter}`,
+          [today],
+        );
+        const monthRows = await dbQuery<RowDataPacket[]>(
+          `SELECT COALESCE(SUM(${residual}),0) AS s, COUNT(*) AS c FROM ${quoteIdentifier(costsTable.name)}
+            WHERE tenant_id = ${costsTable.tenantId ?? 0} AND COALESCE(is_paid,0) = 0 AND due_date >= ? AND due_date <= ?${locSql}${residualFilter}`,
+          [monthStart, monthEnd],
+        );
+        const minDue = String(overdueRows[0]?.min_due ?? "").slice(0, 10);
+        costs = {
+          overdueAmount: round2(num(overdueRows[0]?.s)),
+          overdueCount: num(overdueRows[0]?.c),
+          // Link "Vedi scaduti": from = MIN(due_date) (fallback inizio mese), to = oggi.
+          overdueFrom: /^\d{4}-\d{2}-\d{2}$/.test(minDue) ? minDue : monthStart,
+          overdueTo: today,
+          monthAmount: round2(num(monthRows[0]?.s)),
+          monthCount: num(monthRows[0]?.c),
+          monthFrom: monthStart,
+          monthTo: monthEnd,
+        };
+      } catch {
+        costs = null;
+      }
     }
   }
 
