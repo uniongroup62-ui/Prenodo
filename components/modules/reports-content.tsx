@@ -45,6 +45,7 @@ type ReportsResponse = {
   ok?: boolean;
   kpis?: { activeSales?: number; revenue?: number; cancelledRevenue?: number; averageTicket?: number; clients?: number; lowStock?: number };
   locationLabel?: string;
+  locationFailClosed?: boolean;
   analytics?: Analytics;
 };
 
@@ -253,15 +254,22 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
 
   const todayIso = localYmd(new Date());
   const monthStartIso = `${todayIso.slice(0, 7)}-01`;
-  const isYmd = (v: unknown) => /^\d{4}-\d{2}-\d{2}$/.test(String(v ?? ""));
+  // reportYmdValid legacy (regex + checkdate: '2026-02-31' NON è valida).
+  const isYmd = (v: unknown) => {
+    const s = String(v ?? "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+    const [y, m, d] = s.split("-").map(Number);
+    const dt = new Date(y, m - 1, d);
+    return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
+  };
 
   // Stato filtri dai querystring legacy (?range=&from=&to=&granularity=&
-  // compare=...); default legacy: mese corrente (range=custom se from/to
-  // manuali senza range valido).
+  // compare=...); default legacy: range invalido + from/to PRESENTI (anche
+  // invalidi, isset() nel PHP) → 'custom', altrimenti mese corrente.
   const q = initialQuery ?? {};
   const initialRange = RANGE_LABELS[String(q.range ?? "")]
     ? String(q.range)
-    : (isYmd(q.from) || isYmd(q.to) ? "custom" : "month_current");
+    : (q.from !== undefined || q.to !== undefined ? "custom" : "month_current");
   const [range, setRange] = useState(initialRange);
   const [from, setFrom] = useState(isYmd(q.from) ? String(q.from) : monthStartIso);
   const [to, setTo] = useState(isYmd(q.to) ? String(q.to) : todayIso);
@@ -274,6 +282,8 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
   const [compareTo, setCompareTo] = useState(isYmd(q.compare_to) ? String(q.compare_to) : todayIso);
 
   const [data, setData] = useState<ReportsResponse | null>(null);
+  // Auth::requirePerm legacy: 403 → pagina 'Accesso negato' (card nel chrome).
+  const [accessDenied, setAccessDenied] = useState(false);
   const [clientSearch, setClientSearch] = useState("");
   const [itemSearch, setItemSearch] = useState("");
   const [operatorSearch, setOperatorSearch] = useState("");
@@ -313,10 +323,15 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
     switch (compareMode) {
       case "previous_year": return { from: shiftYearsYmd(win.from, -1), to: shiftYearsYmd(win.to, -1) };
       case "month": {
+        // sameLengthFromMonth legacy (reports.php 161-172): dal 1° del mese per
+        // la STESSA LUNGHEZZA del periodo principale, clampata a fine mese.
         const [yy, mm] = compareMonth.split("-").map(Number);
         if (yy && mm) {
-          const last = new Date(yy, mm, 0);
-          return { from: `${compareMonth}-01`, to: localYmd(last) };
+          const lenDays = Math.max(1, Math.round((Date.parse(`${win.to}T12:00:00`) - Date.parse(`${win.from}T12:00:00`)) / 86400000) + 1);
+          const lastOfMonth = new Date(yy, mm, 0);
+          const target = new Date(yy, mm - 1, lenDays);
+          const to = target.getTime() > lastOfMonth.getTime() ? lastOfMonth : target;
+          return { from: `${compareMonth}-01`, to: localYmd(to) };
         }
         return previousPeriod();
       }
@@ -341,7 +356,10 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
       params.set("compare_to", cw.to);
     }
     return fetch(`/api/manage/reports?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
-      .then((r) => r.json())
+      .then((r) => {
+        if (r.status === 403) setAccessDenied(true);
+        return r.json();
+      })
       .then((j: ReportsResponse) => setData(j))
       .catch(() => setData(null));
   }, [slug, resolveRange, resolveCompareWindow, compare]);
@@ -616,6 +634,18 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
       + (compare && compareWindow ? ` / Confronto ${(COMPARE_MODE_LABELS[compareMode] ?? "").toLowerCase()}: ${itDate(compareWindow.from)} - ${itDate(compareWindow.to)}` : "")
     : "Statistiche vendite del periodo";
 
+  // Port della pagina 403 di Auth::requirePerm (Auth.php 494-505).
+  if (accessDenied) {
+    return (
+      <div className="container-fluid">
+        <div className="card p-4">
+          <div className="h4 fw-semibold mb-2">Accesso negato</div>
+          <div className="text-muted">Non hai i permessi per accedere a questa sezione.</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="container-fluid">
       <link rel="stylesheet" href="/assets/css/pages/reports.css" />
@@ -627,6 +657,10 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
           <div className="bs-page-subtitle">{subtitle}</div>
         </div>
       </div>
+
+      {data?.locationFailClosed ? (
+        <div className="alert alert-warning">Seleziona una sede valida per visualizzare i dati.</div>
+      ) : null}
 
       <div className="report-filter-card p-3 mb-3">
         <form

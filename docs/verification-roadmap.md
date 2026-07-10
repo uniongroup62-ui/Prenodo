@@ -9938,3 +9938,106 @@ riscritti byte-identici, permessi, azione ignota, alert days 7/7).
 PRODUZIONE INTATTA: automation_settings byte-identica (updated_at escluso,
 trigger PG), 20 reminders pending preesistenti INTATTE, wallet e piani non
 toccati. REGRESSIONE: model-a 12/12, ruoli 21/21. tsc + eslint puliti.
+
+## 2026-07-10 — Report (reports.php + reports.js): audit 1:1 + 8 fix + e2e live
+
+Legacy letto INTEGRALE (agente Explore, spec riga-per-riga): app/pages/
+reports.php (2155) + assets/js/pages/reports.js (655) + helper centrali
+(fmt_money, app_locations/app_user_location_options/app_current_location_id/
+app_all_locations_filter_enabled, Auth::requirePerm/can/canAny). Next:
+lib/manage-reports.ts (ora 700) + app/api/manage/reports/route.ts (ora 105) +
+reports-content.tsx (ora 1345). Permesso reports.view; card Costi gated
+canAny(costs.manage|costs.items), Commissioni can(commissions.manage).
+
+FIX (8):
+1) FILTRO SEDE legacy completo (reports.php 296-354): il filtro è ora una
+   LISTA di sedi (all_locations=1 → IN sulle sedi autorizzate, non "nessun
+   filtro"), con righe location_id NULL incluse SOLO per l'admin in tutte-le-
+   sedi (reportCanIncludeNullLocation) e includeUnassigned degli appuntamenti
+   = sede singola O admin-all; applicato a vendite/appuntamenti(+bridge)/
+   clienti/costi/commissioni.
+2) FAIL-CLOSED (reports.php 296): utente senza sedi autorizzate valide →
+   tutte le WHERE di sede diventano 1=0, label 'Nessuna sede autorizzata',
+   alert verbatim 'Seleziona una sede valida per visualizzare i dati.' nel
+   componente. NB: il login Next applica il "no lockout" (staff senza
+   staff_locations → tutte le attive), quindi lo stato si raggiunge solo con
+   sedi revocate/disattivate a sessione viva (cookie stantio) — testato così.
+3) Scope clienti per sede (buildClientScopeCondition 450-497): gli EXISTS ora
+   filtrano vendite NON ANNULLATE e appuntamenti ATTIVI (prima contavano
+   anche vendite annullate/appuntamenti cancellati).
+4) Confronto 'Scegli mese' (sameLengthFromMonth 161-172): dal 1° del mese per
+   la STESSA LUNGHEZZA del periodo principale clampata a fine mese — prima
+   copriva sempre il mese intero.
+5) Età media a 1 DECIMALE della media vera (number_format($avg,1) — prima
+   arrotondata all'intero, '42,0' vs '42,3').
+6) Ordine operatori post-fusione: revenue desc poi ORE LAVORATE desc
+   (reports.php 1183-1189; prima numero vendite).
+7) prevalenceSub col punto migliaia (intFmt legacy); 403 → card 'Accesso
+   negato'/'Non hai i permessi per accedere a questa sezione.' come
+   Auth::requirePerm; isYmd con validità reale (checkdate: 2026-02-31 KO);
+   range='custom' se from/to PRESENTI anche invalidi (isset legacy).
+8) (verificato non-fix) sales.payment_method NON esiste in PG → la
+   risoluzione metodo SOLO dalle note 'Tipo pagamento: X' è fedele
+   (app_column_exists false nel legacy).
+
+CONFERMATI FEDELI: modello a EVENTI DI INCASSO (fetchCollectionEvents:
+vendite senza piano per sale_date + acconti piani per sale_date + rate PAGATE
+per paid_at, importi max(0,·) round 2, 1 movimento ciascuno) distinto dal
+riepilogo vendite (Venduto=SUM netto, Lordo=SUM subtotal, sconti+fidelity,
+AVG ticket, COUNT DISTINCT clienti serviti>0); adattamento documentato
+NET_SALE_REV (il legacy memorizza total già al netto di credito/giftcard, il
+Next lo ricostruisce); finestre half-open [from 00:00, to+1g) OVUNQUE tranne
+costi (due_date BETWEEN inclusivo — testato col costo su to) e commissioni
+(COALESCE(movement_datetime,created_at) half-open, entry_status<>cancelled);
+preset range identici (today/yesterday/last_7/30/90/180/month_current/
+month_previous/year_current/custom con swap); granularità auto ≤45 daily,
+≤180 weekly, else monthly con bucket zero-fill (label d/m, 'd/m - d/m',
+'m/Y') e allineamento pad/tronca della serie di confronto; modalità confronto
+(auto per-mese/per-anno/periodo-precedente con makeYmd clamp del giorno);
+bucket prenotazioni con le liste stato legacy INCLUSO il bug-fedele 'non
+presentata' (attivo E no_show); metodi pagamento in ordine
+Contanti/Carte/Assegno/Bonifico/Non indicato con share % a 1 decimale;
+composizione tipologie con classificazione dal NOME (giftcard/giftbox/
+ricarica/pacchetto vincono), Voce→Altro e 'Prodotto' SEMPRE presente anche a
+0; top servizi/prodotti con le 6 esclusioni nome; top clienti con fallback
+'Cliente #N'/'Cliente non associato'; operatori vendite+ore (segments done,
+duration_minutes o differenza minuti, fusione per nome normalizzato) e
+'Operatore #N'; archivio clienti (genere M/F, nascite valide 1900..oggi,
+fasce <18..65+, prevalenza Equilibrato/Donne/Uomini + 'N con genere
+indicato'/'Nessun genere indicato'); delta KPI formatDeltaInfo (is-good/
+is-bad/is-flat, 'Nuovo rispetto al confronto', 'Nessuna variazione', 'Non
+confrontabile' con requires_both per lo scontrino medio, goodWhenUp=false
+per Costi/Commissioni, '±€ X (±Y,Z%)'); UI verbatim (sottotitolo composto,
+form filtri, KPI card, badge, canvas aria-label 'Clienti per eta' senza
+accento, modali Mostra altro con ricerca/count 'N risultati'/'Nessun
+risultato trovato.'/'Nessun dato.', colonne e formatter qtyFmt/hoursFmt);
+grafici Chart.js identici a reports.js (line con confronto tratteggiato
+[6,4], doughnut cutout 62%, bar orizzontali, tooltip €/'Utilizzi:'/'%',
+moneyShort/integerShort, palette 10 colori, empty-state verbatim).
+
+RESIDUI documentati (non fix): (a) LIMIT 100/100/50 sulle liste top del Next
+(il legacy è illimitato nei modali; oltre soglia irrealistica per tenant);
+(b) tooltip Chart.js con € SUFFISSO (Intl it-IT) come il JS legacy vs €
+prefisso dei valori server-side — divergenza INTERNA al legacy replicata;
+(c) fallback 'Grafico non disponibile.' se Chart.js non carica non replicato
+(la shell Next carica sempre Chart dal CDN, il componente attende); (d) km
+'compare_month' default da OGGI-1mese invece che da from-1mese (differisce
+solo su deep-link year_current senza compare_month); (e) risposta API con
+kpis/latestSales/mix extra (non usati dalla pagina fedele); (f) served per
+giorno della cassa (chiavi dinamiche legacy) non replicato: inutilizzato nei
+grafici.
+
+VERIFICATO: test-report 24/24 live con seed ZZ in finestra 2025-01 isolata
+(3 vendite di cui 1 con piano rate: incasso eventi 260 = 85 netto + 50 + 50
+acconto + 75 rata pagata in finestra con rata di febbraio ESCLUSA, venduto
+335/lordo 360/sconti 15/ticket 111,67, daily per giorno, metodi da note
+Contanti/Carte/Bonifico con share 32,7/19,2/48,1, top clienti, operatori
+ordinati per revenue con luca solo-ore 1,5h fuso dai segments, composizione
+solo-Prodotto-a-0, bucket prenotazioni 5/3/1/1/1/1/1 + trend, costi BETWEEN
+inclusivo 40/10/30, commissioni 25, card null senza permessi, confronto
+custom e AUTO periodo-precedente con deltaPct -100 e costi/commissioni del
+confronto, sede 51 cieca sui dati di 21, all_locations admin, FAIL-CLOSED
+con sede revocata, archivio = scope SQL legacy, età 1 decimale, 403/401).
+PRODUZIONE INTATTA: baseline conteggi identici (9 vendite/1 piano/3 rate/10
+appuntamenti/0 costi/2 commissioni/5 clienti). REGRESSIONE: model-a 12/12,
+automazione 20/20. tsc pulito, eslint solo warning css preesistente.

@@ -152,11 +152,16 @@ type CollectionTotals = {
   byMethod: Map<string, { amount: number; count: number }>;
 };
 
+// Filtro sede legacy (reports.php 296-354): lista di sedi consentite,
+// inclusione NULL solo per admin in "tutte le sedi", fail-closed (1=0) quando
+// l'utente non ha sedi autorizzate ma il tenant ne ha.
+export type ReportLocationFilter = { ids: number[]; includeNull: boolean; failClosed: boolean };
+
 export async function getManageReports(
   slug: string,
   fromRaw: string,
   toRaw: string,
-  locationId = 0,
+  locationFilter: ReportLocationFilter | number = 0,
   compare = false,
   options: { includeCosts?: boolean; includeCommissions?: boolean; compareFrom?: string; compareTo?: string } = {},
 ): Promise<ManageReports> {
@@ -166,10 +171,25 @@ export async function getManageReports(
   const to = /^\d{4}-\d{2}-\d{2}$/.test(toRaw) ? toRaw : ymd(today);
   const toExclusive = addDaysYmd(to, 1);
 
+  const loc: ReportLocationFilter = typeof locationFilter === "number"
+    ? { ids: locationFilter > 0 ? [locationFilter] : [], includeNull: false, failClosed: false }
+    : locationFilter;
+  const locIds = loc.ids.filter((n) => Number(n) > 0);
+  // buildLocationCondition (reports.php 343-354).
+  const locCond = (col: string): { sql: string; params: unknown[] } => {
+    if (loc.failClosed) return { sql: " AND 1=0", params: [] };
+    if (!locIds.length) return { sql: "", params: [] };
+    const base = locIds.length === 1 ? `${col} = ?` : `${col} IN (${locIds.map(() => "?").join(",")})`;
+    return loc.includeNull
+      ? { sql: ` AND (${base} OR ${col} IS NULL)`, params: [...locIds] }
+      : { sql: ` AND ${base}`, params: [...locIds] };
+  };
+
   const sales = await tenantTable(slug, "sales");
   const tid = sales.tenantId ?? 0;
-  const locClause = locationId > 0 ? " AND s.location_id = ?" : "";
-  const locParams: unknown[] = locationId > 0 ? [locationId] : [];
+  const salesLoc = locCond("s.location_id");
+  const locClause = salesLoc.sql;
+  const locParams: unknown[] = salesLoc.params;
   const cph = CANCELLED_SALE_STATES.map(() => "?").join(",");
   const scopeSql = `s.tenant_id = ? AND LOWER(TRIM(COALESCE(s.status,''))) NOT IN (${cph})${locClause}`;
   const scopeParams = [tid, ...CANCELLED_SALE_STATES, ...locParams];
@@ -258,19 +278,29 @@ export async function getManageReports(
     };
   };
 
-  // --- Prenotazioni: filtro sede (diretto + bridge, come reports.php 392-430)
+  // --- Prenotazioni: filtro sede (diretto + bridge, come reports.php 392-430).
+  // includeUnassigned legacy = sede singola O admin in "tutte le sedi".
   const appt = await tenantTable(slug, "appointments");
   const hasApptBridge = await tableExists("appointment_locations");
   let apptLocClause = "";
   const apptLocParams: unknown[] = [];
-  if (locationId > 0) {
+  if (loc.failClosed) {
+    apptLocClause = " AND 1=0";
+  } else if (locIds.length > 0) {
+    const includeUnassigned = locIds.length === 1 || loc.includeNull;
+    const inSql = locIds.length === 1 ? "= ?" : `IN (${locIds.map(() => "?").join(",")})`;
     if (hasApptBridge) {
       const bridge = await tenantTable(slug, "appointment_locations");
-      apptLocClause = ` AND (a.location_id = ? OR (a.location_id IS NULL AND (EXISTS (SELECT 1 FROM ${quoteIdentifier(bridge.name)} al WHERE al.appointment_id = a.id AND al.location_id = ? AND al.tenant_id = a.tenant_id) OR NOT EXISTS (SELECT 1 FROM ${quoteIdentifier(bridge.name)} al2 WHERE al2.appointment_id = a.id AND al2.tenant_id = a.tenant_id))))`;
-      apptLocParams.push(locationId, locationId);
+      const noBridge = includeUnassigned
+        ? ` OR NOT EXISTS (SELECT 1 FROM ${quoteIdentifier(bridge.name)} al2 WHERE al2.appointment_id = a.id AND al2.tenant_id = a.tenant_id)`
+        : "";
+      apptLocClause = ` AND (a.location_id ${inSql} OR (a.location_id IS NULL AND (EXISTS (SELECT 1 FROM ${quoteIdentifier(bridge.name)} al WHERE al.appointment_id = a.id AND al.location_id ${inSql} AND al.tenant_id = a.tenant_id)${noBridge})))`;
+      apptLocParams.push(...locIds, ...locIds);
     } else {
-      apptLocClause = " AND (a.location_id = ? OR a.location_id IS NULL)";
-      apptLocParams.push(locationId);
+      apptLocClause = includeUnassigned
+        ? ` AND (a.location_id ${inSql} OR a.location_id IS NULL)`
+        : ` AND a.location_id ${inSql}`;
+      apptLocParams.push(...locIds);
     }
   }
   const bucket = (states: string[]) => `SUM(CASE WHEN LOWER(TRIM(COALESCE(a.status,''))) IN (${states.map((s) => `'${s}'`).join(",")}) THEN 1 ELSE 0 END)`;
@@ -423,16 +453,25 @@ export async function getManageReports(
       opMap.set(key, { name, revenue: 0, saleCount: 0, avgTicket: 0, hoursWorked: hours, apptCount: Number(row.appts ?? 0) });
     }
   }
-  const operators = Array.from(opMap.values()).sort((a, b) => b.revenue - a.revenue || b.saleCount - a.saleCount);
+  // Ordine legacy post-merge (reports.php 1183-1189): revenue desc, poi ORE
+  // LAVORATE desc (non il numero vendite).
+  const operators = Array.from(opMap.values()).sort((a, b) => b.revenue - a.revenue || b.hoursWorked - a.hoursWorked);
 
   // --- Archivio clienti (reports.php 1013-1077) ---------------------------
   let clientLocClause = "";
   const clientLocParams: unknown[] = [];
-  if (locationId > 0) {
+  if (loc.failClosed) {
+    clientLocClause = " AND 1=0";
+  } else if (locIds.length > 0) {
     // Il cliente "appartiene" alla sede se location_id coincide O ha una
-    // vendita/appuntamento in quella sede (buildClientScopeCondition 450-497).
-    clientLocClause = ` AND (c.location_id = ? OR EXISTS (SELECT 1 FROM ${quoteIdentifier(sales.name)} sx WHERE sx.client_id = c.id AND sx.tenant_id = c.tenant_id AND sx.location_id = ?) OR EXISTS (SELECT 1 FROM ${quoteIdentifier(appt.name)} ax WHERE ax.client_id = c.id AND ax.tenant_id = c.tenant_id AND ax.location_id = ?))`;
-    clientLocParams.push(locationId, locationId, locationId);
+    // vendita NON ANNULLATA o un appuntamento ATTIVO in quella sede
+    // (buildClientScopeCondition 450-497: gli EXISTS filtrano gli stati).
+    const inSql = locIds.length === 1 ? "= ?" : `IN (${locIds.map(() => "?").join(",")})`;
+    const directCond = loc.includeNull ? `(c.location_id ${inSql} OR c.location_id IS NULL)` : `c.location_id ${inSql}`;
+    const salesNotCancelled = `LOWER(TRIM(COALESCE(sx.status,''))) NOT IN (${CANCELLED_SALE_STATES.map((s) => `'${s}'`).join(",")})`;
+    const apptActive = `LOWER(TRIM(COALESCE(ax.status,''))) NOT IN (${ACTIVE_APPT_EXCLUDED.map((s) => `'${s}'`).join(",")})`;
+    clientLocClause = ` AND (${directCond} OR EXISTS (SELECT 1 FROM ${quoteIdentifier(sales.name)} sx WHERE sx.client_id = c.id AND sx.tenant_id = c.tenant_id AND sx.location_id ${inSql} AND ${salesNotCancelled}) OR EXISTS (SELECT 1 FROM ${quoteIdentifier(appt.name)} ax WHERE ax.client_id = c.id AND ax.tenant_id = c.tenant_id AND ax.location_id ${inSql} AND ${apptActive}))`;
+    clientLocParams.push(...locIds, ...locIds, ...locIds);
   }
   const birthValid = "c.birth_date IS NOT NULL AND c.birth_date >= '1900-01-01' AND c.birth_date <= CURRENT_DATE";
   const ageExpr = "DATE_PART('year', AGE(CURRENT_DATE, c.birth_date))";
@@ -459,7 +498,9 @@ export async function getManageReports(
   const genderKnown = male + female;
   // Prevalenza legacy (reports.php 1067-1077).
   const prevalence = genderKnown === 0 ? "Non indicato" : male === female ? "Equilibrato" : female > male ? "Donne" : "Uomini";
-  const prevalenceSub = genderKnown > 0 ? `${genderKnown} con genere indicato` : "Nessun genere indicato";
+  // Legacy: intFmt(known)." con genere indicato" — number_format con punto migliaia.
+  const groupInt = (n: number) => String(Math.trunc(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  const prevalenceSub = genderKnown > 0 ? `${groupInt(genderKnown)} con genere indicato` : "Nessun genere indicato";
   const birthKnown = Number(cr.birth_known ?? 0);
   const clientsArchive: ManageReports["clientsArchive"] = {
     total: totalClients,
@@ -470,7 +511,9 @@ export async function getManageReports(
     prevalenceSub,
     birthKnown,
     birthUnknown: Math.max(0, totalClients - birthKnown),
-    avgAge: cr.avg_age === null || cr.avg_age === undefined || birthKnown === 0 ? null : Math.round(Number(cr.avg_age)),
+    // Legacy mostra number_format(avg, 1): UN decimale della media vera
+    // (reports.php 1787), non l'intero arrotondato.
+    avgAge: cr.avg_age === null || cr.avg_age === undefined || birthKnown === 0 ? null : Math.round(Number(cr.avg_age) * 10) / 10,
     ageBuckets: [
       { label: "<18", count: Number(cr.a17 ?? 0) },
       { label: "18-24", count: Number(cr.a24 ?? 0) },
@@ -485,7 +528,8 @@ export async function getManageReports(
   // --- Costi (reports.php 1211-1266): due_date BETWEEN inclusivo ----------
   const costSummaryFor = async (rangeFrom: string, rangeTo: string): Promise<{ total: number; paid: number; open: number }> => {
     const costsTable = await tenantTable(slug, "costs");
-    const costLoc = locationId > 0 ? " AND c.location_id = ?" : "";
+    const costLocCond = locCond("c.location_id");
+    const costLoc = costLocCond.sql;
     const costRows = await dbQuery<RowDataPacket[]>(
       `SELECT COALESCE(SUM(c.amount),0) total,
               COALESCE(SUM(CASE WHEN COALESCE(c.is_paid,0) = 1 AND COALESCE(c.paid_amount,0) <= 0 THEN c.amount
@@ -494,7 +538,7 @@ export async function getManageReports(
               COALESCE(SUM(CASE WHEN COALESCE(c.is_paid,0) = 1 THEN 0 ELSE GREATEST(COALESCE(c.amount,0) - COALESCE(c.paid_amount,0), 0) END),0) open
          FROM ${quoteIdentifier(costsTable.name)} c
         WHERE c.tenant_id = ? AND c.due_date BETWEEN ? AND ?${costLoc}`,
-      [costsTable.tenantId ?? 0, rangeFrom, rangeTo, ...(locationId > 0 ? [locationId] : [])],
+      [costsTable.tenantId ?? 0, rangeFrom, rangeTo, ...costLocCond.params],
     ).catch(() => [] as RowDataPacket[]);
     const row = costRows[0] ?? {};
     return { total: money(row.total), paid: money(row.paid), open: money(row.open) };
@@ -506,7 +550,8 @@ export async function getManageReports(
   // --- Commissioni (reports.php 1276-1327) --------------------------------
   const commissionSummaryFor = async (rangeFrom: string, rangeToExclusive: string): Promise<{ count: number; total: number; paid: number; open: number }> => {
     const commTable = await tenantTable(slug, "staff_commission_payments");
-    const commLoc = locationId > 0 ? " AND p.location_id = ?" : "";
+    const commLocCond = locCond("p.location_id");
+    const commLoc = commLocCond.sql;
     const commRows = await dbQuery<RowDataPacket[]>(
       `SELECT COUNT(*) cnt, COALESCE(SUM(COALESCE(p.commission_amount,0)),0) total,
               COALESCE(SUM(CASE WHEN COALESCE(p.is_paid,0) = 1 THEN COALESCE(p.commission_amount,0) ELSE 0 END),0) paid,
@@ -514,7 +559,7 @@ export async function getManageReports(
          FROM ${quoteIdentifier(commTable.name)} p
         WHERE p.tenant_id = ? AND COALESCE(p.movement_datetime, p.created_at) >= ? AND COALESCE(p.movement_datetime, p.created_at) < ?
           AND LOWER(TRIM(COALESCE(p.entry_status,''))) <> 'cancelled'${commLoc}`,
-      [commTable.tenantId ?? 0, rangeFrom, rangeToExclusive, ...(locationId > 0 ? [locationId] : [])],
+      [commTable.tenantId ?? 0, rangeFrom, rangeToExclusive, ...commLocCond.params],
     ).catch(() => [] as RowDataPacket[]);
     const row = commRows[0] ?? {};
     return { count: Number(row.cnt ?? 0), total: money(row.total), paid: money(row.paid), open: money(row.open) };
