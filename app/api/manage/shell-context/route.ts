@@ -7,7 +7,7 @@ import {
   getNotificationSummary,
   getSupportAccess,
 } from "@/lib/manage-shell-context";
-import { can, canAny } from "@/lib/role-permissions";
+import { can, canAny, isAssignable } from "@/lib/role-permissions";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -36,12 +36,27 @@ export async function GET(request: Request) {
   // appointments.quick_booking. viewerUserId alimenta lo scope localStorage del
   // poller notifiche browser (beautysuite_browser_notifications:tenant:user:loc).
   const perms = session.user.perms;
+  // Auth::can legacy per il dropdown account (View.php 830-844): admin passa
+  // sempre; i permessi NON-assegnabili (roles.manage) sono negati ai non-admin
+  // anche se presenti in DB (stessa regola della pagina Ruoli); Accessibilità
+  // ed Esci sono per qualsiasi utente autenticato (gate lato client).
+  const isAdmin = String(session.user.role ?? "").toLowerCase() === "admin";
+  const authCan = (perm: string): boolean => {
+    if (isAdmin) return true;
+    if (!isAssignable(perm)) return false;
+    return can(perms, perm);
+  };
+  const authCanAny = (list: string[]): boolean => isAdmin || canAny(perms, list.filter(isAssignable));
   const topbar = {
-    canViewNotifications: can(perms, "notifications.view"),
-    bellBirthdays: canAny(perms, ["clients.manage", "client_sheets.manage", "client_consents.manage"]),
-    bellInstallments: can(perms, "installments.manage"),
-    bellQuotes: can(perms, "quotes.manage"),
-    quickBooking: can(perms, "appointments.quick_booking"),
+    canViewNotifications: authCan("notifications.view"),
+    bellBirthdays: authCanAny(["clients.manage", "client_sheets.manage", "client_consents.manage"]),
+    bellInstallments: authCan("installments.manage"),
+    bellQuotes: authCan("quotes.manage"),
+    quickBooking: authCan("appointments.quick_booking"),
+    accountBusinessProfile: authCan("settings.general"),
+    accountLocations: authCan("settings.location"),
+    accountConsentModules: authCan("consent_modules.manage"),
+    accountRoles: authCan("roles.manage"),
   };
 
   return Response.json({

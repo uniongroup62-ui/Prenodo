@@ -145,14 +145,20 @@ type NotifCounts = { count: number; quotes: number; installments: number; birthd
 type ShellLocation = { id: number; name: string };
 type ShellSupport = { created_by_email?: string; reason?: string; expires_at?: string };
 type ShellClosure = { start: string; end: string };
-// Gate per-elemento della topbar (View.php 796-824): le icone/il bottone
-// esistono SOLO col permesso corrispondente, come il markup PHP condizionale.
+// Gate per-elemento della topbar (View.php 796-848): icone, bottone
+// quick-booking e voci del dropdown account esistono SOLO col permesso
+// corrispondente (Auth::can), come il markup PHP condizionale. Accessibilità
+// ed Esci sono per qualsiasi utente autenticato.
 type ShellTopbar = {
   canViewNotifications: boolean;
   bellBirthdays: boolean;
   bellInstallments: boolean;
   bellQuotes: boolean;
   quickBooking: boolean;
+  accountBusinessProfile: boolean;
+  accountLocations: boolean;
+  accountConsentModules: boolean;
+  accountRoles: boolean;
 };
 const TOPBAR_NONE: ShellTopbar = {
   canViewNotifications: false,
@@ -160,6 +166,10 @@ const TOPBAR_NONE: ShellTopbar = {
   bellInstallments: false,
   bellQuotes: false,
   quickBooking: false,
+  accountBusinessProfile: false,
+  accountLocations: false,
+  accountConsentModules: false,
+  accountRoles: false,
 };
 
 // Bootstrap's global, loaded by the CDN <script> in the shell. Only the Toast
@@ -311,6 +321,10 @@ export function ManageShell({
           bellInstallments: Boolean(t.bellInstallments),
           bellQuotes: Boolean(t.bellQuotes),
           quickBooking: Boolean(t.quickBooking),
+          accountBusinessProfile: Boolean(t.accountBusinessProfile),
+          accountLocations: Boolean(t.accountLocations),
+          accountConsentModules: Boolean(t.accountConsentModules),
+          accountRoles: Boolean(t.accountRoles),
         });
         setViewerUserId(Number(data.viewerUserId ?? 0));
         setLocations(Array.isArray(data.locations) ? data.locations : []);
@@ -922,12 +936,23 @@ export function ManageShell({
                 <button className="icon-btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="Account">
                   <i className="bi bi-person-circle" />
                 </button>
+                {/* Voci gated per-permesso come View.php 830-846 (Auth::can:
+                    Ruoli è di fatto solo-Admin — non-assegnabile); Accessibilità
+                    ed Esci sempre presenti per l'utente autenticato. */}
                 <ul className="dropdown-menu dropdown-menu-end">
-                  <li><a className="dropdown-item" href={pageHref(slug, "business_profile")}><i className="bi bi-gear me-2" />Profilo attività</a></li>
-                  <li><a className="dropdown-item" href={pageHref(slug, "locations")}><i className="bi bi-building me-2" />Sedi</a></li>
-                  <li><a className="dropdown-item" href={pageHref(slug, "consent_modules")}><i className="bi bi-shield-check me-2" />Moduli consenso</a></li>
+                  {topbar.accountBusinessProfile ? (
+                    <li><a className="dropdown-item" href={pageHref(slug, "business_profile")}><i className="bi bi-gear me-2" />Profilo attività</a></li>
+                  ) : null}
+                  {topbar.accountLocations ? (
+                    <li><a className="dropdown-item" href={pageHref(slug, "locations")}><i className="bi bi-building me-2" />Sedi</a></li>
+                  ) : null}
+                  {topbar.accountConsentModules ? (
+                    <li><a className="dropdown-item" href={pageHref(slug, "consent_modules")}><i className="bi bi-shield-check me-2" />Moduli consenso</a></li>
+                  ) : null}
                   <li><a className="dropdown-item" href={pageHref(slug, "accessibility")}><i className="bi bi-universal-access me-2" />Accessibilità</a></li>
-                  <li><a className="dropdown-item" href={pageHref(slug, "roles")}><i className="bi bi-shield-lock me-2" />Ruoli</a></li>
+                  {topbar.accountRoles ? (
+                    <li><a className="dropdown-item" href={pageHref(slug, "roles")}><i className="bi bi-shield-lock me-2" />Ruoli</a></li>
+                  ) : null}
                   <li><hr className="dropdown-divider" /></li>
                   <li><a className="dropdown-item" href={`/${encodeURIComponent(slug)}/logout`}><i className="bi bi-box-arrow-right me-2" />Esci</a></li>
                 </ul>

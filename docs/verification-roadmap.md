@@ -10536,3 +10536,23 @@ Residui noti: eventuale nota coupon con SOLO codice (senza riga sconto) non
 ricalcola lo sconto dal motore coupon (il flusso di booking scrive sempre
 entrambe le righe; ricalcolo legato al port del modulo Buoni); dropdown
 account topbar ancora non gated per-permesso (fuori scope Notifiche).
+
+## 2026-07-10 — Topbar, dropdown account: voci gated per-permesso (chiusura residuo)
+
+Chiuso il residuo segnalato negli audit Notifiche 3/4: il dropdown account
+della topbar renderizzava TUTTE le voci incondizionatamente; il legacy le
+gatta con Auth::can (View.php 830-846): Profilo attività → settings.general,
+Sedi → settings.location, Moduli consenso → consent_modules.manage, Ruoli →
+roles.manage (NON-assegnabile ⇒ di fatto solo-Admin, stessa regola della
+pagina Ruoli), Accessibilità ed Esci per qualsiasi utente autenticato.
+
+FIX: shell-context espone i 4 flag account nel blocco topbar e TUTTI i flag
+topbar (campanelle, quick-booking inclusi) ora replicano Auth::can ESATTO:
+admin → sempre true (anche a lista permessi vuota), non-assegnabili negati ai
+non-admin anche se presenti in sessione, altrimenti walk dei permessi;
+manage-shell renderizza le voci condizionalmente (divider ed Esci sempre).
+
+VERIFICATO: test-topbar-dropdown 4/4 live (admin con perms VUOTE → tutti i
+flag true; staff settings.general → solo Profilo; staff con roles.manage in
+cookie → Ruoli comunque nascosto; settings.location+consent_modules.manage →
+Sedi+Moduli). REGRESSIONE: test-notifiche-shell 12/12. tsc/eslint puliti.
