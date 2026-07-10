@@ -9694,3 +9694,90 @@ print + lock + upload manuale 'Privacy firmata' + send_privacy + Reset GDPR).
 PRODUZIONE INTATTA: records=0, customer_documents=0, moduli=1 (sistema id 3),
 5 clienti reali con gdpr draft. REGRESSIONE: test-consensi 25/25, model-a
 12/12. tsc + eslint puliti.
+
+## 2026-07-10 — Accessibilità (accessibility.php + gate email di index.php/View.php): audit 1:1 + 5 fix + e2e live
+
+Legacy letto INTEGRALE (diretto): app/pages/accessibility.php (539) +
+assets/js/pages/accessibility.js (38, countdown reinvio + avviso scadenza) +
+il GATE globale di index.php 580-590 (redirect forzato) e View.php 203/407/
+421-440/472/761/853/876 (chrome ridotto). Next: lib/manage-accessibility.ts
+(699) + lib/manage-password-reset.ts (changeManagePassword/invalidate) +
+app/api/manage/accessibility/route.ts (121) + accessibility-content.tsx
+(438) + manage-shell.tsx + le 4 pagine server (catch-all, dashboard,
+onboarding, booking). Pagina senza permessi: basta il login (come il legacy).
+
+FIX (5):
+1) GATE VERIFICA EMAIL mancante: il legacy (index.php 580-590) redirige OGNI
+   pagina del gestionale tranne accessibility/logout/login a
+   accessibility?err='Verifica email necessaria prima di continuare' quando
+   needs_email_verification; nel Next il flag era nel cookie ma NESSUN layout
+   lo usava. Aggiunto il redirect nel catch-all E nelle route dedicate che lo
+   scavalcano (dashboard, onboarding, booking ramo admin — il wizard pubblico
+   resta esente come $isPublicBooking). Precede l'onboarding, come nel legacy.
+2) CHROME GATE in ManageShell (prop emailVerificationGate dal server della
+   pagina accessibility): nav sections e topbar NON renderizzate, banner
+   supporto/chiusure nascosti, brand -> accessibility, body class
+   email-verification-gate + blocco <style> verbatim di View.php 421-440
+   (sidebar-toggle nascosto, layout mobile statico).
+3) GATE SEDE: accessibility è tra le pagine ESENTI dalla selezione sede nel
+   legacy (index.php 610) — il chooser full-screen di ManageShell ora la
+   salta (credenziali gestibili anche senza sede corrente).
+4) Conferma email: il client ora fa NAVIGAZIONE PIENA a ?msg=Email verificata
+   (come il redirect legacy) — rilegge il cookie aggiornato e il gate chrome
+   sparisce subito (prima un load() SPA lasciava il chrome ridotto fino al
+   refresh manuale).
+5) confirmEmailCode: blocco transazionale con catch-all 'Errore verifica
+   email' sugli errori DB (accessibility.php 326-356) + rawPendingRow con
+   catch->null (accessibility_get_pending ritorna null su errore, quindi
+   'Nessuna richiesta di cambio email attiva' anche su blip DB).
+
+CONFERMATI FEDELI: costanti (TTL 900s, cooldown 60s con 'Attendi N secondi
+prima di richiedere un nuovo codice.', max 5 tentativi, password min 8);
+request_email_verify/request_email_change/resend_email_code/
+confirm_email_change/change_password con ordine guardie e flash verbatim
+SENZA punto ('Email non valida', 'L email e gia questa', 'Password attuale
+non corretta', 'Codice non valido', 'Inserisci il codice', 'Email verificata',
+'Password aggiornata', 'Codice inviato alla tua email/alla nuova email',
+'Codice reinviato', 'Compila tutti i campi password', 'Le nuove password non
+coincidono', 'La nuova password deve avere almeno 8 caratteri', 'Inserisci la
+password attuale per cambiare email.', 'Codice scaduto: richiedi un nuovo
+codice' vs resend 'Email non valida: richiedi un nuovo codice.' CON punto,
+'Troppi tentativi non validi. Richiedi un nuovo codice.', 'Nessuna verifica
+email in corso.', 'Nessuna richiesta di cambio email attiva'); unicità email
+su users E staff con esenzione righe full_name='SSO' (LOWER() per il trap
+case-sensitivity PG, testato in MAIUSCOLO); sync staff.email old->new al
+confirm (SSO esclusa); invalidazione password_resets (user_type admin,
+used_at=NOW()) su cambio email E password; resend che FUNZIONA anche su
+pending scaduta (quirk legacy: nessun check scadenza nel resend); attempt_
+count+last_attempt_at su codice errato, delete al 5°; mb_strlen ~ Array.from
+(password multibyte 8 code point accettata); bcrypt compat $2y$/$2a$/$2b$;
+UI verbatim (badge Verificata/Da verificare, alert 'Verifica richiesta'/'in
+corso' con Scadenza d/m/Y H:i e 'Tentativi usati: N/5', countdown 'Reinvia
+tra Ns', avviso 'Il codice e scaduto. Reinvia un nuovo codice.' allo scadere
+del TTL, card Note con i 3 bullet, 'Indietro' -> dashboard).
+
+RESIDUI documentati (non fix): (a) con email NON configurata (SES off) il
+legacy fallirebbe l'invio ('Invio codice fallito (controlla mail() del
+server)') mentre il Next salta l'invio, tiene la pending e in DEV espone
+verificationCode nel payload (adattamento deliberato commentato nel codice —
+in produzione SES è configurato e il path fallimento-invio resta fedele:
+delete pending + flash legacy); (b) le route /api/manage/* restano invocabili
+con cookie valido anche sotto gate (il legacy blocca al front-controller
+anche i POST): la UI è comunque irraggiungibile perché ogni pagina redirige;
+(c) FILTER_VALIDATE_EMAIL vs regex email (differenze solo su indirizzi
+malformati esotici); (d) validazione lunghezza anche in changeManagePassword
+(mai raggiunta dalla route che pre-valida col flash legacy).
+NOTA dati reali: l'utente 52 del tenant 25 ha email_verified_at NULL — al
+prossimo login vedrà il gate di verifica, comportamento legacy corretto.
+
+VERIFICATO: test-accessibilita 40/40 live (GET stato, 401, cambio password
+completo con invalidazione reset + multibyte, verifica email attuale con
+codice esposto in dev, cooldown richiesta/reinvio, 5 tentativi errati con
+contatore e delete, conferma con email invariata + verified_at, GATE: 307
+verbatim su dashboard/onboarding/clients/booking + accessibility 200 con
+chrome ridotto (style/brand/no-nav/no-topbar) vs chrome pieno senza flag,
+cambio email con tutte le guardie + conflitti users/staff case-insensitive +
+esenzione SSO + sync staff + scadenza + resend su scaduta + azione ignota).
+PRODUZIONE INTATTA: users=2 (20,52), staff=2 (22,56), verifications=0,
+password_resets=0. REGRESSIONE: model-a 12/12, consensi-cliente 38/38.
+tsc pulito, eslint solo warning css preesistenti.

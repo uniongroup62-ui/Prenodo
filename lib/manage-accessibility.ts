@@ -189,23 +189,30 @@ export async function confirmEmailCode({
   }
   if (newEmail !== normalizedCurrent) await ensureEmailAvailable(tenantSlug, userId, newEmail, normalizedCurrent);
 
-  const users = await tenantTable(tenantSlug, "users");
-  const userClauses = ["id = ?"];
-  const userParams: unknown[] = newEmail === normalizedCurrent
-    ? [userId]
-    : [newEmail, userId];
-  if (users.mode === "shared" && await columnExists(users.name, "tenant_id")) {
-    userClauses.push("tenant_id = ?");
-    userParams.push(users.tenantId ?? 0);
-  }
   const verifiedAt = sqlNow();
-  if (newEmail === normalizedCurrent) {
-    await dbExecute(`UPDATE \`${users.name}\` SET email_verified_at = ? WHERE ${userClauses.join(" AND ")}`, [verifiedAt, ...userParams]);
-  } else {
-    await dbExecute(`UPDATE \`${users.name}\` SET email = ?, email_verified_at = ? WHERE ${userClauses.join(" AND ")}`, [newEmail, verifiedAt, ...userParams.slice(1)]);
-    await syncStaffEmail(tenantSlug, normalizedCurrent, newEmail);
+  // Blocco transazionale legacy (accessibility.php 326-344): qualsiasi errore
+  // DB nell'applicazione del cambio → flash catch-all 'Errore verifica email'
+  // (i flash specifici sopra escono dal try legacy via redirect).
+  try {
+    const users = await tenantTable(tenantSlug, "users");
+    const userClauses = ["id = ?"];
+    const userParams: unknown[] = newEmail === normalizedCurrent
+      ? [userId]
+      : [newEmail, userId];
+    if (users.mode === "shared" && await columnExists(users.name, "tenant_id")) {
+      userClauses.push("tenant_id = ?");
+      userParams.push(users.tenantId ?? 0);
+    }
+    if (newEmail === normalizedCurrent) {
+      await dbExecute(`UPDATE \`${users.name}\` SET email_verified_at = ? WHERE ${userClauses.join(" AND ")}`, [verifiedAt, ...userParams]);
+    } else {
+      await dbExecute(`UPDATE \`${users.name}\` SET email = ?, email_verified_at = ? WHERE ${userClauses.join(" AND ")}`, [newEmail, verifiedAt, ...userParams.slice(1)]);
+      await syncStaffEmail(tenantSlug, normalizedCurrent, newEmail);
+    }
+    await deletePendingEmailVerification(tenantSlug, userId);
+  } catch {
+    throw new Error("Errore verifica email");
   }
-  await deletePendingEmailVerification(tenantSlug, userId);
   await invalidateManagePasswordResets(tenantSlug, userId);
   return { ok: true, email: newEmail, verifiedAt, message: "Email verificata" };
 }
@@ -504,10 +511,12 @@ async function rawPendingRow(slug: string, userId: number): Promise<RowDataPacke
     clauses.unshift("tenant_id = ?");
     params.unshift(table.tenantId ?? 0);
   }
+  // accessibility_get_pending: catch interno → null (il confirm mostra
+  // 'Nessuna richiesta di cambio email attiva' anche su errore DB, come il PHP).
   const rows = await dbQuery<RowDataPacket[]>(
     `SELECT id,new_email,code_hash,expires_at,created_at,attempt_count,last_attempt_at FROM \`${table.name}\` WHERE ${clauses.join(" AND ")} ORDER BY id DESC LIMIT 1`,
     params,
-  );
+  ).catch(() => [] as RowDataPacket[]);
   return rows[0] ?? null;
 }
 

@@ -239,6 +239,15 @@ export default async function TenantPage({
   const session = await currentManageSession(tenantSlug);
   if (!session) redirect(`/manage/login?slug=${encodeURIComponent(tenantSlug)}`);
 
+  // Gate verifica email (index.php 580-590): con needs_email_verification ogni
+  // pagina del gestionale tranne accessibility redirige alla verifica col
+  // flash legacy (login/logout, le altre pagine ammesse, sono route dedicate
+  // fuori da questo catch-all). Precede l'onboarding come nel legacy, che lo
+  // propone solo a email verificata.
+  if (session.user.needsEmailVerification && page !== "accessibility") {
+    redirect(`/${encodeURIComponent(tenantSlug)}/accessibility?err=${encodeURIComponent("Verifica email necessaria prima di continuare")}`);
+  }
+
   if (page === "onboarding") {
     if (session.user.role.toLowerCase() !== "admin") redirect(`/${tenantSlug}/dashboard`);
     return <ManageOnboardingApp tenantSlug={tenantSlug} />;
@@ -1021,9 +1030,11 @@ export default async function TenantPage({
 
   // Accessibilità (accessibility.php): flash ?msg/?err dai redirect legacy
   // (Codice inviato / Email verificata / Password aggiornata / errori).
+  // emailVerificationGate = chrome ridotto di View.php (nav/topbar nascoste)
+  // finché l'email non è verificata — unica pagina raggiungibile sotto gate.
   if (page === "accessibility") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page} emailVerificationGate={session.user.needsEmailVerification}>
         <AccessibilityContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
       </ManageShell>
     );

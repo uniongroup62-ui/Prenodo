@@ -18,6 +18,11 @@ export default async function TenantDashboardPage({
   const { tenantSlug } = await params;
   const session = await currentManageSession(tenantSlug);
   if (!session) redirect(`/manage/login?slug=${encodeURIComponent(tenantSlug)}`);
+  // Gate verifica email (index.php 580-590): stessa guardia del catch-all —
+  // questa route dedicata lo scavalca, quindi il redirect va ripetuto qui.
+  if (session.user.needsEmailVerification) {
+    redirect(`/${encodeURIComponent(tenantSlug)}/accessibility?err=${encodeURIComponent("Verifica email necessaria prima di continuare")}`);
+  }
   if (await shouldPromptOnboarding(tenantSlug, session.user.role.toLowerCase() === "admin")) {
     redirect(`/${encodeURIComponent(tenantSlug)}/onboarding`);
   }

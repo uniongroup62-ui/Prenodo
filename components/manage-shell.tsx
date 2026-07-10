@@ -179,11 +179,16 @@ export function ManageShell({
   slug,
   userName,
   currentPage = "dashboard",
+  emailVerificationGate = false,
   children,
 }: {
   slug: string;
   userName: string;
   currentPage?: string;
+  // Gate verifica email (View.php $emailVerificationGate): chrome ridotto —
+  // niente nav/topbar/banner, brand che punta ad Accessibilita — finché
+  // l'email di accesso non è verificata (index.php 580-590 redirige qui).
+  emailVerificationGate?: boolean;
   children: React.ReactNode;
 }) {
   // Port of the app.js sidebar behaviors: desktop collapse (persisted in
@@ -196,7 +201,9 @@ export function ManageShell({
     } catch {
       collapsed = false;
     }
-    document.body.className = collapsed ? "sidebar-collapsed" : "";
+    document.body.className = [collapsed ? "sidebar-collapsed" : "", emailVerificationGate ? "email-verification-gate" : ""]
+      .filter(Boolean)
+      .join(" ");
     document.documentElement.classList.remove("sidebar-collapsed-initial");
 
     const desktopToggle = document.getElementById("sidebarDesktopToggle");
@@ -228,7 +235,7 @@ export function ManageShell({
       backdrop?.removeEventListener("click", closeSidebar);
       document.body.className = previous;
     };
-  }, []);
+  }, [emailVerificationGate]);
 
   const basePage = currentPage.split("&")[0];
 
@@ -424,8 +431,10 @@ export function ManageShell({
   // utente multi-sede senza sede corrente (o senza sedi assegnate) vede il
   // chooser a schermo intero PRIMA del gestionale, come il blocco globale di
   // index.php 606-638. La scelta passa da switchLocation (equivalente del
-  // legacy ?set_location_id=).
-  if (shellContextLoaded && needsLocationSelection) {
+  // legacy ?set_location_id=). Accessibilita è ESCLUSA dal gate sede
+  // (index.php 610 la elenca tra le pagine esenti): credenziali gestibili
+  // anche senza sede selezionata.
+  if (shellContextLoaded && needsLocationSelection && basePage !== "accessibility") {
     return (
       <>
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" precedence="bs" />
@@ -473,11 +482,33 @@ export function ManageShell({
       <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" async />
       <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" async />
 
+      {/* CSS del gate verifica email — blocco <style> verbatim di View.php 421-440. */}
+      {emailVerificationGate ? (
+        <style>{`
+    body.email-verification-gate .app-sidebar .sidebar-toggle{display:none!important;}
+    body.email-verification-gate .app-main{min-height:100vh;min-height:100dvh;}
+    @media (max-width: 992px){
+      body.email-verification-gate .app-shell{display:block;}
+      body.email-verification-gate .app-sidebar{
+        position:static;
+        left:auto;
+        width:100%;
+        height:auto;
+        min-height:0;
+        border-right:0;
+        border-bottom:1px solid var(--border);
+        box-shadow:none;
+      }
+      body.email-verification-gate .app-content{padding:16px;}
+    }
+        `}</style>
+      ) : null}
+
       <div id="sidebarBackdrop" className="app-backdrop" />
       <div className="app-shell">
         <aside className="app-sidebar" id="sidebar">
           <div className="d-flex align-items-center justify-content-between">
-            <a className="brand" href={pageHref(slug, "dashboard")}>
+            <a className="brand" href={pageHref(slug, emailVerificationGate ? "accessibility" : "dashboard")}>
               <span className="mark">B</span>
               <span className="name">BeautySuite</span>
             </a>
@@ -489,7 +520,7 @@ export function ManageShell({
             </button>
           </div>
 
-          {RENDERED_MENU.map((group, gi) => (
+          {emailVerificationGate ? null : RENDERED_MENU.map((group, gi) => (
             <div className="nav-section" key={gi}>
               {group.label ? <div className="nav-label">{group.label}</div> : null}
               {group.entries.map((entry) => {
@@ -566,6 +597,8 @@ export function ManageShell({
         </aside>
 
         <div className="app-main">
+          {/* Topbar nascosta sotto gate verifica email (View.php 761). */}
+          {emailVerificationGate ? null : (
           <header className="topbar">
             <button className="icon-btn d-lg-none" id="sidebarOpen" type="button" aria-label="Menu">
               <i className="bi bi-list" />
@@ -666,10 +699,12 @@ export function ManageShell({
               </div>
             </div>
           </header>
+          )}
 
           {/* SUPPORT ACCESS sticky alert (verbatim port of View.php) — shown when
-              an operator is acting through a support session. */}
-          {supportAccess ? (
+              an operator is acting through a support session (nascosto sotto
+              gate verifica email, View.php 853). */}
+          {!emailVerificationGate && supportAccess ? (
             <div className="alert alert-info border-0 rounded-0 mb-0 py-2" style={{ position: "sticky", top: 64, zIndex: 1021 }}>
               <div className="container-fluid">
                 <div className="d-flex align-items-center gap-2">
@@ -689,8 +724,9 @@ export function ManageShell({
           ) : null}
 
           {/* STORE CLOSURE sticky alert (verbatim port of View.php) — nearest
-              upcoming closure window; offset by 40px when support alert is shown. */}
-          {closureRange ? (
+              upcoming closure window; offset by 40px when support alert is shown
+              (nascosto sotto gate verifica email, View.php 876). */}
+          {!emailVerificationGate && closureRange ? (
             <div
               className="alert alert-warning border-0 rounded-0 mb-0 py-2"
               style={{ position: "sticky", top: supportAccess ? 104 : 64, zIndex: 1020 }}

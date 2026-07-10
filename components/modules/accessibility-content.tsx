@@ -132,7 +132,7 @@ export function AccessibilityContent({
     if (next && typeof window !== "undefined") window.scrollTo({ top: 0 });
   }, []);
 
-  async function postAction(payload: Record<string, unknown>): Promise<void> {
+  async function postAction(payload: Record<string, unknown>, opts?: { navigateOnSuccess?: boolean }): Promise<void> {
     setFeedback(null);
     try {
       const res = await fetch(`/api/manage/accessibility?slug=${encodeURIComponent(slug)}`, {
@@ -143,6 +143,13 @@ export function AccessibilityContent({
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j?.ok === false) {
         showFlash({ type: "danger", text: String(j?.error ?? j?.message ?? "Errore accessibilita.") });
+        return;
+      }
+      // Conferma email: il legacy redirige a ?msg=Email verificata — la
+      // navigazione piena rilegge il cookie aggiornato e toglie il gate
+      // verifica email dal chrome (nav/topbar riappaiono).
+      if (opts?.navigateOnSuccess) {
+        window.location.assign(`/${encodeURIComponent(slug)}/accessibility?msg=${encodeURIComponent(String(j?.message ?? "Operazione completata."))}`);
         return;
       }
       showFlash({ type: "success", text: String(j?.message ?? "Operazione completata.") });
@@ -280,7 +287,7 @@ export function AccessibilityContent({
                     className="mt-2"
                     onSubmit={(e) => {
                       e.preventDefault();
-                      postAction({ action: "confirm_email_change", code });
+                      postAction({ action: "confirm_email_change", code }, { navigateOnSuccess: true });
                     }}
                   >
                     <input type="hidden" name="action" value="confirm_email_change" />

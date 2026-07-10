@@ -70,6 +70,12 @@ export default async function TenantBookingPage({
   if (!isPublicRequest) {
     const session = await currentManageSession(tenantSlug);
     if (session) {
+      // Gate verifica email (index.php 580-590): vale anche per l'admin
+      // booking (le richieste PUBBLICHE del wizard restano esenti, come
+      // $isPublicBooking nel legacy).
+      if (session.user.needsEmailVerification) {
+        redirect(`/${encodeURIComponent(tenantSlug)}/accessibility?err=${encodeURIComponent("Verifica email necessaria prima di continuare")}`);
+      }
       return (
         <ManageShell slug={tenantSlug} userName={session.user.name} currentPage="booking">
           <BookingSettingsContent slug={tenantSlug} initialQuery={{ msg: qs("msg") || undefined }} />
