@@ -1,7 +1,7 @@
 import "server-only";
 
 import type { RowDataPacket } from "@/lib/tenant-db";
-import { dbQuery, tenantIdForSlug, tenantSelect } from "@/lib/tenant-db";
+import { dbQuery, tenantIdForSlug } from "@/lib/tenant-db";
 import { fidelityAddCardDurationYmd, fidelityCardExpiryNotificationConfig } from "@/lib/db-repositories";
 import { can } from "@/lib/role-permissions";
 import {
@@ -199,6 +199,11 @@ export type InstallmentGroup = {
   linkLabel: string;
   lines: string[];
   linesMore: number;
+  // Campi della card legacy (notifications_installments.php 95-138).
+  count: number;
+  badgeClass: string;
+  dateLabel: string;
+  previewRows: Array<{ clientName: string; installmentNo: number; dueLabel: string; amount: number }>;
 };
 
 function dueAlertTitle(daysDiff: number): string {
@@ -244,6 +249,7 @@ async function getInstallmentDueAlertGroups(
   slug: string,
   tenantId: number | null,
   currentLocationId: number,
+  previewLimitOverride?: number,
 ): Promise<InstallmentGroup[]> {
   try {
     if (
@@ -253,7 +259,8 @@ async function getInstallmentDueAlertGroups(
       return [];
     }
     const daysAhead = Math.max(0, await automationAlertDays(slug, "installment_alert_days"));
-    const previewLimit = 3;
+    // Dashboard: 3 (dashboard.php); pagina notifiche rate: 25 (notifications_installments.php:38).
+    const previewLimit = Math.max(1, previewLimitOverride ?? 3);
     const filterByLocation = currentLocationId > 0 && (await tenantColumnExists(slug, "sales", "location_id"));
 
     const today = startOfToday();
@@ -314,12 +321,16 @@ async function getInstallmentDueAlertGroups(
 
     return ordered.map((bucket) => {
       const linesMore = Math.max(0, bucket.count - bucket.previewRows.length);
+      // date_label legacy: overdue = min(due_date) 'Scadute dal d/m/Y',
+      // altrimenti 'Scadenza d/m/Y' del giorno del bucket.
+      const dueDates = bucket.previewRows.map((r) => normalizeYmd(String(r.due_date ?? "")) ?? "").filter(Boolean).sort();
+      const firstDue = dueDates[0] ?? "";
+      const fmtDm = (isoDate: string) => (isoDate ? isoDate.split("-").reverse().join("/") : "");
       let link: string;
       if (bucket.daysDiff < 0) {
         link = `/${slug}/installments_manage?status=overdue`;
       } else {
-        const dueDate = normalizeYmd(String(bucket.previewRows[0]?.due_date ?? "")) ?? "";
-        const enc = encodeURIComponent(dueDate);
+        const enc = encodeURIComponent(firstDue);
         link = `/${slug}/installments_manage?status=open&due_from=${enc}&due_to=${enc}`;
       }
       if (filterByLocation) link += `&location_id=${currentLocationId}`;
@@ -333,6 +344,15 @@ async function getInstallmentDueAlertGroups(
         linkLabel: "Apri Gestione Rate",
         lines: bucket.previewRows.map(formatInstallmentLine),
         linesMore,
+        count: bucket.count,
+        badgeClass: bucket.daysDiff < 0 ? "text-bg-danger" : bucket.daysDiff <= 1 ? "text-bg-warning" : "text-bg-info",
+        dateLabel: firstDue ? (bucket.daysDiff < 0 ? `Scadute dal ${fmtDm(firstDue)}` : `Scadenza ${fmtDm(firstDue)}`) : "—",
+        previewRows: bucket.previewRows.map((r) => ({
+          clientName: String(r.client_name ?? "").trim() || "Cliente",
+          installmentNo: Math.max(1, Number(r.installment_no ?? 0)),
+          dueLabel: fmtDm(normalizeYmd(String(r.due_date ?? "")) ?? "") || "-",
+          amount: Number(r.amount ?? 0),
+        })),
       };
     });
   } catch {
@@ -356,6 +376,11 @@ export type FidelityGroup = {
   link: string;
   lines: string[];
   linesMore: number;
+  // Campi della card legacy (notifications.php 604-649).
+  count: number;
+  badgeClass: string;
+  dateLabel: string;
+  previewRows: Array<{ clientName: string; cardCode: string; expiresLabel: string; statusLabel: string; clientEmail: string }>;
 };
 
 type FidelityConfig = { mode: "disabled" | "reminder" | "renewal"; value: number; unit: "days" | "months" | "years" };
@@ -395,7 +420,8 @@ async function getFidelityCardAlertGroups(slug: string, tenantId: number | null,
     const extraSelect = `${hasStatus ? ", fc.status" : ""}${hasIsActive ? ", fc.is_active" : ""}`;
     const rows = await dbQuery<RowDataPacket[]>(
       `SELECT fc.id, fc.code, fc.client_id, fc.${expiryCol} AS expires_at${extraSelect},
-              c.full_name AS client_name
+              c.full_name AS client_name,
+              COALESCE(NULLIF(TRIM(c.email), ''), '') AS client_email
          FROM cards fc
          JOIN clients c ON c.id=fc.client_id
         WHERE fc.${expiryCol} IS NOT NULL${tenantFc}
@@ -405,7 +431,7 @@ async function getFidelityCardAlertGroups(slug: string, tenantId: number | null,
 
     const today = ymd(startOfToday());
 
-    type Item = { clientName: string; expiresAt: string; expiresLabel: string; statusLabel: string };
+    type Item = { clientName: string; cardCode: string; clientEmail: string; expiresAt: string; expiresLabel: string; statusLabel: string };
     const expiredRows: Item[] = [];
     const dueBuckets = new Map<number, Item[]>();
 
@@ -431,6 +457,8 @@ async function getFidelityCardAlertGroups(slug: string, tenantId: number | null,
       const isRenewal = cfg.mode === "renewal" && cfg.value > 0;
       const item: Item = {
         clientName: String(row.client_name ?? "").trim() || "Cliente",
+        cardCode: String(row.code ?? ""),
+        clientEmail: String(row.client_email ?? ""),
         expiresAt,
         expiresLabel: formatYmdLabel(expiresAt),
         statusLabel: isExpired ? "Scaduta" : isRenewal ? "In finestra rinnovo" : days === 0 ? "Scade oggi" : "In scadenza",
@@ -465,6 +493,14 @@ async function getFidelityCardAlertGroups(slug: string, tenantId: number | null,
       return line;
     };
 
+    const previewOf = (items: Item[]) => items.slice(0, previewLimit).map((it) => ({
+      clientName: it.clientName,
+      cardCode: it.cardCode,
+      expiresLabel: it.expiresLabel,
+      statusLabel: it.statusLabel,
+      clientEmail: it.clientEmail,
+    }));
+
     if (expiredRows.length > 0) {
       expiredRows.sort((a, b) => a.expiresAt.localeCompare(b.expiresAt));
       const count = expiredRows.length;
@@ -477,6 +513,10 @@ async function getFidelityCardAlertGroups(slug: string, tenantId: number | null,
         link: `/${slug}/fidelity_membership`,
         lines: expiredRows.slice(0, previewLimit).map(lineFor),
         linesMore: Math.max(0, count - previewLimit),
+        count,
+        badgeClass: "text-bg-danger",
+        dateLabel: expiredRows[0] ? `Scadute dal ${expiredRows[0].expiresLabel}` : "",
+        previewRows: previewOf(expiredRows),
       });
     }
 
@@ -508,6 +548,10 @@ async function getFidelityCardAlertGroups(slug: string, tenantId: number | null,
         link: `/${slug}/fidelity_membership`,
         lines: items.slice(0, previewLimit).map(lineFor),
         linesMore: Math.max(0, count - previewLimit),
+        count,
+        badgeClass: kind === "warning" ? "text-bg-warning" : "text-bg-info",
+        dateLabel: items[0] ? `Scadenza ${items[0].expiresLabel}` : "",
+        previewRows: previewOf(items),
       });
     }
 
@@ -518,6 +562,87 @@ async function getFidelityCardAlertGroups(slug: string, tenantId: number | null,
 }
 
 // ---------------------------------------------------------------------------
+// Port di client_birthday_notification_rows (Helpers.php 7550-7601): clienti con
+// data di nascita valida, ESCLUSI i clienti-sconosciuto auto-creati e i BLOCCATI;
+// prossima occorrenza con fallback 29/02→28/02, età, sede; ordina per giorni poi
+// nome (case-insensitive), limite 200 (notifications_birthdays.php:37).
+export type BirthdayRow = {
+  id: number;
+  fullName: string;
+  phone: string;
+  email: string;
+  birthdayNextDate: string;
+  birthdayDays: number;
+  birthdayAge: number;
+  locationName: string;
+};
+
+export async function listBirthdayNotificationRows(slug: string, daysAhead: number, limit = 200): Promise<BirthdayRow[]> {
+  const days = Math.max(0, Math.min(365, Math.trunc(daysAhead)));
+  try {
+    const tenantId = await tenantIdForSlug(slug).catch(() => null);
+    const tenantC = tenantId !== null ? " AND c.tenant_id=?" : "";
+    const params: unknown[] = [];
+    if (tenantId !== null) params.push(tenantId);
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT c.id, c.full_name, c.phone, c.email, c.birth_date, c.location_id, l.name AS location_name
+         FROM clients c
+         LEFT JOIN locations l ON l.id=c.location_id${tenantId !== null ? " AND l.tenant_id=c.tenant_id" : ""}
+        WHERE c.birth_date IS NOT NULL${tenantC}
+          AND NOT (LOWER(TRIM(COALESCE(c.full_name,'')))='sconosciuto' AND LOWER(TRIM(COALESCE(c.notes,''))) LIKE 'creato automaticamente (vendite giftbox/giftcard senza cliente).%')
+          AND COALESCE(c.is_blocked,0)=0
+        ORDER BY c.full_name ASC, c.id ASC`,
+      params,
+    );
+
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const pad = (n: number) => String(n).padStart(2, "0");
+    // client_birthday_next_occurrence: 29/02 in anno non bisestile → 28/02.
+    const make = (year: number, month: number, day: number): Date | null => {
+      const d = new Date(year, month - 1, day);
+      if (d.getFullYear() === year && d.getMonth() === month - 1 && d.getDate() === day) return d;
+      if (month === 2 && day === 29) return new Date(year, 1, 28);
+      return null;
+    };
+
+    const out: BirthdayRow[] = [];
+    for (const row of rows) {
+      const birth = row.birth_date instanceof Date
+        ? row.birth_date
+        : (() => { const m = String(row.birth_date ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null; })();
+      if (!birth || Number.isNaN(birth.getTime())) continue;
+      const month = birth.getMonth() + 1;
+      const day = birth.getDate();
+      let year = today.getFullYear();
+      let next = make(year, month, day);
+      if (!next) continue;
+      if (next.getTime() < today.getTime()) {
+        year += 1;
+        next = make(year, month, day);
+        if (!next) continue;
+      }
+      const diffDaysCount = Math.round((next.getTime() - today.getTime()) / 86400000);
+      if (diffDaysCount > days) continue;
+      out.push({
+        id: Number(row.id ?? 0),
+        fullName: String(row.full_name ?? "").trim(),
+        phone: String(row.phone ?? ""),
+        email: String(row.email ?? ""),
+        birthdayNextDate: `${next.getFullYear()}-${pad(next.getMonth() + 1)}-${pad(next.getDate())}`,
+        birthdayDays: diffDaysCount,
+        birthdayAge: Math.max(0, year - birth.getFullYear()),
+        locationName: String(row.location_name ?? "").trim(),
+      });
+    }
+
+    out.sort((a, b) => a.birthdayDays - b.birthdayDays || a.fullName.toLowerCase().localeCompare(b.fullName.toLowerCase()));
+    return limit > 0 ? out.slice(0, limit) : out;
+  } catch {
+    return [];
+  }
+}
+
 // Gruppi "Tessere Fidelity in scadenza/scadute" per la pagina notifiche (riusa il
 // port dashboard): risolve il tenant e delega a getFidelityCardAlertGroups.
 export async function notificationFidelityCardGroups(slug: string): Promise<FidelityGroup[]> {
@@ -526,10 +651,11 @@ export async function notificationFidelityCardGroups(slug: string): Promise<Fide
   return getFidelityCardAlertGroups(slug, tenantId, 5).catch(() => []);
 }
 
-// Gruppi "Rate in scadenza/scadute" per il feed notifiche browser.
-export async function notificationInstallmentGroups(slug: string, currentLocationId: number): Promise<InstallmentGroup[]> {
+// Gruppi "Rate in scadenza/scadute" per il feed notifiche browser (preview 3)
+// e per la pagina notifiche rate (preview 25, notifications_installments.php:38).
+export async function notificationInstallmentGroups(slug: string, currentLocationId: number, previewLimit = 3): Promise<InstallmentGroup[]> {
   const tenantId = await tenantIdForSlug(slug).catch(() => null);
-  return getInstallmentDueAlertGroups(slug, tenantId, currentLocationId).catch(() => []);
+  return getInstallmentDueAlertGroups(slug, tenantId, currentLocationId, previewLimit).catch(() => []);
 }
 
 // Top-level builder — assembles the 6 alert types in legacy order, honouring

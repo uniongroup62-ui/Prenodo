@@ -2,18 +2,19 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-// Faithful port of the PHP quote-notifications page (index.php?page=notifications_quotes,
-// title "Preventivi"). The legacy page lists quotes that were accepted or rejected from
-// the booking client area for the current location. There is no dedicated quote-response
-// API, so responses are derived from the DB-backed /api/manage/quotes feed (status
-// accepted/rejected). When none are present the page shows the verbatim empty state, which
-// matches the live PHP capture for this tenant.
+// Port fedele di app/pages/notifications_quotes.php ("Preventivi"): risposte
+// cliente NON lette (status accettato/rifiutato + customer_decision_at
+// valorizzato + seen NULL, ordinate per decisione desc, LIMIT 100) con la card
+// legacy (Preventivo #numero + badge, Cliente - email, 'Risposta inviata il:',
+// Totale preventivo, azioni Apri preventivo / Segna come letto), 'Segna tutti
+// come letti' col confirm di notifications_quotes.js e i flash legacy.
 
 type Quote = {
   id: number;
   code: string;
   clientId: number;
   clientName: string;
+  clientEmail?: string;
   total: number;
   status: string;
   acceptedAt?: string;
@@ -22,43 +23,42 @@ type Quote = {
   createdAt?: string;
 };
 
-type LocationRow = {
-  id: number;
-  name?: string;
-};
-
 function tenantSlug(): string {
   if (typeof window === "undefined") return "";
   return window.location.pathname.split("/")[1] || "";
 }
 
 function fmtDateTime(iso?: string): string {
-  if (!iso) return "—";
+  if (!iso) return "";
   const ms = Date.parse(iso);
-  if (!Number.isFinite(ms)) return iso;
+  if (!Number.isFinite(ms)) return "";
   const d = new Date(ms);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function fmtEuro(n: number): string {
-  return `€ ${Number(n || 0).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+// fmt_money legacy (1.234,56).
+function fmtMoney(value: number): string {
+  const fixed = Math.abs(Number(value) || 0).toFixed(2);
+  const [i, d] = fixed.split(".");
+  return `${Number(value) < 0 ? "-" : ""}${i.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${d}`;
 }
 
-// Accepted / rejected responses from the booking client area.
-const ACCEPTED = new Set(["accepted", "paid", "converted"]);
-const REJECTED = new Set(["rejected", "canceled"]);
+// Euristica alert legacy (notifications_quotes.php 100-109).
+function alertTypeFor(msg: string): "success" | "warning" {
+  const low = msg.toLowerCase();
+  return ["non autorizzata", "non valida", "errore", "impossibile", "non disponibile", "non trovato"].some((n) => low.includes(n)) ? "warning" : "success";
+}
 
 export function NotificationsQuotesContent({ slug: slugProp }: { slug?: string } = {}) {
-  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
-  // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [locationName, setLocationName] = useState<string>("");
   const [loading, setLoading] = useState(true);
+  const [flash, setFlash] = useState("");
 
   useEffect(() => {
-    setLoading(true);
+    // `loading` parte true e si azzera nel .finally.
     fetch(`/api/manage/quotes?slug=${encodeURIComponent(slug)}`, {
       headers: { "x-tenant-slug": slug },
     })
@@ -72,30 +72,27 @@ export function NotificationsQuotesContent({ slug: slugProp }: { slug?: string }
     })
       .then((r) => r.json())
       .then((j) => {
-        const list: LocationRow[] = Array.isArray(j.locations) ? j.locations : [];
+        const list: Array<{ id: number; name?: string }> = Array.isArray(j.locations) ? j.locations : [];
         const current = list.find((l) => Number(l.id) === Number(j.currentLocationId));
         setLocationName(String(current?.name ?? list[0]?.name ?? ""));
       })
       .catch(() => {});
   }, [slug]);
 
-  // Responses = decisioni cliente NON ancora lette (come il legacy:
-  // customer_decision_at valorizzato e customer_decision_seen_at NULL),
-  // piu' recenti in alto.
+  // SOLO status accepted/rejected (il legacy filtra sui valori esatti: un
+  // preventivo convertito/pagato non è più una risposta) + decisione non letta.
   const responses = useMemo(() => {
     return quotes
-      .filter((q) => (ACCEPTED.has(q.status) || REJECTED.has(q.status)) && q.customerDecisionAt && !q.customerDecisionSeenAt)
-      .map((q) => ({
-        ...q,
-        accepted: ACCEPTED.has(q.status),
-        when: q.customerDecisionAt ?? q.acceptedAt ?? q.createdAt,
-      }))
-      .sort((a, b) => String(b.when ?? "").localeCompare(String(a.when ?? "")));
+      .filter((q) => (q.status === "accepted" || q.status === "rejected") && q.customerDecisionAt && !q.customerDecisionSeenAt)
+      .sort((a, b) => String(b.customerDecisionAt ?? "").localeCompare(String(a.customerDecisionAt ?? "")) || b.id - a.id);
   }, [quotes]);
+  // LIMIT 100 legacy con totale separato.
+  const visible = responses.slice(0, 100);
 
-  // "Segna come letto" / "Segna tutti come letti" (port di
-  // notifications_quotes.php action=seen / seen_all).
+  // Port di action=seen / seen_all coi flash legacy; seen_all chiede conferma
+  // come notifications_quotes.js (data-notifications-quotes-confirm).
   const markSeen = async (id: number | null) => {
+    if (id === null && typeof window !== "undefined" && !window.confirm("Segnare tutti i preventivi come letti?")) return;
     try {
       const response = await fetch(`/api/manage/quotes?slug=${encodeURIComponent(slug)}`, {
         method: "POST",
@@ -103,21 +100,30 @@ export function NotificationsQuotesContent({ slug: slugProp }: { slug?: string }
         body: JSON.stringify(id ? { action: "seen", id: String(id) } : { action: "seen_all" }),
       });
       const json = await response.json().catch(() => ({}));
-      if (json.ok && Array.isArray(json.quotes)) setQuotes(json.quotes);
+      if (json.ok) {
+        if (Array.isArray(json.quotes)) setQuotes(json.quotes);
+        setFlash(String(json.message || (id ? "Preventivo segnato come letto" : "Preventivi segnati come letti")));
+      } else {
+        setFlash(String(json.error || "Operazione non valida"));
+      }
     } catch {
-      // best-effort
+      setFlash("Operazione non valida");
     }
+    if (typeof window !== "undefined") window.scrollTo({ top: 0 });
   };
 
   const subtitleLocation = locationName ? ` Sede: ${locationName}.` : "";
 
-  function href(suffix: string): string {
-    return `/${encodeURIComponent(slug)}/${`notifications_quotes${suffix}`.replace("&", "?")}`;
-  }
-
   return (
     <div className="container-fluid">
       <link rel="stylesheet" href="/assets/css/pages/notifications_cards.css" />
+
+      {flash ? (
+        <div className={`alert alert-${alertTypeFor(flash)} alert-dismissible`} role="alert">
+          {flash}
+          <button type="button" className="btn-close" aria-label="Chiudi" onClick={() => setFlash("")} />
+        </div>
+      ) : null}
 
       <div className="bs-page-header">
         <div className="bs-page-heading">
@@ -127,7 +133,7 @@ export function NotificationsQuotesContent({ slug: slugProp }: { slug?: string }
             Accettati o rifiutati dall&#039;area clienti del booking.{subtitleLocation}
           </div>
         </div>
-        {responses.length > 0 ? (
+        {visible.length > 0 ? (
           <div className="bs-page-actions">
             <button className="btn btn-outline-secondary btn-sm" type="button" onClick={() => markSeen(null)}>
               <i className="bi bi-check2-all me-1" />
@@ -137,7 +143,7 @@ export function NotificationsQuotesContent({ slug: slugProp }: { slug?: string }
         ) : null}
       </div>
 
-      {responses.length === 0 ? (
+      {visible.length === 0 ? (
         <div className="card p-4">
           <div className="fw-semibold">{loading ? "Caricamento…" : "Nessuna risposta sui preventivi."}</div>
           <div className="text-muted small mt-1">
@@ -145,52 +151,55 @@ export function NotificationsQuotesContent({ slug: slugProp }: { slug?: string }
           </div>
         </div>
       ) : (
-        <div className="d-flex flex-column gap-3">
-          {responses.map((r) => (
-            <div className="card notification-card" key={r.id}>
-              <div className="d-flex flex-wrap">
-                <div
-                  className={`notification-main p-3 flex-grow-1 ${
-                    r.accepted ? "notification-main--success" : "notification-main--danger"
-                  }`}
-                >
-                  <div className="d-flex align-items-center gap-2">
-                    <i className={`bi ${r.accepted ? "bi-check-circle" : "bi-x-circle"}`} aria-hidden="true" />
-                    <span className="fw-semibold">
-                      {r.accepted ? "Preventivo accettato" : "Preventivo rifiutato"}
-                    </span>
-                    <span className={`badge ${r.accepted ? "text-bg-success" : "text-bg-danger"}`}>
-                      {r.accepted ? "Accettato" : "Rifiutato"}
-                    </span>
+        <>
+          {visible.map((q) => {
+            const isAcc = q.status === "accepted";
+            const decLabel = fmtDateTime(q.customerDecisionAt);
+            return (
+              <div className="card mb-3 notification-card" key={q.id}>
+                <div className="d-flex flex-wrap">
+                  <div className={`p-3 flex-grow-1 notification-main ${isAcc ? "notification-main--success" : "notification-main--danger"}`}>
+                    <div className="d-flex align-items-center justify-content-between gap-2">
+                      <div className="fw-bold fs-5 mb-1">Preventivo #{q.code}</div>
+                      <span className={`badge ${isAcc ? "bg-success" : "bg-danger"}`}>{isAcc ? "Accettato" : "Rifiutato"}</span>
+                    </div>
+
+                    <div className="text-muted small">
+                      Cliente: <strong>{q.clientName || "-"}</strong>
+                      {q.clientEmail ? <> - {q.clientEmail}</> : null}
+                    </div>
+
+                    {decLabel ? (
+                      <div className="text-muted small mt-1">Risposta inviata il: <strong>{decLabel}</strong></div>
+                    ) : null}
+
+                    <div className="mt-3">
+                      <div className="text-muted small">Totale preventivo</div>
+                      <div className="fw-bold">€ {fmtMoney(q.total)}</div>
+                    </div>
                   </div>
-                  <div className="text-muted small mt-1">{fmtDateTime(r.when)}</div>
-                </div>
-                <div className="notification-detail p-3">
-                  <div className="text-muted small">Cliente</div>
-                  <div className="fw-semibold">{r.clientName || "—"}</div>
-                  <div className="text-muted small mt-2">Preventivo</div>
-                  <div className="fw-semibold">{r.code || "—"}</div>
-                  <div className="text-muted small mt-2">Totale</div>
-                  <div className="fw-semibold">{fmtEuro(r.total)}</div>
-                </div>
-                <div className="notification-action p-3 d-flex align-items-center gap-2">
-                  <a
-                    className="btn btn-sm btn-outline-secondary"
-                    href={`/${encodeURIComponent(slug)}/quotes?action=view&id=${r.id}`}
-                  >
-                    Apri preventivo
-                  </a>
-                  <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => markSeen(r.id)}>
-                    Segna come letto
-                  </button>
+
+                  <div className="p-3 notification-action">
+                    <div className="d-grid gap-2">
+                      <a className="btn btn-outline-primary btn-sm" href={`/${encodeURIComponent(slug)}/quotes?action=view&id=${q.id}`}>
+                        <i className="bi bi-box-arrow-up-right me-1" />
+                        Apri preventivo
+                      </a>
+                      <button className="btn btn-outline-secondary btn-sm w-100" type="button" onClick={() => markSeen(q.id)}>
+                        <i className="bi bi-check2 me-1" />
+                        Segna come letto
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
-          <div className="d-none">
-            <a href={href("")}>notifications_quotes</a>
+            );
+          })}
+
+          <div className="text-muted small mt-2">
+            Mostrando preventivi da 1 a {visible.length} di {responses.length} totali
           </div>
-        </div>
+        </>
       )}
     </div>
   );

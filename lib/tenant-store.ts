@@ -318,6 +318,8 @@ export type Quote = {
   code: string;
   clientId: number;
   clientName: string;
+  // Email cliente per la card notifiche (COALESCE(q.client_email, c.email) legacy).
+  clientEmail?: string;
   lines: QuoteLine[];
   subtotal: number;
   discount: number;

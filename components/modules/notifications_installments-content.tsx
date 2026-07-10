@@ -1,51 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-// Faithful port of the PHP installment-notifications page
-// (?page=notifications_installments, "Rate in scadenza / scadute").
-// The page lists installments already overdue plus those due within the next N
-// days (default 7, configurable via the "Impostazioni avviso rate" modal), and
-// links to "Gestione Rate". It is fed by the existing DB-backed
-// /api/manage/installments route, whose installment plans we flatten and filter.
+// Port fedele di app/pages/notifications_installments.php ("Rate in scadenza /
+// scadute"): card per GRUPPO (titolo + badge conteggio + testo + date_label +
+// Anteprima fino a 25 righe 'Rata N - d/m/Y - € X' + '...e altre N' + link
+// 'Apri in Gestione Rate' coi filtri status/due) via
+// /api/manage/notifications?action=installment_groups, finestra configurabile
+// dal modale "Impostazioni avviso rate" (automation_settings.installment_alert
+// _days) e flash legacy sopra l'header.
 
-const DEFAULT_ALERT_DAYS = 7;
-
-type ApiInstallment = {
-  id: number;
-  dueDate: string;
-  amount: number;
-  status: string;
-  paidAt?: string;
-};
-
-type ApiInstallmentPlan = {
-  id: number;
-  saleId: number;
-  clientId: number;
-  clientName: string;
-  total: number;
-  paid: number;
-  status: string;
-  installments: ApiInstallment[];
-  createdAt: string;
-};
-
-type DueRow = {
+type PreviewRow = { clientName: string; installmentNo: number; dueLabel: string; amount: number };
+type Group = {
   key: string;
-  planId: number;
-  installmentId: number;
-  clientName: string;
-  amount: number;
-  dueDate: string;
-  overdue: boolean;
-};
-
-type DueGroup = {
-  key: string;
-  title: string;
   kind: "danger" | "warning" | "info";
-  rows: DueRow[];
+  title: string;
+  text: string;
+  link: string;
+  count: number;
+  badgeClass: string;
+  dateLabel: string;
+  previewRows: PreviewRow[];
+  linesMore: number;
 };
 
 function tenantSlug(): string {
@@ -53,7 +29,6 @@ function tenantSlug(): string {
   return window.location.pathname.split("/")[1] || "";
 }
 
-// Hide the Bootstrap settings modal after a successful save (bootstrap 5 global, loaded by the shell).
 function closeInstallmentSettingsModal(): void {
   if (typeof window === "undefined") return;
   const el = document.getElementById("installmentNotificationSettingsModal");
@@ -61,51 +36,51 @@ function closeInstallmentSettingsModal(): void {
   if (el && bs?.Modal) bs.Modal.getOrCreateInstance(el).hide();
 }
 
-function startOfDay(d: Date): number {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+// fmt_money legacy (1.234,56).
+function fmtMoney(value: number): string {
+  const fixed = Math.abs(Number(value) || 0).toFixed(2);
+  const [i, d] = fixed.split(".");
+  return `${Number(value) < 0 ? "-" : ""}${i.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${d}`;
 }
 
-function fmtDate(iso?: string): string {
-  if (!iso) return "—";
-  const ms = Date.parse(iso);
-  if (!Number.isFinite(ms)) return iso.slice(0, 10) || "—";
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
-}
-
-function fmtEur(value: number): string {
-  return new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" }).format(
-    Number.isFinite(value) ? value : 0,
-  );
+// Euristica alert legacy (notifications_installments.php 45-54).
+function alertTypeFor(msg: string): "success" | "warning" {
+  const low = msg.toLowerCase();
+  return ["non autorizzata", "non valida", "errore", "impossibile", "non disponibile"].some((n) => low.includes(n)) ? "warning" : "success";
 }
 
 export function NotificationsInstallmentsContent({ slug: slugProp }: { slug?: string } = {}) {
-  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
-  // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
-  const [plans, setPlans] = useState<ApiInstallmentPlan[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [canSee, setCanSee] = useState(true);
+  const [schemaOk, setSchemaOk] = useState(true);
+  const [locationLabel, setLocationLabel] = useState("");
   const [loading, setLoading] = useState(true);
-  // The alert window is PERSISTED (automation_settings.installment_alert_days) — seeded from the API
-  // response on load, saved back via POST action=save_alert_days from the settings modal.
-  const [alertDays, setAlertDays] = useState(DEFAULT_ALERT_DAYS);
-  const [alertDaysInput, setAlertDaysInput] = useState(String(DEFAULT_ALERT_DAYS));
+  const [alertDays, setAlertDays] = useState(7);
+  const [alertDaysInput, setAlertDaysInput] = useState("7");
   const [savingSettings, setSavingSettings] = useState(false);
+  const [flash, setFlash] = useState("");
 
   const load = useCallback(() => {
-    setLoading(true);
-    fetch(`/api/manage/installments?slug=${encodeURIComponent(slug)}`, {
+    // `loading` parte true e si azzera nel .finally (niente setState sincroni
+    // nel percorso chiamato dall'effect).
+    fetch(`/api/manage/notifications?slug=${encodeURIComponent(slug)}&action=installment_groups`, {
       headers: { "x-tenant-slug": slug },
     })
       .then((r) => r.json())
       .then((j) => {
-        setPlans(Array.isArray(j.plans) ? j.plans : []);
-        if (typeof j.alertDays === "number" && Number.isFinite(j.alertDays)) {
-          setAlertDays(j.alertDays);
-          setAlertDaysInput(String(j.alertDays));
+        if (!j?.ok) return;
+        setGroups(Array.isArray(j.groups) ? j.groups : []);
+        setCanSee(Boolean(j.canSee));
+        setSchemaOk(Boolean(j.schemaOk));
+        setLocationLabel(String(j.locationLabel ?? ""));
+        const n = Number(j.alertDays);
+        if (Number.isFinite(n)) {
+          setAlertDays(n);
+          setAlertDaysInput(String(n));
         }
       })
-      .catch(() => setPlans([]))
+      .catch(() => setGroups([]))
       .finally(() => setLoading(false));
   }, [slug]);
 
@@ -113,68 +88,17 @@ export function NotificationsInstallmentsContent({ slug: slugProp }: { slug?: st
     load();
   }, [load]);
 
-  const rows = useMemo<DueRow[]>(() => {
-    const today = startOfDay(new Date());
-    const horizon = today + Math.max(0, alertDays) * 24 * 60 * 60 * 1000;
-    const out: DueRow[] = [];
-    for (const plan of plans) {
-      for (const inst of plan.installments ?? []) {
-        const status = String(inst.status ?? "");
-        if (status === "paid" || status === "cancelled" || status === "canceled") continue;
-        const dueMs = Date.parse(inst.dueDate);
-        if (!Number.isFinite(dueMs)) continue;
-        const dueDay = startOfDay(new Date(dueMs));
-        const overdue = dueDay < today || status === "overdue";
-        // Always show overdue; show upcoming only within the alert horizon.
-        if (!overdue && dueDay > horizon) continue;
-        out.push({
-          key: `${plan.id}-${inst.id}`,
-          planId: plan.id,
-          installmentId: inst.id,
-          clientName: plan.clientName || "—",
-          amount: Number(inst.amount ?? 0),
-          dueDate: inst.dueDate,
-          overdue,
-        });
-      }
-    }
-    return out.sort((a, b) => Date.parse(a.dueDate) - Date.parse(b.dueDate));
-  }, [plans, alertDays]);
-
-  // Group the due rows by days-to-due (overdue → danger, today/tomorrow → warning, later → info),
-  // faithful to SaleInstallments::getDueAlertGroups' overdue + due_N buckets.
-  const groups = useMemo<DueGroup[]>(() => {
-    const today = startOfDay(new Date());
-    const dayMs = 24 * 60 * 60 * 1000;
-    const byKey = new Map<string, { daysDiff: number; rows: DueRow[] }>();
-    for (const row of rows) {
-      const dueDay = startOfDay(new Date(Date.parse(row.dueDate)));
-      const daysDiff = Math.round((dueDay - today) / dayMs);
-      const key = daysDiff < 0 ? "overdue" : `due_${daysDiff}`;
-      let bucket = byKey.get(key);
-      if (!bucket) {
-        bucket = { daysDiff, rows: [] };
-        byKey.set(key, bucket);
-      }
-      bucket.rows.push(row);
-    }
-    const titleFor = (daysDiff: number): string => {
-      if (daysDiff < 0) return "Rate scadute";
-      if (daysDiff === 0) return "Rate in scadenza oggi";
-      if (daysDiff === 1) return "Rate in scadenza domani";
-      return `Rate in scadenza tra ${daysDiff} giorni`;
-    };
-    const kindFor = (daysDiff: number): DueGroup["kind"] => (daysDiff < 0 ? "danger" : daysDiff <= 1 ? "warning" : "info");
-    return [...byKey.entries()]
-      .sort((a, b) => (a[1].daysDiff < 0 ? -1 : b[1].daysDiff < 0 ? 1 : a[1].daysDiff - b[1].daysDiff))
-      .map(([key, bucket]) => ({ key, title: titleFor(bucket.daysDiff), kind: kindFor(bucket.daysDiff), rows: bucket.rows }));
-  }, [rows]);
+  // installment_notification_days_label: 'oggi' | 'nei prossimi N giorno/i'.
+  const windowText = alertDays === 0 ? "oggi" : `nei prossimi ${alertDays} ${alertDays === 1 ? "giorno" : "giorni"}`;
+  let subtitle = `Mostra le rate gia scadute e quelle in scadenza ${windowText}.`;
+  if (locationLabel) subtitle += ` Sede: ${locationLabel}.`;
 
   function manageHref(): string {
     return `/${encodeURIComponent(slug)}/installments_manage`;
   }
 
-  // Persist the alert window (POST action=save_alert_days) then close the settings modal.
+  // Port del POST action=save_settings (installment_notification_set_days):
+  // clamp 0..365, flash legacy 'Impostazioni salvate'/'Operazione non valida'.
   async function saveAlertDays() {
     const parsed = Number.parseInt(alertDaysInput, 10);
     const days = Number.isFinite(parsed) ? Math.min(365, Math.max(0, parsed)) : alertDays;
@@ -186,13 +110,20 @@ export function NotificationsInstallmentsContent({ slug: slugProp }: { slug?: st
         body: JSON.stringify({ action: "save_alert_days", alert_days: String(days) }),
       });
       const json = await res.json().catch(() => ({}));
-      const saved = typeof json?.alertDays === "number" ? json.alertDays : days;
-      setAlertDays(saved);
-      setAlertDaysInput(String(saved));
+      if (!res.ok || json?.ok === false) {
+        setFlash(String(json?.error || "Operazione non valida"));
+      } else {
+        setFlash("Impostazioni salvate");
+        const saved = typeof json?.alertDays === "number" ? json.alertDays : days;
+        setAlertDays(saved);
+        setAlertDaysInput(String(saved));
+        load();
+      }
       closeInstallmentSettingsModal();
+      if (typeof window !== "undefined") window.scrollTo({ top: 0 });
     } catch {
-      // Keep the modal open on failure; the local value still reflects the attempt.
-      setAlertDays(days);
+      setFlash("Operazione non valida");
+      closeInstallmentSettingsModal();
     } finally {
       setSavingSettings(false);
     }
@@ -202,13 +133,18 @@ export function NotificationsInstallmentsContent({ slug: slugProp }: { slug?: st
     <div className="container-fluid">
       <link rel="stylesheet" href="/assets/css/pages/notifications_cards.css" />
 
+      {flash ? (
+        <div className={`alert alert-${alertTypeFor(flash)} alert-dismissible`} role="alert">
+          {flash}
+          <button type="button" className="btn-close" aria-label="Chiudi" onClick={() => setFlash("")} />
+        </div>
+      ) : null}
+
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Notifiche</div>
           <h1 className="bs-page-title">Rate in scadenza / scadute</h1>
-          <div className="bs-page-subtitle">
-            Mostra le rate gia scadute e quelle in scadenza nei prossimi {alertDays} giorni.
-          </div>
+          <div className="bs-page-subtitle">{subtitle}</div>
         </div>
         <div className="bs-page-actions">
           <div className="d-flex flex-wrap justify-content-end gap-2">
@@ -229,58 +165,59 @@ export function NotificationsInstallmentsContent({ slug: slugProp }: { slug?: st
         </div>
       </div>
 
-      {groups.length === 0 ? (
+      {!canSee ? (
         <div className="card p-4">
-          <div className="fw-semibold">
-            {loading ? "Caricamento…" : "Nessuna rata in scadenza o scaduta."}
-          </div>
-          <div className="text-muted small mt-1">
-            Qui vedrai le rate gia scadute e quelle in scadenza nei prossimi {alertDays} giorni.
-          </div>
+          <div className="fw-semibold">Permesso non disponibile.</div>
+          <div className="text-muted small mt-1">Non hai i permessi necessari per visualizzare le rate.</div>
+        </div>
+      ) : !schemaOk ? (
+        <div className="card p-4">
+          <div className="fw-semibold">Rate non disponibili.</div>
+          <div className="text-muted small mt-1">La struttura dati della Gestione Rate non e disponibile.</div>
+        </div>
+      ) : groups.length === 0 ? (
+        <div className="card p-4">
+          <div className="fw-semibold">{loading ? "Caricamento…" : "Nessuna rata in scadenza o scaduta."}</div>
+          <div className="text-muted small mt-1">Qui vedrai le rate gia scadute e quelle in scadenza {windowText}.</div>
         </div>
       ) : (
-        <div className="d-flex flex-column gap-4">
-          {groups.map((group) => (
-            <div key={group.key}>
-              <div className="d-flex align-items-center gap-2 mb-2">
-                <span className={`badge text-bg-${group.kind}`}>{group.rows.length}</span>
-                <h2 className="h6 mb-0">{group.title}</h2>
+        groups.map((group) => (
+          <div className="card mb-3 notification-card" key={group.key}>
+            <div className="d-flex flex-wrap">
+              <div className={`p-3 flex-grow-1 notification-main notification-main--${group.kind}`}>
+                <div className="d-flex align-items-center justify-content-between gap-2">
+                  <div className="fw-bold fs-5 mb-1">{group.title}</div>
+                  <span className={`badge ${group.badgeClass}`}>{group.count}</span>
+                </div>
+                <div className="text-muted small">{group.text}</div>
+                <div className="text-muted small mt-1">{group.dateLabel}</div>
               </div>
-              <div className="d-flex flex-column gap-2">
-                {group.rows.map((row) => (
-                  <div
-                    key={row.key}
-                    className={`card notification-card notification-main notification-main--${group.kind} p-3`}
-                  >
-                    <div className="d-flex flex-wrap justify-content-between align-items-center gap-2">
-                      <div>
-                        <div className="fw-semibold">{row.clientName}</div>
-                        <div className="text-muted small">
-                          {row.overdue ? "Rata scaduta" : "Rata in scadenza"} - Scadenza: {fmtDate(row.dueDate)}
-                        </div>
-                      </div>
-                      <div className="d-flex align-items-center gap-3">
-                        <div className="fw-semibold">{fmtEur(row.amount)}</div>
-                        <a className="btn btn-sm btn-outline-primary" href={manageHref()}>
-                          <i className="bi bi-cash-stack me-1" />
-                          Apri Gestione Rate
-                        </a>
-                      </div>
-                    </div>
+
+              <div className="p-3 flex-grow-1 notification-detail">
+                <div className="text-muted small mb-1">Anteprima</div>
+                {group.previewRows.map((row, i) => (
+                  <div className="mb-2" key={i}>
+                    <div className="fw-semibold">{row.clientName}</div>
+                    <div className="text-muted small">Rata {row.installmentNo} - {row.dueLabel} - € {fmtMoney(row.amount)}</div>
                   </div>
                 ))}
+                {group.linesMore > 0 ? <div className="text-muted small">...e altre {group.linesMore}</div> : null}
+              </div>
+
+              <div className="p-3 notification-action">
+                <div className="d-grid gap-2">
+                  <a className="btn btn-outline-primary btn-sm" href={group.link || manageHref()}>
+                    <i className="bi bi-box-arrow-up-right me-1" />
+                    Apri in Gestione Rate
+                  </a>
+                </div>
               </div>
             </div>
-          ))}
-        </div>
+          </div>
+        ))
       )}
 
-      <div
-        className="modal fade"
-        id="installmentNotificationSettingsModal"
-        tabIndex={-1}
-        aria-hidden="true"
-      >
+      <div className="modal fade" id="installmentNotificationSettingsModal" tabIndex={-1} aria-hidden="true">
         <div className="modal-dialog modal-dialog-centered">
           <form
             method="post"
@@ -315,8 +252,7 @@ export function NotificationsInstallmentsContent({ slug: slugProp }: { slug?: st
                 <span className="input-group-text">giorni</span>
               </div>
               <div className="form-text">
-                Le rate gia scadute vengono sempre mostrate. Imposta 0 per includere solo quelle scadute
-                e quelle in scadenza oggi.
+                Le rate gia scadute vengono sempre mostrate. Imposta 0 per includere solo quelle scadute e quelle in scadenza oggi.
               </div>
             </div>
             <div className="modal-footer">
@@ -325,7 +261,7 @@ export function NotificationsInstallmentsContent({ slug: slugProp }: { slug?: st
               </button>
               <button className="btn btn-primary" type="submit" disabled={savingSettings}>
                 <i className="bi bi-check2-circle me-1" />
-                {savingSettings ? "Salvataggio…" : "Salva"}
+                Salva
               </button>
             </div>
           </form>

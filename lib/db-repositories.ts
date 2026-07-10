@@ -22069,6 +22069,7 @@ async function mapQuote(slug: string, row: RowDataPacket): Promise<Quote> {
     code: String(row.number ?? `Q-${String(id).padStart(5, "0")}`),
     clientId: Number(row.client_id ?? 0),
     clientName: String(row.client_name ?? row.client_company_name ?? "Cliente"),
+    clientEmail: String(row.client_email ?? "") || undefined,
     lines,
     subtotal: Number(row.subtotal ?? 0),
     discount: Number(row.discount_total ?? 0),

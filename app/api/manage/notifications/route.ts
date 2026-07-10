@@ -1,7 +1,8 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import { getAutomationSettings, saveClientBirthdayAlertDays } from "@/lib/automation-reminders";
-import { listDbNotifications, listNotificationPendingAppointments, markDbNotificationRead } from "@/lib/db-repositories";
-import { notificationFidelityCardGroups, notificationInstallmentGroups } from "@/lib/manage-dashboard-alerts";
+import { fidelityCardExpiryNotificationConfig, listDbNotifications, listNotificationPendingAppointments, markDbNotificationRead } from "@/lib/db-repositories";
+import { listBirthdayNotificationRows, notificationFidelityCardGroups, notificationInstallmentGroups } from "@/lib/manage-dashboard-alerts";
+import { tableExists } from "@/lib/tenant-db";
 import { currentManageSession } from "@/lib/manage-auth";
 import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -39,15 +40,65 @@ export async function GET(request: Request) {
     if (action === "pending") {
       const locationContext = await getManageLocationContext(tenantSlug);
       const pending = await listNotificationPendingAppointments(tenantSlug, locationContext.currentLocationId);
-      const fidelityGroups = can(session.user.perms, "fidelity.membership")
-        ? await notificationFidelityCardGroups(tenantSlug)
-        : [];
+      const canFidelity = can(session.user.perms, "fidelity.membership");
+      const fidelityGroups = canFidelity ? await notificationFidelityCardGroups(tenantSlug) : [];
+      // Testi della sezione Fidelity dipendenti dalla config tessera
+      // (notifications.php 317-338): renewal / reminder / nessuna finestra.
+      const cfg = await fidelityCardExpiryNotificationConfig(tenantSlug).catch(
+        () => ({ mode: "disabled" as const, value: 0, unit: "days" as const }),
+      );
+      const durLabel = (v: number, unit: string) =>
+        `${v} ${unit === "years" ? (v === 1 ? "anno" : "anni") : unit === "months" ? (v === 1 ? "mese" : "mesi") : v === 1 ? "giorno" : "giorni"}`;
+      let sectionText: string;
+      let emptyText: string;
+      if (cfg.mode === "renewal" && cfg.value > 0) {
+        sectionText = `Mostra le tessere già scadute e quelle entrate nella finestra di rinnovo automatico (${durLabel(cfg.value, cfg.unit)}).`;
+        emptyText = "Nessuna tessera è attualmente scaduta o dentro la finestra di rinnovo automatico.";
+      } else if (cfg.value > 0) {
+        sectionText = `Mostra le tessere già scadute e quelle in scadenza nei prossimi ${cfg.value} ${cfg.value === 1 ? "giorno" : "giorni"}.`;
+        emptyText = "Nessuna tessera è attualmente scaduta o dentro il promemoria di scadenza configurato.";
+      } else {
+        sectionText = "Mostra le tessere già scadute. Per vedere anche quelle in scadenza, imposta il rinnovo automatico oppure il promemoria di scadenza in Fidelity → Adesione → Impostazioni tessera Fidelity.";
+        emptyText = "Nessuna tessera è attualmente scaduta.";
+      }
       const locationLabel = locationContext.locations.find((l) => l.id === locationContext.currentLocationId)?.name ?? "";
       return Response.json({
         ok: true,
         pending,
         fidelityGroups,
+        fidelitySection: { enabled: canFidelity && cfg.mode !== "disabled", sectionText, emptyText },
         canManage: can(session.user.perms, "appointments.manage"),
+        locationLabel,
+      }, { headers: { "Cache-Control": "no-store" } });
+    }
+
+    // Pagina "Compleanni clienti" (notifications_birthdays.php): righe con
+    // esclusioni legacy (bloccati + clienti-sconosciuto), finestra e permesso.
+    if (action === "birthdays") {
+      const canSee = canAny(session.user.perms, ["clients.manage", "client_sheets.manage", "client_consents.manage"]);
+      const settings = await getAutomationSettings(tenantSlug);
+      const days = settings.client_birthday_alert_days;
+      const rows = canSee ? await listBirthdayNotificationRows(tenantSlug, days, 200) : [];
+      return Response.json({ ok: true, canSee, schemaOk: true, alertDays: days, rows }, { headers: { "Cache-Control": "no-store" } });
+    }
+
+    // Pagina "Rate in scadenza / scadute" (notifications_installments.php):
+    // gruppi legacy con anteprima 25, giorni configurati e sede corrente.
+    if (action === "installment_groups") {
+      const canSee = can(session.user.perms, "installments.manage");
+      const settings = await getAutomationSettings(tenantSlug);
+      const locationContext = await getManageLocationContext(tenantSlug);
+      const schemaOk = await tableExists("sale_installments").catch(() => false);
+      const groups = canSee && schemaOk
+        ? await notificationInstallmentGroups(tenantSlug, locationContext.currentLocationId, 25)
+        : [];
+      const locationLabel = locationContext.locations.find((l) => l.id === locationContext.currentLocationId)?.name ?? "";
+      return Response.json({
+        ok: true,
+        canSee,
+        schemaOk,
+        alertDays: settings.installment_alert_days,
+        groups,
         locationLabel,
       }, { headers: { "Cache-Control": "no-store" } });
     }

@@ -10107,3 +10107,101 @@ legacy), POST gate). PRODUZIONE INTATTA: riga businesses ripristinata
 byte-identica (choose_staff 0, annullo attivo 2 ore). REGRESSIONE: report
 24/24 (stessa cancel policy negli esempi Automazione/Report), model-a 12/12.
 tsc pulito, eslint solo warning preesistenti.
+
+## 2026-07-10 — Notifiche (notifications.php + 3 sottopagine): audit 1:1 + riscrittura sottopagine + e2e live
+
+Legacy letto INTEGRALE (diretto): app/pages/notifications.php (812, hub) +
+notifications_birthdays.php (157) + notifications_installments.php (167) +
+notifications_quotes.php (207) + notifications_quotes.js (34, confirm +
+popup annullo) + helper: client_birthday_notification_days/label/set/rows e
+next_occurrence (Helpers 7471-7607), installment_notification_* (7437-7461),
+SaleInstallments::getDueAlertGroups + dueAlert* (1047-1200),
+fidelity_card_notification_groups (5147-5356) + expiry_notification_config.
+Next: app/api/manage/notifications/route.ts (ora 210) +
+lib/manage-dashboard-alerts.ts (gruppi) + 4 componenti + quotes route
+(seen/seen_all, già fedele) + installments route (alert_days).
+
+NOTA architettura hub: nel legacy le sezioni Rate e Preventivi dentro
+notifications.php sono MORTE (flag forzati false, righe 341-342): vivono
+nelle pagine dedicate delle campanelle. L'hub mostra solo "Appuntamenti in
+attesa" + "Tessere Fidelity in scadenza / scadute".
+
+FIX/RISCRITTURE:
+1) RATE (componente riscritto): rendeva una card PER OGNI RATA con testi
+   propri; ora card per GRUPPO come il legacy (titolo dueAlertTitle 'Rate già
+   scadute'/'oggi'/'domani'/'tra N giorni' + badge conteggio + testo
+   singolare/plurale + date_label 'Scadute dal d/m/Y'/'Scadenza d/m/Y' +
+   Anteprima fino a 25 righe 'Rata N - d/m/Y - € importo' + '...e altre N' +
+   link 'Apri in Gestione Rate' coi filtri status=overdue / due_from&due_to
+   e location_id). Builder lib parametrizzato (preview 3 dashboard / 25
+   pagina) con previewRows strutturate; sottotitolo dinamico ('oggi' / 'nei
+   prossimi N giorno/i' + ' Sede: X.'); card 'Permesso non disponibile.' /
+   'Rate non disponibili.'; flash 'Impostazioni salvate' con euristica
+   warning legacy. Nuova action=installment_groups nella route.
+2) COMPLEANNI (componente riscritto): rendeva una TABELLA e calcolava i
+   compleanni client-side dal feed clients (senza esclusioni, 29/02 sbagliato,
+   href 'Apri' alla pagina sbagliata). Ora righe server-side (nuova
+   action=birthdays) col port fedele di client_birthday_notification_rows:
+   ESCLUSI clienti BLOCCATI e clienti-sconosciuto auto-creati, fallback
+   29/02→28/02, età, 'Sede riferimento', sort giorni+nome, limite 200; card
+   legacy (badge Oggi/'Tra N giorno/i' danger/primary, 'Compleanno: d/m/Y',
+   'Eta: N anni', Contatti con '-', 'Apri cliente' → clients?action=view);
+   sottotitolo/empty dinamici; card permesso/schema; flash legacy.
+3) PREVENTIVI (componente riscritto): includeva 'paid'/'converted' tra gli
+   accettati e 'canceled' tra i rifiutati (il legacy filtra ESATTAMENTE
+   status IN accepted,rejected: un preventivo convertito non è una risposta);
+   layout card legacy ('Preventivo #numero' + badge, 'Cliente: X - email',
+   'Risposta inviata il: d/m/Y H:i', 'Totale preventivo' € fmt_money, azioni
+   Apri preventivo/Segna come letto); confirm 'Segnare tutti i preventivi
+   come letti?' (notifications_quotes.js); flash 'Preventivo segnato come
+   letto'/'Preventivi segnati come letti' con euristica; footer 'Mostrando
+   preventivi da 1 a N di M totali' con LIMIT 100; clientEmail aggiunto al
+   feed quotes (COALESCE legacy).
+4) HUB sezione Fidelity: era visibile solo con gruppi presenti e con card
+   ridotte; ora come il legacy: sezione visibile con permesso + config
+   tessera non-disabled, testo sezione dipendente dalla config (renewal /
+   promemoria N giorni / nessuna finestra con rimando a 'Fidelity → Adesione
+   → Impostazioni tessera Fidelity'), empty state 'Nessuna tessera in
+   scadenza o scaduta.' + testo config; card gruppo con badge conteggio,
+   date_label e Anteprima strutturata ('Tessera #CODICE • data • stato' +
+   email cliente). fidelitySection nel payload action=pending; gruppi lib
+   estesi (cardCode/clientEmail/count/badgeClass/dateLabel/previewRows).
+
+CONFERMATI FEDELI: hub 'Appuntamenti in attesa' con card ricche (servizi
+aggregati con '(nessun servizio)', data/ora, 'Codice prenotazione: #',
+pacchetto/prepagato, Operatore/Posizione/Cliente con telefono/email, 'Totale
+stimato' con sconto coupon dalle note, azioni Approva/Modifica[drawer
+qb-edit]/Annulla, 'Permesso Appuntamenti richiesto per gestire la
+richiesta.', 'Mostrando appuntamenti da 1 a N di N totali'); approva/annulla
+via route appointments con lifecycle completa (email + promemoria) e messaggi
+'Appuntamento approvato'/'Appuntamento annullato'; euristica alert legacy
+(warning su 'non autorizzata/non valida/non piu/errore/...'); azioni header
+Personalizza + 'Attiva notifiche browser' con modale preferenze
+(Prenotazioni sempre attive 'Sempre attiva.', quotes/installments/birthdays/
+fidelity_cards via user-prefs); feed browser (action=feed) con eventi
+tipizzati e gate permessi; action=count (badge topbar, già in shell-context);
+giorni avviso compleanni/rate letti e salvati su automation_settings con
+clamp 0..365 e guardie 'Operazione non autorizzata'; seen/seen_all preventivi
+con WHERE legacy (status+decision+seen NULL+sede) già fedele nella route
+quotes; modali impostazioni verbatim.
+
+RESIDUI documentati (non fix): (a) l'annullo pending nel legacy apre il
+popup qbAppointmentCancelDialog (pendingOnly, con motivazioni) — il Next usa
+window.confirm + la stessa lifecycle di annullo (route appointments), popup
+non portato; (b) l'approvazione non ha la guardia esplicita
+'Appuntamento non piu in attesa' (race: la lista si ricarica e la route
+lifecycle gestisce lo stato corrente); (c) polling feed a 15s (intervallo
+legacy del poller app.js non replicato al secondo); (d) i flash arrivano
+come stato SPA invece del redirect ?msg= (pattern del port).
+
+VERIFICATO: test-notifiche 17/17 live (hub pending con appuntamento ZZ +
+canManage + sede, fidelitySection disabled con config assente e testi
+verbatim nel payload, 403 permesso, compleanni con ZZ incluso a 3 giorni/età/
+sede e BLOCCATO+sconosciuto ESCLUSI, alertDays 7, canSee false senza permessi
+clienti, clamp 400→365 con 'Impostazioni salvate' e guardia non autorizzata,
+gruppi rate 'Rate già scadute' 1 rata + 'in scadenza domani' con preview
+'Rata N', dateLabel e link filtrati con location_id, canSee false, preventivi
+accepted+rejected con email e 'paid' esclusa, seen/seen_all coi messaggi e
+seen_at, approvazione pending→scheduled che sparisce dalla lista).
+PRODUZIONE INTATTA: conteggi baseline identici, giorni avviso ripristinati.
+REGRESSIONE: model-a 12/12, automazione 20/20. tsc pulito, eslint 0 errori.

@@ -39,7 +39,13 @@ type FidelityGroup = {
   link: string;
   lines: string[];
   linesMore: number;
+  count: number;
+  badgeClass: string;
+  dateLabel: string;
+  previewRows: Array<{ clientName: string; cardCode: string; expiresLabel: string; statusLabel: string; clientEmail: string }>;
 };
+
+type FidelitySection = { enabled: boolean; sectionText: string; emptyText: string };
 
 const BROWSER_NOTIFICATION_PREFS = [
   { id: "browserNotifQuotes", pref: "quotes", label: "Preventivi accettati o rifiutati" },
@@ -65,6 +71,7 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
 
   const [pending, setPending] = useState<PendingAppointment[]>([]);
   const [fidelityGroups, setFidelityGroups] = useState<FidelityGroup[]>([]);
+  const [fidelitySection, setFidelitySection] = useState<FidelitySection | null>(null);
   const [canManage, setCanManage] = useState(false);
   const [locationLabel, setLocationLabel] = useState("");
   const [prefs, setPrefs] = useState<Record<string, boolean>>({});
@@ -76,8 +83,11 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
   // Permesso browser + preferenze salvate (port di api_user_prefs get_browser_
   // notification_preferences; il tipo "appointments" resta sempre attivo).
   useEffect(() => {
-    if (typeof window !== "undefined" && "Notification" in window) setNotifPerm(Notification.permission);
-    else setNotifPerm("unsupported");
+    // Lettura permesso in microtask: niente setState sincroni nell'effect.
+    Promise.resolve().then(() => {
+      if (typeof window !== "undefined" && "Notification" in window) setNotifPerm(Notification.permission);
+      else setNotifPerm("unsupported");
+    });
     fetch(`/api/manage/user-prefs?action=get_browser_notification_preferences&slug=${encodeURIComponent(slug)}`, {
       headers: { "x-tenant-slug": slug },
     })
@@ -218,6 +228,7 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
         if (!j?.ok) return;
         setPending(Array.isArray(j.pending) ? j.pending : []);
         setFidelityGroups(Array.isArray(j.fidelityGroups) ? j.fidelityGroups : []);
+        setFidelitySection(j.fidelitySection ?? null);
         setCanManage(Boolean(j.canManage));
         setLocationLabel(String(j.locationLabel ?? ""));
       })
@@ -493,46 +504,66 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
         </>
       )}
 
-      {fidelityGroups.length > 0 ? (
+      {/* Sezione Fidelity legacy (notifications.php 579-651): visibile quando
+          il permesso c'è e la config tessera non è 'disabled', con testi
+          dipendenti dalla config e empty state dedicato. */}
+      {fidelitySection?.enabled ? (
         <>
           <hr className="my-4" />
           <div className="d-flex justify-content-between align-items-center mb-3" id="fidelity_cards_notifications">
             <div>
               <div className="text-muted small">Fidelity / Adesione</div>
               <h2 className="h5 fw-bold m-0">Tessere Fidelity in scadenza / scadute</h2>
+              <div className="text-muted small mt-1">{fidelitySection.sectionText}</div>
             </div>
             <a className="btn btn-outline-primary btn-sm" href={`/${encodeURIComponent(slug)}/fidelity_membership`}>
               <i className="bi bi-box-arrow-up-right me-1" />
               Apri Fidelity / Adesione
             </a>
           </div>
-          {fidelityGroups.map((group) => (
-            <div className="card mb-3 notification-card" key={group.key}>
-              <div className="d-flex flex-wrap">
-                <div className="p-3 flex-grow-1 notification-main notification-main--info">
-                  <div className="fw-bold fs-5 mb-1">{group.title}</div>
-                  <div className="text-muted small">{group.text}</div>
-                </div>
-                <div className="p-3 flex-grow-1 notification-detail">
-                  <div className="text-muted small mb-1">Anteprima</div>
-                  {group.lines.map((line, i) => (
-                    <div className="text-muted small" key={i}>
-                      {line}
+          {fidelityGroups.length === 0 ? (
+            <div className="card p-4">
+              <div className="fw-semibold">Nessuna tessera in scadenza o scaduta.</div>
+              <div className="text-muted small mt-1">{fidelitySection.emptyText}</div>
+            </div>
+          ) : (
+            fidelityGroups.map((group) => (
+              <div className="card mb-3 notification-card" key={group.key}>
+                <div className="d-flex flex-wrap">
+                  <div className={`p-3 flex-grow-1 notification-main notification-main--${group.kind}`}>
+                    <div className="d-flex align-items-center justify-content-between gap-2">
+                      <div className="fw-bold fs-5 mb-1">{group.title}</div>
+                      <span className={`badge ${group.badgeClass || "text-bg-info"}`}>{group.count}</span>
                     </div>
-                  ))}
-                  {group.linesMore > 0 ? <div className="text-muted small">…e altre {group.linesMore}</div> : null}
-                </div>
-                <div className="p-3 notification-action">
-                  <div className="d-grid gap-2">
-                    <a className="btn btn-outline-primary btn-sm" href={group.link || `/${encodeURIComponent(slug)}/fidelity_membership`}>
-                      <i className="bi bi-box-arrow-up-right me-1" />
-                      Apri in Fidelity / Adesione
-                    </a>
+                    <div className="text-muted small">{group.text}</div>
+                    <div className="text-muted small mt-1">{group.dateLabel}</div>
+                  </div>
+                  <div className="p-3 flex-grow-1 notification-detail">
+                    <div className="text-muted small mb-1">Anteprima</div>
+                    {(group.previewRows ?? []).map((row, i) => (
+                      <div className="mb-2" key={i}>
+                        <div className="fw-semibold">{row.clientName || "Cliente"}</div>
+                        <div className="text-muted small">
+                          Tessera #{row.cardCode} • {row.expiresLabel || "—"}
+                          {row.statusLabel ? <> • {row.statusLabel}</> : null}
+                        </div>
+                        {row.clientEmail ? <div className="text-muted small">{row.clientEmail}</div> : null}
+                      </div>
+                    ))}
+                    {group.linesMore > 0 ? <div className="text-muted small">…e altre {group.linesMore}</div> : null}
+                  </div>
+                  <div className="p-3 notification-action">
+                    <div className="d-grid gap-2">
+                      <a className="btn btn-outline-primary btn-sm" href={group.link || `/${encodeURIComponent(slug)}/fidelity_membership`}>
+                        <i className="bi bi-box-arrow-up-right me-1" />
+                        Apri in Fidelity / Adesione
+                      </a>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          ))}
+            ))
+          )}
         </>
       ) : null}
     </div>

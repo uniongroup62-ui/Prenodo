@@ -1,82 +1,90 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-// Faithful port of the PHP page ?page=notifications_birthdays
-// (app/pages/notifications_birthdays.php): shows clients whose birthday falls
-// in the next N days plus a settings modal to configure the alert window.
-//
-// There is no dedicated birthdays/settings API route, so we read the existing
-// DB-backed /api/manage/clients list and compute upcoming birthdays client-side
-// from the optional `birthday` field. When no client has an upcoming birthday
-// (the current live data) the original empty state is rendered verbatim.
+// Port fedele di app/pages/notifications_birthdays.php ("Compleanni clienti"):
+// card legacy per cliente (badge Oggi/'Tra N giorno/i', Compleanno d/m/Y, Eta,
+// Sede riferimento, Contatti, 'Apri cliente') alimentate da
+// /api/manage/notifications?action=birthdays (righe server-side con le
+// esclusioni legacy: clienti bloccati + clienti-sconosciuto auto-creati,
+// fallback 29/02→28/02), finestra configurabile dal modale (clamp 0..365 su
+// automation_settings.client_birthday_alert_days) e flash legacy in testa.
 
-type Client = {
+type BirthdayRow = {
   id: number;
-  name: string;
-  email?: string;
-  phone?: string;
-  birthday?: string;
+  fullName: string;
+  phone: string;
+  email: string;
+  birthdayNextDate: string;
+  birthdayDays: number;
+  birthdayAge: number;
+  locationName: string;
 };
-
-const DEFAULT_ALERT_DAYS = 7;
 
 function tenantSlug(): string {
   if (typeof window === "undefined") return "";
   return window.location.pathname.split("/")[1] || "";
 }
 
-// Days from today until the next occurrence of the given month/day birthday.
-function daysUntilBirthday(birthday: string | undefined, today: Date): number | null {
-  if (!birthday) return null;
-  const d = birthday.slice(0, 10);
-  const [, m, day] = d.split("-").map((x) => Number(x));
-  if (!m || !day) return null;
-  const base = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-  let next = new Date(today.getFullYear(), m - 1, day);
-  if (next < base) next = new Date(today.getFullYear() + 1, m - 1, day);
-  return Math.round((next.getTime() - base.getTime()) / 86400000);
+function closeBirthdaySettingsModal(): void {
+  if (typeof window === "undefined") return;
+  const el = document.getElementById("birthdayNotificationSettingsModal");
+  const bs = (window as unknown as { bootstrap?: { Modal?: { getOrCreateInstance: (e: Element) => { hide: () => void } } } }).bootstrap;
+  if (el && bs?.Modal) bs.Modal.getOrCreateInstance(el).hide();
+}
+
+function fmtDate(iso: string): string {
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : "-";
+}
+
+// Euristica alert legacy (notifications_birthdays.php 42-50).
+function alertTypeFor(msg: string): "success" | "warning" {
+  const low = msg.toLowerCase();
+  return ["non autorizzata", "non valida", "errore", "impossibile", "non disponibile"].some((n) => low.includes(n)) ? "warning" : "success";
 }
 
 export function NotificationsBirthdaysContent({ slug: slugProp }: { slug?: string } = {}) {
-  // Prop dal server preferita: il fallback window-only rende slug="" in SSR
-  // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
 
-  const [clients, setClients] = useState<Client[]>([]);
-  const [alertDays, setAlertDays] = useState<number>(DEFAULT_ALERT_DAYS);
-  const [daysInput, setDaysInput] = useState<string>(String(DEFAULT_ALERT_DAYS));
-  const [settingsMessage, setSettingsMessage] = useState<string>("");
+  const [rows, setRows] = useState<BirthdayRow[]>([]);
+  const [canSee, setCanSee] = useState(true);
+  const [schemaOk, setSchemaOk] = useState(true);
+  const [alertDays, setAlertDays] = useState(7);
+  const [daysInput, setDaysInput] = useState("7");
+  const [flash, setFlash] = useState("");
 
-  useEffect(() => {
-    fetch(`/api/manage/clients?slug=${encodeURIComponent(slug)}`, {
-      headers: { "x-tenant-slug": slug },
-    })
-      .then((r) => r.json())
-      .then((j) => setClients(Array.isArray(j.clients) ? j.clients : []))
-      .catch(() => setClients([]));
-    // Valore persistito (automation_settings.client_birthday_alert_days).
-    fetch(`/api/manage/notifications?slug=${encodeURIComponent(slug)}&action=settings`, {
+  const load = useCallback(() => {
+    fetch(`/api/manage/notifications?slug=${encodeURIComponent(slug)}&action=birthdays`, {
       headers: { "x-tenant-slug": slug },
     })
       .then((r) => r.json())
       .then((j) => {
-        const n = Number(j.client_birthday_alert_days);
+        if (!j?.ok) return;
+        setRows(Array.isArray(j.rows) ? j.rows : []);
+        setCanSee(Boolean(j.canSee));
+        setSchemaOk(Boolean(j.schemaOk));
+        const n = Number(j.alertDays);
         if (Number.isFinite(n) && n >= 0 && n <= 365) {
           setAlertDays(n);
           setDaysInput(String(n));
         }
       })
-      .catch(() => undefined);
+      .catch(() => setRows([]));
   }, [slug]);
 
-  // Port di notifications_birthdays.php action=save_settings: persiste il
-  // valore lato server e aggiorna la lista, messaggio legacy.
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // client_birthday_notification_days_label: 'oggi' | 'nei prossimi N giorno/i'.
+  const windowText = alertDays === 0 ? "oggi" : `nei prossimi ${alertDays} ${alertDays === 1 ? "giorno" : "giorni"}`;
+
+  // Port di action=save_settings: clamp 0..365, flash 'Impostazioni salvate'.
   const submitSettings = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const n = Number(daysInput);
-    if (!Number.isFinite(n) || n < 0 || n > 365) return;
-    setSettingsMessage("");
+    const parsed = Number.parseInt(daysInput, 10);
+    const n = Number.isFinite(parsed) ? Math.min(365, Math.max(0, parsed)) : alertDays;
     try {
       const response = await fetch(`/api/manage/notifications?slug=${encodeURIComponent(slug)}`, {
         method: "POST",
@@ -85,35 +93,36 @@ export function NotificationsBirthdaysContent({ slug: slugProp }: { slug?: strin
       });
       const json = await response.json().catch(() => ({}));
       if (json.ok) {
+        setFlash(String(json.message || "Impostazioni salvate"));
         setAlertDays(Number(json.days ?? n));
-        setSettingsMessage(json.message || "Impostazioni salvate");
+        setDaysInput(String(json.days ?? n));
+        load();
       } else {
-        setSettingsMessage(json.error || "Operazione non valida");
+        setFlash(String(json.error || "Operazione non valida"));
       }
     } catch {
-      setSettingsMessage("Operazione non valida");
+      setFlash("Operazione non valida");
     }
+    closeBirthdaySettingsModal();
+    if (typeof window !== "undefined") window.scrollTo({ top: 0 });
   };
-
-  const today = new Date();
-  const upcoming = clients
-    .map((c) => ({ client: c, days: daysUntilBirthday(c.birthday, today) }))
-    .filter((row): row is { client: Client; days: number } => row.days !== null && row.days <= alertDays)
-    .sort((a, b) => a.days - b.days);
-
-  function href(suffix: string): string {
-    return `/${encodeURIComponent(slug)}/${`notifications_birthdays${suffix}`.replace("&", "?")}`;
-  }
 
   return (
     <div className="container-fluid">
       <link rel="stylesheet" href="/assets/css/pages/notifications_cards.css" />
 
+      {flash ? (
+        <div className={`alert alert-${alertTypeFor(flash)} alert-dismissible`} role="alert">
+          {flash}
+          <button type="button" className="btn-close" aria-label="Chiudi" onClick={() => setFlash("")} />
+        </div>
+      ) : null}
+
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Notifiche</div>
           <h1 className="bs-page-title">Compleanni clienti</h1>
-          <div className="bs-page-subtitle">Mostra i clienti con compleanno nei prossimi 7 giorni.</div>
+          <div className="bs-page-subtitle">Mostra i clienti con compleanno {windowText}.</div>
         </div>
         <div className="bs-page-actions">
           <div className="d-flex flex-wrap justify-content-end gap-2">
@@ -134,50 +143,62 @@ export function NotificationsBirthdaysContent({ slug: slugProp }: { slug?: strin
         </div>
       </div>
 
-      {upcoming.length === 0 ? (
+      {!canSee ? (
+        <div className="card p-4">
+          <div className="fw-semibold">Permesso non disponibile.</div>
+          <div className="text-muted small mt-1">Non hai i permessi necessari per visualizzare i compleanni dei clienti.</div>
+        </div>
+      ) : !schemaOk ? (
+        <div className="card p-4">
+          <div className="fw-semibold">Compleanni non disponibili.</div>
+          <div className="text-muted small mt-1">La struttura dati dei clienti non contiene la data di nascita.</div>
+        </div>
+      ) : rows.length === 0 ? (
         <div className="card p-4">
           <div className="fw-semibold">Nessun compleanno cliente.</div>
-          <div className="text-muted small mt-1">Qui vedrai i clienti con compleanno nei prossimi 7 giorni.</div>
+          <div className="text-muted small mt-1">Qui vedrai i clienti con compleanno {windowText}.</div>
         </div>
       ) : (
-        <div className="card">
-          <div className="table-responsive">
-            <table className="table mb-0 align-middle">
-              <thead>
-                <tr>
-                  <th>Cliente</th>
-                  <th>Contatti</th>
-                  <th>Compleanno</th>
-                  <th className="text-end">Azioni</th>
-                </tr>
-              </thead>
-              <tbody>
-                {upcoming.map(({ client, days }) => (
-                  <tr key={client.id}>
-                    <td className="fw-semibold">{client.name}</td>
-                    <td className="text-muted">
-                      {client.phone ? (
-                        <>
-                          {client.phone}
-                          <br />
-                        </>
-                      ) : null}
-                      {client.email || "—"}
-                    </td>
-                    <td className="text-muted small">
-                      {days === 0 ? "Oggi" : `Tra ${days} giorni`}
-                    </td>
-                    <td className="text-end">
-                      <a className="btn btn-sm btn-primary" href={href(`&action=view&id=${client.id}`)}>
-                        Apri
-                      </a>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        rows.map((row) => {
+          const days = row.birthdayDays;
+          const accentClass = days === 0 ? "notification-main--danger" : "notification-main--primary";
+          const badgeClass = days === 0 ? "text-bg-danger" : "text-bg-primary";
+          const badgeText = days === 0 ? "Oggi" : `Tra ${days} ${days === 1 ? "giorno" : "giorni"}`;
+          return (
+            <div className="card mb-3 notification-card" key={row.id}>
+              <div className="d-flex flex-wrap">
+                <div className={`p-3 flex-grow-1 notification-main ${accentClass}`}>
+                  <div className="d-flex align-items-center justify-content-between gap-2">
+                    <div className="fw-bold fs-5 mb-1">{row.fullName || "Cliente"}</div>
+                    <span className={`badge ${badgeClass}`}>{badgeText}</span>
+                  </div>
+                  <div className="text-muted small">Compleanno: <strong>{fmtDate(row.birthdayNextDate)}</strong></div>
+                  {row.birthdayAge > 0 ? (
+                    <div className="text-muted small mt-1">Eta: {row.birthdayAge} anni</div>
+                  ) : null}
+                  {row.locationName ? (
+                    <div className="text-muted small mt-1">Sede riferimento: {row.locationName}</div>
+                  ) : null}
+                </div>
+
+                <div className="p-3 flex-grow-1 notification-detail">
+                  <div className="text-muted small mb-1">Contatti</div>
+                  <div className="fw-semibold">{row.phone || "-"}</div>
+                  <div className="text-muted small">{row.email || "-"}</div>
+                </div>
+
+                <div className="p-3 notification-action">
+                  <div className="d-grid gap-2">
+                    <a className="btn btn-outline-primary btn-sm" href={`/${encodeURIComponent(slug)}/clients?action=view&id=${row.id}`}>
+                      <i className="bi bi-box-arrow-up-right me-1" />
+                      Apri cliente
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })
       )}
 
       <div className="modal fade" id="birthdayNotificationSettingsModal" tabIndex={-1} aria-hidden="true">
@@ -189,9 +210,6 @@ export function NotificationsBirthdaysContent({ slug: slugProp }: { slug?: strin
               <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Chiudi" />
             </div>
             <div className="modal-body">
-              {settingsMessage ? (
-                <div className={`alert ${settingsMessage === "Impostazioni salvate" ? "alert-success" : "alert-danger"} py-2`}>{settingsMessage}</div>
-              ) : null}
               <label className="form-label fw-semibold" htmlFor="client_birthday_alert_days">
                 Avvisa per i compleanni nei prossimi
               </label>
