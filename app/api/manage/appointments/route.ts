@@ -152,8 +152,9 @@ export async function GET(request: Request) {
   // message inline and disables Confirm; otherwise { ok:true, preview }. Mirrors the POST
   // cancel_done gate; served over GET here (the modal fetches it read-only).
   if (action === "cancel_done_preview") {
+    // api_appt_require_manage default (api_appointments.php 9613-9614).
     if (!can(session.user.perms, "appointments.manage")) {
-      return jsonError("Permesso annullamento appuntamenti mancante.", 403);
+      return jsonError("Permesso Appuntamenti richiesto.", 403);
     }
     const id = Number.parseInt(String(url.searchParams.get("id") ?? "0"), 10);
     if (!Number.isFinite(id) || id <= 0) return jsonError("ID mancante", 400);
@@ -416,6 +417,19 @@ export async function POST(request: Request) {
 
   try {
     if (action === "hold_availability") {
+      // Gate legacy (api_appointments.php 6253-6256): in EDIT (exclude_id>0)
+      // manage + accesso alla prenotazione; in CREATE quick_booking.
+      const holdExcludeId = Number.parseInt(String(body.exclude_id ?? "0"), 10) || 0;
+      if (holdExcludeId > 0) {
+        if (!can(session.user.perms, "appointments.manage")) {
+          return jsonError("Permesso Appuntamenti richiesto.", 403);
+        }
+        if (!(await appointmentLocationAllowedForUser(tenantSlug, session.user, holdExcludeId))) {
+          return jsonError("Prenotazione non trovata o non disponibile nella sede corrente.", 403);
+        }
+      } else if (!can(session.user.perms, "appointments.quick_booking")) {
+        return jsonError("Permesso Prenotazione rapida richiesto.", 403);
+      }
       const date = String(body.date ?? todayIso());
       const time = String(body.time ?? "");
       const serviceNames = parseServiceNamesFromBody(body);
@@ -448,9 +462,17 @@ export async function POST(request: Request) {
     // whole gift INSTANCE of the client against an existing appointment. gift_idx
     // optional (auto-picks the first available instance). Legacy error messages.
     if (action === "fidelity_gift_redeem") {
+      // Gate legacy (api_appointments.php 7888-7897): manage + accesso alla
+      // prenotazione (l'ombrello POST ammette anche plan/quick_booking).
+      if (!can(session.user.perms, "appointments.manage")) {
+        return jsonError("Permesso Appuntamenti richiesto.", 403);
+      }
       const clientId = Number.parseInt(String(body.client_id ?? "0"), 10) || 0;
       const appointmentId = Number.parseInt(String(body.appointment_id ?? "0"), 10) || 0;
       if (clientId <= 0 || appointmentId <= 0) return jsonError("Dati mancanti", 400);
+      if (!(await appointmentLocationAllowedForUser(tenantSlug, session.user, appointmentId))) {
+        return jsonError("Prenotazione non trovata o non disponibile nella sede corrente.", 403);
+      }
       const giftIdx = body.gift_idx === undefined || body.gift_idx === null || String(body.gift_idx) === ""
         ? null
         : Number.parseInt(String(body.gift_idx), 10) || 0;
@@ -489,12 +511,20 @@ export async function POST(request: Request) {
     }
 
     if (action === "release_hold") {
+      // Gate legacy (api_appointments.php 6434): manage O quick_booking.
+      if (!canAny(session.user.perms, ["appointments.manage", "appointments.quick_booking"])) {
+        return jsonError("Permesso Prenotazione rapida richiesto.", 403);
+      }
       const token = String(body.appointment_hold_token ?? body.token ?? "");
       const released = await releasePublicBookingHold({ slug: tenantSlug, token, ownerKey: "manage" });
       return Response.json({ ok: released, sourceMode: "database" });
     }
 
     if (action === "renew_hold") {
+      // Gate legacy (api_appointments.php 6447): manage O quick_booking.
+      if (!canAny(session.user.perms, ["appointments.manage", "appointments.quick_booking"])) {
+        return jsonError("Permesso Prenotazione rapida richiesto.", 403);
+      }
       const token = String(body.appointment_hold_token ?? body.token ?? "");
       const hold = await renewPublicBookingHold({ slug: tenantSlug, token, ownerKey: "manage" });
       return Response.json({ ok: true, sourceMode: "database", ...hold });
@@ -726,8 +756,9 @@ export async function POST(request: Request) {
     // On the validation throw (e.g. the row is not 'done') we mirror the status path:
     // return { ok:false, error } with a 200 so the UI shows the message inline.
     if (action === "cancel_done") {
+      // api_appt_require_manage default (api_appointments.php 9632-9633).
       if (!can(session.user.perms, "appointments.manage")) {
-        return jsonError("Permesso annullamento appuntamenti mancante.", 403);
+        return jsonError("Permesso Appuntamenti richiesto.", 403);
       }
       const id = Number.parseInt(String(body.id ?? url.searchParams.get("id") ?? "0"), 10);
       if (!Number.isFinite(id) || id <= 0) {
@@ -970,6 +1001,45 @@ export async function POST(request: Request) {
     // there (one service is covered once).
     const giftRedeems = parseGiftRedeem(body.gift_redeem);
     const giftWarnings: string[] = [];
+    // PRE-GATE conflitti residui (port di qb_validate_qb_residui_conflicts,
+    // api_appointments.php 10146-10151): con selezioni giftbox/pacchetto/
+    // prepagato/omaggio e stato attivo, un residuo già collegato a un'ALTRA
+    // prenotazione (o quantità esaurite) BLOCCA il save con i messaggi legacy
+    // (join a capo, come l'Exception legacy). La giftcard non rientra nel check.
+    {
+      const saveStatusNorm = appointmentPhpStatus(String(body.status ?? "scheduled"));
+      // Selezioni RAW (snake_case) come le manda il drawer: la stessa parse del
+      // ramo qb_residui_check — i redeem tipizzati sopra sono camelCase e NON
+      // combaciano col contratto della lite-check.
+      const rawSel = (raw: unknown): Array<Record<string, unknown>> => {
+        const text = String(raw ?? "").trim();
+        if (!text) return [];
+        try {
+          const arr = JSON.parse(text);
+          return Array.isArray(arr) ? arr.filter((x) => x && typeof x === "object") : [];
+        } catch {
+          return [];
+        }
+      };
+      if (
+        ["pending", "scheduled", "done"].includes(saveStatusNorm) &&
+        (packageRedeems.length > 0 || prepaidRedeems.length > 0 || giftboxRedeems.length > 0 || giftRedeems.length > 0)
+      ) {
+        const conflicts = await qbResiduiConflictsLite(tenantSlug, isEdit ? editId : 0, {
+          packages: rawSel(body.package_redeem),
+          services: rawSel(body.prepaid_service_redeem),
+          giftboxes: rawSel(body.giftbox_redeem),
+          gifts: rawSel(body.gift_redeem),
+        }).catch(() => ({ messages: [] as string[] }));
+        const messages = Array.isArray((conflicts as { messages?: string[] }).messages)
+          ? (conflicts as { messages: string[] }).messages
+          : [];
+        if (messages.length > 0) {
+          return Response.json({ ok: false, error: messages.join("\n") });
+        }
+      }
+    }
+
     let serviceNames = parseServiceNamesFromBody(body);
     if (serviceIds.length > 0) {
       // `service_ids` is unambiguous (no comma-in-name issue) so it wins when sent.

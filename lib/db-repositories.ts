@@ -2123,6 +2123,20 @@ async function planAppointmentServices({
     totalDuration += duration;
   }
 
+  // MULTI-servizio: operatore OBBLIGATORIO per ogni servizio (api_appointments.php
+  // 10898-10900) — dopo il tentativo di auto-assegnazione dell'unico eleggibile,
+  // un servizio ancora senza operatore blocca il save col messaggio verbatim.
+  // Esenzione no_operator (il legacy vi assegna il placeholder SSO via
+  // unique_staff_for_service; il motore Next li tratta a operatore nullo).
+  if (services.length > 1) {
+    for (const seg of segments) {
+      if (Number(seg.staffId ?? 0) > 0) continue;
+      if (Number(seg.service?.no_operator ?? 0) === 1) continue;
+      const nm = String(seg.service?.name ?? "").trim() || `Servizio #${Number(seg.service?.id ?? 0)}`;
+      throw new Error(`Seleziona un operatore per "${nm}".`);
+    }
+  }
+
   // Durata totale non valida (api_appointments.php:10952-10954): un insieme di servizi
   // a durata nulla non deve produrre un appuntamento di durata 0.
   if (totalDuration <= 0) {
@@ -2138,6 +2152,72 @@ async function planAppointmentServices({
     end: cursor,
     staffIds: Array.from(staffIdSet),
   };
+}
+
+// Auto-assegnazione operatore per il SINGOLO servizio (port di
+// appt_auto_staff_for_single_service, api_appointments.php:10966-10974 +
+// helper): il legacy non salva MAI un singolo servizio senza operatore —
+// candidati = eleggibili del servizio (staff_services, fallback tutti gli
+// attivi non-SSO), filtro sede STRICT-con-safety, ordine alfabetico; viene
+// assegnato il PRIMO libero (niente conflitti né time-off nell'intervallo).
+// Nessun candidato libero -> messaggio verbatim. Esenti i servizi no_operator
+// (il motore Next li tratta a operatore nullo) e i multi-servizio (guardia
+// 'Seleziona un operatore per "X".' in planAppointmentServices).
+async function autoAssignSingleServiceStaff(
+  slug: string,
+  plan: AppointmentServicePlan,
+  locationId: number | null,
+  excludeAppointmentId: number | null,
+): Promise<void> {
+  if (plan.services.length !== 1) return;
+  const seg = plan.segments[0];
+  if (!seg || Number(seg.staffId ?? 0) > 0) return;
+  const service = plan.services[0];
+  if (Number(service.no_operator ?? 0) === 1) return;
+  const serviceId = Number(service.id ?? 0);
+  if (serviceId <= 0) return;
+
+  const mappedRows = await tenantSelect<RowDataPacket>({ slug, table: "staff_services", columns: "staff_id", where: "service_id = ?", params: [serviceId] }).catch(() => [] as RowDataPacket[]);
+  const mappedIds = [...new Set(mappedRows.map((r) => Number(r.staff_id ?? 0)).filter((n) => n > 0))];
+  const staffRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "staff",
+    columns: "id",
+    where: mappedIds.length
+      ? `id IN (${mappedIds.map(() => "?").join(",")}) AND COALESCE(is_active,1) = 1 AND full_name <> 'SSO'`
+      : `COALESCE(is_active,1) = 1 AND full_name <> 'SSO'`,
+    params: mappedIds.length ? mappedIds : [],
+    orderBy: "full_name ASC, id ASC",
+  }).catch(() => [] as RowDataPacket[]);
+  let candidateIds = staffRows.map((r) => Number(r.id ?? 0)).filter((n) => n > 0);
+  // Filtro sede (app_filter_staff_ids_by_location, stessa safety anti-vuoto di
+  // uniqueStaffForService: nessuna riga staff_locations -> nessun filtro).
+  if (locationId && locationId > 0 && candidateIds.length) {
+    const slRows = await tenantSelect<RowDataPacket>({ slug, table: "staff_locations", columns: "staff_id, location_id", where: `staff_id IN (${candidateIds.map(() => "?").join(",")})`, params: candidateIds }).catch(() => [] as RowDataPacket[]);
+    if (slRows.length) {
+      const allowedHere = new Set<number>();
+      for (const r of slRows) { if (Number(r.location_id ?? 0) === locationId) allowedHere.add(Number(r.staff_id ?? 0)); }
+      candidateIds = candidateIds.filter((id) => allowedHere.has(id));
+    }
+  }
+
+  const date = String(seg.startsAt).slice(0, 10);
+  for (const candidate of candidateIds) {
+    try {
+      await assertAppointmentSlotAvailable({
+        slug,
+        date,
+        segments: [{ staffId: candidate, startsAt: seg.startsAt, endsAt: seg.endsAt, serviceId, locationId, cabinId: null }],
+        excludeAppointmentId: excludeAppointmentId ?? undefined,
+      });
+    } catch {
+      continue; // occupato o in time-off: prova il prossimo
+    }
+    seg.staffId = candidate;
+    if (!plan.staffIds.includes(candidate)) plan.staffIds.push(candidate);
+    return;
+  }
+  throw new Error("Nessun operatore disponibile per il servizio e l'orario selezionati.");
 }
 
 // ---------------------------------------------------------------------------
@@ -2716,6 +2796,10 @@ export async function createDbAppointment({
       locationId,
     });
   }
+  // Singolo servizio senza operatore: auto-assegnazione del primo eleggibile
+  // LIBERO come il legacy (appt_auto_staff_for_single_service) — mai un save
+  // single-service a operatore nullo; nessuno libero -> errore verbatim.
+  await autoAssignSingleServiceStaff(slug, plan, locationId, null);
   // Double-booking guard: refuse to book an operator already busy at this time.
   // Legacy staff-service guard: each segment's operator must be enabled for its
   // service (see assertStaffAllowedForServices).
@@ -3105,6 +3189,10 @@ export async function updateDbAppointment({
       locationId,
     });
   }
+  // Singolo servizio senza operatore: auto-assegnazione come il create (il
+  // legacy applica appt_auto_staff_for_single_service anche in edit, con
+  // l'appuntamento stesso escluso dai conflitti).
+  await autoAssignSingleServiceStaff(slug, plan, locationId, id);
   // Double-booking guard: refuse to move/edit onto a slot where an operator is
   // Legacy staff-service guard (same as create): each segment's operator must be
   // enabled for its service.
@@ -5123,11 +5211,15 @@ export async function appointmentLocationAllowedForUser(
   user: { role?: string; locationIds?: number[] },
   appointmentId: number,
 ): Promise<boolean> {
+  // ESISTENZA prima di tutto (legacy app_appointment_accessible: SELECT 1 →
+  // falso su id inesistente/di altro tenant per CHIUNQUE, admin compreso —
+  // l'errore utente è 'Prenotazione non trovata o non disponibile nella sede
+  // corrente.', non i testi interni del motore).
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "appointments", columns: "location_id", where: "id = ?", params: [appointmentId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  if (!rows[0]) return false; // inesistente / non del tenant
   if ((user.role ?? "").toLowerCase() === "admin") return true;
   const ids = (user.locationIds ?? []).filter((n) => Number(n) > 0);
   if (ids.length === 0) return true; // nessuna restrizione -> tutte le sedi
-  const rows = await tenantSelect<RowDataPacket>({ slug, table: "appointments", columns: "location_id", where: "id = ?", params: [appointmentId], limit: 1 }).catch(() => [] as RowDataPacket[]);
-  if (!rows[0]) return false; // inesistente / non del tenant
   const loc = rows[0].location_id;
   if (loc === null || loc === undefined || Number(loc) <= 0) return true; // senza sede -> permissivo
   return ids.map((n) => Number(n)).includes(Number(loc));
@@ -22675,6 +22767,10 @@ async function resolveClientForAppointment(slug: string, clientName: string, loc
   if (clientId && clientId > 0) {
     const byId = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id,full_name", where: "id = ?", params: [clientId], limit: 1 });
     if (byId[0]) return { id: Number(byId[0].id), name: String(byId[0].full_name) };
+    // Legacy (api_appointments.php 3671/9993-9996): un client_id esplicito che non
+    // risolve nel tenant è un ERRORE — niente fallback per nome (che potrebbe
+    // legare al cliente sbagliato o crearne uno nuovo).
+    throw new Error("Cliente non valido o non disponibile nella sede scelta.");
   }
   const normalized = normalizeName(clientName, "Cliente");
   const existing = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id,full_name", where: "LOWER(full_name) = ?", params: [normalized.toLowerCase()], limit: 1 });

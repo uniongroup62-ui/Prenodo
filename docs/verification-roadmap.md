@@ -11101,3 +11101,113 @@ COMPLETA (segments/services/staff/locations/package/giftbox/prepaid/
 promotion_redemptions tutti a 0), delete id inesistente -> deleted=0 +
 blockedUnavailable=1. Regressione: test-appuntamenti 41/41 +
 test-calendario 20/20. Baseline 10/5 ripristinata (client_packages ZZ rimossi).
+
+## 2026-07-11 — Quick Booking (motore api_appointments: save/get/hold/cancel_done — gate, guardie operatore, residui)
+
+Mappa legacy INTEGRALE via agente di api_appointments.php (13134): gate per
+azione (righe 59-86 + tabella azione->gate), action=save integrale (ordine
+delle 24 validazioni coi testi verbatim, scritture, risposta), get (shape
+completa), cancel_done_preview/apply, delete, create_quick (api_clients),
+staff_for_services/cabins_for_services. Il drawer UI era gia' stato chiuso
+nelle passate Calendario 2a/2b/2c; questa passata chiude il MOTORE.
+
+FIX (route /api/manage/appointments):
+1) GATE hold_availability (legacy 6253-6256): in EDIT (exclude_id>0)
+   manage + accesso alla prenotazione, in CREATE quick_booking ('Permesso
+   Prenotazione rapida richiesto.') — prima bastava l'ombrello POST (anche
+   solo appointments.plan teneva slot).
+2) GATE release_hold/renew_hold (6434/6447): manage O quick_booking col testo
+   'Permesso Prenotazione rapida richiesto.'.
+3) GATE fidelity_gift_redeem (7888-7897): manage + accesso alla prenotazione
+   ('Permesso Appuntamenti richiesto.' / guardia sede) — prima l'ombrello.
+4) 403 cancel_done + cancel_done_preview -> 'Permesso Appuntamenti richiesto.'
+   (default di api_appt_require_manage; era un testo inventato).
+5) PRE-GATE conflitti residui nel save (port di
+   qb_validate_qb_residui_conflicts, 10146-10151): selezioni pacchetto/
+   prepagato/giftbox/omaggio con residuo esaurito o gia' collegato a un'altra
+   prenotazione BLOCCANO il save coi messaggi della lite-check (join a capo
+   come l'Exception legacy; giftcard esclusa dal check come nel legacy).
+   NB: le selezioni passano RAW (snake_case) — i redeem tipizzati camelCase
+   non combaciano col contratto della lite-check.
+
+FIX (motore db-repositories):
+6) resolveClientForAppointment: un client_id ESPLICITO che non risolve nel
+   tenant e' un errore verbatim 'Cliente non valido o non disponibile nella
+   sede scelta.' (3671/9993) — prima faceva fallback silenzioso sul NOME fino
+   a CREARE un cliente nuovo. Il fallback per nome resta per i caller interni
+   senza id (planner).
+7) appointmentLocationAllowedForUser FAIL-CLOSED sull'esistenza: il legacy
+   app_appointment_accessible fa SELECT 1 per CHIUNQUE (admin compreso) e
+   l'errore utente e' 'Prenotazione non trovata o non disponibile nella sede
+   corrente.' — lo shortcut admin PRECEDEVA il check e gli id inesistenti
+   finivano sui testi interni del motore ('Appuntamento non trovato.').
+   Vale per get/save-edit/move/swap/status/cancel_done/delete.
+8) planAppointmentServices: MULTI-servizio con un servizio senza operatore
+   (dopo il tentativo unique) -> 'Seleziona un operatore per "NOME".'
+   (10898-10900, fallback 'Servizio #id'; esenti i servizi no_operator).
+   Prima il save multi procedeva a operatore nullo.
+9) autoAssignSingleServiceStaff (port di appt_auto_staff_for_single_service,
+   10966-10974): il SINGLE service senza operatore non si salva mai a
+   operatore nullo — auto-assegnazione del primo eleggibile LIBERO (mappati
+   staff_services, fallback tutti gli attivi non-SSO, filtro sede
+   STRICT-con-safety, ordine alfabetico, conflitti+time-off via
+   assertAppointmentSlotAvailable con exclude dell'appuntamento in edit);
+   nessuno libero -> 'Nessun operatore disponibile per il servizio e
+   l'orario selezionati.'. Cablata in create E update.
+
+ATTESTAZIONI (residui deliberati / divergenze note):
+- WARNINGS-ROLLBACK (13093-13100): il legacy fa rollback DELL'INTERO
+  appuntamento se un'operazione collegata (riscatti/credito/giftcard) produce
+  warning; il Next salva e riporta i warning (skip best-effort). Il pre-gate
+  residui (fix 5) rende irraggiungibile il caso per selezioni coerenti; il
+  caso residuo (stato drawer stantio su ownership/scadenza) resta divergente:
+  prenotazione creata SENZA il riscatto saltato + warning, vs rollback legacy.
+  Motivo: la catena apply del Next non e' transazionale cross-funzione.
+- action=status NON esiste nel legacy (il cambio stato passa nel save con le
+  guardie 10225-10233): il port lo SPEZZA in save (che in edit NON tocca lo
+  stato) + action=status con le stesse guardie verbatim; il drawer invia i due
+  POST separati (riga 3503). Composizione equivalente, testata T1-T7.
+- client_id='__new__' (9977-9983, cliente inline nel save): non portato — il
+  drawer Next crea il cliente PRIMA via /api/manage/clients (create_quick
+  port, guardie client-side verbatim 'Nome e cognome obbligatori.'/'Email non
+  valida.'/'PEC non valida.') e invia l'id. Percorso senza entry point.
+- day-lock 5s (appointment_hold_acquire_day_lock): anti-race opzionale non
+  portato — coprono hold + assert conflitti/cabine (stessi errori finali).
+- hold 'converted': il tail del path principale legacy NON marca l'hold
+  convertito (quirk asimmetrico, solo il ramo segmento lo fa); il Next lo
+  marca sempre con appointment_id — migliorativo innocuo (l'hold attivo
+  escluso comunque dal proprio save), attestato.
+- Coupon nel save: il Next salva codice/sconto COME INVIATI (clamp) nelle
+  notes; la ri-validazione server-side legacy (coupon_find/validate/minimo/
+  applicabilita', 10983-11135) resta il residuo del modulo Buoni gia'
+  registrato ('coupon recompute from code-only notes').
+- Ordine errori: durata/tempo/multi-guard hanno precedenze leggermente
+  diverse quando PIU' errori coesistono (es. multi-guard Next precede il
+  check servizio-fuori-sede; nel legacy e' l'inverso) — testi identici,
+  precedenza divergente solo in corner multi-errore.
+- 'Occupato'/'(occupata)': testi della select operatore (staff_for_service
+  singolare) e del flag cabina resi dal frontend — gia' portati (drawer 2b).
+
+E2E test-quickbooking.mjs 35/35: gate create-vs-edit (G1-G2), create felice
+con figli/public_code/cabina auto (S1-S2), 13 guardie in ordine legacy
+(V1-V13: orario, sede invalida, servizio fantasma, CABINA PRIMA del conflitto
+operatore + conflitto puro con appuntamento raw senza cabina + cabina
+esplicita occupata, bloccato, non abilitato con virgolette, client_id
+fantasma senza creazione, multi senza operatore con 2 eleggibili in sede,
+auto-assegnazione unique, unique occupato -> Conflitto fedele, auto-pick
+esaurito -> 'Nessun operatore disponibile...', pre-gate residui pacchetto a
+0 sessioni, gate hold con solo plan, gate fidelity_gift_redeem), hold
+(H1-H3: token, doppio hold rifiutato verbatim, convert legato all'id), edit
+(E1-E3: replace figli, 403 fantasma, lock annullato), get (Q1-Q2 payload +
+guardia), status/cancel_done (T1-T7 transizioni verbatim + storno con
+cancelled_reason). Regressione: test-appuntamenti 41/41 + test-appuntamenti2
+8/8 (D2 aggiornato al 403 fail-closed) + test-calendario 20/20 +
+test-notifiche-hub 16/16. Baseline 10/5/3/3 ripristinata.
+
+INCIDENTE (dichiarato e risanato): una pulizia per inferenza (client_id
+orfano) ha eliminato ANCHE l'appuntamento di baseline 210 (pending, client
+124 gia' orfano in origine). Ripristinato byte-per-byte dagli snapshot dei
+transcript (id 210, public_code 'B39D71592D', 27/07/2026 11:00-12:00,
+pending, servizio 9 €12, sede 21, segmento id 214 senza operatore) e
+verificato campo-per-campo sull'API list. LEZIONE (in memoria): mai eliminare
+per inferenza — solo gli id tracciati creati in-sessione.
