@@ -1,5 +1,45 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Fidelity pass 2: ri-attestazione + sonda invariante — ~700 verdi, nessun bug prodotto (2026-07-12)
+
+Seconda passata (audit completo 07-09 con fix normalizeFidelityPoints
+floor/ceil; satelliti Punti/Portafoglio/Promozioni auditati a parte). DRIFT
+sulla route: solo Modello A (deliberato).
+BATTERIA (tutta verde a fine pass): test-fidelity 42 + test-punti 26 +
+test-portafoglio 14 + e2e levels 31 / membership 32 / membership-settings 29
+/ points 42 / wallet 29 / fidwallet 11 / toggle 27 / credit 10 + markers
+45+58+60+65+102+72 = ~700 con le sonde.
+SONDA INVARIANTE (input ostili): '3,7' -> floor 3 ('Aggiunti 3 Punti', MAI
+round), '0,9' -> 'Inserisci un numero intero di punti valido.', overflow ->
+clamp esatto 100000000, cliente inesistente -> gate adesione (stesso ordine
+guardie del PHP: importo -> cliente -> adesione).
+INCIDENTE RILEVATO E SANATO (nessun bug prodotto):
+1. CAMPAGNA PRODUZIONE 37 trovata active=0 (updated_at 11/07 22:55): il
+   toggle-off Fidelity disattiva FEDELMENTE le campagne attive
+   (fidelity_page_deactivate_active_campaigns) e il re-enable NON le riattiva
+   — una suite pre-audit l'aveva spenta senza ripristino. RIPRISTINATA
+   active=1 (unico campo mutato); e2e-fidelity ARCHIVIATA .superseded
+   (shape needsConfirm/impact inventata, aspettativa 'punti restituiti +5'
+   SMENTITA dal legacy — lo strip libera solo la riserva, clients.points
+   intatto, fidelity.php 492-537 — e mutazione campagne di produzione senza
+   snapshot); il dominio toggle è coperto da e2e-fidelity-toggle 27 (semina
+   campagna ZZ propria, messaggi composti verbatim).
+2. LEAK point_lots: e2e-fidwallet ripuliva transactions ma NON i point_lots
+   creati dal wallet (manual + backfill 'legacy') — 6 lotti orfani rimossi
+   (id 138-145, creati stanotte dalle sue run) e cleanup della suite esteso.
+HARNESS SANATI: e2e-fidwallet/e2e-credit (assert status!=200 -> flash 200+err
+come il PHP; testi verbatim confermati su fidelity_wallet.php 64/114/124/168;
+'bloccato' -> 'disattivato' verbatim api_appointments 10000), e2e-credit +
+e2e-fidelity-points a sessione forgiata sede 21 (il KPI legacy filtra
+location_id SOLO con sede>0), e2e-fidelity-levels (il livello NON si azzera
+al toggle-off: flag write-only Fidelity.php 593, audit Punti), test-punti/
+test-portafoglio baseline post-bonifica (tx 82->80, emitted 508->488, used
+218->217: le 2 tx orfane del client 11 rimosse il 12/07), import pg
+createRequire su 3 script.
+Baseline: tx 80, lots 36, cards 0, campagna 37 ATTIVA, 5 clienti, 10
+appuntamenti, 9 vendite, fidelity_enabled 1. DOMINIO CONFERMATO COMPLETO.
+Nessuna modifica al codice prodotto.
+
 ## Bonifica orfani tenant 25 (autorizzata dall'utente) — 28 righe rimosse (2026-07-12)
 
 Su conferma esplicita dell'utente, bonifica dei soli orfani FK-dangling
