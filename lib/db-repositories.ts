@@ -2692,15 +2692,28 @@ function extractCouponMetaFromNotes(notes: unknown): { code: string; discount: n
   if (!raw) return { code: "", discount: 0 };
   let code = "";
   let discount = 0;
-  for (const line of raw.split(/\r?\n/)) {
+  // Regex TOLLERANTI del legacy (Helpers.php 3364-3374): 'Coupon : X', 'Sconto
+  // coupon: € 3,90' senza '-', variante 'Coupon discount: 3.90' — i writer
+  // storici non usano tutti il formato canonico dei marker.
+  for (const line of raw.split(/\r\n|\n|\r/)) {
     const t = line.trim();
-    if (t.startsWith(COUPON_CODE_MARKER)) {
-      code = t.slice(COUPON_CODE_MARKER.length).trim().toUpperCase();
-    } else if (t.startsWith(COUPON_DISCOUNT_MARKER)) {
-      discount = roundMoney(Math.max(0, parseMoney(t.slice(COUPON_DISCOUNT_MARKER.length), 0)));
+    if (t === "") continue;
+    const mCode = /^Coupon\s*:\s*([A-Za-z0-9_-]{1,40})\s*$/i.exec(t);
+    if (mCode) {
+      code = mCode[1].trim().toUpperCase();
+      continue;
+    }
+    const mDisc = /^(?:Sconto\s*coupon|Coupon\s*discount)\s*:\s*(?:-?\s*€\s*)?(-?[0-9]+(?:[.,][0-9]{1,2})?)\s*$/i.exec(t);
+    if (mDisc) {
+      const v = Number.parseFloat(mDisc[1].replace(",", "."));
+      discount = roundMoney(Math.abs(Number.isFinite(v) ? v : 0));
+      continue;
     }
   }
-  if (!code || discount <= 0) return { code: "", discount: 0 };
+  // Legacy extract_coupon_meta_from_notes (Helpers.php 3355-3378): il CODICE
+  // torna anche SENZA riga sconto (righe storiche code-only: il get legacy le
+  // ricalcola — residuo Buoni — e il drawer mostra 'Coupon storico preservato.').
+  if (!code) return { code: "", discount: 0 };
   return { code, discount };
 }
 
@@ -4601,9 +4614,13 @@ export async function getDbAppointmentForEdit(slug: string, id: number): Promise
     // from the notes markers via extract_coupon_meta_from_notes) for the price-panel prefill.
     fidelityPointsUsed: Math.max(0, Math.round(Number(row.fidelity_points_used ?? 0) || 0)),
     creditUsed: roundMoney(Math.max(0, parseMoney(row.credit_used, 0))),
+    // Coupon dal marker nelle notes: il codice torna ANCHE con sconto 0 (riga
+    // storica code-only) — il drawer distingue 'Coupon applicato.' vs 'Coupon
+    // storico preservato.' (2b); il ricalcolo legacy dello sconto (get
+    // 8893-8922) resta il residuo del modulo Buoni.
     coupon: (() => {
       const meta = extractCouponMetaFromNotes(row.notes);
-      return meta.code && meta.discount > 0 ? meta : null;
+      return meta.code ? meta : null;
     })(),
     expiredLinkWarning,
     cancelledAt,

@@ -29,12 +29,25 @@ export const runtime = "nodejs";
 // Legacy page access: clients.php richiede ANY di questi tre permessi; le azioni
 // new/edit/delete/history restano gated clients.manage (vedi sotto).
 const CLIENTS_PAGE_PERMS = ["clients.manage", "client_sheets.manage", "client_consents.manage"];
+// Gate API legacy (api_clients.php 12-19): il drawer quick-booking (search/card/
+// storico/residui) e il planner (search) passano anche con i permessi agenda —
+// la whitelist a 9 permessi con 403 'Accesso negato'. La PAGINA Clienti resta
+// gated ai 3 permessi via flag pageAllowed nella risposta list.
+const CLIENTS_API_PERMS = [
+  ...CLIENTS_PAGE_PERMS,
+  "appointments.manage",
+  "appointments.plan",
+  "appointments.quick_booking",
+  "calendar.view",
+  "fidelity.manage",
+  "fidelity.membership",
+];
 
 export async function GET(request: Request) {
   const tenantSlug = manageTenantSlugFromRequest(request);
   const session = await currentManageSession(tenantSlug);
   if (!session) return jsonError("Sessione scaduta o non valida.", 401);
-  if (!canAny(session.user.perms, CLIENTS_PAGE_PERMS)) return jsonError("Permesso clienti mancante.", 403);
+  if (!canAny(session.user.perms, CLIENTS_API_PERMS)) return jsonError("Accesso negato", 403);
 
   const url = new URL(request.url);
   // Azioni riservate a clients.manage (legacy: redirect "Permessi insufficienti
@@ -43,6 +56,12 @@ export async function GET(request: Request) {
   const requestedAction = url.searchParams.get("action") ?? "";
   if (guardedActions.includes(requestedAction) && !can(session.user.perms, "clients.manage")) {
     return jsonError("Permessi insufficienti per questa azione sui clienti.", 403);
+  }
+  // Azioni di PAGINA (scheda cliente): restano sui 3 permessi pagina anche con
+  // l'ombrello API a 9 (un utente solo-agenda non apre la scheda; la LIST resta
+  // servita per la ricerca drawer/planner e la pagina si gata via pageAllowed).
+  if (requestedAction === "detail" && !canAny(session.user.perms, CLIENTS_PAGE_PERMS)) {
+    return jsonError("Permesso clienti mancante.", 403);
   }
   const locationId = await resolveManageLocationId({
     slug: tenantSlug,
@@ -233,18 +252,25 @@ export async function GET(request: Request) {
   try {
     const allLocations = ["1", "true", "on", "yes", "all"].includes(String(url.searchParams.get("all_locations") ?? "").trim().toLowerCase());
     const filterLocationId = allLocations ? 0 : locationId;
-    const clients = await listDbClients({
+    // exclude_blocked=1 (search del drawer/planner, api_clients search legacy):
+    // i clienti disattivati non compaiono tra i risultati selezionabili.
+    const excludeBlocked = ["1", "true", "on", "yes"].includes(String(url.searchParams.get("exclude_blocked") ?? "").trim().toLowerCase());
+    let clients = await listDbClients({
       slug: tenantSlug,
       query: url.searchParams.get("q") ?? "",
       locationId: filterLocationId,
       legacyList: true,
     });
+    if (excludeBlocked) clients = clients.filter((c) => !(c as { archived?: boolean }).archived);
     const anyRows = await listDbClients({ slug: tenantSlug, legacyList: true });
     return Response.json({
       ok: true,
       sourceMode: "database",
       clients,
       hasAnyClients: anyRows.length > 0,
+      // Gate della PAGINA Clienti (clients.php requireAnyPerm sui 3 permessi):
+      // l'ombrello API è a 9 per drawer/planner, la pagina si gata con questo.
+      pageAllowed: canAny(session.user.perms, CLIENTS_PAGE_PERMS),
       perms: {
         clientsManage: can(session.user.perms, "clients.manage"),
         clientSheetsManage: can(session.user.perms, "client_sheets.manage"),
@@ -300,11 +326,20 @@ export async function POST(request: Request) {
   const tenantSlug = manageTenantSlugFromRequest(request);
   const session = await currentManageSession(tenantSlug);
   if (!session) return jsonError("Sessione scaduta o non valida.", 401);
-  if (!can(session.user.perms, "clients.manage")) return jsonError("Permesso clienti mancante.", 403);
 
   const body = await parseRequestBody(request);
   const url = new URL(request.url);
   const action = String(body.action ?? url.searchParams.get("action") ?? "create");
+  // CREATE = anche il drawer quick-booking (legacy api_clients create_quick,
+  // 1351-1352: clients.manage O appointments.quick_booking, testo verbatim);
+  // tutte le altre azioni restano clients.manage.
+  if (action === "create") {
+    if (!canAny(session.user.perms, ["clients.manage", "appointments.quick_booking"])) {
+      return jsonError("Permesso insufficiente per creare clienti.", 403);
+    }
+  } else if (!can(session.user.perms, "clients.manage")) {
+    return jsonError("Permesso clienti mancante.", 403);
+  }
 
   try {
     // NB: Modello A (= PHP) — nessuna guardia per-sede sul cliente: l'anagrafica e'

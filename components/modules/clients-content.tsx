@@ -93,6 +93,10 @@ export function ClientsContent({ slug: slugProp, initialQuery }: { slug?: string
     ["1", "true", "on", "yes", "all"].includes(String(initialQuery?.all_locations ?? "").trim().toLowerCase()),
   );
   const [loading, setLoading] = useState(true);
+  // Gate pagina legacy (clients.php requireAnyPerm sui 3 permessi clienti): la
+  // route API ora ammette anche i permessi agenda per la ricerca del drawer, la
+  // PAGINA si gata col flag pageAllowed -> card 'Accesso negato'.
+  const [accessDenied, setAccessDenied] = useState(false);
   // Flash legacy (View::alert): ?msg= success + ?err= danger dal redirect.
   const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
 
@@ -105,6 +109,7 @@ export function ClientsContent({ slug: slugProp, initialQuery }: { slug?: string
       )
         .then((r) => r.json())
         .then((j) => {
+          if (j?.pageAllowed === false) setAccessDenied(true);
           setClients(Array.isArray(j.clients) ? j.clients : []);
           setHasAnyClients(Boolean(j.hasAnyClients ?? (Array.isArray(j.clients) && j.clients.length > 0)));
           if (j.perms) {
@@ -165,6 +170,18 @@ export function ClientsContent({ slug: slugProp, initialQuery }: { slug?: string
   const showEmptyState = !loading && !hasAnyClients;
   // Legacy: il filtro "Tutte le sedi" esiste solo per i tenant multi-sede.
   const showAllLocationsFilter = locationsCount > 1;
+
+  // Port della pagina 403 di requireAnyPerm (clients.php): card 'Accesso negato'.
+  if (accessDenied) {
+    return (
+      <div className="container-fluid">
+        <div className="card p-4">
+          <div className="h4 fw-semibold mb-2">Accesso negato</div>
+          <div className="text-muted">Non hai i permessi per accedere a questa sezione.</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="container-fluid">

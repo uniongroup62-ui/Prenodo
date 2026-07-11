@@ -421,7 +421,9 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
     if (!findOpen) return;
     const q = findQuery.trim();
     const handle = window.setTimeout(() => {
-      fetch(`/api/manage/clients?slug=${encodeURIComponent(slug)}&q=${encodeURIComponent(q)}`, {
+      // Search legacy (api_clients search, planner JS 120: exclude_blocked=1):
+      // tenant-wide senza filtro sede + clienti bloccati esclusi.
+      fetch(`/api/manage/clients?slug=${encodeURIComponent(slug)}&q=${encodeURIComponent(q)}&all_locations=1&exclude_blocked=1`, {
         headers: { "x-tenant-slug": slug },
       })
         .then((r) => r.json())

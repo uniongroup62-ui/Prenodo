@@ -11211,3 +11211,75 @@ transcript (id 210, public_code 'B39D71592D', 27/07/2026 11:00-12:00,
 pending, servizio 9 €12, sede 21, segmento id 214 senza operatore) e
 verificato campo-per-campo sull'API list. LEZIONE (in memoria): mai eliminare
 per inferenza — solo gli id tracciati creati in-sessione.
+
+## 2026-07-11 — Quick Booking, parte 2 (gate di contorno del drawer: ombrello GET, api_clients a 9 permessi, preview, coupon get)
+
+Chiusura del dominio sul CONTORNO del drawer: gate delle azioni ausiliarie
+(mappa legacy della parte 1 + ancoraggi diretti api_appointments 7990-7994 /
+5884-5892 / 6918-6922 e api_clients 12-19 / 1343-1444, Helpers 3329-3390).
+
+FIX (route /api/manage/appointments):
+1) OMBRELLO GET = gate di PAGINA legacy (api_appointments.php:2, requireAnyPerm
+   sui 4 permessi INCLUSO quick_booking): prima l'ombrello a 3 negava a un
+   operatore solo-quick_booking le GET del drawer (context, staff_for_service,
+   cabins_for_services, availability, preview) che il legacy serve. Le azioni
+   con gate proprio piu' stretto:
+   - list (7990-7994): any di view/manage/plan -> 'Permesso Calendario richiesto.'
+   - get (8597): any di view/manage/plan -> 'Permesso non sufficiente per
+     aprire la prenotazione.' (il solo quick_booking non apre prenotazioni).
+2) qb_residui_check (5884-5892): split legacy — con appointment_id manage +
+   accesso alla prenotazione, senza quick_booking (gate mancato nella parte 1).
+3) promotion_preview (6918-6922): guardie legacy — client_id che non risolve
+   -> 403 'Cliente non valido o non disponibile nella sede scelta.'; servizio
+   fuori sede -> 403 'Servizio non disponibile nella sede selezionata.'.
+
+FIX (route /api/manage/clients — superficie API del drawer):
+4) OMBRELLO GET = gate API legacy a 9 permessi (api_clients.php 12-19: i 3
+   permessi clienti + manage/plan/quick_booking/calendar.view/fidelity.manage/
+   fidelity.membership) con 403 verbatim 'Accesso negato' — prima la ricerca
+   clienti del drawer E del planner falliva per gli operatori solo-agenda
+   (anche solo-plan!). La PAGINA Clienti resta sui 3 permessi:
+   - flag pageAllowed nella risposta list + card 'Accesso negato' in
+     clients-content (port di requireAnyPerm della pagina);
+   - action=detail (scheda) gated ai 3 permessi ('Permesso clienti mancante.').
+5) POST action=create = create_quick legacy (1351-1352): clients.manage O
+   appointments.quick_booking, 403 verbatim 'Permesso insufficiente per creare
+   clienti.' — il drawer 'Nuovo cliente' funzionava solo con clients.manage.
+   Le altre azioni POST restano clients.manage.
+6) SEARCH semantics del drawer/planner (api_clients action=search): tenant-wide
+   (Modello A) + exclude_blocked=1 — la lista default resta sede-strict per la
+   pagina; il drawer e il planner ora passano all_locations=1&exclude_blocked=1
+   e la route supporta exclude_blocked (i disattivati spariscono dai risultati
+   selezionabili, come il legacy).
+
+FIX (motore, get payload):
+7) Coupon dalle notes: extract_coupon_meta_from_notes fedele (Helpers.php
+   3355-3378) — regex TOLLERANTI ('Coupon : X', 'Sconto coupon: € 3,90' senza
+   '-', variante 'Coupon discount: 3.90') e il CODICE torna anche SENZA riga
+   sconto. Il payload get ora restituisce coupon {code, discount:0} per le
+   righe storiche code-only: senza questo il fix 2b del drawer ('Coupon
+   storico preservato.') era irraggiungibile. Bonus: i conteggi-usi coupon
+   (per-customer limit) ora vedono anche le righe code-only come il legacy.
+   Il RICALCOLO dello sconto sul get (8893-8922) resta il residuo del modulo
+   Buoni gia' registrato.
+
+ATTESTAZIONI:
+- coupon_preview / fidelity_preview legacy: nel port vivono nelle route dei
+  moduli Buoni/Fidelity (composizione, gia' audidate in quei domini).
+- Esposizione dati: la search a 9 permessi restituisce le righe della lista
+  (superset dei 4 campi della search legacy) — equivalente in pratica: la
+  action=card whitelisted espone comunque l'anagrafica completa per-cliente.
+- staff_for_services (plurale) legacy non calcola disponibilita' (solo il
+  singolare ha available/'Occupato') — il port del singolare verificato live.
+
+E2E test-quickbooking2.mjs 21/21: matrice gate (context/staff_for_service/
+cabins/availability OK con solo quick_booking; list/get 403 coi testi propri;
+GET 403 ombrello senza permessi agenda), qb_residui_check split, promotion
+preview guardie, clients (search drawer tenant-wide con esclusione bloccati +
+pageAllowed false, lista pagina pageAllowed true, 403 'Accesso negato' senza i
+9, create con solo quick_booking + 403 verbatim senza, update/detail negati,
+card+quickbook_client_context OK), staff_for_service 'Occupato' su finestra
+occupata, cabins_for_services occupied/free_ids/auto_select, get coupon
+code-only {ZZTEST,0} + variante tollerante {ZZVAR,3.9}. Regressione COMPLETA:
+test-quickbooking 35/35 + test-appuntamenti 41/41 + test-appuntamenti2 8/8 +
+test-calendario 20/20 + test-notifiche-hub 16/16. Baseline 10/5 ripristinata.

@@ -16,6 +16,7 @@ import {
   getDbAppointmentCustomerVisibleSnapshot,
   getDbAppointmentForEdit,
   getDbAppointmentPhpStatus,
+  getDbClient,
   appointmentListDecorations,
   listDbAppointments,
   moveDbAppointmentCalendar,
@@ -63,16 +64,22 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const action = url.searchParams.get("action") ?? "list";
 
-  if (!canAny(session.user.perms, ["calendar.view", "appointments.manage", "appointments.plan"])) {
-    // Testi 403 per-azione del legacy: list 'Permesso Calendario richiesto.'
-    // (api_appointments.php 7993), get 'Permesso non sufficiente per aprire la
-    // prenotazione.' (8597); le altre GET restano sul messaggio ombrello.
+  // Gate di PAGINA legacy (api_appointments.php:2, requireAnyPerm sui 4 permessi):
+  // anche il solo quick_booking apre le GET di contorno del drawer (context,
+  // staff_for_service/s, cabins_for_services, availability, preview). Le azioni
+  // list e get hanno poi il PROPRIO gate più stretto coi testi verbatim.
+  if (!canAny(session.user.perms, ["calendar.view", "appointments.manage", "appointments.plan", "appointments.quick_booking"])) {
     const msg = action === "get"
       ? "Permesso non sufficiente per aprire la prenotazione."
       : action === "list"
         ? "Permesso Calendario richiesto."
         : "Permesso appuntamenti mancante.";
     return jsonError(msg, 403);
+  }
+  // action=get (8597): any di view/manage/plan col testo dedicato — il solo
+  // quick_booking NON basta ad aprire una prenotazione esistente.
+  if (action === "get" && !canAny(session.user.perms, ["calendar.view", "appointments.manage", "appointments.plan"])) {
+    return jsonError("Permesso non sufficiente per aprire la prenotazione.", 403);
   }
 
   // Quick-booking context: everything the global "Nuova prenotazione" offcanvas
@@ -262,6 +269,22 @@ export async function GET(request: Request) {
       if (serviceIds.length === 0) {
         return Response.json({ ok: true, applied: 0, promotion: null, services: [], location_id: locationId, service_ids: [], reason: "Nessun servizio selezionato." });
       }
+      // Guardie legacy (api_appointments.php 6918-6922): accesso al cliente
+      // (Modello A: esiste nel tenant) + servizi disponibili nella sede.
+      if (clientId > 0) {
+        const clientRow = await getDbClient(clientId, tenantSlug);
+        if (!clientRow) return jsonError("Cliente non valido o non disponibile nella sede scelta.", 403);
+      }
+      if (locationId && locationId > 0) {
+        const promoContext = await publicBookingContext(tenantSlug);
+        for (const sid of serviceIds) {
+          const svc = promoContext.services.find((s) => s.id === sid);
+          const svcLocationIds = (svc as { locationIds?: number[] } | undefined)?.locationIds ?? [];
+          if (svc && svcLocationIds.length > 0 && !svcLocationIds.includes(locationId)) {
+            return jsonError("Servizio non disponibile nella sede selezionata.", 403);
+          }
+        }
+      }
       const promoCtx = await evalBestPromotionForAppointment({ slug: tenantSlug, serviceIds, date, time, clientId: clientId > 0 ? clientId : null, locationId });
       return Response.json({
         ok: true,
@@ -340,6 +363,12 @@ export async function GET(request: Request) {
   }
 
   try {
+    // Gate della LIST (api_appointments.php 7990-7994): any di view/manage/plan
+    // con 'Permesso Calendario richiesto.' — il solo quick_booking (ammesso
+    // dall'ombrello di pagina qui sopra) NON legge la lista.
+    if (!canAny(session.user.perms, ["calendar.view", "appointments.manage", "appointments.plan"])) {
+      return jsonError("Permesso Calendario richiesto.", 403);
+    }
     const date = url.searchParams.get("date") ?? undefined;
     // RANGE list (calendar Week/Month views): when `from`/`to` (YYYY-MM-DD) are
     // sent INSTEAD of a single `date`, list every appointment whose start falls in
@@ -818,6 +847,19 @@ export async function POST(request: Request) {
     // action=qb_residui_check, api_appointments.php:5879-5906): risponde nella
     // shape legacy {ok, packages, giftboxes, services, gifts, messages}.
     if (action === "qb_residui_check") {
+      // Gate legacy (api_appointments.php 5884-5892): con appointment_id (edit)
+      // manage + accesso alla prenotazione; senza (create) quick_booking.
+      const residuiApptId = Number.parseInt(String(body.appointment_id ?? "0"), 10) || 0;
+      if (residuiApptId > 0) {
+        if (!can(session.user.perms, "appointments.manage")) {
+          return jsonError("Permesso Appuntamenti richiesto.", 403);
+        }
+        if (!(await appointmentLocationAllowedForUser(tenantSlug, session.user, residuiApptId))) {
+          return jsonError("Prenotazione non trovata o non disponibile nella sede corrente.", 403);
+        }
+      } else if (!can(session.user.perms, "appointments.quick_booking")) {
+        return jsonError("Permesso Prenotazione rapida richiesto.", 403);
+      }
       try {
         const parseSel = (raw: unknown): Array<Record<string, unknown>> => {
           const text = String(raw ?? "").trim();

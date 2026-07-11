@@ -2275,7 +2275,10 @@ export function QuickBookingDrawer() {
         return;
       }
       findTimerRef.current = setTimeout(() => {
-        const params = new URLSearchParams({ slug, q });
+        // Semantica della SEARCH legacy (api_clients action=search): tenant-wide
+        // (Modello A, nessun filtro sede) + exclude_blocked=1 — la lista default
+        // della route è invece sede-strict per la pagina Clienti.
+        const params = new URLSearchParams({ slug, q, all_locations: "1", exclude_blocked: "1" });
         fetch(`/api/manage/clients?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
           .then((r) => r.json())
           .then((j: { clients?: Array<{ id: number; name: string; email?: string; phone?: string }> }) => {
