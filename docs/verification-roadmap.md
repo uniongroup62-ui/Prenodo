@@ -1,5 +1,24 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Preventivi pass 3 (incl. notifiche preventivi): ri-attestazione — 162 verdi, delete-sent riconfermata via probe (2026-07-11)
+
+Terza passata (audit 07-05 quotes+settings + audit completo/conversione POS 07-08 +
+chiusura residui con endpoint compat RIMOSSI 5964360; la pagina notifiche
+'Preventivi: risposte clienti' è del pass Notifiche). DRIFT: manage-quotes/route/
+componenti intatti dai commit dell'audit.
+BATTERIA POST-AUDIT subito verde: test-preventivi 25 + test-quote-decision 10 +
+e2e-quotes 80 (save/validazioni/prezzi bloccati dal catalogo/matematica/numerazione
+N/YYYY/view/edit snapshot) + e2e-quote-settings 20 + notifiche 17 + feed 10 = 162.
+QUATTRO script PRE-audit fallivano per ragioni non-prodotto e sono stati ARCHIVIATI
+(.superseded): usavano le azioni compat RIMOSSE deliberatamente nell'audit
+('Azione preventivi non supportata.' è il rifiuto corretto) e asserivano il
+transport sbagliato sulla delete (status!=200, mentre il port risponde 200 con err
+nel body come il flash legacy). PROBE di conferma sull'unica semantica dubbia:
+delete di un preventivo INVIATO -> rifiutata con l'esatto verbatim 'Puoi eliminare
+solo preventivi in bozza. Per preventivi inviati o storicizzati usa lo stato
+Annullato/Rifiutato.' (quotes.php 270), riga intatta. Nessun bug prodotto.
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice.
+
 ## Pacchetti pass 3: ri-attestazione — zero drift, batteria risanata 257 verdi (2026-07-11)
 
 Terza passata (audit 07-05 packages+settings + emissione fedele 07-08: snapshot
