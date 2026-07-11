@@ -1,5 +1,17 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Pacchetti pass 4: ri-attestazione stessa giornata — zero drift, 260 verdi (2026-07-11)
+
+Quarta passata richiesta a poche ore dal pass 3. DRIFT dal commit 38442bf: solo
+a43c34c (doc Preventivi), nessun file prodotto toccato. Ri-eseguita l'INTERA
+batteria: test-pacchetti 26 + test-pkg-pos 8 + e2e-pkg-editor 15 +
+e2e-pkg-catalog 13 + e2e-pkg-clientdetail 12 + e2e-pkg-usage 10 +
+probe-pkg-preview 3 + e2e-packages 48 + e2e-package-settings 6 +
+e2e-packages-catalog 27 + markers-packages 92 = 260 verdi, zero FAIL.
+Baseline tenant 25 verificata a fine corsa: packages/client_packages/products = 0,
+sales 9, sale_items 9, clients 5, appointments 10, zero residui ZZ.
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice.
+
 ## Preventivi pass 3 (incl. notifiche preventivi): ri-attestazione — 162 verdi, delete-sent riconfermata via probe (2026-07-11)
 
 Terza passata (audit 07-05 quotes+settings + audit completo/conversione POS 07-08 +
