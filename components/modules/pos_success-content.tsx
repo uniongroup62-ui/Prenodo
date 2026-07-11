@@ -72,7 +72,12 @@ function flashFromUrl(): boolean {
 }
 
 function fmtMoney(value: number): string {
-  return Number(value || 0).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // fmt_money legacy = number_format(2, ',', '.') — raggruppamento migliaia manuale
+  // (toLocaleString it-IT non raggruppa 1000-9999).
+  const n = Number(value) || 0;
+  const [int, dec] = Math.abs(n).toFixed(2).split(".");
+  const g = int.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return (n < 0 ? "-" : "") + g + "," + dec;
 }
 
 // fmt_points legacy: intero quando possibile, altrimenti 2 decimali it-IT.
@@ -134,14 +139,22 @@ export function PosSuccessContent({ slug: slugProp }: { slug?: string } = {}) {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    const id = saleIdFromUrl();
-    setFlash(flashFromUrl());
-    if (id <= 0) {
-      setError("Vendita non valida.");
-      setLoading(false);
-      return;
-    }
-    setSaleId(id);
+    // Prefill URL in microtask (pattern consolidato: niente setState sincroni).
+    let alive = true;
+    Promise.resolve().then(() => {
+      if (!alive) return;
+      const id = saleIdFromUrl();
+      setFlash(flashFromUrl());
+      if (id <= 0) {
+        setError("Vendita non valida.");
+        setLoading(false);
+        return;
+      }
+      setSaleId(id);
+    });
+    return () => {
+      alive = false;
+    };
   }, []);
 
   useEffect(() => {

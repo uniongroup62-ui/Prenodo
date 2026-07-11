@@ -6555,7 +6555,12 @@ function randomHex(length: number): string {
 }
 
 function formatMoney(value: number): string {
-  return roundMoney(value).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // fmt_money legacy = number_format(2, ',', '.') — raggruppamento migliaia manuale
+  // (toLocaleString it-IT non raggruppa 1000-9999).
+  const n = roundMoney(value);
+  const [int, dec] = Math.abs(n).toFixed(2).split(".");
+  const g = int.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return (n < 0 ? "-" : "") + g + "," + dec;
 }
 
 // Data odierna Europe/Rome (non il fuso del server): il legacy usa date('Y-m-d') su Rome, e su

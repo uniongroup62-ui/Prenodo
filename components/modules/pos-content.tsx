@@ -148,6 +148,8 @@ type PosContext = {
   fidelityRedeemEnabled?: boolean;
   // Blocco info Fidelity sotto Concludi (pos.php 6399-6411).
   fidelityEarnInfo?: { euroPerPoint: number; earnStep: number; campaignActiveToday: boolean };
+  // Flag pagina/azioni legacy (pos.php:2 requirePerm('pos.manage'); 5934 pos.settings).
+  perms?: { posManage?: boolean; posSettings?: boolean };
 };
 
 // Info promo per un tile del catalogo (mode=catalog_promos legacy): prezzo promo
@@ -1988,7 +1990,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
       setErrorMsg("Inserisci un importo ricarica valido.");
       return;
     }
-    const label = `Ricarica € ${rechargeBase.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const label = `Ricarica € ${rechargeBase.toFixed(2).replace(".", ",")}`;
     setCart((prev) => [
       {
         key: `${Date.now()}-${Math.floor(Math.random() * 1000)}`,
@@ -2443,6 +2445,19 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
     }
   }
 
+  // Gate pagina legacy (pos.php:2 requirePerm('pos.manage')): con l'ombrello API
+  // allargato ai 4 permessi pos.* la pagina si gata col flag.
+  if (ctx?.perms?.posManage === false) {
+    return (
+      <div className="container-fluid">
+        <div className="card p-4">
+          <div className="h4 fw-semibold mb-2">Accesso negato</div>
+          <div className="text-muted">Non hai i permessi per accedere a questa sezione.</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="container-fluid">
       <link rel="stylesheet" href="/assets/css/pages/pos.css" />
@@ -2455,9 +2470,12 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
         </div>
         <div className="bs-page-actions">
           <div className="d-flex gap-2 flex-wrap">
-            <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/pos_settings`}>
-              <i className="bi bi-gear me-1"></i>Impostazioni
-            </a>
+            {/* Gate legacy (pos.php 5934: Auth::can('pos.settings')). */}
+            {ctx?.perms?.posSettings !== false ? (
+              <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/pos_settings`}>
+                <i className="bi bi-gear me-1"></i>Impostazioni
+              </a>
+            ) : null}
           </div>
         </div>
       </div>

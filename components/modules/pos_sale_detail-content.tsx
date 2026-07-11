@@ -204,7 +204,12 @@ function backSourceFromUrl(): { label: string; page: string } {
 }
 
 function fmtMoney(value: number): string {
-  return Number(value || 0).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // fmt_money legacy = number_format(2, ',', '.') — raggruppamento migliaia manuale
+  // (toLocaleString it-IT non raggruppa 1000-9999).
+  const n = Number(value) || 0;
+  const [int, dec] = Math.abs(n).toFixed(2).split(".");
+  const g = int.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return (n < 0 ? "-" : "") + g + "," + dec;
 }
 
 function fmtDateTime(value?: string): string {
@@ -341,14 +346,22 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
   // Mount-only: risolve l'id dall'URL (client-side). Id assente/invalido -> stato
   // errore; altrimenti saleId>0 fa partire il fetch dell'effect sotto.
   useEffect(() => {
-    const id = saleIdFromUrl();
-    setBackSource(backSourceFromUrl());
-    if (id <= 0) {
-      setError("Vendita non valida.");
-      setLoading(false);
-      return;
-    }
-    setSaleId(id);
+    // Prefill URL in microtask (pattern consolidato: niente setState sincroni).
+    let alive = true;
+    Promise.resolve().then(() => {
+      if (!alive) return;
+      const id = saleIdFromUrl();
+      setBackSource(backSourceFromUrl());
+      if (id <= 0) {
+        setError("Vendita non valida.");
+        setLoading(false);
+        return;
+      }
+      setSaleId(id);
+    });
+    return () => {
+      alive = false;
+    };
   }, []);
 
   useEffect(() => {

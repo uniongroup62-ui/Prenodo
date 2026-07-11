@@ -8632,7 +8632,9 @@ export async function dbClientGiftcards(slug: string, clientId: number): Promise
       columns: hasExpiry ? "id, code, balance, expires_at" : "id, code, balance",
       where: `${target} AND status = 'active' AND balance > 0${expiry}`,
       params: [clientId],
-      orderBy: "(expires_at IS NULL) DESC, expires_at ASC, id DESC",
+      // Ordine legacy dei Residui POS (pos_payment_residual_giftcards):
+      // emissione più recente prima.
+      orderBy: "issued_at DESC, id DESC",
       limit: 50,
     });
     const out: Array<{ id: number; code: string; balance: number; expiresAt: string }> = [];

@@ -11428,3 +11428,64 @@ pre-fix identificato puntualmente e rimosso). Regressione COMPLETA 7 suite:
 
 NOTA infrastruttura: due wedge del dev server turbopack (route auth stamattina,
 route pos oggi) risolti con kill + rm .next/dev + riavvio.
+
+## 2026-07-11 — Pagamenti, parte 2 (satelliti Movimenti + Dettaglio vendita: gate pos.*, residui credito attestati, fmt_money)
+
+Mappe legacy INTEGRALI via agenti: pos_history.php (3853 — gate pos.movements,
+azione cancel_sale con l'ordine completo di validazioni/scritture/decisioni
+punti, lista movimenti a 4 fonti con cap 200, modale annullo coi testi) e
+pos_sale_detail.php (6137 — gate a 4 permessi, 5 azioni ?do= coi verbatim,
+struttura pagina, cancel/delete modal, parsing note).
+
+CHIUSURA RESIDUO parte 1 — CREDITO 'LOCKED' NEI RESIDUI: attestato come
+NON-divergenza. Il legacy calcola locked/locked_amount/locked_booking_code ma
+'available' = balance SEMPRE (pos.php 1006 + commento 1037-1039: "il POS deve
+usare il saldo reale del portafoglio... senza bloccare tutto il credito") e i
+campi locked sono RICEVUTI ma MAI RENDERIZZATI da pos.js (solo inizializzati
+nei default: dati morti). Il numero unico del Next è equivalente.
+
+FIX:
+1) OMBRELLO GET /api/manage/pos = unione dei gate pagina pos.* legacy (il
+   dettaglio vendita è requireAnyPerm sui 4: manage/movements/prepaids/
+   preorders) — prima un utente solo-preordini/solo-prepagati NON apriva il
+   dettaglio (403). Le pagine si gatano coi flag `perms` aggiunti al context:
+   - pos-content: card 'Accesso negato' senza pos.manage (pos.php:2) +
+     bottone Impostazioni gated pos.settings (5934);
+   - pos_history-content: card 'Accesso negato' senza pos.movements
+     (pos_history.php:2) + 'Torna a Pagamenti' gated pos.manage (2762).
+2) AZIONI dei Movimenti gated per permesso (pos_history 3810/3812/2519):
+   Voucher GiftBox solo con giftbox.manage, Voucher GiftCard con
+   giftcard.manage, 'Apri' ricarica con credit_movements.manage; altrimenti '—'.
+3) fmt_money con RAGGRUPPAMENTO migliaia (number_format legacy) al posto di
+   toLocaleString it-IT (trappola nota: non raggruppa 1000-9999) in:
+   manage-pos formatMoney (note vendita: 'Sconto manuale: -€ 1.005,00'
+   verificato live), pos_history, pos_sale_detail, pos_success. La label
+   ricarica del carrello resta NON raggruppata (pos.js fmtEUR è toFixed).
+4) Residui GiftCard: ordine legacy 'issued_at DESC, id DESC'
+   (pos_payment_residual_giftcards) al posto dell'ordine per scadenza.
+
+VERIFICHE LIVE (nessuna divergenza):
+- Movimenti: vendita kind/label 'Vendita', stato 'Attiva', operatore; vendita
+  con ricarica -> label composita con 'Ricarica' + hasRechargeLine.
+- Dettaglio/success shape per pos.prepaids-only (gate a 4 ok).
+- PREORDINI: vendita status 'ordered' NON scarica lo stock; ritiro PARZIALE
+  1/2 -> SPLIT righe (ordered 1 + collected 1) + stock -1 + marker
+  '[PREORDINE RITIRATO' nelle note; undo -> righe RI-FUSE (merge su riga
+  ordered gemella) + stock ripristinato. Gate 'Non hai i permessi per gestire
+  i preordini.' per-azione.
+- PREPAGATI: vendita type prepaid x3 -> client_prepaid_services
+  (purchased/remaining 3); esecuzione manuale x1 -> remaining 2 + riga
+  client_prepaid_service_usages; undo -> remaining 3. Gate 'Non hai i
+  permessi per gestire i prepagati.'.
+
+RESIDUI (parte 3 pianificata): diff TESTUALE fine di pos_sale_detail
+(timeline eventi, badge, riepilogo annullo coi testi delle decisioni punti
+normal/negative/skip e delete-modal) e pos_history (modale annullo con
+decisioni per-ricarica) — i MOTORI sono portati e ora testati, la rasatura
+dei testi UI resta; pos_preorders/pos_prepaids/pos_settings/pos_success
+pagine da passare; breakdown preview_discount.
+
+E2E test-pagamenti2.mjs 15/15. Regressione COMPLETA 8 suite: 13+35+21+15+41+
+8+20+16. Baseline vendite/prepagati/stock_docs/prodotti ripristinata.
+NOTA: terzo wedge turbopack del giorno sulla ricompilazione POS (kill +
+rm .next/dev + riavvio).

@@ -43,6 +43,14 @@ type PosContext = {
     packages?: CatalogItem[];
   };
   locations?: Array<{ id: number; name: string }>;
+  // Flag legacy: gate pagina (pos.movements) + gate dei link per-azione.
+  perms?: {
+    posManage?: boolean;
+    posMovements?: boolean;
+    creditMovements?: boolean;
+    giftboxManage?: boolean;
+    giftcardManage?: boolean;
+  };
 };
 
 const MOVEMENT_TYPES: Array<{ value: string; label: string }> = [
@@ -65,14 +73,20 @@ function fmtDateTime(value?: string): string {
   return day && mo && y ? `${day}/${mo}/${y}` : value;
 }
 
+// fmt_money legacy = number_format(2, ',', '.') — raggruppamento migliaia manuale
+// (toLocaleString it-IT non raggruppa 1000-9999).
 function fmtMoney(value: number): string {
-  return `${value.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`;
+  const n = Number(value) || 0;
+  const [int, dec] = Math.abs(n).toFixed(2).split(".");
+  const grouped = int.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return `${n < 0 ? "-" : ""}${grouped},${dec} €`;
 }
 
-// Per-kind action link (faithful to pos_history.php ~3808-3818): a sale opens "Dettaglio
-// vendita"; a giftbox/giftcard opens its "Voucher"; a standalone recharge opens "Apri" ->
-// the client's credit movements.
-function renderMovementAction(mv: PosMovement, slug: string): ReactNode {
+// Per-kind action link (faithful to pos_history.php ~3808-3818, gate legacy sui
+// permessi): a sale opens "Dettaglio vendita"; giftbox/giftcard aprono il
+// "Voucher" SOLO con giftbox.manage/giftcard.manage (3810/3812); la ricarica
+// standalone apre "Apri" solo con credit_movements.manage (2519); else '—'.
+function renderMovementAction(mv: PosMovement, slug: string, perms: PosContext["perms"]): ReactNode {
   const base = `/${encodeURIComponent(slug)}`;
   if (mv.kind === "sale") {
     return (
@@ -81,26 +95,28 @@ function renderMovementAction(mv: PosMovement, slug: string): ReactNode {
       </a>
     );
   }
-  if (mv.kind === "giftbox") {
+  if (mv.kind === "giftbox" && perms?.giftboxManage !== false) {
     return (
       <a className="btn btn-sm btn-outline-primary" href={`${base}/giftbox_voucher?id=${mv.id}&embed=1`} target="_blank" rel="noopener">
         Voucher
       </a>
     );
   }
-  if (mv.kind === "giftcard") {
+  if (mv.kind === "giftcard" && perms?.giftcardManage !== false) {
     return (
       <a className="btn btn-sm btn-outline-primary" href={`${base}/giftcard_voucher?id=${mv.id}&embed=1`} target="_blank" rel="noopener">
         Voucher
       </a>
     );
   }
-  // recharge
-  return (
-    <a className="btn btn-sm btn-outline-primary" href={`${base}/credit_movements?client_id=${mv.clientId}`}>
-      Apri
-    </a>
-  );
+  if (mv.kind === "recharge" && perms?.creditMovements !== false) {
+    return (
+      <a className="btn btn-sm btn-outline-primary" href={`${base}/credit_movements?client_id=${mv.clientId}`}>
+        Apri
+      </a>
+    );
+  }
+  return <span className="text-muted">—</span>;
 }
 
 export function PosHistoryContent({ slug: slugProp }: { slug?: string } = {}) {
@@ -124,7 +140,11 @@ export function PosHistoryContent({ slug: slugProp }: { slug?: string } = {}) {
   const [serviceSearch, setServiceSearch] = useState("");
 
   useEffect(() => {
-    setLoading(true);
+    // setLoading in microtask (pattern consolidato: niente setState sincroni nell'effect).
+    let alive = true;
+    Promise.resolve().then(() => {
+      if (alive) setLoading(true);
+    });
     // #11: l'intervallo data viene passato al SERVER (from/to) cosi' il LIMIT si applica DOPO
     // il filtro — una ricerca per data profonda non viene piu' troncata dalle 250 vendite piu'
     // recenti. Gli altri filtri (tipo/cliente/servizio) restano un raffinamento client-side.
@@ -136,6 +156,9 @@ export function PosHistoryContent({ slug: slugProp }: { slug?: string } = {}) {
       .then((j: PosContext) => setCtx(j ?? null))
       .catch(() => setCtx(null))
       .finally(() => setLoading(false));
+    return () => {
+      alive = false;
+    };
   }, [slug, from, to]);
 
   const clients = ctx?.catalog?.clients ?? [];
@@ -218,6 +241,19 @@ export function PosHistoryContent({ slug: slugProp }: { slug?: string } = {}) {
   const clientFilterText = clientSearch.trim().toLowerCase();
   const serviceFilterText = serviceSearch.trim().toLowerCase();
 
+  // Gate pagina legacy (pos_history.php:2 requirePerm('pos.movements')): con
+  // l'ombrello API allargato ai 4 permessi pos.* la pagina si gata col flag.
+  if (ctx?.perms?.posMovements === false) {
+    return (
+      <div className="container-fluid">
+        <div className="card p-4">
+          <div className="h4 fw-semibold mb-2">Accesso negato</div>
+          <div className="text-muted">Non hai i permessi per accedere a questa sezione.</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="container-fluid">
       <link rel="stylesheet" href="/assets/css/pages/pos_history.css" />
@@ -233,9 +269,12 @@ export function PosHistoryContent({ slug: slugProp }: { slug?: string } = {}) {
           </div>
           <div className="bs-page-actions">
             <div className="d-flex gap-2">
-              <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/pos`}>
-                <i className="bi bi-arrow-left"></i> Torna a Pagamenti
-              </a>
+              {/* Gate legacy (pos_history.php 2762: Auth::can('pos.manage')). */}
+              {ctx?.perms?.posManage !== false ? (
+                <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/pos`}>
+                  <i className="bi bi-arrow-left"></i> Torna a Pagamenti
+                </a>
+              ) : null}
             </div>
           </div>
         </div>
@@ -639,7 +678,7 @@ export function PosHistoryContent({ slug: slugProp }: { slug?: string } = {}) {
                                 <span className="text-muted small">—</span>
                               )}
                             </td>
-                            <td className="text-end pos-cronologia-actions-col">{renderMovementAction(mv, slug)}</td>
+                            <td className="text-end pos-cronologia-actions-col">{renderMovementAction(mv, slug, ctx?.perms)}</td>
                           </tr>
                         );
                       })

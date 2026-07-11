@@ -22,7 +22,11 @@ export async function GET(request: Request) {
   const tenantSlug = manageTenantSlugFromRequest(request);
   const session = await currentManageSession(tenantSlug);
   if (!session) return jsonError("Sessione scaduta o non valida.", 401);
-  if (!canAny(session.user.perms, ["pos.manage", "pos.movements"])) return jsonError("Permesso POS mancante.", 403);
+  // Ombrello GET = unione dei gate di PAGINA pos.* legacy: pos.php (pos.manage),
+  // pos_history (pos.movements), pos_sale_detail (requireAnyPerm sui 4:
+  // manage/movements/prepaids/preorders), pos_preorders/pos_prepaids. Le pagine
+  // si gatano coi flag perms della risposta context.
+  if (!canAny(session.user.perms, ["pos.manage", "pos.movements", "pos.prepaids", "pos.preorders"])) return jsonError("Permesso POS mancante.", 403);
 
   const url = new URL(request.url);
 
@@ -95,7 +99,7 @@ export async function GET(request: Request) {
   const includeCancelled = ["1", "true", "yes"].includes((url.searchParams.get("include_cancelled") ?? "1").toLowerCase());
 
   try {
-    return Response.json(await getManagePosContext(tenantSlug, {
+    const context = await getManagePosContext(tenantSlug, {
       locationId,
       includeCancelled,
       query: url.searchParams.get("q") ?? "",
@@ -103,7 +107,27 @@ export async function GET(request: Request) {
       // piu' vecchi del range prima del filtro).
       from: url.searchParams.get("from") ?? "",
       to: url.searchParams.get("to") ?? "",
-    }));
+    });
+    return Response.json({
+      ...context,
+      // Flag pagina/azioni legacy: pos.php requirePerm('pos.manage');
+      // pos_history.php requirePerm('pos.movements') + gate per-azione dei link
+      // (Voucher giftbox/giftcard, 'Apri' ricariche, Impostazioni header).
+      perms: {
+        posManage: can(session.user.perms, "pos.manage"),
+        posMovements: can(session.user.perms, "pos.movements"),
+        posPreorders: can(session.user.perms, "pos.preorders"),
+        posPrepaids: can(session.user.perms, "pos.prepaids"),
+        posSettings: can(session.user.perms, "pos.settings"),
+        creditMovements: can(session.user.perms, "credit_movements.manage"),
+        giftboxManage: can(session.user.perms, "giftbox.manage"),
+        giftcardManage: can(session.user.perms, "giftcard.manage"),
+        fidelityManage: can(session.user.perms, "fidelity.manage"),
+        appointmentsManage: can(session.user.perms, "appointments.manage"),
+        quotesManage: can(session.user.perms, "quotes.manage"),
+        packagesClients: can(session.user.perms, "packages.clients"),
+      },
+    });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Errore POS.");
   }
