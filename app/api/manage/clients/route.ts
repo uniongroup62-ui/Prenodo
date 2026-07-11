@@ -22,6 +22,7 @@ import { currentManageSession } from "@/lib/manage-auth";
 import { resolveManageLocationId } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can, canAny } from "@/lib/role-permissions";
+import { tenantSelect, type RowDataPacket } from "@/lib/tenant-db";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -360,7 +361,8 @@ export async function POST(request: Request) {
     if (action === "update") {
       const invalid = legacyClientValidationError(body);
       if (invalid) return jsonError(invalid);
-      const input = await clientInputFromBody(body, tenantSlug);
+      // EDIT legacy (1856-1859): la sede va POSTATA (nessun fallback corrente).
+      const input = await clientInputFromBody(body, tenantSlug, false);
       if (!input.locationId || input.locationId <= 0) return jsonError("Seleziona una sede valida.");
       const client = await updateDbClient(id, input, tenantSlug);
       return Response.json({ ok: true, source: "clients?action=update", sourceMode: "database", client, clients: await listDbClients({ slug: tenantSlug }) });
@@ -421,12 +423,25 @@ export async function POST(request: Request) {
   }
 }
 
-async function clientInputFromBody(body: Record<string, string>, tenantSlug: string): Promise<Partial<ManagedClient>> {
-  const locationId = await resolveManageLocationId({
-    slug: tenantSlug,
-    raw: body.location_id === undefined ? null : body.location_id,
-    fallbackCurrent: true,
-  });
+// client_resolve_location_id (clients.php 583-596): la sede del CLIENTE si
+// valida contro QUALSIASI sede ATTIVA del tenant — il form legacy lista tutte
+// le sedi attive, non quelle dell'utente (Modello A: anagrafica tenant-wide;
+// resolveManageLocationId filtrerebbe alle sedi di sessione e un operatore
+// ristretto non potrebbe assegnare il cliente a un'altra sede). Il CREATE con
+// campo vuoto ricade sulla sede corrente (1659-1661); l'EDIT la esige postata
+// (1856-1859) — in entrambi i casi 0 => 'Seleziona una sede valida.'.
+async function resolveClientLocationId(slug: string, raw: unknown, fallbackCurrent: boolean): Promise<number> {
+  const id = Number.parseInt(String(raw ?? "").trim(), 10) || 0;
+  if (id > 0) {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "id", where: "id = ? AND COALESCE(is_active,1) = 1", params: [id], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    return rows[0] ? id : 0;
+  }
+  if (!fallbackCurrent) return 0;
+  return resolveManageLocationId({ slug, raw: null, fallbackCurrent: true });
+}
+
+async function clientInputFromBody(body: Record<string, string>, tenantSlug: string, locationFallbackCurrent = true): Promise<Partial<ManagedClient>> {
+  const locationId = await resolveClientLocationId(tenantSlug, body.location_id, locationFallbackCurrent);
 
   return {
     name: body.name ?? body.client_name ?? body.full_name,

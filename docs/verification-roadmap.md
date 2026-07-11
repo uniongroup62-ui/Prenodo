@@ -1,5 +1,33 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Clienti pass 3: fix sede anagrafica (qualsiasi attiva, Modello A) + batteria risanata 287 verdi (2026-07-11)
+
+Terza passata (audit 07-05 + tag/data 07-08 + api_clients 9 permessi in QB parte 2 +
+Modello A). FIX REALE trovato dal test aggiornato al Modello A:
+- **Sede del cliente validata contro le sedi di SESSIONE invece che del TENANT**:
+  clientInputFromBody usava resolveManageLocationId (lista sedi filtrata per
+  utente) — un operatore ristretto a Sede1 NON poteva assegnare/spostare
+  l'anagrafica su Sede2 ('Seleziona una sede valida.'), mentre il legacy
+  (client_resolve_location_id 583-596 + form con app_locations attive) accetta
+  QUALSIASI sede ATTIVA del tenant — coerente col Modello A (anagrafica
+  tenant-wide). Ora resolver dedicato: sede postata -> valida se esiste attiva;
+  CREATE senza sede -> fallback corrente (1659-1661); EDIT la ESIGE postata
+  senza fallback (1856-1859) — 0 => 'Seleziona una sede valida.' verbatim.
+HARNESS risanati (pattern harness-multisede-trap + Modello A):
+- e2e-clients: login reale a sede 0 -> falso FAIL sull'esclusione del cliente
+  senza-sede dalla lista filtrata (il filtro lista legacy usa
+  includeNoLocation=false: il port è FEDELE) — sessione forgiata -> 50/0.
+- e2e-clients-tags / e2e-clients-history: import pg nudo (mai eseguibili qui) +
+  login reale — patchati -> 8/0 + 9/0.
+- test-clienti-sede: i C-check asserivano il modello PRE-Modello-A (accesso
+  cliente negato cross-sede) — aggiornati alla decisione utente (tenant-wide:
+  get/detail/history/update/block/tag/delete cross-sede OK; = PHP
+  app_client_accessible che ignora la sede) + 2 check nuovi sulla validazione
+  sede (inesistente -> verbatim; edit senza sede -> verbatim) -> 19/0.
+BATTERIA COMPLETA: test-clienti 24 + test-clienti-sede 19 + e2e-clients 50 +
+tags 8 + history 9 + e2e-client-sheets 26 + test-consensi-cliente 38 +
+markers-clients 113 = 287 verdi; 5 clienti reali intatti, residui 0.
+
 ## Buoni pass 3: ri-attestazione — core coupon riusato dai pass successivi, batteria 51 verdi (2026-07-11)
 
 Terza passata (audit 07-08 'port FEDELE' + pass 2 di oggi 09c85d1: preview_discount
