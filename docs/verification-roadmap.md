@@ -1,5 +1,24 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Pagamenti pass 4: ri-verifica post-Buoni — batteria verde + probe pacchetti/ricariche nel preview (2026-07-11)
+
+Quarta passata su Pagamenti dopo la ristrutturazione del checkout POS operata dal
+pass Buoni (09c85d1: coupon+auto-promo combinati, auto-pick silenzioso,
+action=preview_discount, rework del flusso coupon in pos-content). Verifiche:
+- DRIFT: i file del dominio (manage-pos.ts, pos-content.tsx, satelliti) toccati
+  SOLO dal commit Buoni, già e2e'd al momento (30/30 + regressione).
+- BATTERIA COMPLETA rieseguita: test-pagamenti 13/13 + test-pagamenti2 15/15 +
+  test-pagamenti3 11/11 + test-buoni2 30/30 (i percorsi coupon/promo del POS).
+- PROBE NUOVO (superficie mai esercitata): righe PACCHETTO e RICARICA nel rebuild
+  del preview_discount (pos.php 1236-1250) — 3/3: contribuiscono al SOLO subtotale
+  (P1: scope moderno + solo pacchetto -> subtotal 50 ma rifiuto 'del carrello';
+  P2: scope 'all' legacy -> sconto sul fallback subtotale, 5 su 50; P3: ricarica
+  amount 80 -> subtotal 80, sconto 8).
+Residui rimasti (dichiarati, non-azione): warnings schema di pos_preorders (stati
+irraggiungibili in PG) ed esiti email nel flash di pos_success (legati al flash di
+sessione legacy; fallback 'Email destinatario:' fedele). Il residuo 'breakdown
+preview_discount' È CHIUSO dal pass Buoni. DOMINIO CONFERMATO COMPLETO.
+
 ## Appuntamenti pass 3: RI-VALIDAZIONE coupon al save (residuo Buoni chiuso) + marker legacy (2026-07-11)
 
 Terza passata: chiuso il residuo dichiarato del pass QB motore — il save
