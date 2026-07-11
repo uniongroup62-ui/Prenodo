@@ -1,5 +1,26 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Scadenziario e Costi pass 3: ri-attestazione — zero drift, batteria 79/79 (2026-07-11)
+
+Terza passata sul dominio (audit 2026-07-04 + audit/fix 2026-07-08 con 2 BLOCKER,
+parse migliaia, 3 minori e i 4 completamenti — 'non resta nulla di rinviato').
+Verifiche:
+- DRIFT: manage-costs.ts, i 3 componenti e le route costs/cost-attachment sono
+  intatti dai commit dell'audit stesso (28e8950/c62feb1/bb66eec) — nessun commit
+  successivo li tocca; il dominio non ha punti di contatto coi lavori recenti
+  (il widget dashboard Scadenziario è verificato a parte nel dominio Dashboard).
+- BATTERIA COMPLETA rieseguita: e2e-costs 52/0 + test-costs-fixes 14/14 +
+  test-costs-completions 9/9 + test-costs-minors 4/4 (ricorrenze fine-mese
+  31gen→28feb e 29feb→28feb, scope per-sede su get/toggle/delete/save/allegato,
+  parse '1.234'→1234 e '1,234,567'→1234567, accent-folding, businessTodayIso,
+  fornitore inattivo, Tutte-le-sedi, MIME magic-bytes) + markers-costs 82/0.
+- NOTA sulla suite diagnostica test-costs-audit (7/3): è lo script FORENSE
+  pre-fix a logica invertita — i FAIL su B1-B3 CONFERMANO che lo scope sede è in
+  opera ('Costo non trovato.'), e i PASS su C2/C3 provengono da una REPLICA
+  LOCALE del vecchio algoritmo di parse (non chiamano l'app; il parse reale è
+  coperto da test-costs-fixes). Nessuna azione.
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice.
+
 ## Gestione Rate pass 3: ri-attestazione — zero drift, batteria verde, searchInstallments = codice morto legacy (2026-07-11)
 
 Terza passata (la seconda è di oggi stesso, commit 20214c6). Verifiche:
