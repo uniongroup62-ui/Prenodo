@@ -1,5 +1,25 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Buoni pass 3: ri-attestazione — core coupon riusato dai pass successivi, batteria 51 verdi (2026-07-11)
+
+Terza passata (audit 07-08 'port FEDELE' + pass 2 di oggi 09c85d1: preview_discount
+POS, combinazione coupon+auto-promo, fix fmt_money/scope/items-vuoti/statusInfo).
+DRIFT: route coupons e componenti lista/form INTATTI da 09c85d1; il core coupon in
+db-repositories è stato ESTESO dai pass successivi — tutti riusi verificati:
+- Notifiche pass 5 (0da6a93): ricalcolo nella lista pending (couponFindRow/
+  couponValidateDbRow/couponEvalDiscountCore).
+- Appuntamenti pass 3 (75d29d5): ri-validazione al save + promo-su-codice
+  (codePromotionId) + fix marker note a VIRGOLA (formatCouponAmount: il legacy
+  coupon_apply_meta_to_notes usa number_format ',', '.').
+BATTERIA COMPLETA dei consumatori del core rieseguita ORA: test-buoni2 30/30
+(form/preview/stacking/checkout/QB path/cancel-delete) + test-notifiche-coupon 6/6
++ test-appuntamenti3 12/12 + probe-pkg-preview 3/3 = 51 verdi; render 200 di
+coupons e coupon_form. Baseline pulita (0 coupons).
+Il modulo Buoni ora alimenta TRE superfici di riscatto/ricalcolo (POS, save
+appuntamenti, lista pending notifiche) oltre al preview QB: tutte allineate allo
+stesso core (couponEvalDefFromRow/ValidateDbRow/EvalDiscountCore/AfterPromotionCore).
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice.
+
 ## Fornitori pass 2: ri-attestazione — zero drift, batteria 87 verdi (2026-07-11)
 
 Seconda passata (audit 2026-07-08: campi/validazioni verbatim, sedi
