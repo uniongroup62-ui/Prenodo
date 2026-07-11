@@ -1,5 +1,25 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Dashboard pass 7: ri-verifica post commit cross-modulo — zero drift, batteria verde (2026-07-11)
+
+Settima passata su Dashboard, di sola RI-ATTESTAZIONE dopo i commit recenti su lib
+condivise (Buoni 09c85d1: motore promo/lineDiscounts; Rate 20214c6:
+searchDbInstallmentPlans/route; Notifiche 0da6a93: lista pending). Verifiche:
+- DRIFT: git log sui 4 file del dominio (manage-dashboard.ts,
+  manage-dashboard-alerts.ts, dashboard/route.ts, dashboard-content.tsx) —
+  NESSUNA modifica dal commit di chiusura 3a9b42e (sweep finale, parte 5).
+- PUNTI DI CONTATTO coi moduli toccati: gli avvisi dashboard usano
+  countPendingAppointments (non la lista pending arricchita dal ricalcolo coupon),
+  getInstallmentDueAlertGroups (già ri-verificato 1:1 nel pass Rate 2) e il motore
+  promo NON è consumato dalla dashboard — nessun impatto possibile.
+- BATTERIA COMPLETA rieseguita live: test-dashboard 16/16, test-dashboard3 5/5,
+  test-dashboard4 7/7, test-dashboard-attest 9/9 (equivalenza query legacy ↔ API su
+  dati di produzione), test-notifiche-shell 12/12 (contatori topbar condivisi) — 49
+  check verdi, produzione intatta (soli GET).
+Il dominio resta COMPLETO come attestato nelle parti 1-6 (dashboard.php 737 +
+api_dashboard_performance.php 281 + dashboard.js 144 letti integrali e diffati;
+nessuna superficie legacy non verificata). Nessuna modifica al codice in questo pass.
+
 ## Notifiche pass 5: chiuso il ricalcolo coupon della lista pending (2026-07-11)
 
 Quinta passata sul dominio Notifiche (le quattro precedenti: hub+pagine dedicate,
