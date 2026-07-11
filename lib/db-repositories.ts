@@ -11244,7 +11244,38 @@ export async function listDbPrepaids(slug: string): Promise<ClientPrepaid[]> {
     listPackageSourceRows(slug),
     listGiftboxSourceRows(slug),
   ]);
-  return [...prepaids, ...packages, ...giftboxes];
+  const rows = [...prepaids, ...packages, ...giftboxes];
+  // Arricchimenti riga legacy (pos_prepaids.php): vendita d'origine annullata
+  // (1583, CASE su sales.status) e servizio non più attivo a listino (1592,
+  // join services.is_active) per TUTTE le fonti; il prossimo appuntamento
+  // (1604) è già stato calcolato per-kind dove il legacy lo espone.
+  const saleIds = [...new Set(rows.map((r) => Number(r.sourceSaleId ?? 0)).filter((n) => n > 0))];
+  const serviceIds = [...new Set(rows.map((r) => Number(r.serviceId ?? 0)).filter((n) => n > 0))];
+  const [cancelledSaleIds, activeServiceIds] = await Promise.all([
+    saleIds.length
+      ? tenantSelect<RowDataPacket>({
+          slug,
+          table: "sales",
+          columns: "id",
+          where: `id IN (${saleIds.map(() => "?").join(",")}) AND LOWER(TRIM(COALESCE(status,''))) IN ('cancelled','canceled','annullata','annullato')`,
+          params: saleIds,
+        }).then((r) => new Set(r.map((x) => Number(x.id ?? 0)))).catch(() => new Set<number>())
+      : Promise.resolve(new Set<number>()),
+    serviceIds.length
+      ? tenantSelect<RowDataPacket>({
+          slug,
+          table: "services",
+          columns: "id",
+          where: `id IN (${serviceIds.map(() => "?").join(",")}) AND COALESCE(is_active,1) = 1`,
+          params: serviceIds,
+        }).then((r) => new Set(r.map((x) => Number(x.id ?? 0)))).catch(() => new Set<number>(serviceIds))
+      : Promise.resolve(new Set<number>()),
+  ]);
+  for (const row of rows) {
+    row.saleCancelled = Number(row.sourceSaleId ?? 0) > 0 && cancelledSaleIds.has(Number(row.sourceSaleId));
+    row.serviceActive = Number(row.serviceId ?? 0) <= 0 || activeServiceIds.has(Number(row.serviceId));
+  }
+  return rows;
 }
 
 // ---- Source 1: standalone prepaids (client_prepaid_services) ----
@@ -11259,7 +11290,7 @@ async function listPrepaidSourceRows(slug: string): Promise<ClientPrepaid[]> {
   if (rows.length === 0) return [];
 
   const ids = rows.map((r) => Number(r.id ?? 0)).filter((n) => n > 0);
-  const [bookedMap, lastUsedMap] = await Promise.all([
+  const [{ qtyMap: bookedMap, nextMap }, lastUsedMap] = await Promise.all([
     prepaidBookedMap(slug, ids),
     prepaidLastUsedMap(slug, ids),
   ]);
@@ -11285,21 +11316,29 @@ async function listPrepaidSourceRows(slug: string): Promise<ClientPrepaid[]> {
         status: clientPrepaidStatus(String(row.status ?? "active"), remaining, String(row.expires_at ?? "")),
         sourceSaleId: row.sale_id ? Number(row.sale_id) : undefined,
         createdAt: toIso(row.created_at ?? row.purchase_date),
+        // 'Prossimo appuntamento' legacy (pl.next_starts_at, solo fonte prepagati).
+        nextStartsAt: nextMap.get(id) || undefined,
       };
     }),
   );
 }
 
-// Batched booked-qty for many prepaids: link rows (redeemed_at IS NULL) grouped by
-// client_prepaid_service_id, kept only when their appointment is OPEN. Missing
-// linkage/appointments tables -> empty map (0 booked for all).
-async function prepaidBookedMap(slug: string, prepaidServiceIds: number[]): Promise<Map<number, number>> {
-  const out = new Map<number, number>();
+// Batched booked-qty + next-open-appointment for many prepaids: link rows
+// (redeemed_at IS NULL) grouped by client_prepaid_service_id, kept only when
+// their appointment is OPEN; nextMap = MIN(starts_at) degli appuntamenti aperti
+// collegati (il 'Prossimo appuntamento' della riga legacy, pl.next_starts_at).
+// Missing linkage/appointments tables -> empty maps (0 booked, nessun next).
+async function prepaidBookedMap(
+  slug: string,
+  prepaidServiceIds: number[],
+): Promise<{ qtyMap: Map<number, number>; nextMap: Map<number, string> }> {
+  const qtyMap = new Map<number, number>();
+  const nextMap = new Map<number, string>();
   const ids = prepaidServiceIds.filter((n) => n > 0);
-  if (ids.length === 0) return out;
+  if (ids.length === 0) return { qtyMap, nextMap };
   try {
     const linkTable = await tenantTable(slug, "appointment_prepaid_service_items");
-    if (!(await tableExists(linkTable.name))) return out;
+    if (!(await tableExists(linkTable.name))) return { qtyMap, nextMap };
     const placeholders = ids.map(() => "?").join(",");
     const linkRows = await tenantSelect<RowDataPacket>({
       slug,
@@ -11308,13 +11347,45 @@ async function prepaidBookedMap(slug: string, prepaidServiceIds: number[]): Prom
       where: `client_prepaid_service_id IN (${placeholders}) AND redeemed_at IS NULL`,
       params: ids,
     });
-    if (linkRows.length === 0) return out;
-    const openIds = await openAppointmentIds(slug, linkRows.map((r) => Number(r.appointment_id ?? 0)));
+    if (linkRows.length === 0) return { qtyMap, nextMap };
+    const openStarts = await openAppointmentStartsMap(slug, linkRows.map((r) => Number(r.appointment_id ?? 0)));
     for (const r of linkRows) {
-      if (!openIds.has(Number(r.appointment_id ?? 0))) continue;
+      const apptId = Number(r.appointment_id ?? 0);
+      const startsAt = openStarts.get(apptId);
+      if (startsAt === undefined) continue; // appuntamento non aperto
       const key = Number(r.client_prepaid_service_id ?? 0);
-      out.set(key, (out.get(key) ?? 0) + Math.max(0, Number(r.qty ?? 0)));
+      qtyMap.set(key, (qtyMap.get(key) ?? 0) + Math.max(0, Number(r.qty ?? 0)));
+      const prev = nextMap.get(key);
+      if (startsAt && (!prev || startsAt < prev)) nextMap.set(key, startsAt);
     }
+  } catch {
+    return { qtyMap, nextMap };
+  }
+  return { qtyMap, nextMap };
+}
+
+// Variante di openAppointmentIds che riporta anche starts_at (per il 'Prossimo
+// appuntamento' dei prepagati). Senza tabella appointments i link non-riscattati
+// contano come prenotati (parità con openAppointmentIds) ma senza data.
+async function openAppointmentStartsMap(slug: string, ids: number[]): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  const unique = Array.from(new Set(ids.filter((n) => n > 0)));
+  if (unique.length === 0) return out;
+  try {
+    const apptTable = await tenantTable(slug, "appointments");
+    if (!(await tableExists(apptTable.name))) {
+      for (const id of unique) out.set(id, "");
+      return out;
+    }
+    const placeholders = unique.map(() => "?").join(",");
+    const rows = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "appointments",
+      columns: "id, starts_at",
+      where: `id IN (${placeholders}) AND LOWER(TRIM(COALESCE(status, ''))) IN ('pending', 'scheduled')`,
+      params: unique,
+    });
+    for (const r of rows) out.set(Number(r.id ?? 0), r.starts_at ? toIso(r.starts_at) : "");
   } catch {
     return out;
   }

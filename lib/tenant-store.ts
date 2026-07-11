@@ -442,6 +442,12 @@ export type ClientPrepaid = {
   status: ClientPrepaidStatus;
   sourceSaleId?: number;
   createdAt: string;
+  // Arricchimenti riga legacy (pos_prepaids.php): prossimo appuntamento aperto
+  // collegato (1604, solo kind 'prepaid' — le altre fonti non lo calcolano),
+  // vendita d'origine annullata (1583), servizio non più attivo a listino (1592).
+  nextStartsAt?: string;
+  saleCancelled?: boolean;
+  serviceActive?: boolean;
 };
 
 export type PreorderStatus = "open" | "collected" | "cancelled";

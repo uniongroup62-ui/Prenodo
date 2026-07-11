@@ -11539,10 +11539,20 @@ ATTESTAZIONI:
   _pos_pp_expiry_hint/_pos_pp_age_label/ramo mark_collected di pos_preorders:
   RAMI MORTI legacy (non portati).
 
-RESIDUI (dichiarati, bassa priorità): arricchimenti riga Prepagati che
-richiedono campi engine ('Prossimo appuntamento:', 'Vendita annullata',
-'Servizio non più attivo a listino.'); warnings schema di pos_preorders
+RESIDUI (dichiarati, bassa priorità): warnings schema di pos_preorders
 (stati irraggiungibili in PG); breakdown preview_discount (Buoni).
+CHIUSO in coda al pass 3 (stessa giornata): arricchimenti riga Prepagati —
+listDbPrepaids ora calcola saleCancelled (vendita d'origine con status
+annullato, batch su Set) e serviceActive (COALESCE(is_active,1) sul listino,
+fail-open se la query fallisce), e prepaidBookedMap restituisce anche
+nextMap = MIN(starts_at) degli appuntamenti APERTI collegati (link rows
+redeemed_at IS NULL → openAppointmentStartsMap pending/scheduled), esposto
+come nextStartsAt solo sulla fonte prepagati (il legacy calcola
+pl.next_starts_at solo lì, 1604 — pacchetti/giftbox non lo mostrano). UI
+pos_prepaids: 'Prossimo appuntamento: {data}' text-primary (1604),
+'Vendita annullata' small text-danger sotto il link vendita (1583, la riga
+NON è filtrata), 'Servizio non più attivo a listino.' small sotto il nome
+servizio (1592).
 
 E2E test-pagamenti3.mjs 7/7: seed vendita preordine+prepagato via percorso UI;
 modulo pos_settings shape; save 30days/6months (riga aggiornata + conteggio 1
@@ -11552,3 +11562,12 @@ lista prepagati (gate pos.prepaids, 2/2 residue, bookedQty 0 — POST-FIX);
 sale_success (2 righe, subtotal 44). Snapshot pos_settings RIPRISTINATO.
 Regressione COMPLETA 9 suite: 13+15+35+21+15+41+8+20+16. Quarto wedge
 turbopack risolto col ciclo kill+rm .next/dev+riavvio.
+
+E2E test-pagamenti3.mjs ESTESA a 11/11 con gli arricchimenti riga Prepagati:
+E1 riga seed pulita (saleCancelled=false, serviceActive=true, no
+nextStartsAt); E2 appuntamento aperto collegato via
+appointment_prepaid_service_items → bookedQty 1 + nextStartsAt 2026-08-20;
+E3 vendita d'origine annullata → riga ANCORA in lista con
+saleCancelled=true; E4 servizio ZZ disattivato → serviceActive=false.
+Regressione Pagamenti verde: 13/13 + 15/15 + 11/11; baseline ripristinata
+(9 sales / 9 items / 10 appuntamenti / 0 servizi ZZ / pos_settings snap).

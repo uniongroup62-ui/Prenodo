@@ -27,6 +27,11 @@ type Prepaid = {
   status: "active" | "completed" | "expired" | "cancelled";
   sourceSaleId?: number;
   createdAt: string;
+  // Arricchimenti riga legacy: prossimo appuntamento aperto (1604, solo prepagati),
+  // vendita d'origine annullata (1583), servizio disattivato a listino (1592).
+  nextStartsAt?: string;
+  saleCancelled?: boolean;
+  serviceActive?: boolean;
 };
 
 // Tipo badge per source kind (mirrors the legacy sourceBadge* mapping).
@@ -568,12 +573,20 @@ export function PosPrepaidsContent({ slug: slugProp }: { slug?: string } = {}) {
                           </td>
                           <td className="pos-prepaids-col-sale">
                             {p.sourceSaleId ? <a href={saleHref}>#{p.sourceSaleId}</a> : "—"}
+                            {/* Legacy 1583: la vendita d'origine annullata è segnalata, non filtrata. */}
+                            {p.saleCancelled ? <div className="small text-danger">Vendita annullata</div> : null}
                           </td>
                           <td className="pos-prepaids-col-type">
                             <span className={`badge ${kind.className}`}>{kind.label}</span>
                           </td>
                           <td className="pos-prepaids-col-client">{p.clientName || "—"}</td>
-                          <td>{p.serviceName}</td>
+                          <td>
+                            {p.serviceName}
+                            {/* Legacy 1592: servizio disattivato a listino segnalato sotto il nome. */}
+                            {p.serviceActive === false ? (
+                              <div className="small text-muted">Servizio non più attivo a listino.</div>
+                            ) : null}
+                          </td>
                           <td className="pos-prepaids-col-availability">
                             <div className="fw-semibold">
                               {p.remainingQuantity} / {p.totalQuantity} residue
@@ -587,6 +600,10 @@ export function PosPrepaidsContent({ slug: slugProp }: { slug?: string } = {}) {
                               <div className="text-muted small">Ultimo utilizzo: {fmtDate(p.lastUsedAt)}</div>
                             ) : usedQty <= 0 ? (
                               <div className="text-muted small">Mai utilizzato</div>
+                            ) : null}
+                            {/* Legacy 1604: prossimo appuntamento aperto collegato (text-primary). */}
+                            {p.nextStartsAt ? (
+                              <div className="text-primary small">Prossimo appuntamento: {fmtDate(p.nextStartsAt)}</div>
                             ) : null}
                           </td>
                           <td className="pos-prepaids-col-status">
