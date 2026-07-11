@@ -1,5 +1,38 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## GiftCard pass 3: ri-attestazione + sonda ostile — 276 verdi, nessun bug prodotto (2026-07-12)
+
+Terza passata (audit pagina 07-05 + audit completo 07-08 con fix storno
+refund->topup e blocco issue + cron email unificata 07-09). DRIFT: zero sui
+file dedicati (route/componenti/cron); lib toccate solo dai pass
+Pagamenti/Ricariche già verificati.
+BATTERIA: test-giftcard 22 + e2e-giftcard 94 + e2e-giftcard-settings 16 +
+markers-giftcard 92 + markers-giftcard-settings 36 + test-d1-giftcard 2 +
+NUOVA sonda ostile test-giftcard-hostile 13 + probe C8bis = 276 verdi
+(l'emissione POS è coperta da e2e-pos-gift 11, verde oggi nel pass GiftBox).
+SONDA OSTILE: credito negativo ('Importo non valido.', saldo intatto),
+overflow ('Saldo insufficiente.'), card annullata ('GiftCard non utilizzabile
+(stato: cancelled).'), item qty 999 ('Quantità eccede il residuo (residuo:
+3).'), qty -7 clampata a 1 come il legacy, riga inesistente ('Voce non
+trovata.'), prodotto oltre lo stock sede ('Stock insufficiente per il
+prodotto "X" nella sede selezionata.'), data garbage ('Seleziona una nuova
+data di scadenza valida.'), action=issue bloccata verbatim, topup/cancel
+'Operazione non disponibile.'.
+ATTESTATO scadenza rollover (hand-POST '2027-02-30', irraggiungibile da UI):
+GiftCard::normDate legacy (208-215) NON ha checkdate — regex identico al
+port; su card con item riscattato interviene PRIMA il lock 'Non e possibile
+modificare la scadenza di una GiftCard riscattata.'; su card pulita il port
+fallisce PULITO ('date/time field value out of range') senza scrittura =
+stessa divergenza migliorativa attestata per GiftBox (MySQL live non-strict
+scriverebbe zero-date silenziosa).
+NOTA baseline: 10 giftcard_transactions ORFANE (giftcard_id 1 e 18, create
+02-04/07 da sessioni di test antiche i cui cleanup non toccavano la tabella
+tx) — preesistenti a questa passata, NON rimosse per la policy
+anti-inferenza (solo id tracciati in-sessione).
+Baseline tenant 25 pulita (giftcards/items 0, 0 residui ZZ, 5 clienti, 9
+vendite, 10 appuntamenti). DOMINIO CONFERMATO COMPLETO. Nessuna modifica al
+codice prodotto.
+
 ## GiftBox pass 2: ri-attestazione + sonda ostile — 143 verdi, nessun bug prodotto (2026-07-12)
 
 Seconda passata dedicata (audit completo 07-05 + fix riscatto-completo/snapshot
