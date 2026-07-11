@@ -21,9 +21,14 @@ export async function GET(request: Request) {
   // Filters (faithful to installments_manage.php searchPlans query params): status / client_id /
   // sale_id / q / due_from / due_to. Empty/absent → the full list (searchDbInstallmentPlans with {}).
   const url = new URL(request.url);
+  // Filtro "Tutte le sedi" legacy (app_all_locations_filter_enabled): scope 0 per
+  // l'admin, lista delle sedi ASSEGNATE per l'utente ristretto (location_ids).
+  const allLocations = ALL_LOCATIONS_TRUTHY.includes(String(url.searchParams.get("all_locations") ?? "").trim().toLowerCase());
   // #2 scope sede: la sede corrente dell'utente (0 = tutte, per admin/all-locations) — come le
   // altre route manage. Filtra la lista ai piani delle vendite di questa sede.
-  const scopeLocationId = await resolveManageLocationId({ slug: tenantSlug, raw: url.searchParams.get("location_id"), fallbackCurrent: true });
+  const scopeLocationId = allLocations
+    ? 0
+    : await resolveManageLocationId({ slug: tenantSlug, raw: url.searchParams.get("location_id"), fallbackCurrent: true });
   const filters = {
     status: url.searchParams.get("status") || undefined,
     clientId: parseInteger(url.searchParams.get("client_id"), 0) || undefined,
@@ -32,6 +37,7 @@ export async function GET(request: Request) {
     dueFrom: url.searchParams.get("due_from") || undefined,
     dueTo: url.searchParams.get("due_to") || undefined,
     locationId: scopeLocationId,
+    locationIds: allLocations ? restrictedLocationIds(session.user) : undefined,
   };
 
   try {
@@ -69,9 +75,20 @@ export async function POST(request: Request) {
 
   const body = await parseRequestBody(request);
   const action = body.action ?? body.do ?? "create";
+  // Sede postata NON autorizzata: il legacy blocca l'azione con l'errore verbatim
+  // (installments_manage.php 83-85) invece di degradare a scope-0.
+  const postedLocationId = parseInteger(body.location_id, 0);
+  const allLocations = ALL_LOCATIONS_TRUTHY.includes(String(body.all_locations ?? "").trim().toLowerCase());
   // #2 scope sede per le mutazioni: mark_paid/mark_pending su una rata di un'altra sede
-  // falliscono con "Rata non trovata" (come il legacy locationScopeSql).
-  const scopeLocationId = await resolveManageLocationId({ slug: tenantSlug, raw: body.location_id, fallbackCurrent: true });
+  // falliscono con "Rata non trovata" (come il legacy locationScopeSql). Col filtro
+  // "Tutte le sedi" lo scope diventa la lista delle sedi assegnate (0 = admin).
+  const scopeLocationId = allLocations
+    ? 0
+    : await resolveManageLocationId({ slug: tenantSlug, raw: body.location_id, fallbackCurrent: true });
+  if (!allLocations && postedLocationId > 0 && scopeLocationId !== postedLocationId) {
+    return jsonError("Sede non autorizzata per questa operazione.");
+  }
+  const scopeLocationIds = allLocations ? restrictedLocationIds(session.user) : undefined;
 
   try {
     if (action === "create") {
@@ -94,12 +111,13 @@ export async function POST(request: Request) {
         note: body.note,
         userId: session.user.id,
         locationId: scopeLocationId,
+        locationIds: scopeLocationIds,
       });
       return Response.json({ ok: true, source: "installments?action=pay", sourceMode: "database", plan, plans: await listDbInstallmentPlans(tenantSlug) });
     }
 
     if (action === "pending" || action === "reopen" || action === "mark_pending") {
-      const plan = await markInstallmentPending(tenantSlug, parseInteger(body.installment_id ?? body.id), session.user.id, scopeLocationId);
+      const plan = await markInstallmentPending(tenantSlug, parseInteger(body.installment_id ?? body.id), session.user.id, scopeLocationId, scopeLocationIds);
       return Response.json({ ok: true, source: "installments?action=mark_pending", sourceMode: "database", plan, plans: await listDbInstallmentPlans(tenantSlug) });
     }
 
@@ -131,9 +149,9 @@ export async function POST(request: Request) {
 
 async function markInstallmentPaid(
   slug: string,
-  options: { installmentId: number; paidAmount?: string; paidAt?: string; paymentType?: string; note?: string; userId: number; locationId?: number },
+  options: { installmentId: number; paidAmount?: string; paidAt?: string; paymentType?: string; note?: string; userId: number; locationId?: number; locationIds?: number[] },
 ): Promise<InstallmentPlan> {
-  const row = await installmentRow(slug, options.installmentId, options.locationId ?? 0);
+  const row = await installmentRow(slug, options.installmentId, options.locationId ?? 0, options.locationIds);
   // NB parità legacy: NESSUNA guardia "già pagata" — markInstallmentPaid ri-esegue
   // l'UPDATE anche su una rata paid (aggiorna paid_at/tipo, idempotente).
   // Rata o piano annullati non incassabili (SaleInstallments::markInstallmentPaid ~554-557).
@@ -149,10 +167,8 @@ async function markInstallmentPaid(
   const paidRaw = String(options.paidAmount ?? "").trim();
   let paidAmount = amount;
   if (paidRaw !== "") {
-    // parseMoneyValue legacy: "1.234,56" (virgola decimale, punti migliaia) o "1234.56".
-    const normalized = paidRaw.includes(",") ? paidRaw.replace(/\./g, "").replace(",", ".") : paidRaw;
-    const parsed = Number.parseFloat(normalized);
-    if (!Number.isFinite(parsed)) throw new Error("L'importo incassato non e valido.");
+    const parsed = parseMoneyValueLegacy(paidRaw);
+    if (parsed === null) throw new Error("L'importo incassato non e valido.");
     paidAmount = Math.round(Math.max(0, parsed) * 100) / 100;
     if (paidAmount <= 0.00001) paidAmount = amount;
   }
@@ -190,8 +206,8 @@ async function markInstallmentPaid(
   return installmentPlan(slug, planId);
 }
 
-async function markInstallmentPending(slug: string, installmentId: number, userId: number, locationId = 0): Promise<InstallmentPlan> {
-  const row = await installmentRow(slug, installmentId, locationId);
+async function markInstallmentPending(slug: string, installmentId: number, userId: number, locationId = 0, locationIds?: number[]): Promise<InstallmentPlan> {
+  const row = await installmentRow(slug, installmentId, locationId, locationIds);
   // Guard legacy markInstallmentPending: rata o piano annullati non riapribili.
   if (String(row.status ?? "") === "cancelled" || (await planStatus(slug, Number(row.plan_id ?? 0))) === "cancelled") {
     throw new Error("Non puoi riaprire una rata annullata.");
@@ -216,15 +232,18 @@ async function markInstallmentPending(slug: string, installmentId: number, userI
   return installmentPlan(slug, planId);
 }
 
-async function installmentRow(slug: string, installmentId: number, locationId = 0): Promise<RowDataPacket> {
+async function installmentRow(slug: string, installmentId: number, locationId = 0, locationIds?: number[]): Promise<RowDataPacket> {
   // Il legacy ritorna null dalla lib (id non valido O rata inesistente) e la pagina
   // presenta lo stesso messaggio per entrambi i casi.
   if (installmentId <= 0) throw new Error("Rata non trovata o non aggiornata.");
   // #2 SCOPE SEDE (port di locationScopeSql usato in markInstallmentPaid/Pending): la rata deve
   // appartenere a una vendita della sede corrente (o NULL). Se locationId>0 e la vendita e' di
   // un'altra sede, la row e' assente -> stesso messaggio del legacy ("Rata non trovata").
+  // Col filtro "Tutte le sedi" l'utente RISTRETTO resta vincolato alla lista delle
+  // sue sedi (legacy location_ids, senza NULL).
   let where = "id = ?";
   const params: unknown[] = [installmentId];
+  const listIds = (locationIds ?? []).map((n) => Math.trunc(Number(n)) || 0).filter((n) => n > 0);
   if (locationId > 0) {
     const salesT = await tenantTable(slug, "sales");
     const salesScoped = salesT.mode === "shared" && (await columnExists(salesT.name, "tenant_id"));
@@ -232,10 +251,40 @@ async function installmentRow(slug: string, installmentId: number, locationId = 
     where += ` AND sale_id IN (SELECT id FROM ${quoteIdentifier(salesT.name)} WHERE ${salesTenant}(location_id = ? OR location_id IS NULL))`;
     if (salesScoped) params.push(salesT.tenantId ?? 0);
     params.push(locationId);
+  } else if (listIds.length > 0) {
+    const salesT = await tenantTable(slug, "sales");
+    const salesScoped = salesT.mode === "shared" && (await columnExists(salesT.name, "tenant_id"));
+    const salesTenant = salesScoped ? "tenant_id = ? AND " : "";
+    where += ` AND sale_id IN (SELECT id FROM ${quoteIdentifier(salesT.name)} WHERE ${salesTenant}location_id IN (${listIds.map(() => "?").join(",")}))`;
+    if (salesScoped) params.push(salesT.tenantId ?? 0);
+    params.push(...listIds);
   }
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "sale_installments", where, params, limit: 1 });
   if (!rows[0]) throw new Error("Rata non trovata o non aggiornata.");
   return rows[0];
+}
+
+// Set truthy del filtro "Tutte le sedi" (app_all_locations_filter_enabled).
+const ALL_LOCATIONS_TRUTHY = ["1", "true", "on", "yes", "all"];
+
+// Sedi assegnate dell'utente per lo scope "Tutte le sedi": lista vuota per
+// l'admin (= nessuno scope, vede tutto come il legacy allowed=tutte+NULL).
+function restrictedLocationIds(user: { role?: string; locationIds?: number[] }): number[] {
+  if (String(user.role ?? "").toLowerCase() === "admin") return [];
+  return (user.locationIds ?? []).map((n) => Math.trunc(Number(n)) || 0).filter((n) => n > 0);
+}
+
+// Port ESATTO di SaleInstallments::parseMoneyValue (199-210): strip nbsp/spazi/€,
+// con virgola E punto insieme i punti sono migliaia, poi virgola -> punto e
+// REGEX di validazione (niente parseFloat permissivo: '20abc' è invalido).
+function parseMoneyValueLegacy(value: string): number | null {
+  let raw = String(value ?? "").trim();
+  if (raw === "") return null;
+  raw = raw.replace(/[  €]/g, "");
+  if (raw.includes(",") && raw.includes(".")) raw = raw.replace(/\./g, "");
+  raw = raw.replace(",", ".");
+  if (!/^-?\d+(?:\.\d{1,6})?$/.test(raw)) return null;
+  return Math.round(Number.parseFloat(raw) * 100) / 100;
 }
 
 async function refreshInstallmentPlanStatus(slug: string, planId: number, userId?: number): Promise<void> {
@@ -265,17 +314,22 @@ async function installmentPlan(slug: string, planId: number): Promise<Installmen
   return plan;
 }
 
-// null = data non valida (il chiamante risponde con l'errore legacy).
+// null = data non valida (il chiamante risponde con l'errore legacy). Port di
+// normalizeDateTime (SaleInstallments.php 228-243): checkdate + range ESPLICITI —
+// Date.parse V8 accetta '2026-02-30T10:00' (rollover locale) e l'errore
+// esploderebbe dal DB invece che col messaggio legacy.
 function parsePaidAt(value: string | undefined): Date | string | null {
   const raw = clean(value, 40);
   if (!raw) return new Date();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-    return Number.isNaN(Date.parse(raw)) ? null : `${raw} 00:00:00`;
-  }
-  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?$/.test(raw)) {
-    return Number.isNaN(Date.parse(raw.replace(" ", "T"))) ? null : raw.replace("T", " ");
-  }
-  return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?$/.exec(raw);
+  if (!m) return null;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const [h, mi, s] = [Number(m[4] ?? 0), Number(m[5] ?? 0), Number(m[6] ?? 0)];
+  const probe = new Date(Date.UTC(y, mo - 1, d));
+  if (probe.getUTCFullYear() !== y || probe.getUTCMonth() !== mo - 1 || probe.getUTCDate() !== d) return null;
+  if (h > 23 || mi > 59 || s > 59) return null;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${m[1]}-${m[2]}-${m[3]} ${pad(h)}:${pad(mi)}:${pad(s)}`;
 }
 
 // normalizePaymentType legacy (SaleInstallments.php ~245-269): set canonico

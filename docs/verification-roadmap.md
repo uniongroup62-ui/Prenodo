@@ -221,14 +221,14 @@ FIX di fedeltà:
   Attiva/Scaduto/Programmato sbagliato tra mezzanotte e le 2 ora italiana).
 - parseCouponIdList split /[\s,;|]+/ come coupon_decode_ids_json.
 
-BUG CRITICO cross-modulo (Promozioni) trovato e corretto: starts_at/ends_at sono colonne
-DATE -> node-pg le consegna come Date e String(x).slice(0,10) dava "Tue Jul 07" (regex
-mai soddisfatta) => la FINESTRA DI VALIDITÀ era ignorata dal motore promo: promo SCADUTE
-o future valutate attive in auto-promo POS, tile catalogo, QB e redemption (la promo
-reale 71, scaduta il 10/07, si sarebbe auto-applicata a ogni vendita). Fix con
-instanceof Date -> dateIsoLocal in evaluateOnePromotion + mapPromotion + endLabel tile +
-matcher campagna Fidelity (stesso pattern latente). Verificato live (B10: promo scaduta
-non si combina più).
+NOTA (rettificata il 2026-07-11, pass Gestione Rate): il sospetto "bug critico" sulle
+finestre date promo NON era raggiungibile in-app — tenant-db imposta
+pg.types.setTypeParser(1082/1114/1184/1083/1700) e consegna DATE/timestamp/numeric come
+STRINGHE grezze (stile mysql2 dateStrings), quindi String(x).slice(0,10) funzionava già.
+Il sospetto nasceva da probe con client pg RAW (parser di default => oggetti Date). I
+rami `instanceof Date -> dateIsoLocal` aggiunti in evaluateOnePromotion + mapPromotion +
+endLabel tile + matcher campagne restano come hardening innocuo (inerti coi parser
+attivi). B10 (promo scaduta non si combina) resta un test di regressione valido.
 
 E2E test-buoni2 30/30: A form (gen_code charset, validazioni verbatim, normalizzazione
 codice con spazi, unicità coupon+promozioni), B preview_discount (gate, non trovato,
@@ -413,6 +413,40 @@ regressione e2e 52/0):
   viene rifiutato "Formato non supportato (solo PDF o JPG)"; un file valido con tipo dichiarato
   errato viene comunque accettato col MIME reale. Verificato 5/5. Non resta nulla di rinviato.
 
+
+## Gestione Rate pass 2: filtro Tutte-le-sedi + guardia sede azioni + parse fedeli (2026-07-11)
+
+Seconda passata con mappa integrale (installments_manage.php 496 + SaleInstallments.php 1236 +
+installments_manage.js + notifications_installments.php). E2E test-rate2 20/20 + regressione
+pagamenti 13/13, buoni 30/30. Fix:
+- **Filtro "Tutte le sedi" MANCANTE** (multi-sede, legacy $installmentShowAllLocationsFilter):
+  la lista era sempre bloccata alla sede corrente e un utente multi-sede NON poteva vedere né
+  incassare le rate delle altre sue sedi. Port completo: checkbox nel form (solo count>1),
+  GET/POST all_locations (set truthy legacy), scope admin=nessuno / ristretto=lista sedi
+  ASSEGNATE senza NULL (locationScopeSql con location_ids; include_unassigned resta admin-only),
+  searchDbInstallmentPlans.locationIds + installmentRow(list), sottotitolo ' Sede: Tutte'.
+- **Guardia sede sulle azioni**: location_id postato NON autorizzato veniva DEGRADATO a scope-0
+  (azione senza vincolo di sede!) — ora blocca con 'Sede non autorizzata per questa operazione.'
+  (installments_manage.php 83-85 verbatim).
+- **parseMoneyValue fedele** (SaleInstallments 199-210): l'importo incassato era parseFloat
+  permissivo ('20abc' accettato come 20!) e rifiutava i formati validi legacy — ora regex
+  ^-?\d+(\.\d{1,6})?$ con strip nbsp/spazi/€ e punti-migliaia quando c'è anche la virgola
+  ('€ 10,00' valido, '20abc' -> 'L'importo incassato non e valido.').
+- **parsePaidAt con checkdate esplicito** (normalizeDateTime 228-243): Date.parse V8 accetta
+  '2026-02-30T10:00' (rollover) e l'errore esplodeva dal DB ('date/time field value out of
+  range') invece del legacy 'La data di incasso non e valida.'.
+- **Flash 403 impostazioni avviso rate**: 'Operazione non autorizzata' (legacy) al posto
+  dell'errore permesso della route.
+Confermati fedeli (nessun fix): stati/badge/KPI/stats, fallback selezione piano (plan_id ->
+risultato unico -> sale_id), combobox cliente (accent-insensitive, Enter=primo, 'Nessun
+risultato'), riga Acconto 'Incassato in vendita', rate annullate ('Rata annullata' +
+'Incassata il ... • €'), select tipi Contanti/Carta/Assegno/Bonifico vs label 'Carta di
+Credito', note piano/annullo, gruppi notifiche rate (titoli/testi/badge/date_label/link 25
+anteprime), label finestra 'oggi'/'N giorno/i', clamp 0..365. NB: nel POST paid il legacy
+SOVRASCRIVE la nota esistente con NULL (la pagina posta note='') — parità mantenuta.
+RETTIFICA Buoni: il "bug critico date promo" del pass precedente NON era raggiungibile
+in-app (tenant-db setTypeParser consegna DATE/timestamp come stringhe); vedi nota nella
+sezione Buoni pass 2.
 
 ## Gestione Rate: audit + fix 2 MAJOR + 2 minori (2026-07-08)
 

@@ -16325,6 +16325,10 @@ export type InstallmentPlanSearchFilters = {
   dueTo?: string;
   // #2 scope sede: id della sede corrente dell'utente (0 = tutte, per admin/all-locations).
   locationId?: number;
+  // Filtro "Tutte le sedi" per utente RISTRETTO (legacy location_ids): lista
+  // delle sedi assegnate — senza le vendite NULL (include_unassigned è solo
+  // admin nel legacy, e l'admin qui viaggia con locationId=0 e lista vuota).
+  locationIds?: number[];
 };
 
 export async function listDbInstallmentPlans(slug: string): Promise<InstallmentPlan[]> {
@@ -16416,6 +16420,7 @@ export async function searchDbInstallmentPlans(
   // vedi listPosSales). locationId 0 = nessuno scope (admin / tutte le sedi). IN-subquery non
   // correlata: nessuna dipendenza dall'alias della tabella esterna.
   const scopeLocationId = Number(filters.locationId ?? 0);
+  const scopeLocationIds = (filters.locationIds ?? []).map((n) => Math.trunc(Number(n)) || 0).filter((n) => n > 0);
   if (scopeLocationId > 0) {
     const salesT = await tenantTable(slug, "sales");
     const salesScoped = salesT.mode === "shared" && (await columnExists(salesT.name, "tenant_id"));
@@ -16423,6 +16428,16 @@ export async function searchDbInstallmentPlans(
     clauses.push(`sale_id IN (SELECT id FROM ${quoteIdentifier(salesT.name)} WHERE ${salesTenant}(location_id = ? OR location_id IS NULL))`);
     if (salesScoped) params.push(salesT.tenantId ?? 0);
     params.push(scopeLocationId);
+  } else if (scopeLocationIds.length > 0) {
+    // "Tutte le sedi" per utente RISTRETTO (legacy locationScopeSql con
+    // location_ids): vendite delle SUE sedi, senza le NULL (include_unassigned
+    // è riservato agli admin, che qui non hanno lista).
+    const salesT = await tenantTable(slug, "sales");
+    const salesScoped = salesT.mode === "shared" && (await columnExists(salesT.name, "tenant_id"));
+    const salesTenant = salesScoped ? "tenant_id = ? AND " : "";
+    clauses.push(`sale_id IN (SELECT id FROM ${quoteIdentifier(salesT.name)} WHERE ${salesTenant}location_id IN (${scopeLocationIds.map(() => "?").join(",")}))`);
+    if (salesScoped) params.push(salesT.tenantId ?? 0);
+    params.push(...scopeLocationIds);
   }
 
   const rows = await tenantSelect<RowDataPacket>({

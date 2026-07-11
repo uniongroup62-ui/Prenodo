@@ -66,6 +66,9 @@ type Filters = {
   // (loadPlanBySaleId). Set only from the URL — the filter form does not carry it, so
   // pressing Filtra drops it exactly like the legacy GET form.
   saleId: number;
+  // Checkbox legacy "Tutte le sedi" (?all_locations=1, tenant multi-sede): allarga
+  // lo scope alle sedi assegnate (tutte per l'admin) invece della sola corrente.
+  allLocations: boolean;
 };
 
 // The values the legacy page accepts for ?status= (anything else falls back to "open").
@@ -81,6 +84,7 @@ export type InstallmentsQuery = {
   due_from?: string;
   due_to?: string;
   plan_id?: string;
+  all_locations?: string;
 };
 
 function filtersFromQuery(q: InstallmentsQuery): { filters: Filters; planId: number } {
@@ -93,6 +97,8 @@ function filtersFromQuery(q: InstallmentsQuery): { filters: Filters; planId: num
       dueFrom: String(q.due_from ?? "").trim(),
       dueTo: String(q.due_to ?? "").trim(),
       saleId: Number.parseInt(String(q.sale_id ?? "0"), 10) || 0,
+      // Set truthy legacy (app_all_locations_filter_enabled).
+      allLocations: ["1", "true", "on", "yes", "all"].includes(String(q.all_locations ?? "").trim().toLowerCase()),
     },
     planId: Number.parseInt(String(q.plan_id ?? "0"), 10) || 0,
   };
@@ -181,11 +187,12 @@ export function InstallmentsManageContent({ slug: slugProp, initialQuery }: { sl
   // Applied filters (drive the fetch) vs draft filters (the form controls). Like the legacy
   // GET form, changing a control does nothing until "Filtra" submits the draft.
   const [filters, setFilters] = useState<Filters>(initial.filters);
-  const [draft, setDraft] = useState<{ status: string; clientId: string; dueFrom: string; dueTo: string }>({
+  const [draft, setDraft] = useState<{ status: string; clientId: string; dueFrom: string; dueTo: string; allLocations: boolean }>({
     status: initial.filters.status,
     clientId: initial.filters.clientId,
     dueFrom: initial.filters.dueFrom,
     dueTo: initial.filters.dueTo,
+    allLocations: initial.filters.allLocations,
   });
   const [plans, setPlans] = useState<InstallmentPlan[]>([]);
   // Whether the tenant has ANY installment plan at all (unfiltered). Drives the empty-state card.
@@ -204,9 +211,10 @@ export function InstallmentsManageContent({ slug: slugProp, initialQuery }: { sl
   const [payType, setPayType] = useState<Record<number, string>>({});
   const [payAt, setPayAt] = useState<Record<number, string>>({});
 
-  // " Sede: X" subtitle suffix — legacy appends it whenever the tenant has locations
-  // (current location label, or "Tutte" with the all-locations filter).
-  const [sedeLabel, setSedeLabel] = useState("");
+  // Contesto sedi per sottotitolo e checkbox: il suffisso " Sede: X" segue il
+  // filtro applicato ('Tutte' con all_locations, come $installmentLocationId=0);
+  // il checkbox "Tutte le sedi" esiste solo multi-sede (count > 1).
+  const [locCtx, setLocCtx] = useState<{ locations: Array<{ id: number; name?: string }>; currentId: number } | null>(null);
 
 
   // Load the filtered plan list. Faithful to searchPlans($filters): the status synthetic values are
@@ -218,6 +226,7 @@ export function InstallmentsManageContent({ slug: slugProp, initialQuery }: { sl
     if (filters.saleId > 0) params.set("sale_id", String(filters.saleId));
     if (filters.dueFrom) params.set("due_from", filters.dueFrom);
     if (filters.dueTo) params.set("due_to", filters.dueTo);
+    if (filters.allLocations) params.set("all_locations", "1");
 
     let active = true;
     fetch(`/api/manage/installments?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
@@ -244,10 +253,7 @@ export function InstallmentsManageContent({ slug: slugProp, initialQuery }: { sl
         if (!active) return;
         const locations = Array.isArray(j?.locations) ? j.locations : [];
         const currentId = Number(j?.currentLocationId ?? 0);
-        if (currentId > 0 || locations.length > 0) {
-          const current = locations.find((l) => Number(l.id) === currentId);
-          setSedeLabel(currentId > 0 ? String(current?.name ?? `#${currentId}`) : "Tutte");
-        }
+        setLocCtx({ locations, currentId });
       })
       .catch(() => {});
     return () => {
@@ -310,6 +316,7 @@ export function InstallmentsManageContent({ slug: slugProp, initialQuery }: { sl
     sp.set("sale_id", String(f.saleId || 0));
     if (f.dueFrom) sp.set("due_from", f.dueFrom);
     if (f.dueTo) sp.set("due_to", f.dueTo);
+    if (f.allLocations) sp.set("all_locations", "1");
     window.history.replaceState(null, "", `${window.location.pathname}?${sp.toString()}`);
   }
 
@@ -350,7 +357,10 @@ export function InstallmentsManageContent({ slug: slugProp, initialQuery }: { sl
     const res = await fetch(`/api/manage/installments?slug=${encodeURIComponent(slug)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-      body: JSON.stringify(payload),
+      // Col filtro "Tutte le sedi" attivo anche le azioni viaggiano senza sede
+      // singola (legacy: il form posta location_id=0 + all_locations=1), così una
+      // rata di un'altra sede assegnata resta incassabile.
+      body: JSON.stringify(filters.allLocations ? { ...payload, all_locations: "1" } : payload),
     });
     return res.json();
   }
@@ -412,6 +422,16 @@ export function InstallmentsManageContent({ slug: slugProp, initialQuery }: { sl
 
   const posUrl = `/${encodeURIComponent(slug)}/pos`;
   const historyUrl = `/${encodeURIComponent(slug)}/pos_history`;
+
+  // Sottotitolo legacy: ' Sede: X' (corrente) o ' Sede: Tutte' (filtro attivo /
+  // nessuna sede corrente), appeso quando il tenant ha sedi.
+  const showAllLocationsFilter = (locCtx?.locations.length ?? 0) > 1;
+  const sedeLabel = (() => {
+    if (!locCtx || (locCtx.currentId <= 0 && locCtx.locations.length === 0)) return "";
+    if (filters.allLocations || locCtx.currentId <= 0) return "Tutte";
+    const current = locCtx.locations.find((l) => Number(l.id) === locCtx.currentId);
+    return String(current?.name ?? `#${locCtx.currentId}`);
+  })();
 
   return (
     <div className="container-fluid">
@@ -546,6 +566,22 @@ export function InstallmentsManageContent({ slug: slugProp, initialQuery }: { sl
                 />
               </div>
               <div className="col-12 col-lg-3 d-flex mt-2 mt-lg-0 flex-wrap installments-filter-actions">
+                {showAllLocationsFilter ? (
+                  <div className="form-check mb-0">
+                    <input
+                      className="form-check-input"
+                      type="checkbox"
+                      id="installmentsAllLocations"
+                      name="all_locations"
+                      value="1"
+                      checked={draft.allLocations}
+                      onChange={(e) => setDraft((f) => ({ ...f, allLocations: e.target.checked }))}
+                    />
+                    <label className="form-check-label" htmlFor="installmentsAllLocations">
+                      Tutte le sedi
+                    </label>
+                  </div>
+                ) : null}
                 <button type="submit" className="btn btn-outline-primary installments-filter-submit app-filter-submit">
                   <i className="bi bi-search me-1" />
                   Filtra

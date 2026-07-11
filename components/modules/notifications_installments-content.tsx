@@ -111,7 +111,9 @@ export function NotificationsInstallmentsContent({ slug: slugProp }: { slug?: st
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || json?.ok === false) {
-        setFlash(String(json?.error || "Operazione non valida"));
+        // Legacy: senza installments.manage il save risponde col flash
+        // 'Operazione non autorizzata' (notifications_installments.php 21-23).
+        setFlash(res.status === 403 ? "Operazione non autorizzata" : String(json?.error || "Operazione non valida"));
       } else {
         setFlash("Impostazioni salvate");
         const saved = typeof json?.alertDays === "number" ? json.alertDays : days;
