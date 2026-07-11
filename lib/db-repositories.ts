@@ -2648,10 +2648,14 @@ function normalizeAppointmentDiscount(
 const COUPON_CODE_MARKER = "Coupon:";
 const COUPON_DISCOUNT_MARKER = "Sconto coupon: - €"; // "Sconto coupon: - €"
 
-// Format an amount the legacy way for the notes marker: 2 decimals, dot-decimal (the legacy
-// stores the raw figure; the drawer re-parses it tolerating comma/dot). e.g. 5 -> "5.00".
+// Formato legacy del marker (coupon_apply_meta_to_notes, Helpers.php:
+// number_format($discount, 2, ',', '.')): VIRGOLA decimale + punto migliaia
+// (es. 1,20 / 1.500,00). L'estrattore tollera entrambe le forme, ma il testo
+// visibile nelle note deve combaciare col legacy.
 function formatCouponAmount(amount: number): string {
-  return (Math.round((Math.max(0, amount) + Number.EPSILON) * 100) / 100).toFixed(2);
+  const n = Math.round((Math.max(0, amount) + Number.EPSILON) * 100) / 100;
+  const [int, dec] = n.toFixed(2).split(".");
+  return `${int.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${dec}`;
 }
 
 // Strip any previously-embedded coupon marker lines from a notes string (idempotent), so
@@ -2717,6 +2721,123 @@ function extractCouponMetaFromNotes(notes: unknown): { code: string; discount: n
   return { code, discount };
 }
 
+// Port di api_appointments.php 10983-11135: il coupon inviato al SAVE viene
+// RI-VALIDATO e lo sconto RICALCOLATO server-side (i valori del drawer non si
+// salvano mai a scatola chiusa). Ordine legacy:
+// 1. EDIT: snapshot storico — riga sconto nelle note per lo STESSO codice ->
+//    conservata (clampata al subtotale, niente ri-validazione: modifiche di un
+//    appuntamento esistente non si bloccano per scadenza/stato/limite);
+//    altrimenti ricalcolo LENIENTE (coupon_get_valid SENZA cliente/sede).
+// 2. PROMO-SU-CODICE: il codice coincide con una promotions.coupon_code attiva
+//    -> si applica come PROMOZIONE (coupon azzerato); non applicabile -> la
+//    reason alimenta il fallback 'Coupon non trovato.'.
+// 3. Coupon classico: find + validate_row (cliente/sede/limite) + eval COMBINATA
+//    con la migliore auto-promo (coupon_eval_after_promotion) o coupon-only,
+//    con gli errori verbatim del save.
+async function resolveAppointmentCouponForSave(
+  slug: string,
+  args: {
+    code: string;
+    appointmentId: number | null;
+    services: Array<{ id: number; price: number }>;
+    date: string;
+    time: string | null;
+    clientId: number;
+    locationId: number | null;
+    promoCtx: AppointmentPromoContext;
+  },
+): Promise<{ code: string; discount: number; promoCodeCtx: AppointmentPromoContext | null }> {
+  const code = normalizeCouponCode(args.code);
+  if (code === "") return { code: "", discount: 0, promoCodeCtx: null };
+
+  let items: CouponPreviewItem[] = args.services
+    .filter((s) => Number(s.id ?? 0) > 0)
+    .map((s) => ({ type: "service" as const, id: Number(s.id), line: roundMoney(Math.max(0, Number(s.price ?? 0))), categoryId: null }));
+  items = await couponResolveItemCategories(slug, items).catch(() => items);
+  const subtotal = roundMoney(items.reduce((sum, it) => sum + it.line, 0));
+  const asOfDate = /^\d{4}-\d{2}-\d{2}$/.test(args.date) ? args.date : todayIso();
+
+  // 1) EDIT: snapshot storico + fallback leniente (appt_coupon_discount_for_
+  // snapshot_context — subtotale 0 lo salta e ricade sul percorso rigoroso).
+  const appointmentId = Math.max(0, Number(args.appointmentId ?? 0) || 0);
+  if (appointmentId > 0 && subtotal > 0.0000001) {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "appointments", columns: "notes", where: "id = ?", params: [appointmentId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    const meta = extractCouponMetaFromNotes(rows[0]?.notes);
+    if (meta.discount > 0.00001 && meta.code === code) {
+      return { code, discount: roundMoney(Math.min(subtotal, meta.discount)), promoCodeCtx: null };
+    }
+    const row = await couponFindRow(slug, code);
+    if (row && !(await couponValidateDbRow(slug, row, { asOfDate, clientId: null, locationId: null }))) {
+      const lenient = couponEvalDiscountCore(couponEvalDefFromRow(row), subtotal, items);
+      if (lenient.discount > 0.0000001) return { code, discount: lenient.discount, promoCodeCtx: null };
+    }
+  }
+
+  // 2) PROMO-SU-CODICE (Promotions::discountForCode).
+  let promoCodeReason = "";
+  const promoRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "promotions",
+    columns: "id",
+    where: "UPPER(TRIM(COALESCE(coupon_code,''))) = ? AND COALESCE(is_active,0) = 1",
+    params: [code],
+    orderBy: "priority DESC, id ASC",
+    limit: 1,
+  }).catch(() => [] as RowDataPacket[]);
+  if (promoRows[0]) {
+    const codeCtx = await evalBestPromotionForAppointment({
+      slug,
+      serviceIds: args.services.map((s) => Number(s.id ?? 0)),
+      date: asOfDate,
+      time: args.time,
+      clientId: args.clientId || null,
+      locationId: args.locationId,
+      excludeAppointmentId: appointmentId > 0 ? appointmentId : null,
+      codePromotionId: Number(promoRows[0].id ?? 0),
+    });
+    if (codeCtx.applied && codeCtx.promotion && codeCtx.discount > 0.0000001) {
+      // Legacy 11041-11043: promo bloccata dal codice, coupon azzerato.
+      return { code: "", discount: 0, promoCodeCtx: codeCtx };
+    }
+    promoCodeReason = codeCtx.reason || "Promozione non applicabile.";
+  }
+
+  // 3) Coupon classico.
+  const row = await couponFindRow(slug, code);
+  if (!row) throw new Error(promoCodeReason !== "" ? promoCodeReason : "Coupon non trovato.");
+  const invalid = await couponValidateDbRow(slug, row, { asOfDate, clientId: args.clientId, locationId: args.locationId });
+  if (invalid) throw new Error(invalid || "Coupon non valido o non applicabile.");
+  const def = couponEvalDefFromRow(row);
+
+  if (args.promoCtx.applied && args.promoCtx.promotion) {
+    // Combinazione con l'auto-promo (coupon_eval_after_promotion, 11095-11115):
+    // sconti promo per riga derivati dai prezzi bloccati (list - booked, qty 1).
+    const lineDiscounts: Record<string, number> = {};
+    for (const line of args.promoCtx.services) {
+      const d = roundMoney(Math.max(0, Number(line.list_price ?? 0) - Number(line.booked_price ?? 0)));
+      if (d > 0) lineDiscounts[`service:${line.service_id}`] = roundMoney((lineDiscounts[`service:${line.service_id}`] ?? 0) + d);
+    }
+    const clean: PosCleanLine[] = items.map((it) => ({ type: it.type, id: it.id, qty: 1, unit: it.line, line: it.line, categoryId: it.categoryId ?? null }));
+    const allow = args.promoCtx.promotion.stackable_with_coupon;
+    const combo = couponEvalAfterPromotionCore(def, clean, { discount: args.promoCtx.discount, lineDiscounts }, allow);
+    if (!combo.meetsMinimum && combo.minSubtotal > 0.000001) {
+      throw new Error(`Importo minimo richiesto: ${couponMoneyIt(combo.minSubtotal)}.`);
+    }
+    if (combo.eligibleSubtotal <= 0.000001 || combo.couponDiscount <= 0.000001) {
+      throw new Error(allow ? "Nessun servizio/prodotto selezionato rientra nel coupon." : "Il coupon non è applicabile agli elementi già in promozione per questa campagna.");
+    }
+    return { code, discount: combo.couponDiscount, promoCodeCtx: null };
+  }
+
+  const evalRes = couponEvalDiscountCore(def, subtotal, items);
+  if (!evalRes.meetsMinimum && evalRes.minSubtotal > 0.000001) {
+    throw new Error(`Importo minimo richiesto: ${couponMoneyIt(evalRes.minSubtotal)}.`);
+  }
+  if (evalRes.eligibleSubtotal <= 0.000001) throw new Error("Nessun servizio/prodotto selezionato rientra nel coupon.");
+  if (evalRes.discount <= 0.000001) throw new Error("Coupon non applicabile.");
+  return { code, discount: evalRes.discount, promoCodeCtx: null };
+}
+
 export async function createDbAppointment({
   slug,
   clientId,
@@ -2751,7 +2872,8 @@ export async function createDbAppointment({
   fidelityPointsUsed,
   creditUsed,
   couponCode,
-  couponDiscount,
+  // couponDiscount del payload NON viene destrutturato: lo sconto salvato è
+  // SEMPRE ricalcolato server-side (legacy 11132, coupon_discount_for_save).
 }: {
   slug: string;
   // The SELECTED client id (#qb_client_id from the drawer). Preferred over clientName so a
@@ -2873,7 +2995,7 @@ export async function createDbAppointment({
   // snapshot below. Legacy stacking guard: fidelity points cannot be combined
   // with a promo that is not stackable-with-fidelity (hard error, :12379); a
   // non-stackable coupon instead restricts its own base in the drawer preview.
-  const promoCtx = await evalBestPromotionForAppointment({
+  const autoPromoCtx = await evalBestPromotionForAppointment({
     slug,
     serviceIds: plan.services.map((service) => Number(service.id ?? 0)),
     date,
@@ -2881,6 +3003,26 @@ export async function createDbAppointment({
     clientId: Number(client.id ?? 0) || null,
     locationId,
   });
+  // COUPON al save RI-VALIDATO e RICALCOLATO server-side (api_appointments
+  // 10983-11135): un codice-promozione blocca la promo e azzera il coupon;
+  // un coupon classico viene validato (cliente/sede/limite) e lo sconto esce
+  // dal motore (combinato con l'auto-promo quando applicata) — mai dal client.
+  let promoCtx = autoPromoCtx;
+  let couponForSave = { code: "", discount: 0 };
+  if (String(couponCode ?? "").trim() !== "") {
+    const resolved = await resolveAppointmentCouponForSave(slug, {
+      code: String(couponCode ?? ""),
+      appointmentId: null,
+      services: plan.services.map((s) => ({ id: Number(s.id ?? 0), price: Number(s.price ?? 0) })),
+      date,
+      time: normalizedTime,
+      clientId: Number(client.id ?? 0) || 0,
+      locationId,
+      promoCtx: autoPromoCtx,
+    });
+    if (resolved.promoCodeCtx) promoCtx = resolved.promoCodeCtx;
+    else couponForSave = { code: resolved.code, discount: resolved.discount };
+  }
   if (promoCtx.applied && promoCtx.promotion && fidelityPointsUse > 0 && !promoCtx.promotion.stackable_with_fidelity) {
     throw new Error(
       promoCtx.promotion.title
@@ -2893,7 +3035,7 @@ export async function createDbAppointment({
   const promoByService = new Map(promoCtx.services.map((line) => [line.service_id, line]));
   // Block 4: embed the applied coupon into the general `notes` column (the appointments table
   // has no coupon columns), mirroring the legacy coupon_apply_meta_to_notes.
-  const notesWithCoupon = couponApplyMetaToNotes(null, couponCode, couponDiscount);
+  const notesWithCoupon = couponApplyMetaToNotes(null, couponForSave.code, couponForSave.discount);
   const appointmentValues: Record<string, unknown> = {
     client_id: client.id,
     service_id: plan.primaryService.id,
@@ -3227,7 +3369,7 @@ export async function updateDbAppointment({
   const discount = normalizeAppointmentDiscount(discountType, discountValue);
   // PROMOZIONE automatica su edit (mirrors createDbAppointment), gated on the
   // legacy old-status rule: a done appointment keeps its frozen promo pricing.
-  const promoCtx = promoUpdateAllowed
+  const autoPromoCtx = promoUpdateAllowed
     ? await evalBestPromotionForAppointment({
         slug,
         serviceIds: plan.services.map((service) => Number(service.id ?? 0)),
@@ -3239,6 +3381,35 @@ export async function updateDbAppointment({
         excludeAppointmentId: id,
       })
     : { applied: false, promotion: null, services: [], discount: 0, reason: "" } satisfies AppointmentPromoContext;
+  // COUPON al save (solo quando i campi arrivano dal caller): stessa
+  // ri-validazione/ricalcolo del create, con lo SNAPSHOT STORICO dell'edit
+  // (stesso codice già nelle note -> sconto conservato) e il fallback leniente.
+  let promoCtx = autoPromoCtx;
+  let couponResolved: { code: string; discount: number } | null = null;
+  if (couponCode !== undefined || couponDiscount !== undefined) {
+    if (String(couponCode ?? "").trim() !== "") {
+      const resolved = await resolveAppointmentCouponForSave(slug, {
+        code: String(couponCode ?? ""),
+        appointmentId: id,
+        services: plan.services.map((s) => ({ id: Number(s.id ?? 0), price: Number(s.price ?? 0) })),
+        date,
+        time: normalizedTime,
+        clientId: Number(client.id ?? 0) || 0,
+        locationId,
+        promoCtx: autoPromoCtx,
+      });
+      if (resolved.promoCodeCtx) {
+        // Promo-su-codice: coupon azzerato (11042-11043); il repricing promo
+        // resta gated dallo stato-vecchio come il flusso promo dell'edit.
+        if (promoUpdateAllowed) promoCtx = resolved.promoCodeCtx;
+        couponResolved = { code: "", discount: 0 };
+      } else {
+        couponResolved = { code: resolved.code, discount: resolved.discount };
+      }
+    } else {
+      couponResolved = { code: "", discount: 0 };
+    }
+  }
   // Fidelity gate (same legacy chain as create): steps 1-2 here, the promo
   // conflict on the RAW request, then the balance assert after the guard.
   const fidelityGate = fidelityPointsUsed !== undefined
@@ -3279,10 +3450,11 @@ export async function updateDbAppointment({
   if (creditUsed !== undefined) {
     updateValues.credit_used = roundMoney(Math.max(0, Number(creditUsed) || 0));
   }
-  if (couponCode !== undefined || couponDiscount !== undefined) {
+  if (couponResolved !== null) {
     const currentRows = await tenantSelect<RowDataPacket>({ slug, table: "appointments", columns: "notes", where: "id = ?", params: [id], limit: 1 }).catch(() => [] as RowDataPacket[]);
     const currentNotes = currentRows[0] ? String(currentRows[0].notes ?? "") : "";
-    const merged = couponApplyMetaToNotes(currentNotes, couponCode, couponDiscount);
+    // Il valore persistito è quello RICALCOLATO (mai il payload del drawer).
+    const merged = couponApplyMetaToNotes(currentNotes, couponResolved.code, couponResolved.discount);
     updateValues.notes = merged || null;
   }
   await tenantUpdate({
@@ -15056,6 +15228,7 @@ export async function evalBestPromotionForAppointment({
   locationId,
   preferredPromotionId = null,
   excludeAppointmentId = null,
+  codePromotionId = null,
 }: {
   slug: string;
   serviceIds: number[];
@@ -15069,6 +15242,10 @@ export async function evalBestPromotionForAppointment({
   preferredPromotionId?: number | null;
   // In modifica: la prenotazione stessa non deve contare nel per_customer_limit.
   excludeAppointmentId?: number | null;
+  // PROMO-SU-CODICE al save (Promotions::discountForCode, api_appointments
+  // 11007-11015): considera SOLO questa promozione e bypassa il filtro
+  // coupon_code (che altrimenti la esclude dall'auto-best).
+  codePromotionId?: number | null;
 }): Promise<AppointmentPromoContext> {
   const none = (reason: string): AppointmentPromoContext => ({ applied: false, promotion: null, services: [], discount: 0, reason });
   const ids = serviceIds.map((id) => Math.trunc(Number(id)) || 0).filter((id) => id > 0);
@@ -15084,7 +15261,10 @@ export async function evalBestPromotionForAppointment({
       .filter((line) => line.unitPrice > 0);
     if (cart.length === 0) return none("Nessun servizio valido nel carrello.");
 
-    const { promotions } = await evaluatePromotionsForCart(slug, cart, date, time ?? "", clientId ?? 0, locationId ?? 0, { excludeAppointmentId });
+    const { promotions: allPromotions } = await evaluatePromotionsForCart(slug, cart, date, time ?? "", clientId ?? 0, locationId ?? 0, { excludeAppointmentId });
+    // Modalità promo-su-codice: conta SOLO la promozione del codice.
+    const codePromoId = Math.max(0, Number(codePromotionId ?? 0) || 0);
+    const promotions = codePromoId > 0 ? allPromotions.filter((p) => p.promotionId === codePromoId) : allPromotions;
     if (promotions.length === 0) return none("Nessuna promozione automatica applicabile.");
 
     // Skip coupon-code promotions (redeemed via coupon, not auto-applied).
@@ -15098,7 +15278,7 @@ export async function evalBestPromotionForAppointment({
     for (const evalResult of ordered) {
       const row = rowById.get(evalResult.promotionId);
       if (!row) continue;
-      if (String(row.coupon_code ?? "").trim() !== "") continue;
+      if (codePromoId <= 0 && String(row.coupon_code ?? "").trim() !== "") continue;
       const meta = promoStackMeta(row);
       // Condizioni promozionali (testo) — mostrate nel recap se abilitate.
       const promoConditions = Number(row.promo_conditions_enabled ?? 0) === 1 && String(row.promo_conditions ?? "").trim() !== "" ? String(row.promo_conditions).trim() : "";

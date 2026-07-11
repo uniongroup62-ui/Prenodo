@@ -1,5 +1,45 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Appuntamenti pass 3: RI-VALIDAZIONE coupon al save (residuo Buoni chiuso) + marker legacy (2026-07-11)
+
+Terza passata: chiuso il residuo dichiarato del pass QB motore — il save
+dell'appuntamento salvava codice/sconto coupon COME INVIATI (clamp), mentre il
+legacy li RI-VALIDA e RICALCOLA (api_appointments.php 10983-11135). Port completo
+in resolveAppointmentCouponForSave (riusa il core Buoni), cablato in
+createDbAppointment E updateDbAppointment:
+- EDIT: snapshot STORICO (stesso codice con riga sconto nelle note -> sconto
+  conservato clampato, niente ri-validazione: le modifiche non si bloccano per
+  scadenza/stato/limite del coupon) + fallback LENIENTE
+  (appt_coupon_discount_for_snapshot_context: get_valid SENZA cliente/sede ->
+  un codice a limite esaurito resta applicabile in edit).
+- PROMO-SU-CODICE (Promotions::discountForCode): il codice di una promozione
+  attiva si applica come PROMOZIONE (promotion_id + prezzi bloccati per servizio
+  + redemption) e il coupon viene azzerato; evalBestPromotionForAppointment
+  esteso con codePromotionId (bypass del filtro coupon_code SOLO per quella).
+- Coupon classico: find ('Coupon non trovato.', con la reason promo come
+  fallback) -> validate_row (disattivato/finestra/'Seleziona un cliente...'/
+  'Limite di utilizzo per cliente raggiunto (N/M).') -> eval COMBINATA con
+  l'auto-promo (coupon_eval_after_promotion: base ridotta se non cumulabile,
+  'Il coupon non è applicabile agli elementi già in promozione per questa
+  campagna.'/'Nessun servizio/prodotto selezionato rientra nel coupon.'/
+  'Importo minimo richiesto: X.') o coupon-only ('Coupon non applicabile.').
+  Lo sconto persistito è SEMPRE quello del motore (payload ostile ignorato);
+  couponDiscount del payload non è più consumato dal create.
+- BUG marker corretto: formatCouponAmount scriveva '1.20' col PUNTO — il legacy
+  coupon_apply_meta_to_notes usa number_format(',', '.') => '1,20' (virgola +
+  migliaia). L'estrattore tollerava entrambe, ma il testo visibile nelle note
+  divergeva.
+Nota di parità: coupon_usage_counters legacy è FAIL-OPEN su errore DB (catch ->
+righe vuote) e il port replica lo stesso comportamento (.catch -> count 0).
+
+E2E test-appuntamenti3 12/12 (inesistente/disattivato/minimo raggruppato/scope,
+sconto ricalcolato 1,20 con payload 999, limite (1/1) da marker, promo-su-codice
+con prezzo 9.60 e niente marker, combinata blocco+parziale 3,00, EDIT storico con
+coupon disattivato, CREATE strict vs EDIT leniente a limite esaurito).
+test-quickbooking3 AGGIORNATO alla semantica legacy (K5a rifiuto inesistente +
+K5b ricalcolo 1.2) -> 16/16. REGRESSIONE: appuntamenti 41+8, quickbooking 35+21,
+calendario 20, notifiche-hub 16, buoni 30 — tutte verdi, baseline 10/5 intatta.
+
 ## Calendario pass 3: ri-verifica post commit cross-modulo — nessuna regressione, batteria risanata (2026-07-11)
 
 Ri-verifica del dominio Calendario (chiuso in parti 1+2a/2b/2c del 2026-07-10 più la
