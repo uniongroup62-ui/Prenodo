@@ -23140,6 +23140,67 @@ export async function listNotificationPendingAppointments(slug: string, currentL
 
   const decorations = await appointmentListDecorations(slug, ids).catch(() => new Map<number, { packageSummary: string; prepaidSummary: string; staffColor: string }>());
 
+  // RICALCOLO coupon dal motore (notifications.php 253-258): nota con SOLO il
+  // codice (senza riga 'Sconto coupon') -> coupon_get_valid (find + validate
+  // SENZA cliente/sede: limite per-cliente e sede non si applicano) +
+  // coupon_calc_discount sugli items dei servizi dell'appuntamento
+  // (coupon_items_from_appointment_services: qty clampata a >=1, categoria
+  // dalla riga o risolta dal listino).
+  const recomputedByAppt = new Map<number, number>();
+  {
+    const needing = apptRows.filter((r) => {
+      const meta = extractCouponMetaFromNotes(r.notes);
+      return meta.discount <= 0.00001 && meta.code !== "";
+    });
+    if (needing.length > 0) {
+      // Categoria per riga servizio (colonna best-effort come column_exists legacy).
+      const catByApptSvc = new Map<string, number>();
+      const catRows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "appointment_services",
+        columns: "appointment_id, service_id, service_category_id",
+        where: `appointment_id IN (${inIds})`,
+        params: ids,
+      }).catch(() => [] as RowDataPacket[]);
+      for (const r of catRows) {
+        const cid = Number(r.service_category_id ?? 0) || 0;
+        if (cid > 0) catByApptSvc.set(`${Number(r.appointment_id)}:${Number(r.service_id)}`, cid);
+      }
+      const couponCache = new Map<string, { def: CouponEvalDef } | null>();
+      for (const r of needing) {
+        const aid = Number(r.id);
+        const meta = extractCouponMetaFromNotes(r.notes);
+        let entry = couponCache.get(meta.code);
+        if (entry === undefined) {
+          const row = await couponFindRow(slug, meta.code);
+          const invalid = row ? await couponValidateDbRow(slug, row, { clientId: null, locationId: null }) : "not-found";
+          entry = row && !invalid ? { def: couponEvalDefFromRow(row) } : null;
+          couponCache.set(meta.code, entry);
+        }
+        if (!entry) continue;
+        let items: CouponPreviewItem[] = apsRows
+          .filter((a) => Number(a.appointment_id) === aid && Number(a.service_id) > 0)
+          .map((a) => {
+            const qty = Math.max(1, Math.trunc(Number(a.qty ?? 1)) || 1);
+            const price = roundMoney(Math.max(0, Number(a.price ?? 0)));
+            return {
+              type: "service" as const,
+              id: Number(a.service_id),
+              line: roundMoney(price * qty),
+              categoryId: catByApptSvc.get(`${aid}:${Number(a.service_id)}`) ?? null,
+            };
+          });
+        items = await couponResolveItemCategories(slug, items).catch(() => items);
+        const sv = svcByAppt.get(aid);
+        const subtotal = sv && sv.total !== null ? sv.total : (svcPriceById.get(Number(r.service_id)) ?? 0);
+        // coupon_calc_discount = coupon_eval_discount(...).discount — items []
+        // segue la semantica legacy (solo scope 'all' ricade sul subtotale).
+        const evalRes = couponEvalDiscountCore(entry.def, subtotal, items);
+        if (evalRes.discount > 0.00001) recomputedByAppt.set(aid, evalRes.discount);
+      }
+    }
+  }
+
   return apptRows.map((r) => {
     const aid = Number(r.id);
     const cl = clientById.get(Number(r.client_id)) ?? { name: "", phone: "", email: "" };
@@ -23150,10 +23211,13 @@ export async function listNotificationPendingAppointments(slug: string, currentL
     // righe NULL) il totale ricade sul prezzo del servizio primario.
     let total = sv && sv.total !== null ? sv.total : (svcPriceById.get(Number(r.service_id)) ?? 0);
     const subtotal = total;
-    // Sconto coupon dalle note (notifications.php 244-268): clampato al
-    // subtotale PRIMA della soglia — a subtotale 0 il coupon NON compare.
+    // Sconto coupon dalle note (notifications.php 244-268): riga sconto
+    // presente clampata al subtotale; SOLO codice -> valore RICALCOLATO dal
+    // motore (già cappato a subtotal/eligible da coupon_eval_discount).
     const coupon = extractCouponMetaFromNotes(r.notes);
-    const discount = Math.max(0, Math.min(subtotal, coupon.discount));
+    const discount = coupon.discount > 0.00001
+      ? Math.max(0, Math.min(subtotal, coupon.discount))
+      : (recomputedByAppt.get(aid) ?? 0);
     let couponCode = "";
     if (discount > 0.00001) {
       total = Math.max(0, subtotal - discount);

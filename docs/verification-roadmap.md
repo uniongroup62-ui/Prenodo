@@ -1,5 +1,30 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Notifiche pass 5: chiuso il ricalcolo coupon della lista pending (2026-07-11)
+
+Quinta passata sul dominio Notifiche (le quattro precedenti: hub+pagine dedicate,
+feed browser 1:1, contatori shell/topbar, POST pagina+popup annullo+dettagli lista).
+Chiuso l'ULTIMO residuo dichiarato (parte 4): nota booking con SOLO 'Coupon: CODE'
+(senza riga 'Sconto coupon') — il legacy RICALCOLA lo sconto dal motore
+(notifications.php 253-258: coupon_get_valid SENZA cliente/sede, quindi limite
+per-cliente e vincolo sede NON si applicano, + coupon_calc_discount sugli items dei
+servizi dell'appuntamento con qty clampata a >=1 e categoria dalla riga o dal
+listino). Era rimandato al port del modulo Buoni: ora
+listNotificationPendingAppointments riusa couponFindRow + couponValidateDbRow +
+couponEvalDiscountCore (items [] = semantica legacy: solo scope 'all' ricade sul
+subtotale). La riga sconto ESPLICITA continua a vincere (clamp al subtotale, nessun
+ricalcolo). Nota micro-edge accettato: 'Sconto coupon: 0' esplicito ricadrebbe nel
+ricalcolo (l'estrattore Next non distingue 0 da assente); la riga non è producibile
+dai writer reali.
+
+E2E test-notifiche-coupon 6/6 (ricalcolo 10%: totale 18 + code; disattivato,
+scaduto e scope fuori target senza sconto; scope services matchante 18; riga
+esplicita 5,00 -> totale 15 senza motore). REGRESSIONE: notifiche 17/17, hub
+16/16, feed 10/10, shell 12/12. Baseline intatta (10 appuntamenti, 0 coupons).
+Residui rimasti (dichiarati, non-azione): polling feed 15s (il legacy non fissa
+l'intervallo in pagina), flash SPA vs redirect ?msg= (pattern del port), envelope
+extra del feed non consumato dal client. DOMINIO NOTIFICHE COMPLETO.
+
 ## Accesso-per-sede: chiusi i 7 GAP DI FEDELTA' (2026-07-08)
 
 Implementati i 7 gap di fedelta' della mappa accesso-sede (dove il PHP GIA' restringe e il Next no o
