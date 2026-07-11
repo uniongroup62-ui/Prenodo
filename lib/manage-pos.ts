@@ -956,7 +956,13 @@ export async function checkoutManageSale(
     if (item.type === "product" && item.refId > 0 && item.status !== "ordered") {
       await adjustProductStock(slug, item.refId, locationId, -item.quantity);
     }
-    if (item.type === "prepaid" && client.id > 0) await issuePrepaidFromSale(slug, saleId, saleItemId, client.id, item);
+    // PREPAGATO: sia la riga type 'prepaid' (modale) sia il percorso UI legacy
+    // — SERVIZIO col toggle di riga in stato 'prepaid' (ClientPrepaidServices::
+    // syncSale post-commit crea il prepagato da OGNI riga service+prepaid).
+    // Senza il secondo ramo le vendite dalla cassa non generavano il residuo.
+    if ((item.type === "prepaid" || (item.type === "service" && item.status === "prepaid")) && client.id > 0) {
+      await issuePrepaidFromSale(slug, saleId, saleItemId, client.id, item);
+    }
     if (item.type === "package" && client.id > 0) {
       const clientPackageId = await issuePackageFromSale(slug, saleId, client.id, item, locationId);
       if (clientPackageId > 0) createdClientPackages.push(clientPackageId);

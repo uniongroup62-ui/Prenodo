@@ -126,11 +126,20 @@ export function PosSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
 
   const posHref = `/${encodeURIComponent(slug)}/pos`;
 
-  // Mirrors PHP: the "apply to existing" buttons are enabled only when the
-  // expiry is currently enabled AND a positive value is saved (the count is
-  // recomputed server-side and reflected in *_without_expiry).
-  const preordersApplyDisabled = !settings.preorders_expiry_enabled || settings.preorders_expiry_value <= 0;
-  const prepaidsApplyDisabled = !settings.prepaids_expiry_enabled || settings.prepaids_expiry_value <= 0;
+  // canApply legacy (pos_settings.php 70-71): attivo + valore>0 + CONTEGGIO>0.
+  const preordersApplyDisabled = !settings.preorders_expiry_enabled || settings.preorders_expiry_value <= 0 || settings.preorders_without_expiry <= 0;
+  const prepaidsApplyDisabled = !settings.prepaids_expiry_enabled || settings.prepaids_expiry_value <= 0 || settings.prepaids_without_expiry <= 0;
+  // Help dinamici verbatim (pos_settings.php 72-81, refuso 'verra' preservato).
+  const preordersApplyText = !settings.preorders_expiry_enabled || settings.preorders_expiry_value <= 0
+    ? "Attiva e salva la scadenza per aggiornare i preordini esistenti."
+    : settings.preorders_without_expiry === 1
+      ? "1 preordine aperto senza scadenza verra aggiornato con le impostazioni salvate."
+      : `${settings.preorders_without_expiry} preordini aperti senza scadenza verranno aggiornati con le impostazioni salvate.`;
+  const prepaidsApplyText = !settings.prepaids_expiry_enabled || settings.prepaids_expiry_value <= 0
+    ? "Attiva e salva la scadenza per aggiornare i prepagati esistenti."
+    : settings.prepaids_without_expiry === 1
+      ? "1 prepagato attivo senza scadenza verra aggiornato con le impostazioni salvate."
+      : `${settings.prepaids_without_expiry} prepagati attivi senza scadenza verranno aggiornati con le impostazioni salvate.`;
 
   return (
     <div className="container-fluid">
@@ -232,7 +241,7 @@ export function PosSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
                   <i className="bi bi-calendar-plus me-1" />
                   Applica ai preordini senza scadenza
                 </button>
-                <div className="form-text">Attiva e salva la scadenza per aggiornare i preordini esistenti.</div>
+                <div className="form-text">{preordersApplyText}</div>
               </div>
             </div>
           </div>
@@ -301,7 +310,7 @@ export function PosSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
                   <i className="bi bi-calendar-plus me-1" />
                   Applica ai prepagati senza scadenza
                 </button>
-                <div className="form-text">Attiva e salva la scadenza per aggiornare i prepagati esistenti.</div>
+                <div className="form-text">{prepaidsApplyText}</div>
               </div>
             </div>
           </div>

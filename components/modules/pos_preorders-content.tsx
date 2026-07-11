@@ -106,7 +106,11 @@ export function PosPreordersContent({ slug: slugProp }: { slug?: string } = {}) 
   }, [slug, locationId]);
 
   useEffect(() => {
-    load();
+    // load() fa setLoading(true) sincrono -> microtask (pattern consolidato).
+    let alive = true;
+    Promise.resolve().then(() => {
+      if (alive) load();
+    });
     fetch(`/api/manage/locations?slug=${encodeURIComponent(slug)}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
       .then((j) => setLocations(Array.isArray(j.locations) ? j.locations : []))
@@ -115,6 +119,9 @@ export function PosPreordersContent({ slug: slugProp }: { slug?: string } = {}) 
       .then((r) => r.json())
       .then((j) => setClients(Array.isArray(j.clients) ? j.clients : []))
       .catch(() => {});
+    return () => {
+      alive = false;
+    };
   }, [load, slug]);
 
   // Apply the filter rail to the loaded preorders. Mirrors _pos_pre_row_match:

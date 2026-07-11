@@ -95,7 +95,11 @@ export function PosPrepaidsContent({ slug: slugProp }: { slug?: string } = {}) {
   }>({ from: "", to: "", locationId: "0", q: "", clients: [], view: "active" });
 
   useEffect(() => {
-    setLoading(true);
+    // setLoading in microtask (pattern consolidato).
+    let alive = true;
+    Promise.resolve().then(() => {
+      if (alive) setLoading(true);
+    });
     fetch(`/api/manage/prepaids?slug=${encodeURIComponent(slug)}`, {
       headers: { "x-tenant-slug": slug },
     })
@@ -121,6 +125,9 @@ export function PosPrepaidsContent({ slug: slugProp }: { slug?: string } = {}) {
         }
       })
       .catch(() => {});
+    return () => {
+      alive = false;
+    };
   }, [slug]);
 
   // Distinct clients present in the prepaids list (PHP builds this from the data).
@@ -556,7 +563,7 @@ export function PosPrepaidsContent({ slug: slugProp }: { slug?: string } = {}) {
                           <td className="pos-prepaids-col-purchase">
                             <div>{fmtDate(p.createdAt)}</div>
                             {p.expiresAt ? (
-                              <div className="text-muted small">Scade: {fmtDate(p.expiresAt)}</div>
+                              <div className="text-muted small">Scadenza: {fmtDate(p.expiresAt)}</div>
                             ) : null}
                           </td>
                           <td className="pos-prepaids-col-sale">
@@ -571,8 +578,10 @@ export function PosPrepaidsContent({ slug: slugProp }: { slug?: string } = {}) {
                             <div className="fw-semibold">
                               {p.remainingQuantity} / {p.totalQuantity} residue
                             </div>
+                            {/* Riga legacy (pos_prepaids.php 1597): 'Prenotate N • Usate N'
+                                (le prenotabili stanno nel riepilogo KPI). */}
                             <div className="text-muted small">
-                              Prenotabili {p.bookableQty} • Prenotate {p.bookedQty} • Usate {usedQty}
+                              Prenotate {p.bookedQty} • Usate {usedQty}
                             </div>
                             {p.lastUsedAt ? (
                               <div className="text-muted small">Ultimo utilizzo: {fmtDate(p.lastUsedAt)}</div>
@@ -608,6 +617,8 @@ export function PosPrepaidsContent({ slug: slugProp }: { slug?: string } = {}) {
                 </tbody>
               </table>
             </div>
+            {/* Footer conteggio legacy (pos_prepaids.php 1679, variante pagina singola). */}
+            <div className="text-muted small mt-2">{filtered.length} prepagati trovati.</div>
           </div>
         </section>
       </div>

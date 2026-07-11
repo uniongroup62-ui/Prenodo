@@ -11489,3 +11489,66 @@ E2E test-pagamenti2.mjs 15/15. Regressione COMPLETA 8 suite: 13+35+21+15+41+
 8+20+16. Baseline vendite/prepagati/stock_docs/prodotti ripristinata.
 NOTA: terzo wedge turbopack del giorno sulla ricompilazione POS (kill +
 rm .next/dev + riavvio).
+
+## 2026-07-11 — Pagamenti, parte 3 (pagine minori + rasatura modali + BUG prepagati da percorso UI)
+
+Mappe legacy INTEGRALI via agenti: pos_preorders.php (1434) + pos_prepaids.php
+(1690) + pos_settings.php (225) + pos_success.php (987). Rasatura testi dei
+modali annullo/elimina sulle mappe di parte 2 (batch verbatim: copertura già
+quasi totale, con &apos; che mascherava i match).
+
+BUG REALE (fix motore): il percorso UI dei PREPAGATI — servizio col toggle di
+riga in stato 'prepaid' (l'UNICO percorso della cassa legacy: pos.js non emette
+type 'prepaid'; ClientPrepaidServices::syncSale post-commit crea il prepagato
+da OGNI riga service+prepaid) — NON creava client_prepaid_services nel Next
+(il trigger era solo su type 'prepaid', il tipo del modale/compat). Le vendite
+prepagate dalla cassa non generavano il residuo: niente pagina Prepagati,
+niente riscatti da appuntamento. issuePrepaidFromSale ora scatta anche per
+service+status prepaid. Verificato live: seed via percorso UI -> record 2/2
+residue + subtotal a listino.
+
+FIX (pagine minori):
+1) pos_settings: help "Applica a esistenti" DINAMICI verbatim (72-81, refuso
+   'verra' preservato: '1 preordine aperto senza scadenza verra aggiornato...'
+   / 'N preordini aperti... verranno aggiornati...') + bottoni disabled anche
+   a CONTEGGIO 0 (canApply legacy 70-71, prima solo enabled+valore).
+2) pos_prepaids: cella disponibilità 'Prenotate N • Usate N' (1597 — le
+   prenotabili stanno nel KPI, la riga non le elenca), label 'Scadenza: '
+   (1569, era 'Scade:'), footer conteggio 'N prepagati trovati.' (1679).
+3) 3 eslint set-state-in-effect (prepaids, preorders) -> microtask.
+
+ATTESTAZIONI:
+- linked_points_storno_mode (decisioni punti per-prenotazione nel modale
+  annullo legacy): CABLAGGIO MORTO NEL LEGACY STESSO — le radio vengono
+  renderizzate e postate (pos_history 3376-3387) ma NESSUN codice legge quel
+  campo dal POST (grep integrale su pages/lib/js). Il Next che non le
+  implementa è fedele; le decisioni operative reali sono points_storno_mode
+  (vendita) e recharge_points_storno_mode (per-ricarica), entrambe portate.
+- Prenotazioni collegate all'annullo: i blocker Next (attive/eseguite/
+  annullate-con-credito) sono il port di appt_lifecycle_release_sale_cancel_
+  linked_reservations (throw 2126-2131) esposti in PREVIEW invece che a metà
+  transazione — testi near-verbatim, esito identico.
+- Esiti email voucher nel flash di pos_success ('Email inviata a')
+  ('ATTENZIONE: email non inviata'): legati al flash di sessione legacy
+  (esito dell'invio appena tentato); il port DB-rebuilt mostra il fallback
+  legacy 'Email destinatario:' (806) e le varianti deterministiche
+  (programmata/destinatario). Residuo cosmetico dichiarato.
+- Conteggio senza-scadenza in pos_settings: il Next lo espone gated
+  dall'abilitazione (UI risultante identica alla cascata legacy).
+- Header doppio di pos_success (666-707 ob_end_clean) e $metaBits/
+  _pos_pp_expiry_hint/_pos_pp_age_label/ramo mark_collected di pos_preorders:
+  RAMI MORTI legacy (non portati).
+
+RESIDUI (dichiarati, bassa priorità): arricchimenti riga Prepagati che
+richiedono campi engine ('Prossimo appuntamento:', 'Vendita annullata',
+'Servizio non più attivo a listino.'); warnings schema di pos_preorders
+(stati irraggiungibili in PG); breakdown preview_discount (Buoni).
+
+E2E test-pagamenti3.mjs 7/7: seed vendita preordine+prepagato via percorso UI;
+modulo pos_settings shape; save 30days/6months (riga aggiornata + conteggio 1
+ora abilitato); apply_existing_preorders count=1 + preorder_expires_at sul
+seed; lista preordini (gate pos.preorders, fonte vendita, qty, stock, expiry);
+lista prepagati (gate pos.prepaids, 2/2 residue, bookedQty 0 — POST-FIX);
+sale_success (2 righe, subtotal 44). Snapshot pos_settings RIPRISTINATO.
+Regressione COMPLETA 9 suite: 13+15+35+21+15+41+8+20+16. Quarto wedge
+turbopack risolto col ciclo kill+rm .next/dev+riavvio.
