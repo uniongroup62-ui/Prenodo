@@ -1,5 +1,35 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Commissioni pass 3: ri-attestazione — zero drift, batteria risanata 129 verdi (2026-07-11)
+
+Terza passata (audit dedicato 07-05 + audit/fix 07-08: BUG FUSO periodi #16, gate
+modulo per-movimento, sconto 100%, risoluzione operatore per EMAIL b541360, poi
+Modello A). DRIFT: file del dominio intatti dall'ultimo commit verificato; nessun
+punto di contatto coi lavori recenti (il motore legge vendite/appuntamenti scritti,
+non i flussi checkout/preview toccati dal pass Buoni).
+
+BATTERIA: e2e-commissions 32/0 subito verde; DUE problemi di HARNESS trovati e
+risanati (nessun bug prodotto):
+1) LEAK periodi auto-aperti: e2e-commissions abilita modulo+staff via API (che
+   AUTO-APRE i periodi, semantica #16) ma il cleanup ripristinava i settings via
+   SQL senza chiudere i periodi -> restavano un periodo staff-22 e un periodo
+   modulo APERTI (la suite full si auto-abortiva correttamente sulla baseline
+   sporca; il leftover staff-22 delle 17:21 è stato rimosso con provenienza
+   verificata: creato dal run stesso). FIX: snapshot degli id periodo pre-run +
+   delete dei soli NUOVI a fine run.
+2) test-commission-periods STANTIO: seminava vendite con created_by=20 e
+   operator_name ZZ — ma dalla risoluzione per EMAIL (b541360:
+   created_by -> users.email -> staff.email, MAI per nome) le vendite
+   accreditavano lo staff reale 22 e le entries dello staff ZZ restavano vuote.
+   RISCRITTO con utente ZZ dedicato (users id 900001 + staff ZZ con la stessa
+   email, entrambi rimossi a fine run): il gate periodi torna verificabile
+   (marzo in P1 -> ~10, luglio nel GAP -> nulla, settembre in P2 -> ~10).
+Esito finale: e2e-commissions 32/0 + test-commissioni-full 30/0 +
+test-commission-periods 4/4 + markers-commissions 63/0 = 129 verdi; baseline
+finale pulita (periodi/settings 0, utenti/staff ZZ 0; le 2 righe
+staff_commission_payments pre-esistenti di produzione INTATTE).
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice prodotto.
+
 ## Scadenziario e Costi pass 3: ri-attestazione — zero drift, batteria 79/79 (2026-07-11)
 
 Terza passata sul dominio (audit 2026-07-04 + audit/fix 2026-07-08 con 2 BLOCKER,
