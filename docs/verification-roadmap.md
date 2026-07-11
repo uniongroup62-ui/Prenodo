@@ -1,5 +1,27 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Pacchetti pass 3: ri-attestazione — zero drift, batteria risanata 257 verdi (2026-07-11)
+
+Terza passata (audit 07-05 packages+settings + emissione fedele 07-08: snapshot
+non-retroattivo, sedute solo-servizi, sede; + conversione preventivi 07-08).
+DRIFT: superfici pacchetto toccate solo dai commit già verificati (POS/Buoni per
+la vendita, nessun file catalogo/editor).
+BATTERIA: test-pacchetti 26 + test-pkg-pos 8 + e2e-packages 48 +
+e2e-package-settings 6 + e2e-packages-catalog 27 + markers 92 + verify-markers
+subito verdi. QUATTRO harness risanati (zero bug prodotto):
+- e2e-pkg-usage / e2e-pkg-clientdetail / e2e-pkg-catalog: import pg nudo (mai
+  eseguibili qui) + login reale a sede 0 (harness-multisede-trap) — patchati
+  -> 10/0 + 12/0 + 13/0 (delete catalogo con cascata items/services/pricing/
+  locations + client_package DETACHED con nome conservato).
+- e2e-pkg-editor: PROD cablato a un id reale poi rimosso (products del tenant
+  ora vuota) — la guardia 'Prodotto non valido o non attivo nel pacchetto.'
+  faceva correttamente il suo lavoro; reso auto-seminante (prodotto ZZ +
+  stock sede 21, cleanup) -> 15/0 (prezzo calcolato 100=110-10, sessions_total
+  solo-servizi, package_items/services/pricing/locations, catalog_get
+  round-trip, edit rebuild, validazioni verbatim).
+Totale 257 verdi; baseline pulita (0 packages/client_packages/products/items).
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice prodotto.
+
 ## Clienti pass 3: fix sede anagrafica (qualsiasi attiva, Modello A) + batteria risanata 287 verdi (2026-07-11)
 
 Terza passata (audit 07-05 + tag/data 07-08 + api_clients 9 permessi in QB parte 2 +
