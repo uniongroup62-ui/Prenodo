@@ -1,5 +1,28 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Ricariche pass 2: ri-attestazione + sonda parsing — 126 verdi, nessun bug prodotto (2026-07-12)
+
+Seconda passata (pagina 07-05 + audit completo 07-09 col fix double-earn
+ba9d3e2). DRIFT: zero sui file dedicati.
+BATTERIA: test-recharges 32 + e2e-recharges 23 + markers-recharges 63 +
+test-recharge-void-guard 3 + sonda parsing 5 = 126 verdi.
+SONDA PARSING (nfloat legacy vs parseMoney port, equivalenti incluso il
+quirk): '1.500,50' -> 1.50 (bug-fedele: str_replace virgola + (float) tronca
+al secondo punto), 'abc' -> 'Inserisci un importo ricarica valido.', '1e3' ->
+1000 (scientifica accettata da (float) PHP), bonus percent -20 -> clampato a
+0 (recharges.php 122 verbatim), create_recharge -> flash INFO ok:true 'Le
+ricariche credito si registrano dalla pagina Pagamenti.' senza creare nulla.
+HARNESS SANATI: test-recharges baseline post-bonifica (tx 82->80) + LEAK
+coppia ledger scoperto e fixato (il ciclo ricarica+storno sul client 9 di
+produzione lascia 2 credit_adjustments 'Ricarica/Storno ricarica vendita #N'
+che il cleanup solo-ZZ non rimuoveva: coppia #879 eliminata, cleanup esteso
+con snapshot max-id — NOTA: la coppia #475 del 07-07 è INCLUSA nella
+baseline 49 storica, non toccarla); e2e-recharges adattato alla campagna 37
+ATTIVA (i check 'campagna vuota/la mia campagna' presuppongono nessuna
+attiva: snapshot + off + restore in finally).
+Baseline: recharge_templates 0, recharges 1, cadj 49, tx 80, lots 36.
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice prodotto.
+
 ## Fidelity pass 2: ri-attestazione + sonda invariante — ~700 verdi, nessun bug prodotto (2026-07-12)
 
 Seconda passata (audit completo 07-09 con fix normalizeFidelityPoints
