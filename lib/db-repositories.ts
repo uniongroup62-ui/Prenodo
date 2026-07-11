@@ -2797,18 +2797,12 @@ export async function createDbAppointment({
     locationId,
   });
   const end = plan.end;
+  // Token hold = SOLO auto-esclusione dai conflitti (semantica legacy: il save
+  // non valida mai il token — "hold tecnico" avvisorio, api_appointments
+  // 10971-10980; un token scaduto non blocca il save se lo slot è ancora
+  // libero). Fluisce come excludeHoldToken in cabine+slot e viene marcato
+  // converted best-effort a fine save.
   const token = (holdToken ?? "").trim();
-  if (token) {
-    await assertDbAppointmentHold({
-      slug,
-      token,
-      ownerKey: "manage",
-      startsAt: start,
-      serviceId: Number(plan.primaryService.id ?? 0),
-      staffId: operatorStaffId,
-      locationId,
-    });
-  }
   // Singolo servizio senza operatore: auto-assegnazione del primo eleggibile
   // LIBERO come il legacy (appt_auto_staff_for_single_service) — mai un save
   // single-service a operatore nullo; nessuno libero -> errore verbatim.
@@ -3190,18 +3184,8 @@ export async function updateDbAppointment({
     locationId,
   });
   const end = plan.end;
+  // Token hold = SOLO auto-esclusione (semantica legacy, vedi createDbAppointment).
   const token = (holdToken ?? "").trim();
-  if (token) {
-    await assertDbAppointmentHold({
-      slug,
-      token,
-      ownerKey: "manage",
-      startsAt: start,
-      serviceId: Number(plan.primaryService.id ?? 0),
-      staffId: operatorStaffId,
-      locationId,
-    });
-  }
   // Singolo servizio senza operatore: auto-assegnazione come il create (il
   // legacy applica appt_auto_staff_for_single_service anche in edit, con
   // l'appuntamento stesso escluso dai conflitti).
@@ -22899,43 +22883,11 @@ async function insertAppointmentSegment(
   }
 }
 
-async function assertDbAppointmentHold({
-  slug,
-  token,
-  ownerKey,
-  startsAt,
-  serviceId,
-  staffId,
-  locationId,
-}: {
-  slug: string;
-  token: string;
-  ownerKey: string;
-  startsAt: string;
-  serviceId: number;
-  staffId: number | null;
-  locationId: number | null;
-}): Promise<void> {
-  const rows = await tenantSelect<RowDataPacket>({
-    slug,
-    table: "appointment_holds",
-    where: "token = ? AND owner_key = ? AND status = 'active' AND expires_at > NOW()",
-    params: [token, ownerKey],
-    limit: 1,
-  });
-  const hold = rows[0];
-  if (!hold) throw new Error("Hold appuntamento scaduto o non valido.");
-  if (sqlDateTimePrefix(hold.starts_at) !== startsAt.slice(0, 16)) throw new Error("Hold non coerente con orario selezionato.");
-
-  const heldServices = parseDbNumberArray(hold.service_ids_json);
-  if (serviceId > 0 && heldServices.length > 0 && !heldServices.includes(serviceId)) throw new Error("Hold non coerente con servizio selezionato.");
-
-  const heldStaff = parseDbNumberArray(hold.staff_ids_json);
-  if (staffId && heldStaff.length > 0 && !heldStaff.includes(staffId)) throw new Error("Hold non coerente con operatore selezionato.");
-
-  const heldLocationId = hold.location_id === null || hold.location_id === undefined ? null : Number(hold.location_id);
-  if (locationId && heldLocationId && heldLocationId !== locationId) throw new Error("Hold non coerente con sede selezionata.");
-}
+// NB: la validazione HARD del token hold al save è stata RIMOSSA (parità
+// legacy): api_appointments usa appointment_hold_token_from_request SOLO per
+// auto-escludere il proprio hold dai conflitti — un token scaduto/invalido non
+// blocca il save se lo slot è ancora libero (gli hold ATTIVI degli altri
+// bloccano comunque via i busy-range).
 
 async function markDbAppointmentHoldConverted(slug: string, token: string, ownerKey: string, appointmentId: number): Promise<void> {
   const rows = await tenantSelect<RowDataPacket>({
@@ -23125,20 +23077,6 @@ function slugSegment(value: string): string {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "") || "sede";
-}
-
-function parseDbNumberArray(value: unknown): number[] {
-  if (!value) return [];
-  try {
-    const parsed = JSON.parse(String(value));
-    if (Array.isArray(parsed)) return parsed.map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0);
-  } catch {
-    // fallback below
-  }
-  return String(value)
-    .split(",")
-    .map((item) => Number.parseInt(item.trim(), 10))
-    .filter((item) => Number.isFinite(item) && item > 0);
 }
 
 function normalizeCouponCode(value: string): string {

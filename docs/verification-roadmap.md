@@ -11283,3 +11283,64 @@ occupata, cabins_for_services occupied/free_ids/auto_select, get coupon
 code-only {ZZTEST,0} + variante tollerante {ZZVAR,3.9}. Regressione COMPLETA:
 test-quickbooking 35/35 + test-appuntamenti 41/41 + test-appuntamenti2 8/8 +
 test-calendario 20/20 + test-notifiche-hub 16/16. Baseline 10/5 ripristinata.
+
+## 2026-07-11 — Quick Booking, parte 3 (round-trip vivi: hold avvisorio, credito, sconto, coupon, swap, availability browser)
+
+Verifica LIVE dei flussi del motore non ancora esercitati end-to-end +
+chiusura dell'ultima divergenza di semantica hold.
+
+FIX:
+1) HOLD TOKEN = AVVISORIO (parità legacy): il save Next VALIDAVA il token hard
+   ('Hold appuntamento scaduto o non valido.' + 4 errori di coerenza) — il
+   legacy usa appointment_hold_token_from_request SOLO per auto-escludere il
+   proprio hold dai conflitti (nessuna funzione di validazione nel save: hold
+   "tecnico", commento 10971-10980). Con token scaduto/released/garbage il
+   save legacy procede se lo slot è ancora libero; gli hold ATTIVI degli altri
+   bloccano comunque via i busy-range (staff E cabine). Rimossa
+   assertDbAppointmentHold dai due call-site (create/update) e la funzione
+   stessa; il token resta excludeHoldToken in cabine+slot e viene marcato
+   converted best-effort. Il caso reale coperto: drift TTL client/server dopo
+   il watchdog 2b — il legacy salvava, il Next rifiutava.
+
+VERIFICHE LIVE (nessuna divergenza, prima non testate):
+- CREDITO round-trip: save con credit_use=5 -> appointments.credit_used=5,
+  clients.credit_balance 50->45, riga credit_adjustments debit delta -5 nota
+  'Utilizzo credito prenotazione #id'; annullo (action=status canceled,
+  reserved-mode) -> saldo RIMBORSATO a 50.
+- SCONTO manuale: percent 150 -> clamp 100 (riga + get round-trip); fixed
+  '12,5' con virgola -> 12.50.
+- COUPON via save: marker nelle notes ('Coupon: ZZTEST' + 'Sconto coupon: - €
+  3.90') -> get {ZZTEST, 3.9}; re-save con lo stesso coupon -> strip+re-embed,
+  UNA sola riga marker (niente stacking).
+- HOLD lifecycle: renew_hold estende expires_at; release_hold -> riga
+  'released'; save con token released/garbage su slot libero -> OK (fix 1);
+  hold ATTIVO altrui blocca il save senza token con l'errore CABINA ('Nessuna
+  cabina disponibile nell'orario selezionato.') — l'hold occupa anche le
+  cabine (legacy appointment_hold_occupied_cabin_ids_for_range, 2855) e la
+  cabina si risolve PRIMA del conflitto operatore, come nel save.
+- cancel_done_preview su eseguito: ok + preview (status/targetStatus/
+  cancelMode/summary/warnings/blockers).
+- SWAP revalidation: swap che manda l'operatore su finestra occupata ->
+  verbatim legacy 9511 'Impossibile cambiare ordine: <nome> ha già un altro
+  appuntamento in quell'orario.' e finestre INVARIATE (9506 = variante
+  time-off '.. risulta non disponibile (motivo) nel periodo selezionato.').
+- AVAILABILITY BROWSER (modale Disponibilità): range=week -> months[] +
+  range_start/end; range=month&summary=1 -> months[].
+
+ATTESTAZIONI:
+- RAMO SEGMENTO LIVE del save legacy (11257-11941, POST save con segment_id +
+  segment_old_starts_at/old_ends_at, commit e risposta propri): senza entry
+  point nel build — l'unico produttore di segment view è data-qb-segment,
+  attestato MORTO (nessuna pagina lo emette; Appuntamenti parte 2). Il save
+  Next ignora segment_id (un hand-POST ottiene l'edit dell'appuntamento
+  intero). Il riordino segmenti passa da action=swap_segment, il drag da
+  action=move con segment_id: entrambi portati e testati.
+- staff_for_services (PLURALE) legacy: il drawer Next calcola l'eleggibilità
+  client-side dal context (services.staffIds) — dato equivalente (il plurale
+  legacy non calcola disponibilità; il SINGOLARE con available/'Occupato' è
+  portato e testato).
+
+E2E test-quickbooking3.mjs 15/15. Regressione COMPLETA: test-quickbooking
+35/35 + test-quickbooking2 21/21 + test-appuntamenti 41/41 +
+test-appuntamenti2 8/8 + test-calendario 20/20 + test-notifiche-hub 16/16.
+Baseline 10/5 + credit_adjustments(49) ripristinata.
