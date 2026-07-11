@@ -1,5 +1,23 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Gestione Rate pass 3: ri-attestazione — zero drift, batteria verde, searchInstallments = codice morto legacy (2026-07-11)
+
+Terza passata (la seconda è di oggi stesso, commit 20214c6). Verifiche:
+- DRIFT: route/componenti Rate intatti dal pass 2; i commit successivi (Notifiche
+  pass 5, Appuntamenti pass 3, Pagamenti pass 4) non toccano superfici Rate.
+- BATTERIA: test-rate2 20/20 rieseguita (scope sede a 3 livelli, guardia 'Sede non
+  autorizzata', parse importi/date ostili, alias tipi pagamento, annullo piano +
+  guardie su annullata, gruppo 'Rate già scadute', clamp alert_days) + render 200
+  di installments_manage e notifications_installments; test-pagamenti 13/13
+  (creazione piani al checkout) già verde nel pass Pagamenti 4 di oggi.
+- ATTESTAZIONE NUOVA: SaleInstallments::searchInstallments (lib 970-1044) ha ZERO
+  chiamanti nelle pagine/lib legacy — codice morto, correttamente NON portato come
+  superficie Next (le liste passano da searchPlans; i gruppi da getDueAlertGroups).
+Residui invariati (dichiarati non-azione dall'audit 1): reset filtri post-azione,
+deep-link plan_id fuori filtro, flash lista non filtrata nella risposta POST,
+stato 'tabelle rateizzazione mancanti' non riproducibile su Supabase.
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice.
+
 ## Pagamenti pass 4: ri-verifica post-Buoni — batteria verde + probe pacchetti/ricariche nel preview (2026-07-11)
 
 Quarta passata su Pagamenti dopo la ristrutturazione del checkout POS operata dal
