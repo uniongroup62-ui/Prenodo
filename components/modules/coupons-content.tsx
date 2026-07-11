@@ -52,9 +52,16 @@ function fmtDate(value?: string): string {
   return v !== "" ? v : "—";
 }
 
+// Data odierna LOCALE (legacy date('Y-m-d') sul server Rome): toISOString è UTC
+// e tra mezzanotte e le 2 ora italiana sbaglierebbe i confini di validità.
+function todayLocal(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 // Mirrors coupons_status_info(): disabled / scheduled / expired / active.
 function statusInfo(coupon: Coupon): { label: string; badge: string } {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
   const validFrom = (coupon.startsAt ?? "").slice(0, 10);
   const validTo = (coupon.endsAt ?? "").slice(0, 10);
   if (!coupon.active) return { label: "Disattivato", badge: "bg-secondary" };

@@ -169,6 +169,75 @@ messaggio preview "Nessun servizio/prodotto selezionato rientra..." vs legacy ".
 marker note), a differenza della bozza-Buono legacy a chiusura vendita.
 
 
+## Buoni pass 2: preview_discount POS + combinazione coupon/auto-promo + BUG date promo (2026-07-11)
+
+Seconda passata su Buoni (mappa integrale coupons.php 1253 + Helpers coupon_* 2449-3253 +
+pos.php preview_discount 1166-1435 e checkout 4233-4462 + coupons.js). Chiuso il residuo
+"breakdown preview_discount" e trovati BUG reali. E2E test-buoni2 30/30.
+
+FIX di fedeltà:
+- **preview_discount POS dedicato** (coupons route action=preview_discount, gate pos.manage
+  'Permesso cassa mancante.'): carrello {type,id,qty} whitelist service/product/package/
+  recharge RICOSTRUITO dal listino server-side (prezzi mai dal client; inattivi e fuori
+  sede scartati; package/recharge nel solo subtotale), promo-su-codice riconosciute
+  (is_promo, 'Seleziona un cliente per applicare questa promozione.' con limite
+  per-cliente senza cliente, fallback al coupon classico se la promo non è applicabile),
+  shape JSON legacy (found/applicable/reason/discount/coupon_discount/promotion_discount/
+  stacked_with_coupon/promo_*). Reason POS verbatim: 'Codice non trovato.',
+  'Nessun servizio/prodotto del carrello rientra nel coupon.' (variante POS ≠ QB
+  'selezionato'), 'Con un preventivo collegato coupon e promozioni sono disabilitati.'.
+- **Combinazione coupon+auto-promo** (port coupon_eval_after_promotion Helpers 3101-3241):
+  con la migliore auto-promo applicabile il coupon si CUMULA — se la promo non è
+  cumulabile-col-coupon la base coupon sono SOLO le righe non scontate (mai il fallback
+  scope-all sul subtotale post-promo, base azzerata di proposito se tutto è in promo:
+  'Il coupon non è applicabile agli elementi già in promozione per questa campagna.');
+  promo_non_discounted_subtotal_after_coupon (allocazione coupon pro-rata legacy con
+  resto sull'ultima riga) alimenta il cap Fidelity. Prima il Next AZZERAVA la promo
+  quando si applicava un coupon (soldi diversi dal legacy).
+- **Checkout combinato** (pos.php 4338-4400): con coupon classico il server IGNORA lo stato
+  promo del client e auto-sceglie la migliore auto-promo (testi Cassa: 'Coupon non
+  applicabile: importo minimo richiesto X.', 'Coupon non applicabile agli articoli
+  presenti nel carrello.', 'Coupon non trovato.'); vendita con promotion_applied_* +
+  redemption + note 'Promozione: NAME -X' + marker coupon.
+- **Auto-pick SILENZIOSO al checkout** (pos.php 4233-4299): senza coupon e senza
+  promotion_id dal client, la migliore auto-promo valida si applica comunque (prima un
+  hand-POST non riceveva la promo che il legacy avrebbe applicato).
+- **POS UI**: applyCoupon -> preview_discount col carrello intero; ri-preview debounce
+  250ms su cambio carrello/cliente (pos.js schedulePreview — prima lo sconto restava
+  congelato all'Apply); promo da codice/stacking riflessa nelle righe Promozione+Coupon;
+  effetto auto-promo salta senza azzerare quando c'è un codice digitato; fallback
+  'Codice non applicabile.'/'Codice non trovato.' (pos.js 3290-3291); rimosso il
+  messaggio non-legacy 'Aggiungi almeno un elemento al carrello.'.
+- **couponMoneyIt** = fmt_money manuale (toLocaleString it-IT non raggruppa 1000-9999:
+  'Importo minimo richiesto: 1.500,00.' ora fedele).
+- **coupon_scope_normalize fedele**: alias legacy (all_services_and_products,
+  products_categories) + fallback 'all' (prima all_services_products — un edit con scope
+  sporco salvava lo scope sbagliato).
+- **Semantica items vuoti** (coupon_applicable_subtotal 2865-2895): carrello ricostruito
+  VUOTO ≠ nessun contesto — con items=[] solo scope 'all' ricade sul subtotale
+  (all_services_products = 0: un carrello di soli pacchetti ora rifiuta il coupon come
+  il legacy).
+- **statusInfo data LOCALE** nei 2 componenti (prima toISOString UTC: badge
+  Attiva/Scaduto/Programmato sbagliato tra mezzanotte e le 2 ora italiana).
+- parseCouponIdList split /[\s,;|]+/ come coupon_decode_ids_json.
+
+BUG CRITICO cross-modulo (Promozioni) trovato e corretto: starts_at/ends_at sono colonne
+DATE -> node-pg le consegna come Date e String(x).slice(0,10) dava "Tue Jul 07" (regex
+mai soddisfatta) => la FINESTRA DI VALIDITÀ era ignorata dal motore promo: promo SCADUTE
+o future valutate attive in auto-promo POS, tile catalogo, QB e redemption (la promo
+reale 71, scaduta il 10/07, si sarebbe auto-applicata a ogni vendita). Fix con
+instanceof Date -> dateIsoLocal in evaluateOnePromotion + mapPromotion + endLabel tile +
+matcher campagna Fidelity (stesso pattern latente). Verificato live (B10: promo scaduta
+non si combina più).
+
+E2E test-buoni2 30/30: A form (gen_code charset, validazioni verbatim, normalizzazione
+codice con spazi, unicità coupon+promozioni), B preview_discount (gate, non trovato,
+preventivo, carrello vuoto, coupon-only 5,00, minimo raggruppato, COMBINATA 13=10+3 con
+non-scontato 27, blocco tutto-in-promo, promo-su-codice 10, fix date), C checkout
+(combinato 13/37 con note legacy, auto-pick silenzioso, blocco verbatim), D QB path
+invariato ('selezionato'), E cancel/delete (hard/soft/blocco prenotazioni aperte).
+Regressione: pagamenti 13+15+11, quickbooking 35+15 — tutte verdi, baseline intatta.
+
 ## Fornitori: audit + fix univocita' nome case-insensitive (2026-07-08)
 
 Audit dedicato Fornitori (suppliers.php 865 + Helpers.php app_supplier_*) vs Next (manage-products.ts

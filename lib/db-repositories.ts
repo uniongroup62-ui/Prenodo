@@ -12321,9 +12321,13 @@ export type CouponPreviewContext = {
   apptTime?: string | null;
 };
 
-// € formatter for the legacy reason strings (fmt_money: it-IT, 2 decimals).
+// € formatter for the legacy reason strings — port of fmt_money():
+// number_format(n, 2, ',', '.'). NON toLocaleString('it-IT'): CLDR
+// minimumGroupingDigits=2 non raggruppa le migliaia per 1000-9999.
 function couponMoneyIt(n: number): string {
-  return Number(n || 0).toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const v = Number(n || 0);
+  const [int, dec] = Math.abs(v).toFixed(2).split(".");
+  return `${v < 0 ? "-" : ""}${int.replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${dec}`;
 }
 
 // Active per-client usage of a coupon code (port of coupon_usage_counters with
@@ -12410,6 +12414,113 @@ function couponItemMatchesScope(
   return true;
 }
 
+// Definizione di sconto coupon estratta dalla riga DB (per il core di calcolo).
+type CouponEvalDef = {
+  scope: string;
+  lists: { serviceCategoryIds: number[]; serviceIds: number[]; productCategoryIds: number[]; productIds: number[] };
+  type: "percent" | "fixed";
+  value: number;
+  minSubtotal: number;
+};
+
+function couponEvalDefFromRow(row: RowDataPacket): CouponEvalDef {
+  return {
+    scope: normalizeCouponScope(String(row.apply_scope ?? "all")),
+    lists: {
+      serviceCategoryIds: decodeCouponIdsJson(row.service_category_ids_json),
+      serviceIds: decodeCouponIdsJson(row.service_ids_json),
+      productCategoryIds: decodeCouponIdsJson(row.product_category_ids_json),
+      productIds: decodeCouponIdsJson(row.product_ids_json),
+    },
+    type: String(row.discount_type ?? "") === "fixed" ? "fixed" : "percent",
+    value: roundMoney(Math.max(0, Number(row.discount_value ?? 0))),
+    minSubtotal: roundMoney(Math.max(0, Number(row.min_subtotal ?? 0))),
+  };
+}
+
+// Port ESATTO di coupon_applicable_subtotal + coupon_eval_discount (Helpers.php
+// 2865-2934). items === null (nessun contesto carrello) ≠ items === [] (carrello
+// ricostruito ma vuoto): col carrello vuoto solo lo scope 'all' ricade sul
+// subtotale — all_services_products dà 0 (il POS legacy rifiuta il coupon su un
+// carrello di soli pacchetti/ricariche).
+function couponEvalDiscountCore(
+  def: CouponEvalDef,
+  subtotal: number,
+  items: CouponPreviewItem[] | null,
+): { discount: number; eligibleSubtotal: number; minSubtotal: number; meetsMinimum: boolean; scope: string } {
+  const safeSubtotal = roundMoney(Math.max(0, subtotal));
+  const scope = def.scope;
+
+  let eligibleSubtotal: number;
+  if (items === null) {
+    eligibleSubtotal = scope === "all" || scope === "all_services_products" ? safeSubtotal : 0;
+  } else if (items.length === 0) {
+    eligibleSubtotal = scope === "all" ? safeSubtotal : 0;
+  } else {
+    let sumAll = 0;
+    let sumEligible = 0;
+    for (const it of items) {
+      const line = roundMoney(Math.max(0, Number(it.line ?? 0)));
+      if (line <= 0.0000001) continue;
+      sumAll += line;
+      if (couponItemMatchesScope(scope, def.lists, it)) sumEligible += line;
+    }
+    eligibleSubtotal = scope === "all" ? (safeSubtotal > 0.0000001 ? safeSubtotal : roundMoney(sumAll)) : roundMoney(sumEligible);
+  }
+  if (safeSubtotal > 0.0000001 && eligibleSubtotal > safeSubtotal) eligibleSubtotal = safeSubtotal;
+  eligibleSubtotal = roundMoney(Math.max(0, eligibleSubtotal));
+
+  const minSubtotal = def.minSubtotal;
+  const minimumBase = scope !== "all" && items !== null ? eligibleSubtotal : safeSubtotal;
+  const meetsMinimum = !(minSubtotal > 0.0000001 && minimumBase + 0.0000001 < minSubtotal);
+
+  let discount = 0;
+  if (meetsMinimum && eligibleSubtotal > 0.0000001) {
+    discount = def.type === "percent" ? eligibleSubtotal * (def.value / 100) : def.value;
+  }
+  if (discount < 0) discount = 0;
+  if (discount > eligibleSubtotal) discount = eligibleSubtotal;
+  if (discount > safeSubtotal) discount = safeSubtotal;
+  return { discount: roundMoney(discount), eligibleSubtotal, minSubtotal, meetsMinimum, scope };
+}
+
+// Port di coupon_validate_row (Helpers.php 2679-2741) su una riga DB già
+// caricata: stato, sede, finestra date, limite per cliente. Ritorna la reason
+// legacy o null se valido. clientId: null = flusso senza cliente (limite non
+// verificabile), 0 = nessun cliente selezionato (limite>0 esige la selezione).
+async function couponValidateDbRow(
+  slug: string,
+  row: RowDataPacket,
+  ctx: { asOfDate?: string | null; clientId?: number | null; locationId?: number | null },
+): Promise<string | null> {
+  if (Number(row.is_active ?? 1) !== 1) return "Coupon disattivato.";
+
+  const locationId = Number(ctx.locationId ?? 0);
+  if (locationId > 0) {
+    // app_coupon_location_allowed: no coupon_locations rows = valid everywhere.
+    const locRows = await tenantSelect<RowDataPacket>({ slug, table: "coupon_locations", columns: "location_id", where: "coupon_id = ?", params: [Number(row.id ?? 0)] }).catch(() => [] as RowDataPacket[]);
+    const allowed = locRows.map((r) => Number(r.location_id ?? 0)).filter((n) => n > 0);
+    if (allowed.length > 0 && !allowed.includes(locationId)) return "Coupon non valido per questa sede.";
+  }
+
+  const rawDate = String(ctx.asOfDate ?? "").trim();
+  const asOf = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : todayIso();
+  const validFrom = row.valid_from ? (row.valid_from instanceof Date ? dateIsoLocal(row.valid_from) : String(row.valid_from).slice(0, 10)) : "";
+  const validTo = row.valid_to ? (row.valid_to instanceof Date ? dateIsoLocal(row.valid_to) : String(row.valid_to).slice(0, 10)) : "";
+  if (validFrom !== "" && validFrom > asOf) return "Coupon non ancora attivo per la data selezionata.";
+  if (validTo !== "" && validTo < asOf) return "Coupon scaduto per la data selezionata.";
+
+  const usageLimit = Math.max(0, Math.round(Number(row.usage_limit ?? 0)));
+  const clientId = ctx.clientId === undefined || ctx.clientId === null ? null : Number(ctx.clientId);
+  if (usageLimit > 0 && clientId !== null && clientId <= 0) return "Seleziona un cliente per usare questo coupon.";
+  if (usageLimit > 0 && clientId !== null && clientId > 0) {
+    const code = normalizeCouponCode(String(row.code ?? ""));
+    const used = await couponClientActiveUsedCount(slug, code, clientId);
+    if (used >= usageLimit) return `Limite di utilizzo per cliente raggiunto (${used}/${usageLimit}).`;
+  }
+  return null;
+}
+
 // Full legacy preview: coupon_validate_row (stato/sede/date/limite per cliente)
 // + coupon_eval_discount (base eleggibile per apply_scope, minimo sul totale o
 // sull'eleggibile, sconto percent/fixed cappato). Reason strings verbatim.
@@ -12428,45 +12539,17 @@ export async function previewDbCoupon(
   const row = rows[0];
   const coupon = await mapCoupon(slug, row);
 
-  // ---- coupon_validate_row ----
-  if (Number(row.is_active ?? 1) !== 1) return { valid: false, discount: 0, reason: "Coupon disattivato.", coupon };
-
-  const locationId = Number(context?.locationId ?? 0);
-  if (locationId > 0) {
-    // app_coupon_location_allowed: no coupon_locations rows = valid everywhere.
-    const locRows = await tenantSelect<RowDataPacket>({ slug, table: "coupon_locations", columns: "location_id", where: "coupon_id = ?", params: [coupon.id] }).catch(() => [] as RowDataPacket[]);
-    const allowed = locRows.map((r) => Number(r.location_id ?? 0)).filter((n) => n > 0);
-    if (allowed.length > 0 && !allowed.includes(locationId)) {
-      return { valid: false, discount: 0, reason: "Coupon non valido per questa sede.", coupon };
-    }
-  }
-
-  const rawDate = String(context?.apptDate ?? "").trim();
-  const asOf = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : todayIso();
-  if (coupon.startsAt !== "" && coupon.startsAt > asOf) return { valid: false, discount: 0, reason: "Coupon non ancora attivo per la data selezionata.", coupon };
-  if (coupon.endsAt !== "" && coupon.endsAt < asOf) return { valid: false, discount: 0, reason: "Coupon scaduto per la data selezionata.", coupon };
-
-  // usage_limit è PER CLIENTE (legacy): con clientId===null il flusso non ha un
-  // cliente da vincolare e il limite non è verificabile (nessun esaurito globale).
-  const clientId = context?.clientId === undefined || context?.clientId === null ? null : Number(context.clientId);
-  if (coupon.usageLimit > 0 && clientId !== null && clientId <= 0) {
-    return { valid: false, discount: 0, reason: "Seleziona un cliente per usare questo coupon.", coupon };
-  }
-  if (coupon.usageLimit > 0 && clientId !== null && clientId > 0) {
-    const used = await couponClientActiveUsedCount(slug, normalized, clientId);
-    if (used >= coupon.usageLimit) {
-      return { valid: false, discount: 0, reason: `Limite di utilizzo per cliente raggiunto (${used}/${coupon.usageLimit}).`, coupon };
-    }
-  }
+  // ---- coupon_validate_row ---- (clientId: null = flusso senza cliente, il
+  // limite per-cliente non è verificabile; 0 = "nessun cliente selezionato").
+  const invalidReason = await couponValidateDbRow(slug, row, {
+    asOfDate: context?.apptDate ?? null,
+    clientId: context?.clientId === undefined ? null : context.clientId,
+    locationId: context?.locationId ?? null,
+  });
+  if (invalidReason) return { valid: false, discount: 0, reason: invalidReason, coupon };
 
   // ---- coupon_eval_discount ----
-  const scope = normalizeCouponScope(String(row.apply_scope ?? "all"));
-  const lists = {
-    serviceCategoryIds: decodeCouponIdsJson(row.service_category_ids_json),
-    serviceIds: decodeCouponIdsJson(row.service_ids_json),
-    productCategoryIds: decodeCouponIdsJson(row.product_category_ids_json),
-    productIds: decodeCouponIdsJson(row.product_ids_json),
-  };
+  const def = couponEvalDefFromRow(row);
 
   // Items: explicit cart lines win; otherwise derive service lines (list price +
   // category) from serviceIds like the legacy appt pricing context.
@@ -12486,38 +12569,8 @@ export async function previewDbCoupon(
   }
   if (items) items = await couponResolveItemCategories(slug, items);
 
-  const safeSubtotal = roundMoney(Math.max(0, subtotal));
-  // coupon_applicable_subtotal: without items only the all/all_services_products
-  // scopes fall back to the whole subtotal; restricted scopes give 0.
-  let eligibleSubtotal: number;
-  if (!items) {
-    eligibleSubtotal = scope === "all" || scope === "all_services_products" ? safeSubtotal : 0;
-  } else {
-    let sumAll = 0;
-    let sumEligible = 0;
-    for (const it of items) {
-      const line = roundMoney(Math.max(0, Number(it.line ?? 0)));
-      if (line <= 0.0000001) continue;
-      sumAll += line;
-      if (couponItemMatchesScope(scope, lists, it)) sumEligible += line;
-    }
-    eligibleSubtotal = scope === "all" ? (safeSubtotal > 0.0000001 ? safeSubtotal : roundMoney(sumAll)) : roundMoney(sumEligible);
-  }
-  if (safeSubtotal > 0.0000001 && eligibleSubtotal > safeSubtotal) eligibleSubtotal = safeSubtotal;
-  eligibleSubtotal = roundMoney(Math.max(0, eligibleSubtotal));
-
-  const minSubtotal = roundMoney(Math.max(0, coupon.minSubtotal));
-  const minimumBase = scope !== "all" && items ? eligibleSubtotal : safeSubtotal;
-  const meetsMinimum = !(minSubtotal > 0.0000001 && minimumBase + 0.0000001 < minSubtotal);
-
-  let discount = 0;
-  if (meetsMinimum && eligibleSubtotal > 0.0000001) {
-    discount = coupon.type === "percent" ? eligibleSubtotal * (coupon.value / 100) : coupon.value;
-  }
-  if (discount < 0) discount = 0;
-  if (discount > eligibleSubtotal) discount = eligibleSubtotal;
-  if (discount > safeSubtotal) discount = safeSubtotal;
-  discount = roundMoney(discount);
+  const evalRes = couponEvalDiscountCore(def, subtotal, items);
+  const { discount, eligibleSubtotal, minSubtotal, meetsMinimum } = evalRes;
 
   if (meetsMinimum && eligibleSubtotal > 0.0000001 && discount > 0.0000001) {
     return { valid: true, discount, reason: "Coupon valido.", eligibleSubtotal, coupon };
@@ -12535,6 +12588,469 @@ export async function redeemDbCoupon(code: string, subtotal: number, slug: strin
   const preview = await previewDbCoupon(code, subtotal, slug, context);
   if (!preview.valid || !preview.coupon) throw new Error(preview.reason);
   return { coupon: preview.coupon, discount: preview.discount };
+}
+
+// ---------------------------------------------------------------------------
+// POS: preview sconto codice (port di pos.php mode=preview_discount 1166-1435)
+// + combinazione coupon+auto-promo (coupon_eval_after_promotion, Helpers.php
+// 3101-3241), condivisa col checkout (pos.php 4338-4400).
+// ---------------------------------------------------------------------------
+
+// Riga POST del preview POS (pos.js getCartItems): {type,id,qty} + amount per le
+// ricariche senza modello (id 0 ammesso solo lì).
+export type PosPreviewCartInput = { type: string; id: number; qty: number; amount?: number };
+
+// Riga carrello ricostruita dal listino (il $clean legacy, aggregata per
+// type:id): solo service/product entrano nelle valutazioni coupon/promo;
+// package/recharge contribuiscono al solo subtotale.
+export type PosCleanLine = { type: "service" | "product"; id: number; qty: number; unit: number; line: number; categoryId: number | null };
+
+// Port del rebuild carrello di preview_discount (pos.php 1204-1253): prezzi
+// SEMPRE dal DB, righe inattive/di altra sede scartate in silenzio.
+async function posRebuildCleanCart(
+  slug: string,
+  rawItems: PosPreviewCartInput[],
+  locationId: number,
+): Promise<{ subtotal: number; clean: PosCleanLine[] }> {
+  type Agg = { qty: number; amount: number };
+  const agg = new Map<string, Agg>();
+  for (const it of rawItems) {
+    const type = String(it.type ?? "").trim().toLowerCase();
+    const id = Math.trunc(Number(it.id)) || 0;
+    const qty = Math.trunc(Number(it.qty)) || 0;
+    if (!type || qty <= 0) continue;
+    if (!["service", "product", "package", "recharge"].includes(type)) continue;
+    if (type !== "recharge" && id <= 0) continue;
+    const key = `${type}:${id}`;
+    const cur = agg.get(key) ?? { qty: 0, amount: 0 };
+    cur.qty += qty;
+    if (type === "recharge") cur.amount += roundMoney(Math.max(0, Number(it.amount ?? 0))) * qty;
+    agg.set(key, cur);
+  }
+
+  const idsOf = (family: string) => [...agg.keys()].filter((k) => k.startsWith(`${family}:`)).map((k) => Number(k.split(":")[1])).filter((n) => n > 0);
+  const svcIds = idsOf("service");
+  const prodIds = idsOf("product");
+  const pkgIds = idsOf("package");
+
+  const inClause = (ids: number[]) => ids.map(() => "?").join(",");
+  const svcRows = svcIds.length
+    ? await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, price, category_id", where: `id IN (${inClause(svcIds)}) AND COALESCE(is_active,1) = 1`, params: svcIds }).catch(() => [] as RowDataPacket[])
+    : [];
+  const prodRows = prodIds.length
+    ? await tenantSelect<RowDataPacket>({ slug, table: "products", columns: "id, price, category_id", where: `id IN (${inClause(prodIds)}) AND COALESCE(is_active,1) = 1`, params: prodIds }).catch(() => [] as RowDataPacket[])
+    : [];
+  const pkgRows = pkgIds.length
+    ? await tenantSelect<RowDataPacket>({ slug, table: "packages", columns: "id, price", where: `id IN (${inClause(pkgIds)}) AND COALESCE(is_active,1) = 1`, params: pkgIds }).catch(() => [] as RowDataPacket[])
+    : [];
+
+  // Gate sede (pos_service_location_allowed / app_product_location_enabled /
+  // pos_package_location_allowed): senza righe di associazione l'elemento vale
+  // ovunque; con righe serve il match sulla sede.
+  const allowedByMapping = async (table: string, refCol: string, ids: number[]): Promise<Set<number>> => {
+    const allowed = new Set(ids);
+    if (locationId <= 0 || ids.length === 0) return allowed;
+    const rows = await tenantSelect<RowDataPacket>({ slug, table, columns: `${refCol}, location_id`, where: `${refCol} IN (${inClause(ids)})`, params: ids }).catch(() => null);
+    if (!rows) return allowed; // tabella assente: fail-open come il legacy
+    const restricted = new Map<number, boolean>();
+    for (const r of rows) {
+      const rid = Number(r[refCol] ?? 0);
+      if (rid <= 0) continue;
+      restricted.set(rid, restricted.get(rid) === true || Number(r.location_id ?? 0) === locationId);
+    }
+    for (const [rid, ok] of restricted) if (!ok) allowed.delete(rid);
+    return allowed;
+  };
+  // Prodotti per sede = product_stocks.is_enabled (catalogo POS): righe presenti
+  // per la sede con is_enabled=0 escludono; nessuna riga = disponibile ovunque.
+  const productAllowed = async (ids: number[]): Promise<Set<number>> => {
+    const allowed = new Set(ids);
+    if (locationId <= 0 || ids.length === 0) return allowed;
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "product_stocks", columns: "product_id, location_id, is_enabled", where: `product_id IN (${inClause(ids)})`, params: ids }).catch(() => null);
+    if (!rows) return allowed;
+    const hasAny = new Set<number>();
+    const okHere = new Set<number>();
+    for (const r of rows) {
+      const pid = Number(r.product_id ?? 0);
+      if (pid <= 0) continue;
+      hasAny.add(pid);
+      if (Number(r.location_id ?? 0) === locationId && Number(r.is_enabled ?? 0) === 1) okHere.add(pid);
+    }
+    for (const pid of hasAny) if (!okHere.has(pid)) allowed.delete(pid);
+    return allowed;
+  };
+
+  const [svcAllowed, prodAllowedSet, pkgAllowed] = await Promise.all([
+    allowedByMapping("service_locations", "service_id", svcIds),
+    productAllowed(prodIds),
+    allowedByMapping("package_locations", "package_id", pkgIds),
+  ]);
+
+  const svcById = new Map(svcRows.map((r) => [Number(r.id ?? 0), r]));
+  const prodById = new Map(prodRows.map((r) => [Number(r.id ?? 0), r]));
+  const pkgById = new Map(pkgRows.map((r) => [Number(r.id ?? 0), r]));
+
+  let subtotal = 0;
+  const clean: PosCleanLine[] = [];
+  for (const [key, cur] of agg) {
+    const [type, idStr] = key.split(":");
+    const id = Number(idStr);
+    if (type === "service") {
+      const row = svcById.get(id);
+      if (!row || !svcAllowed.has(id)) continue;
+      const unit = roundMoney(Math.max(0, Number(row.price ?? 0)));
+      const line = roundMoney(unit * cur.qty);
+      subtotal += line;
+      clean.push({ type: "service", id, qty: cur.qty, unit, line, categoryId: Number(row.category_id ?? 0) || null });
+    } else if (type === "product") {
+      const row = prodById.get(id);
+      if (!row || !prodAllowedSet.has(id)) continue;
+      const unit = roundMoney(Math.max(0, Number(row.price ?? 0)));
+      const line = roundMoney(unit * cur.qty);
+      subtotal += line;
+      clean.push({ type: "product", id, qty: cur.qty, unit, line, categoryId: Number(row.category_id ?? 0) || null });
+    } else if (type === "package") {
+      const row = pkgById.get(id);
+      if (!row || !pkgAllowed.has(id)) continue;
+      subtotal += roundMoney(Math.max(0, Number(row.price ?? 0)) * cur.qty);
+    } else if (type === "recharge") {
+      if (cur.amount > 0.00001) subtotal += roundMoney(cur.amount);
+    }
+  }
+  return { subtotal: roundMoney(subtotal), clean };
+}
+
+// coupon_find (Helpers.php 2660-2677): lookup per codice, esclusi i soft-deleted.
+export async function couponFindRow(slug: string, code: string): Promise<RowDataPacket | null> {
+  const normalized = normalizeCouponCode(code);
+  if (normalized === "") return null;
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "coupons", where: "code = ? AND deleted_at IS NULL", params: [normalized], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  return rows[0] ?? null;
+}
+
+// Port di coupon_eval_after_promotion (Helpers.php 3101-3241) sui totali riga
+// (le righe clean sono aggregate per type:id come i lineDiscounts del motore).
+// Se la promo NON è cumulabile col coupon, la base coupon sono SOLO le righe
+// senza sconto promo; tutte escluse = base 0 (mai il fallback scope-all).
+function couponEvalAfterPromotionCore(
+  def: CouponEvalDef,
+  clean: PosCleanLine[],
+  promo: { discount: number; lineDiscounts: Record<string, number> },
+  allowCouponOnPromoItems: boolean,
+): {
+  couponDiscount: number;
+  promoDiscount: number;
+  discountTotal: number;
+  eligibleSubtotal: number;
+  minSubtotal: number;
+  meetsMinimum: boolean;
+  promoNonDiscountedAfterCoupon: number;
+} {
+  const promoDiscOf = (l: PosCleanLine) => roundMoney(Math.max(0, Number(promo.lineDiscounts[`${l.type}:${l.id}`] ?? 0)));
+  const afterPromo = clean.map((l) => ({ ...l, line: roundMoney(Math.max(0, l.line - promoDiscOf(l))) }));
+  const subtotalAfterPromo = roundMoney(afterPromo.reduce((s, l) => s + l.line, 0));
+
+  const couponInput = allowCouponOnPromoItems ? afterPromo : afterPromo.filter((l) => promoDiscOf(l) <= 0.00001);
+
+  let evalRes: { discount: number; eligibleSubtotal: number; minSubtotal: number; meetsMinimum: boolean };
+  if (!allowCouponOnPromoItems && couponInput.length === 0) {
+    // Legacy 3140-3150: base coupon azzerata di proposito (niente fallback
+    // scope-all sul subtotale post-promo); il minimo resta confrontato col
+    // subtotale post-promo.
+    evalRes = {
+      discount: 0,
+      eligibleSubtotal: 0,
+      minSubtotal: def.minSubtotal,
+      meetsMinimum: !(def.minSubtotal > 0.0000001 && subtotalAfterPromo + 0.0000001 < def.minSubtotal),
+    };
+  } else {
+    const base = allowCouponOnPromoItems ? subtotalAfterPromo : roundMoney(couponInput.reduce((s, l) => s + l.line, 0));
+    const items: CouponPreviewItem[] = couponInput.map((l) => ({ type: l.type, id: l.id, line: l.line, categoryId: l.categoryId }));
+    evalRes = couponEvalDiscountCore(def, base, items);
+  }
+
+  // Allocazione pro-rata dello sconto coupon sulle righe eleggibili (legacy
+  // coupon_eval_discount_breakdown 3043-3072: quota = round(disc*line/eligible),
+  // l'ultima riga assorbe il resto, cap al totale riga).
+  const couponAlloc = new Map<string, number>();
+  if (evalRes.discount > 0.00001 && evalRes.eligibleSubtotal > 0.00001) {
+    const eligible = couponInput.filter(
+      (l) => l.line > 0.00001 && couponItemMatchesScope(def.scope, def.lists, { type: l.type, id: l.id, line: l.line, categoryId: l.categoryId }),
+    );
+    let remaining = evalRes.discount;
+    eligible.forEach((l, pos) => {
+      let share = pos === eligible.length - 1 ? roundMoney(Math.max(0, remaining)) : roundMoney(evalRes.discount * (l.line / evalRes.eligibleSubtotal));
+      if (share > remaining) share = remaining;
+      if (share > l.line) share = l.line;
+      remaining = roundMoney(remaining - share);
+      couponAlloc.set(`${l.type}:${l.id}`, share);
+    });
+  }
+
+  // Subtotale post-tutto delle righe NON scontate dalla promo (legacy 3172-3219):
+  // alimenta il cap Fidelity quando la promo non è cumulabile coi punti.
+  let promoNonDiscountedAfterCoupon = 0;
+  for (const l of afterPromo) {
+    if (promoDiscOf(l) > 0.00001) continue;
+    promoNonDiscountedAfterCoupon += roundMoney(Math.max(0, l.line - (couponAlloc.get(`${l.type}:${l.id}`) ?? 0)));
+  }
+
+  const couponDiscount = roundMoney(evalRes.discount);
+  const promoDiscount = roundMoney(Math.max(0, promo.discount));
+  return {
+    couponDiscount,
+    promoDiscount,
+    discountTotal: roundMoney(promoDiscount + couponDiscount),
+    eligibleSubtotal: evalRes.eligibleSubtotal,
+    minSubtotal: evalRes.minSubtotal,
+    meetsMinimum: evalRes.meetsMinimum,
+    promoNonDiscountedAfterCoupon: roundMoney(Math.max(0, promoNonDiscountedAfterCoupon)),
+  };
+}
+
+// Esito della valutazione coupon-classico + migliore auto-promo (condivisa da
+// preview e checkout, che la mappano sui rispettivi testi legacy).
+export type PosCouponComboResult =
+  | { status: "not_found" }
+  | { status: "invalid"; reason: string }
+  | { status: "refused"; kind: "min" | "cart" | "promo_blocked" | "generic"; minSubtotal: number; eligibleSubtotal: number; stacked: boolean }
+  | {
+      status: "ok";
+      couponDiscount: number;
+      eligibleSubtotal: number;
+      couponType: string;
+      couponValue: number;
+      promo: { id: number; name: string; discount: number; stackableWithFidelity: boolean; stackableWithCoupon: boolean; nonDiscountedAfterCoupon: number } | null;
+    };
+
+// Coupon classico in cassa: coupon_find + coupon_validate_row + eval sul
+// carrello, combinato con la MIGLIORE auto-promo quando applicabile (pos.php
+// preview 1335-1426 = checkout 4338-4400, stessa semantica).
+export async function evalPosCouponWithAutoPromo(
+  slug: string,
+  args: { code: string; clean: PosCleanLine[]; subtotal: number; clientId: number; locationId: number },
+): Promise<PosCouponComboResult> {
+  const row = await couponFindRow(slug, args.code);
+  if (!row) return { status: "not_found" };
+
+  // Il POS passa SEMPRE il cliente (0 = non selezionato): un limite per-cliente
+  // esige la selezione, come coupon_validate_row chiamato con $cid ?: 0.
+  const invalid = await couponValidateDbRow(slug, row, { clientId: Math.max(0, args.clientId), locationId: args.locationId });
+  if (invalid) return { status: "invalid", reason: invalid };
+
+  const def = couponEvalDefFromRow(row);
+  const couponType = String(row.discount_type ?? "");
+  const couponValue = roundMoney(Math.max(0, Number(row.discount_value ?? 0)));
+  // Categorie mancanti risolte dal listino (il checkout non le ha in riga; gli
+  // scope per-categoria le richiedono).
+  const resolved = await couponResolveItemCategories(
+    slug,
+    args.clean.map((l) => ({ type: l.type, id: l.id, line: l.line, categoryId: l.categoryId })),
+  );
+  const cleanResolved: PosCleanLine[] = args.clean.map((l, i) => ({ ...l, categoryId: resolved[i]?.categoryId ?? l.categoryId ?? null }));
+  const items: CouponPreviewItem[] = cleanResolved.map((l) => ({ type: l.type, id: l.id, line: l.line, categoryId: l.categoryId }));
+
+  // Migliore auto-promo per il carrello (pos_pick_best_auto_promotion): mai le
+  // promo "su codice"; senza cliente saltano quelle con limite per-cliente.
+  const promoCart: PromoCartLine[] = args.clean.map((l) => ({ type: l.type, id: l.id, qty: l.qty, unitPrice: l.unit }));
+  const auto = promoCart.length
+    ? await evaluatePromotionsForCart(slug, promoCart, todayIso(), promoNowTime(), args.clientId, args.locationId, { autoOnly: true }).catch(() => ({ promotions: [], best: null }))
+    : { promotions: [], best: null };
+  const best = auto.best && auto.best.discount > 0.00001 ? auto.best : null;
+
+  if (best) {
+    const combo = couponEvalAfterPromotionCore(def, cleanResolved, { discount: best.discount, lineDiscounts: best.lineDiscounts }, best.stackableWithCoupon);
+    if (combo.meetsMinimum && combo.eligibleSubtotal > 0.000001 && combo.couponDiscount > 0.000001 && combo.discountTotal > 0.000001) {
+      return {
+        status: "ok",
+        couponDiscount: combo.couponDiscount,
+        eligibleSubtotal: combo.eligibleSubtotal,
+        couponType,
+        couponValue,
+        promo: {
+          id: best.promotionId,
+          name: best.title,
+          discount: combo.promoDiscount,
+          stackableWithFidelity: best.stackableWithFidelity,
+          stackableWithCoupon: best.stackableWithCoupon,
+          nonDiscountedAfterCoupon: combo.promoNonDiscountedAfterCoupon,
+        },
+      };
+    }
+    if (!combo.meetsMinimum && combo.minSubtotal > 0.000001) {
+      return { status: "refused", kind: "min", minSubtotal: combo.minSubtotal, eligibleSubtotal: combo.eligibleSubtotal, stacked: true };
+    }
+    if (combo.eligibleSubtotal <= 0.000001 || combo.couponDiscount <= 0.000001) {
+      return { status: "refused", kind: best.stackableWithCoupon ? "cart" : "promo_blocked", minSubtotal: combo.minSubtotal, eligibleSubtotal: combo.eligibleSubtotal, stacked: true };
+    }
+    return { status: "refused", kind: "generic", minSubtotal: combo.minSubtotal, eligibleSubtotal: combo.eligibleSubtotal, stacked: true };
+  }
+
+  const evalRes = couponEvalDiscountCore(def, args.subtotal, items);
+  if (evalRes.meetsMinimum && evalRes.eligibleSubtotal > 0.000001 && evalRes.discount > 0.000001) {
+    return { status: "ok", couponDiscount: evalRes.discount, eligibleSubtotal: evalRes.eligibleSubtotal, couponType, couponValue, promo: null };
+  }
+  if (!evalRes.meetsMinimum && evalRes.minSubtotal > 0.000001) {
+    return { status: "refused", kind: "min", minSubtotal: evalRes.minSubtotal, eligibleSubtotal: evalRes.eligibleSubtotal, stacked: false };
+  }
+  if (evalRes.eligibleSubtotal <= 0.000001) {
+    return { status: "refused", kind: "cart", minSubtotal: evalRes.minSubtotal, eligibleSubtotal: evalRes.eligibleSubtotal, stacked: false };
+  }
+  return { status: "refused", kind: "generic", minSubtotal: evalRes.minSubtotal, eligibleSubtotal: evalRes.eligibleSubtotal, stacked: false };
+}
+
+// Orario corrente HH:MM (il legacy passa date('H:i:s') al motore promo).
+function promoNowTime(): string {
+  const now = new Date();
+  return `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+}
+
+// Risposta del preview POS, stessa shape JSON del legacy mode=preview_discount.
+export type PosDiscountPreview = {
+  ok: true;
+  code: string;
+  found: 0 | 1;
+  applicable: 0 | 1;
+  reason: string;
+  subtotal: number;
+  discount: number;
+  is_promo: 0 | 1;
+  promo_id: number;
+  promo_name: string;
+  promo_stackable: number;
+  promo_allows_fidelity: 0 | 1;
+  promo_non_discounted_subtotal: number;
+  coupon_type: string;
+  coupon_value: number;
+  coupon_discount?: number;
+  promotion_discount?: number;
+  stacked_with_coupon?: 0 | 1;
+  eligible_subtotal?: number;
+};
+
+export async function posPreviewDiscount(
+  slug: string,
+  args: { code: string; clientId: number; locationId: number; quoteImportId?: number; items: PosPreviewCartInput[] },
+): Promise<PosDiscountPreview> {
+  const code = String(args.code ?? "").trim().toUpperCase();
+  const out: PosDiscountPreview = {
+    ok: true,
+    code,
+    found: 0,
+    applicable: 0,
+    reason: "",
+    subtotal: 0,
+    discount: 0,
+    is_promo: 0,
+    promo_id: 0,
+    promo_name: "",
+    promo_stackable: 0,
+    promo_allows_fidelity: 1,
+    promo_non_discounted_subtotal: 0,
+    coupon_type: "",
+    coupon_value: 0,
+  };
+
+  if ((args.quoteImportId ?? 0) > 0) {
+    out.reason = "Con un preventivo collegato coupon e promozioni sono disabilitati.";
+    return out;
+  }
+  if (code === "") return out;
+
+  const { subtotal, clean } = await posRebuildCleanCart(slug, args.items, args.locationId);
+  out.subtotal = subtotal;
+  const cid = Math.max(0, Math.trunc(args.clientId) || 0);
+
+  // 1) PROMO-SU-CODICE (Promotions::discountForCode): il codice coincide con una
+  // promotions.coupon_code attiva -> si applica come promozione; se non
+  // applicabile, fallback al coupon classico solo se il coupon esiste.
+  const promoRows = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "promotions",
+    columns: "id, per_customer_limit",
+    where: "UPPER(TRIM(COALESCE(coupon_code,''))) = ? AND COALESCE(is_active,0) = 1",
+    params: [code],
+    orderBy: "priority DESC, id ASC",
+    limit: 1,
+  }).catch(() => [] as RowDataPacket[]);
+  if (promoRows[0]) {
+    out.found = 1;
+    const promoId = Number(promoRows[0].id ?? 0);
+    const promoCart: PromoCartLine[] = clean.map((l) => ({ type: l.type, id: l.id, qty: l.qty, unitPrice: l.unit }));
+    const evaluated = promoCart.length
+      ? await evaluatePromotionsForCart(slug, promoCart, todayIso(), promoNowTime(), cid, args.locationId).catch(() => ({ promotions: [], best: null }))
+      : { promotions: [], best: null };
+    const chosen = evaluated.promotions.find((p) => p.promotionId === promoId) ?? null;
+    if (chosen && chosen.eligible && chosen.discount > 0.00001) {
+      // pos.php 1279: la promo con limite per-cliente esige un cliente selezionato.
+      if (cid <= 0 && (Math.trunc(Number(promoRows[0].per_customer_limit ?? 0)) || 0) > 0) {
+        out.reason = "Seleziona un cliente per applicare questa promozione.";
+        return out;
+      }
+      out.applicable = 1;
+      out.discount = roundMoney(Math.min(subtotal, Math.max(0, chosen.discount)));
+      out.is_promo = 1;
+      out.promo_id = chosen.promotionId;
+      out.promo_name = chosen.title;
+      out.promo_stackable = (chosen.stackableWithFidelity ? 4 : 0) + (chosen.stackableWithCoupon ? 2 : 0);
+      out.promo_allows_fidelity = chosen.stackableWithFidelity ? 1 : 0;
+      out.promo_non_discounted_subtotal = roundMoney(Math.max(0, chosen.nonDiscountedSubtotal));
+      return out;
+    }
+    // Promo trovata ma non applicabile: fallback al coupon classico se esiste.
+    if (!(await couponFindRow(slug, code))) {
+      out.reason = "Promozione non applicabile.";
+      return out;
+    }
+    out.found = 0; // il ramo coupon sotto lo rimette a 1
+  }
+
+  // 2) Coupon classico (con eventuale auto-promo combinata).
+  const combo = await evalPosCouponWithAutoPromo(slug, { code, clean, subtotal, clientId: cid, locationId: args.locationId });
+  if (combo.status === "not_found") {
+    out.reason = "Codice non trovato.";
+    return out;
+  }
+  out.found = 1;
+  const row = await couponFindRow(slug, code);
+  out.coupon_type = String(row?.discount_type ?? "");
+  out.coupon_value = roundMoney(Math.max(0, Number(row?.discount_value ?? 0)));
+
+  if (combo.status === "invalid") {
+    out.reason = combo.reason || "Coupon non valido per la data odierna.";
+    return out;
+  }
+  if (combo.status === "refused") {
+    out.eligible_subtotal = combo.eligibleSubtotal;
+    out.coupon_discount = 0;
+    out.promotion_discount = 0;
+    out.stacked_with_coupon = 0;
+    if (combo.kind === "min") out.reason = `Importo minimo richiesto: ${couponMoneyIt(combo.minSubtotal)}.`;
+    else if (combo.kind === "promo_blocked") out.reason = "Il coupon non è applicabile agli elementi già in promozione per questa campagna.";
+    else if (combo.kind === "cart") out.reason = "Nessun servizio/prodotto del carrello rientra nel coupon.";
+    else out.reason = "Coupon non applicabile.";
+    return out;
+  }
+
+  out.applicable = 1;
+  out.eligible_subtotal = combo.eligibleSubtotal;
+  out.coupon_discount = combo.couponDiscount;
+  if (combo.promo) {
+    out.discount = roundMoney(combo.couponDiscount + combo.promo.discount);
+    out.promotion_discount = combo.promo.discount;
+    out.is_promo = 1;
+    out.promo_id = combo.promo.id;
+    out.promo_name = combo.promo.name;
+    out.promo_stackable = (combo.promo.stackableWithFidelity ? 4 : 0) + (combo.promo.stackableWithCoupon ? 2 : 0);
+    out.promo_allows_fidelity = combo.promo.stackableWithFidelity ? 1 : 0;
+    out.promo_non_discounted_subtotal = combo.promo.nonDiscountedAfterCoupon;
+    out.stacked_with_coupon = 1;
+  } else {
+    out.discount = combo.couponDiscount;
+    out.promotion_discount = 0;
+    out.stacked_with_coupon = 0;
+  }
+  return out;
 }
 
 // Server-side coupon code generation (port of coupons_generate_code): readable
@@ -12710,16 +13226,17 @@ export async function getCouponFormContext(slug: string): Promise<CouponFormCont
 // Parse a coupon scope / location id-list from a body field. Accepts a
 // JSON-array string (the form sends the nested arrays as JSON so they survive
 // parseRequestBody's top-level flatten — the [object Object] trap) or a plain
-// comma-separated list. Returns unique positive ids.
+// separated list (legacy coupon_decode_ids_json: split su [\s,;|]+). Returns
+// unique positive ids.
 function parseCouponIdList(raw: unknown): number[] {
   let src: unknown = raw;
   if (typeof src === "string") {
     const s = src.trim();
     if (s === "") return [];
     if (s.startsWith("[")) {
-      try { src = JSON.parse(s); } catch { src = s.split(","); }
+      try { src = JSON.parse(s); } catch { src = s.split(/[\s,;|]+/); }
     } else {
-      src = s.split(",");
+      src = s.split(/[\s,;|]+/);
     }
   }
   if (!Array.isArray(src)) return [];
@@ -12875,10 +13392,15 @@ export async function saveManageCoupon(slug: string, body: Record<string, string
   return saved;
 }
 
+// Port of coupon_scope_normalize (Helpers.php 2455-2463): alias legacy inclusi,
+// fallback 'all' (NON all_services_products — la promozione a scope moderno del
+// default avviene solo nel save action=new, come coupons.php 592).
 function normalizeCouponScope(value: string): string {
-  const scope = value.trim().toLowerCase();
+  let scope = value.trim().toLowerCase();
+  if (scope === "all_services_and_products") scope = "all_services_products";
+  if (scope === "products_categories") scope = "product_categories";
   const allowed = ["all", "service_categories", "services", "product_categories", "products", "all_services_products"];
-  return allowed.includes(scope) ? scope : "all_services_products";
+  return allowed.includes(scope) ? scope : "all";
 }
 
 // Usage stats for a coupon code (port of coupons.php coupons_usage_stats). Counts
@@ -13711,6 +14233,9 @@ export type PromoEvalResult = {
   stackableWithFidelity: boolean;
   stackableWithCoupon: boolean;
   nonDiscountedSubtotal: number;
+  // Sconto promo per riga carrello ("service:ID"/"product:ID" -> € totali, solo
+  // righe scontate): alimenta la combinazione coupon+promo del POS.
+  lineDiscounts: Record<string, number>;
 };
 
 const PROMO_CANCELLED_STATES = ["canceled", "cancelled", "annullato", "annullata", "rejected", "rifiutato", "rifiutata", "deleted", "eliminato", "eliminata"];
@@ -13921,7 +14446,7 @@ function promoBadgePercent(value: number): string {
 // scope=all group => largest-remainder pro-rata across the group's units.
 // Besides the total it now returns the per-service breakdown (unit old/now/
 // discount + badge) the drawer/booking price panels render.
-function computePromoDiscountCents(promo: RowDataPacket, ch: PromoChildren, cart: PromoCartLine[]): { discountC: number; eligibleQty: number; eligibleAmountC: number; breakdownServices: Record<number, PromoServiceBreakdown>; nonDiscountedC: number } {
+function computePromoDiscountCents(promo: RowDataPacket, ch: PromoChildren, cart: PromoCartLine[]): { discountC: number; eligibleQty: number; eligibleAmountC: number; breakdownServices: Record<number, PromoServiceBreakdown>; nonDiscountedC: number; lineDiscounts: Record<string, number> } {
   const svcMode = String(promo.apply_services_mode ?? "all").toLowerCase();
   const prdMode = String(promo.apply_products_mode ?? "none").toLowerCase();
   const cents = (v: number) => Math.round(v * 100);
@@ -14047,11 +14572,14 @@ function computePromoDiscountCents(promo: RowDataPacket, ch: PromoChildren, cart
 
   // Subtotale NON scontato dalla promo (pos.php preview_auto_promo 1620-1639): somma
   // delle righe service/product con sconto unitario nullo — righe fuori scope incluse.
+  // linesByKey ("type:id" -> sconto promo totale in cents) è esposto anche come
+  // lineDiscounts (in euro): serve alla combinazione coupon+promo del POS
+  // (coupon_eval_after_promotion) per sapere quali righe la promo ha scontato.
   let nonDiscountedC = 0;
+  const linesByKey = new Map<string, number>();
   {
     const discByLine = new Map<PromoLine, number>();
     for (const line of lines) discByLine.set(line, line.units.reduce((s, u) => s + Math.max(0, Math.min(u.unitC, u.discC)), 0));
-    const linesByKey = new Map<string, number>();
     for (const line of lines) {
       const key = `${line.type}:${line.id}`;
       linesByKey.set(key, (linesByKey.get(key) ?? 0) + (discByLine.get(line) ?? 0));
@@ -14065,6 +14593,8 @@ function computePromoDiscountCents(promo: RowDataPacket, ch: PromoChildren, cart
       if (lineDisc <= 0) nonDiscountedC += unitC * qty;
     }
   }
+  const lineDiscounts: Record<string, number> = {};
+  for (const [key, c] of linesByKey) if (c > 0) lineDiscounts[key] = roundMoney(c / 100);
 
   // Per-service breakdown (aggregate lines by service id; legacy svcAgg): unit
   // old/now/discount + badge ("-p%" when the whole line is percent-discounted,
@@ -14103,7 +14633,7 @@ function computePromoDiscountCents(promo: RowDataPacket, ch: PromoChildren, cart
     breakdownServices[sid] = { old: oldUnit, now: nowUnit, discount: discUnit, badge };
   }
 
-  return { discountC: Math.max(0, discountC), eligibleQty, eligibleAmountC, breakdownServices, nonDiscountedC };
+  return { discountC: Math.max(0, discountC), eligibleQty, eligibleAmountC, breakdownServices, nonDiscountedC, lineDiscounts };
 }
 
 // Evaluate one active promotion against a cart + context (port of the guard chain
@@ -14111,11 +14641,14 @@ function computePromoDiscountCents(promo: RowDataPacket, ch: PromoChildren, cart
 // then the discount). date=YYYY-MM-DD, time=HH:MM (optional), locationId optional.
 function evaluateOnePromotion(promo: RowDataPacket, ch: PromoChildren, cart: PromoCartLine[], date: string, time: string, clientId: number, locationId: number, ctx: PromoClientCtx | null): PromoEvalResult {
   const stack = promoStackMeta(promo);
-  const base: PromoEvalResult = { promotionId: Number(promo.id ?? 0), title: String(promo.title ?? ""), eligible: false, discount: 0, reason: "", eligibleQty: 0, eligibleAmount: 0, breakdownServices: {}, stackableWithFidelity: stack.stackableWithFidelity, stackableWithCoupon: stack.stackableWithCoupon, nonDiscountedSubtotal: 0 };
+  const base: PromoEvalResult = { promotionId: Number(promo.id ?? 0), title: String(promo.title ?? ""), eligible: false, discount: 0, reason: "", eligibleQty: 0, eligibleAmount: 0, breakdownServices: {}, stackableWithFidelity: stack.stackableWithFidelity, stackableWithCoupon: stack.stackableWithCoupon, nonDiscountedSubtotal: 0, lineDiscounts: {} };
 
   if (Number(promo.is_active ?? 0) !== 1) return { ...base, reason: "Promozione non attiva." };
-  const start = String(promo.starts_at ?? "").slice(0, 10);
-  const end = String(promo.ends_at ?? "").slice(0, 10);
+  // starts_at/ends_at sono colonne DATE: node-pg le consegna come Date a
+  // mezzanotte LOCALE — String(x).slice(0,10) darebbe "Tue Jul 07" (regex mai
+  // soddisfatta = finestra IGNORATA: promo scadute/future valutate attive).
+  const start = promo.starts_at instanceof Date ? dateIsoLocal(promo.starts_at) : String(promo.starts_at ?? "").slice(0, 10);
+  const end = promo.ends_at instanceof Date ? dateIsoLocal(promo.ends_at) : String(promo.ends_at ?? "").slice(0, 10);
   if (start && /^\d{4}-\d{2}-\d{2}$/.test(start) && date < start) return { ...base, reason: "Promozione non ancora valida." };
   if (end && /^\d{4}-\d{2}-\d{2}$/.test(end) && date > end) return { ...base, reason: "Promozione scaduta." };
   if (ch.blackouts.has(date)) return { ...base, reason: "Non valida in questa data." };
@@ -14137,10 +14670,10 @@ function evaluateOnePromotion(promo: RowDataPacket, ch: PromoChildren, cart: Pro
   const targetOk = checkPromoTarget(target, promo, ctx, date);
   if (targetOk !== true) return { ...base, reason: targetOk };
 
-  const { discountC, eligibleQty, eligibleAmountC, breakdownServices, nonDiscountedC } = computePromoDiscountCents(promo, ch, cart);
+  const { discountC, eligibleQty, eligibleAmountC, breakdownServices, nonDiscountedC, lineDiscounts } = computePromoDiscountCents(promo, ch, cart);
   if (eligibleQty <= 0) return { ...base, reason: "Nessun servizio/prodotto nel carrello rientra nello scope della promozione." };
   const discount = roundMoney(discountC / 100);
-  return { ...base, eligible: discount > 0, discount, reason: discount > 0 ? "Promozione valida." : "Nessuno sconto applicabile.", eligibleQty, eligibleAmount: roundMoney(eligibleAmountC / 100), breakdownServices, nonDiscountedSubtotal: roundMoney(nonDiscountedC / 100) };
+  return { ...base, eligible: discount > 0, discount, reason: discount > 0 ? "Promozione valida." : "Nessuno sconto applicabile.", eligibleQty, eligibleAmount: roundMoney(eligibleAmountC / 100), breakdownServices, nonDiscountedSubtotal: roundMoney(nonDiscountedC / 100), lineDiscounts };
 }
 
 // Evaluate ALL active promotions against a cart; return the eligible ones (discount
@@ -14423,7 +14956,8 @@ export async function publicBookingServiceCatalogPromos(
     }
   };
   const endLabel = (promo: RowDataPacket): string => {
-    const end = String(promo.ends_at ?? "").slice(0, 10);
+    // Colonna DATE -> Date locale (String() darebbe "Tue Jul 07": label persa).
+    const end = promo.ends_at instanceof Date ? dateIsoLocal(promo.ends_at) : String(promo.ends_at ?? "").slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(end)) return "";
     const [y, m, d] = end.split("-");
     return `${d}/${m}/${y}`;
@@ -16628,10 +17162,12 @@ export async function getFidelityPointsStats(slug: string, locationId = 0): Prom
     where: "COALESCE(active,0) = 1 AND deleted_at IS NULL",
   }).catch(() => [] as RowDataPacket[]);
   activeCampaigns = campRows.length;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIso();
   for (const c of campRows) {
-    const starts = String(c.starts_at ?? "").slice(0, 10);
-    const ends = String(c.ends_at ?? "").slice(0, 10);
+    // Colonne DATE -> Date locale da node-pg (String() darebbe "Tue Jul 07" e
+    // il confronto lessicografico scarterebbe SEMPRE la campagna).
+    const starts = c.starts_at instanceof Date ? dateIsoLocal(c.starts_at) : String(c.starts_at ?? "").slice(0, 10);
+    const ends = c.ends_at instanceof Date ? dateIsoLocal(c.ends_at) : String(c.ends_at ?? "").slice(0, 10);
     if ((starts === "" || starts <= today) && (ends === "" || ends >= today)) {
       activeCampaignToday = String(c.name ?? "");
       break;
@@ -19774,8 +20310,9 @@ function mapPromotion(row: RowDataPacket): PromotionRule {
     discountType: String(row.discount_type ?? "") === "fixed" ? "fixed" : "percent",
     discountValue: roundMoney(Number(row.discount_value ?? 0)),
     active: Number(row.is_active ?? 1) === 1,
-    startsAt: String(row.starts_at ?? todayIso()).slice(0, 10),
-    endsAt: String(row.ends_at ?? addDaysDate(30)).slice(0, 10),
+    // Colonne DATE -> Date locale da node-pg: String() darebbe "Tue Jul 07".
+    startsAt: row.starts_at instanceof Date ? dateIsoLocal(row.starts_at) : String(row.starts_at ?? todayIso()).slice(0, 10),
+    endsAt: row.ends_at instanceof Date ? dateIsoLocal(row.ends_at) : String(row.ends_at ?? addDaysDate(30)).slice(0, 10),
     channel: Number(row.show_in_booking ?? 1) === 1 ? "booking" : String(row.marketplace_visibility ?? "") === "hidden" ? "pos" : "marketplace",
     createdAt: toIso(row.created_at),
   };

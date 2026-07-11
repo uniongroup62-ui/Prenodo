@@ -1,6 +1,6 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
 import { todayIso } from "@/lib/appointment-engine";
-import { cancelManageCoupon, couponGenerateCode, createDbCoupon, deleteManageCoupon, evalBestPromotionForAppointment, getCouponFormContext, getManageCoupon, listDbCoupons, listManageCoupons, previewDbCoupon, redeemDbCoupon, saveManageCoupon, type CouponPreviewItem } from "@/lib/db-repositories";
+import { cancelManageCoupon, couponGenerateCode, createDbCoupon, deleteManageCoupon, evalBestPromotionForAppointment, getCouponFormContext, getManageCoupon, listDbCoupons, listManageCoupons, posPreviewDiscount, previewDbCoupon, redeemDbCoupon, saveManageCoupon, type CouponPreviewItem, type PosPreviewCartInput } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
 import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -151,6 +151,37 @@ export async function POST(request: Request) {
         const errorType = message === "Coupon non trovato" ? "danger" : "warning";
         return Response.json({ ok: false, error: message, errorType }, { status: 400 });
       }
+    }
+
+    // Preview sconto della CASSA (port di pos.php mode=preview_discount): carrello
+    // {type,id,qty} ricostruito dal listino server-side, promo-su-codice riconosciute,
+    // coupon classico COMBINATO con la migliore auto-promo (stacked_with_coupon).
+    // Stessa shape JSON del legacy; gate cassa come la pagina POS.
+    if (action === "preview_discount") {
+      if (!can(session.user.perms, "pos.manage")) return jsonError("Permesso cassa mancante.", 403);
+      let rawItems: PosPreviewCartInput[] = [];
+      try {
+        const parsed = JSON.parse(String(body.items_json ?? body.items ?? "[]"));
+        if (Array.isArray(parsed)) {
+          rawItems = parsed.map((it: Record<string, unknown>) => ({
+            type: String(it.type ?? ""),
+            id: parseInteger(it.id, 0),
+            qty: parseInteger(it.qty, 0),
+            amount: parseNumber(it.amount, 0),
+          }));
+        }
+      } catch {
+        rawItems = [];
+      }
+      const locationContext = await getManageLocationContext(tenantSlug).catch(() => null);
+      const preview = await posPreviewDiscount(tenantSlug, {
+        code: String(body.code ?? ""),
+        clientId: parseInteger(body.client_id, 0),
+        locationId: parseInteger(body.location_id, 0) || locationContext?.currentLocationId || 0,
+        quoteImportId: parseInteger(body.quote_import_id, 0),
+        items: rawItems,
+      });
+      return Response.json({ ...preview, source: "pos?mode=preview_discount", sourceMode: "database" });
     }
 
     // preview/redeem are also reachable from the quick-booking drawer's coupon Apply

@@ -2022,12 +2022,109 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
     setCouponDiscount(0);
   }, []);
 
-  // Apply: validate the typed code against the DB coupons preview endpoint
-  // (POST /api/manage/coupons action=preview -> {ok, preview:{valid, discount, reason}},
-  // the same endpoint the quick-booking drawer uses). On valid, store the code +
-  // discount (revealing the coupon row and subtracting it from the total); on invalid
-  // show the reason. The subtotal sent is the cart subtotal (coupon minimums are
-  // subtotal-aware; the backend re-validates on checkout so the charged discount agrees).
+  // Reset dello stato promozione (Block 3b) — anche quello derivato dal preview
+  // del codice (promo-su-codice / coupon+promo combinati).
+  const clearPromotion = useCallback(() => {
+    setPromotionId(0);
+    setPromotionName("");
+    setPromotionDiscountRaw(0);
+    setPromotionAllowsFidelity(true);
+    setPromotionNonDiscounted(0);
+  }, []);
+
+  // Carrello per il preview del codice (pos.js getCartItems): whitelist legacy
+  // service/product/package/recharge — le righe prepagate viaggiano come service
+  // (nel legacy il prepagato è uno status di riga, non un type); i prezzi NON
+  // viaggiano (il server ricostruisce dal listino, pos.php 1204-1253).
+  const discountPreviewItems = useCallback(
+    () =>
+      cart
+        .filter((l) => ["service", "product", "package", "prepaid", "recharge"].includes(l.type) && (l.type === "recharge" || l.refId > 0))
+        .map((l) => ({
+          type: l.type === "prepaid" ? "service" : l.type,
+          id: l.refId,
+          qty: l.quantity,
+          ...(l.type === "recharge" ? { amount: roundMoney(Math.max(0, l.baseAmount ?? l.unitPrice)) } : {}),
+        })),
+    [cart],
+  );
+
+  // Preview del codice in cassa (legacy pos.js fetchPreview -> pos.php
+  // mode=preview_discount): promo-su-codice riconosciute (is_promo senza
+  // stacked), coupon classico COMBINATO con la migliore auto-promo
+  // (stacked_with_coupon=1: riga promo + riga coupon insieme, come il legacy
+  // coupon_eval_after_promotion). Il checkout rifà tutto server-side.
+  const runDiscountPreview = useCallback(
+    async (code: string) => {
+      const myReq = ++couponReqRef.current;
+      setCouponApplying(true);
+      try {
+        const res = await fetch(`/api/manage/coupons?slug=${encodeURIComponent(slug)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+          body: JSON.stringify({ action: "preview_discount", code, client_id: clientId ?? 0, items_json: JSON.stringify(discountPreviewItems()) }),
+        });
+        const data: {
+          ok?: boolean;
+          found?: number;
+          applicable?: number;
+          reason?: string;
+          discount?: number;
+          coupon_discount?: number;
+          promotion_discount?: number;
+          is_promo?: number;
+          promo_id?: number;
+          promo_name?: string;
+          promo_allows_fidelity?: number;
+          promo_non_discounted_subtotal?: number;
+          stacked_with_coupon?: number;
+        } = await res.json().catch(() => ({}));
+        if (myReq !== couponReqRef.current) return; // stale
+        const applicable = res.ok && data?.ok !== false && Number(data.applicable ?? 0) === 1 && Number(data.discount ?? 0) > 0.00001;
+        if (applicable) {
+          setCouponCode(code);
+          setCouponInput(code);
+          // Esito legacy (pos.js fetchPreview): a codice valido couponHelp resta
+          // VUOTO — lo sconto compare nelle righe del dettaglio prezzi.
+          setCouponMsg(null);
+          if (Number(data.is_promo ?? 0) === 1) {
+            const stacked = Number(data.stacked_with_coupon ?? 0) === 1;
+            setCouponDiscount(stacked ? roundMoney(Math.max(0, Number(data.coupon_discount ?? 0))) : 0);
+            setPromotionId(Number(data.promo_id ?? 0));
+            setPromotionName(String(data.promo_name ?? ""));
+            setPromotionDiscountRaw(roundMoney(Math.max(0, stacked ? Number(data.promotion_discount ?? 0) : Number(data.discount ?? 0))));
+            setPromotionAllowsFidelity(Number(data.promo_allows_fidelity ?? 1) === 1);
+            setPromotionNonDiscounted(roundMoney(Math.max(0, Number(data.promo_non_discounted_subtotal ?? 0))));
+          } else {
+            setCouponDiscount(roundMoney(Math.max(0, Number(data.discount ?? 0))));
+            clearPromotion();
+          }
+        } else if (!res.ok || data?.ok === false) {
+          clearCouponState();
+          setCouponInput(code);
+          setCouponMsg({ text: "Errore durante la verifica del coupon.", ok: false });
+        } else {
+          clearCouponState();
+          clearPromotion();
+          setCouponInput(code);
+          // Esiti verbatim legacy (pos.js 3289-3292): reason del server, fallback
+          // 'Codice non applicabile.' se trovato, 'Codice non trovato.' se no.
+          const fallback = Number(data.found ?? 0) === 1 ? "Codice non applicabile." : "Codice non trovato.";
+          setCouponMsg({ text: String(data.reason || fallback), ok: false });
+        }
+      } catch {
+        if (myReq !== couponReqRef.current) return;
+        clearCouponState();
+        setCouponInput(code);
+        setCouponMsg({ text: "Errore durante la verifica del coupon.", ok: false });
+      } finally {
+        if (myReq === couponReqRef.current) setCouponApplying(false);
+      }
+    },
+    [slug, clientId, discountPreviewItems, clearCouponState, clearPromotion],
+  );
+
+  // Apply (pos.js couponApplyBtn): valida il codice digitato via preview_discount.
   const applyCoupon = useCallback(async () => {
     const code = couponInput.trim().toUpperCase();
     setCouponOpen(true);
@@ -2044,54 +2141,23 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
       setCouponMsg(null);
       return;
     }
-    if (subtotal <= 0) {
-      setCouponMsg({ text: "Aggiungi almeno un elemento al carrello.", ok: false });
-      return;
-    }
-    const myReq = ++couponReqRef.current;
-    setCouponApplying(true);
-    try {
-      // Carrello reale al preview (legacy mode=preview_discount): l'apply_scope
-      // del coupon morde su servizi/prodotti effettivi; client_id abilita il
-      // limite di utilizzo per cliente.
-      const itemsJson = JSON.stringify(
-        cart
-          .filter((l) => (l.type === "service" || l.type === "product") && l.refId > 0 && l.unitPrice * l.quantity > 0)
-          .map((l) => ({ type: l.type, id: l.refId, line: roundMoney(l.unitPrice * l.quantity) })),
-      );
-      const res = await fetch(`/api/manage/coupons?slug=${encodeURIComponent(slug)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-        body: JSON.stringify({ action: "preview", code, subtotal, items_json: itemsJson, client_id: clientId ?? 0 }),
-      });
-      const data: { ok?: boolean; error?: string; preview?: { valid?: boolean; discount?: number; reason?: string } } =
-        await res.json().catch(() => ({}));
-      if (myReq !== couponReqRef.current) return; // stale
-      const preview = data?.preview;
-      if (res.ok && data?.ok !== false && preview?.valid) {
-        const disc = roundMoney(Math.max(0, Number(preview.discount ?? 0)));
-        setCouponCode(code);
-        setCouponDiscount(disc);
-        setCouponInput(code);
-        // Esito legacy (pos.js fetchPreview): a coupon valido couponHelp resta VUOTO —
-        // lo sconto compare nella riga "Coupon / Promo" del dettaglio prezzi.
-        setCouponMsg(null);
-      } else {
-        clearCouponState();
-        setCouponInput(code);
-        // Esiti verbatim legacy: reason del preview, altrimenti "Codice non trovato."
-        // (il preview Next include già "Codice non applicabile." tra le reason).
-        setCouponMsg({ text: String(preview?.reason || data?.error || "Codice non trovato."), ok: false });
-      }
-    } catch {
-      if (myReq !== couponReqRef.current) return;
-      clearCouponState();
-      setCouponInput(code);
-      setCouponMsg({ text: "Errore durante la verifica del coupon.", ok: false });
-    } finally {
-      if (myReq === couponReqRef.current) setCouponApplying(false);
-    }
-  }, [couponInput, couponCode, subtotal, slug, clearCouponState, cart, clientId]);
+    await runDiscountPreview(code);
+  }, [couponInput, couponCode, clearCouponState, runDiscountPreview]);
+
+  // Ri-preview legacy (pos.js schedulePreview, debounce 250ms): al variare di
+  // carrello o cliente il codice DIGITATO viene rivalutato — lo sconto segue il
+  // carrello invece di restare congelato al valore dell'Apply.
+  useEffect(() => {
+    const code = couponInput.trim().toUpperCase();
+    if (!code || quoteLockActive || hasRechargeInCart) return;
+    const timer = setTimeout(() => {
+      void runDiscountPreview(code);
+    }, 250);
+    return () => clearTimeout(timer);
+    // Ritriggera solo su carrello/cliente: il typing non deve previeware a ogni
+    // tasto (nel legacy il preview parte da Apply/Enter e dalle mutazioni carrello).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cart, clientId]);
 
   // Remove: clear the applied coupon + the typed code + the feedback.
   const removeCoupon = useCallback(() => {
@@ -2101,27 +2167,23 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   }, [clearCouponState]);
 
   // ---- Promotion (Block 3b) ----
-  const clearPromotion = useCallback(() => {
-    setPromotionId(0);
-    setPromotionName("");
-    setPromotionDiscountRaw(0);
-    setPromotionAllowsFidelity(true);
-    setPromotionNonDiscounted(0);
-  }, []);
-
   // Auto-promozioni legacy (pos.js fetchPreview -> preview_auto_promo, debounce 250ms,
   // best-effort e SILENZIOSO): con carrello servizi/prodotti, nessun coupon applicato e
   // nessuna ricarica, applica la migliore promozione attiva; la riga "Promozione: {nome}"
   // appare nel dettaglio prezzi. promotion_id is sent on checkout, where the backend
   // re-evaluates + records the redemption. Un req-id scarta le risposte stantie.
   useEffect(() => {
-    if (quoteLockActive || hasRechargeInCart || subtotal <= 0 || couponCode) {
+    if (quoteLockActive || hasRechargeInCart || subtotal <= 0) {
       const myReq = ++promotionReqRef.current;
       Promise.resolve().then(() => {
         if (myReq === promotionReqRef.current) clearPromotion();
       });
       return;
     }
+    // Con un codice digitato lo stato promo lo governa il preview_discount
+    // (legacy: fetchPreview con code NON chiama preview_auto_promo) — qui si
+    // salta SENZA azzerare, altrimenti si wiperebbe la promo combinata.
+    if (couponInput.trim() !== "") return;
     const promoCart = cart
       .filter((l) => (l.type === "service" || l.type === "product") && l.refId > 0 && l.unitPrice > 0)
       .map((l) => ({ type: l.type, id: l.refId, qty: l.quantity, unitPrice: l.unitPrice }));
@@ -2167,7 +2229,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
       }
     }, 250);
     return () => clearTimeout(timer);
-  }, [cart, subtotal, clientId, couponCode, hasRechargeInCart, quoteLockActive, slug, clearPromotion]);
+  }, [cart, subtotal, clientId, couponInput, hasRechargeInCart, quoteLockActive, slug, clearPromotion]);
 
   // Lock ricarica (pos.js syncRechargeExclusivePricingState): con una ricarica in
   // carrello coupon, buoni, promozioni, sconti e punti vengono AZZERATI e i controlli

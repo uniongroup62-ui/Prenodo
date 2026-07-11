@@ -26,10 +26,11 @@ import {
   getDbAppointmentForEdit,
   fidelityIsClientAdhering,
   fidelityReservedPoints,
+  evalPosCouponWithAutoPromo,
   listFidelityCampaigns,
-  previewDbCoupon,
   redeemDbGiftCard,
   refundDbGiftCard,
+  type PosCleanLine,
   type PromoCartLine,
 } from "@/lib/db-repositories";
 import { expireClientLots, fidelityLotsSettings } from "@/lib/fidelity-lots";
@@ -655,54 +656,90 @@ export async function checkoutManageSale(
       applied: { id: chosen.promotionId, name: chosen.title, nonDiscountedSubtotal: chosen.nonDiscountedSubtotal, stackableWithFidelity: chosen.stackableWithFidelity, code },
     };
   };
-  if (input.promotionId && input.promotionId > 0) {
+  const couponCode = clean(input.couponCode, 40);
+  let couponDiscount = 0;
+
+  // Carrello "clean" legacy (righe service/product a prezzo listino, aggregate
+  // per type:id): base delle valutazioni coupon/auto-promo del checkout.
+  const cleanLines: PosCleanLine[] = (() => {
+    const byKey = new Map<string, PosCleanLine>();
+    for (const it of items) {
+      if ((it.type !== "service" && it.type !== "product") || it.refId <= 0 || it.total <= 0) continue;
+      const type = it.type === "product" ? ("product" as const) : ("service" as const);
+      const key = `${type}:${it.refId}`;
+      const cur = byKey.get(key);
+      if (cur) {
+        cur.qty += it.quantity;
+        cur.line = roundMoney(cur.line + it.total);
+      } else {
+        byKey.set(key, { type, id: it.refId, qty: it.quantity, unit: it.unitPrice, line: it.total, categoryId: null });
+      }
+    }
+    return [...byKey.values()];
+  })();
+
+  // Con un COUPON in vendita il legacy ignora ogni stato promo del client: la
+  // promozione arriva (eventualmente) dalla combinazione server-side qui sotto
+  // (pos.php 4234 gate !$coupon_code; 4349 auto-pick nel ramo coupon).
+  if (!couponCode && input.promotionId && input.promotionId > 0) {
     const r = await evalPromotionById(input.promotionId);
     promoDiscount = r.discount;
     promoApplied = r.applied;
+  } else if (!couponCode && (input.sourceQuoteId ?? 0) <= 0 && promoCart.length > 0) {
+    // Auto-promo SILENZIOSA al salvataggio (pos.php 4233-4299): anche senza
+    // promotion_id dal client, la migliore promo automatica valida si applica.
+    const evaluated = await evaluatePromotionsForCart(slug, promoCart, promoDate, promoTime, client.id, locationId, { autoOnly: true }).catch(() => ({ promotions: [], best: null }));
+    const best = evaluated.best && evaluated.best.discount > 0.00001 ? evaluated.best : null;
+    if (best) {
+      promoDiscount = Math.min(subtotal, best.discount);
+      promoApplied = { id: best.promotionId, name: best.title, nonDiscountedSubtotal: best.nonDiscountedSubtotal, stackableWithFidelity: best.stackableWithFidelity };
+    }
   }
 
-  const couponCode = clean(input.couponCode, 40);
-  let couponDiscount = 0;
   if (couponCode) {
     // PROMO-CON-CODICE (pos.php:4304-4336): un codice che coincide con una
     // promotions.coupon_code ATTIVA si applica come PROMOZIONE (non coupon), come nel
-    // booking; solo se NON è una promo si fa fallback al coupon classico. Non sovrascrive
-    // una promozione già scelta via promotion_id.
-    const promoRows = !promoApplied
-      ? await tenantSelect<RowDataPacket>({
-          slug,
-          table: "promotions",
-          columns: "id",
-          where: "UPPER(TRIM(COALESCE(coupon_code,''))) = ? AND COALESCE(is_active,0) = 1",
-          params: [couponCode.toUpperCase()],
-          orderBy: "priority DESC, id ASC",
-          limit: 1,
-        }).catch(() => [] as RowDataPacket[])
-      : [];
+    // booking; solo se NON è una promo si fa fallback al coupon classico.
+    const promoRows = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "promotions",
+      columns: "id",
+      where: "UPPER(TRIM(COALESCE(coupon_code,''))) = ? AND COALESCE(is_active,0) = 1",
+      params: [couponCode.toUpperCase()],
+      orderBy: "priority DESC, id ASC",
+      limit: 1,
+    }).catch(() => [] as RowDataPacket[]);
     const promoIdFromCode = Number(promoRows[0]?.id ?? 0) || 0;
     if (promoIdFromCode > 0) {
       const r = await evalPromotionById(promoIdFromCode, couponCode.toUpperCase());
       promoDiscount = r.discount;
       promoApplied = r.applied;
     } else {
-      // Fallback COUPON classico. Validazione legacy completa (pos.php ~4340-4400):
-      // coupon_validate_row con cliente (limite per-cliente) e sede POS +
-      // coupon_eval_discount sul carrello reale (apply_scope), messaggi Cassa verbatim.
-      const couponItems = items
-        .filter((it) => (it.type === "service" || it.type === "product") && it.refId > 0 && it.total > 0)
-        .map((it) => ({ type: it.type === "product" ? ("product" as const) : ("service" as const), id: it.refId, line: it.total }));
-      const coupon = await previewDbCoupon(couponCode, subtotal, slug, {
-        items: couponItems.length ? couponItems : undefined,
+      // COUPON classico + MIGLIORE auto-promo combinati (pos.php 4338-4400 via
+      // coupon_eval_after_promotion): con promo non cumulabile la base coupon
+      // sono solo le righe non scontate; messaggi Cassa verbatim.
+      const combo = await evalPosCouponWithAutoPromo(slug, {
+        code: couponCode,
+        clean: cleanLines,
+        subtotal,
         clientId: client.id > 0 ? client.id : 0,
         locationId,
       });
-      if (!coupon.valid) {
-        let reason = coupon.reason || "Coupon non valido o non applicabile.";
-        if (reason.startsWith("Importo minimo richiesto:")) reason = `Coupon non applicabile: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}`;
-        else if (reason === "Nessun servizio/prodotto selezionato rientra nel coupon.") reason = "Coupon non applicabile agli articoli presenti nel carrello.";
-        throw new Error(reason);
+      if (combo.status === "not_found") throw new Error("Coupon non trovato.");
+      if (combo.status === "invalid") throw new Error(combo.reason || "Coupon non valido o non applicabile.");
+      if (combo.status === "refused") {
+        if (combo.kind === "min") throw new Error(`Coupon non applicabile: importo minimo richiesto ${formatMoney(combo.minSubtotal)}.`);
+        if (combo.kind === "promo_blocked") throw new Error("Il coupon non è applicabile agli elementi già in promozione per questa campagna.");
+        if (combo.kind === "cart") throw new Error("Coupon non applicabile agli articoli presenti nel carrello.");
+        throw new Error("Coupon non applicabile.");
       }
-      couponDiscount = coupon.discount;
+      couponDiscount = combo.couponDiscount;
+      if (combo.promo) {
+        promoDiscount = combo.promo.discount;
+        // nonDiscountedSubtotal = base post promo+coupon (legacy 4366+4476: il cap
+        // Fidelity usa la parte non-promo già al netto della quota coupon).
+        promoApplied = { id: combo.promo.id, name: combo.promo.name, nonDiscountedSubtotal: combo.promo.nonDiscountedAfterCoupon, stackableWithFidelity: combo.promo.stackableWithFidelity };
+      }
     }
   }
   // FIDELITY points redemption: convert the requested points into an euro discount,
