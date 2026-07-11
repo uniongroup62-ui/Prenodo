@@ -1,5 +1,22 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Magazzino pass 3: ri-attestazione — zero drift, batteria 164 verdi (harness export risanato) (2026-07-11)
+
+Terza passata (audit dedicato 07-05 + audit/fix delete-blockers 07-08 con 40 check,
+poi Fornitori b11e34d e accesso-per-sede 2e48ff5 — regressioni verdi allora).
+DRIFT: manage-products/route/componenti intatti dagli ultimi commit verificati;
+nessun contatto coi lavori recenti (preordini/stock del POS verificati nel dominio
+Pagamenti).
+
+BATTERIA: test-magazzino 41/0 + markers-magazzino 84/0 subito verdi;
+e2e-magazzino 38/1 — l'unico FAIL (riga carico assente dall'export CSV) era la
+STESSA causa sistemica degli altri harness: LOGIN REALE su tenant diventato
+multi-sede -> sessione a sede 0, mentre l'export è correttamente SEDE-SCOPED dal
+pass accesso-per-sede (successivo allo script). Risanato con sessione forgiata a
+sede 21 -> 39/0. Totale 164 verdi; baseline intatta (0 prodotti/categorie/
+fornitori ZZ, stock_docs 8).
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice prodotto.
+
 ## Commissioni pass 3: ri-attestazione — zero drift, batteria risanata 129 verdi (2026-07-11)
 
 Terza passata (audit dedicato 07-05 + audit/fix 07-08: BUG FUSO periodi #16, gate
