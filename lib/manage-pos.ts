@@ -318,7 +318,7 @@ export type ManagePosResiduals = {
   ok: true;
   clientId: number;
   credit: number;
-  giftcards: Array<{ id: number; code: string; balance: number }>;
+  giftcards: Array<{ id: number; code: string; balance: number; expiresAt: string }>;
   // FIDELITY redemption: the client's spendable POINTS (available = saldo - prenotati,
   // come il legacy mode=client_fidelity: Fidelity::availablePoints) plus the business
   // redeem settings, so the UI can render the "punti da usare" box and compute the
@@ -364,7 +364,7 @@ export async function getManagePosResiduals(slug: string, clientId: number): Pro
     ok: true,
     clientId: id,
     credit: roundMoney(Math.max(0, credit)),
-    giftcards: giftcards.map((card) => ({ id: card.id, code: card.code, balance: roundMoney(Math.max(0, card.balance)) })),
+    giftcards: giftcards.map((card) => ({ id: card.id, code: card.code, balance: roundMoney(Math.max(0, card.balance)), expiresAt: card.expiresAt ?? "" })),
     points: normalizedPoints,
     pointsBalance: adhering ? pointsBalance : 0,
     pointsReserved: reserved,
@@ -604,7 +604,8 @@ export async function checkoutManageSale(
   if (!input.items.length) throw new Error("Carrello vuoto.");
 
   const client = await resolveSaleClient(slug, input.clientId ?? 0, input.clientName);
-  const items = await buildSaleItems(slug, input.items, locationId, client.id > 0);
+  // Prezzi postati onorati SOLO col preventivo collegato (snapshot); altrimenti listino.
+  const items = await buildSaleItems(slug, input.items, locationId, client.id > 0, (input.sourceQuoteId ?? 0) > 0);
   if (!items.length) throw new Error("Aggiungi almeno un elemento prima di concludere la vendita.");
 
   // ESCLUSIVITÀ CARRELLO — port of pos.php ~3327-3415 + 3502/3755 + 3966-3999 + 4645:
@@ -4312,7 +4313,7 @@ function assertCartExclusivityRules(items: PosSaleItem[], clientId: number, inpu
   }
 }
 
-async function buildSaleItems(slug: string, inputItems: PosSaleItemInput[], locationId: number, hasClient: boolean): Promise<PosSaleItem[]> {
+async function buildSaleItems(slug: string, inputItems: PosSaleItemInput[], locationId: number, hasClient: boolean, trustInputPrices = false): Promise<PosSaleItem[]> {
   const items: PosSaleItem[] = [];
   for (const [index, input] of inputItems.entries()) {
     const quantity = Math.max(1, Math.round(Number(input.quantity ?? 1) || 1));
@@ -4320,7 +4321,16 @@ async function buildSaleItems(slug: string, inputItems: PosSaleItemInput[], loca
     if (input.type === "service") {
       const service = refId > 0 ? await serviceRow(slug, refId) : null;
       if (service && !await serviceAvailableAtLocation(slug, refId, locationId)) throw new Error("Servizio non disponibile nella sede selezionata.");
-      const unitPrice = roundMoney(input.unitPrice ?? Number(service?.price ?? 0) ?? 0);
+      // PREZZO dal LISTINO server-side (parità legacy: il POST di pos.php per
+      // servizi/prodotti NON ha alcun campo prezzo — items[idx]=type/id/qty/status
+      // — e il server legge SEMPRE il prezzo dal DB; un payload artigianale non
+      // può vendere a 0). Il prezzo postato è onorato SOLO col preventivo
+      // collegato (righe a prezzo-snapshot del preventivo).
+      const unitPrice = roundMoney(
+        service && !(trustInputPrices && input.unitPrice !== undefined)
+          ? Number(service.price ?? 0)
+          : (input.unitPrice ?? Number(service?.price ?? 0) ?? 0),
+      );
       items.push({
         id: index + 1,
         type: "service",
@@ -4336,7 +4346,12 @@ async function buildSaleItems(slug: string, inputItems: PosSaleItemInput[], loca
     if (input.type === "product") {
       const product = refId > 0 ? await productRow(slug, refId) : null;
       if (product && !await productAvailableAtLocation(slug, refId, locationId)) throw new Error("Prodotto non disponibile nella sede selezionata.");
-      const unitPrice = roundMoney(input.unitPrice ?? Number(product?.price ?? 0) ?? 0);
+      // Stessa regola listino-server dei servizi (vedi sopra).
+      const unitPrice = roundMoney(
+        product && !(trustInputPrices && input.unitPrice !== undefined)
+          ? Number(product.price ?? 0)
+          : (input.unitPrice ?? Number(product?.price ?? 0) ?? 0),
+      );
       items.push({
         id: index + 1,
         type: "product",

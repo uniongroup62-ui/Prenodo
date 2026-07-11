@@ -11344,3 +11344,87 @@ E2E test-quickbooking3.mjs 15/15. Regressione COMPLETA: test-quickbooking
 35/35 + test-quickbooking2 21/21 + test-appuntamenti 41/41 +
 test-appuntamenti2 8/8 + test-calendario 20/20 + test-notifiche-hub 16/16.
 Baseline 10/5 + credit_adjustments(49) ripristinata.
+
+## 2026-07-11 — Pagamenti (POS pass 1: pagina + checkout core)
+
+Mappe legacy INTEGRALI via agenti: pos.php (7148 — permessi/CSRF, 4 azioni POST
+non-vendita, azione 'sale' con ordine completo delle validazioni e ~90 testi
+verbatim, transazione e scritture, pannello prezzi server) e pos.js (5948 —
+carrello/esclusività, ordine detrazioni sconto-codice→manuale→fidelity→
+giftcard→credito, rate, coupon/promo preview, residui, GiftBox/GiftCard/
+ricariche coi refusi 'puo'/'verra'/'restera'/'Validita' da preservare).
+Next: pos-content.tsx (4535), lib/manage-pos.ts (6569), route pos (539) —
+motore già costruito nelle campagne precedenti (emissioni voucher solo-POS,
+earn-base, storni), questa passata chiude pagina+checkout.
+
+FIX (motore lib/manage-pos.ts):
+1) PREZZI dal LISTINO server-side: il POST legacy per servizi/prodotti NON ha
+   alcun campo prezzo (items[idx] = type/id/qty/status) e pos.php legge SEMPRE
+   il prezzo dal DB — il Next si fidava dell'unitPrice del payload (0 se
+   assente per il default della route: vendita a 0€ con hand-POST, righe e
+   subtotale azzerati). Ora buildSaleItems usa il prezzo di catalogo per
+   servizi/prodotti con riga trovata; i prezzi postati sono onorati SOLO col
+   preventivo collegato (source_quote_id: righe a prezzo-snapshot).
+2) Residui GiftCard con SCADENZA: dbClientGiftcards espone expires_at (il
+   modale legacy mostra 'Disponibile: X • Scade: Y' / 'Scadenza: —').
+
+FIX (componente pos-content.tsx):
+3) Gate submit 'GiftBox attiva ma senza contenuto. Aggiungi almeno un
+   servizio/prodotto oppure un pacchetto in GiftBox, oppure elimina la
+   GiftBox.' (pos.js 5698) — mancava.
+4) Modale Residui: stati RICARICA-in-carrello coi testi verbatim ('Il credito
+   non può essere usato se nel carrello è presente una ricarica.', 'Le
+   GiftCard non possono essere usate se...', empty-state 'I residui del
+   cliente non sono utilizzabili quando nel carrello è presente una ricarica
+   credito.') + controlli disabilitati; help credito 'Saldo tessera: X • Max
+   utilizzabile: Y' (pos.js 3063); scadenza per GiftCard.
+5) Apostrofo DRITTO in "L'acconto iniziale deve essere inferiore al totale
+   della vendita." (era tipografico — trappola virgolette curve).
+6) 6 errori eslint set-state-in-effect pre-esistenti -> microtask (mount load,
+   tile promos, sync piano rate, preview punti ricarica, auto-promo, lock
+   ricarica).
+
+ATTESTAZIONI (feature morte nel legacy stesso / convenzioni):
+- BUONO-IN-VENDITA (new_coupon_draft): cablaggio MORTO nel build legacy — il
+  JS legge gli elementi pos_new_coupon_* (2064-2069) che NESSUN markup emette
+  (0 occorrenze in pos.php), i campi POST non partono mai e il ramo server
+  3076-3153 + INSERT coupons 4812-4850 è irraggiungibile ('Buono creato in
+  questa vendita...' e il flash di pos_success inclusi). NON portato.
+- OMAGGI V2 in cassa: $giftsV2Enabled=false HARD-CODED (pos.php 96) — API
+  client_gifts_v2 sempre vuota, ramo riscatto 4074-4182/5668-5677 morto
+  (gift_instance_id mai valorizzato dal POST). NON portato.
+- Note vendita: il Next aggiunge il marker interno '[posmethod:x]' ACCANTO
+  alla riga legacy 'Tipo pagamento: <label>' (parsing del dettaglio vendita);
+  righe legacy verbatim verificate live ('Sconto manuale: -€ 2,00' virgola
+  fmt_money, 'Tipo pagamento: Carta di Credito', 'Rateizzazione: acconto €
+  4,00 • residuo € 8,00 • 3 rate • prima scadenza ...').
+- Metodi: cash/card/check/bank legacy -> il Next normalizza bank->transfer
+  nello storage (convenzione stabilita, Report Incasso già auditato sopra).
+- pkSyncExpiryHint definita DUE volte in pos.js (la prima è morta), fmtEUR con
+  3 implementazioni (il catalogo usa Intl it-IT): quirk di riferimento.
+
+RESIDUI (pass 2 pianificato):
+- Credito residui: il legacy espone {available,balance,locked(prenotato da
+  booking pending)} — il Next un numero unico (saldo wallet); la quota LOCKED
+  da prenotazioni con credito non è sottratta.
+- Testi minori del box/modale residui e pannello prezzi da diffare al
+  dettaglio; pagine satellite (pos_history 3853, pos_sale_detail 6137,
+  pos_preorders/prepaids/settings/success) da passare una a una.
+- Verifica breakdown promo/coupon lato server contro preview_discount legacy
+  (Buoni: ricalcolo code-only già registrato).
+
+E2E test-pagamenti.mjs 13/13: gate 'Permesso cassa mancante.'; checkout
+servizio+prodotto SENZA prezzi nel payload -> ri-prezzato dal listino (32€),
+righe item_type/item_id, stock 5->3, note; sconto manuale (colonna+nota
+virgola); esclusività ricariche/GiftCard verbatim; scelta unico/rateizzato
+obbligatoria; piano rate 3x con acconto (plan row + rate front-loaded
+2.67/2.67/2.66 + nota); 'Coupon non trovato.'; 'Stock insufficiente per ZZ
+Prodotto POS'; annullo con stock RIPRISTINATO + 'La motivazione è
+obbligatoria per annullare una vendita.' + delete della annullata; gate
+annullo 'Permesso movimenti POS mancante.'. Prodotto ZZ seminato e rimosso;
+baseline vendite 9/9/1/3/0 ripristinata (leak intermedio id 728 del run
+pre-fix identificato puntualmente e rimosso). Regressione COMPLETA 7 suite:
+35+21+15+41+8+20+16.
+
+NOTA infrastruttura: due wedge del dev server turbopack (route auth stamattina,
+route pos oggi) risolti con kill + rm .next/dev + riavvio.

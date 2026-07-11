@@ -167,7 +167,7 @@ type TilePromoInfo = {
 type ClientResiduals = {
   clientId: number;
   credit: number;
-  giftcards: Array<{ id: number; code: string; balance: number }>;
+  giftcards: Array<{ id: number; code: string; balance: number; expiresAt: string }>;
   // Punti DISPONIBILI (saldo - prenotati, come Fidelity::availablePoints legacy) + il
   // dettaglio saldo/prenotati per l'help concatenato del box punti (pos.js sync()).
   points: number;
@@ -663,7 +663,14 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   }, [slug]);
 
   useEffect(() => {
-    load();
+    // Microtask: load() fa setLoading(true) sincrono (pattern consolidato).
+    let alive = true;
+    Promise.resolve().then(() => {
+      if (alive) load();
+    });
+    return () => {
+      alive = false;
+    };
   }, [load]);
 
   // "Vendita da appuntamento" pre-load (mount-once): when the POS URL carries
@@ -868,9 +875,13 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   // cid|mode|ids evita richieste duplicate; un req-id scarta le risposte stantie.
   useEffect(() => {
     // Quote lock legacy (loadTilePromos): promo tile azzerate e nessuna richiesta.
+    // (Reset in microtask: niente setState sincroni nell'effect.)
     if (quoteLockActive) {
       tilePromoKeyRef.current = "";
-      setTilePromos({ service: {}, product: {} });
+      const myReq = ++tilePromoReqRef.current;
+      Promise.resolve().then(() => {
+        if (myReq === tilePromoReqRef.current) setTilePromos({ service: {}, product: {} });
+      });
       return;
     }
     const items = tiles.slice(0, 60).map((tile) => ({ type: catalogMode, id: tile.id }));
@@ -879,7 +890,9 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
     const myReq = ++tilePromoReqRef.current;
     if (!items.length) {
       tilePromoKeyRef.current = key;
-      setTilePromos({ service: {}, product: {} });
+      Promise.resolve().then(() => {
+        if (myReq === tilePromoReqRef.current) setTilePromos({ service: {}, product: {} });
+      });
       return;
     }
     const timer = setTimeout(async () => {
@@ -1106,7 +1119,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
     if (!clientId || clientId <= 0) return "Seleziona un cliente per configurare la rateizzazione.";
     if (netTotal <= 0.00001) return "La rateizzazione non è disponibile con totale a zero.";
     if (installmentCount < 2) return "Servono almeno 2 rate per un piano rateale.";
-    if (installmentFinanced <= 0.00001) return "L’acconto iniziale deve essere inferiore al totale della vendita.";
+    if (installmentFinanced <= 0.00001) return "L'acconto iniziale deve essere inferiore al totale della vendita.";
     return "";
   }, [clientId, netTotal, installmentCount, installmentFinanced]);
   const installmentCanSave = useMemo(() => installmentModalError === "", [installmentModalError]);
@@ -1116,32 +1129,40 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   // cliente, totale (>0.02) o tipo pagamento divergono dallo snapshot il piano cade con
   // il notice verbatim (la scelta resta Rateizzato -> "da configurare").
   useEffect(() => {
-    if (netTotal <= 0.00001 || !paymentTypeEnabled) {
-      if (installmentChoice !== "" || installmentPlan) {
-        setInstallmentChoice("");
-        setInstallmentPlan(null);
-        setInstallmentNotice("");
+    // Sync in MICROTASK (niente setState sincroni nell'effect, pattern consolidato).
+    let alive = true;
+    Promise.resolve().then(() => {
+      if (!alive) return;
+      if (netTotal <= 0.00001 || !paymentTypeEnabled) {
+        if (installmentChoice !== "" || installmentPlan) {
+          setInstallmentChoice("");
+          setInstallmentPlan(null);
+          setInstallmentNotice("");
+        }
+        return;
       }
-      return;
-    }
-    if (hasRechargeInCart && (installmentChoice === "installment" || installmentPlan)) {
-      setInstallmentPlan(null);
-      setInstallmentChoice("single");
-      setInstallmentNotice("Le ricariche credito possono essere concluse solo con pagamento in unica soluzione.");
-      return;
-    }
-    if (!installmentPlan) return;
-    if (
-      !clientId ||
-      clientId <= 0 ||
-      installmentPlan.clientId !== clientId ||
-      Math.abs(installmentPlan.total - netTotal) > 0.02 ||
-      installmentPlan.paymentType !== baseMethod
-    ) {
-      setInstallmentPlan(null);
-      setInstallmentChoice("installment");
-      setInstallmentNotice("Il piano rate è stato rimosso perché cliente, totale o tipo pagamento sono cambiati.");
-    }
+      if (hasRechargeInCart && (installmentChoice === "installment" || installmentPlan)) {
+        setInstallmentPlan(null);
+        setInstallmentChoice("single");
+        setInstallmentNotice("Le ricariche credito possono essere concluse solo con pagamento in unica soluzione.");
+        return;
+      }
+      if (!installmentPlan) return;
+      if (
+        !clientId ||
+        clientId <= 0 ||
+        installmentPlan.clientId !== clientId ||
+        Math.abs(installmentPlan.total - netTotal) > 0.02 ||
+        installmentPlan.paymentType !== baseMethod
+      ) {
+        setInstallmentPlan(null);
+        setInstallmentChoice("installment");
+        setInstallmentNotice("Il piano rate è stato rimosso perché cliente, totale o tipo pagamento sono cambiati.");
+      }
+    });
+    return () => {
+      alive = false;
+    };
   }, [netTotal, paymentTypeEnabled, hasRechargeInCart, installmentChoice, installmentPlan, clientId, baseMethod]);
 
   // Help della card rateizzazione (renderInstallmentCard legacy, cascata + override
@@ -1327,7 +1348,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
           credit: j?.ok === false ? 0 : roundMoney(Math.max(0, Number(j?.credit ?? 0))),
           giftcards: j?.ok !== false && Array.isArray(j?.giftcards)
             ? j.giftcards
-                .map((card) => ({ id: Number(card.id ?? 0), code: String(card.code ?? ""), balance: roundMoney(Math.max(0, Number(card.balance ?? 0))) }))
+                .map((card) => ({ id: Number(card.id ?? 0), code: String(card.code ?? ""), balance: roundMoney(Math.max(0, Number(card.balance ?? 0))), expiresAt: String(card.expiresAt ?? "") }))
                 .filter((card) => card.id > 0 && card.balance > 0)
             : [],
           points: j?.ok === false ? 0 : Math.max(0, Math.floor(Number(j?.points ?? 0))),
@@ -1901,11 +1922,16 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   useEffect(() => {
     const myReq = ++rechargePointsReqRef.current;
     if (!clientId || clientId <= 0 || rechargeEarnBase <= 0.00001) {
-      setRechargePointsPreview(null);
-      setRechargePointsLoading(false);
+      Promise.resolve().then(() => {
+        if (myReq !== rechargePointsReqRef.current) return;
+        setRechargePointsPreview(null);
+        setRechargePointsLoading(false);
+      });
       return;
     }
-    setRechargePointsLoading(true);
+    Promise.resolve().then(() => {
+      if (myReq === rechargePointsReqRef.current) setRechargePointsLoading(true);
+    });
     const timer = setTimeout(async () => {
       try {
         const res = await fetch(`/api/manage/pos?slug=${encodeURIComponent(slug)}`, {
@@ -2088,14 +2114,20 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   // re-evaluates + records the redemption. Un req-id scarta le risposte stantie.
   useEffect(() => {
     if (quoteLockActive || hasRechargeInCart || subtotal <= 0 || couponCode) {
-      clearPromotion();
+      const myReq = ++promotionReqRef.current;
+      Promise.resolve().then(() => {
+        if (myReq === promotionReqRef.current) clearPromotion();
+      });
       return;
     }
     const promoCart = cart
       .filter((l) => (l.type === "service" || l.type === "product") && l.refId > 0 && l.unitPrice > 0)
       .map((l) => ({ type: l.type, id: l.refId, qty: l.quantity, unitPrice: l.unitPrice }));
     if (promoCart.length === 0) {
-      clearPromotion();
+      const myReq = ++promotionReqRef.current;
+      Promise.resolve().then(() => {
+        if (myReq === promotionReqRef.current) clearPromotion();
+      });
       return;
     }
     const myReq = ++promotionReqRef.current;
@@ -2140,13 +2172,21 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   // disabilitati; il couponHelp mostra il messaggio verbatim (reso nel JSX).
   useEffect(() => {
     if (!hasRechargeInCart) return;
-    clearCouponState();
-    setCouponInput("");
-    setCouponMsg(null);
-    setDiscountType("none");
-    setDiscountValue("0");
-    setPointsUseInput("0");
-    clearPromotion();
+    // Reset in microtask (pattern consolidato).
+    let alive = true;
+    Promise.resolve().then(() => {
+      if (!alive) return;
+      clearCouponState();
+      setCouponInput("");
+      setCouponMsg(null);
+      setDiscountType("none");
+      setDiscountValue("0");
+      setPointsUseInput("0");
+      clearPromotion();
+    });
+    return () => {
+      alive = false;
+    };
   }, [hasRechargeInCart, clearCouponState, clearPromotion]);
 
   // ---- Residui mutators ----
@@ -2169,6 +2209,13 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
     // GiftBox/GiftCard, cliente richiesto, scelta/piano rate) ferma il submit.
     if (concludeBlockReason) {
       setErrorMsg(concludeBlockReason);
+      return;
+    }
+    // GiftBox ATTIVA ma senza contenuto (pos.js 5698, validazione al submit):
+    // niente righe eleggibili (servizi Prepagato/prodotti Ordinato) né pacchetti
+    // in GiftBox -> blocco col testo verbatim.
+    if (gbDraft && giftboxEligibleLines.length === 0 && !cart.some((l) => l.type === "package")) {
+      setErrorMsg("GiftBox attiva ma senza contenuto. Aggiungi almeno un servizio/prodotto oppure un pacchetto in GiftBox, oppure elimina la GiftBox.");
       return;
     }
     // Mirror the backend's "Pagamento insufficiente" client-side.
@@ -3395,20 +3442,30 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
 
               {creditAvailable <= 0 && (residuals?.giftcards.length ?? 0) === 0 ? (
                 <div className="alert alert-light border small" id="posResidualsEmptyState">
-                  Nessun residuo disponibile per il cliente selezionato.
+                  {/* Variante ricarica-in-carrello (pos.js 3112) vs vuoto (3113). */}
+                  {hasRechargeInCart
+                    ? "I residui del cliente non sono utilizzabili quando nel carrello è presente una ricarica credito."
+                    : "Nessun residuo disponibile per il cliente selezionato."}
                 </div>
               ) : null}
 
               {creditAvailable > 0 ? (
                 <div className="card p-3 mb-3" id="posResidualCreditCard">
                   <div className="fw-semibold mb-1">Credito</div>
-                  <div className="small text-muted mb-3">Utilizza il credito disponibile del cliente per questa vendita.</div>
+                  {/* Help legacy (pos.js 3062-3063): con ricarica in carrello il credito
+                      è disattivato col testo dedicato; altrimenti saldo + max. */}
+                  <div className="small text-muted mb-3">
+                    {hasRechargeInCart
+                      ? "Il credito non può essere usato se nel carrello è presente una ricarica."
+                      : `Saldo tessera: ${fmtEUR(creditAvailable)} • Max utilizzabile: ${fmtEUR(roundMoney(Math.min(creditAvailable, total)))}`}
+                  </div>
 
                   <div className="form-check mb-2">
                     <input
                       className="form-check-input"
                       type="checkbox"
                       id="posResidualCreditToggle"
+                      disabled={hasRechargeInCart}
                       checked={Number(rmCreditAmt.replace(",", ".")) > 0}
                       onChange={(e) => setRmCreditAmt(e.target.checked ? String(roundMoney(Math.min(creditAvailable, total))) : "0")}
                     />
@@ -3426,12 +3483,14 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                       className="form-control"
                       id="posResidualCreditAmount"
                       value={rmCreditAmt}
+                      disabled={hasRechargeInCart}
                       onChange={(e) => setRmCreditAmt(e.target.value)}
                     />
                     <button
                       type="button"
                       className="btn btn-outline-secondary"
                       id="posResidualCreditMaxBtn"
+                      disabled={hasRechargeInCart}
                       onClick={() => setRmCreditAmt(String(roundMoney(Math.min(creditAvailable, total))))}
                     >
                       Usa max
@@ -3443,7 +3502,13 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
               {(residuals?.giftcards.length ?? 0) > 0 ? (
                 <div className="card p-3" id="posResidualGiftcardCard">
                   <div className="fw-semibold mb-1">GiftCard</div>
-                  <div className="small text-muted mb-3">Seleziona una GiftCard disponibile e scegli l&apos;importo da usare.</div>
+                  {/* Help legacy (pos.js 3103): con ricarica in carrello le GiftCard
+                      sono disattivate col testo dedicato. */}
+                  <div className="small text-muted mb-3">
+                    {hasRechargeInCart
+                      ? "Le GiftCard non possono essere usate se nel carrello è presente una ricarica."
+                      : "Seleziona una GiftCard disponibile e scegli l'importo da usare."}
+                  </div>
 
                   <div id="posResidualGiftcardList" className="mb-3">
                     {residuals?.giftcards.map((card) => (
@@ -3453,6 +3518,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                           type="radio"
                           name="posResidualGiftcardPick"
                           id={`posResidualGiftcard_${card.id}`}
+                          disabled={hasRechargeInCart}
                           checked={rmGiftcardId === card.id}
                           onChange={() => {
                             setRmGiftcardId(card.id);
@@ -3460,7 +3526,9 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                           }}
                         />
                         <label className="form-check-label" htmlFor={`posResidualGiftcard_${card.id}`}>
+                          {/* Riga legacy (pos.js 3104): 'Disponibile: X • Scade: Y' / 'Scadenza: —'. */}
                           {card.code || `GiftCard #${card.id}`} — <strong>{fmtEUR(card.balance)}</strong>
+                          <span className="text-muted small"> • {card.expiresAt ? `Scade: ${card.expiresAt}` : "Scadenza: —"}</span>
                         </label>
                       </div>
                     ))}

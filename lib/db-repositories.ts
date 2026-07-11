@@ -8618,7 +8618,7 @@ export async function refundDbGiftCard(id: number, amount: number, slug: string,
 // Same rule as quickBookClientGiftcards / quickBookClientResidualsSummary: a giftcard
 // the client OWNS (recipient_client_id when the column exists, else client_id),
 // status='active', balance > 0, not expired. Tenant-scoped + every read guarded.
-export async function dbClientGiftcards(slug: string, clientId: number): Promise<Array<{ id: number; code: string; balance: number }>> {
+export async function dbClientGiftcards(slug: string, clientId: number): Promise<Array<{ id: number; code: string; balance: number; expiresAt: string }>> {
   if (clientId <= 0) return [];
   try {
     const giftcardTable = await tenantTable(slug, "giftcards");
@@ -8629,18 +8629,20 @@ export async function dbClientGiftcards(slug: string, clientId: number): Promise
     const rows = await tenantSelect<RowDataPacket>({
       slug,
       table: "giftcards",
-      columns: "id, code, balance",
+      columns: hasExpiry ? "id, code, balance, expires_at" : "id, code, balance",
       where: `${target} AND status = 'active' AND balance > 0${expiry}`,
       params: [clientId],
       orderBy: "(expires_at IS NULL) DESC, expires_at ASC, id DESC",
       limit: 50,
     });
-    const out: Array<{ id: number; code: string; balance: number }> = [];
+    const out: Array<{ id: number; code: string; balance: number; expiresAt: string }> = [];
     for (const row of rows) {
       const id = Number(row.id ?? 0);
       const balance = roundMoney(Math.max(0, parseMoney(row.balance, 0)));
       if (id <= 0 || balance <= 0) continue;
-      out.push({ id, code: String(row.code ?? ""), balance });
+      // Scadenza per il modale Residui (pos.js 3104 'Scade: Y-m-d' / 'Scadenza: —').
+      const expiresAt = row.expires_at ? dateIsoLocal(toDate(row.expires_at)) : "";
+      out.push({ id, code: String(row.code ?? ""), balance, expiresAt });
     }
     return out;
   } catch {
