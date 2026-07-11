@@ -1,5 +1,23 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Fornitori pass 2: ri-attestazione — zero drift, batteria 87 verdi (2026-07-11)
+
+Seconda passata (audit 2026-07-08: campi/validazioni verbatim, sedi
+magazzino/costi obbligatorie se attivo, rename cascade su products.supplier_name,
+sync supplier_locations, univocità nome case-insensitive b11e34d). DRIFT:
+manage-products/suppliers-content intatti da b11e34d/2e48ff5 (accesso-per-sede),
+entrambi verificati allora con regressione.
+BATTERIA: test-fornitori 17/0 + e2e-suppliers 21/0 + markers-suppliers 49/0 =
+87 verdi (validazioni 'Nome fornitore obbligatorio'/sedi verbatim, dup
+case-insensitive 'Esiste gia un fornitore con questo nome.', anagrafica completa,
+supplier_locations warehouse+costs, productCount/'Uso', delete usato bloccato
+verbatim vs libero con cascata righe sedi, rename cascade sul prodotto,
+'Fornitore non trovato'). Baseline pulita (0 fornitori, 0 righe sedi).
+NOTA harness: e2e-suppliers1/2 erano BOZZE superate (import pg nudo, mai
+eseguibili qui; check tutti coperti dalla suite finale) — rinominate
+.superseded per non inquinare le batterie. Nessuna modifica al codice.
+DOMINIO CONFERMATO COMPLETO.
+
 ## Magazzino pass 3: ri-attestazione — zero drift, batteria 164 verdi (harness export risanato) (2026-07-11)
 
 Terza passata (audit dedicato 07-05 + audit/fix delete-blockers 07-08 con 40 check,
