@@ -1,5 +1,22 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Bonifica orfani tenant 25 (autorizzata dall'utente) — 28 righe rimosse (2026-07-12)
+
+Su conferma esplicita dell'utente, bonifica dei soli orfani FK-dangling
+STRETTAMENTE PARENTALI (righe figlie il cui padre-entità non esiste più: la
+UI non può mai più mostrarle), tutti scarti di sessioni di test con cleanup
+incompleti. NON toccati i riferimenti cross-entità legittimi (es. appuntamenti
+di clienti eliminati = storico, vedi appt 210).
+Rimossi: 10 giftcard_transactions (card 1/18, 01-04/07) + 2
+giftbox_transactions (istanze 8/9, 03/07) + 1 appointment_services (appt 85)
++ 1 client_package_items ('ZZ Package Product Mask', cp 6, 01/07) + 2
+transactions fidelity (client 11, 01/07, note 'Storno punti... prenotazione
+#122') + 12 stock_doc_items (doc 105-116, prodotti ZZ 166-183, 11/07 dalle
+sessioni Magazzino/Fornitori).
+Re-scan finale su 13 tabelle figlie: TUTTO a zero. Baseline produzione
+INTATTA e verificata: 9 sales / 9 sale_items / 5 clients / 10 appointments /
+8 stock_docs / 1 piano rate + 3 rate.
+
 ## GiftCard pass 3: ri-attestazione + sonda ostile — 276 verdi, nessun bug prodotto (2026-07-12)
 
 Terza passata (audit pagina 07-05 + audit completo 07-08 con fix storno
