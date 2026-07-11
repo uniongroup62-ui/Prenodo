@@ -1,5 +1,15 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Preventivi pass 4: ri-attestazione stessa giornata — zero drift, 162 verdi (2026-07-11)
+
+Quarta passata richiesta a poche ore dal pass 3. DRIFT dal commit a43c34c: nessun
+file prodotto toccato (solo doc). Ri-eseguita l'INTERA batteria: test-preventivi
+25 + test-quote-decision 10 + e2e-quotes 80 + e2e-quote-settings 20 +
+test-notifiche 17 + test-notifiche-feed 10 = 162 verdi, zero FAIL.
+Baseline tenant 25 verificata a fine corsa: quotes/quote_items = 0, sales 9,
+clients 5, appointments 10, zero residui ZZ.
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice.
+
 ## Pacchetti pass 4: ri-attestazione stessa giornata — zero drift, 260 verdi (2026-07-11)
 
 Quarta passata richiesta a poche ore dal pass 3. DRIFT dal commit 38442bf: solo
