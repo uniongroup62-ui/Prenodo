@@ -1,5 +1,31 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Calendario pass 3: ri-verifica post commit cross-modulo — nessuna regressione, batteria risanata (2026-07-11)
+
+Ri-verifica del dominio Calendario (chiuso in parti 1+2a/2b/2c del 2026-07-10 più la
+campagna V e i 7 batch workflow). DRIFT: calendar-content/quick-booking-drawer/
+manage-calendar intatti dall'ultimo commit verificato (dbe2e13, QB parte 2, già e2e
+21/21); punti di contatto coi commit recenti (preview coupon QB e motore promo del
+pass Buoni) già coperti da test-buoni2 D1/D2 e dalle suite QB verdi.
+
+BATTERIA: test-calendario 20/20 subito verde. TRE script accessori della batteria
+fallivano per STANTIETÀ (non regressioni) — causa sistemica: il tenant è diventato
+MULTI-SEDE dopo la loro scrittura, quindi il login reale ora parte con
+needsLocationSelection=true (sede 0) e le liste per-sede sono FAIL-CLOSED (comportamento
+fedele dei pass multi-sede). Risanati e ora rieseguibili:
+- e2e-calendar-move: sessione forgiata sede 21 (33/33) + aspettativa CORRETTA per l'id
+  inesistente — il legacy stesso risponde col guard d'accesso
+  'Prenotazione non trovata o non disponibile nella sede corrente.'
+  (api_appt_require_appointment_access 3675 gira PRIMA del 'Non trovato' a 9113,
+  raggiungibile solo in race): il Next era giusto, lo script no.
+- test-calendar-location-scope: RISCRITTO auto-seminante (cablava id 418/419 di una
+  semina passata) — 6/6 (ristretto vede solo la sua sede, admin entrambe).
+- e2e-hours-calendar: sessione forgiata + permesso corretto hours.manage — 4/4
+  (orari per-sede nei bounds, hours_save riflesso, restore CLEAN).
+markers-calendar 48 trovati / 0 mancanti. verify-calendar è uno script Playwright per
+gli screenshot (ambiente senza playwright; i diff visivi php/next sono già archiviati).
+Nessuna modifica al codice prodotto: solo risanamento harness. DOMINIO CONFERMATO.
+
 ## Dashboard pass 7: ri-verifica post commit cross-modulo — zero drift, batteria verde (2026-07-11)
 
 Settima passata su Dashboard, di sola RI-ATTESTAZIONE dopo i commit recenti su lib
