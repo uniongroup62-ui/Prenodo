@@ -1,5 +1,40 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## GiftBox pass 2: ri-attestazione + sonda ostile — 143 verdi, nessun bug prodotto (2026-07-12)
+
+Seconda passata dedicata (audit completo 07-05 + fix riscatto-completo/snapshot
+07-08, commit 5a7880d). DRIFT da allora: solo Modello A (guardia sede istanze
+rimossa, deliberato), earn-base POS e arricchimenti Prepagati — tutti già
+verificati nei rispettivi pass.
+BATTERIA: test-giftbox 27 + e2e-giftbox 64 + e2e-giftbox-settings 15 +
+verify-giftbox-markers ALL-OK + e2e-pos-gift 11 (emissione POS) +
+verify-pos-gift-markers ALL-OK + NUOVA sonda ostile test-giftbox-hostile 11
++ probe H4bis = 143 verdi.
+SONDA OSTILE (riscatto/scadenza/destinatario): qty negativa filtrata
+('Seleziona almeno un elemento da riscattare.'), overflow ('Quantità non
+disponibile per "X".'), decimale '1.7' troncato a 1 come (int) PHP, garbage
+data ('Seleziona una nuova data di scadenza valida.'), passata ('non può
+essere precedente a oggi.'), annullata ('Istanza non riscattabile'), item
+inesistente ('Elemento non valido (id=N).').
+ATTESTATO scadenza rollover (hand-POST '2027-02-30', non raggiungibile da UI
+type=date): il legacy GiftBox::updateInstanceExpiry (3306) NON ha checkdate —
+regex identico al port; sul MySQL live NON-strict (sql_mode senza STRICT_*)
+scriverebbe silenziosamente una zero-date, il port fallisce PULITO col flash
+'Errore: date/time field value out of range...' senza scrittura né crash =
+divergenza migliorativa deliberata (nessun checkdate inventato).
+HARNESS: e2e-giftbox-giftcard ARCHIVIATO .superseded (usava action=issue
+GiftCard rimossa deliberatamente — rifiuto corretto 'La creazione delle
+GiftCard avviene da Pagamenti (pulsante GiftCard).' — e asseriva la shape
+lista pre-riscrittura totalCount/locationsCount); verify-giftbox-markers: il
+marker 'Errore: seleziona almeno un livello Punti.' è un flash SERVER
+(giftbox.php 588) mai presente nel corpus statico client -> reso
+comportamentale (probe POST fidelity_only senza livelli, verbatim confermato
+live); e2e-pos-gift sanato con installment_choice 'single' (scelta
+unico/rateizzato obbligatoria introdotta fedelmente nel pass Pagamenti).
+Baseline tenant 25 pulita (produzione giftbox 1 template + 1 istanza intatta,
+0 residui ZZ, 5 clienti). DOMINIO CONFERMATO COMPLETO. Nessuna modifica al
+codice prodotto.
+
 ## Preventivi pass 4: ri-attestazione stessa giornata — zero drift, 162 verdi (2026-07-11)
 
 Quarta passata richiesta a poche ore dal pass 3. DRIFT dal commit a43c34c: nessun
