@@ -13025,3 +13025,37 @@ strutturale.
 
 ZERO bug; migliorie del pomeriggio confermate (context ~360ms). Nessuna
 miglioria residua aperta sul dominio.
+
+## Appuntamenti — ri-pass serale + analisi logiche mutative (2026-07-12, notte)
+
+Richiesta: nuovo bug-hunt + valutazione logiche eliminazione/modifica.
+Drift: solo 0bd7915 su db-repositories (gia' regressato). Batterie verdi:
+markers 27/27, lista 13/13, plan 18/18 + 14/14.
+
+ANALISI LOGICHE MUTATIVE (probe live con seed ZZ annullato id 547,
+tracciato e cascata verificata; baseline 10 confermato):
+- DELETE singola: SOLO da stato Annullato (guardia verbatim) = design a
+  DUE FASI corretto — l'annullo fa i reversal di business (restore
+  riserve punti/credito/giftcard via motore lifecycle), l'eliminazione
+  rimuove solo le righe; CASCATA COMPLETA verificata live (0 orfani in
+  appointment_services/staff/segments/locations/reminders); doppio
+  delete → 403 'Prenotazione non trovata o non disponibile nella sede
+  corrente.' (a-vuoto = errore non-successo, fedele 83d59ee).
+- BULK: 3 contatori legacy (eliminate/saltate/bloccate), set misti senza
+  effetti collaterali (gia' attestato nel pass precedente, baseline
+  intatto).
+- MODIFICA (save/edit): delegata al motore QB — prezzi dal LISTINO,
+  coupon ricalcolato server-side, redeem rivalidati, conflitti/hold; un
+  solo punto di mutazione per dominio.
+- STATUS: azione dedicata (port spezzato del save legacy) con whitelist
+  'Stato prenotazione non valido.'; annullo/eseguito via cancel_done con
+  preview e restore riserve.
+- SWAP SEGMENTI: scambio posizioni+finestre con rivalidazione operatore/
+  cabina sui nuovi orari.
+VERDETTO: corrette e ben difese; il due-fasi annulla→elimina e' il design
+giusto (nessuna hard-delete accidentale). Unica evoluzione possibile (NON
+raccomandata per la parita'): audit trail/cestino delle eliminazioni —
+oggi la rimozione fisica e' definitiva come nel legacy.
+
+ZERO bug; nessuna miglioria residua aperta sul dominio (prefetch lista e
+get drawer del pomeriggio confermati dalla batteria).
