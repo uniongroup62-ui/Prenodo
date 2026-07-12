@@ -1,5 +1,38 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Promozioni pass 2: ri-attestazione + risanamento batteria — 228 verdi, nessun bug prodotto (2026-07-12)
+
+Seconda passata (chiusa 07-03, lista riscritta 07-05, audit completo 07-09
+con fix fidelity-off edit; il motore è stato ESTESO nel pass Buoni 09c85d1
+con lineDiscounts/codePromotionId, già verificati lì). DRIFT: solo quello.
+BATTERIA (tutta verde a fine pass): test-promozioni 44 + e2e-promotions 38 +
+e2e-promotions-list 30 + markers-promotions-list 80 + e2e-promo-engine 10 +
+e2e-promo-checkout 6 + e2e-promos 7 + e2e-promos-b2 10 + sonda 3 = 228.
+SONDA OSTILE: percent globale 150 -> 'Lo sconto percentuale servizi non puo
+superare 100%.' (typo legacy conservato); date rovesciate -> 'La data di fine
+deve essere uguale o successiva alla data di inizio.'; starts_at '2030-02-30'
+-> 400 pulito senza scrittura (stessa classe rollover attestata per
+GiftBox/GiftCard: nessun checkdate nel legacy, il port fallisce rumorosamente
+dove MySQL non-strict scriverebbe zero-date).
+HARNESS SANATI (6 script, zero bug prodotto):
+- 4 import pg nudi (mai eseguibili) -> createRequire.
+- INTERFERENZA promo 71 di produzione (attiva, target all): la guardia
+  overlap considera SOLO le attive -> e2e-promotions (che esigeva la tabella
+  VUOTA e abortiva), e2e-promotions-list (clone rifiutato con 'Esiste già
+  una promozione (test 5)...') ed e2e-promos-b2 ora fanno snapshot + off +
+  restore di is_active (pattern campagna 37).
+- e2e-promos-b2 T2: il body edit non postava location_ids -> save
+  legittimamente rifiutato ('Seleziona almeno una sede per la promozione.')
+  e figli T1 conservati: era il body stale, non un bug di rebuild (il save
+  con sede DROPPA promotion_products a mode none, come la DELETE
+  incondizionata di Promotions.php 2375).
+- e2e-promo-checkout: attese a prezzo-payload (100) pre-fix Pagamenti ->
+  ricalcolate dal listino server; sessione forgiata sede 21 (gate
+  prodotto-sede); installment_choice 'single' sui checkout; prodotti ZZ
+  auto-seminati (tabella products di produzione ormai vuota) anche in b2.
+Baseline: 1 promozione (71 attiva), 0 redemptions, prodotti 0.
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice prodotto.
+
 ## Portafoglio pass 2: ri-attestazione + sonda ostile — 140 verdi, nessun bug prodotto (2026-07-12)
 
 Seconda passata dedicata (audit completo 07-09, modulo attestato FEDELE senza
