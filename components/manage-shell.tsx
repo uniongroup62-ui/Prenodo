@@ -212,6 +212,7 @@ export function ManageShell({
   userName,
   currentPage = "dashboard",
   emailVerificationGate = false,
+  needsLocationSelectionHint = false,
   children,
 }: {
   slug: string;
@@ -221,6 +222,12 @@ export function ManageShell({
   // niente nav/topbar/banner, brand che punta ad Accessibilita — finché
   // l'email di accesso non è verificata (index.php 580-590 redirige qui).
   emailVerificationGate?: boolean;
+  // Hint SERVER-SIDE del gate selezione sede (session.user.needsLocationSelection):
+  // il legacy decide il gate prima del paint; senza hint la shell renderizzava
+  // il gestionale per ~1s prima che shell-context rivelasse il gate (flash
+  // segnalato dall'utente). Il fetch client resta l'autorità: se smentisce
+  // l'hint il gate rientra.
+  needsLocationSelectionHint?: boolean;
   children: React.ReactNode;
 }) {
   // Port of the app.js sidebar behaviors: desktop collapse (persisted in
@@ -281,7 +288,7 @@ export function ManageShell({
   const [viewerUserId, setViewerUserId] = useState(0);
   const [locations, setLocations] = useState<ShellLocation[]>([]);
   const [currentLocationId, setCurrentLocationId] = useState(0);
-  const [needsLocationSelection, setNeedsLocationSelection] = useState(false);
+  const [needsLocationSelection, setNeedsLocationSelection] = useState(needsLocationSelectionHint);
   const [shellContextLoaded, setShellContextLoaded] = useState(false);
   const [supportAccess, setSupportAccess] = useState<ShellSupport | null>(null);
   const [closureRange, setClosureRange] = useState<ShellClosure | null>(null);
@@ -673,7 +680,23 @@ export function ManageShell({
   // legacy ?set_location_id=). Accessibilita è ESCLUSA dal gate sede
   // (index.php 610 la elenca tra le pagine esenti): credenziali gestibili
   // anche senza sede selezionata.
-  if (shellContextLoaded && needsLocationSelection && basePage !== "accessibility") {
+  if (needsLocationSelection && basePage !== "accessibility") {
+    // Prima che shell-context risponda (hint dal server) l'elenco sedi non è
+    // ancora noto: loader neutro al posto del gestionale, mai il flash della
+    // dashboard né il messaggio "nessuna sede" a vuoto.
+    if (!shellContextLoaded) {
+      return (
+        <>
+          <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" precedence="bs" />
+          <link rel="stylesheet" href="/assets/css/app.css" precedence="app" />
+          <div className="min-vh-100 d-flex align-items-center justify-content-center bg-light p-3">
+            <div className="spinner-border text-primary" role="status">
+              <span className="visually-hidden">Caricamento…</span>
+            </div>
+          </div>
+        </>
+      );
+    }
     return (
       <>
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" precedence="bs" />

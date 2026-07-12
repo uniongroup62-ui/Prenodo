@@ -262,7 +262,7 @@ export default async function TenantPage({
   // (instead of the Tailwind ManagementApp fallback). initialQuery = flash legacy.
   if (page === "clients" && (query.action === "new" || query.action === "edit")) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <ClientFormContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -272,7 +272,7 @@ export default async function TenantPage({
   // riepilogo "Cosa verrà eliminato" + motivazione + conferma testuale ELIMINA.
   if (page === "clients" && query.action === "delete_confirm") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <ClientDeleteConfirmContent slug={tenantSlug} />
       </ManageShell>
     );
@@ -283,7 +283,7 @@ export default async function TenantPage({
   // (instead of the Tailwind ManagementApp fallback).
   if (page === "services" && (!query.tab || query.tab === "services") && (query.action === "new" || query.action === "edit")) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <ServiceFormContent slug={tenantSlug} />
       </ManageShell>
     );
@@ -299,7 +299,7 @@ export default async function TenantPage({
         ? <ServiceRecommendationsContent slug={tenantSlug} initialQuery={servicesQuery} />
         : <ServicesContent slug={tenantSlug} initialQuery={servicesQuery} />;
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={query.tab === "categories" ? "service_categories" : query.tab === "recommended" ? "service_recommendations" : "services"}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={query.tab === "categories" ? "service_categories" : query.tab === "recommended" ? "service_recommendations" : "services"}>
         {inner}
       </ManageShell>
     );
@@ -310,7 +310,7 @@ export default async function TenantPage({
   // (instead of the Tailwind ManagementApp fallback).
   if (page === "products" && (query.action === "new" || query.action === "edit")) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <ProductFormContent />
       </ManageShell>
     );
@@ -320,7 +320,7 @@ export default async function TenantPage({
   // edit + modal creazione, query GET legacy come prop.
   if (page === "products" && query.action === "categories") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <ProductCategoriesContent
           slug={tenantSlug}
           initialQuery={{ category_search: query.category_search, edit_id: query.edit_id }}
@@ -332,7 +332,7 @@ export default async function TenantPage({
   // Magazzino, LISTA prodotti: i filtri legacy viaggiano nella query GET.
   if (page === "products") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <ProductsContent
           slug={tenantSlug}
           initialQuery={{
@@ -352,7 +352,7 @@ export default async function TenantPage({
   // Fornitori: filtri + flash legacy via query GET.
   if (page === "suppliers" && query.action !== "new" && query.action !== "edit") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <SuppliersContent
           slug={tenantSlug}
           initialQuery={{ q: query.q, scope: query.scope, status: query.status, msg: query.msg, err: query.err }}
@@ -364,7 +364,7 @@ export default async function TenantPage({
   // Carico / Scarico: lista + viste view/print via query GET legacy.
   if (page === "stock_moves" && query.action !== "new") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <StockMovesContent
           slug={tenantSlug}
           initialQuery={{
@@ -390,7 +390,7 @@ export default async function TenantPage({
   // (instead of the Tailwind ManagementApp fallback).
   if (page === "locations" && (query.action === "new" || query.action === "edit")) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <LocationFormContent />
       </ManageShell>
     );
@@ -401,7 +401,7 @@ export default async function TenantPage({
   // (instead of the Tailwind ManagementApp fallback).
   if (page === "staff" && (query.action === "new" || query.action === "edit")) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <StaffFormContent slug={tenantSlug} action={query.action === "edit" ? "edit" : "new"} staffId={Number(query.id ?? 0) || 0} />
       </ManageShell>
     );
@@ -413,7 +413,7 @@ export default async function TenantPage({
   // categories tab (tab=categories) keeps its own inline modal flow.
   if (page === "costs" && tab !== "categories" && (query.action === "new" || query.action === "edit")) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <CostFormContent />
       </ManageShell>
     );
@@ -423,7 +423,7 @@ export default async function TenantPage({
   // come prop server-side (parità con il parsing $_GET di costs.php).
   if (page === "costs" && tab === "categories") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <CostCategoriesContent
           slug={tenantSlug}
           initialQuery={{
@@ -439,7 +439,7 @@ export default async function TenantPage({
   }
   if (page === "costs") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <CostsContent
           slug={tenantSlug}
           initialQuery={{
@@ -457,7 +457,7 @@ export default async function TenantPage({
   // Faithful quote NEW/EDIT form (quotes.php action=new|edit).
   if (page === "quotes" && (query.action === "new" || query.action === "edit")) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <QuoteFormContent
           slug={tenantSlug}
           initialQuery={{ action: query.action, id: query.id, location_id: query.location_id, msg: query.msg, err: query.err }}
@@ -470,7 +470,7 @@ export default async function TenantPage({
   // alert vendita collegata/disponibilità, righe + totali, modale Invia email.
   if (page === "quotes" && query.action === "view") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <QuoteDetailContent slug={tenantSlug} initialQuery={{ id: query.id, msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -487,7 +487,7 @@ export default async function TenantPage({
   // dal redirect legacy.
   if (page === "quote_settings") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <QuoteSettingsContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -497,7 +497,7 @@ export default async function TenantPage({
   // querystring + flash ?msg/?err.
   if (page === "quotes") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <QuotesContent
           slug={tenantSlug}
           initialQuery={{
@@ -521,7 +521,7 @@ export default async function TenantPage({
   // The action=view detail stays on the existing fallback for now.
   if (page === "stock_moves" && query.action === "new") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <StockMoveFormContent />
       </ManageShell>
     );
@@ -533,7 +533,7 @@ export default async function TenantPage({
   // initialQuery = flash del redirect legacy post-save.
   if (page === "consent_modules" && (query.action === "new" || query.action === "edit")) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <ConsentModuleFormContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -543,7 +543,7 @@ export default async function TenantPage({
   // dai redirect legacy (salvato/eliminato/non trovato).
   if (page === "consent_modules") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <ConsentModulesContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -555,7 +555,7 @@ export default async function TenantPage({
   // legacy redirect flash (?msg=&type=).
   if (page === "coupons" && (query.action === "new" || query.action === "edit")) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <CouponFormContent slug={tenantSlug} initialQuery={{ msg: query.msg, type: query.type }} />
       </ManageShell>
     );
@@ -565,7 +565,7 @@ export default async function TenantPage({
   // and the "Tutte le sedi" GET filter from the querystring.
   if (page === "coupons") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <CouponsContent
           slug={tenantSlug}
           initialQuery={{ msg: query.msg, type: query.type, all_locations: query.all_locations }}
@@ -579,7 +579,7 @@ export default async function TenantPage({
   // faithful editor.
   if (page === "promotions" && (query.action === "new" || query.action === "edit" || query.action === "duplicate")) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <PromotionFormContent slug={tenantSlug} />
       </ManageShell>
     );
@@ -589,7 +589,7 @@ export default async function TenantPage({
   // auto-apertura del Riepilogo via ?open_summary.
   if (page === "promotions") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <PromotionsContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err, open_summary: query.open_summary }} />
       </ManageShell>
     );
@@ -600,7 +600,7 @@ export default async function TenantPage({
   // (instead of the Tailwind ManagementApp fallback).
   if (page === "suppliers" && (query.action === "new" || query.action === "edit")) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <SupplierFormContent />
       </ManageShell>
     );
@@ -611,7 +611,7 @@ export default async function TenantPage({
   // the faithful campaign editor (instead of the Tailwind ManagementApp fallback).
   if (page === "gifts" && (query.action === "new" || query.action === "edit" || query.action === "clone")) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <GiftFormContent slug={tenantSlug} />
       </ManageShell>
     );
@@ -621,7 +621,7 @@ export default async function TenantPage({
   // dai redirect + auto-apertura del Riepilogo via ?open_summary.
   if (page === "gifts" && query.action === "campaigns") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <GiftsContent slug={tenantSlug} initialQuery={{ action: "campaigns", msg: query.msg, err: query.err, open_summary: query.open_summary }} />
       </ManageShell>
     );
@@ -630,7 +630,7 @@ export default async function TenantPage({
   // Operatori (staff.php): lista con filtri GET + flash ?msg/?err legacy.
   if (page === "staff" && !query.action) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <StaffContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err, q: query.q, role: query.role, status: query.status, all_locations: query.all_locations }} />
       </ManageShell>
     );
@@ -639,7 +639,7 @@ export default async function TenantPage({
   // Cabine (cabins.php): flash ?msg/?err dei redirect legacy.
   if (page === "cabins") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <CabinsContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -649,7 +649,7 @@ export default async function TenantPage({
   // dedicata (?action=new|edit&id=) + flash ?msg/?err dei redirect legacy.
   if (page === "resources") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <ResourcesContent slug={tenantSlug} initialQuery={{ action: query.action, id: query.id, msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -659,7 +659,7 @@ export default async function TenantPage({
   // dal querystring (form GET legacy) + flash ?msg/?err dei redirect.
   if (page === "gifts") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <GiftsContent
           slug={tenantSlug}
           initialQuery={{ msg: query.msg, err: query.err, inst_client_id: query.inst_client_id, inst_gift_id: query.inst_gift_id, inst_state: query.inst_state, inst_p: query.inst_p }}
@@ -673,7 +673,7 @@ export default async function TenantPage({
   // instead of the Tailwind fallback.
   if (page === "packages" && tab === "catalog" && (query.action === "catalog_new" || query.action === "catalog_edit")) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <PackagesCatalogFormContent slug={tenantSlug} />
       </ManageShell>
     );
@@ -684,7 +684,7 @@ export default async function TenantPage({
   // edit, instead of the Tailwind fallback. initialQuery = flash legacy.
   if (page === "packages" && (query.action === "view" || query.action === "client_view")) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <ClientPackageDetailContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -695,7 +695,7 @@ export default async function TenantPage({
   // redirige con l'errore verbatim).
   if (page === "packages" && (query.action === "client_edit" || query.action === "client_new")) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <ClientPackageFormContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -705,7 +705,7 @@ export default async function TenantPage({
   // solo dal dettaglio vendita — redirect col messaggio verbatim.
   if (page === "packages" && (query.action === "client_cancel" || query.action === "client_delete")) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <ClientPackageCancelRedirect slug={tenantSlug} action={query.action} id={query.id} />
       </ManageShell>
     );
@@ -715,7 +715,7 @@ export default async function TenantPage({
   // filtro all_locations + flash ?msg/?err dai redirect.
   if (page === "packages" && query.tab === "catalog" && (query.action === undefined || query.action === "list")) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <PackagesCatalogContent
           slug={tenantSlug}
           initialQuery={{ all_locations: query.all_locations, msg: query.msg, err: query.err }}
@@ -728,7 +728,7 @@ export default async function TenantPage({
   // filtri GET (client_id/package_name/status/all_locations) + flash ?msg/?err.
   if (page === "packages" && (query.tab === undefined || query.tab === "clients") && (query.action === undefined || query.action === "list")) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <PackagesContent
           slug={tenantSlug}
           initialQuery={{
@@ -748,7 +748,7 @@ export default async function TenantPage({
   // transactions + redeem/update-recipient, instead of the Tailwind fallback.
   if (page === "giftcard" && (query.action === "edit" || query.action === "view")) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <GiftCardDetailContent slug={tenantSlug} initialQuery={{ id: query.id, msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -759,7 +759,7 @@ export default async function TenantPage({
   // "vai in Pagamenti").
   if (page === "giftcard") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <GiftcardContent
           slug={tenantSlug}
           initialQuery={{
@@ -782,7 +782,7 @@ export default async function TenantPage({
   // handles new/edit.)
   if (page === "giftbox" && (query.action === "view" || query.action === "edit_instance")) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <GiftBoxInstanceDetailContent slug={tenantSlug} initialQuery={{ id: query.id, msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -793,7 +793,7 @@ export default async function TenantPage({
   // those to the faithful template editor (instead of the Tailwind fallback).
   if (page === "giftbox" && (query.action === "new" || query.action === "edit")) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <GiftBoxFormContent slug={tenantSlug} initialQuery={{ action: query.action, id: query.id, msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -802,7 +802,7 @@ export default async function TenantPage({
   // Faithful Ricariche (recharges.php): flash ?msg/?err via redirect.
   if (page === "recharges") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <RechargesContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -821,7 +821,7 @@ export default async function TenantPage({
   // flash ?msg/?err via redirect (#fidelity_card_settings).
   if (page === "fidelity_membership_settings") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <FidelityMembershipSettingsContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -831,7 +831,7 @@ export default async function TenantPage({
   // flash ?msg/?err.
   if (page === "fidelity_membership") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <FidelityMembershipContent slug={tenantSlug} initialQuery={{ q: query.q, p: query.p, msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -841,7 +841,7 @@ export default async function TenantPage({
   // (?client_id/p/p_pending/p_list) + flash ?msg/?err + ?warn_locked.
   if (page === "fidelity_wallet") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <FidelityWalletContent
           slug={tenantSlug}
           initialQuery={{
@@ -861,7 +861,7 @@ export default async function TenantPage({
   // Faithful Punti Fidelity (fidelity_points.php): flash ?msg/?err.
   if (page === "fidelity_points") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <FidelityPointsContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -870,7 +870,7 @@ export default async function TenantPage({
   // Faithful Fidelity (fidelity.php): toggle generale con flash ?msg/?err.
   if (page === "fidelity") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <FidelityContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -879,7 +879,7 @@ export default async function TenantPage({
   // Faithful GiftCard / Impostazioni (giftcard_settings.php): flash ?msg/?err.
   if (page === "giftcard_settings") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <GiftcardSettingsContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -888,7 +888,7 @@ export default async function TenantPage({
   // Faithful GiftBox / Impostazioni (giftbox_settings.php): flash ?msg/?err.
   if (page === "giftbox_settings") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <GiftboxSettingsContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -898,7 +898,7 @@ export default async function TenantPage({
   // (tab=instances/boxes) + flash ?msg/?err.
   if (page === "giftbox") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <GiftboxContent
           slug={tenantSlug}
           initialQuery={{
@@ -921,7 +921,7 @@ export default async function TenantPage({
   // delete confirm), instead of the Tailwind ManagementApp fallback.
   if (page === "clients" && query.action === "view") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <ClientDetailContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -931,7 +931,7 @@ export default async function TenantPage({
   // e il flash ?msg=&err= dei redirect delle azioni.
   if (page === "clients") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <ClientsContent
           slug={tenantSlug}
           initialQuery={{ q: query.q, all_locations: query.all_locations, msg: query.msg, err: query.err }}
@@ -945,7 +945,7 @@ export default async function TenantPage({
   // instead of the Tailwind ManagementApp fallback.
   if (page === "clients" && query.action === "history") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <ClientHistoryContent />
       </ManageShell>
     );
@@ -973,7 +973,7 @@ export default async function TenantPage({
   // (from/to/staff_id/source/detail_staff_id) — inoltrati come prop server-side.
   if (page === "commissions" && tab !== "settings") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <CommissionsContent
           slug={tenantSlug}
           initialQuery={{
@@ -993,7 +993,7 @@ export default async function TenantPage({
   // parsing $_GET della pagina PHP.
   if (page === "installments_manage") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <InstallmentsManageContent
           slug={tenantSlug}
           initialQuery={{
@@ -1012,7 +1012,7 @@ export default async function TenantPage({
   // Automazione (automation.php): flash ?msg=Automazione salvata dal redirect.
   if (page === "automation") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <AutomationContent slug={tenantSlug} initialQuery={{ msg: query.msg }} />
       </ManageShell>
     );
@@ -1022,7 +1022,7 @@ export default async function TenantPage({
   // ('Permessi Staff aggiornati' / errori validazione modulo).
   if (page === "roles") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <RolesContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err, role: query.role }} />
       </ManageShell>
     );
@@ -1034,7 +1034,7 @@ export default async function TenantPage({
   // finché l'email non è verificata — unica pagina raggiungibile sotto gate.
   if (page === "accessibility") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page} emailVerificationGate={session.user.needsEmailVerification}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page} emailVerificationGate={session.user.needsEmailVerification}>
         <AccessibilityContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -1044,7 +1044,7 @@ export default async function TenantPage({
   // flash ?msg=/?err= dai redirect + deep-link action=delete_preview&id=N.
   if (page === "locations" || page === "settings") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <LocationsContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err, action: query.action, id: query.id }} />
       </ManageShell>
     );
@@ -1054,7 +1054,7 @@ export default async function TenantPage({
   // legacy (Profilo attività salvato / Posizione logo salvata / ...).
   if (page === "business_profile") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <BusinessProfileContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
       </ManageShell>
     );
@@ -1064,7 +1064,7 @@ export default async function TenantPage({
   // redirect legacy (Orari salvati / Chiusura salvata / Straordinario salvato...).
   if (page === "hours") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <HoursContent slug={tenantSlug} initialQuery={{ tab: query.tab, location_id: query.location_id, msg: query.msg }} />
       </ManageShell>
     );
@@ -1075,7 +1075,7 @@ export default async function TenantPage({
   // compare, compare_mode, compare_month, compare_from, compare_to).
   if (page === "reports") {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <ReportsContent
           slug={tenantSlug}
           initialQuery={{
@@ -1102,7 +1102,7 @@ export default async function TenantPage({
   const FaithfulContent = faithfulPageKey ? FAITHFUL_MODULES[faithfulPageKey] : undefined;
   if (FaithfulContent) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <FaithfulContent slug={tenantSlug} />
       </ManageShell>
     );
@@ -1114,7 +1114,7 @@ export default async function TenantPage({
   // gestionale completamente diverso e non è mai il comportamento del PHP.
   if (page) {
     return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} currentPage={page}>
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <div className="card p-4">
           <div className="h4 fw-semibold">Pagina non trovata</div>
         </div>

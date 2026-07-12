@@ -77,7 +77,7 @@ export default async function TenantBookingPage({
         redirect(`/${encodeURIComponent(tenantSlug)}/accessibility?err=${encodeURIComponent("Verifica email necessaria prima di continuare")}`);
       }
       return (
-        <ManageShell slug={tenantSlug} userName={session.user.name} currentPage="booking">
+        <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage="booking">
           <BookingSettingsContent slug={tenantSlug} initialQuery={{ msg: qs("msg") || undefined }} />
         </ManageShell>
       );
