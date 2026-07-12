@@ -362,6 +362,11 @@ export function ManageShell({
     if (!shellContextLoaded || !topbar.canViewNotifications || emailVerificationGate || needsLocationSelection) return;
     if (typeof window === "undefined") return;
     const pulseTimers = bellPulseTimers.current;
+    // Il setup è ASINCRONO (prima si mergia lo stato 'visto' dal server, POI si
+    // crea il feed: il flag hydrated viene letto alla creazione); cancelled +
+    // cleanup differito coprono lo smontaggio durante il fetch iniziale.
+    let cancelled = false;
+    let teardown: (() => void) | null = null;
 
     const storageGet = (key: string): string | null => {
       try {
@@ -370,13 +375,74 @@ export function ManageShell({
         return null;
       }
     };
-    const storageSet = (key: string, value: string): void => {
+    const localStorageSet = (key: string, value: string): void => {
       try {
         window.localStorage.setItem(key, value);
       } catch {
         // ignora, come storageSet legacy
       }
     };
+    // Chiavi dello stato 'visto' per QUESTO scope (tenant:utente:sede).
+    const prefixForSeen = browserNotificationStoragePrefix(slug, viewerUserId, currentLocationId);
+    const seenStorageKey = `${prefixForSeen}:seen`;
+    const hydratedStorageKey = `${prefixForSeen}:hydrated`;
+    // Write-through L2 (deviazione approvata 2026-07-13): ogni scrittura del
+    // motore su seen/hydrated viene ripubblicata al server con debounce —
+    // fire-and-forget, su errore resta il localStorage come prima.
+    let seenPushTimer = 0;
+    const pushSeenToServer = () => {
+      window.clearTimeout(seenPushTimer);
+      seenPushTimer = window.setTimeout(() => {
+        const payload = {
+          action: "save_seen_state",
+          seen_json: storageGet(seenStorageKey) ?? "[]",
+          hydrated: storageGet(hydratedStorageKey) === "1" ? "1" : "0",
+        };
+        void fetch(`/api/manage/notifications?slug=${encodeURIComponent(slug)}`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+          body: JSON.stringify(payload),
+        }).catch(() => undefined);
+      }, 400);
+    };
+    const storageSet = (key: string, value: string): void => {
+      localStorageSet(key, value);
+      if (key === seenStorageKey || key === hydratedStorageKey) pushSeenToServer();
+    };
+
+    (async () => {
+      // MERGE L2→L1: lo stato 'visto' del server viene unito al localStorage
+      // PRIMA della creazione del feed (unione chiavi cap 180; hydrated se
+      // vero su UNO dei due lati) — un browser nuovo eredita i visti e non
+      // ri-notifica. Su errore si degrada al solo localStorage.
+      try {
+        const res = await fetch(
+          `/api/manage/notifications?slug=${encodeURIComponent(slug)}&action=seen_state&_=${Date.now()}`,
+          { credentials: "include", cache: "no-store", headers: { Accept: "application/json", "x-tenant-slug": slug } },
+        );
+        const data = await res.json();
+        if (res.ok && data?.ok === true) {
+          const localSeen = (() => {
+            try {
+              const parsed = JSON.parse(storageGet(seenStorageKey) || "[]");
+              return Array.isArray(parsed) ? parsed.filter(Boolean).map(String) : [];
+            } catch {
+              return [];
+            }
+          })();
+          const serverSeen = Array.isArray(data.seen) ? data.seen.filter(Boolean).map(String) : [];
+          if (serverSeen.length) {
+            localStorageSet(seenStorageKey, JSON.stringify(Array.from(new Set([...localSeen, ...serverSeen])).slice(-180)));
+          }
+          if (data.hydrated === true && storageGet(hydratedStorageKey) !== "1") {
+            localStorageSet(hydratedStorageKey, "1");
+          }
+        }
+      } catch {
+        // degrada al solo localStorage, come prima della L2
+      }
+      if (cancelled) return;
 
     const supportsBrowserNotifications = () => "Notification" in window;
     const hasSecureNotificationContext = () =>
@@ -514,13 +580,20 @@ export function ManageShell({
     document.addEventListener("visibilitychange", onVisibilityChange);
     window.addEventListener("bs:notifications-baseline", onBaselineRequest);
 
-    return () => {
+    teardown = () => {
       timers.forEach((t) => window.clearTimeout(t));
       window.clearInterval(intervalId);
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("bs:notifications-baseline", onBaselineRequest);
       Object.values(pulseTimers).forEach((t) => window.clearTimeout(t));
+      window.clearTimeout(seenPushTimer);
+    };
+    })();
+
+    return () => {
+      cancelled = true;
+      teardown?.();
     };
   }, [slug, shellContextLoaded, topbar.canViewNotifications, emailVerificationGate, needsLocationSelection, viewerUserId, currentLocationId]);
 

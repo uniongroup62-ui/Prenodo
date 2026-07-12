@@ -13161,3 +13161,34 @@ server-side al posto del localStorage (cambio browser/pulizia storage
 ri-mostra eventi gia' visti); (b) le native su mobile richiederebbero un
 service worker/PWA — fuori scope per il gestionale desktop, da valutare
 solo come evoluzione di prodotto.
+
+## Notifiche browser — 'visto' persistito lato server (2026-07-13)
+
+Deviazione migliorativa APPROVATA dall'utente ('la prima' delle opzioni del
+test live). Analisi della scelta: il motore feed (testato 12/12, fedele)
+usa uno storage SINCRONO iniettato → riscriverlo async sarebbe stato
+rischio inutile; scelta a RISCHIO CONTENUTO = write-through a due livelli:
+localStorage resta la L1 sincrona (motore INTATTO), il server diventa L2.
+- lib/browser-notification-seen.ts: colonna users.browser_notification_seen
+  (TEXT JSON { '<locationId>': { seen[], hydrated } }, ensure con ALTER
+  best-effort, decode tollerante, cap 180 come writeSeen);
+- route notifications: GET action=seen_state + POST save_seen_state
+  (notifications.view, sede corrente dal contesto);
+- manage-shell: setup del poller reso ASINCRONO — MERGE L2→L1 (unione
+  chiavi cap 180, hydrated se vero su un lato) PRIMA della creazione del
+  feed (il flag hydrated e' letto alla creazione); storageSet wrappato →
+  push debounced 400ms fire-and-forget su seen/hydrated; cancelled+teardown
+  per lo smontaggio durante il fetch; su errore server degrada al solo
+  localStorage (comportamento pre-L2).
+BENEFICIO REALE (oltre al niente-ri-toast): senza L2 un browser fresco
+ri-baselinava e INGHIOTTIVA in silenzio gli eventi arrivati poco prima
+(mai notificati da nessuna parte); con hydrated/seen ereditati dal server
+gli eventi genuinamente nuovi vengono notificati anche al primo avvio.
+
+VERIFICA live cross-browser: browser A riceve il toast del pending nuovo e
+la colonna DB contiene chiave+hydrated (push debounced ok); browser B
+FRESCO eredita seen+hydrated via merge (localStorage popolato), NON
+ri-notifica l'evento gia' visto (0 toast/native) e NOTIFICA il pending
+genuinamente nuovo seminato dopo il merge. Cleanup: seeds+reminders
+rimossi, colonna azzerata, baseline 10. Regressione notifiche COMPLETA:
+16+10+12+12+19+7; tsc pulito, eslint solo warning pre-esistenti.

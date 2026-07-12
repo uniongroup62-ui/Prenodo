@@ -1,5 +1,6 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import { automationScheduleReminder, getAutomationSettings, saveClientBirthdayAlertDays } from "@/lib/automation-reminders";
+import { getBrowserNotificationSeenState, saveBrowserNotificationSeenState } from "@/lib/browser-notification-seen";
 import { lifecycleKindForStatusChange, sendAppointmentLifecycleEmail } from "@/lib/appointment-lifecycle-email";
 import { cancelDoneAppointment, fidelityCardExpiryNotificationConfig, listNotificationPendingAppointments } from "@/lib/db-repositories";
 import { listBirthdayNotificationRows, notificationFidelityCardGroups, notificationInstallmentGroups } from "@/lib/manage-dashboard-alerts";
@@ -24,6 +25,16 @@ export async function GET(request: Request) {
   const action = url.searchParams.get("action") ?? "list";
 
   try {
+    // Stato 'visto' delle notifiche browser (L2 SERVER-SIDE, deviazione
+    // migliorativa approvata 2026-07-13): la shell lo legge all'avvio del
+    // poller e lo MERGIA nel localStorage prima di creare il feed, così un
+    // browser nuovo non ri-notifica gli eventi già visti altrove.
+    if (action === "seen_state") {
+      const locationContext = await getManageLocationContext(tenantSlug);
+      const state = await getBrowserNotificationSeenState(tenantSlug, Number(session.user.id ?? 0), locationContext.currentLocationId);
+      return Response.json({ ok: true, ...state }, { headers: { "Cache-Control": "no-store" } });
+    }
+
     // Port del poller legacy ?page=notifications&action=count: ritorna il
     // notificationSummary corrente (badge topbar) con no-store.
     if (action === "count") {
@@ -397,6 +408,23 @@ export async function POST(request: Request) {
       }
       const days = await saveClientBirthdayAlertDays(tenantSlug, parseInteger(body.client_birthday_alert_days ?? body.days, 7));
       return Response.json({ ok: true, message: "Impostazioni salvate", days });
+    }
+
+    // Persistenza dello stato 'visto' (coppia di action=seen_state): la shell
+    // ripubblica qui, con debounce, le scritture del motore feed (chiavi viste
+    // cap 180 + flag hydrated) scoped sulla sede corrente.
+    if (action === "save_seen_state") {
+      const locationContext = await getManageLocationContext(tenantSlug);
+      let seen: unknown = [];
+      try { seen = JSON.parse(String(body.seen_json ?? "[]")); } catch { seen = []; }
+      await saveBrowserNotificationSeenState(
+        tenantSlug,
+        Number(session.user.id ?? 0),
+        locationContext.currentLocationId,
+        seen,
+        String(body.hydrated ?? "") === "1" || String(body.hydrated ?? "").toLowerCase() === "true",
+      );
+      return Response.json({ ok: true });
     }
 
     // Port del POST di notifications.php (77-146): approva/annulla una
