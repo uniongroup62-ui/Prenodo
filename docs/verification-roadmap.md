@@ -12831,3 +12831,40 @@ Appuntamenti 27+13+18+14, Quick Booking 35+21+16+28, Calendario
 48+20+6+33+4, Dashboard 13 (un FAIL era un flake time-of-day della SUITE:
 semina a NOW()+6h che di sera sconfina a domani → offset portati a minuti).
 tsc/eslint puliti.
+
+## Quick Booking — pass di verifica bug + migliorie (2026-07-12, sera)
+
+Richiesta: caccia bug + suggerimenti (dominio COMPLETO: motore 63d3e77 +
+contorno dbe2e13). Drift: solo 71c3ccf (prefetch mapAppointment), gia'
+regressato verde con le 4 suite core (35+21+16+28) in quel pass.
+
+Batterie rimanenti: markers-qb 24/24, markers-qb-neg 5/5, residui-verify
+6/6, public-comm 19/19. 3 HARNESS STANTII SANATI (non bug): (1) markers-qb2
+cercava ' — Occupato' ma il template literal `${name} — ${reason ||
+"Occupato"}` spezza la sequenza nel chunk → marker sul fallback contiguo →
+6/6; (2) markers-qb3 cercava i fallback PER-TIPO ('verifica dei residui del
+pacchetto/degli omaggi') RIMOSSI DELIBERATAMENTE in c8f1cc0 (il flusso
+modale usa il generico verbatim di app.js 810) → marker aggiornato → 37/37;
+(3) test-qb-findings-verify: la divergenza storica no_show-blocca-slot
+risulta RISOLTA (ora lo slot si libera come il legacy, allineamento
+disponibilita' pending/scheduled dei pass successivi) → check girato a
+parita' → 3/3.
+
+Probe ostili motore (tutti corretti, 2 appuntamenti creati dai probe
+tracciati e rimossi, id 1464-1465): staff_map/cabin_map JSON rotto =
+tollerato come json_decode (auto-assegnazione/guardia cabina, mai crash);
+client_id inesistente → 'Cliente non valido o non disponibile nella sede
+scelta.'; sede 9999 → 'Sede non valida o non disponibile.'; redeem
+pacchetto inesistente → SKIP con warning e save ok (attestato
+warnings-rollback del pass QB); qty negativa → skip; hold senza dati /
+token altrui → guardie verbatim. NOTA cosmetica: data rollover
+('2027-02-30') e ora 99:99 → 400 con l'errore PG GREZZO inglese
+('date/time field value out of range') — stessa classe fallisci-pulito
+documentata (GiftBox/GiftCard/Promozioni), ma il testo non e' amichevole.
+
+ZERO bug prodotto. MIGLIORIE SUGGERITE (non applicate): (1) mappare
+l'errore PG out-of-range su un messaggio italiano pulito nel save (il
+drawer lo mostra in toast; raro perche' i picker impediscono l'input, ma
+il testo grezzo e' brutto); (2) PERF action=get (payload drawer completo)
+~433-476ms: parallelizzare i blocchi indipendenti del payload come fatto
+per lista/dashboard/calendario.
