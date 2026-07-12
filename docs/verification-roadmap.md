@@ -1,5 +1,22 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Moduli consenso pass 3: ri-attestazione + sonda ostile — 134 verdi, nessun bug prodotto (2026-07-12)
+
+Terza passata (audit 07-06 + audit 1:1 07-10 03b1045 con riparazione
+body_template nell'ensure). DRIFT: zero sui file dedicati.
+BATTERIA subito verde: e2e-consent-modules 18 + markers-consent-modules 88 +
+test-consensi 25 + sonda 3 = 134.
+SONDA OSTILE (route configuration?module=consent_modules, permesso
+consent_modules.manage): delete del modulo di SISTEMA -> 'Il modulo PDF
+privacy GDPR e di sistema e non puo essere eliminato.' (verbatim senza
+accenti); delete con documento FIRMATO collegato -> 'Il modulo ha documenti
+firmati collegati e non puo essere eliminato. Disattivalo...' con riga
+intatta; nome VUOTO -> salvato col default 'Modulo consenso' = FEDELE a
+ConsentModules.php 270-271 (name==='' ? isSystem ? 'PDF privacy GDPR' :
+'Modulo consenso') — il residuo della sonda è stato rimosso (id tracciato).
+Baseline: 1 modulo di sistema 'PDF privacy GDPR' intatto, 0 records.
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice prodotto.
+
 ## Sedi pass 3: ri-attestazione + risanamento batteria multi-sede — 230 verdi, nessun bug prodotto (2026-07-12)
 
 Terza passata (audit completo 07-06 + eliminazione COMPLETA P11 07-10
