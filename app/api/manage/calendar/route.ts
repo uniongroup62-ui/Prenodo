@@ -62,9 +62,14 @@ export async function GET(request: Request) {
     // Per-staff grey unavailability bands for the Day (staff columns) view —
     // port of the legacy include_unavailability=1 (off-shift + time-off clipped
     // to the store's open intervals). Best-effort: never blocks the context.
-    const locationParam = Number.parseInt(String(url.searchParams.get("location_id") ?? "0"), 10) || null;
+    const locationParam = Number.parseInt(String(url.searchParams.get("location_id") ?? "0"), 10) || 0;
+    // Fallback sulla sede di sessione quando il param manca o è invalido: le
+    // bande grigie devono seguire gli orari della sede attiva, non l'unione.
+    const unavailabilityLocation = locationParam > 0
+      ? locationParam
+      : (Number(activeUser.currentLocationId ?? 0) > 0 ? Number(activeUser.currentLocationId) : null);
     const staffUnavailability = date
-      ? await staffUnavailabilityForDate(tenantSlug, date, locationParam).catch(() => [])
+      ? await staffUnavailabilityForDate(tenantSlug, date, unavailabilityLocation).catch(() => [])
       : [];
     return Response.json({
       ok: true,

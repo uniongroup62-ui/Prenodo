@@ -12743,3 +12743,20 @@ ricadere sulla sede di sessione quando il param manca/è invalido (oggi null
 = nessun filtro sede); il client passa sempre il valore giusto, priorita'
 bassa. UX: overlay 'Caricamento prenotazioni…' anti-flicker gia' presente e
 fedele — nessuno skeleton necessario.
+
+## Calendario — migliorie applicate (2026-07-12, sera, seguito del pass bug-hunt)
+
+Analisi 'scelta migliore': il context era GIA' parallelo nel blocco grande
+(Promise.all su 9 loader) — il refactor profondo dei loader NON vale il
+rischio (i metadati interni battono la cache tenant-db). Interventi mirati:
+(1) rimosso ensureCalendarSchema seriale in testa (ridondante:
+listCalendarNotes e getCalendarDayStaffOrder si auto-assicurano lo schema);
+(2) getManageLocationContext spostato DENTRO il Promise.all (il suo
+risultato serve solo dopo, per i filtri); (3) filterStaffByLocation +
+filterServicesByLocation in parallelo tra loro. Latenza action=context:
+450-760ms → 357-373ms (payload identico). (4) staffUnavailability: fallback
+sulla sede di SESSIONE quando location_id manca/è invalido (prima null =
+nessun filtro sede sulle bande grigie; il client passa comunque il param).
+
+Regressione verde: markers 48/48, test-calendario 20/20, location-scope
+6/6, e2e-calendar-move 33/33, e2e-hours-calendar 4/4; tsc/eslint puliti.

@@ -101,16 +101,19 @@ export async function calendarContext(input: {
   const date = normalizeDate(input.date) || todayIsoLocal();
   const start = normalizeDate(input.start) || date;
   const end = normalizeDate(input.end) || addDays(start, 1);
-  await ensureCalendarSchema(input.slug);
 
+  // Tutto il fetch in UN unico Promise.all: il contesto sede serve solo DOPO
+  // (per i filtri), e lo schema notes/ordine è auto-assicurato dai rispettivi
+  // loader (listCalendarNotes → ensureCalendarNotesTable,
+  // getCalendarDayStaffOrder → ensureUserCalendarOrderColumn) — l'ensure
+  // seriale in testa era un round trip ridondante.
+  //
   // Sede corrente: gli orari/chiusure/eccezioni sono PER SEDE (business_hours.
   // location_id) — il calendario deve usare le righe della sede attiva, non
   // l'unione di tutte (una riga globale/di altra sede non aggiornata terrebbe
   // il calendario sui vecchi orari, es. venerdì fino alle 19 dopo il cambio a 16).
-  const locationContext = await getManageLocationContext(input.slug).catch(() => null);
-  const currentLocationId = Number(locationContext?.currentLocationId ?? 0) || 0;
-
-  const [staff, staffOrder, locations, services, appointments, notesPayload, businessHoursAll, closuresAll, exceptionsAll] = await Promise.all([
+  const [locationContext, staff, staffOrder, locations, services, appointments, notesPayload, businessHoursAll, closuresAll, exceptionsAll] = await Promise.all([
+    getManageLocationContext(input.slug).catch(() => null),
     calendarStaff(input.slug),
     getCalendarDayStaffOrder(input.slug, input.userId),
     listDbLocations(input.slug),
@@ -121,6 +124,7 @@ export async function calendarContext(input: {
     listClosures({ slug: input.slug, start, end }),
     listBusinessHourExceptions({ slug: input.slug, start, end }),
   ]);
+  const currentLocationId = Number(locationContext?.currentLocationId ?? 0) || 0;
 
   // Orari: fallback PER GIORNO sede -> globale, come la query legacy
   // (calendar.php:171-181 "WHERE location_id IS NULL OR location_id=? ORDER BY
@@ -155,17 +159,16 @@ export async function calendarContext(input: {
   // Colonne/operatori PER SEDE (calendar.php:149-150 app_filter_staff_ids_by_location):
   // un operatore assegnato SOLO ad un'altra sede non compare come colonna nella sede
   // attiva. Solo con sede attiva; currentLocationId<=0 (single-sede/nessuna) -> tutti.
-  const scopedStaff = currentLocationId > 0
-    ? await filterStaffByLocation(input.slug, staff, currentLocationId)
-    : staff;
-
-  // Tendina SERVIZI del filtro calendario PER SEDE (calendar.php:30-38 +
-  // app_service_location_allowed): un servizio assegnato SOLO ad un'altra sede non
-  // compare tra i filtri della sede attiva. PERMISSIVO (a differenza dello staff):
-  // un servizio senza righe service_locations resta disponibile ovunque.
-  const scopedServices = currentLocationId > 0
-    ? await filterServicesByLocation(input.slug, services, currentLocationId)
-    : services;
+  // Tendina SERVIZI PER SEDE (calendar.php:30-38 + app_service_location_allowed):
+  // PERMISSIVO (a differenza dello staff): un servizio senza righe
+  // service_locations resta disponibile ovunque. I due filtri sono
+  // indipendenti: in parallelo.
+  const [scopedStaff, scopedServices] = currentLocationId > 0
+    ? await Promise.all([
+        filterStaffByLocation(input.slug, staff, currentLocationId),
+        filterServicesByLocation(input.slug, services, currentLocationId),
+      ])
+    : [staff, services];
 
   return {
     date,
@@ -537,13 +540,6 @@ async function calendarNoteExists(table: TenantTableLike, id: number): Promise<b
   }
   const rows = await dbQuery<RowDataPacket[]>(`SELECT id FROM ${quoteIdentifier(table.name)} WHERE ${clauses.join(" AND ")} LIMIT 1`, params);
   return rows.length > 0;
-}
-
-async function ensureCalendarSchema(slug: string): Promise<void> {
-  await Promise.all([
-    ensureCalendarNotesTable(slug),
-    ensureUserCalendarOrderColumn(slug),
-  ]);
 }
 
 async function ensureCalendarNotesTable(slug: string): Promise<TenantTableLike> {
