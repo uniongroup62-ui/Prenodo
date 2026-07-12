@@ -1,5 +1,30 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Sedi pass 3: ri-attestazione + risanamento batteria multi-sede — 230 verdi, nessun bug prodotto (2026-07-12)
+
+Terza passata (audit completo 07-06 + eliminazione COMPLETA P11 07-10
+8220d40). DRIFT: zero.
+BATTERIA (tutta verde a fine pass): test-sedi 40 + test-sedi-p11 15 +
+e2e-locations 18 + e2e-locations-page 32 + markers-locations 119 +
+test-location-guard 6 = 230.
+HARNESS SANATI (3 script, zero bug prodotto — tutti aspettative del tenant
+MONO-sede, ora la produzione ha 2 sedi 21:0 + 51:1):
+- test-location-guard: id appuntamenti 416/417 HARDCODED da una sessione
+  vecchia (inesistenti: i DENY passavano 'per sbaglio' sulla guardia
+  esistenza, gli ALLOW fallivano) -> auto-seminante via pg con cleanup;
+  confermato il modello guardie: RESTRICTED[21] nega cross-sede col verbatim
+  sede-text e opera sulla propria; ADMIN opera ovunque su appuntamenti
+  ESISTENTI anche a sede 0.
+- e2e-locations / e2e-locations-page: nuova sede = sort successivo RELATIVO
+  (non piu' 1), un solo move-up = swap col PRECEDENTE (51, non prima
+  assoluta), delete-preview su Sede1 ora scatta sul blocker STORICO ('La
+  sede contiene storico operativo o contabile...') e non su 'Deve restare
+  almeno una sede.' (che vale solo quando resterebbe 0 sedi — fedele);
+  restore-assert a 2 sedi con riallineamento sort di 51.
+Baseline: 2 sedi (21 sort 0, 51 sort 1), mapping marketplace intatto
+(cat 5 primary), 10 appuntamenti. DOMINIO CONFERMATO COMPLETO. Nessuna
+modifica al codice prodotto.
+
 ## Profilo attività pass 2: ri-attestazione + sonda limiti — 127 verdi, nessun bug prodotto (2026-07-12)
 
 Seconda passata (audit 07-06 + audit 1:1 07-10 f3738c5 col sync marketplace
