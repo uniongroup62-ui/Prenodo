@@ -12990,3 +12990,38 @@ raccomandata per la parita': azioni rapide inline tipo 'Approva' diretto
 dalla card avvisi — oggi passa correttamente dalla pagina Notifiche.)
 
 ZERO bug, zero migliorie residue aperte sul dominio.
+
+## Calendario — ri-pass serale + analisi logiche mutative (2026-07-12, notte)
+
+Richiesta: nuovo bug-hunt + valutazione logiche eliminazione/modifica.
+Drift: ZERO commit sui file calendario dopo 3cd4f44; i condivisi cambiati
+(prefetch mapAppointment 71c3ccf, get drawer 9e73241, summary 0bd7915)
+ri-verificati con la batteria COMPLETA: markers 48/48, test-calendario
+20/20, location-scope 6/6, e2e-calendar-move 33/33, hours 4/4.
+
+ANALISI LOGICHE MUTATIVE (probe live + codice):
+- MOVE (drag+resize, endpoint UNICO come il legacy): catena guardie
+  nell'ordine giusto (manage → scope sede verbatim → stato pending/
+  scheduled → timeoff → conflitto solo-su-stati-aperti), multi-segmento
+  shiftato per DELTA, client-side editable gated manage+stati (annullati/
+  eseguiti non trascinabili, segmenti mai resizable) — coperto dai 33
+  check della suite move. CORRETTO.
+- NOTE: scrittura gated appointments.manage (calendar.view NON basta,
+  fedele ad api_calendar_notes 19); tenant-scoped su list/save/delete/
+  fetch/exists; clamp 190/20000; DELETE IDEMPOTENTE (2a delete → ok:true,
+  come il DELETE 0-righe legacy); update su nota cancellata → 'Nota non
+  trovata.' pulito ANCHE nella finestra di race (exists → UPDATE 0 righe →
+  fetch che lancia lo stesso messaggio). CORRETTO. Nota: due utenti che
+  editano la stessa nota = last-write-wins silenzioso (updated_by/at
+  tracciati) — identico al legacy; un lock ottimistico sarebbe una
+  deviazione non necessaria a questo volume d'uso.
+- DRAWER (crea/edita/stato/annullo dal calendario): delega TUTTO al motore
+  Quick Booking (un solo punto di mutazione per dominio, stesse guardie
+  del pass QB) — architettura giusta, nessuna duplicazione.
+- ORDINE COLONNE: preferenza per-utente con decode tollerante (fix
+  e2422a5 di oggi). CORRETTO.
+VERDETTO: logiche mutative corrette e ben difese, nessun suggerimento
+strutturale.
+
+ZERO bug; migliorie del pomeriggio confermate (context ~360ms). Nessuna
+miglioria residua aperta sul dominio.
