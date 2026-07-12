@@ -1,5 +1,28 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Risorse pass 2: ri-attestazione + sonda ostile — 90 verdi, nessun bug prodotto (2026-07-12)
+
+Seconda passata (V4 07-03, pagina riscritta 07-06, audit completo 07-10
+f9f5385 attestato FEDELE senza fix). DRIFT: zero sul dominio (i commit
+successivi su db-repositories sono Orari/Operatori/Cabine, auditati a parte).
+NOTA AMBIENTE: a inizio pass il dev server era INCASTRATO (tutte le API 404,
+login compreso) — rimedio Turbopack noto (kill PID + rm .next/dev + riavvio).
+BATTERIA: test-risorse 12 + e2e-resources 25 + e2e-cabins-resources 14 +
+markers-resources 36 + sonda ostile 3 = 90 verdi.
+SONDA OSTILE: qty_total -5 -> clampata a 0 (max(0,(int)) identico a
+resources.php 170/215); delete con servizio collegato -> 'Risorsa non
+eliminata: è associata a uno o più servizi.' (verbatim 344); id inesistente
+-> 'Risorsa non trovata'.
+HARNESS SANATO e2e-cabins-resources: sessione forgiata sede 21 (la create
+cliente senza sede è rifiutata; permesso = resources.manage/cabins.manage) +
+SEMINA di 2 staff ZZ alla sede 21 — alla sede c'è UN solo operatore di
+produzione (staff 22; il 56 è solo alla 51) e il test dei sovrapposti
+moriva sull'auto-pick ('Nessun operatore disponibile...') PRIMA del vincolo
+risorse: con 3 operatori il 3° sovrapposto è rifiutato dal messaggio
+risorse legacy come da attesa.
+Baseline: resources 0, junctions 0, 5 clienti, 2 staff produzione intatti.
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice prodotto.
+
 ## Omaggi pass 2: ri-attestazione + risanamento batteria — ~344 verdi + 2 marker bundle, nessun bug prodotto (2026-07-12)
 
 Seconda passata (Gifts V2 07-03, lista/riepilogo+form 07-05, audit completo
