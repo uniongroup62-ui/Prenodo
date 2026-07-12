@@ -41,12 +41,19 @@ export const MODERN_AUTH_LAYOUT_STYLE = `
 
 export const MODERN_AUTH_STYLE = MODERN_AUTH_LAYOUT_STYLE + MODERN_AUTH_FORM_STYLE;
 
-// Variante GESTIONALE: pannello visual mantenuto (scelta utente: "va bene
-// così com'è, magari migliorala") — form moderno + gradiente più ricco e
-// badge brand nel pannello.
+// Variante GESTIONALE (iterata su feedback utente): pannello visual mantenuto
+// col gradiente ricco; il form NON sta in una box — campi direttamente sul
+// bianco con titolo centrato (riferimento: screen "Sellora" fornito), brand
+// in alto a sinistra accanto alla freccia back.
 export const MODERN_MANAGE_AUTH_STYLE = MODERN_AUTH_FORM_STYLE + `
-.manage-page.account-page--auth{background:#f8fafc}
-.manage-page .auth-stack{gap:26px}
+.manage-page.account-page--auth{background:#fff}
+.manage-page .account-main--auth-flow{align-items:center;min-height:100vh}
+.manage-page .auth-stack{gap:0;justify-content:center}
+.manage-page .auth-brand{position:fixed;top:26px;left:88px;z-index:5}
+.manage-page .auth-brand .brand-mark{width:34px;height:34px;border-radius:10px;font-size:16px}
+.manage-page .auth-card{background:transparent;border:0;box-shadow:none;padding:0;width:min(380px,100%)}
+.manage-page .auth-card h1{text-align:center;font-size:28px;margin-bottom:8px}
+.manage-page .auth-card .lead{text-align:center;margin-bottom:28px}
 .manage-page .visual-card.manage-visual{background:linear-gradient(160deg,#4e6da6 0%,#365287 55%,#243a63 100%);border-radius:22px;box-shadow:0 18px 44px rgba(36,58,99,.28)}
 .manage-page .visual-card .tenant-badge{background:rgba(255,255,255,.16);border-radius:12px}
 .manage-page .visual-card .visual-actions a{border-radius:10px}
