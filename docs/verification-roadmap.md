@@ -1,5 +1,26 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Servizi pass 2: ri-attestazione + sonda ostile — 147 verdi, nessun bug prodotto (2026-07-12)
+
+Seconda passata (audit funzionale 07-06 + audit completo 07-10 77da9aa,
+modulo FEDELE senza fix). DRIFT: zero sui file dedicati.
+BATTERIA: test-servizi 34 + e2e-services 40 + markers-services2 60 +
+test-service-location-filter 4 + e2e-staff-for-service 6 + sonda 3 = 147.
+HARNESS SANATO test-servizi D4a: il check si appoggiava alla promo 71 di
+produzione che all'audit (10/07) era IN finestra di validità — il gate
+legacy svc_service_deactivation_blockers (1583-87) blocca solo le campagne
+'REALMENTE attive' (is_active E starts<=CURDATE<=ends): oggi la 71 è
+scaduta e fedele-mente NON blocca. Ora D4a semina una promo ZZ scope-all in
+finestra via SQL (bypassa la guardia overlap) e non tocca più la 71 (il
+vecchio flusso la spegneva per D4b).
+SONDA OSTILE: prezzo con save senza cabine -> 'Seleziona almeno una cabina
+in cui verrà effettuato il servizio' (la guardia cabine precede il parsing
+prezzo); durata -30 -> 'La durata del servizio deve essere maggiore di
+zero'; nome vuoto -> 'Nome servizio obbligatorio'.
+Baseline: 2 servizi produzione, 1 categoria, junctions 3-3-2, promo 71
+attiva intatta, 5 clienti. DOMINIO CONFERMATO COMPLETO. Nessuna modifica al
+codice prodotto.
+
 ## Risorse pass 2: ri-attestazione + sonda ostile — 90 verdi, nessun bug prodotto (2026-07-12)
 
 Seconda passata (V4 07-03, pagina riscritta 07-06, audit completo 07-10
