@@ -528,6 +528,88 @@ function expandSegments(list: Appointment[]): CalBlock[] {
   );
 }
 
+// === GHOST DI SPOSTAMENTO (miglioria UX approvata 2026-07-12) ===
+// Durante il drag-move la snapshot HTML5 del browser segue il cursore pixel
+// per pixel mentre il drop viene SNAPPATO ai 5' — l'utente non vede dove il
+// blocco atterrerà né se la posizione è valida. Il ghost è una banda
+// renderizzata nella colonna sotto il cursore, già snappata CON LA STESSA
+// matematica del drop (mai una bugia), con orario live e stato pre-verificato
+// client-side: 'bad' = fuori finestra o sovrapposto a un altro appuntamento
+// (dati già sul client), 'warn' = dentro una banda non-disponibile (il server
+// potrebbe rifiutare), 'ok' = libera. Il SERVER resta l'autorità: le guardie
+// di action=move non cambiano, il ghost è solo feedback.
+type MoveGhost = { col: string; top: number; height: number; label: string; state: "ok" | "warn" | "bad"; note: string };
+
+// Durata del blocco trascinato (fallback alla durata di default come il render).
+function moveBlockDurationMin(block: CalBlock): number {
+  const s = timeToMin(block.time);
+  const e = timeToMin(block.endTime ?? "");
+  return s !== null && e !== null && e > s ? e - s : DEFAULT_DURATION_MIN;
+}
+
+// Stato di validità della posizione snappata: sovrapposizione con gli ALTRI
+// blocchi della colonna (i blocchi dello stesso appuntamento sono esclusi:
+// un multi-segmento viene shiftato tutto per delta dal server), sforamento
+// della finestra visibile, bande non-disponibile (solo vista Giorno).
+function moveGhostStateFor(
+  startMin: number,
+  durMin: number,
+  colBlocks: CalBlock[],
+  apptId: number,
+  winEnd: number,
+  bands?: Array<{ start: number; end: number }>,
+): { state: MoveGhost["state"]; note: string } {
+  const endMin = startMin + durMin;
+  if (endMin > winEnd) return { state: "bad", note: "fuori orario" };
+  for (const o of colBlocks) {
+    if (Number(o.id) === apptId) continue;
+    const os = timeToMin(o.time);
+    if (os === null) continue;
+    const oe = timeToMin(o.endTime ?? "");
+    const oEnd = oe !== null && oe > os ? oe : os + DEFAULT_DURATION_MIN;
+    if (startMin < oEnd && endMin > os) return { state: "bad", note: "occupato" };
+  }
+  if (bands && bands.some((b) => startMin < b.end && endMin > b.start)) {
+    return { state: "warn", note: "non disponibile" };
+  }
+  return { state: "ok", note: "" };
+}
+
+// Banda ghost (posizionata dentro il body colonna, non-interattiva).
+function renderMoveGhostBand(g: MoveGhost) {
+  const palette = g.state === "bad"
+    ? { bg: "rgba(220,38,38,.12)", border: "#dc2626", text: "#b91c1c" }
+    : g.state === "warn"
+      ? { bg: "rgba(245,158,11,.16)", border: "#d97706", text: "#92400e" }
+      : { bg: "rgba(47,99,244,.14)", border: "#2f63f4", text: "#1d4ed8" };
+  return (
+    <div
+      className={`cal-move-ghost is-${g.state}`}
+      style={{
+        position: "absolute",
+        left: 2,
+        right: 2,
+        top: g.top,
+        height: g.height,
+        zIndex: 7,
+        pointerEvents: "none",
+        background: palette.bg,
+        border: `2px dashed ${palette.border}`,
+        borderRadius: 6,
+        boxSizing: "border-box",
+        display: "flex",
+        alignItems: "flex-start",
+        padding: "2px 6px",
+      }}
+    >
+      <span style={{ fontSize: 11, fontWeight: 700, color: palette.text, background: "rgba(255,255,255,.88)", borderRadius: 4, padding: "0 4px", whiteSpace: "nowrap" }}>
+        {g.label}
+        {g.note ? ` • ${g.note}` : ""}
+      </span>
+    </div>
+  );
+}
+
 // === TEMA SOFT PER STATO (port fedele di calendarAppointmentStatusTheme,
 // calendar.js 3961-3979 + applyCalendarSoftAppointmentStyle 3981-4008) ===
 // Ogni blocco appuntamento riceve sfondo/bordo/testo pastello per STATO + la barra
@@ -1029,6 +1111,39 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
   // Drag-move state. dragRef holds the in-flight payload (the dragged block + the
   // grab offset); move/resize errors are surfaced via window.alert (legacy parity).
   const dragRef = useRef<CalendarDrag | null>(null);
+  // GHOST di spostamento: banda snappata con orario/validità nella colonna sotto
+  // il cursore (vedi MoveGhost a livello modulo). Il ref evita setState ripetuti
+  // sulla stessa posizione snappata (dragover spara a ogni pixel).
+  const [moveGhost, setMoveGhost] = useState<MoveGhost | null>(null);
+  const moveGhostRef = useRef<MoveGhost | null>(null);
+  const updateMoveGhost = useCallback((g: MoveGhost | null) => {
+    const prev = moveGhostRef.current;
+    if (g && prev && prev.col === g.col && prev.top === g.top && prev.height === g.height && prev.state === g.state) return;
+    if (!g && !prev) return;
+    moveGhostRef.current = g;
+    setMoveGhost(g);
+  }, []);
+  // Appuntamento in trascinamento: TUTTI i suoi blocchi/segmenti vengono
+  // attenuati (il server shifta l'intero booking per delta) così è chiaro
+  // COSA si sta spostando e il ghost resta l'unica destinazione.
+  const [draggingApptId, setDraggingApptId] = useState(0);
+  // Drag-image trasparente: sopprime la snapshot nativa del browser (che si
+  // muove non-snappata e confonderebbe rispetto al ghost).
+  const dragImageRef = useRef<HTMLImageElement | null>(null);
+  const applyGhostDragImage = useCallback((e: ReactDragEvent<HTMLElement>) => {
+    try {
+      if (!dragImageRef.current && typeof document !== "undefined") {
+        const img = document.createElement("img");
+        img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+        dragImageRef.current = img;
+      }
+      if (dragImageRef.current) e.dataTransfer.setDragImage(dragImageRef.current, 0, 0);
+    } catch { /* ignore */ }
+  }, []);
+  const clearMoveGhost = useCallback(() => {
+    updateMoveGhost(null);
+    setDraggingApptId(0);
+  }, [updateMoveGhost]);
   // In-flight resize (bottom-edge drag). Held in a ref (no re-render per mouse move);
   // a non-null `resizePreview` mirrors the live snapped end so the block stretches.
   const resizeRef = useRef<CalendarResize | null>(null);
@@ -2046,11 +2161,30 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
   //   - onWeekColumnDrop(iso, e): map the dropped block TOP (cursor - grab offset) to a
   //     snapped time in the WEEK window, and move the appointment to THIS column's date
   //     (iso) + that time, operator unchanged (moveAppointmentToDate).
-  const onWeekColumnDragOver = useCallback((e: ReactDragEvent<HTMLElement>) => {
-    if (!dragRef.current) return;
-    e.preventDefault();
-    try { e.dataTransfer.dropEffect = "move"; } catch { /* ignore */ }
-  }, []);
+  // dragover con GHOST: oltre ad abilitare il drop, calcola la posizione
+  // snappata (STESSA matematica del drop qui sotto) e aggiorna la banda
+  // fantasma con orario live + validità contro i blocchi della colonna.
+  const onWeekColumnDragOver = useCallback(
+    (iso: string, colBlocks: CalBlock[], e: ReactDragEvent<HTMLElement>) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      e.preventDefault();
+      try { e.dataTransfer.dropEffect = "move"; } catch { /* ignore */ }
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      const startMin = snappedMinFromY(e.clientY - rect.top - drag.grabOffsetPx, weekMinMin, weekMaxMin);
+      const durMin = moveBlockDurationMin(drag.block);
+      const v = moveGhostStateFor(startMin, durMin, colBlocks, Number(drag.block.id), weekMaxMin);
+      updateMoveGhost({
+        col: `week-${iso}`,
+        top: (startMin - weekMinMin) * PX_PER_MIN,
+        height: Math.max(durMin * PX_PER_MIN - 2, 18),
+        label: `${minToTime(startMin)} - ${minToTime(startMin + durMin)}`,
+        state: v.state,
+        note: v.note,
+      });
+    },
+    [snappedMinFromY, weekMinMin, weekMaxMin, updateMoveGhost],
+  );
   const onWeekColumnDrop = useCallback(
     (iso: string, e: ReactDragEvent<HTMLElement>) => {
       const drag = dragRef.current;
@@ -2062,8 +2196,9 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
       const minutes = snappedMinFromY(topPx, weekMinMin, weekMaxMin);
       moveBlockToDate(drag.block, iso, minToTime(minutes));
       dragRef.current = null;
+      clearMoveGhost();
     },
-    [snappedMinFromY, weekMinMin, weekMaxMin, moveBlockToDate],
+    [snappedMinFromY, weekMinMin, weekMaxMin, moveBlockToDate, clearMoveGhost],
   );
   // WEEK/MONTH block drag START / END — extracted callbacks (lint parity with the drop
   // handlers above). onDragStart records the grabbed BLOCK + the pointer offset from
@@ -2077,10 +2212,14 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("text/plain", String(block.id));
     } catch { /* ignore */ }
-  }, []);
+    // Ghost: snapshot nativa soppressa + originale attenuato.
+    applyGhostDragImage(e);
+    setDraggingApptId(Number(block.id));
+  }, [applyGhostDragImage]);
   const onWeekBlockDragEnd = useCallback(() => {
     setTimeout(() => { dragRef.current = null; }, 0);
-  }, []);
+    clearMoveGhost();
+  }, [clearMoveGhost]);
   // MONTH chip drop on a day cell (port of the legacy dayGridMonth eventDrop:
   // FullCalendar month drag keeps the chip's TIME and changes the DATE; segment
   // chips shift the whole appointment by the date delta server-side).
@@ -2092,8 +2231,9 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
       e.stopPropagation();
       moveBlockToDate(drag.block, iso, drag.block.time);
       dragRef.current = null;
+      clearMoveGhost();
     },
-    [moveBlockToDate],
+    [moveBlockToDate, clearMoveGhost],
   );
 
   // NOW-INDICATOR tick (port of installStaffNowIndicatorFix): keep nowMinutes in sync
@@ -2732,9 +2872,9 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                   style={{ position: "relative", height: weekGridHeight }}
                   // Block drag-move DROP target: a Week block dropped here moves to THIS
                   // column's day + the snapped drop time (operator unchanged). onDragOver
-                  // must allow the drop for the browser to fire onDrop. Component-scope
-                  // handlers (read dragRef outside the nested render helper).
-                  onDragOver={onWeekColumnDragOver}
+                  // must allow the drop for the browser to fire onDrop; aggiorna anche il
+                  // GHOST snappato con la validità contro i blocchi di QUESTA colonna.
+                  onDragOver={(e) => onWeekColumnDragOver(iso, expandSegments(dayAppts), e)}
                   onDrop={(e) => onWeekColumnDrop(iso, e)}
                   // Plain-click quick-book on the empty background (blocks stopPropagation);
                   // guarded against the click trailing a drag / resize / drag-select.
@@ -2748,6 +2888,8 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                   {/* HOVER guide-line / slot-highlight / time label + live drag-select
                       band overlays for this day column (non-interactive). */}
                   {renderHoverOverlay(`week-${iso}`, weekMinMin)}
+                  {/* GHOST di spostamento: destinazione snappata + orario + validità. */}
+                  {moveGhost && moveGhost.col === `week-${iso}` ? renderMoveGhostBand(moveGhost) : null}
                   {weekRows.map((m) => {
                     const major = isMajorRow(m);
                     return (
@@ -2827,6 +2969,8 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                           // visible/clickable over the shading.
                           zIndex: 3,
                           ...softEventStyle(theme),
+                          // In trascinamento: tutti i blocchi del booking attenuati.
+                          ...(draggingApptId === Number(a.id) ? { opacity: 0.35 } : {}),
                           ...(msAccent ? ({ "--ms-accent": msAccent } as React.CSSProperties) : null),
                         }}
                       >
@@ -2955,12 +3099,26 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                     padding: 4,
                     opacity: inMonth ? 1 : 0.45,
                     cursor: "pointer",
+                    // GHOST mese: cella di destinazione evidenziata durante il drag
+                    // (il chip conserva l'ORARIO, cambia solo la data).
+                    ...(moveGhost && moveGhost.col === `month-${iso}`
+                      ? { background: "rgba(47,99,244,.10)", boxShadow: "inset 0 0 0 2px #2f63f4", borderRadius: 4 }
+                      : {}),
                   }}
                   // Drop target del drag chip (cambio DATA, orario conservato).
                   onDragOver={(e) => {
-                    if (dragRef.current) {
+                    const drag = dragRef.current;
+                    if (drag) {
                       e.preventDefault();
                       try { e.dataTransfer.dropEffect = "move"; } catch { /* ignore */ }
+                      updateMoveGhost({
+                        col: `month-${iso}`,
+                        top: 0,
+                        height: 0,
+                        label: `${drag.block.time}`,
+                        state: "ok",
+                        note: "",
+                      });
                     }
                   }}
                   onDrop={(e) => onMonthCellDrop(iso, e)}
@@ -3598,10 +3756,33 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                   style={{ position: "relative", height: gridHeight }}
                                   onDragOver={(e) => {
                                     // Required so the browser fires onDrop on this element.
-                                    if (dragRef.current) {
-                                      e.preventDefault();
-                                      e.dataTransfer.dropEffect = "move";
-                                    }
+                                    const drag = dragRef.current;
+                                    if (!drag) return;
+                                    e.preventDefault();
+                                    e.dataTransfer.dropEffect = "move";
+                                    // GHOST snappato: STESSA matematica del drop (timeFromY sul
+                                    // top del blocco = cursore - grab offset), validità contro i
+                                    // blocchi di QUESTA colonna operatore + bande non-disponibile.
+                                    const rect = e.currentTarget.getBoundingClientRect();
+                                    const startMin = timeToMin(timeFromY(e.clientY - rect.top - drag.grabOffsetPx));
+                                    if (startMin === null) return;
+                                    const durMin = moveBlockDurationMin(drag.block);
+                                    const v = moveGhostStateFor(
+                                      startMin,
+                                      durMin,
+                                      colAppts,
+                                      Number(drag.block.id),
+                                      maxMin,
+                                      staffUnavail.filter((band) => band.staffId === s.id),
+                                    );
+                                    updateMoveGhost({
+                                      col: `day-${s.id}`,
+                                      top: (startMin - minMin) * PX_PER_MIN,
+                                      height: Math.max(durMin * PX_PER_MIN - 2, 18),
+                                      label: `${minToTime(startMin)} - ${minToTime(startMin + durMin)}`,
+                                      state: v.state,
+                                      note: v.note,
+                                    });
                                   }}
                                   onDrop={(e) => {
                                     const drag = dragRef.current;
@@ -3612,6 +3793,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                     const topPx = e.clientY - rect.top - drag.grabOffsetPx;
                                     moveBlockDay(drag.block, timeFromY(topPx), s.id, s.name);
                                     dragRef.current = null;
+                                    clearMoveGhost();
                                   }}
                                   onClick={(e) => {
                                     // Quick-book only on the empty background, never on a block
@@ -3663,6 +3845,8 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                   {/* HOVER guide-line / slot-highlight / time label + live
                                       drag-select band overlays (non-interactive). */}
                                   {renderHoverOverlay(`day-${s.id}`, minMin)}
+                                  {/* GHOST di spostamento: destinazione snappata + orario + validità. */}
+                                  {moveGhost && moveGhost.col === `day-${s.id}` ? renderMoveGhostBand(moveGhost) : null}
                                   {rows.map((m) => {
                                     const major = isMajorRow(m);
                                     return (
@@ -3726,11 +3910,15 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                           e.dataTransfer.effectAllowed = "move";
                                           // Some browsers require data to start a drag.
                                           try { e.dataTransfer.setData("text/plain", String(a.id)); } catch { /* ignore */ }
+                                          // Ghost: snapshot nativa soppressa + originale attenuato.
+                                          applyGhostDragImage(e);
+                                          setDraggingApptId(Number(a.id));
                                         }}
                                         onDragEnd={() => {
                                           // Clear shortly after so the synthetic click that follows
                                           // a drag does not trigger quick-book / edit on the column.
                                           setTimeout(() => { dragRef.current = null; }, 0);
+                                          clearMoveGhost();
                                         }}
                                         onClick={(e) => {
                                           // Always suppress navigation to the legacy view URL +
@@ -3760,6 +3948,8 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                           zIndex: 3,
                                           ...softEventStyle(theme),
                                           ...(msAccent ? ({ "--ms-accent": msAccent } as React.CSSProperties) : null),
+                                          // In trascinamento: tutti i blocchi del booking attenuati.
+                                          ...(draggingApptId === Number(a.id) ? { opacity: 0.35 } : {}),
                                         }}
                                       >
                                         {/* Card rows, faithful to the legacy eventContent (calendar.js

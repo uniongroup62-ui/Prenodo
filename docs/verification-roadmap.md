@@ -13059,3 +13059,42 @@ oggi la rimozione fisica e' definitiva come nel legacy.
 
 ZERO bug; nessuna miglioria residua aperta sul dominio (prefetch lista e
 get drawer del pomeriggio confermati dalla batteria).
+
+## Calendario — miglioria UX applicata: ghost di spostamento (2026-07-13)
+
+Richiesta utente: durante il drag-move "non si capisce in che punto dello
+slot si sta spostando la prenotazione e dove e' possibile e dove no".
+Causa: drag & drop HTML5 nativo — la snapshot del browser segue il cursore
+pixel-per-pixel mentre il drop viene snappato ai 5', nessun orario di
+destinazione, validita' scoperta solo dal toast d'errore server DOPO il
+rilascio (il resize aveva gia' l'anteprima live, il move no; il legacy FC
+mostrava il mirror snappato).
+
+Implementato (solo client, guardie server INVARIATE — il ghost e' feedback,
+il server resta l'autorita'):
+(1) GHOST SNAPPATO: banda fantasma nella colonna sotto il cursore,
+posizionata con LA STESSA matematica del drop (timeFromY nel Giorno,
+snappedMinFromY nella Settimana, cursore - grab offset) — mai una bugia —
+con orario live 'HH:MM - HH:MM';
+(2) VALIDITA' pre-verificata client-side sui dati gia' presenti: 'bad' =
+fine oltre la finestra ('fuori orario') o sovrapposizione con un ALTRO
+appuntamento della colonna ('occupato', blocchi dello stesso booking
+esclusi: il server shifta i segmenti insieme), 'warn' = banda
+non-disponibile dell'operatore (solo vista Giorno, il server potrebbe
+rifiutare), 'ok' = libera; palette blu/ambra/rosso con bordo tratteggiato;
+(3) SNAPSHOT NATIVA SOPPRESSA (setDragImage trasparente) + TUTTI i blocchi
+del booking trascinato attenuati a 0.35 — una sola rappresentazione della
+destinazione;
+(4) MESE: cella giorno di destinazione evidenziata durante il dragover
+(il chip conserva l'orario, cambia la data).
+updateMoveGhost deduplica per posizione snappata (dragover spara per pixel);
+cleanup su drop/dragend in tutte le viste.
+
+VERIFICA headless (drag simulato con DataTransfer): zona libera → 'is-ok |
+12:25 - 13:25'; sopra appuntamento ALTRUI (408→175) → 'is-bad | 13:50 -
+14:50 • occupato'; fondo colonna → 'is-bad | 19:00 - 20:00 • fuori orario';
+segmento dello STESSO booking → ok (corretto); dragend → ghost rimosso;
+originale attenuato visibile a screenshot. Regressione COMPLETA verde:
+markers 48/48, test-calendario 20/20, location-scope 6/6, e2e-calendar-move
+33/33 (i drop reali e le guardie server non cambiano), hours 4/4;
+tsc/eslint puliti (resta solo il warning no-css-tags pre-esistente).
