@@ -101,6 +101,11 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
   const slug = slugProp || tenantSlug();
 
   const [pending, setPending] = useState<PendingAppointment[]>([]);
+  // Primo caricamento in corso: gli empty-state mostrano 'Caricamento…' invece
+  // di 'Nessun…' (pattern delle sottopagine Rate/Preventivi — l'utente vedeva
+  // 'nessuna voce' per un attimo prima dell'arrivo dei dati). I refresh
+  // successivi restano silenziosi (loading non torna mai true).
+  const [loading, setLoading] = useState(true);
   const [fidelityGroups, setFidelityGroups] = useState<FidelityGroup[]>([]);
   const [fidelitySection, setFidelitySection] = useState<FidelitySection | null>(null);
   const [fidelityTableOk, setFidelityTableOk] = useState(true);
@@ -272,7 +277,8 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
         setCanManage(Boolean(j.canManage));
         setLocationLabel(String(j.locationLabel ?? ""));
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => setLoading(false));
   }, [slug]);
 
   useEffect(() => {
@@ -458,7 +464,7 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
 
       {pending.length === 0 ? (
         <div className="card p-4">
-          <div className="fw-semibold">Nessun appuntamento in attesa.</div>
+          <div className="fw-semibold">{loading ? "Caricamento…" : "Nessun appuntamento in attesa."}</div>
           <div className="text-muted small mt-1">
             Quando un cliente prenota online, l&apos;appuntamento resta in sospeso finché non lo approvi.
           </div>
@@ -596,7 +602,7 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
             </div>
           ) : fidelityGroups.length === 0 ? (
             <div className="card p-4">
-              <div className="fw-semibold">Nessuna tessera in scadenza o scaduta.</div>
+              <div className="fw-semibold">{loading ? "Caricamento…" : "Nessuna tessera in scadenza o scaduta."}</div>
               <div className="text-muted small mt-1">{fidelitySection.emptyText}</div>
             </div>
           ) : (

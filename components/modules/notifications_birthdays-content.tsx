@@ -48,6 +48,9 @@ export function NotificationsBirthdaysContent({ slug: slugProp }: { slug?: strin
   const slug = slugProp || tenantSlug();
 
   const [rows, setRows] = useState<BirthdayRow[]>([]);
+  // Primo caricamento: l'empty-state mostra 'Caricamento…' invece di
+  // 'Nessun compleanno' (pattern Rate/Preventivi).
+  const [loading, setLoading] = useState(true);
   const [canSee, setCanSee] = useState(true);
   const [schemaOk, setSchemaOk] = useState(true);
   const [alertDays, setAlertDays] = useState(7);
@@ -70,7 +73,8 @@ export function NotificationsBirthdaysContent({ slug: slugProp }: { slug?: strin
           setDaysInput(String(n));
         }
       })
-      .catch(() => setRows([]));
+      .catch(() => setRows([]))
+      .finally(() => setLoading(false));
   }, [slug]);
 
   useEffect(() => {
@@ -155,7 +159,7 @@ export function NotificationsBirthdaysContent({ slug: slugProp }: { slug?: strin
         </div>
       ) : rows.length === 0 ? (
         <div className="card p-4">
-          <div className="fw-semibold">Nessun compleanno cliente.</div>
+          <div className="fw-semibold">{loading ? "Caricamento…" : "Nessun compleanno cliente."}</div>
           <div className="text-muted small mt-1">Qui vedrai i clienti con compleanno {windowText}.</div>
         </div>
       ) : (

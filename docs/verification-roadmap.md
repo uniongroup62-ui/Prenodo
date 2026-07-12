@@ -13121,3 +13121,15 @@ EMAXCONNSESSION (15 client, session mode) per connessioni zombie dei
 processi uccisi + pool warm del dev server: liberato dopo ~7' col riavvio
 del dev server e l'attesa dei TCP timeout — con run seriali e un solo
 browser la pressione resta gestibile.
+
+## Notifiche — 'Caricamento…' negli empty-state di hub e Compleanni (2026-07-13)
+
+Segnalazione utente corretta: hub (appuntamenti in attesa + tessere) e
+Compleanni mostravano l'empty-state ('Nessun…') DURANTE il primo fetch —
+Rate e Preventivi avevano gia' il pattern giusto (loading=true iniziale,
+titolo 'Caricamento…' finche' il .finally non azzera). Allineati i due
+mancanti allo STESSO pattern (i refresh successivi restano silenziosi:
+loading non torna mai true). Verifica headless con API rallentata di 2.5s:
+durante il fetch 'Caricamento…' visibile e 'Nessun appuntamento' assente;
+dopo, 4 card e nessun testo di caricamento. Regressione hub 16/16 +
+automation 19/19; tsc/eslint puliti.
