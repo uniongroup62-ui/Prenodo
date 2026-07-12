@@ -40,6 +40,7 @@
  *   inert. The booking CTAs are real links to /<slug>/booking.
  */
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { MarketplaceAccountNav, useMarketplacePageEffects } from "@/components/public/marketplace-shared";
 
@@ -228,6 +229,10 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
   const [slug, setSlug] = useState<string>(slugProp ?? "");
   const [context, setContext] = useState<BookingContext | null>(null);
   const [profile, setProfile] = useState<MarketplaceProfile | null>(null);
+  // Directory caricata: serve per l'empty-state legacy "Attività non trovata"
+  // (public_marketplace.php 1099: `elseif (!$detailProfile)`), che scatta solo
+  // A LISTA NOTA — mai durante il primo load (placeholder fedeli).
+  const [mkLoaded, setMkLoaded] = useState(false);
 
   useEffect(() => {
     if (slugProp) return;
@@ -250,6 +255,7 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
         if (mkData?.ok && Array.isArray(mkData.profiles)) {
           const match = (mkData.profiles as MarketplaceProfile[]).find((p) => p.slug === slug) ?? null;
           setProfile(match);
+          setMkLoaded(true);
         }
       } catch {
         // Faithful-but-static fallback: render placeholders below.
@@ -523,6 +529,17 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
       </header>
 
       {/* ===================== PROFILE ===================== */}
+      {mkLoaded && !profile ? (
+        // Empty-state legacy (public_marketplace.php 1099-1105) per slug non in
+        // directory: testi e markup verbatim, stili .empty da public_marketplace.css.
+        <main className="wrap">
+          <div className="empty">
+            <h1>Attività non trovata</h1>
+            <p>Il profilo richiesto non è pubblicato o non è più disponibile.</p>
+            <p><Link className="btn btn-primary" href="/attivita">Torna alla ricerca</Link></p>
+          </div>
+        </main>
+      ) : (
       <main className="wrap">
         <div className="salon-detail-layout">
           <div className="salon-profile">
@@ -741,6 +758,7 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
           </aside>
         </div>
       </main>
+      )}
 
       {/* ===================== FOOTER ===================== */}
       <footer className="marketplace-footer">

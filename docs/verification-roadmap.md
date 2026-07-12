@@ -1,5 +1,27 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Marketplace pass 5: ri-attestazione + FIX empty-state 'Attività non trovata' — 227 verdi (2026-07-12)
+
+Quinta passata (audit 07-06 ×4 + superfici booking-marketplace riverificate
+oggi nel pass Booking). DRIFT: zero (il sync profilo era del pass Profilo).
+BATTERIA subito verde: e2e-marketplace 28 + layout 3 + detail-fn 5 + arrow 2
++ markers-marketplace 100 + e2e-account-faithful 15 + markers-account 46 +
+e2e-booking-marketplace 26 = 225 + sonde.
+SONDA OSTILE: ricerca con quote/percenti/cat inesistente -> 200 senza crash;
+favorite senza login -> 'Accesso cliente richiesto.'; slug inesistente ->
+TROVATO GAP: il dettaglio rendeva i placeholder statici invece dell'
+empty-state legacy.
+FIX PRODOTTO (marketplace-detail-faithful.tsx): port dell'empty-state di
+public_marketplace.php 1099-1105 — a directory CARICATA (gate mkLoaded, mai
+durante il primo load) e slug non in lista rende '<h1>Attività non
+trovata</h1><p>Il profilo richiesto non è pubblicato o non è più
+disponibile.</p>' + Link 'Torna alla ricerca' -> /attivita (stili .empty già
+in public_marketplace.css 121). Verificato headless: slug inesistente ->
+empty-state 1/1, tenant reale -> salon-hero intatto, empty-state 0.
+eslint/tsc puliti sulle righe nuove (19 problemi PRE-esistenti invariati);
+regressione marketplace verde (28+5+100).
+DOMINIO CONFERMATO COMPLETO.
+
 ## Booking pass 2 (wizard pubblico + impostazioni + marketplace): ri-attestazione — 155+ verdi, nessun bug prodotto (2026-07-12)
 
 Seconda passata dedicata (items 18-24 07-02/03, impostazioni 07-03 +
