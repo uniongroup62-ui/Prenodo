@@ -1,5 +1,19 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Accessibilità pass 3: ri-attestazione — 175 verdi, nessun bug prodotto (2026-07-12)
+
+Terza passata (audit 07-06 + audit 1:1 07-10 6622c65 con 5 fix sul gate
+email globale). DRIFT: zero sui file dedicati.
+BATTERIA subito verde: test-accessibilita 40 + e2e-accessibility 34 +
+markers-accessibility 40 + e2e-account-faithful 15 + markers-account 46 =
+175. La suite d'audit copre GIÀ i casi ostili: password attuale errata,
+cooldown 60s verbatim su richiesta/reinvio, codice errato con attempt_count,
+QUINTO tentativo -> 'Troppi tentativi non validi. Richiedi un nuovo codice.'
+con pending ELIMINATA, codice scaduto al confirm con pending eliminata,
+'Sessione gestionale scaduta.' senza sessione, SES-off che espone il codice
+solo in dev.
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice prodotto.
+
 ## Moduli consenso pass 3: ri-attestazione + sonda ostile — 134 verdi, nessun bug prodotto (2026-07-12)
 
 Terza passata (audit 07-06 + audit 1:1 07-10 03b1045 con riparazione
