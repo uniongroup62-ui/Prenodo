@@ -12938,3 +12938,27 @@ costante; anche action=pending ~570-597ms beneficerebbe; (2) opzionale,
 DIVERGE dal legacy: 'visto' server-side al posto del localStorage (oggi
 cambiare browser/pulire storage ri-mostra i toast gia' visti) — solo se si
 accetta la deviazione.
+
+## Notifiche — miglioria applicata: feed/pending/summary paralleli (2026-07-12, sera)
+
+Analisi 'scelta giusta': il feed e' il percorso PIU' battuto del gestionale
+(poller ogni 5s da ogni scheda) e i suoi blocchi sono gia' batchati ma
+SERIALI — stessa ricetta validata (parallelizzare senza toccare query ne'
+semantiche, golden diff a garanzia). Sicurezza dell'ordine: ogni blocco
+eventi pusha chiavi con prefisso per-tipo (mai collisioni) e l'output e'
+ri-ordinato per (created_at, key) → l'ordine di esecuzione non cambia il
+payload. Tre livelli:
+(1) getNotificationSummary (manage-shell-context, condiviso da feed/count/
+campanelle shell): i 5 conteggi in Promise.all coi gate per-permesso
+invariati (ternari → Promise.resolve(0));
+(2) listNotificationPendingAppointments: i 6 blocchi post-base (clienti,
+servizi→listino, operatori, sedi, business, decorazioni) in Promise.all;
+il ricalcolo coupon resta DOPO (dipende da apsRows/svcByAppt);
+(3) route feed: locationContext ∥ prefs, poi summary ∥ pending-chain ∥
+4 blocchi gated in un unico Promise.all.
+
+VERIFICA: payload BYTE-IDENTICI ai golden (feed al netto di generated_at,
+pending, count). Latenze: feed 717-743 → 318-343ms (~2.2x — carico poller
+piu' che dimezzato), pending 570-597 → 325-342ms, count 218-228 → 188-209ms.
+Regressione verde: notifiche 16+10+12+6+12+19 + dashboard 16+13 (summary
+condiviso); tsc/eslint puliti.

@@ -116,9 +116,22 @@ export async function GET(request: Request) {
     // conteggio/data (al cambio conteggio l'evento RI-notifica), i preventivi
     // sono eventi PER-QUOTE, ordinamento created_at desc + slice limit 1..50.
     if (action === "feed") {
-      const locationContext = await getManageLocationContext(tenantSlug);
-      const loc = locationContext.currentLocationId;
       const perms = session.user.perms;
+      // Contesto sede e preferenze utente sono letture indipendenti: in
+      // parallelo (il feed gira ogni 5s dal poller di ogni scheda aperta).
+      const prefs: Record<string, boolean> = { quotes: false, installments: false, birthdays: false, fidelity_cards: false };
+      const [locationContext] = await Promise.all([
+        getManageLocationContext(tenantSlug),
+        (async () => {
+          if (!(await columnExists("users", "browser_notification_preferences"))) return;
+          const uRows = await tenantSelect<RowDataPacket>({ slug: tenantSlug, table: "users", columns: "browser_notification_preferences", where: "id = ?", params: [session.user.id], limit: 1 }).catch(() => [] as RowDataPacket[]);
+          try {
+            const dec = JSON.parse(String(uRows[0]?.browser_notification_preferences ?? "") || "{}") as Record<string, unknown>;
+            for (const k of Object.keys(prefs)) prefs[k] = dec[k] === true || dec[k] === 1 || dec[k] === "1" || dec[k] === "true" || dec[k] === "on" || dec[k] === "yes";
+          } catch { /* default */ }
+        })(),
+      ]);
+      const loc = locationContext.currentLocationId;
       const limit = Math.max(1, Math.min(50, parseInteger(url.searchParams.get("limit"), 20)));
       const slugify = (v: string) => (String(v).toLowerCase().trim().replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") || "item");
       const seed = (v: string) => (String(v).replace(/[^0-9a-zA-Z]+/g, "") || "na");
@@ -138,16 +151,6 @@ export async function GET(request: Request) {
         byKey.set(e.key, { ...e, _ts: Date.parse(e.created_at) || Date.now() });
       };
 
-      // Preferenze utente lette LATO SERVER (BrowserNotifications::preferences).
-      const prefs: Record<string, boolean> = { quotes: false, installments: false, birthdays: false, fidelity_cards: false };
-      if (await columnExists("users", "browser_notification_preferences")) {
-        const uRows = await tenantSelect<RowDataPacket>({ slug: tenantSlug, table: "users", columns: "browser_notification_preferences", where: "id = ?", params: [session.user.id], limit: 1 }).catch(() => [] as RowDataPacket[]);
-        try {
-          const dec = JSON.parse(String(uRows[0]?.browser_notification_preferences ?? "") || "{}") as Record<string, unknown>;
-          for (const k of Object.keys(prefs)) prefs[k] = dec[k] === true || dec[k] === 1 || dec[k] === "1" || dec[k] === "true" || dec[k] === "on" || dec[k] === "yes";
-        } catch { /* default */ }
-      }
-
       // Guardia legacy (feed riga 93): sotto gate selezione-sede il feed
       // risponde con metadati + summary (a zero) ed EVENTI VUOTI.
       if (locationContext.needsLocationSelection) {
@@ -164,6 +167,13 @@ export async function GET(request: Request) {
         }, { headers: { "Cache-Control": "no-store" } });
       }
 
+      // Summary e blocchi eventi in PARALLELO: sono indipendenti (ogni push ha
+      // chiavi con prefisso per-tipo, mai collisioni) e l'output finale viene
+      // comunque ri-ordinato per (created_at, key) — l'ordine di esecuzione
+      // non cambia il payload.
+      const summaryP = getNotificationSummary(tenantSlug, session.user, loc, locationContext.needsLocationSelection);
+      await Promise.all([
+        (async () => {
       // appointment_pending (addPendingAppointmentEvents): ordina per
       // COALESCE(created_at, starts_at) DESC, key con seed data creazione,
       // body 'servizio - cliente - d/m/Y H:i - H:i - #codice - pacchetto - prepagato'.
@@ -198,6 +208,9 @@ export async function GET(request: Request) {
         });
       }
 
+        })(),
+
+        (async () => {
       // quote_response (addQuoteResponseEvents): UN EVENTO PER PREVENTIVO con
       // titolo Accettato/Rifiutato e body 'cliente - #numero - EUR importo'.
       if (prefs.quotes && can(perms, "quotes.manage")) {
@@ -235,6 +248,9 @@ export async function GET(request: Request) {
         }
       }
 
+        })(),
+
+        (async () => {
       // installment_due (addInstallmentEvents): gruppi con anteprima 2, max 4,
       // key con conteggio+date_label (ri-notifica al cambio), body testo + 1a riga.
       if (prefs.installments && can(perms, "installments.manage")) {
@@ -254,6 +270,9 @@ export async function GET(request: Request) {
         }
       }
 
+        })(),
+
+        (async () => {
       // client_birthday (addBirthdayEvent): singolo evento, testi verbatim,
       // gate canAny come il legacy (clients/schede/consensi).
       if (prefs.birthdays && canAny(perms, ["clients.manage", "client_sheets.manage", "client_consents.manage"])) {
@@ -279,6 +298,9 @@ export async function GET(request: Request) {
         }
       }
 
+        })(),
+
+        (async () => {
       // fidelity_card (addFidelityCardEvents, tipo SINGOLARE): gruppi anteprima
       // 2, max 4, body testo + primo cliente.
       if (prefs.fidelity_cards && can(perms, "fidelity.membership")) {
@@ -300,6 +322,9 @@ export async function GET(request: Request) {
         }
       }
 
+        })(),
+      ]);
+
       // Ordinamento legacy: created_at desc, poi key desc; slice al limit.
       const events = Array.from(byKey.values())
         .sort((a, b) => b._ts - a._ts || b.key.localeCompare(a.key))
@@ -309,12 +334,7 @@ export async function GET(request: Request) {
       // Payload legacy (BrowserNotifications::feed 82-90): metadati + il
       // notificationSummary MERGIATO — il poller topbar aggiorna i badge
       // direttamente dalla risposta del feed (renderCounts(data)).
-      const summary = await getNotificationSummary(
-        tenantSlug,
-        session.user,
-        loc,
-        locationContext.needsLocationSelection,
-      );
+      const summary = await summaryP;
       return Response.json({
         ok: true,
         generated_at: new Date().toISOString(),

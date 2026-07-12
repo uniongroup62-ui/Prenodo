@@ -297,19 +297,15 @@ export async function getNotificationSummary(
 
   const summary: ShellNotificationSummary = { ...EMPTY_SUMMARY };
 
-  summary.appointments = await countPendingAppointments(slug, currentLocationId);
-
-  if (can(user.perms, "quotes.manage")) {
-    summary.quotes = await countUnseenQuoteDecisions(slug, currentLocationId);
-  }
-  if (can(user.perms, "installments.manage")) {
-    summary.installments = await countInstallmentDueAlertGroups(slug, currentLocationId);
-  }
-  if (canAny(user.perms, ["clients.manage", "client_sheets.manage", "client_consents.manage"])) {
-    summary.birthdays = await countUpcomingBirthdays(slug);
-  }
-
-  summary.fidelity_cards = await countFidelityCardNotifications(slug);
+  // I 5 conteggi sono indipendenti (gate per-permesso invariati): in parallelo —
+  // questo summary è sul percorso del poller (feed/count ogni 5s da ogni scheda).
+  [summary.appointments, summary.quotes, summary.installments, summary.birthdays, summary.fidelity_cards] = await Promise.all([
+    countPendingAppointments(slug, currentLocationId),
+    can(user.perms, "quotes.manage") ? countUnseenQuoteDecisions(slug, currentLocationId) : Promise.resolve(0),
+    can(user.perms, "installments.manage") ? countInstallmentDueAlertGroups(slug, currentLocationId) : Promise.resolve(0),
+    canAny(user.perms, ["clients.manage", "client_sheets.manage", "client_consents.manage"]) ? countUpcomingBirthdays(slug) : Promise.resolve(0),
+    countFidelityCardNotifications(slug),
+  ]);
 
   // Formula legacy (View.php:191): il badge della campanella somma SOLO
   // appuntamenti pending + tessere fidelity; preventivi/rate/compleanni hanno

@@ -23437,82 +23437,106 @@ export async function listNotificationPendingAppointments(slug: string, currentL
   const inIds = ids.map(() => "?").join(",");
   const uniq = (arr: number[]) => Array.from(new Set(arr.filter((n) => n > 0)));
 
-  // Cliente (nome, telefono, email)
+  // I 6 blocchi (clienti, servizi, operatori, sedi, business, decorazioni)
+  // dipendono solo da apptRows/ids: in parallelo — questa lista è sul percorso
+  // del poller (feed ogni 5s) oltre che di action=pending.
   const clientById = new Map<number, { name: string; phone: string; email: string }>();
-  const clientIds = uniq(apptRows.map((r) => Number(r.client_id)));
-  if (clientIds.length) {
-    const rows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, full_name, phone, email", where: `id IN (${clientIds.map(() => "?").join(",")})`, params: clientIds }).catch(() => [] as RowDataPacket[]);
-    for (const r of rows) clientById.set(Number(r.id), { name: String(r.full_name ?? ""), phone: String(r.phone ?? ""), email: String(r.email ?? "") });
-  }
-
-  // Servizi per appuntamento (nomi + totale) da appointment_services. Come la
-  // SELECT legacy (notifications.php 166-173): SUM(price*qty) SENZA clamp (qty
-  // 0 → contributo 0; righe con price/qty NULL non contribuiscono e se TUTTE le
-  // righe sono NULL il totale ricade sul prezzo del servizio primario, come
-  // COALESCE(svc.total_price, s.price, 0)); nomi DISTINTI ORDINATI
-  // (GROUP_CONCAT DISTINCT ... ORDER BY name).
   const svcNameById = new Map<number, string>();
   const svcPriceById = new Map<number, number>();
   const svcByAppt = new Map<number, { names: string[]; total: number | null }>();
-  const apsRows = await tenantSelect<RowDataPacket>({ slug, table: "appointment_services", columns: "appointment_id, service_id, price, qty", where: `appointment_id IN (${inIds})`, params: ids }).catch(() => [] as RowDataPacket[]);
-  const allSvcIds = uniq([...apsRows.map((r) => Number(r.service_id)), ...apptRows.map((r) => Number(r.service_id))]);
-  if (allSvcIds.length) {
-    const rows = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, name, price", where: `id IN (${allSvcIds.map(() => "?").join(",")})`, params: allSvcIds }).catch(() => [] as RowDataPacket[]);
-    for (const r of rows) {
-      svcNameById.set(Number(r.id), String(r.name ?? ""));
-      svcPriceById.set(Number(r.id), Number(r.price ?? 0));
-    }
-  }
-  for (const r of apsRows) {
-    const aid = Number(r.appointment_id);
-    if (!svcByAppt.has(aid)) svcByAppt.set(aid, { names: [], total: null });
-    const e = svcByAppt.get(aid)!;
-    const nm = svcNameById.get(Number(r.service_id)) ?? "";
-    if (nm && !e.names.includes(nm)) e.names.push(nm);
-    if (r.price !== null && r.price !== undefined && r.qty !== null && r.qty !== undefined) {
-      e.total = (e.total ?? 0) + Number(r.price) * Number(r.qty);
-    }
-  }
-  for (const e of svcByAppt.values()) e.names.sort((a, b) => a.localeCompare(b));
-
-  // Operatori per appuntamento (nomi/telefoni/email) da appointment_staff+staff
+  let apsRows: RowDataPacket[] = [];
   const staffByAppt = new Map<number, { names: string[]; phones: string[]; emails: string[] }>();
-  const astRows = await tenantSelect<RowDataPacket>({ slug, table: "appointment_staff", columns: "appointment_id, staff_id", where: `appointment_id IN (${inIds})`, params: ids }).catch(() => [] as RowDataPacket[]);
-  const staffById = new Map<number, { name: string; phone: string; email: string }>();
-  const staffIds = uniq(astRows.map((r) => Number(r.staff_id)));
-  if (staffIds.length) {
-    const rows = await tenantSelect<RowDataPacket>({ slug, table: "staff", columns: "id, full_name, phone, email", where: `id IN (${staffIds.map(() => "?").join(",")})`, params: staffIds }).catch(() => [] as RowDataPacket[]);
-    for (const r of rows) staffById.set(Number(r.id), { name: String(r.full_name ?? ""), phone: String(r.phone ?? ""), email: String(r.email ?? "") });
-  }
-  for (const r of astRows) {
-    const aid = Number(r.appointment_id);
-    const st = staffById.get(Number(r.staff_id));
-    if (!st) continue;
-    if (!staffByAppt.has(aid)) staffByAppt.set(aid, { names: [], phones: [], emails: [] });
-    const e = staffByAppt.get(aid)!;
-    if (st.name && !e.names.includes(st.name)) e.names.push(st.name);
-    if (st.phone && !e.phones.includes(st.phone)) e.phones.push(st.phone);
-    if (st.email && !e.emails.includes(st.email)) e.emails.push(st.email);
-  }
-  // GROUP_CONCAT DISTINCT ... ORDER BY: nomi/telefoni/email ordinati.
-  for (const e of staffByAppt.values()) {
-    e.names.sort((a, b) => a.localeCompare(b));
-    e.phones.sort((a, b) => a.localeCompare(b));
-    e.emails.sort((a, b) => a.localeCompare(b));
-  }
-
-  // Sedi (riga completa: l'indirizzo mostrato è quello COMPOSTO da
-  // app_location_full_address — via, [cap città (provincia)] con precedenza
-  // ai campi legal_*) + fallback business (name/address).
   const locById = new Map<number, RowDataPacket>();
-  const locIds = uniq([...apptRows.map((r) => Number(r.location_id)), currentLocationId]);
-  if (locIds.length) {
-    const rows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "*", where: `id IN (${locIds.map(() => "?").join(",")})`, params: locIds }).catch(() => [] as RowDataPacket[]);
-    for (const r of rows) locById.set(Number(r.id), r);
-  }
-  const bizRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "name, address", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
-  const bizName = String(bizRows[0]?.name ?? "");
-  const bizAddress = String(bizRows[0]?.address ?? "");
+  let bizName = "";
+  let bizAddress = "";
+  let decorations = new Map<number, { packageSummary: string; prepaidSummary: string; staffColor: string }>();
+
+  await Promise.all([
+    // Cliente (nome, telefono, email)
+    (async () => {
+      const clientIds = uniq(apptRows.map((r) => Number(r.client_id)));
+      if (!clientIds.length) return;
+      const rows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, full_name, phone, email", where: `id IN (${clientIds.map(() => "?").join(",")})`, params: clientIds }).catch(() => [] as RowDataPacket[]);
+      for (const r of rows) clientById.set(Number(r.id), { name: String(r.full_name ?? ""), phone: String(r.phone ?? ""), email: String(r.email ?? "") });
+    })(),
+
+    // Servizi per appuntamento (nomi + totale) da appointment_services. Come la
+    // SELECT legacy (notifications.php 166-173): SUM(price*qty) SENZA clamp (qty
+    // 0 → contributo 0; righe con price/qty NULL non contribuiscono e se TUTTE le
+    // righe sono NULL il totale ricade sul prezzo del servizio primario, come
+    // COALESCE(svc.total_price, s.price, 0)); nomi DISTINTI ORDINATI
+    // (GROUP_CONCAT DISTINCT ... ORDER BY name).
+    (async () => {
+      apsRows = await tenantSelect<RowDataPacket>({ slug, table: "appointment_services", columns: "appointment_id, service_id, price, qty", where: `appointment_id IN (${inIds})`, params: ids }).catch(() => [] as RowDataPacket[]);
+      const allSvcIds = uniq([...apsRows.map((r) => Number(r.service_id)), ...apptRows.map((r) => Number(r.service_id))]);
+      if (allSvcIds.length) {
+        const rows = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, name, price", where: `id IN (${allSvcIds.map(() => "?").join(",")})`, params: allSvcIds }).catch(() => [] as RowDataPacket[]);
+        for (const r of rows) {
+          svcNameById.set(Number(r.id), String(r.name ?? ""));
+          svcPriceById.set(Number(r.id), Number(r.price ?? 0));
+        }
+      }
+      for (const r of apsRows) {
+        const aid = Number(r.appointment_id);
+        if (!svcByAppt.has(aid)) svcByAppt.set(aid, { names: [], total: null });
+        const e = svcByAppt.get(aid)!;
+        const nm = svcNameById.get(Number(r.service_id)) ?? "";
+        if (nm && !e.names.includes(nm)) e.names.push(nm);
+        if (r.price !== null && r.price !== undefined && r.qty !== null && r.qty !== undefined) {
+          e.total = (e.total ?? 0) + Number(r.price) * Number(r.qty);
+        }
+      }
+      for (const e of svcByAppt.values()) e.names.sort((a, b) => a.localeCompare(b));
+    })(),
+
+    // Operatori per appuntamento (nomi/telefoni/email) da appointment_staff+staff
+    (async () => {
+      const astRows = await tenantSelect<RowDataPacket>({ slug, table: "appointment_staff", columns: "appointment_id, staff_id", where: `appointment_id IN (${inIds})`, params: ids }).catch(() => [] as RowDataPacket[]);
+      const staffById = new Map<number, { name: string; phone: string; email: string }>();
+      const staffIds = uniq(astRows.map((r) => Number(r.staff_id)));
+      if (staffIds.length) {
+        const rows = await tenantSelect<RowDataPacket>({ slug, table: "staff", columns: "id, full_name, phone, email", where: `id IN (${staffIds.map(() => "?").join(",")})`, params: staffIds }).catch(() => [] as RowDataPacket[]);
+        for (const r of rows) staffById.set(Number(r.id), { name: String(r.full_name ?? ""), phone: String(r.phone ?? ""), email: String(r.email ?? "") });
+      }
+      for (const r of astRows) {
+        const aid = Number(r.appointment_id);
+        const st = staffById.get(Number(r.staff_id));
+        if (!st) continue;
+        if (!staffByAppt.has(aid)) staffByAppt.set(aid, { names: [], phones: [], emails: [] });
+        const e = staffByAppt.get(aid)!;
+        if (st.name && !e.names.includes(st.name)) e.names.push(st.name);
+        if (st.phone && !e.phones.includes(st.phone)) e.phones.push(st.phone);
+        if (st.email && !e.emails.includes(st.email)) e.emails.push(st.email);
+      }
+      // GROUP_CONCAT DISTINCT ... ORDER BY: nomi/telefoni/email ordinati.
+      for (const e of staffByAppt.values()) {
+        e.names.sort((a, b) => a.localeCompare(b));
+        e.phones.sort((a, b) => a.localeCompare(b));
+        e.emails.sort((a, b) => a.localeCompare(b));
+      }
+    })(),
+
+    // Sedi (riga completa: l'indirizzo mostrato è quello COMPOSTO da
+    // app_location_full_address — via, [cap città (provincia)] con precedenza
+    // ai campi legal_*) + fallback business (name/address).
+    (async () => {
+      const locIds = uniq([...apptRows.map((r) => Number(r.location_id)), currentLocationId]);
+      if (!locIds.length) return;
+      const rows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "*", where: `id IN (${locIds.map(() => "?").join(",")})`, params: locIds }).catch(() => [] as RowDataPacket[]);
+      for (const r of rows) locById.set(Number(r.id), r);
+    })(),
+
+    (async () => {
+      const bizRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "name, address", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
+      bizName = String(bizRows[0]?.name ?? "");
+      bizAddress = String(bizRows[0]?.address ?? "");
+    })(),
+
+    (async () => {
+      decorations = await appointmentListDecorations(slug, ids).catch(() => new Map<number, { packageSummary: string; prepaidSummary: string; staffColor: string }>());
+    })(),
+  ]);
+
   const currentLocRow = currentLocationId > 0 ? locById.get(currentLocationId) : undefined;
   // app_location_full_address (Helpers.php 852-865).
   const locationFullAddress = (row: RowDataPacket | undefined, fallbackAddress: string): string => {
@@ -23525,8 +23549,6 @@ export async function listNotificationPendingAppointments(slug: string, currentL
     if (province !== "") cityLine = `${cityLine} (${province})`.trim();
     return [address, cityLine].filter((p) => p.trim() !== "").join(", ").trim();
   };
-
-  const decorations = await appointmentListDecorations(slug, ids).catch(() => new Map<number, { packageSummary: string; prepaidSummary: string; staffColor: string }>());
 
   // RICALCOLO coupon dal motore (notifications.php 253-258): nota con SOLO il
   // codice (senza riga 'Sconto coupon') -> coupon_get_valid (find + validate
