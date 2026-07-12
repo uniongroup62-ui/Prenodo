@@ -135,11 +135,12 @@ export function MarketplaceAccountNav({ returnPath = "/attivita" }: { returnPath
           </svg>
         </button>
         <div className="marketplace-account-menu marketplace-account-menu--public" role="menu" hidden={!open} data-marketplace-account-panel>
-          <a role="menuitem" href={`/account/login?return=${ret}`}>
-            Accedi
-          </a>
-          <a role="menuitem" href={`/account/register?return=${ret}`}>
-            Registrati
+          {/* Flusso alla Fresha (scelta utente 2026-07-12): un solo ingresso
+              che porta al selettore /login (clienti vs professionisti); il
+              return prosegue fino al login cliente. I flussi CONTESTUALI
+              (gate del wizard, next=) restano diretti su /account/login. */}
+          <a role="menuitem" href={`/login?return=${ret}`}>
+            Accedi o registrati
           </a>
         </div>
       </div>

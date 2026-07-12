@@ -31,7 +31,17 @@ const STYLE = `
 .login-choice-foot a:hover{text-decoration:underline}
 `;
 
-export default function LoginChoicePage() {
+export default async function LoginChoicePage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  // Propaga il return alla card CLIENTI e al Registrati (il login cliente lo
+  // preserva già sui suoi link); solo path relativi, mai URL esterni.
+  const query = (await searchParams) ?? {};
+  const rawReturn = query.return;
+  const ret = String(Array.isArray(rawReturn) ? rawReturn[0] ?? "" : rawReturn ?? "");
+  const returnQs = ret.startsWith("/") && !ret.startsWith("//") ? `?return=${encodeURIComponent(ret)}` : "";
   return (
     <div className="login-choice-page">
       <style dangerouslySetInnerHTML={{ __html: STYLE }} />
@@ -42,7 +52,7 @@ export default function LoginChoicePage() {
       <h1 className="login-choice-title">Come vuoi accedere?</h1>
       <p className="login-choice-subtitle">Scegli l&apos;area giusta per te.</p>
       <div className="login-choice-cards">
-        <Link className="login-choice-card" href="/account/login">
+        <Link className="login-choice-card" href={`/account/login${returnQs}`}>
           <span className="login-choice-card__text">
             <span className="login-choice-card__title">Prenodo per i clienti</span>
             <span className="login-choice-card__desc">Prenota saloni e centri estetici vicino a te</span>
@@ -58,7 +68,7 @@ export default function LoginChoicePage() {
         </Link>
       </div>
       <p className="login-choice-foot">
-        Non hai un account? <Link href="/account/register">Registrati come cliente</Link>
+        Non hai un account? <Link href={`/account/register${returnQs}`}>Registrati come cliente</Link>
       </p>
     </div>
   );

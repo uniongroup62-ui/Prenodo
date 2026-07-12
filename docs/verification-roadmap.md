@@ -9,9 +9,13 @@ Fresha con le 2 card). Implementato:
   per i professionisti' (Gestisci e fai crescere la tua attività ->
   /manage/login) + link Registrati; palette coerente col marketplace
   (#4e6da6/#0f172a/#64748b/#dbe3ef), card bianche 16px con hover.
-- Voce 'Sei un professionista?' nel menu topbar: aggiunta e poi RIMOSSA su
-  indicazione utente (allineamento pieno al pattern Fresha: il selettore
-  /login è l'unico instradamento; menu pubblico invariato Accedi/Registrati).
+- Menu topbar pubblico (evoluzione su scelta utente, flusso Fresha PURO):
+  una sola voce 'Accedi o registrati' -> /login?return=<pagina>; il
+  selettore propaga il return alla card clienti (/account/login?return=) e
+  al link Registrati; card professionisti -> /manage/login. I flussi
+  CONTESTUALI (gate del wizard start=1, next=hub/my) restano DIRETTI su
+  /account/login?tenant&next (verificato 307 invariato): chi sta prenotando
+  non passa dal selettore, come Fresha nel funnel.
 Superficie NUOVA a livello piattaforma: i due login esistenti restano
 invariati (nessun impatto sulla parità 1:1 delle pagine portate).
 Verificato headless: entrambe le card navigano correttamente, voce menu
