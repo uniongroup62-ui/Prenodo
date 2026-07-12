@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useMarketplacePageEffects } from "@/components/public/marketplace-shared";
 import { accountAuthDestination } from "@/components/public/account-auth-destination";
+import { MODERN_AUTH_STYLE } from "@/components/public/modern-auth-style";
 
 // Pixel-faithful port of the legacy PHP public CUSTOMER ACCOUNT login page
 // served at http://localhost/account/login (public_customer_accounts /
@@ -95,6 +96,7 @@ export function AccountLoginFaithful() {
   const [returnTarget, setReturnTarget] = useState("/attivita");
   const [tenant, setTenant] = useState("");
   const [locationId, setLocationId] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -185,9 +187,11 @@ export function AccountLoginFaithful() {
       <link rel="stylesheet" href="/assets/css/app.css" />
       <link rel="stylesheet" href="/assets/css/pages/public_account.css" />
       <style dangerouslySetInnerHTML={{ __html: TOPBAR_STYLE }} />
+      {/* Restyle moderno (scelta utente 2026-07-12): SOLO PELLE, vedi modern-auth-style.ts */}
+      <style dangerouslySetInnerHTML={{ __html: MODERN_AUTH_STYLE }} />
 
       <div className="account-page account-page--auth">
-        <a className="auth-back" href="/attivita" aria-label="Torna alla home" title="Torna alla home">
+        <a className="auth-back" href="/login" aria-label="Torna alla scelta di accesso" title="Torna alla scelta di accesso">
           &larr;
         </a>
         <header
@@ -203,8 +207,8 @@ export function AccountLoginFaithful() {
         >
           <div className="marketplace-topbar__inner">
             <a className="marketplace-topbar__brand" href="/attivita">
-              <span className="marketplace-topbar__brand-mark">B</span>
-              <span>BeautySuite</span>
+              <span className="marketplace-topbar__brand-mark">P</span>
+              <span>Prenodo</span>
             </a>
             <form
               className="marketplace-topbar-search"
@@ -363,8 +367,8 @@ export function AccountLoginFaithful() {
         <main className="account-main account-main--auth-flow">
           <div className="auth-stack">
             <a className="auth-brand" href="/attivita">
-              <span className="brand-mark">B</span>
-              <span>BeautySuite</span>
+              <span className="brand-mark">P</span>
+              <span>Prenodo</span>
             </a>
             <section className="auth-card">
               <p className="eyebrow">Account cliente</p>
@@ -383,10 +387,33 @@ export function AccountLoginFaithful() {
                   Email <input type="email" name="email" autoComplete="email" required defaultValue="" />
                 </label>
                 <label>
-                  Password <input type="password" name="password" autoComplete="current-password" required />
+                  Password
+                  <span className="pw-field">
+                    <input type={showPassword ? "text" : "password"} name="password" autoComplete="current-password" required />
+                    <button
+                      type="button"
+                      className="pw-toggle"
+                      aria-label={showPassword ? "Nascondi password" : "Mostra password"}
+                      onClick={() => setShowPassword((v) => !v)}
+                    >
+                      {/* SVG inline: bootstrap-icons non è caricato su questa pagina. */}
+                      {showPassword ? (
+                        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 10 8 10 8a13.16 13.16 0 0 1-1.67 2.68" />
+                          <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 8 10 8a9.74 9.74 0 0 0 5.39-1.61" />
+                          <line x1="2" y1="2" x2="22" y2="22" />
+                        </svg>
+                      ) : (
+                        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M2 12s3-8 10-8 10 8 10 8-3 8-10 8-10-8-10-8Z" />
+                          <circle cx="12" cy="12" r="3" />
+                        </svg>
+                      )}
+                    </button>
+                  </span>
                 </label>
                 <button className="auth-submit" type="submit" disabled={busy}>
-                  Accedi
+                  {busy ? "Accesso in corso…" : "Accedi"}
                 </button>
               </form>
               <div className="links">

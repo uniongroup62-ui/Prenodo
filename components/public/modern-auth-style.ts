@@ -1,0 +1,35 @@
+// Restyle moderno delle pagine auth cliente (scelta utente 2026-07-12):
+// SOLO PELLE — override CSS scoped su .account-page--auth: card centrata stile
+// Fresha (aside promozionale e search topbar nascosti), input alti con focus
+// ring brand, bottone 48px, toggle password. Logica/markup di form invariati.
+// Condiviso da account-login-faithful e account-register-faithful (e pagine
+// sorelle forgot/reset/verify se adottano lo stesso guscio).
+export const MODERN_AUTH_STYLE = `
+.account-page--auth{background:#f8fafc;min-height:100vh}
+.account-page--auth .marketplace-topbar-search{display:none}
+.account-page--auth .visual-card{display:none}
+.account-page--auth .account-main--auth-flow{display:flex;justify-content:center;align-items:flex-start;padding:48px 24px 64px;max-width:none}
+.account-page--auth .auth-stack{width:min(440px,100%);margin:0;display:flex;flex-direction:column;align-items:center;gap:26px}
+.account-page--auth .auth-brand{display:flex;align-items:center;gap:12px;font-size:20px;font-weight:600;color:#0f172a;text-decoration:none}
+.account-page--auth .auth-brand .brand-mark{width:40px;height:40px;border-radius:12px;background:#4e6da6;color:#fff;display:grid;place-items:center;font-weight:600;font-size:18px}
+.account-page--auth .auth-card{width:100%;background:#fff;border:1px solid #e2e8f0;border-radius:18px;box-shadow:0 10px 34px rgba(15,23,42,.06);padding:34px 32px 30px}
+.account-page--auth .auth-card .eyebrow{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#4e6da6;margin:0 0 8px}
+.account-page--auth .auth-card h1{font-size:24px;font-weight:700;color:#0f172a;margin:0 0 6px}
+.account-page--auth .auth-card .lead{font-size:14px;color:#64748b;margin:0 0 22px;line-height:1.5}
+.account-page--auth .auth-card .form label{display:flex;flex-direction:column;gap:7px;font-size:13px;font-weight:600;color:#334155;margin-bottom:16px}
+.account-page--auth .auth-card .form input[type="email"],.account-page--auth .auth-card .form input[type="password"],.account-page--auth .auth-card .form input[type="text"],.account-page--auth .auth-card .form input[type="tel"]{height:50px;border:1px solid #dbe3ef;border-radius:12px;padding:0 16px;font-size:15px;color:#0f172a;background:#fff;transition:border-color .15s ease,box-shadow .15s ease;width:100%}
+.account-page--auth .auth-card .form input:focus{outline:none;border-color:#4e6da6;box-shadow:0 0 0 4px rgba(78,109,166,.14)}
+.account-page--auth .auth-card .form .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.account-page--auth .auth-card .pw-field{position:relative;display:flex;align-items:center}
+.account-page--auth .auth-card .pw-field input{padding-right:48px}
+.account-page--auth .auth-card .pw-toggle{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:38px;height:38px;border:0;border-radius:10px;background:transparent;color:#64748b;display:grid;place-items:center;cursor:pointer;font-size:17px}
+.account-page--auth .auth-card .pw-toggle:hover{background:#eef4ff;color:#365287}
+.account-page--auth .auth-card .auth-submit{width:100%;height:48px;border:0;border-radius:12px;background:#4e6da6;color:#fff;font-size:15px;font-weight:700;cursor:pointer;margin-top:6px;transition:background .15s ease,box-shadow .15s ease}
+.account-page--auth .auth-card .auth-submit:hover:not(:disabled){background:#365287;box-shadow:0 8px 22px rgba(78,109,166,.28)}
+.account-page--auth .auth-card .auth-submit:disabled{opacity:.65;cursor:default}
+.account-page--auth .auth-card .links{display:flex;justify-content:center;gap:12px;margin-top:20px;font-size:14px}
+.account-page--auth .auth-card .links a{color:#4e6da6;font-weight:600;text-decoration:none}
+.account-page--auth .auth-card .links a:hover{text-decoration:underline}
+.account-page--auth .auth-card .links span{color:#cbd5e1}
+.account-page--auth .auth-card .alert{background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;border-radius:12px;padding:12px 14px;font-size:14px;margin-bottom:16px}
+`;

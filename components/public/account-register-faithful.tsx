@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useMarketplacePageEffects } from "@/components/public/marketplace-shared";
 import { accountAuthDestination } from "@/components/public/account-auth-destination";
+import { MODERN_AUTH_STYLE } from "@/components/public/modern-auth-style";
 
 // Pixel-faithful port of the legacy PHP public CUSTOMER ACCOUNT register page
 // served at http://localhost/account/register (public_customer_accounts /
@@ -190,9 +191,11 @@ export function AccountRegisterFaithful() {
       <link rel="stylesheet" href="/assets/css/app.css" />
       <link rel="stylesheet" href="/assets/css/pages/public_account.css" />
       <style dangerouslySetInnerHTML={{ __html: TOPBAR_STYLE }} />
+      {/* Restyle moderno (scelta utente 2026-07-12): SOLO PELLE, vedi modern-auth-style.ts */}
+      <style dangerouslySetInnerHTML={{ __html: MODERN_AUTH_STYLE }} />
 
       <div className="account-page account-page--auth">
-        <a className="auth-back" href="/attivita" aria-label="Torna alla home" title="Torna alla home">
+        <a className="auth-back" href="/login" aria-label="Torna alla scelta di accesso" title="Torna alla scelta di accesso">
           &larr;
         </a>
         <header
@@ -208,8 +211,8 @@ export function AccountRegisterFaithful() {
         >
           <div className="marketplace-topbar__inner">
             <a className="marketplace-topbar__brand" href="/attivita">
-              <span className="marketplace-topbar__brand-mark">B</span>
-              <span>BeautySuite</span>
+              <span className="marketplace-topbar__brand-mark">P</span>
+              <span>Prenodo</span>
             </a>
             <form
               className="marketplace-topbar-search"
@@ -368,8 +371,8 @@ export function AccountRegisterFaithful() {
         <main className="account-main account-main--auth-flow">
           <div className="auth-stack">
             <a className="auth-brand" href="/attivita">
-              <span className="brand-mark">B</span>
-              <span>BeautySuite</span>
+              <span className="brand-mark">P</span>
+              <span>Prenodo</span>
             </a>
             <section className="auth-card">
               <p className="eyebrow">Account cliente</p>
@@ -410,7 +413,7 @@ export function AccountRegisterFaithful() {
                   </label>
                 </div>
                 <button className="auth-submit" type="submit" disabled={busy}>
-                  Crea account
+                  {busy ? "Creazione in corso…" : "Crea account"}
                 </button>
               </form>
               <div className="links">
