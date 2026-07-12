@@ -59,8 +59,8 @@ export const MODERN_CUSTOMER_PHOTO_AUTH_STYLE = MODERN_AUTH_FORM_STYLE + `
 .account-page--auth .auth-photo-quote p{font-size:22px;font-weight:700;line-height:1.35;margin:0 0 10px}
 .account-page--auth .auth-photo-quote small{display:block;font-size:13px;font-weight:600;opacity:.92}
 .account-page--auth .auth-photo-quote small + small{font-weight:400;opacity:.75}
-.account-page--auth .account-main--auth-flow{display:flex;justify-content:center;align-items:center;min-height:100vh;padding:48px 24px;margin-left:min(680px,44vw);max-width:none}
-.account-page--auth .auth-stack{width:min(400px,100%);margin:0;display:flex;flex-direction:column;align-items:center;gap:0}
+.account-page--auth .account-main--auth-flow{display:flex;justify-content:center;align-items:center;min-height:100vh;padding:48px 24px;margin-left:min(680px,44vw);max-width:none;box-sizing:border-box}
+.account-page--auth .auth-stack{width:min(400px,100%);margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;min-height:0}
 .account-page--auth .auth-stack > .auth-brand{display:none}
 .account-page--auth .auth-card{width:100%;background:transparent;border:0;box-shadow:none;padding:0}
 .account-page--auth .auth-card .eyebrow{display:none}
