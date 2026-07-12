@@ -12797,3 +12797,37 @@ save/QB), da fare solo con la regressione completa del dominio; (2) legata
 alla (1): la lista ritorna tutte le righe del periodo senza paginazione
 (parity legacy) — con dataset grandi il payload cresce, monitorare;
 plan_context gia' rapido (55-62ms), nessun intervento.
+
+## Appuntamenti — miglioria applicata: prefetch batch di mapAppointment (2026-07-12, sera)
+
+Analisi 'scelta migliore' in 3 tempi: (1) parallelizzare i 4 sub-fetch
+per-riga e le decorazioni lista (3 gruppi indipendenti) ha reso poco
+(721→643ms) perche' il collo NON era la serialita' ma il NUMERO di query
+(~60 per lista) x RTT ~40ms verso il pooler Supabase (session mode,
+pool_size 15, apertura connessione ~350ms — misure con probe pg dirette);
+(2) il refactor scelto e' quindi il BATCH per id-set nella variante a
+rischio contenuto: buildAppointmentsPrefetch (6 query totali: clients IN,
+appointment_services IN, appointment_segments IN con colonne-unione,
+appointment_staff IN, poi services IN + staff IN dipendenti) passato come
+argomento OPZIONALE alle stesse 4 funzioni per-riga — che senza prefetch
+continuano a interrogare da sole (get/save/QB single-row INVARIATI); su
+errore del prefetch la lista ricade al mapping per-riga classico.
+
+Parita' curata nei dettagli: riordino LOCALE per i due consumatori dei
+segmenti (position,starts_at,id vs position,id — ordini diversi nelle due
+query per-riga); name servizi RAW (null conservato: default '' vs
+'Servizio' nei due path); catena ?? di clientName (full_name→email→
+'Cliente'); serviceRowsOk=false replica il salto al fallback service_id del
+try/catch per-riga. UNICA divergenza deliberata: l'operatore primario col
+prefetch e' il primo per staff_id ASC (il fetch per-riga era LIMIT 1 SENZA
+ordine = arbitrario) — ora ALLINEATO al pallino colore della lista che gia'
+sceglieva per staff_id ASC (prima nome e colore potevano disaccordarsi sui
+multi-operatore).
+
+VERIFICA: payload action=list e calendario BYTE-IDENTICI ai golden
+congelati pre-refactor (2020→2030, 9 righe); latenza list 721→486ms
+mediana; regressione COMPLETA dei 4 domini che passano da mapAppointment:
+Appuntamenti 27+13+18+14, Quick Booking 35+21+16+28, Calendario
+48+20+6+33+4, Dashboard 13 (un FAIL era un flake time-of-day della SUITE:
+semina a NOW()+6h che di sera sconfina a domani → offset portati a minuti).
+tsc/eslint puliti.

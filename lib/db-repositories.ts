@@ -1888,7 +1888,10 @@ export async function listDbAppointments({
     orderBy: "starts_at ASC",
   });
 
-  return Promise.all(rows.map((row) => mapAppointment(slug, row)));
+  // Prefetch in blocco (6 query per l'intera lista); su errore imprevisto si
+  // torna al mapping per-riga classico (pre undefined = query per riga).
+  const pre = await buildAppointmentsPrefetch(slug, rows).catch(() => undefined);
+  return Promise.all(rows.map((row) => mapAppointment(slug, row, pre)));
 }
 
 // Optional MULTI-SERVICE inputs shared by create/update. When `serviceNames`
@@ -23016,15 +23019,185 @@ function quoteStatus(status: string): QuoteStatus {
   return "draft";
 }
 
-async function mapAppointment(slug: string, row: RowDataPacket): Promise<AppointmentWithMeta> {
+// Dati PREFETCH per il mapping in blocco di una lista di appuntamenti: 6 query
+// totali (per id-set) al posto dei 4-6 fetch PER RIGA di mapAppointment. Le
+// stesse funzioni per-riga consumano queste mappe quando presenti e continuano
+// a interrogare da sole quando assenti (chiamanti single-row invariati). Con un
+// RTT di ~40ms verso il pooler la lista passava da ~60 query a 6.
+type AppointmentsPrefetch = {
+  clientNameById: Map<number, string>;
+  // false quando la query batch su appointment_services fallisce: le righe
+  // ricadono sul fallback service_id come farebbe il try/catch per-riga.
+  serviceRowsOk: boolean;
+  serviceRowsByAppt: Map<number, RowDataPacket[]>;
+  segRowsByAppt: Map<number, RowDataPacket[]>;
+  primaryStaffIdByAppt: Map<number, number>;
+  // name RAW (null conservato: i due consumatori hanno default diversi,
+  // '' vs 'Servizio').
+  servicesById: Map<number, { name: string | null; price: number }>;
+  staffById: Map<number, { name: string; color: string }>;
+};
+
+async function buildAppointmentsPrefetch(slug: string, rows: RowDataPacket[]): Promise<AppointmentsPrefetch> {
+  const pre: AppointmentsPrefetch = {
+    clientNameById: new Map(),
+    serviceRowsOk: true,
+    serviceRowsByAppt: new Map(),
+    segRowsByAppt: new Map(),
+    primaryStaffIdByAppt: new Map(),
+    servicesById: new Map(),
+    staffById: new Map(),
+  };
+  const ids = [...new Set(rows.map((r) => Number(r.id ?? 0)).filter((n) => n > 0))];
+  if (!ids.length) return pre;
+  const inList = ids.map(() => "?").join(",");
+  const clientIds = [...new Set(rows.map((r) => Number(r.client_id ?? 0)).filter((n) => n > 0))];
+
+  await Promise.all([
+    (async () => {
+      if (!clientIds.length) return;
+      try {
+        const rs = await tenantSelect<RowDataPacket>({
+          slug,
+          table: "clients",
+          columns: "id, full_name, email",
+          where: `id IN (${clientIds.map(() => "?").join(",")})`,
+          params: clientIds,
+        });
+        // Stessa catena ?? di appointmentClientName (full_name -> email -> 'Cliente').
+        for (const r of rs) pre.clientNameById.set(Number(r.id), String(r.full_name ?? r.email ?? "Cliente"));
+      } catch {
+        // mappa vuota -> 'Cliente' per tutti, come il catch per-riga
+      }
+    })(),
+    (async () => {
+      try {
+        const rs = await tenantSelect<RowDataPacket>({
+          slug,
+          table: "appointment_services",
+          columns: "appointment_id, service_id, service_name, price",
+          where: `appointment_id IN (${inList})`,
+          params: ids,
+          // Stesso ordine del fetch per-riga (service_id ASC) dentro ogni gruppo.
+          orderBy: "appointment_id ASC, service_id ASC",
+        });
+        for (const r of rs) {
+          const aid = Number(r.appointment_id ?? 0);
+          if (!pre.serviceRowsByAppt.has(aid)) pre.serviceRowsByAppt.set(aid, []);
+          pre.serviceRowsByAppt.get(aid)!.push(r);
+        }
+      } catch {
+        pre.serviceRowsOk = false;
+      }
+    })(),
+    (async () => {
+      try {
+        const rs = await tenantSelect<RowDataPacket>({
+          slug,
+          table: "appointment_segments",
+          // Unione delle colonne dei due consumatori (serviceLines + segments calendario).
+          columns: "id, appointment_id, service_id, service_name, position, starts_at, ends_at, staff_id",
+          where: `appointment_id IN (${inList})`,
+          params: ids,
+          orderBy: "appointment_id ASC, position ASC, id ASC",
+        });
+        for (const r of rs) {
+          const aid = Number(r.appointment_id ?? 0);
+          if (!pre.segRowsByAppt.has(aid)) pre.segRowsByAppt.set(aid, []);
+          pre.segRowsByAppt.get(aid)!.push(r);
+        }
+      } catch {
+        // mappa vuota, come il catch -> [] per-riga
+      }
+    })(),
+    (async () => {
+      try {
+        const rs = await tenantSelect<RowDataPacket>({
+          slug,
+          table: "appointment_staff",
+          columns: "appointment_id, staff_id",
+          where: `appointment_id IN (${inList})`,
+          params: ids,
+          // Primo per staff_id ASC: allineato al pallino colore della lista
+          // (appointmentListDecorations). Il fetch per-riga era LIMIT 1 senza
+          // ordine (arbitrario) — qui diventa deterministico.
+          orderBy: "appointment_id ASC, staff_id ASC",
+        });
+        for (const r of rs) {
+          const aid = Number(r.appointment_id ?? 0);
+          const sid = Number(r.staff_id ?? 0);
+          if (aid > 0 && sid > 0 && !pre.primaryStaffIdByAppt.has(aid)) pre.primaryStaffIdByAppt.set(aid, sid);
+        }
+      } catch {
+        // mappa vuota -> {id:0,name:''} per tutti, come il catch per-riga
+      }
+    })(),
+  ]);
+
+  // Seconda ondata (dipendente): servizi citati da segmenti/fallback + operatori.
+  const serviceIds = new Set<number>();
+  for (const segs of pre.segRowsByAppt.values()) for (const s of segs) { const sid = Number(s.service_id ?? 0); if (sid > 0) serviceIds.add(sid); }
+  for (const r of rows) { const sid = Number(r.service_id ?? 0); if (sid > 0) serviceIds.add(sid); }
+  const staffIds = new Set<number>(pre.primaryStaffIdByAppt.values());
+  for (const segs of pre.segRowsByAppt.values()) for (const s of segs) { const sid = Number(s.staff_id ?? 0); if (sid > 0) staffIds.add(sid); }
+
+  await Promise.all([
+    (async () => {
+      if (!serviceIds.size) return;
+      const list = [...serviceIds];
+      try {
+        const rs = await tenantSelect<RowDataPacket>({
+          slug,
+          table: "services",
+          columns: "id, name, price",
+          where: `id IN (${list.map(() => "?").join(",")})`,
+          params: list,
+        });
+        for (const r of rs) pre.servicesById.set(Number(r.id), { name: r.name === null || r.name === undefined ? null : String(r.name), price: Number(r.price ?? 0) });
+      } catch {
+        // mappa vuota -> stessi default dei catch per-riga
+      }
+    })(),
+    (async () => {
+      if (!staffIds.size) return;
+      const list = [...staffIds];
+      try {
+        const rs = await tenantSelect<RowDataPacket>({
+          slug,
+          table: "staff",
+          columns: "id, full_name, calendar_color",
+          where: `id IN (${list.map(() => "?").join(",")})`,
+          params: list,
+        });
+        for (const r of rs) {
+          // Normalizzazione colore legacy (appointments.php 561-563).
+          let color = String(r.calendar_color ?? "").trim();
+          if (color !== "" && color[0] !== "#") color = `#${color}`;
+          pre.staffById.set(Number(r.id), { name: String(r.full_name ?? ""), color: /^#[0-9a-fA-F]{6}$/.test(color) ? color : "" });
+        }
+      } catch {
+        // mappa vuota -> nomi '' come i catch per-riga
+      }
+    })(),
+  ]);
+
+  return pre;
+}
+
+async function mapAppointment(slug: string, row: RowDataPacket, pre?: AppointmentsPrefetch): Promise<AppointmentWithMeta> {
   const appointmentId = Number(row.id ?? 0);
-  const clientName = await appointmentClientName(slug, Number(row.client_id ?? 0));
+  // I 4 sub-fetch sono indipendenti tra loro: in parallelo (prima erano
+  // sequenziali per riga — su una lista il costo si sommava riga per riga).
   // Full ordered service list (one per appointment_services row) for the multi-service
   // parent/child rendering. The primary (first) line drives the existing single-line
   // `service`/`price` summary so the row is unchanged for single-service appointments.
-  const serviceLines = await appointmentServiceLines(slug, row);
+  const [clientName, serviceLines, staffRef, segments] = await Promise.all([
+    appointmentClientName(slug, Number(row.client_id ?? 0), pre),
+    appointmentServiceLines(slug, row, pre),
+    appointmentStaffRef(slug, appointmentId, pre),
+    appointmentSegmentsForCalendar(slug, appointmentId, pre),
+  ]);
   const primary = serviceLines[0] ?? { serviceId: 0, name: "Servizio", price: 0 };
-  const staffRef = await appointmentStaffRef(slug, appointmentId);
   const startsAt = toDate(row.starts_at);
   // End time HH:MM (additive) so the calendar can render a block at its real
   // persisted duration; null/missing ends_at leaves it undefined (the grid then
@@ -23059,7 +23232,7 @@ async function mapAppointment(slug: string, row: RowDataPacket): Promise<Appoint
     // ("↳ HH:MM → HH:MM" + operatore col pallino colore).
     services: serviceLines.map((line) => ({ serviceId: line.serviceId, name: line.name, price: `${roundMoney(line.price)} euro`, segmentId: line.segmentId ?? null, time: line.time, endTime: line.endTime, staffName: line.staffName, staffColor: line.staffColor })),
     // Per-operator segments for the Day calendar (only when >1 distinct operator).
-    segments: await appointmentSegmentsForCalendar(slug, appointmentId),
+    segments,
   };
 }
 
@@ -23084,104 +23257,114 @@ export async function appointmentListDecorations(
   };
   const inList = ids.map(() => "?").join(",");
 
-  // Pacchetti collegati.
-  try {
-    const linkRows = await tenantSelect<RowDataPacket>({
-      slug,
-      table: "appointment_package_items",
-      columns: "appointment_id, client_package_id",
-      where: `appointment_id IN (${inList})`,
-      params: ids,
-      orderBy: "appointment_id ASC, id ASC",
-    });
-    const cpIds = [...new Set(linkRows.map((r) => Number(r.client_package_id ?? 0)).filter((n) => n > 0))];
-    const nameById = new Map<number, string>();
-    if (cpIds.length) {
-      const cpRows = await tenantSelect<RowDataPacket>({
-        slug,
-        table: "client_packages",
-        columns: "id, package_name",
-        where: `id IN (${cpIds.map(() => "?").join(",")})`,
-        params: cpIds,
-      }).catch(() => [] as RowDataPacket[]);
-      for (const r of cpRows) nameById.set(Number(r.id), String(r.package_name ?? "").trim());
-    }
-    const namesByAppointment = new Map<number, Set<string>>();
-    for (const r of linkRows) {
-      const aid = Number(r.appointment_id ?? 0);
-      if (aid <= 0) continue;
-      const cpId = Number(r.client_package_id ?? 0);
-      let name = cpId > 0 ? nameById.get(cpId) ?? "" : "";
-      if (!name) name = cpId > 0 ? `Pacchetto #${cpId}` : "Pacchetto";
-      if (!namesByAppointment.has(aid)) namesByAppointment.set(aid, new Set());
-      namesByAppointment.get(aid)!.add(name);
-    }
-    for (const [aid, set] of namesByAppointment) {
-      const names = [...set];
-      if (!names.length) continue;
-      entry(aid).packageSummary = (names.length > 1 ? "Pacchetti: " : "Pacchetto: ") + names.join(", ");
-    }
-  } catch {
-    // best-effort
-  }
-
-  // Prepagati collegati.
-  try {
-    const rows = await tenantSelect<RowDataPacket>({
-      slug,
-      table: "appointment_prepaid_service_items",
-      columns: "DISTINCT appointment_id",
-      where: `appointment_id IN (${inList})`,
-      params: ids,
-    });
-    for (const r of rows) {
-      const aid = Number(r.appointment_id ?? 0);
-      if (aid > 0) entry(aid).prepaidSummary = "Prepagato";
-    }
-  } catch {
-    // best-effort
-  }
-
-  // Colore operatore (primo appointment_staff per appuntamento).
-  try {
-    const staffLinks = await tenantSelect<RowDataPacket>({
-      slug,
-      table: "appointment_staff",
-      columns: "appointment_id, staff_id",
-      where: `appointment_id IN (${inList})`,
-      params: ids,
-      orderBy: "appointment_id ASC, staff_id ASC",
-    });
-    const firstStaff = new Map<number, number>();
-    for (const r of staffLinks) {
-      const aid = Number(r.appointment_id ?? 0);
-      const sid = Number(r.staff_id ?? 0);
-      if (aid > 0 && sid > 0 && !firstStaff.has(aid)) firstStaff.set(aid, sid);
-    }
-    const staffIds = [...new Set(firstStaff.values())];
-    if (staffIds.length) {
-      const staffRows = await tenantSelect<RowDataPacket>({
-        slug,
-        table: "staff",
-        columns: "id, calendar_color",
-        where: `id IN (${staffIds.map(() => "?").join(",")})`,
-        params: staffIds,
-      }).catch(() => [] as RowDataPacket[]);
-      const colorById = new Map<number, string>();
-      for (const r of staffRows) {
-        // Normalizzazione '#' legacy (appointments.php 561-563) prima della validazione.
-        let color = String(r.calendar_color ?? "").trim();
-        if (color !== "" && color[0] !== "#") color = `#${color}`;
-        if (/^#[0-9a-fA-F]{6}$/.test(color)) colorById.set(Number(r.id), color);
+  // I 3 gruppi (pacchetti/prepagati/colore) scrivono campi diversi e sono
+  // indipendenti: in parallelo (prima erano ~5 round trip seriali).
+  await Promise.all([
+    // Pacchetti collegati.
+    (async () => {
+      try {
+        const linkRows = await tenantSelect<RowDataPacket>({
+          slug,
+          table: "appointment_package_items",
+          columns: "appointment_id, client_package_id",
+          where: `appointment_id IN (${inList})`,
+          params: ids,
+          orderBy: "appointment_id ASC, id ASC",
+        });
+        const cpIds = [...new Set(linkRows.map((r) => Number(r.client_package_id ?? 0)).filter((n) => n > 0))];
+        const nameById = new Map<number, string>();
+        if (cpIds.length) {
+          const cpRows = await tenantSelect<RowDataPacket>({
+            slug,
+            table: "client_packages",
+            columns: "id, package_name",
+            where: `id IN (${cpIds.map(() => "?").join(",")})`,
+            params: cpIds,
+          }).catch(() => [] as RowDataPacket[]);
+          for (const r of cpRows) nameById.set(Number(r.id), String(r.package_name ?? "").trim());
+        }
+        const namesByAppointment = new Map<number, Set<string>>();
+        for (const r of linkRows) {
+          const aid = Number(r.appointment_id ?? 0);
+          if (aid <= 0) continue;
+          const cpId = Number(r.client_package_id ?? 0);
+          let name = cpId > 0 ? nameById.get(cpId) ?? "" : "";
+          if (!name) name = cpId > 0 ? `Pacchetto #${cpId}` : "Pacchetto";
+          if (!namesByAppointment.has(aid)) namesByAppointment.set(aid, new Set());
+          namesByAppointment.get(aid)!.add(name);
+        }
+        for (const [aid, set] of namesByAppointment) {
+          const names = [...set];
+          if (!names.length) continue;
+          entry(aid).packageSummary = (names.length > 1 ? "Pacchetti: " : "Pacchetto: ") + names.join(", ");
+        }
+      } catch {
+        // best-effort
       }
-      for (const [aid, sid] of firstStaff) {
-        const color = colorById.get(sid);
-        if (color) entry(aid).staffColor = color;
+    })(),
+
+    // Prepagati collegati.
+    (async () => {
+      try {
+        const rows = await tenantSelect<RowDataPacket>({
+          slug,
+          table: "appointment_prepaid_service_items",
+          columns: "DISTINCT appointment_id",
+          where: `appointment_id IN (${inList})`,
+          params: ids,
+        });
+        for (const r of rows) {
+          const aid = Number(r.appointment_id ?? 0);
+          if (aid > 0) entry(aid).prepaidSummary = "Prepagato";
+        }
+      } catch {
+        // best-effort
       }
-    }
-  } catch {
-    // best-effort
-  }
+    })(),
+
+    // Colore operatore (primo appointment_staff per appuntamento).
+    (async () => {
+      try {
+        const staffLinks = await tenantSelect<RowDataPacket>({
+          slug,
+          table: "appointment_staff",
+          columns: "appointment_id, staff_id",
+          where: `appointment_id IN (${inList})`,
+          params: ids,
+          orderBy: "appointment_id ASC, staff_id ASC",
+        });
+        const firstStaff = new Map<number, number>();
+        for (const r of staffLinks) {
+          const aid = Number(r.appointment_id ?? 0);
+          const sid = Number(r.staff_id ?? 0);
+          if (aid > 0 && sid > 0 && !firstStaff.has(aid)) firstStaff.set(aid, sid);
+        }
+        const staffIds = [...new Set(firstStaff.values())];
+        if (staffIds.length) {
+          const staffRows = await tenantSelect<RowDataPacket>({
+            slug,
+            table: "staff",
+            columns: "id, calendar_color",
+            where: `id IN (${staffIds.map(() => "?").join(",")})`,
+            params: staffIds,
+          }).catch(() => [] as RowDataPacket[]);
+          const colorById = new Map<number, string>();
+          for (const r of staffRows) {
+            // Normalizzazione '#' legacy (appointments.php 561-563) prima della validazione.
+            let color = String(r.calendar_color ?? "").trim();
+            if (color !== "" && color[0] !== "#") color = `#${color}`;
+            if (/^#[0-9a-fA-F]{6}$/.test(color)) colorById.set(Number(r.id), color);
+          }
+          for (const [aid, sid] of firstStaff) {
+            const color = colorById.get(sid);
+            if (color) entry(aid).staffColor = color;
+          }
+        }
+      } catch {
+        // best-effort
+      }
+    })(),
+  ]);
 
   return out;
 }
@@ -23449,20 +23632,29 @@ export async function listNotificationPendingAppointments(slug: string, currentL
 async function appointmentSegmentsForCalendar(
   slug: string,
   appointmentId: number,
+  pre?: AppointmentsPrefetch,
 ): Promise<AppointmentWithMeta["segments"]> {
   if (appointmentId <= 0) return undefined;
-  const rows = await tenantSelect<RowDataPacket>({
-    slug,
-    table: "appointment_segments",
-    columns: "id, service_id, service_name, staff_id, starts_at, ends_at, position",
-    where: "appointment_id = ?",
-    params: [appointmentId],
-    orderBy: "position ASC, starts_at ASC, id ASC",
-  }).catch(() => [] as RowDataPacket[]);
+  // Col prefetch le righe vengono riordinate localmente con lo STESSO ordine
+  // della query per-riga (position, starts_at, id — i timestamp sono stringhe
+  // uniformi, il confronto lessicografico equivale al cronologico).
+  const rows = pre
+    ? [...(pre.segRowsByAppt.get(appointmentId) ?? [])].sort((a, b) =>
+        (Number(a.position ?? 0) - Number(b.position ?? 0)) ||
+        String(a.starts_at ?? "").localeCompare(String(b.starts_at ?? "")) ||
+        (Number(a.id ?? 0) - Number(b.id ?? 0)))
+    : await tenantSelect<RowDataPacket>({
+        slug,
+        table: "appointment_segments",
+        columns: "id, service_id, service_name, staff_id, starts_at, ends_at, position",
+        where: "appointment_id = ?",
+        params: [appointmentId],
+        orderBy: "position ASC, starts_at ASC, id ASC",
+      }).catch(() => [] as RowDataPacket[]);
   if (rows.length < 2) return undefined;
   const staffIds = [...new Set(rows.map((r) => Number(r.staff_id ?? 0)).filter((n) => n > 0))];
 
-  const staffRows = staffIds.length
+  const staffRows = staffIds.length && !pre
     ? await tenantSelect<RowDataPacket>({
         slug,
         table: "staff",
@@ -23471,7 +23663,9 @@ async function appointmentSegmentsForCalendar(
         params: staffIds,
       }).catch(() => [] as RowDataPacket[])
     : [];
-  const nameById = new Map<number, string>(staffRows.map((r) => [Number(r.id), String(r.full_name ?? "")]));
+  const nameById = pre
+    ? new Map<number, string>(staffIds.map((sid) => [sid, pre.staffById.get(sid)?.name ?? ""]))
+    : new Map<number, string>(staffRows.map((r) => [Number(r.id), String(r.full_name ?? "")]));
 
   return rows.map((r) => ({
     segmentId: Number(r.id ?? 0),
@@ -23492,30 +23686,44 @@ async function appointmentSegmentsForCalendar(
 async function appointmentServiceLines(
   slug: string,
   appointment: RowDataPacket,
+  pre?: AppointmentsPrefetch,
 ): Promise<Array<{ serviceId: number; name: string; price: number; segmentId?: number | null; time?: string; endTime?: string; staffName?: string; staffColor?: string }>> {
   const appointmentId = Number(appointment.id ?? 0);
   try {
-    const serviceRows = await tenantSelect<RowDataPacket>({
-      slug,
-      table: "appointment_services",
-      columns: "service_id, service_name, price",
-      where: "appointment_id = ?",
-      params: [appointmentId],
-      orderBy: "service_id ASC",
-    });
+    // Col prefetch fallito su appointment_services si ricade sul fallback
+    // service_id, come farebbe il try/catch per-riga sull'errore della query.
+    if (pre && !pre.serviceRowsOk) throw new Error("prefetch appointment_services non disponibile");
+    // Snapshot servizi e segmenti sono due letture indipendenti: in parallelo.
     // Segmenti (multi-servizio) ordinati per POSIZIONE: nel legacy ogni SEGMENTO è
     // una riga figlia (con data-seg per il riordino ↑/↓ + "↳ HH:MM → HH:MM" +
     // operatore). Costruiamo una riga PER SEGMENTO (non per service_id) così due
     // segmenti dello STESSO servizio non collidono e ognuno tiene il proprio
     // segmentId/orario/operatore (parità col legacy che raggruppa per segmento).
-    const segRows = await tenantSelect<RowDataPacket>({
-      slug,
-      table: "appointment_segments",
-      columns: "id, service_id, position, starts_at, ends_at, staff_id",
-      where: "appointment_id = ?",
-      params: [appointmentId],
-      orderBy: "position ASC, id ASC",
-    }).catch(() => [] as RowDataPacket[]);
+    const [serviceRows, segRows] = pre
+      ? [
+          pre.serviceRowsByAppt.get(appointmentId) ?? [],
+          // Riordino locale con lo stesso ordine della query per-riga (position, id).
+          [...(pre.segRowsByAppt.get(appointmentId) ?? [])].sort((a, b) =>
+            (Number(a.position ?? 0) - Number(b.position ?? 0)) || (Number(a.id ?? 0) - Number(b.id ?? 0))),
+        ]
+      : await Promise.all([
+          tenantSelect<RowDataPacket>({
+            slug,
+            table: "appointment_services",
+            columns: "service_id, service_name, price",
+            where: "appointment_id = ?",
+            params: [appointmentId],
+            orderBy: "service_id ASC",
+          }),
+          tenantSelect<RowDataPacket>({
+            slug,
+            table: "appointment_segments",
+            columns: "id, service_id, position, starts_at, ends_at, staff_id",
+            where: "appointment_id = ?",
+            params: [appointmentId],
+            orderBy: "position ASC, id ASC",
+          }).catch(() => [] as RowDataPacket[]),
+        ]);
 
     if (segRows.length > 0) {
       // Nome/prezzo per service_id dallo snapshot appointment_services (prima
@@ -23527,32 +23735,47 @@ async function appointmentServiceLines(
       }
       const missingServiceIds = [...new Set(segRows.map((s) => Number(s.service_id ?? 0)).filter((sid) => sid > 0 && !svcMeta.has(sid)))];
       if (missingServiceIds.length) {
-        const svcRows = await tenantSelect<RowDataPacket>({
-          slug,
-          table: "services",
-          columns: "id, name, price",
-          where: `id IN (${missingServiceIds.map(() => "?").join(",")})`,
-          params: missingServiceIds,
-        }).catch(() => [] as RowDataPacket[]);
-        for (const r of svcRows) svcMeta.set(Number(r.id), { name: String(r.name ?? ""), price: Number(r.price ?? 0) });
+        if (pre) {
+          // Stessa semantica della query per-riga: String(name ?? "").
+          for (const sid of missingServiceIds) {
+            const meta = pre.servicesById.get(sid);
+            if (meta) svcMeta.set(sid, { name: String(meta.name ?? ""), price: meta.price });
+          }
+        } else {
+          const svcRows = await tenantSelect<RowDataPacket>({
+            slug,
+            table: "services",
+            columns: "id, name, price",
+            where: `id IN (${missingServiceIds.map(() => "?").join(",")})`,
+            params: missingServiceIds,
+          }).catch(() => [] as RowDataPacket[]);
+          for (const r of svcRows) svcMeta.set(Number(r.id), { name: String(r.name ?? ""), price: Number(r.price ?? 0) });
+        }
       }
       // Nomi + colori operatore dei segmenti (batch): pallino colore legacy.
       const segStaffIds = [...new Set(segRows.map((s) => Number(s.staff_id ?? 0)).filter((n) => n > 0))];
       const segStaffById = new Map<number, { name: string; color: string }>();
       if (segStaffIds.length) {
-        const staffRows = await tenantSelect<RowDataPacket>({
-          slug,
-          table: "staff",
-          columns: "id, full_name, calendar_color",
-          where: `id IN (${segStaffIds.map(() => "?").join(",")})`,
-          params: segStaffIds,
-        }).catch(() => [] as RowDataPacket[]);
-        for (const r of staffRows) {
-          // Normalizzazione colore legacy (appointments.php 561-563): prefisso '#'
-          // quando manca, poi validazione #RRGGBB (altrimenti nessun pallino).
-          let color = String(r.calendar_color ?? "").trim();
-          if (color !== "" && color[0] !== "#") color = `#${color}`;
-          segStaffById.set(Number(r.id), { name: String(r.full_name ?? ""), color: /^#[0-9a-fA-F]{6}$/.test(color) ? color : "" });
+        if (pre) {
+          for (const sid of segStaffIds) {
+            const staff = pre.staffById.get(sid);
+            if (staff) segStaffById.set(sid, staff);
+          }
+        } else {
+          const staffRows = await tenantSelect<RowDataPacket>({
+            slug,
+            table: "staff",
+            columns: "id, full_name, calendar_color",
+            where: `id IN (${segStaffIds.map(() => "?").join(",")})`,
+            params: segStaffIds,
+          }).catch(() => [] as RowDataPacket[]);
+          for (const r of staffRows) {
+            // Normalizzazione colore legacy (appointments.php 561-563): prefisso '#'
+            // quando manca, poi validazione #RRGGBB (altrimenti nessun pallino).
+            let color = String(r.calendar_color ?? "").trim();
+            if (color !== "" && color[0] !== "#") color = `#${color}`;
+            segStaffById.set(Number(r.id), { name: String(r.full_name ?? ""), color: /^#[0-9a-fA-F]{6}$/.test(color) ? color : "" });
+          }
         }
       }
       // Una riga per segmento, già in ordine di posizione.
@@ -23591,8 +23814,14 @@ async function appointmentServiceLines(
   const serviceId = Number(appointment.service_id ?? 0);
   if (serviceId > 0) {
     try {
-      const rows = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, name, price", where: "id = ?", params: [serviceId], limit: 1 });
-      if (rows[0]) return [{ serviceId, name: String(rows[0].name ?? "Servizio"), price: Number(rows[0].price ?? 0) }];
+      if (pre) {
+        const meta = pre.servicesById.get(serviceId);
+        // Stessa semantica della query per-riga: String(name ?? "Servizio").
+        if (meta) return [{ serviceId, name: String(meta.name ?? "Servizio"), price: meta.price }];
+      } else {
+        const rows = await tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, name, price", where: "id = ?", params: [serviceId], limit: 1 });
+        if (rows[0]) return [{ serviceId, name: String(rows[0].name ?? "Servizio"), price: Number(rows[0].price ?? 0) }];
+      }
     } catch {
       // fallback below
     }
@@ -23601,8 +23830,9 @@ async function appointmentServiceLines(
   return [{ serviceId: 0, name: "Servizio", price: 0 }];
 }
 
-async function appointmentClientName(slug: string, clientId: number): Promise<string> {
+async function appointmentClientName(slug: string, clientId: number, pre?: AppointmentsPrefetch): Promise<string> {
   if (clientId <= 0) return "Cliente";
+  if (pre) return pre.clientNameById.get(clientId) ?? "Cliente";
   try {
     const rows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "full_name,email", where: "id = ?", params: [clientId], limit: 1 });
     return String(rows[0]?.full_name ?? rows[0]?.email ?? "Cliente");
@@ -23614,7 +23844,12 @@ async function appointmentClientName(slug: string, clientId: number): Promise<st
 // Operatore primario dell'appuntamento (appointment_staff): NOME + ID. L'id serve al
 // calendario per piazzare il blocco nella colonna giusta anche con operatori omonimi
 // (il legacy piazza per staff_id, non per nome).
-async function appointmentStaffRef(slug: string, appointmentId: number): Promise<{ id: number; name: string }> {
+async function appointmentStaffRef(slug: string, appointmentId: number, pre?: AppointmentsPrefetch): Promise<{ id: number; name: string }> {
+  if (pre) {
+    const staffId = pre.primaryStaffIdByAppt.get(appointmentId) ?? 0;
+    if (staffId <= 0) return { id: 0, name: "" };
+    return { id: staffId, name: pre.staffById.get(staffId)?.name ?? "" };
+  }
   try {
     const rows = await tenantSelect<RowDataPacket>({ slug, table: "appointment_staff", columns: "staff_id", where: "appointment_id = ?", params: [appointmentId], limit: 1 });
     const staffId = Number(rows[0]?.staff_id ?? 0);
