@@ -12962,3 +12962,31 @@ pending, count). Latenze: feed 717-743 → 318-343ms (~2.2x — carico poller
 piu' che dimezzato), pending 570-597 → 325-342ms, count 218-228 → 188-209ms.
 Regressione verde: notifiche 16+10+12+6+12+19 + dashboard 16+13 (summary
 condiviso); tsc/eslint puliti.
+
+## Dashboard — ri-pass serale + analisi logiche mutative (2026-07-12, notte)
+
+Richiesta: nuovo bug-hunt + valutazione logiche eliminazione/modifica.
+Drift: ZERO commit sui file dashboard dopo le migliorie 779a9f1; le
+parallelizzazioni serali (prefetch appuntamenti, summary notifiche) non
+toccano il percorso della route dashboard (gli avvisi hanno builder propri
+in manage-dashboard-alerts).
+
+Batteria completa verde: 16+5+7+9+13. Latenza tenuta: mediana ~240ms
+(le migliorie del pomeriggio persistono). Probe mutativi: la route esporta
+SOLO GET → POST/PUT/DELETE/PATCH = 405 automatico; gate per-card
+riconfermati (senza calendar.view/costs.* → upcoming/costs null); sede
+9999 → fail-closed a zero con locationFailClosed=true.
+
+ANALISI LOGICHE MUTATIVE: la Dashboard NON ha logiche di eliminazione o
+modifica — ED E' CORRETTO: e' un puro read-model (KPI, settimanale,
+prossimi appuntamenti, costi, avvisi) dove ogni azione e' un LINK verso il
+modulo proprietario (Approva → Notifiche col suo UPDATE doppio-guardato
+anti-race gia' verificato; costi → Scadenziario; prenotazioni →
+Calendario/QB). Un solo punto di mutazione per dominio = nessuna
+duplicazione di guardie, nessun rischio di divergenza tra percorsi.
+Fedele al legacy e architetturalmente giusto: NESSUN suggerimento
+strutturale. (Unica evoluzione possibile, DEVIAZIONE di prodotto non
+raccomandata per la parita': azioni rapide inline tipo 'Approva' diretto
+dalla card avvisi — oggi passa correttamente dalla pagina Notifiche.)
+
+ZERO bug, zero migliorie residue aperte sul dominio.
