@@ -4571,89 +4571,101 @@ export async function getDbAppointmentForEdit(slug: string, id: number): Promise
   const row = rows[0];
   if (!row) return null;
 
+  // I blocchi che seguono dipendono tutti SOLO dalla riga base: in parallelo
+  // (prima erano ~8 round trip sequenziali sul payload completo del drawer).
+
   // Client (id + name/email/phone) — mirrors the legacy JOIN clients c ON c.id=a.client_id.
   const clientId = Number(row.client_id ?? 0);
-  let clientName = "";
-  let clientEmail = "";
-  let clientPhone = "";
-  if (clientId > 0) {
-    try {
-      const clientRows = await tenantSelect<RowDataPacket>({
-        slug,
-        table: "clients",
-        columns: "full_name, email, phone",
-        where: "id = ?",
-        params: [clientId],
-        limit: 1,
-      });
-      if (clientRows[0]) {
-        clientName = String(clientRows[0].full_name ?? "").trim();
-        clientEmail = String(clientRows[0].email ?? "").trim();
-        clientPhone = String(clientRows[0].phone ?? "").trim();
+  const clientInfoP = (async () => {
+    let clientName = "";
+    let clientEmail = "";
+    let clientPhone = "";
+    if (clientId > 0) {
+      try {
+        const clientRows = await tenantSelect<RowDataPacket>({
+          slug,
+          table: "clients",
+          columns: "full_name, email, phone",
+          where: "id = ?",
+          params: [clientId],
+          limit: 1,
+        });
+        if (clientRows[0]) {
+          clientName = String(clientRows[0].full_name ?? "").trim();
+          clientEmail = String(clientRows[0].email ?? "").trim();
+          clientPhone = String(clientRows[0].phone ?? "").trim();
+        }
+      } catch {
+        // tolerate a missing column; the drawer still selects the client by id+name.
       }
-    } catch {
-      // tolerate a missing column; the drawer still selects the client by id+name.
     }
-  }
+    return { clientName, clientEmail, clientPhone };
+  })();
 
-  // Ordered service list (one per appointment_services row; falls back to the single
-  // services-table lookup for legacy single-service rows without snapshot rows).
-  const serviceLines = await appointmentServiceLines(slug, row);
-  const services = serviceLines
-    .filter((line) => line.serviceId > 0)
-    // Item D: carry the BOOKED price snapshot so the drawer restores it (see the type note).
-    .map((line) => ({ serviceId: line.serviceId, name: line.name, price: roundMoney(Number(line.price ?? 0)) }));
-
-  // Per-service operator + cabin maps from appointment_segments (the only place the
-  // per-service staff/cabin assignment is persisted; rebuilt on every save). Keyed by
-  // service_id -> staff_id / cabin_id; only positive values are emitted (0 = unassigned).
-  const staffMap: Record<number, number> = {};
-  const cabinMap: Record<number, number> = {};
-  try {
-    const segRows = await tenantSelect<RowDataPacket>({
-      slug,
-      table: "appointment_segments",
-      columns: "service_id, staff_id, cabin_id",
-      where: "appointment_id = ?",
-      params: [id],
-      orderBy: "position ASC, starts_at ASC",
-    });
-    for (const seg of segRows) {
-      const serviceId = Number(seg.service_id ?? 0);
-      if (serviceId <= 0) continue;
-      const staffId = Number(seg.staff_id ?? 0);
-      if (staffId > 0 && staffMap[serviceId] === undefined) staffMap[serviceId] = staffId;
-      const cabinId = seg.cabin_id === null || seg.cabin_id === undefined ? 0 : Number(seg.cabin_id) || 0;
-      if (cabinId > 0 && cabinMap[serviceId] === undefined) cabinMap[serviceId] = cabinId;
+  const svcMapsP = (async () => {
+    // Ordered service list (one per appointment_services row; falls back to the single
+    // services-table lookup for legacy single-service rows without snapshot rows).
+    // Per-service operator + cabin maps from appointment_segments (the only place the
+    // per-service staff/cabin assignment is persisted; rebuilt on every save). Keyed by
+    // service_id -> staff_id / cabin_id; only positive values are emitted (0 = unassigned).
+    const staffMap: Record<number, number> = {};
+    const cabinMap: Record<number, number> = {};
+    const [serviceLines] = await Promise.all([
+      appointmentServiceLines(slug, row),
+      (async () => {
+        try {
+          const segRows = await tenantSelect<RowDataPacket>({
+            slug,
+            table: "appointment_segments",
+            columns: "service_id, staff_id, cabin_id",
+            where: "appointment_id = ?",
+            params: [id],
+            orderBy: "position ASC, starts_at ASC",
+          });
+          for (const seg of segRows) {
+            const serviceId = Number(seg.service_id ?? 0);
+            if (serviceId <= 0) continue;
+            const staffId = Number(seg.staff_id ?? 0);
+            if (staffId > 0 && staffMap[serviceId] === undefined) staffMap[serviceId] = staffId;
+            const cabinId = seg.cabin_id === null || seg.cabin_id === undefined ? 0 : Number(seg.cabin_id) || 0;
+            if (cabinId > 0 && cabinMap[serviceId] === undefined) cabinMap[serviceId] = cabinId;
+          }
+        } catch {
+          // older installs without appointment_segments: fall back to the single operator
+          // (appointment_staff) so at least the whole-appointment operator can prefill.
+        }
+      })(),
+    ]);
+    const services = serviceLines
+      .filter((line) => line.serviceId > 0)
+      // Item D: carry the BOOKED price snapshot so the drawer restores it (see the type note).
+      .map((line) => ({ serviceId: line.serviceId, name: line.name, price: roundMoney(Number(line.price ?? 0)) }));
+    // Single-service / no-segment fallback: pin the whole-appointment operator to the
+    // (one) service so the single operator select prefills even without segment rows.
+    if (Object.keys(staffMap).length === 0 && services.length > 0) {
+      try {
+        const staffRows = await tenantSelect<RowDataPacket>({
+          slug,
+          table: "appointment_staff",
+          columns: "staff_id",
+          where: "appointment_id = ?",
+          params: [id],
+          limit: 1,
+        });
+        const staffId = Number(staffRows[0]?.staff_id ?? 0);
+        if (staffId > 0) staffMap[services[0].serviceId] = staffId;
+      } catch {
+        // tolerate a missing table.
+      }
     }
-  } catch {
-    // older installs without appointment_segments: fall back to the single operator
-    // (appointment_staff) so at least the whole-appointment operator can prefill.
-  }
-  // Single-service / no-segment fallback: pin the whole-appointment operator to the
-  // (one) service so the single operator select prefills even without segment rows.
-  if (Object.keys(staffMap).length === 0 && services.length > 0) {
-    try {
-      const staffRows = await tenantSelect<RowDataPacket>({
-        slug,
-        table: "appointment_staff",
-        columns: "staff_id",
-        where: "appointment_id = ?",
-        params: [id],
-        limit: 1,
-      });
-      const staffId = Number(staffRows[0]?.staff_id ?? 0);
-      if (staffId > 0) staffMap[services[0].serviceId] = staffId;
-    } catch {
-      // tolerate a missing table.
-    }
-  }
+    return { services, staffMap, cabinMap };
+  })();
 
   const startsAt = toDate(row.starts_at);
   const primaryCabinId = row.cabin_id === null || row.cabin_id === undefined || Number(row.cabin_id) <= 0 ? null : Number(row.cabin_id);
 
   // Item 3: the expired-linked warning (checks the redeem sources this appointment links).
-  const expiredLinkWarning = await computeExpiredLinkWarning(slug, Number(row.id ?? id), Number(row.giftcard_id ?? 0) || 0);
+  const expiredLinkWarningP = computeExpiredLinkWarning(slug, Number(row.id ?? id), Number(row.giftcard_id ?? 0) || 0);
 
   // Cancellation metadata (api_appointments.php `get` ~8683-8694): the cancelled_at/
   // cancelled_reason columns, plus the legacy fallback that extracts the reason from a
@@ -4682,6 +4694,7 @@ export async function getDbAppointmentForEdit(slug: string, id: number): Promise
   const giftRedeem: AppointmentEditPayload["giftRedeem"] = [];
   const giftcardRedeem: AppointmentEditPayload["giftcardRedeem"] = [];
   const redeemBoost: AppointmentEditPayload["redeemBoost"] = { packages: [], prepaids: [], giftboxes: [], gifts: [], giftcards: [] };
+  const redeemP = (async () => {
   try {
     const linkRows = await tenantSelect<RowDataPacket>({
       slug,
@@ -4729,20 +4742,32 @@ export async function getDbAppointmentForEdit(slug: string, id: number): Promise
   } catch {
     // best-effort: installazioni senza le colonne di linkage -> nessun prefill.
   }
+  })();
+
   // GiftCard a livello appuntamento (giftcard_id + giftcard_used). Il balance del
   // booster = saldo attuale + quota usata da QUESTO appuntamento, così in edit il
   // massimo applicabile non scende sotto l'uso corrente.
   const usedGiftcardId = Number(row.giftcard_id ?? 0) || 0;
   const usedGiftcardAmount = roundMoney(Math.max(0, parseMoney(row.giftcard_used, 0)));
-  if (usedGiftcardId > 0 && usedGiftcardAmount > 0) {
-    giftcardRedeem.push({ giftcard_id: usedGiftcardId, amount: usedGiftcardAmount });
-    const cardRows = await tenantSelect<RowDataPacket>({ slug, table: "giftcards", columns: "id, code, balance", where: "id = ?", params: [usedGiftcardId], limit: 1 }).catch(() => [] as RowDataPacket[]);
-    redeemBoost.giftcards.push({
-      id: usedGiftcardId,
-      code: String(cardRows[0]?.code ?? ""),
-      balance: roundMoney(Math.max(0, Number(cardRows[0]?.balance ?? 0)) + usedGiftcardAmount),
-    });
-  }
+  const giftcardP = (async () => {
+    if (usedGiftcardId > 0 && usedGiftcardAmount > 0) {
+      giftcardRedeem.push({ giftcard_id: usedGiftcardId, amount: usedGiftcardAmount });
+      const cardRows = await tenantSelect<RowDataPacket>({ slug, table: "giftcards", columns: "id, code, balance", where: "id = ?", params: [usedGiftcardId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+      redeemBoost.giftcards.push({
+        id: usedGiftcardId,
+        code: String(cardRows[0]?.code ?? ""),
+        balance: roundMoney(Math.max(0, Number(cardRows[0]?.balance ?? 0)) + usedGiftcardAmount),
+      });
+    }
+  })();
+
+  const [{ clientName, clientEmail, clientPhone }, { services, staffMap, cabinMap }, expiredLinkWarning] = await Promise.all([
+    clientInfoP,
+    svcMapsP,
+    expiredLinkWarningP,
+    redeemP,
+    giftcardP,
+  ]);
 
   return {
     id: Number(row.id ?? id),

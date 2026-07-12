@@ -1196,11 +1196,22 @@ export async function POST(request: Request) {
     return Response.json(
       {
         ok: false,
-        error: error instanceof Error ? error.message : "Errore appuntamenti.",
+        error: friendlyDateTimeError(error instanceof Error ? error.message : "Errore appuntamenti."),
       },
       { status: 400 },
     );
   }
+}
+
+// Data/ora fuori range nel save (es. '2027-02-30' o '99:99' da un client non-UI):
+// PG rifiuta con un errore grezzo inglese ('date/time field value out of range').
+// Il fallire-pulito e' la divergenza migliorativa documentata (il legacy MySQL
+// rollerebbe/scriverebbe zero-date), ma il testo mostrato nel toast del drawer
+// deve essere pulito. Solo traduzione del messaggio: status e semantica invariati.
+function friendlyDateTimeError(message: string): string {
+  return /date\/time field value out of range|invalid input syntax for type (?:date|time|timestamp)/i.test(message)
+    ? "Data o ora non valida."
+    : message;
 }
 
 // Whether `body.status` is a RECOGNIZED appointment status for action=status —

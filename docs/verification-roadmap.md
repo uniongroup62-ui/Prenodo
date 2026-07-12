@@ -12868,3 +12868,27 @@ drawer lo mostra in toast; raro perche' i picker impediscono l'input, ma
 il testo grezzo e' brutto); (2) PERF action=get (payload drawer completo)
 ~433-476ms: parallelizzare i blocchi indipendenti del payload come fatto
 per lista/dashboard/calendario.
+
+## Quick Booking — migliorie applicate (2026-07-12, sera, seguito del pass bug-hunt)
+
+Su approvazione, applicate le 2 migliorie con la stessa ricetta validata
+(parallelizzare senza toccare query ne' semantiche + golden diff):
+(1) getDbAppointmentForEdit (payload completo del drawer per action=get):
+i blocchi dopo la riga base — info cliente, righe servizi+mappe operatore/
+cabina da segmenti (con fallback appointment_staff DOPO entrambi, come
+prima), expiredLinkWarning, redeem+booster, giftcard booster — erano ~8
+round trip sequenziali, ora un unico Promise.all (la catena interna
+serviceLines→fallback staff preservata). Latenza get: ~490ms → 222-236ms.
+Payload BYTE-IDENTICO al golden congelato pre-refactor su 5 id
+(210/138/175/546/149).
+(2) friendlyDateTimeError nel catch del POST della route appointments:
+'date/time field value out of range' / 'invalid input syntax for type
+date|time|timestamp' → 'Data o ora non valida.' — SOLO traduzione del
+testo (status 400 e fallire-pulito invariati; il legacy MySQL rollerebbe,
+la divergenza migliorativa resta quella documentata). Verificato su
+'2027-02-30' e '99:99'.
+
+Durante la verifica: wedge Turbopack (il server serviva l'error page di
+uno stato intermedio tra due edit) → ricetta nota kill+rm .next/dev+
+riavvio. Regressione verde: QB 35+21+16+28 + findings 3 + residui 6,
+appuntamenti lista 13, calendario 20+33; tsc/eslint puliti.
