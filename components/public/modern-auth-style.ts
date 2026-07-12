@@ -41,19 +41,32 @@ export const MODERN_AUTH_LAYOUT_STYLE = `
 
 export const MODERN_AUTH_STYLE = MODERN_AUTH_LAYOUT_STYLE + MODERN_AUTH_FORM_STYLE;
 
-// Variante GESTIONALE (iterata su feedback utente): pannello visual mantenuto
-// col gradiente ricco; il form NON sta in una box — campi direttamente sul
-// bianco con titolo centrato (riferimento: screen "Sellora" fornito), brand
-// in alto a sinistra accanto alla freccia back.
+// Variante GESTIONALE (iterata su feedback utente, riferimento screen
+// "Sellora"): form SENZA box, centrato verticalmente sulla metà bianca —
+// titolo grande centrato, input compatti, 'Password dimenticata?' a destra
+// sotto il campo, riga finale 'Non hai un account? Registrati', copyright in
+// basso; brand in alto a sinistra; pannello destro col gradiente ricco.
 export const MODERN_MANAGE_AUTH_STYLE = MODERN_AUTH_FORM_STYLE + `
 .manage-page.account-page--auth{background:#fff}
-.manage-page .account-main--auth-flow{align-items:center;min-height:100vh}
-.manage-page .auth-stack{gap:0;justify-content:center}
+.manage-page .account-main--auth-flow{align-items:stretch;min-height:100vh;padding-top:0;padding-bottom:0}
+.manage-page .auth-stack{gap:0;justify-content:center;align-self:stretch;min-height:100vh;display:flex;flex-direction:column}
 .manage-page .auth-brand{position:fixed;top:26px;left:88px;z-index:5}
 .manage-page .auth-brand .brand-mark{width:34px;height:34px;border-radius:10px;font-size:16px}
-.manage-page .auth-card{background:transparent;border:0;box-shadow:none;padding:0;width:min(380px,100%)}
-.manage-page .auth-card h1{text-align:center;font-size:28px;margin-bottom:8px}
-.manage-page .auth-card .lead{text-align:center;margin-bottom:28px}
+.manage-page .auth-card{background:transparent;border:0;box-shadow:none;padding:0;width:min(360px,100%);margin:0 auto}
+.manage-page .auth-card h1{text-align:center;font-size:30px;margin-bottom:10px}
+.manage-page .auth-card .lead{text-align:center;margin-bottom:30px;font-size:13.5px}
+.manage-page .auth-card .form label{font-size:12px;margin-bottom:14px;gap:6px}
+.manage-page .auth-card .form input[type="email"],.manage-page .auth-card .form input[type="password"],.manage-page .auth-card .form input[type="text"]{height:42px;border-radius:8px;border-color:#e2e8f0;font-size:14px;padding:0 12px}
+.manage-page .auth-card .pw-field input{padding-right:44px}
+.manage-page .auth-card .pw-toggle{width:34px;height:34px;font-size:15px}
+.manage-page .auth-card .form-row-after{display:flex;justify-content:flex-end;margin:-6px 0 16px}
+.manage-page .auth-card .form-row-after a{font-size:13px;font-weight:600;color:#4e6da6;text-decoration:none}
+.manage-page .auth-card .form-row-after a:hover{text-decoration:underline}
+.manage-page .auth-card .auth-submit{height:44px;border-radius:10px;font-size:14.5px;margin-top:0}
+.manage-page .auth-card .links{margin-top:22px;font-size:13.5px;color:#64748b}
+.manage-page .auth-card .links span{display:none}
+.manage-page .auth-footer{position:fixed;left:0;bottom:0;width:50%;display:flex;justify-content:space-between;padding:16px 28px;font-size:12px;color:#94a3b8;pointer-events:none}
+@media (max-width:900px){.manage-page .auth-footer{width:100%}}
 .manage-page .visual-card.manage-visual{background:linear-gradient(160deg,#4e6da6 0%,#365287 55%,#243a63 100%);border-radius:22px;box-shadow:0 18px 44px rgba(36,58,99,.28)}
 .manage-page .visual-card .tenant-badge{background:rgba(255,255,255,.16);border-radius:12px}
 .manage-page .visual-card .visual-actions a{border-radius:10px}

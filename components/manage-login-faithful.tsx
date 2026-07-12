@@ -90,16 +90,21 @@ export function ManageLoginFaithful({ initialSlug }: { initialSlug: string }) {
               </button>
             </span>
           </label>
+          {/* Come il riferimento: link recupero a destra sotto il campo. */}
+          <div className="form-row-after">
+            <a href="/manage/forgot-password">Password dimenticata?</a>
+          </div>
           <button className="auth-submit" type="submit" disabled={loading}>
             {loading ? "Accesso in corso…" : "Accedi"}
           </button>
           <div className="links">
-            <a href="/manage/register">Registrati</a>
-            <span>|</span>
-            <a href="/manage/forgot-password">Password dimenticata?</a>
+            Non hai un account?&nbsp;<a href="/manage/register">Registrati</a>
           </div>
         </form>
       </section>
+      <div className="auth-footer">
+        <span>Copyright &copy; 2026 Prenodo.</span>
+      </div>
     </ManageAuthShell>
   );
 }
