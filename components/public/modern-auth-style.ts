@@ -87,7 +87,7 @@ export const MODERN_CUSTOMER_PHOTO_AUTH_STYLE = MODERN_AUTH_FORM_STYLE + `
 // basso; brand in alto a sinistra; pannello destro col gradiente ricco.
 export const MODERN_MANAGE_AUTH_STYLE = MODERN_AUTH_FORM_STYLE + `
 .manage-page.account-page--auth{background:#fff}
-.manage-page .account-main--auth-flow{align-items:stretch;min-height:100vh;padding-top:0;padding-bottom:0}
+.manage-page .account-main--auth-flow{display:flex;justify-content:center;align-items:stretch;min-height:100vh;padding:0 24px;margin-right:min(680px,44vw);max-width:none;box-sizing:border-box}
 .manage-page .auth-stack{gap:0;justify-content:center;align-self:stretch;min-height:100vh;display:flex;flex-direction:column}
 .manage-page .auth-brand{position:fixed;top:26px;left:88px;z-index:5}
 .manage-page .auth-brand .brand-mark{width:34px;height:34px;border-radius:10px;font-size:16px}
@@ -104,9 +104,9 @@ export const MODERN_MANAGE_AUTH_STYLE = MODERN_AUTH_FORM_STYLE + `
 .manage-page .auth-card .auth-submit{height:44px;border-radius:10px;font-size:14.5px;margin-top:0}
 .manage-page .auth-card .links{margin-top:22px;font-size:13.5px;color:#64748b}
 .manage-page .auth-card .links span{display:none}
-.manage-page .auth-footer{position:fixed;left:0;bottom:0;width:50%;display:flex;justify-content:space-between;padding:16px 28px;font-size:12px;color:#94a3b8;pointer-events:none}
-@media (max-width:900px){.manage-page .auth-footer{width:100%}}
-.manage-page .visual-card.manage-visual{background:linear-gradient(160deg,#4e6da6 0%,#365287 55%,#243a63 100%);border-radius:22px;box-shadow:0 18px 44px rgba(36,58,99,.28)}
+.manage-page .auth-footer{position:fixed;left:0;bottom:0;width:calc(100% - min(680px,44vw));display:flex;justify-content:space-between;padding:16px 28px;font-size:12px;color:#94a3b8;pointer-events:none}
+.manage-page .visual-card.manage-visual{position:fixed;inset:0 0 0 auto;width:min(680px,44vw);min-height:0;border-radius:0;box-shadow:none;z-index:1;background:linear-gradient(160deg,#4e6da6 0%,#365287 55%,#243a63 100%)}
+@media (max-width:900px){.manage-page .visual-card.manage-visual{display:none}.manage-page .account-main--auth-flow{margin-right:0}.manage-page .auth-footer{width:100%}}
 .manage-page .visual-card .tenant-badge{background:rgba(255,255,255,.16);border-radius:12px}
 .manage-page .visual-card .visual-actions a{border-radius:10px}
 `;
