@@ -41,6 +41,53 @@ export const MODERN_AUTH_LAYOUT_STYLE = `
 
 export const MODERN_AUTH_STYLE = MODERN_AUTH_LAYOUT_STYLE + MODERN_AUTH_FORM_STYLE;
 
+// Variante CLIENTI "photo split" (iterata su feedback utente, riferimento
+// screen "Nucleus"): pannello FOTO a sinistra con brand in alto e citazione in
+// basso; form a destra sul bianco senza box, label DENTRO i campi
+// (focus-within), bottone pill, 'Password dimenticata?' a sinistra sotto i
+// campi, riga finale 'Non hai un account? Registrati'.
+export const MODERN_CUSTOMER_PHOTO_AUTH_STYLE = `
+.account-page--auth{background:#fff;min-height:100vh}
+.account-page--auth .marketplace-topbar{display:none}
+.account-page--auth .visual-card{display:none}
+.account-page--auth .auth-photo-panel{position:fixed;inset:0 auto 0 0;width:min(420px,34vw);background:#243a63 url('https://images.unsplash.com/photo-1560066984-138dadb4c035?auto=format&fit=crop&w=1000&q=80') center/cover no-repeat;display:flex;flex-direction:column;justify-content:space-between;padding:26px 28px 30px;z-index:1}
+.account-page--auth .auth-photo-panel::before{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(15,23,42,.42) 0%,rgba(15,23,42,.05) 40%,rgba(15,23,42,.62) 100%)}
+.account-page--auth .auth-photo-brand{position:relative;display:flex;align-items:center;gap:10px;color:#fff;font-size:19px;font-weight:600;text-decoration:none;width:max-content;margin-left:52px;min-height:40px}
+.account-page--auth .auth-photo-brand .brand-mark{width:36px;height:36px;border-radius:11px;background:rgba(255,255,255,.18);backdrop-filter:blur(4px);color:#fff;display:grid;place-items:center;font-weight:600}
+.account-page--auth .auth-photo-quote{position:relative;color:#fff}
+.account-page--auth .auth-photo-quote p{font-size:21px;font-weight:700;line-height:1.35;margin:0 0 10px}
+.account-page--auth .auth-photo-quote small{display:block;font-size:13px;font-weight:600;opacity:.92}
+.account-page--auth .auth-photo-quote small + small{font-weight:400;opacity:.75}
+.account-page--auth .account-main--auth-flow{display:flex;justify-content:center;align-items:center;min-height:100vh;padding:48px 24px;margin-left:min(420px,34vw);max-width:none}
+.account-page--auth .auth-stack{width:min(400px,100%);margin:0;display:flex;flex-direction:column;align-items:center;gap:0}
+.account-page--auth .auth-stack > .auth-brand{display:none}
+.account-page--auth .auth-card{width:100%;background:transparent;border:0;box-shadow:none;padding:0}
+.account-page--auth .auth-card .eyebrow{display:none}
+.account-page--auth .auth-card h1{text-align:center;font-size:26px;font-weight:700;color:#0f172a;margin:0 0 8px}
+.account-page--auth .auth-card .lead{text-align:center;font-size:13.5px;color:#64748b;margin:0 0 26px;line-height:1.5}
+.account-page--auth .auth-card .form label{display:flex;flex-direction:column;gap:2px;border:1px solid #e2e8f0;border-radius:10px;padding:8px 14px 9px;font-size:11.5px;font-weight:600;color:#64748b;margin-bottom:12px;transition:border-color .15s ease,box-shadow .15s ease;cursor:text}
+.account-page--auth .auth-card .form label:focus-within{border-color:#4e6da6;box-shadow:0 0 0 4px rgba(78,109,166,.13)}
+.account-page--auth .auth-card .form label input{border:0!important;height:24px;padding:0;font-size:15px;color:#0f172a;background:transparent;outline:none;box-shadow:none;width:100%}
+.account-page--auth .auth-card .form label input:focus{box-shadow:none;border:0}
+.account-page--auth .auth-card .pw-field{position:relative;display:flex;align-items:center}
+.account-page--auth .auth-card .pw-field input{padding-right:36px}
+.account-page--auth .auth-card .pw-toggle{position:absolute;right:-4px;top:50%;transform:translateY(-50%);width:32px;height:32px;border:0;border-radius:8px;background:transparent;color:#64748b;display:grid;place-items:center;cursor:pointer}
+.account-page--auth .auth-card .pw-toggle:hover{color:#365287}
+.account-page--auth .auth-card .form-row-after{display:flex;justify-content:flex-start;margin:2px 0 18px}
+.account-page--auth .auth-card .form-row-after a{font-size:13.5px;font-weight:700;color:#4e6da6;text-decoration:none}
+.account-page--auth .auth-card .form-row-after a:hover{text-decoration:underline}
+.account-page--auth .auth-card .auth-submit{width:100%;height:46px;border:0;border-radius:999px;background:#4e6da6;color:#fff;font-size:15px;font-weight:700;cursor:pointer;transition:background .15s ease,box-shadow .15s ease}
+.account-page--auth .auth-card .auth-submit:hover:not(:disabled){background:#365287;box-shadow:0 8px 22px rgba(78,109,166,.28)}
+.account-page--auth .auth-card .auth-submit:disabled{opacity:.65;cursor:default}
+.account-page--auth .auth-card .links{display:flex;justify-content:center;gap:6px;margin-top:24px;font-size:13.5px;color:#64748b}
+.account-page--auth .auth-card .links a{color:#4e6da6;font-weight:700;text-decoration:none}
+.account-page--auth .auth-card .links a:hover{text-decoration:underline}
+.account-page--auth .auth-card .links span{display:none}
+.account-page--auth .auth-card .alert{background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;border-radius:12px;padding:12px 14px;font-size:14px;margin-bottom:16px}
+.account-page--auth .auth-card .form .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:900px){.account-page--auth .auth-photo-panel{display:none}.account-page--auth .account-main--auth-flow{margin-left:0}}
+`;
+
 // Variante GESTIONALE (iterata su feedback utente, riferimento screen
 // "Sellora"): form SENZA box, centrato verticalmente sulla metà bianca —
 // titolo grande centrato, input compatti, 'Password dimenticata?' a destra

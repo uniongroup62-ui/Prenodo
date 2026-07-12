@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useMarketplacePageEffects } from "@/components/public/marketplace-shared";
 import { accountAuthDestination } from "@/components/public/account-auth-destination";
-import { MODERN_AUTH_STYLE } from "@/components/public/modern-auth-style";
+import { MODERN_CUSTOMER_PHOTO_AUTH_STYLE } from "@/components/public/modern-auth-style";
 import { PasswordEye } from "@/components/public/password-eye";
 
 // Pixel-faithful port of the legacy PHP public CUSTOMER ACCOUNT login page
@@ -188,10 +188,23 @@ export function AccountLoginFaithful() {
       <link rel="stylesheet" href="/assets/css/app.css" />
       <link rel="stylesheet" href="/assets/css/pages/public_account.css" />
       <style dangerouslySetInnerHTML={{ __html: TOPBAR_STYLE }} />
-      {/* Restyle moderno (scelta utente 2026-07-12): SOLO PELLE, vedi modern-auth-style.ts */}
-      <style dangerouslySetInnerHTML={{ __html: MODERN_AUTH_STYLE }} />
+      {/* Restyle "photo split" (scelta utente 2026-07-12, riferimento Nucleus):
+          SOLO PELLE, vedi modern-auth-style.ts */}
+      <style dangerouslySetInnerHTML={{ __html: MODERN_CUSTOMER_PHOTO_AUTH_STYLE }} />
 
       <div className="account-page account-page--auth">
+        <div className="auth-photo-panel" aria-hidden="true">
+          {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- navigazione full-page voluta (anti-FOUC, come il resto della pagina) */}
+          <a className="auth-photo-brand" href="/attivita">
+            <span className="brand-mark">P</span>
+            <span>Prenodo</span>
+          </a>
+          <div className="auth-photo-quote">
+            <p>&ldquo;Prenotare i miei trattamenti non &egrave; mai stato cos&igrave; semplice.&rdquo;</p>
+            <small>Cliente Prenodo</small>
+            <small>Prenotazioni online, punti e vantaggi in un unico posto</small>
+          </div>
+        </div>
         <a className="auth-back" href="/login" aria-label="Torna alla scelta di accesso" title="Torna alla scelta di accesso">
           &larr;
         </a>
@@ -401,14 +414,16 @@ export function AccountLoginFaithful() {
                     </button>
                   </span>
                 </label>
+                {/* Come il riferimento: recupero a sinistra sotto i campi. */}
+                <div className="form-row-after">
+                  <a href={`/account/forgot-password${linkQuery}`}>Password dimenticata?</a>
+                </div>
                 <button className="auth-submit" type="submit" disabled={busy}>
                   {busy ? "Accesso in corso…" : "Accedi"}
                 </button>
               </form>
               <div className="links">
-                <a href={`/account/register${linkQuery}`}>Registrati</a>
-                <span>|</span>
-                <a href={`/account/forgot-password${linkQuery}`}>Password dimenticata?</a>
+                Non hai un account?&nbsp;<a href={`/account/register${linkQuery}`}>Registrati</a>
               </div>
             </section>
           </div>
