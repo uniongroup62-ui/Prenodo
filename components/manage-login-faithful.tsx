@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ManageAuthShell } from "@/components/manage-auth-shell";
+import { PasswordEye } from "@/components/public/password-eye";
 
 // Pixel-faithful port of the PHP /manage/login page (app/pages/manage_account.php).
 // Submits to the existing JSON auth API instead of the PHP form post.
@@ -11,6 +12,7 @@ export function ManageLoginFaithful({ initialSlug }: { initialSlug: string }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -69,17 +71,27 @@ export function ManageLoginFaithful({ initialSlug }: { initialSlug: string }) {
           </label>
           <label>
             Password
-            <input
-              type="password"
-              name="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              required
-            />
+            <span className="pw-field">
+              <input
+                type={showPassword ? "text" : "password"}
+                name="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+                required
+              />
+              <button
+                type="button"
+                className="pw-toggle"
+                aria-label={showPassword ? "Nascondi password" : "Mostra password"}
+                onClick={() => setShowPassword((v) => !v)}
+              >
+                <PasswordEye open={showPassword} />
+              </button>
+            </span>
           </label>
           <button className="auth-submit" type="submit" disabled={loading}>
-            {loading ? "Accesso…" : "Accedi"}
+            {loading ? "Accesso in corso…" : "Accedi"}
           </button>
           <div className="links">
             <a href="/manage/register">Registrati</a>

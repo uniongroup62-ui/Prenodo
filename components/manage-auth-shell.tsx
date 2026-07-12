@@ -8,20 +8,25 @@
 // unstyled content. (Previously the CSS was injected + the body class set from a
 // client useEffect, which only ran after the first paint → the FOUC.)
 
+import { MODERN_MANAGE_AUTH_STYLE } from "@/components/public/modern-auth-style";
+
 export function ManageAuthShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="account-page account-page--auth manage-page">
       <link rel="stylesheet" href="/assets/css/pages/public_account.css" precedence="default" />
       <link rel="stylesheet" href="/assets/css/pages/manage_account.css" precedence="default" />
+      {/* Restyle moderno (scelta utente 2026-07-12): SOLO PELLE, pannello
+          visual mantenuto — vedi modern-auth-style.ts */}
+      <style dangerouslySetInnerHTML={{ __html: MODERN_MANAGE_AUTH_STYLE }} />
 
-      <a className="auth-back" href="/attivita" aria-label="Torna indietro">
+      <a className="auth-back" href="/login" aria-label="Torna alla scelta di accesso">
         &larr;
       </a>
       <main className="account-main account-main--auth-flow">
         <section className="auth-stack">
           <a className="auth-brand" href="/manage/login">
-            <span className="brand-mark">B</span>
-            <span>BeautySuite</span>
+            <span className="brand-mark">P</span>
+            <span>Prenodo</span>
           </a>
           {children}
         </section>
@@ -35,7 +40,7 @@ function ManageAuthVisual() {
   return (
     <aside className="visual-card manage-visual">
       <div className="visual-content">
-        <div className="tenant-badge">B</div>
+        <div className="tenant-badge">P</div>
         <h2>Gestisci la tua attivita online</h2>
         <p>
           Crea il gestionale, configura sedi e operatori, abilita le prenotazioni e accedi al

@@ -1,15 +1,10 @@
-// Restyle moderno delle pagine auth cliente (scelta utente 2026-07-12):
-// SOLO PELLE — override CSS scoped su .account-page--auth: card centrata stile
-// Fresha (aside promozionale e search topbar nascosti), input alti con focus
-// ring brand, bottone 48px, toggle password. Logica/markup di form invariati.
-// Condiviso da account-login-faithful e account-register-faithful (e pagine
-// sorelle forgot/reset/verify se adottano lo stesso guscio).
-export const MODERN_AUTH_STYLE = `
-.account-page--auth{background:#f8fafc;min-height:100vh}
-.account-page--auth .marketplace-topbar-search{display:none}
-.account-page--auth .visual-card{display:none}
-.account-page--auth .account-main--auth-flow{display:flex;justify-content:center;align-items:flex-start;padding:48px 24px 64px;max-width:none}
-.account-page--auth .auth-stack{width:min(440px,100%);margin:0;display:flex;flex-direction:column;align-items:center;gap:26px}
+// Restyle moderno delle pagine auth (scelta utente 2026-07-12): SOLO PELLE —
+// override CSS scoped su .account-page--auth. Due pezzi componibili:
+// - FORM: card/input/bottone/toggle/link (riusabile ovunque, anche col
+//   pannello visual del gestionale intatto);
+// - LAYOUT cliente: card centrata stile Fresha (aside promozionale e search
+//   topbar nascosti). Logica/markup di form invariati.
+export const MODERN_AUTH_FORM_STYLE = `
 .account-page--auth .auth-brand{display:flex;align-items:center;gap:12px;font-size:20px;font-weight:600;color:#0f172a;text-decoration:none}
 .account-page--auth .auth-brand .brand-mark{width:40px;height:40px;border-radius:12px;background:#4e6da6;color:#fff;display:grid;place-items:center;font-weight:600;font-size:18px}
 .account-page--auth .auth-card{width:100%;background:#fff;border:1px solid #e2e8f0;border-radius:18px;box-shadow:0 10px 34px rgba(15,23,42,.06);padding:34px 32px 30px}
@@ -32,4 +27,27 @@ export const MODERN_AUTH_STYLE = `
 .account-page--auth .auth-card .links a:hover{text-decoration:underline}
 .account-page--auth .auth-card .links span{color:#cbd5e1}
 .account-page--auth .auth-card .alert{background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;border-radius:12px;padding:12px 14px;font-size:14px;margin-bottom:16px}
+`;
+
+// LAYOUT cliente: card centrata stile Fresha, aside promozionale e search
+// della topbar nascosti (solo pagine account cliente).
+export const MODERN_AUTH_LAYOUT_STYLE = `
+.account-page--auth{background:#f8fafc;min-height:100vh}
+.account-page--auth .marketplace-topbar-search{display:none}
+.account-page--auth .visual-card{display:none}
+.account-page--auth .account-main--auth-flow{display:flex;justify-content:center;align-items:flex-start;padding:48px 24px 64px;max-width:none}
+.account-page--auth .auth-stack{width:min(440px,100%);margin:0;display:flex;flex-direction:column;align-items:center;gap:26px}
+`;
+
+export const MODERN_AUTH_STYLE = MODERN_AUTH_LAYOUT_STYLE + MODERN_AUTH_FORM_STYLE;
+
+// Variante GESTIONALE: pannello visual mantenuto (scelta utente: "va bene
+// così com'è, magari migliorala") — form moderno + gradiente più ricco e
+// badge brand nel pannello.
+export const MODERN_MANAGE_AUTH_STYLE = MODERN_AUTH_FORM_STYLE + `
+.manage-page.account-page--auth{background:#f8fafc}
+.manage-page .auth-stack{gap:26px}
+.manage-page .visual-card.manage-visual{background:linear-gradient(160deg,#4e6da6 0%,#365287 55%,#243a63 100%);border-radius:22px;box-shadow:0 18px 44px rgba(36,58,99,.28)}
+.manage-page .visual-card .tenant-badge{background:rgba(255,255,255,.16);border-radius:12px}
+.manage-page .visual-card .visual-actions a{border-radius:10px}
 `;
