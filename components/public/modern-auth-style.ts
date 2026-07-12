@@ -42,26 +42,26 @@ export const MODERN_AUTH_LAYOUT_STYLE = `
 export const MODERN_AUTH_STYLE = MODERN_AUTH_LAYOUT_STYLE + MODERN_AUTH_FORM_STYLE;
 
 // Variante CLIENTI "photo split" (iterata su feedback utente, riferimento
-// screen "Nucleus" + richiesta di coerenza col gestionale): pannello FOTO
-// LARGO a sinistra con brand in alto e citazione in basso; a destra lo STESSO
-// form aperto del gestionale (label sopra i campi, input compatti, 'Password
-// dimenticata?' a destra, bottone squadrato), riga finale 'Non hai un
-// account? Registrati'.
+// screen "Nucleus" + richiesta di coerenza col gestionale): form a SINISTRA
+// sul bianco con freccia+brand in alto a sinistra come nel login
+// professionisti; pannello FOTO LARGO a destra con la citazione in basso.
+// Stessa pelle form del gestionale (label sopra i campi, input compatti,
+// 'Password dimenticata?' a destra, bottone squadrato), riga finale 'Non hai
+// un account? Registrati'.
 export const MODERN_CUSTOMER_PHOTO_AUTH_STYLE = MODERN_AUTH_FORM_STYLE + `
 .account-page--auth{background:#fff;min-height:100vh}
 .account-page--auth .marketplace-topbar{display:none}
 .account-page--auth .visual-card{display:none}
-.account-page--auth .auth-photo-panel{position:fixed;inset:0 auto 0 0;width:min(680px,44vw);background:#243a63 url('https://images.unsplash.com/photo-1560066984-138dadb4c035?auto=format&fit=crop&w=1400&q=80') center/cover no-repeat;display:flex;flex-direction:column;justify-content:space-between;padding:26px 30px 32px;z-index:1}
+.account-page--auth .auth-photo-panel{position:fixed;inset:0 0 0 auto;width:min(680px,44vw);background:#243a63 url('https://images.unsplash.com/photo-1560066984-138dadb4c035?auto=format&fit=crop&w=1400&q=80') center/cover no-repeat;display:flex;flex-direction:column;justify-content:flex-end;padding:26px 30px 32px;z-index:1}
 .account-page--auth .auth-photo-panel::before{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(15,23,42,.42) 0%,rgba(15,23,42,.05) 40%,rgba(15,23,42,.62) 100%)}
-.account-page--auth .auth-photo-brand{position:relative;display:flex;align-items:center;gap:10px;color:#fff;font-size:19px;font-weight:600;text-decoration:none;width:max-content;margin-left:52px;min-height:40px}
-.account-page--auth .auth-photo-brand .brand-mark{width:36px;height:36px;border-radius:11px;background:rgba(255,255,255,.18);backdrop-filter:blur(4px);color:#fff;display:grid;place-items:center;font-weight:600}
 .account-page--auth .auth-photo-quote{position:relative;color:#fff;max-width:520px}
 .account-page--auth .auth-photo-quote p{font-size:22px;font-weight:700;line-height:1.35;margin:0 0 10px}
 .account-page--auth .auth-photo-quote small{display:block;font-size:13px;font-weight:600;opacity:.92}
 .account-page--auth .auth-photo-quote small + small{font-weight:400;opacity:.75}
-.account-page--auth .account-main--auth-flow{display:flex;justify-content:center;align-items:center;min-height:100vh;padding:48px 24px;margin-left:min(680px,44vw);max-width:none;box-sizing:border-box}
+.account-page--auth .account-main--auth-flow{display:flex;justify-content:center;align-items:center;min-height:100vh;padding:48px 24px;margin-right:min(680px,44vw);max-width:none;box-sizing:border-box}
 .account-page--auth .auth-stack{width:min(400px,100%);margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0;min-height:0}
-.account-page--auth .auth-stack > .auth-brand{display:none}
+.account-page--auth .auth-stack > .auth-brand{position:fixed;top:26px;left:88px;z-index:5}
+.account-page--auth .auth-stack > .auth-brand .brand-mark{width:34px;height:34px;border-radius:10px;font-size:16px}
 .account-page--auth .auth-card{width:100%;background:transparent;border:0;box-shadow:none;padding:0}
 .account-page--auth .auth-card .eyebrow{display:none}
 .account-page--auth .auth-card h1{text-align:center;font-size:30px;margin-bottom:10px}
@@ -77,7 +77,7 @@ export const MODERN_CUSTOMER_PHOTO_AUTH_STYLE = MODERN_AUTH_FORM_STYLE + `
 .account-page--auth .auth-card .links{margin-top:22px;font-size:13.5px;color:#64748b;gap:6px}
 .account-page--auth .auth-card .links a{font-weight:700}
 .account-page--auth .auth-card .links span{display:none}
-@media (max-width:900px){.account-page--auth .auth-photo-panel{display:none}.account-page--auth .account-main--auth-flow{margin-left:0}}
+@media (max-width:900px){.account-page--auth .auth-photo-panel{display:none}.account-page--auth .account-main--auth-flow{margin-right:0}}
 `;
 
 // Variante GESTIONALE (iterata su feedback utente, riferimento screen

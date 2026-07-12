@@ -194,11 +194,6 @@ export function AccountLoginFaithful() {
 
       <div className="account-page account-page--auth">
         <div className="auth-photo-panel" aria-hidden="true">
-          {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- navigazione full-page voluta (anti-FOUC, come il resto della pagina) */}
-          <a className="auth-photo-brand" href="/attivita">
-            <span className="brand-mark">P</span>
-            <span>Prenodo</span>
-          </a>
           <div className="auth-photo-quote">
             <p>&ldquo;Prenotare i miei trattamenti non &egrave; mai stato cos&igrave; semplice.&rdquo;</p>
             <small>Cliente Prenodo</small>
