@@ -12632,3 +12632,46 @@ E3 vendita d'origine annullata → riga ANCORA in lista con
 saleCancelled=true; E4 servizio ZZ disattivato → serviceActive=false.
 Regressione Pagamenti verde: 13/13 + 15/15 + 11/11; baseline ripristinata
 (9 sales / 9 items / 10 appuntamenti / 0 servizi ZZ / pos_settings snap).
+
+## Dashboard — pass di verifica bug + migliorie (2026-07-12, sera)
+
+Richiesta: caccia bug (senza confronto PHP: dominio gia' verificato in 5
+passaggi, vedi sezioni precedenti) + suggerimenti di miglioria.
+
+Drift dal pass precedente: solo c87f7dc (hint needsLocationSelection alla
+shell contro il flash post-login, verificato in giornata con frame headless:
+spinner→gate, mai il gestionale; percorso normale senza loader aggiunti).
+
+Batterie: test-dashboard 16/16, test-dashboard3 5/5, test-dashboard4 7/7,
+test-dashboard-attest 9/9. e2e-dashboard era ROSSO (2 FAIL + exception):
+harness V1 stantio, non bug — (1) login reale sul tenant ormai multi-sede =
+sede 0 fail-closed (trappola nota) → sanato con sessione forgiata sede 21;
+(2) baseline sales30 con ramo NULL permissivo mentre il KPI legacy/port e'
+STRETTO per il ramo sales → query allineata; (3) checkout POS senza
+installment_choice (obbligatoria dal pass Pagamenti, valore 'single') e con
+aspettativa +80 sul prezzo payload mentre il server prezza dal LISTINO
+(servizio 9 = 12) → +12. Ora 13/13. dash-check.mjs archiviato .superseded
+(ERR_MODULE_NOT_FOUND, diagnostico monouso).
+
+Interferenza dati trovata e rimediata durante la regressione: promo 207
+clone 'test 5' ATTIVA (creata 12:10Z, origine non tracciata) scontava il 10%
+a ogni checkout → 12 falsi FAIL su e2e-installments-manage; rimedio
+conservativo 207 is_active=0 + 71 ripristinata a 1 (mai delete per
+inferenza). Dopo: 43/43.
+
+Probe ostili route (tutti corretti): no-session/cookie-mismatch/path
+traversal → 401; sede inesistente 9999 e negativa -1 → fail-closed a zero
+con costs null; solo dashboard.view → upcoming/costs null (gate per-card);
+slug ripetuto → primo valore.
+
+ZERO bug prodotto. Migliorie suggerite (non applicate): (1) PERF — l'API
+dashboard fa ~29 query DB sequenziali = 650-730ms misurati; parallelizzare i
+blocchi indipendenti (KPI, weekly, upcoming, costi, avvisi) con Promise.all
+la porterebbe verosimilmente a 200-300ms; (2) UX — DashboardContent
+renderizza le card VUOTE finche' il fetch non risolve: skeleton/spinner
+nelle card (KPI e grafico) eviterebbe il vuoto di ~1s; (3) refetch su
+visibilitychange/focus per riallineare i KPI quando si torna sulla scheda
+(il legacy 'si aggiorna' a ogni page load, la SPA no); (4) Chart.js da CDN
+con timeout 3s gia' gestito — valutare bundle locale per togliere la
+dipendenza esterna; (5) il widget costi nascosto su errore SQL (bug-fedele)
+meriterebbe almeno un log server-side per non silenziare regressioni vere.
