@@ -1,5 +1,18 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Orari pass 2: ri-attestazione — 140 verdi, nessun bug prodotto (2026-07-12)
+
+Seconda passata (audit 1:1 07-10 6b112e7). DRIFT: solo il pass Report
+(verificato lì).
+BATTERIA subito verde: test-orari 37 (la suite d'audit gira su sede ZZ e
+copre GIÀ i casi ostili: B7 quirk (int) PHP 'aa:bb'->00:00 SALVATO senza
+errore formato, chiusura con data '2026-02-31', autorizzazione sede su
+GET+POST, join errori '; '×8 vs ' ', fallback righe globali NULL) +
+e2e-hours-page 37 + e2e-hours-calendar 4 (perm hours.manage) +
+markers-hours 62 = 140.
+Baseline: 7 righe globali (NULL) + 7 per-sede + 0 eccezioni intatte, 2 sedi.
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice prodotto.
+
 ## Operatori pass 2: ri-attestazione + sonda ostile — 162 verdi, nessun bug prodotto (2026-07-12)
 
 Seconda passata (audit 1:1 07-10 3d96a40 con fix stale-read email). DRIFT:
