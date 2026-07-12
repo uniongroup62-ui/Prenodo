@@ -1,5 +1,33 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Booking pass 2 (wizard pubblico + impostazioni + marketplace): ri-attestazione — 155+ verdi, nessun bug prodotto (2026-07-12)
+
+Seconda passata dedicata (items 18-24 07-02/03, impostazioni 07-03 +
+audit booking-settings, wizard fixes 07-06, QB audit 07-11 per il flusso
+gestionale). DRIFT: zero sulle superfici booking.
+BATTERIA (tutta verde a fine pass): test-booking-settings 13 +
+e2e-booking-settings 12 + e2e-booking-admin 9 + e2e-booking-marketplace 26 +
+markers-booking-admin 31 + markers-booking-wizard 64 +
+verify-booking-markers ALL-OK.
+ATTESTAZIONE MARKUP MORTO (3 marker corretti): booking.php contiene un
+wizard INLINE morto (13152-13200: 'Scegli i servizi', 'Scegli l\'operatore
+per il tuo servizio.', 'Nessuna disponibilità per questa data.') che il
+wizard live JS-driven SOVRASCRIVE — verificato sulla pagina live XAMPP
+(nessuno dei 3 testi presente) e su booking-wizard.js (stepTitle 3238
+'Servizi', 3247-50 'Professionista'/'Scegli il professionista per ogni
+servizio selezionato.', slotEmpty 3318 'Nessuna disponibilità per questo
+giorno.') = ESATTAMENTE i testi del port booking-faithful. I marker
+puntavano al markup morto.
+HARNESS marketplace (5 check): i redirect attesi verso /account/* erano
+PRE-audit Account (d2334ca ha rimosso il pannello centralizzato fabbricato):
+ora hub/my/packs rendono l'HUB PER-SEDE in-place nella pagina booking (port
+di booking.php 9314-9336; accountAuthDestination mappa hub->
+/<slug>/booking?hub=1) — check adeguati (nav Dashboard/sezioni nell'SSR,
+sottotitoli sezione, mapping unit). profile resta su /account/profile.
+NB: i wiz-*.mjs sono sonde Playwright one-off delle passate wizard (non
+batteria mantenuta).
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice prodotto.
+
 ## Report pass 2: ri-attestazione — 177 verdi, nessun bug prodotto (2026-07-12)
 
 Seconda passata (audit 1:1 07-10 679f9bd). DRIFT: zero.
