@@ -1,5 +1,25 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Profilo attività pass 2: ri-attestazione + sonda limiti — 127 verdi, nessun bug prodotto (2026-07-12)
+
+Seconda passata (audit 07-06 + audit 1:1 07-10 f3738c5 col sync marketplace
+best-effort). DRIFT: zero.
+BATTERIA subito verde: test-profilo 25 + e2e-business-profile 25 +
+markers-business-profile 73 + sonda 4 = 127.
+SONDA LIMITI (con snapshot/restore byte-identico della riga businesses):
+nome vuoto -> wrapper legacy che INGLOBA la validazione ('Errore salvataggio
+profilo attività: Inserisci il nome attività. (se persiste, ...)'); nome 191
+-> 'Il nome attività può contenere al massimo 190 caratteri.' (può
+ACCENTATA); Chi siamo 3001 -> 'Il testo Chi siamo puo contenere al massimo
+3000 caratteri.' (puo NON accentata, quirk del sorgente conservato); azioni
+= save_profile_name/save_profile_activity sulla route business-settings.
+NB: un save valido intermedio della sonda ha chiamato il sync marketplace —
+verificato NESSUN residuo (tenant_directory_profiles non ha riga per questo
+tenant: marketplace non attivo) e riallineato comunque con un re-save dei
+valori di produzione.
+Baseline: businesses byte-identica ('elite', about vuoto).
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice prodotto.
+
 ## Orari pass 2: ri-attestazione — 140 verdi, nessun bug prodotto (2026-07-12)
 
 Seconda passata (audit 1:1 07-10 6b112e7). DRIFT: solo il pass Report
