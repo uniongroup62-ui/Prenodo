@@ -1,5 +1,21 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Report pass 2: ri-attestazione — 177 verdi, nessun bug prodotto (2026-07-12)
+
+Seconda passata (audit 1:1 07-10 679f9bd). DRIFT: zero.
+BATTERIA: test-report 24 + e2e-reports 20 + e2e-reports-page 15 +
+markers-reports 114 + test-reports-net 4 = 177.
+HARNESS SANATO e2e-reports-page L3 (classe mono-sede): 'all_locations con
+UNA sede autorizzata -> label col nome della sede' (reports.php 313-336) ora
+si testa con una sessione RISTRETTA a [21] — con l'admin e 2 sedi la label è
+correttamente 'Tutte le sedi autorizzate' (multi-sede fedele), non più il
+collasso al nome singolo.
+Coperti: Incasso a eventi di CASSA (rate per paid_at) ≠ Venduto, costi
+BETWEEN inclusivo, filtro sede a lista con NULL solo-admin e fail-closed,
+'non presentata' doppia bug-fedele, confronto Scegli-mese same-length,
+Prodotto sempre nel donut, 403 card.
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice prodotto.
+
 ## Automazione pass 2: ri-attestazione + bonifica reminders — 134 verdi, nessun bug prodotto (2026-07-12)
 
 Seconda passata (audit 1:1 07-10 899d16a). DRIFT: zero.
