@@ -1,5 +1,27 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Punti pass 2: ri-attestazione + fix leak campagna 37 — 286 verdi, nessun bug prodotto (2026-07-12)
+
+Seconda passata dedicata (audit completo 07-10 df19863 col fix derivazione
+Livelli Card write-only e chiavi livello campagne). DRIFT: zero sul dominio.
+BATTERIA (tutta verde a fine pass): test-punti 26 + e2e-fidelity-points 42 +
+e2e-fidelity-levels 31 + markers-fidelity-points 102 + markers-fidelity-levels
+58 + e2e-fidelity-toggle 27 = 286.
+LEAK TROVATO E FIXATO (harness, nessun bug prodotto): e2e-fidelity-points al
+check 'points off' spegne Punti -> il motore disattiva FEDELMENTE tutte le
+campagne attive (compresa la 37 di produzione, marcandola
+auto_disabled_by_points=1) e il re-enable NON la riattiva -> a fine run la 37
+restava spenta (secondo colpevole dopo e2e-fidelity: è QUESTA la suite che
+l'aveva spenta ieri sera alle 22:55, girata nel pass di audit) e il messaggio
+contava '2 campagne punti attive disattivate' invece di 1. Fix: snapshot +
+off + restore (active=1 + flag azzerato) delle campagne di produzione, così
+il points-off vede solo la campagna ZZ propria. Campagna 37 RIPRISTINATA
+(active=1, auto_disabled_by_points=0); test-punti E4 fa da sentinella.
+SONDA: earn step 0 -> guardato (step>0 ? amount/step : 0, nessuna divisione
+per zero), fallback earnStepEuro -> earnStep globale, floor a valle.
+Baseline: tx 80, campagna 37 ATTIVA flag pulito, 5 clienti, levels-null.
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice prodotto.
+
 ## Promozioni pass 2: ri-attestazione + risanamento batteria — 228 verdi, nessun bug prodotto (2026-07-12)
 
 Seconda passata (chiusa 07-03, lista riscritta 07-05, audit completo 07-09
