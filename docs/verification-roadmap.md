@@ -1,5 +1,31 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Booking pubblico pass 3: NUOVA suite comportamentale end-to-end — 13+regressione verdi, nessun bug prodotto (2026-07-12)
+
+Terza passata sul wizard/API pubblici (dopo il pass Booking di stamattina che
+copriva impostazioni/ingressi/marker): valore nuovo = flusso COMPORTAMENTALE
+live via /api/booking (i vecchi wiz-*.mjs Playwright erano one-off).
+NUOVA SUITE e2e-public-booking-flow 13/13:
+- context (business+servizi+sedi), closures (closed_dows/dates/ranges);
+- slots: martedì aperto -> 109 slot 9-19 con staffId/staffName/reason
+  'Disponibile'; DOMENICA (chiusura settimanale) -> zero;
+- hold_slot -> token 64hex (shape {hold:{token}}), owner_key coerente;
+- confirm -> appuntamento PENDING su sede 21, cliente auto-creato/linkato
+  con nome+email del form, riga appointment_services col prezzo dal LISTINO
+  (12.00), account marketplace auto-collegato; cleanup completo (appt +
+  services/staff + reminders auto-schedulati + cliente + account).
+- OSTILI: doppio slot -> 'Orario non disponibile.' (unico operatore alla
+  sede); conferma su giorno CHIUSO -> rifiutata; servizio inesistente ->
+  'Uno o piu servizi non sono prenotabili.'; coupon garbage -> 'Coupon non
+  trovato.' senza crash.
+NOTE HARNESS: gli hold sono transienti (TTL ~15') ma le run uccise li
+lasciano attivi -> sweep pre-run per la data di test; il confirm risponde
+{confirmation:{id}} (non appointment.id) — una lettura errata aveva creato
+un appuntamento non tracciato (1373, rimosso; safety-net per note aggiunto).
+REGRESSIONE: markers-booking-wizard 64 + verify-booking-markers ALL-OK +
+e2e-booking-marketplace 26.
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice prodotto.
+
 ## Marketplace pass 5: ri-attestazione + FIX empty-state 'Attività non trovata' — 227 verdi (2026-07-12)
 
 Quinta passata (audit 07-06 ×4 + superfici booking-marketplace riverificate
