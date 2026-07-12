@@ -1,5 +1,23 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Operatori pass 2: ri-attestazione + sonda ostile — 162 verdi, nessun bug prodotto (2026-07-12)
+
+Seconda passata (audit 1:1 07-10 3d96a40 con fix stale-read email). DRIFT:
+zero sui file dedicati.
+BATTERIA: test-operatori 48 + e2e-staff-page 27 + markers-staff 35 +
+e2e-staff-availability 16 + e2e-staff-for-service 6 + test-staff-filter 4 +
+test-staff-list 1 + test-staff-sede2 4 + test-operator 8 + regress 7 +
+column-match 4 + sonda 2 = 162.
+SONDA OSTILE: delete dell'owner (staff 22) -> 'Admin non può essere
+eliminato' con riga intatta; id inesistente -> 'Operatore non trovato'.
+NB azione = staff_delete sulla route resources (un action sconosciuto
+risponde 200 vuoto, come il fall-through del legacy).
+HARNESS SANATO e2e-staff-availability: sessione forgiata sede 21 (A4 creava
+il cliente via API col login reale a sede 0 -> client_id 0 e label conflitto
+'—' invece del nome; il rilevamento del conflitto era comunque corretto).
+Baseline: 2 staff produzione intatti, 5 clienti.
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice prodotto.
+
 ## Cabine pass 2: ri-attestazione + sonda ostile — 95 verdi, nessun bug prodotto (2026-07-12)
 
 Seconda passata (audit 1:1 07-10 b639f4d). DRIFT: solo i pass QB già
