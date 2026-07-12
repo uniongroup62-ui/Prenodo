@@ -424,12 +424,12 @@ export async function getCalendarDayStaffOrder(slug: string, userId = 1): Promis
     limit: 1,
   }).catch(async () => dbQuery<RowDataPacket[]>(`SELECT calendar_day_staff_order FROM ${quoteIdentifier(users.name)} WHERE id=? LIMIT 1`, [targetUserId]));
   const raw = String(rows[0]?.calendar_day_staff_order ?? "");
-  return normalizeOrderList(raw ? JSON.parse(raw) : []);
+  return normalizeOrderList(raw ? decodeJsonTolerant(raw) : []);
 }
 
 export async function setCalendarDayStaffOrder(slug: string, userId: number, order: unknown): Promise<number[]> {
   await ensureUserCalendarOrderColumn(slug);
-  const normalized = normalizeOrderList(Array.isArray(order) ? order : JSON.parse(String(order || "[]")));
+  const normalized = normalizeOrderList(Array.isArray(order) ? order : decodeJsonTolerant(String(order ?? "")));
   const users = await tenantTable(slug, "users");
   const targetUserId = userId > 0 ? userId : 1;
   await tenantUpdate({ slug, table: "users", id: targetUserId, values: { calendar_day_staff_order: JSON.stringify(normalized) } })
@@ -696,6 +696,19 @@ function resolveCurrentStaffId(
     }
   }
   return 0;
+}
+
+// json_decode PHP (api_user_prefs.php 53/82): su JSON corrotto torna null —
+// mai un errore. JSON.parse invece lancia (e la route rispondeva 400 col
+// SyntaxError inglese): qui si replica la tolleranza del legacy.
+function decodeJsonTolerant(raw: string): unknown {
+  const s = raw.trim();
+  if (!s) return null;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
 }
 
 function normalizeOrderList(value: unknown): number[] {

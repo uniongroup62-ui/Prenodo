@@ -12701,3 +12701,45 @@ Verifica: batteria COMPLETA verde post-refactor (16+5+7+9+13), valori API
 byte-identici (attestazione 9/9 inclusa), tsc/eslint puliti, screenshot
 skeleton+finale ok, zero errori console. Il badge '1 Issue' dell'overlay dev
 apparso in uno screenshot era HMR transitorio (edit concorrente al load).
+
+## Calendario — pass di verifica bug + migliorie (2026-07-12, sera)
+
+Richiesta: caccia bug + suggerimenti (dominio gia' COMPLETO nei pass
+precedenti). Drift dal pass: solo Appuntamenti 270d8ff (dominio contiguo),
+shell hint c87f7dc e Dashboard 779a9f1 — nessuno tocca i file calendario.
+
+Batterie: markers 48/48, test-calendario 20/20, location-scope 6/6,
+e2e-calendar-move 33/33, e2e-hours-calendar 4/4. verify-calendar.mjs
+archiviato .superseded (diagnostico one-off, import playwright bare).
+
+Probe ostili route (corretti): notes start=garbage / end<start →
+'Intervallo non valido.'; context date=garbage → fallback a oggi (fedele a
+strtotime); note_save senza data/testo → messaggi verbatim; id inesistente →
+'Nota non trovata.'; delete id=0 → 'Nota non valida.'; scrittura note da
+view-only → 403 'Permesso Appuntamenti richiesto.'; azione inventata → 400;
+titolo/testo oltre i limiti → clamp 190/20000; scoping tenant verificato su
+list/save/delete/fetch/exists (shared mode con tenant_id). Nota rollover
+'2027-02-30' → salvata al 2027-03-02 = FEDELE (strtotime PHP rolla uguale);
+nota di probe ripulita via API (id tracciato).
+
+1 BUG FEDELTA' (minore) TROVATO E CORRETTO: l'ordine colonne operatori
+(get/set_calendar_day_staff_order) usava JSON.parse nudo → su JSON corrotto
+400 col SyntaxError INGLESE, mentre il legacy api_user_prefs.php usa
+json_decode che torna null → normalize → [] senza errore. Fix
+decodeJsonTolerant (trim, '' → null, try/catch → null) su entrambi i punti;
+verificato con snapshot+probe+restore: bad json → ok:true order [], stringa
+valida → [56,22], corrotto in colonna → get []. EDGE NOTO non corretto:
+body.order come ARRAY JSON vero viene appiattito da parseRequestBody
+('22,56') → [] (legacy is_array lo accetterebbe); il client reale manda
+SEMPRE una stringa JSON (calendar-content 2462), toccare l'util condivisa
+non vale il rischio.
+
+MIGLIORIE SUGGERITE (non applicate): (1) PERF — action=context 450-760ms
+misurati (~65 await nel lib, in gran parte sequenziali): parallelizzare i
+blocchi indipendenti (staff, servizi, appuntamenti, note, unavailability)
+come fatto per la dashboard (779a9f1) porterebbe verosimilmente sotto i
+250ms; (2) hardening: location_id del ramo staffUnavailability potrebbe
+ricadere sulla sede di sessione quando il param manca/è invalido (oggi null
+= nessun filtro sede); il client passa sempre il valore giusto, priorita'
+bassa. UX: overlay 'Caricamento prenotazioni…' anti-flicker gia' presente e
+fedele — nessuno skeleton necessario.
