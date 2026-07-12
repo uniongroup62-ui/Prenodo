@@ -13,7 +13,9 @@ export const metadata: Metadata = {
 
 const STYLE = `
 .login-choice-page{min-height:100vh;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;font-family:inherit;color:#0f172a}
-.login-choice-brand{position:fixed;top:26px;left:28px;z-index:5;display:flex;align-items:center;gap:12px;font-size:20px;font-weight:600;color:#0f172a;text-decoration:none}
+.login-choice-back{position:fixed;left:24px;top:24px;z-index:20;width:42px;height:42px;border:1px solid #dbe3ef;border-radius:50%;background:#fff;color:#0f172a;display:grid;place-items:center;text-decoration:none;font-size:22px;font-weight:600;line-height:1;box-shadow:0 10px 28px rgba(15,23,42,.08);transition:background .18s ease,border-color .18s ease,transform .18s ease}
+.login-choice-back:hover{background:#f8fafc;border-color:#cbd5e1;transform:translateX(-2px)}
+.login-choice-brand{position:fixed;top:26px;left:88px;z-index:5;display:flex;align-items:center;gap:12px;font-size:20px;font-weight:600;color:#0f172a;text-decoration:none}
 .login-choice-brand__mark{width:34px;height:34px;border-radius:10px;background:#4e6da6;color:#fff;display:grid;place-items:center;font-weight:600;font-size:16px}
 .login-choice-title{font-size:30px;font-weight:700;margin:0 0 10px;text-align:center}
 .login-choice-subtitle{font-size:13.5px;color:#64748b;margin:0 0 30px;text-align:center;line-height:1.5}
@@ -46,6 +48,10 @@ export default async function LoginChoicePage({
   return (
     <div className="login-choice-page">
       <style dangerouslySetInnerHTML={{ __html: STYLE }} />
+      {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+      <a className="login-choice-back" href="/attivita" aria-label="Torna alla home" title="Torna alla home">
+        &larr;
+      </a>
       {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
       <a className="login-choice-brand" href="/attivita">
         <span className="login-choice-brand__mark">P</span>
