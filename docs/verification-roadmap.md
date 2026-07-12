@@ -12760,3 +12760,40 @@ nessun filtro sede sulle bande grigie; il client passa comunque il param).
 
 Regressione verde: markers 48/48, test-calendario 20/20, location-scope
 6/6, e2e-calendar-move 33/33, e2e-hours-calendar 4/4; tsc/eslint puliti.
+
+## Appuntamenti — pass di verifica bug + migliorie (2026-07-12, sera)
+
+Richiesta: caccia bug + suggerimenti (dominio COMPLETO nei pass lista/
+Pianifica/QB). Drift: nessuno sui file del dominio dopo dbe2e13.
+
+Batterie: markers-plan 18/18 e e2e-plan 14/14 subito verdi. 2 HARNESS
+STANTII SANATI (non bug): (1) markers-appointments 26/27 — il marker
+dell'empty-state cercava la frase INTERA ma dal pass 270d8ff la coda e'
+gated dal ternario canSeeCalendar e non e' piu' contigua nel chunk buildato
+→ marker sul prefisso stabile → 27/27; (2) e2e-appointments-list 7/8 —
+login REALE sul tenant multi-sede = sede 0 fail-closed (lista vuota, riga
+scheduled 'assente') → sessione forgiata sede 21 → 13/13 (piu' check
+eseguiti a valle della riga ora visibile).
+
+Probe ostili route (tutti corretti): search SQL-ish/percent ignorata dal
+server = FEDELE (il filtro lista e' client-side anche nel legacy); date/
+status garbage ignorati; get/preview id 0/negativo/NaN → 'ID mancante', id
+altrui/enorme → guard sede verbatim 403; cancel_done_preview normalizza il
+target a no_show|canceled come api_appointments 9613+; azione GET
+sconosciuta → list (default legacy), POST sconosciuta → path save con
+'Inserisci inizio e fine.' (default legacy); bulk_delete con ids garbage →
+no-op coi contatori, con array misto → guardia stato senza toccare nulla
+(baseline 10 appuntamenti verificato INTATTO, 210 incluso); status
+inventato → 'Stato prenotazione non valido.'; hold garbage → release
+silenzioso ok:false / renew 'Hold non trovato.'.
+
+ZERO bug prodotto. MIGLIORIE SUGGERITE (non applicate): (1) PERF —
+action=list 730-795ms e action=get 433-476ms CON SOLE 9 RIGHE:
+mapAppointment fa 4 fetch sequenziali PER RIGA (clientName, serviceLines,
+staffRef, segments) = N+1 amplificato; batch per id-set (un fetch per
+tabella) porterebbe la lista sotto i ~300ms e scalerebbe con le settimane
+piene — refactor DELICATO (mapAppointment e' condiviso da lista/calendario/
+save/QB), da fare solo con la regressione completa del dominio; (2) legata
+alla (1): la lista ritorna tutte le righe del periodo senza paginazione
+(parity legacy) — con dataset grandi il payload cresce, monitorare;
+plan_context gia' rapido (55-62ms), nessun intervento.
