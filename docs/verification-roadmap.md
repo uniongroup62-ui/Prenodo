@@ -18,8 +18,13 @@ Fresha con le 2 card). Implementato:
   non passa dal selettore, come Fresha nel funnel.
 Superficie NUOVA a livello piattaforma: i due login esistenti restano
 invariati (nessun impatto sulla parità 1:1 delle pagine portate).
-Verificato headless: entrambe le card navigano correttamente, voce menu
-presente su /attivita. tsc 0; eslint pulito sulle righe nuove.
+Verificato headless: entrambe le card navigano correttamente. FIX flash
+(segnalazione utente): le destinazioni caricano i CSS via <link> nel
+componente e la client-navigation di Next montava il DOM prima del CSS
+(FOUC per una frazione di secondo) -> card/brand/registrati navigano
+FULL-PAGE (<a>): il CSS in <head> blocca il paint, primo frame già
+stilizzato (verificato: topbar sticky e bg corretti al domcontentloaded).
+tsc 0; eslint 0.
 
 ## Booking pubblico: FIX pulsante X del wizard (bottone MORTO) — segnalazione utente (2026-07-12)
 

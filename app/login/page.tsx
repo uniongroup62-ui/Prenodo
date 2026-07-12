@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 
 // Selettore d'ingresso "per i clienti / per i professionisti" (pattern Fresha,
 // richiesto dall'utente il 2026-07-12). Superficie NUOVA a livello piattaforma:
@@ -42,33 +41,42 @@ export default async function LoginChoicePage({
   const rawReturn = query.return;
   const ret = String(Array.isArray(rawReturn) ? rawReturn[0] ?? "" : rawReturn ?? "");
   const returnQs = ret.startsWith("/") && !ret.startsWith("//") ? `?return=${encodeURIComponent(ret)}` : "";
+  // NB: navigazioni FULL-PAGE (<a>, non <Link>): le pagine di destinazione
+  // caricano i loro CSS via <link> dentro il componente (app.css /
+  // public_account.css) e con la client-navigation il DOM viene montato PRIMA
+  // che il CSS arrivi -> flash di contenuto non stilizzato (segnalato
+  // dall'utente). Col document-load il CSS blocca il paint: niente flash.
   return (
     <div className="login-choice-page">
       <style dangerouslySetInnerHTML={{ __html: STYLE }} />
-      <Link className="login-choice-brand" href="/attivita">
+      {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+      <a className="login-choice-brand" href="/attivita">
         <span className="login-choice-brand__mark">P</span>
         <span>Prenodo</span>
-      </Link>
+      </a>
       <h1 className="login-choice-title">Come vuoi accedere?</h1>
       <p className="login-choice-subtitle">Scegli l&apos;area giusta per te.</p>
       <div className="login-choice-cards">
-        <Link className="login-choice-card" href={`/account/login${returnQs}`}>
+        { }
+        <a className="login-choice-card" href={`/account/login${returnQs}`}>
           <span className="login-choice-card__text">
             <span className="login-choice-card__title">Prenodo per i clienti</span>
             <span className="login-choice-card__desc">Prenota saloni e centri estetici vicino a te</span>
           </span>
           <span className="login-choice-card__arrow" aria-hidden="true">&rarr;</span>
-        </Link>
-        <Link className="login-choice-card" href="/manage/login">
+        </a>
+        {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+        <a className="login-choice-card" href="/manage/login">
           <span className="login-choice-card__text">
             <span className="login-choice-card__title">Prenodo per i professionisti</span>
             <span className="login-choice-card__desc">Gestisci e fai crescere la tua attivit&agrave;</span>
           </span>
           <span className="login-choice-card__arrow" aria-hidden="true">&rarr;</span>
-        </Link>
+        </a>
       </div>
       <p className="login-choice-foot">
-        Non hai un account? <Link href={`/account/register${returnQs}`}>Registrati come cliente</Link>
+        { }
+        Non hai un account? <a href={`/account/register${returnQs}`}>Registrati come cliente</a>
       </p>
     </div>
   );
