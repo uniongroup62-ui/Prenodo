@@ -1,5 +1,25 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Booking pubblico: FIX pulsante X del wizard (bottone MORTO) — segnalazione utente (2026-07-12)
+
+L'utente ha chiesto di verificare la X del wizard: nel port #btnClose era
+renderizzato SENZA onClick (bottone morto). Il legacy (booking-wizard.js
+4075-4080) al click: releaseBookingHold() + navigazione a
+wizardConfig.closeUrl = '?page=booking&public=1' (la "home"/gate del booking
+pubblico, NON la homepage del sito).
+FIX (booking-faithful.tsx): onClick che rilascia l'hold attivo via
+action=release_hold (token + owner_key correnti) e naviga a
+/<slug>/booking?public=1 — che da loggato redirige alla showcase
+/attivita/<slug> come il flusso legacy.
+VERIFICATO HEADLESS (account cliente ZZ register+verify): wizard aperto a
+'Scegli la sede' -> click X -> URL /attivita/centroesteticoelite con
+salon-hero renderizzata. tsc/eslint puliti.
+BONIFICA COLLATERALE: il cleanup account di e2e-public-booking-flow usava
+nomi tabella errati (catch silenzioso) -> corretti
+(public_customer_accounts/sessions/tenant_links/favorites) e rimossi 3
+account zz residui (incluse 2 eredità di sessioni precedenti); flow 13/13
+riconfermato con 0 account zz a fine run.
+
 ## Booking pubblico pass 3: NUOVA suite comportamentale end-to-end — 13+regressione verdi, nessun bug prodotto (2026-07-12)
 
 Terza passata sul wizard/API pubblici (dopo il pass Booking di stamattina che

@@ -1353,7 +1353,25 @@ export function BookingFaithful({
           >
             <i className="bi bi-arrow-left" />
           </button>
-          <button type="button" className="booking-floating-action booking-floating-close" id="btnClose" aria-label="Chiudi">
+          <button
+            type="button"
+            className="booking-floating-action booking-floating-close"
+            id="btnClose"
+            aria-label="Chiudi"
+            onClick={() => {
+              // Port di btnClose legacy (booking-wizard.js 4075-4080): rilascia
+              // l'hold attivo e torna alla "home" del booking pubblico
+              // (closeUrl = ?page=booking&public=1), non alla homepage del sito.
+              if (hold) {
+                void fetch("/api/booking", {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ action: "release_hold", slug, token: hold.token, owner_key: ownerKeyRef.current }),
+                }).catch(() => {});
+              }
+              window.location.href = `/${encodeURIComponent(slug)}/booking?public=1`;
+            }}
+          >
             <i className="bi bi-x-lg" />
           </button>
 
