@@ -12892,3 +12892,49 @@ Durante la verifica: wedge Turbopack (il server serviva l'error page di
 uno stato intermedio tra due edit) → ricetta nota kill+rm .next/dev+
 riavvio. Regressione verde: QB 35+21+16+28 + findings 3 + residui 6,
 appuntamenti lista 13, calendario 20+33; tsc/eslint puliti.
+
+## Notifiche — pass di verifica bug + analisi logiche mutative (2026-07-12, sera)
+
+Richiesta: caccia bug + valutazione delle logiche di modifica/eliminazione.
+Drift: zero sui file del dominio dopo b00f28c.
+
+Batterie TUTTE verdi al primo colpo: hub 16/16, feed 10/10, shell 12/12,
+coupon 6/6, feed-engine 12/12, automation e2e 19/19.
+
+ANALISI LOGICHE MUTATIVE (verificata sia nel codice che live con seed ZZ
+pending 547, tracciato e rimosso con i suoi 2 reminders; baseline 10
+appuntamenti confermato):
+- Le notifiche sono DERIVATE, non righe proprie: pending/rate/compleanni/
+  preventivi/tessere calcolati live dalle tabelle di dominio → non esiste
+  (correttamente) un delete/edit della notifica; sparisce quando il fatto
+  sottostante si risolve. Nessuna riga orfana possibile.
+- APPROVE: catena guardie (notifications.view route + appointments.manage
+  azione 'Operazione non autorizzata' → id>0 'Operazione non valida' →
+  visibilita' sede col ramo BRIDGE → pending coi sinonimi italiani) e UPDATE
+  DOPPIO-GUARDATO (WHERE ancora-pending + RETURNING): la race di due
+  operatori simultanei e' chiusa — verificato live: secondo approve →
+  'Appuntamento non piu in attesa'.
+- CANCEL/REJECT: motore lifecycle completo (restore riserve punti/credito/
+  giftcard) con guardie di idempotenza PROPRIE ('La prenotazione risulta
+  già annullata.'): il micro-TOCTOU tra check e apply e' innocuo. Cancel
+  su appena-approvato → bloccato dal hub (gli scheduled si annullano dal
+  calendario col preview ricco): corretto e fedele.
+- SIDE EFFECT sicuri: sendAppointmentLifecycleEmail e
+  automationScheduleReminder hanno try/catch interni (mai un errore falso
+  DOPO un update riuscito).
+- SETTINGS compleanni: clamp 0..365 con fallback 7 — verificato live
+  (-5→0, 9999→365, garbage→7 via parseInteger della route).
+- 'Visto' del poller: localStorage tenant:utente:sede cap 180 (fedele).
+VERDETTO: le logiche presenti sono CORRETTE e ben difese; nessun
+suggerimento strutturale necessario.
+
+Probe ostili route: permessi/id/sede/race/azione inventata tutti verbatim.
+
+ZERO bug prodotto. MIGLIORIE SUGGERITE (non applicate): (1) PERF PRIORITARIA
+— action=feed ~717-743ms warm ed e' chiamata OGNI 5s da ogni scheda manage
+aperta (poller globale): parallelizzare i blocchi interni del feed (stessa
+ricetta di dashboard/calendario/appuntamenti) ridurrebbe un carico DB
+costante; anche action=pending ~570-597ms beneficerebbe; (2) opzionale,
+DIVERGE dal legacy: 'visto' server-side al posto del localStorage (oggi
+cambiare browser/pulire storage ri-mostra i toast gia' visti) — solo se si
+accetta la deviazione.
