@@ -1,5 +1,26 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Portafoglio pass 2: ri-attestazione + sonda ostile — 140 verdi, nessun bug prodotto (2026-07-12)
+
+Seconda passata dedicata (audit completo 07-09, modulo attestato FEDELE senza
+fix; il lato wallet è stato appena riverificato anche dentro Fidelity pass 2
+di oggi, incluso il fix del leak point_lots di e2e-fidwallet). DRIFT: solo
+Modello A.
+BATTERIA (tutta da zero): test-portafoglio 14 + e2e-fidelity-wallet 29 +
+e2e-fidwallet 11 + markers-fidelity-wallet 72 + e2e-credit 10 (tile Credito)
++ check-wallet-extra 1 + sonda ostile 3 = 140 verdi.
+SONDA OSTILE: op sconosciuta 'destroy' -> DEFAULT 'add' e 'Aggiunti 2 Punti'
+(fedele al fallback in_array di fidelity_wallet.php 110 — hand-POST con op
+garbage AGGIUNGE, come nel legacy); client_id inesistente -> ok:true con
+detail null (lista senza scheda, nessun errore); mov_page=-5 -> 200 con la
+prima pagina (20 movimenti, clamp).
+HARNESS: check-wallet-extra a sessione forgiata (il fetch di login reale
+lasciava un socket keepalive che abortiva node a teardown su Windows — exit
+127 con check logicamente verdi; ora exit 0 pulito).
+Baseline confermata dai cleanup delle suite: tx 80, lots 36, appt 10, cards
+0, clienti 5. DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice
+prodotto.
+
 ## Ricariche pass 2: ri-attestazione + sonda parsing — 126 verdi, nessun bug prodotto (2026-07-12)
 
 Seconda passata (pagina 07-05 + audit completo 07-09 col fix double-earn
