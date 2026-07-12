@@ -1,5 +1,20 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Ruoli pass 3: ri-attestazione + sonda normalize — 89 verdi, nessun bug prodotto (2026-07-12)
+
+Terza passata (V6 07-03 + audit 07-06 + audit 1:1 07-10 f9851d3 con 5 fix).
+DRIFT: zero.
+BATTERIA subito verde: test-ruoli 21 + e2e-roles-page 16 + e2e-auth-roles 16
++ markers-roles 35 + sonda 1 = 89. La suite d'audit copre già: gate
+solo-Admin (roles.manage nei perms di un NON-admin -> comunque 403,
+non-assegnabile riservato), ensureDb (sync + auto-grant RAW con display
+invariato + migrazione packages.manage -> access+3 figli), normalize
+(ereditati scartati, packages.access auto-aggiunto), audit old RAW.
+SONDA: save_role_perms con ['permesso.inventato','roles.manage',
+'clients.manage'] -> la normalize scarta l'inventato E il non-assegnabile,
+persiste SOLO clients.manage (snapshot/restore ruolo identico).
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice prodotto.
+
 ## Accessibilità pass 3: ri-attestazione — 175 verdi, nessun bug prodotto (2026-07-12)
 
 Terza passata (audit 07-06 + audit 1:1 07-10 6622c65 con 5 fix sul gate
