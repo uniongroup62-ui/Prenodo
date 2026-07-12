@@ -1,5 +1,20 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Cabine pass 2: ri-attestazione + sonda ostile — 95 verdi, nessun bug prodotto (2026-07-12)
+
+Seconda passata (audit 1:1 07-10 b639f4d). DRIFT: solo i pass QB già
+verificati (conflitti cabina-prima).
+BATTERIA subito verde: test-cabine 34 + e2e-cabins-page 20 + markers-cabins
+24 + e2e-cabins-resources 14 (sanata nel pass Risorse) + sonda 3 = 95.
+SONDA OSTILE (su sede ZZ seminata via SQL — le sedi 21/51 sono produzione):
+cabins_count 500 -> clamp legacy a 50 e guardia 'Inserisci un nome per tutte
+le cabine.' (i nomi mancanti dopo lo slice/pad falliscono la validazione,
+identico a cabins.php 410-418); count -3 -> clamp 0, save ok; delete con
+prenotazione FUTURA -> 'Cabina non eliminata: e associata a servizi o
+prenotazioni future.' (verbatim, "e" senza accento).
+Baseline: 4 cabine di produzione intatte, sede ZZ rimossa.
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice prodotto.
+
 ## Servizi pass 2: ri-attestazione + sonda ostile — 147 verdi, nessun bug prodotto (2026-07-12)
 
 Seconda passata (audit funzionale 07-06 + audit completo 07-10 77da9aa,
