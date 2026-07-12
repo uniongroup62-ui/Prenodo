@@ -742,7 +742,9 @@ export function ManageShell({
       <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" precedence="bs" />
       <link rel="stylesheet" href="/assets/css/app.css" precedence="app" />
       <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" async />
-      <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" async />
+      {/* Chart.js 4.4.1 in bundle LOCALE (prima dal CDN jsdelivr): il grafico
+          dashboard non dipende più dalla raggiungibilità di un host esterno. */}
+      <script src="/assets/vendor/chart.umd.min.js" async />
 
       {/* CSS del gate verifica email — blocco <style> verbatim di View.php 421-440. */}
       {emailVerificationGate ? (

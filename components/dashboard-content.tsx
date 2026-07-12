@@ -95,17 +95,33 @@ export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: 
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/manage/dashboard", { headers: { "x-tenant-slug": location.pathname.split("/")[1] || "" } })
-      .then(async (r) => ({ status: r.status, json: await r.json() }))
-      .then(({ status, json }) => {
-        if (cancelled) return;
-        if (status === 403) setAccessDenied(true);
-        else if (json.ok === false) setError(json.error || "Errore dashboard.");
-        else setData(json);
-      })
-      .catch(() => !cancelled && setError("Errore dashboard."));
+    // silent = refresh in background (ritorno sulla scheda): tiene i dati
+    // correnti e non mostra errori transitori; il primo load resta rumoroso.
+    const load = (silent: boolean) => {
+      fetch("/api/manage/dashboard", { headers: { "x-tenant-slug": location.pathname.split("/")[1] || "" } })
+        .then(async (r) => ({ status: r.status, json: await r.json() }))
+        .then(({ status, json }) => {
+          if (cancelled) return;
+          if (status === 403) setAccessDenied(true);
+          else if (json.ok === false) {
+            if (!silent) setError(json.error || "Errore dashboard.");
+          } else {
+            setError("");
+            setData(json);
+          }
+        })
+        .catch(() => !cancelled && !silent && setError("Errore dashboard."));
+    };
+    load(false);
+    // Riallinea i KPI quando si torna sulla scheda: il legacy "si aggiornava"
+    // a ogni page load, la SPA resterebbe congelata a tempo indefinito.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") load(true);
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
 
@@ -195,17 +211,105 @@ export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: 
     );
   }
 
-  return (
-    <div className="container-fluid">
-      <div className="bs-page-header">
-        <div className="bs-page-heading">
-          <div className="bs-page-kicker">Panoramica</div>
-          <h1 className="bs-page-title">Dashboard</h1>
-          <div className="bs-page-subtitle">
-            Stato generale della sede, appuntamenti, vendite e attività recenti.{sedeName ? ` Sede: ${sedeName}` : ""}
-          </div>
+  const pageHeader = (
+    <div className="bs-page-header">
+      <div className="bs-page-heading">
+        <div className="bs-page-kicker">Panoramica</div>
+        <h1 className="bs-page-title">Dashboard</h1>
+        <div className="bs-page-subtitle">
+          Stato generale della sede, appuntamenti, vendite e attività recenti.{sedeName ? ` Sede: ${sedeName}` : ""}
         </div>
       </div>
+    </div>
+  );
+
+  // Skeleton di caricamento: stessa griglia della pagina con placeholder
+  // Bootstrap al posto dei valori — prima le card comparivano VUOTE per il
+  // tempo del fetch (~0,3-1s a seconda della rete verso il DB).
+  if (!data && !error) {
+    return (
+      <div className="container-fluid">
+        {pageHeader}
+        <section className="dashboard-page placeholder-glow" aria-busy="true">
+          <div className="row g-3 dashboard-overview-grid">
+            {[0, 1, 2].map((i) => (
+              <div className="col-md-4" key={i}>
+                <div className="card dashboard-card dashboard-overview-card">
+                  <div className="kpi">
+                    <div className="icon">
+                      <i className={`bi bi-${OVERVIEW_ICONS[i] ?? "bar-chart"} fs-5`} />
+                    </div>
+                    <div className="w-100">
+                      <div className="label"><span className="placeholder col-5" /></div>
+                      <div className="value"><span className="placeholder col-7" /></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="row g-3 dashboard-layout">
+            <div className="col-xl-9 col-lg-8">
+              <div className="card dashboard-card dashboard-weekly-card">
+                <div className="card-header dashboard-card-header fw-semibold d-flex align-items-center gap-2">
+                  <span className="dashboard-card-title">
+                    <i className="bi bi-activity" />
+                    <span>Statistica settimanale</span>
+                  </span>
+                </div>
+                <div className="card-body dashboard-weekly-body">
+                  <div className="row g-0 dashboard-weekly-kpis">
+                    {[0, 1, 2, 3].map((i) => (
+                      <div className="col-sm-6 col-xl-3 dashboard-weekly-kpi-col" key={i}>
+                        <div className="dashboard-weekly-kpi h-100">
+                          <div className="text-muted small"><span className="placeholder col-6" /></div>
+                          <div className="h4 fw-bold mb-0"><span className="placeholder col-4" /></div>
+                          <div className="small mt-1"><span className="placeholder col-3" /></div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="dashboard-chart-area">
+                    <div className="dashboard-chart-meta d-flex align-items-center justify-content-between flex-wrap gap-2">
+                      <div className="small text-muted">Andamento ricavi (giornaliero)</div>
+                    </div>
+                    <div className="dashboard-chart-canvas d-flex align-items-center justify-content-center" style={{ minHeight: 200 }}>
+                      <div className="spinner-border text-primary" role="status">
+                        <span className="visually-hidden">Caricamento…</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="col-xl-3 col-lg-4">
+              <div className="dashboard-side-stack">
+                <div className="card dashboard-card dashboard-side-card dashboard-alerts">
+                  <div className="card-header dashboard-card-header fw-semibold d-flex justify-content-between align-items-center">
+                    <span className="dashboard-card-title">
+                      <i className="bi bi-bell" />
+                      <span>Avvisi</span>
+                    </span>
+                  </div>
+                  <div className="p-3">
+                    <span className="placeholder col-9 d-block mb-2" />
+                    <span className="placeholder col-6 d-block mb-2" />
+                    <span className="placeholder col-7 d-block" />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  return (
+    <div className="container-fluid">
+      {pageHeader}
 
       <section className="dashboard-page">
         {error ? <div className="alert alert-warning">{error}</div> : null}

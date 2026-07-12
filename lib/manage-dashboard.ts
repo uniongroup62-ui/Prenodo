@@ -151,17 +151,32 @@ export async function getManageDashboard(
     };
   }
 
-  const apptTable = await tenantTable(slug, "appointments");
+  // Preflight metadati in PARALLELO (stesse risoluzioni di prima, senza il
+  // costo di ~10 round trip sequenziali): i calcoli sono letture indipendenti,
+  // l'ordine non cambia i risultati.
+  const [apptTable, clientsTable, salesTable, asTable, svcTable, bridgeTable] = await Promise.all([
+    tenantTable(slug, "appointments"),
+    tenantTable(slug, "clients"),
+    tenantTable(slug, "sales"),
+    tenantTable(slug, "appointment_services"),
+    tenantTable(slug, "services"),
+    tenantTable(slug, "appointment_locations").catch(() => null),
+  ]);
   const T = apptTable.tenantId ?? 0;
-  const clientsTable = await tenantTable(slug, "clients");
-  const salesTable = await tenantTable(slug, "sales");
+  const [hasBridge, hasAsQty, hasApptServiceId, hasClientLoc, hasApptLoc, hasSalesLoc, hasAsServiceName] = await Promise.all([
+    bridgeTable ? tableExists(bridgeTable.name).catch(() => false) : Promise.resolve(false),
+    columnExists(asTable.name, "qty"),
+    columnExists(apptTable.name, "service_id"),
+    columnExists(clientsTable.name, "location_id"),
+    columnExists(apptTable.name, "location_id"),
+    columnExists(salesTable.name, "location_id"),
+    columnExists(asTable.name, "service_name"),
+  ]);
 
   // Filtro sede appuntamenti col ramo BRIDGE legacy (dashboard.php 42-47):
   // location diretta OPPURE NULL con riga appointment_locations della sede
   // oppure NESSUNA riga bridge (non assegnato). Senza il ramo bridge un
   // appuntamento NULL con bridge verso un'ALTRA sede verrebbe incluso a torto.
-  const bridgeTable = await tenantTable(slug, "appointment_locations").catch(() => null);
-  const hasBridge = bridgeTable ? await tableExists(bridgeTable.name).catch(() => false) : false;
   const apptLoc = (alias: string): string => {
     if (locationId <= 0) return "";
     if (hasBridge && bridgeTable) {
@@ -172,48 +187,43 @@ export async function getManageDashboard(
   };
 
   // --- KPI Clienti (dashboard.php:59-95) ---
-  let kpiClients = 0;
-  if (locationId > 0) {
-    const rows = await dbQuery<RowDataPacket[]>(
-      // Rami clients/sales STRETTI (location_id=?), ramo appointments PERMISSIVO
-      // (location_id=? OR NULL) — esattamente come dashboard.php:66/71/75, con
-      // i filtri COALESCE(id,0)>0 / COALESCE(client_id,0)>0 del legacy.
-      `SELECT COUNT(DISTINCT client_id) AS c FROM (
-         SELECT id AS client_id FROM ${quoteIdentifier(clientsTable.name)} WHERE tenant_id = ${T} AND location_id = ${locationId} AND COALESCE(id, 0) > 0
-         UNION SELECT a.client_id FROM ${quoteIdentifier(apptTable.name)} a WHERE a.tenant_id = ${T} AND COALESCE(a.client_id, 0) > 0${apptLoc("a")}
-         UNION SELECT s.client_id FROM ${quoteIdentifier(salesTable.name)} s WHERE s.tenant_id = ${T} AND COALESCE(s.client_id, 0) > 0${locStrict("s", locationId)}
-       ) u WHERE client_id IS NOT NULL`,
-      [],
-    ).catch(() => [] as RowDataPacket[]);
-    kpiClients = num(rows[0]?.c);
-  } else {
+  const kpiClientsP = (async () => {
+    if (locationId > 0) {
+      const rows = await dbQuery<RowDataPacket[]>(
+        // Rami clients/sales STRETTI (location_id=?), ramo appointments PERMISSIVO
+        // (location_id=? OR NULL) — esattamente come dashboard.php:66/71/75, con
+        // i filtri COALESCE(id,0)>0 / COALESCE(client_id,0)>0 del legacy.
+        `SELECT COUNT(DISTINCT client_id) AS c FROM (
+           SELECT id AS client_id FROM ${quoteIdentifier(clientsTable.name)} WHERE tenant_id = ${T} AND location_id = ${locationId} AND COALESCE(id, 0) > 0
+           UNION SELECT a.client_id FROM ${quoteIdentifier(apptTable.name)} a WHERE a.tenant_id = ${T} AND COALESCE(a.client_id, 0) > 0${apptLoc("a")}
+           UNION SELECT s.client_id FROM ${quoteIdentifier(salesTable.name)} s WHERE s.tenant_id = ${T} AND COALESCE(s.client_id, 0) > 0${locStrict("s", locationId)}
+         ) u WHERE client_id IS NOT NULL`,
+        [],
+      ).catch(() => [] as RowDataPacket[]);
+      return num(rows[0]?.c);
+    }
     const rows = await dbQuery<RowDataPacket[]>(`SELECT COUNT(*) AS c FROM ${quoteIdentifier(clientsTable.name)} WHERE tenant_id = ${T}`, []).catch(() => [] as RowDataPacket[]);
-    kpiClients = num(rows[0]?.c);
-  }
+    return num(rows[0]?.c);
+  })();
 
   // --- KPI Appuntamenti oggi (dashboard.php:97-104) ---
-  const apptTodayRows = await dbQuery<RowDataPacket[]>(
+  const kpiApptTodayP = dbQuery<RowDataPacket[]>(
     `SELECT COUNT(*) AS c FROM ${quoteIdentifier(apptTable.name)} a
       WHERE a.tenant_id = ${T} AND a.starts_at::date = ? AND ${apptActiveSql("a")}${apptLoc("a")}`,
     [today],
-  ).catch(() => [] as RowDataPacket[]);
-  const kpiApptToday = num(apptTodayRows[0]?.c);
+  ).catch(() => [] as RowDataPacket[]).then((rows) => num(rows[0]?.c));
 
   // --- KPI Vendite ultimi 30gg (dashboard.php:105-130) ---
-  const sales30Rows = await dbQuery<RowDataPacket[]>(
+  const kpiSales30P = dbQuery<RowDataPacket[]>(
     `SELECT COALESCE(SUM(s.total),0) AS s FROM ${quoteIdentifier(salesTable.name)} s
       WHERE s.tenant_id = ${T} AND s.sale_date >= NOW() - interval '30 days' AND ${saleActiveSql("s")}${locStrict("s", locationId)}`,
     [],
-  ).catch(() => [] as RowDataPacket[]);
-  const kpiSales30 = round2(num(sales30Rows[0]?.s));
+  ).catch(() => [] as RowDataPacket[]).then((rows) => round2(num(rows[0]?.s)));
 
   // --- Statistica settimanale (api_dashboard_performance.php:82-245) ---
   // Conta SOLO status='scheduled' ("Prenotato"); ricavi dai servizi degli
-  // appuntamenti. (weekStart/weekEnd/prevStart/prevEnd calcolati sopra.)
-  const asTable = await tenantTable(slug, "appointment_services");
-  const svcTable = await tenantTable(slug, "services");
-  const hasAsQty = await columnExists(asTable.name, "qty");
-  const hasApptServiceId = await columnExists(apptTable.name, "service_id");
+  // appuntamenti. (weekStart/weekEnd/prevStart/prevEnd calcolati sopra;
+  // asTable/svcTable e i flag colonna dal preflight.)
 
   // Ricavi: LEFT JOIN sui servizi dell'appuntamento; se l'appuntamento NON ha
   // righe servizio, fallback sul prezzo del servizio legacy (a.service_id) —
@@ -225,9 +235,6 @@ export async function getManageDashboard(
   // Nuovi clienti per sede: come _dashboard_perf (client_location_sql) il legacy
   // considera il cliente "della sede" se ha la sua location OPPURE un
   // appuntamento (location o NULL) o una vendita in quella sede.
-  const hasClientLoc = await columnExists(clientsTable.name, "location_id");
-  const hasApptLoc = await columnExists(apptTable.name, "location_id");
-  const hasSalesLoc = await columnExists(salesTable.name, "location_id");
   let clientLocSql = "";
   if (locationId > 0) {
     const parts: string[] = [];
@@ -242,20 +249,22 @@ export async function getManageDashboard(
   const weekAgg = async (from: string, to: string) => {
     const where = `a.tenant_id = ${T} AND LOWER(TRIM(COALESCE(a.status,''))) = 'scheduled' AND a.starts_at >= ? AND a.starts_at < ?${apptLoc("a")}`;
     const params = [`${from} 00:00:00`, `${addDaysIso(to, 1)} 00:00:00`];
-    const cntRows = await dbQuery<RowDataPacket[]>(`SELECT COUNT(DISTINCT a.id) AS c FROM ${quoteIdentifier(apptTable.name)} a WHERE ${where}`, params).catch(() => [] as RowDataPacket[]);
-    const revRows = await dbQuery<RowDataPacket[]>(
-      `SELECT COALESCE(SUM(${revExpr}),0) AS r
-         FROM ${quoteIdentifier(apptTable.name)} a
-         ${revJoin}
-        WHERE ${where}`,
-      params,
-    ).catch(() => [] as RowDataPacket[]);
-    const hourRows = await dbQuery<RowDataPacket[]>(
-      `SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (a.ends_at - a.starts_at)) / 60), 0) AS m FROM ${quoteIdentifier(apptTable.name)} a WHERE ${where} AND a.ends_at IS NOT NULL`,
-      params,
-    ).catch(() => [] as RowDataPacket[]);
     const clientWhere = `c.tenant_id = ${T} AND c.created_at::date >= ? AND c.created_at::date <= ?${clientLocSql}`;
-    const newRows = await dbQuery<RowDataPacket[]>(`SELECT COUNT(*) AS c FROM ${quoteIdentifier(clientsTable.name)} c WHERE ${clientWhere}`, [from, to]).catch(() => [] as RowDataPacket[]);
+    const [cntRows, revRows, hourRows, newRows] = await Promise.all([
+      dbQuery<RowDataPacket[]>(`SELECT COUNT(DISTINCT a.id) AS c FROM ${quoteIdentifier(apptTable.name)} a WHERE ${where}`, params).catch(() => [] as RowDataPacket[]),
+      dbQuery<RowDataPacket[]>(
+        `SELECT COALESCE(SUM(${revExpr}),0) AS r
+           FROM ${quoteIdentifier(apptTable.name)} a
+           ${revJoin}
+          WHERE ${where}`,
+        params,
+      ).catch(() => [] as RowDataPacket[]),
+      dbQuery<RowDataPacket[]>(
+        `SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (a.ends_at - a.starts_at)) / 60), 0) AS m FROM ${quoteIdentifier(apptTable.name)} a WHERE ${where} AND a.ends_at IS NOT NULL`,
+        params,
+      ).catch(() => [] as RowDataPacket[]),
+      dbQuery<RowDataPacket[]>(`SELECT COUNT(*) AS c FROM ${quoteIdentifier(clientsTable.name)} c WHERE ${clientWhere}`, [from, to]).catch(() => [] as RowDataPacket[]),
+    ]);
     return {
       appointments: num(cntRows[0]?.c),
       revenue: round2(num(revRows[0]?.r)),
@@ -266,11 +275,11 @@ export async function getManageDashboard(
       newClients: num(newRows[0]?.c),
     };
   };
-  const [cur, prev] = await Promise.all([weekAgg(weekStart, weekEnd), weekAgg(prevStart, prevEnd)]);
+  const weeklyP = Promise.all([weekAgg(weekStart, weekEnd), weekAgg(prevStart, prevEnd)]);
 
   // Serie ricavi giornalieri (api_dashboard_performance.php:216-245): stesso
   // LEFT JOIN + CASE fallback della statistica settimanale.
-  const dailyRows = await dbQuery<RowDataPacket[]>(
+  const dailyP = dbQuery<RowDataPacket[]>(
     `SELECT a.starts_at::date AS d, COALESCE(SUM(${revExpr}),0) AS r
        FROM ${quoteIdentifier(apptTable.name)} a
        ${revJoin}
@@ -279,19 +288,13 @@ export async function getManageDashboard(
       GROUP BY a.starts_at::date`,
     [`${weekStart} 00:00:00`, `${addDaysIso(weekEnd, 1)} 00:00:00`],
   ).catch(() => [] as RowDataPacket[]);
-  const revenueByDate = new Map(dailyRows.map((r) => [String(r.d).slice(0, 10), round2(num(r.r))]));
-  const series = Array.from({ length: 7 }, (_, i) => {
-    const date = addDaysIso(weekStart, i);
-    return { date, label: `${date.slice(8, 10)}/${date.slice(5, 7)}`, revenue: revenueByDate.get(date) ?? 0 };
-  });
 
   // --- Prossimi appuntamenti (dashboard.php:214-237) ---
-  let upcoming: ManageDashboardPayload["upcoming"] = null;
-  if (opts.canSeeCalendar) {
+  const upcomingP = (async (): Promise<ManageDashboardPayload["upcoming"]> => {
+    if (!opts.canSeeCalendar) return null;
     // Nome servizio come il legacy COALESCE(sv.services_name, s.name): usa lo
     // SNAPSHOT appointment_services.service_name (fallback al nome corrente del
     // servizio), e se l'appuntamento non ha righe servizio ricade su a.service_id.
-    const hasAsServiceName = await columnExists(asTable.name, "service_name");
     const svcNameExpr = hasAsServiceName ? "COALESCE(NULLIF(TRIM(sv.service_name), ''), s.name)" : "s.name";
     const fallbackJoin = hasApptServiceId ? `\n         LEFT JOIN ${quoteIdentifier(svcTable.name)} s2 ON s2.id = a.service_id AND s2.tenant_id = a.tenant_id` : "";
     const fallbackCoalesce = hasApptServiceId ? ", s2.name" : "";
@@ -314,7 +317,7 @@ export async function getManageDashboard(
         LIMIT 10`,
       [],
     ).catch(() => [] as RowDataPacket[]);
-    upcoming = rows.map((r) => {
+    return rows.map((r) => {
       const dt = String(r.starts_at ?? "");
       const d = new Date(dt.includes("T") ? dt : dt.replace(" ", "T"));
       const p = (n2: number) => String(n2).padStart(2, "0");
@@ -327,53 +330,68 @@ export async function getManageDashboard(
         serviceName: r.services === null || r.services === undefined ? "—" : String(r.services),
       };
     });
-  }
+  })();
 
   // --- Scadenziario e Costi (dashboard.php:132-206) ---
-  let costs: ManageDashboardPayload["costs"] = null;
-  if (opts.canSeeCosts) {
+  const costsP = (async (): Promise<ManageDashboardPayload["costs"]> => {
+    if (!opts.canSeeCosts) return null;
     const costsTable = await tenantTable(slug, "costs").catch(() => null);
-    if (costsTable) {
-      const hasPaidAmount = await columnExists(costsTable.name, "paid_amount");
-      const residual = hasPaidAmount ? "GREATEST(COALESCE(amount,0) - COALESCE(paid_amount,0), 0)" : "COALESCE(amount,0)";
-      // dashboard.php:159/170: con paid_amount conta solo residui > 0.00001.
-      const residualFilter = hasPaidAmount ? ` AND ${residual} > 0.00001` : "";
-      const monthStart = `${today.slice(0, 7)}-01`;
-      const nextMonth = new Date(`${monthStart}T12:00:00`);
-      nextMonth.setMonth(nextMonth.getMonth() + 1);
-      const monthEnd = addDaysIso(isoLocal(nextMonth), -1);
-      // Filtro sede STRETTO come il legacy (dashboard.php:148 'AND location_id=?').
-      const locSql = locationId > 0 && (await columnExists(costsTable.name, "location_id")) ? ` AND location_id = ${locationId}` : "";
-      // Su ERRORE SQL il legacy azzera l'intero widget (catch -> $costsWidget
-      // = null, card NASCOSTA, dashboard.php 202-204) — niente card a zero.
-      try {
-        const overdueRows = await dbQuery<RowDataPacket[]>(
+    if (!costsTable) return null;
+    const hasPaidAmount = await columnExists(costsTable.name, "paid_amount");
+    const residual = hasPaidAmount ? "GREATEST(COALESCE(amount,0) - COALESCE(paid_amount,0), 0)" : "COALESCE(amount,0)";
+    // dashboard.php:159/170: con paid_amount conta solo residui > 0.00001.
+    const residualFilter = hasPaidAmount ? ` AND ${residual} > 0.00001` : "";
+    const monthStart = `${today.slice(0, 7)}-01`;
+    const nextMonth = new Date(`${monthStart}T12:00:00`);
+    nextMonth.setMonth(nextMonth.getMonth() + 1);
+    const monthEnd = addDaysIso(isoLocal(nextMonth), -1);
+    // Filtro sede STRETTO come il legacy (dashboard.php:148 'AND location_id=?').
+    const locSql = locationId > 0 && (await columnExists(costsTable.name, "location_id")) ? ` AND location_id = ${locationId}` : "";
+    // Su ERRORE SQL il legacy azzera l'intero widget (catch -> $costsWidget
+    // = null, card NASCOSTA, dashboard.php 202-204) — niente card a zero.
+    try {
+      const [overdueRows, monthRows] = await Promise.all([
+        dbQuery<RowDataPacket[]>(
           `SELECT COALESCE(SUM(${residual}),0) AS s, COUNT(*) AS c, MIN(due_date) AS min_due FROM ${quoteIdentifier(costsTable.name)}
             WHERE tenant_id = ${costsTable.tenantId ?? 0} AND COALESCE(is_paid,0) = 0 AND due_date < ?${locSql}${residualFilter}`,
           [today],
-        );
-        const monthRows = await dbQuery<RowDataPacket[]>(
+        ),
+        dbQuery<RowDataPacket[]>(
           `SELECT COALESCE(SUM(${residual}),0) AS s, COUNT(*) AS c FROM ${quoteIdentifier(costsTable.name)}
             WHERE tenant_id = ${costsTable.tenantId ?? 0} AND COALESCE(is_paid,0) = 0 AND due_date >= ? AND due_date <= ?${locSql}${residualFilter}`,
           [monthStart, monthEnd],
-        );
-        const minDue = String(overdueRows[0]?.min_due ?? "").slice(0, 10);
-        costs = {
-          overdueAmount: round2(num(overdueRows[0]?.s)),
-          overdueCount: num(overdueRows[0]?.c),
-          // Link "Vedi scaduti": from = MIN(due_date) (fallback inizio mese), to = oggi.
-          overdueFrom: /^\d{4}-\d{2}-\d{2}$/.test(minDue) ? minDue : monthStart,
-          overdueTo: today,
-          monthAmount: round2(num(monthRows[0]?.s)),
-          monthCount: num(monthRows[0]?.c),
-          monthFrom: monthStart,
-          monthTo: monthEnd,
-        };
-      } catch {
-        costs = null;
-      }
+        ),
+      ]);
+      const minDue = String(overdueRows[0]?.min_due ?? "").slice(0, 10);
+      return {
+        overdueAmount: round2(num(overdueRows[0]?.s)),
+        overdueCount: num(overdueRows[0]?.c),
+        // Link "Vedi scaduti": from = MIN(due_date) (fallback inizio mese), to = oggi.
+        overdueFrom: /^\d{4}-\d{2}-\d{2}$/.test(minDue) ? minDue : monthStart,
+        overdueTo: today,
+        monthAmount: round2(num(monthRows[0]?.s)),
+        monthCount: num(monthRows[0]?.c),
+        monthFrom: monthStart,
+        monthTo: monthEnd,
+      };
+    } catch (e) {
+      // La card resta nascosta come nel legacy, ma l'errore va almeno loggato
+      // per non silenziare regressioni SQL vere.
+      console.error("[manage-dashboard] widget costi nascosto per errore SQL:", e);
+      return null;
     }
-  }
+  })();
+
+  // Tutti i blocchi sono letture indipendenti: attesa in parallelo (prima
+  // erano ~29 round trip sequenziali, 650-730ms misurati).
+  const [kpiClients, kpiApptToday, kpiSales30, [cur, prev], dailyRows, upcoming, costs] = await Promise.all([
+    kpiClientsP, kpiApptTodayP, kpiSales30P, weeklyP, dailyP, upcomingP, costsP,
+  ]);
+  const revenueByDate = new Map(dailyRows.map((r) => [String(r.d).slice(0, 10), round2(num(r.r))]));
+  const series = Array.from({ length: 7 }, (_, i) => {
+    const date = addDaysIso(weekStart, i);
+    return { date, label: `${date.slice(8, 10)}/${date.slice(5, 7)}`, revenue: revenueByDate.get(date) ?? 0 };
+  });
 
   return {
     stats: [

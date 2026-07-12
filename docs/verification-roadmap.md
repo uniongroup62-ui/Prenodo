@@ -12675,3 +12675,29 @@ visibilitychange/focus per riallineare i KPI quando si torna sulla scheda
 con timeout 3s gia' gestito — valutare bundle locale per togliere la
 dipendenza esterna; (5) il widget costi nascosto su errore SQL (bug-fedele)
 meriterebbe almeno un log server-side per non silenziare regressioni vere.
+
+## Dashboard — migliorie applicate (2026-07-12, sera, seguito del pass bug-hunt)
+
+Su approvazione utente, applicate le 5 migliorie suggerite:
+(1) PERF: getManageDashboard parallelizzato — preflight metadati (6 tenantTable
++ 7 columnExists/tableExists) in 2 Promise.all, poi KPI Clienti/Appuntamenti
+oggi/Vendite 30gg, weekly cur+prev (4 query interne in parallelo), serie
+giornaliera, upcoming e costi attesi con un unico Promise.all; anche le 2
+query costi in parallelo dentro il try. Latenza misurata: 650-730ms →
+266-329ms (~2.3x). SQL e semantiche INVARIATI (stessi .catch per-query,
+fail-closed intatto, gate per-card intatti).
+(2) UX: skeleton di caricamento in dashboard-content — stessa griglia con
+placeholder Bootstrap (3 KPI, 4 box settimanali, spinner nell'area grafico,
+card Avvisi) al posto delle card vuote; page header estratto e condiviso.
+(3) Refetch silenzioso su visibilitychange→visible (load(silent): tiene i
+dati correnti, niente errori transitori; primo load invariato).
+(4) Chart.js 4.4.1 in bundle locale public/assets/vendor/chart.umd.min.js
+(era CDN jsdelivr) — script della shell aggiornato, verificato window.Chart
++ grafico renderizzato dal file locale.
+(5) console.error nel catch del widget costi (card resta nascosta come il
+legacy, ma l'errore SQL non e' piu' silenzioso).
+
+Verifica: batteria COMPLETA verde post-refactor (16+5+7+9+13), valori API
+byte-identici (attestazione 9/9 inclusa), tsc/eslint puliti, screenshot
+skeleton+finale ok, zero errori console. Il badge '1 Issue' dell'overlay dev
+apparso in uno screenshot era HMR transitorio (edit concorrente al load).
