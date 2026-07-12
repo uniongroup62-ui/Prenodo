@@ -1,5 +1,21 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## NUOVA FEATURE (richiesta utente): selettore di accesso /login stile Fresha (2026-07-12)
+
+Richiesta utente: facilitare l'instradamento verso il login giusto (screen
+Fresha con le 2 card). Implementato:
+- NUOVA pagina /login (app/login/page.tsx): 2 card 'Prenodo per i clienti'
+  (Prenota saloni e centri estetici vicino a te -> /account/login) e 'Prenodo
+  per i professionisti' (Gestisci e fai crescere la tua attività ->
+  /manage/login) + link Registrati; palette coerente col marketplace
+  (#4e6da6/#0f172a/#64748b/#dbe3ef), card bianche 16px con hover.
+- Voce 'Sei un professionista?' nel menu account PUBBLICO della topbar
+  marketplace (marketplace-shared.tsx, dopo Accedi/Registrati) -> /manage/login.
+Superficie NUOVA a livello piattaforma: i due login esistenti restano
+invariati (nessun impatto sulla parità 1:1 delle pagine portate).
+Verificato headless: entrambe le card navigano correttamente, voce menu
+presente su /attivita. tsc 0; eslint pulito sulle righe nuove.
+
 ## Booking pubblico: FIX pulsante X del wizard (bottone MORTO) — segnalazione utente (2026-07-12)
 
 L'utente ha chiesto di verificare la X del wizard: nel port #btnClose era
