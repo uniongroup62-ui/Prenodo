@@ -25,9 +25,6 @@ const STYLE = `
 .login-choice-card__desc{display:block;font-size:14px;color:#64748b}
 .login-choice-card__arrow{flex:none;width:38px;height:38px;border-radius:999px;border:1px solid #dbe3ef;display:grid;place-items:center;color:#0f172a;font-size:18px;transition:background .15s ease,color .15s ease,border-color .15s ease}
 .login-choice-card:hover .login-choice-card__arrow{background:#4e6da6;border-color:#4e6da6;color:#fff}
-.login-choice-foot{margin-top:28px;font-size:13px;color:#64748b}
-.login-choice-foot a{color:#4e6da6;font-weight:600;text-decoration:none}
-.login-choice-foot a:hover{text-decoration:underline}
 `;
 
 export default async function LoginChoicePage({
@@ -35,8 +32,8 @@ export default async function LoginChoicePage({
 }: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  // Propaga il return alla card CLIENTI e al Registrati (il login cliente lo
-  // preserva già sui suoi link); solo path relativi, mai URL esterni.
+  // Propaga il return alla card CLIENTI (il login cliente lo preserva già sui
+  // suoi link); solo path relativi, mai URL esterni.
   const query = (await searchParams) ?? {};
   const rawReturn = query.return;
   const ret = String(Array.isArray(rawReturn) ? rawReturn[0] ?? "" : rawReturn ?? "");
@@ -57,7 +54,6 @@ export default async function LoginChoicePage({
       <h1 className="login-choice-title">Come vuoi accedere?</h1>
       <p className="login-choice-subtitle">Scegli l&apos;area giusta per te.</p>
       <div className="login-choice-cards">
-        { }
         <a className="login-choice-card" href={`/account/login${returnQs}`}>
           <span className="login-choice-card__text">
             <span className="login-choice-card__title">Prenodo per i clienti</span>
@@ -74,10 +70,6 @@ export default async function LoginChoicePage({
           <span className="login-choice-card__arrow" aria-hidden="true">&rarr;</span>
         </a>
       </div>
-      <p className="login-choice-foot">
-        { }
-        Non hai un account? <a href={`/account/register${returnQs}`}>Registrati come cliente</a>
-      </p>
     </div>
   );
 }
