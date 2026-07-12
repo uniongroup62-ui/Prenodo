@@ -13098,3 +13098,26 @@ originale attenuato visibile a screenshot. Regressione COMPLETA verde:
 markers 48/48, test-calendario 20/20, location-scope 6/6, e2e-calendar-move
 33/33 (i drop reali e le guardie server non cambiano), hours 4/4;
 tsc/eslint puliti (resta solo il warning no-css-tags pre-esistente).
+
+## Calendario — auto-scroll ai bordi durante il drag (2026-07-13)
+
+Osservazione utente CONFERMATA dall'analisi: la griglia Giorno/Settimana
+scorre in uno scroller INTERNO (.fc-scroller) e i browser non auto-scrollano
+affidabilmente i contenitori interni durante un drag HTML5 (Firefox mai,
+Chrome quasi mai — e la drag-image trasparente del ghost spegne l'euristica
+residua); il legacy FullCalendar aveva il proprio dragScroll. Implementato
+autoScrollOnDragOver chiamato da ogni dragover (Giorno/Settimana/Mese):
+cursore entro 56px dal bordo dello scroller → scroll di un passo
+proporzionale alla vicinanza (max 26px; il dragover rispara di continuo →
+scorrimento fluido), assi verticale E orizzontale (la vista Giorno scorre
+in X con molti operatori), fallback sulla finestra per il Mese. Il ghost
+resta corretto durante lo scroll (posizione ricalcolata a ogni dragover
+sul rect corrente).
+
+Verifica headless: 12 dragover al bordo basso → scrollTop 0→204, risalita
+al bordo alto → 84, ghost live durante lo scroll; regressione 20/20 + 33/33.
+NOTA AMBIENTE: durante la verifica il pooler Supabase e' andato in
+EMAXCONNSESSION (15 client, session mode) per connessioni zombie dei
+processi uccisi + pool warm del dev server: liberato dopo ~7' col riavvio
+del dev server e l'attesa dei TCP timeout — con run seriali e un solo
+browser la pressione resta gestibile.

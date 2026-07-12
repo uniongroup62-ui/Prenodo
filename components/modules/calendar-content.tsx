@@ -1144,6 +1144,36 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
     updateMoveGhost(null);
     setDraggingApptId(0);
   }, [updateMoveGhost]);
+  // AUTO-SCROLL ai bordi durante il drag (port del dragScroll di FullCalendar):
+  // i browser non auto-scrollano affidabilmente gli scroller INTERNI durante un
+  // drag HTML5 (Firefox mai; Chrome quasi mai senza drag-image nativa, che qui
+  // è soppressa). Chiamato da ogni dragover: quando il cursore è entro EDGE px
+  // dal bordo dello .fc-scroller, scorre di un passo proporzionale alla
+  // vicinanza (il dragover rispara di continuo → scroll fluido). Verticale +
+  // orizzontale (la vista Giorno scorre anche in X con molti operatori);
+  // fallback sulla finestra per la vista Mese (nessuno scroller interno).
+  const autoScrollOnDragOver = useCallback((e: ReactDragEvent<HTMLElement>) => {
+    const EDGE = 56;
+    const MAX_STEP = 26;
+    const step = (dist: number) => Math.ceil(((EDGE - dist) / EDGE) * MAX_STEP);
+    const scroller = (e.currentTarget as HTMLElement).closest(".fc-scroller") as HTMLElement | null;
+    if (scroller && scroller.scrollHeight > scroller.clientHeight + 1) {
+      const r = scroller.getBoundingClientRect();
+      if (e.clientY < r.top + EDGE) scroller.scrollTop -= step(e.clientY - r.top);
+      else if (e.clientY > r.bottom - EDGE) scroller.scrollTop += step(r.bottom - e.clientY);
+    }
+    if (scroller && scroller.scrollWidth > scroller.clientWidth + 1) {
+      const r = scroller.getBoundingClientRect();
+      if (e.clientX < r.left + EDGE) scroller.scrollLeft -= step(e.clientX - r.left);
+      else if (e.clientX > r.right - EDGE) scroller.scrollLeft += step(r.right - e.clientX);
+    }
+    if (!scroller || scroller.scrollHeight <= scroller.clientHeight + 1) {
+      // Mese (o griglia non scrollabile): scorre la PAGINA.
+      const vh = window.innerHeight;
+      if (e.clientY < EDGE) window.scrollBy(0, -step(e.clientY));
+      else if (e.clientY > vh - EDGE) window.scrollBy(0, step(vh - e.clientY));
+    }
+  }, []);
   // In-flight resize (bottom-edge drag). Held in a ref (no re-render per mouse move);
   // a non-null `resizePreview` mirrors the live snapped end so the block stretches.
   const resizeRef = useRef<CalendarResize | null>(null);
@@ -2170,6 +2200,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
       if (!drag) return;
       e.preventDefault();
       try { e.dataTransfer.dropEffect = "move"; } catch { /* ignore */ }
+      autoScrollOnDragOver(e);
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
       const startMin = snappedMinFromY(e.clientY - rect.top - drag.grabOffsetPx, weekMinMin, weekMaxMin);
       const durMin = moveBlockDurationMin(drag.block);
@@ -3111,6 +3142,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                     if (drag) {
                       e.preventDefault();
                       try { e.dataTransfer.dropEffect = "move"; } catch { /* ignore */ }
+                      autoScrollOnDragOver(e);
                       updateMoveGhost({
                         col: `month-${iso}`,
                         top: 0,
@@ -3760,6 +3792,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                                     if (!drag) return;
                                     e.preventDefault();
                                     e.dataTransfer.dropEffect = "move";
+                                    autoScrollOnDragOver(e);
                                     // GHOST snappato: STESSA matematica del drop (timeFromY sul
                                     // top del blocco = cursore - grab offset), validità contro i
                                     // blocchi di QUESTA colonna operatore + bande non-disponibile.
