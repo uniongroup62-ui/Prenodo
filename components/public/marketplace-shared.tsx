@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useState } from "react";
 
 // Comportamenti condivisi delle pagine marketplace, port 1:1 di
@@ -142,11 +141,6 @@ export function MarketplaceAccountNav({ returnPath = "/attivita" }: { returnPath
           <a role="menuitem" href={`/account/register?return=${ret}`}>
             Registrati
           </a>
-          {/* Ingresso professionisti (richiesta utente 2026-07-12): porta al
-              gestionale senza passare dal selettore /login. */}
-          <Link role="menuitem" href="/manage/login">
-            Sei un professionista?
-          </Link>
         </div>
       </div>
     </nav>
