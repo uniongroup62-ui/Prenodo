@@ -1,5 +1,45 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Omaggi pass 2: ri-attestazione + risanamento batteria — ~344 verdi + 2 marker bundle, nessun bug prodotto (2026-07-12)
+
+Seconda passata (Gifts V2 07-03, lista/riepilogo+form 07-05, audit completo
+07-10 25646b7 con 4 fix enforcement). DRIFT: solo il pass Sedi (grafo gift
+nella delete, verificato lì).
+BATTERIA (tutta verde a fine pass): test-omaggi 49 + e2e-gifts-omaggi 20 +
+e2e-gifts-engine 16 + engine-b 8 + e2e-gifts-form 17 + e2e-gifts-page 51 +
+e2e-gift-instance 21 + e2e-gift-appt-cycle 12 + e2e-gifts 7 +
+markers-gifts-form 63 + markers-gifts-page 80 + verify-gifts-markers ALL-OK
++ verify-gift-details-markers ALL-OK.
+CONFERMA COMPORTAMENTO POST-AUDIT (E7 riscritto): prenotare DUE volte lo
+stesso premio disponibile -> la seconda è RIFIUTATA dal conflitto residui
+('Questo servizio omaggio è già presente in un\'altra prenotazione.' =
+fallback legacy app.js 2980; messaggi composti api_appointments ~2094) —
+l'aspettativa pre-audit 'creata senza copertura' era del mondo Gifts-V2
+prima del port dei conflitti (QB #10).
+HARNESS SANATI (8 script) / ARCHIVIATI (2):
+- 5 login reali -> sessione forgiata sede 21 (la create cliente senza sede è
+  rifiutata dal fix Clienti; T7 done richiedeva appointments.manage; E1 QB
+  richiede appointments.quick_booking — NON 'quick_booking').
+- engine/engine-b: SVC era il servizio di produzione 9 (€12) con attese a
+  prezzo-payload 100 -> servizio ZZ seminato a prezzo 100 (il checkout
+  prezza dal LISTINO, fix Pagamenti) + helper pagamenti a prezzo listino.
+- e2e-gifts import pg nudo -> createRequire.
+- 2 marker faulty: 'Sono visibili solo gli omaggi attivi, nel periodo di
+  validit' non può esistere contiguo (il <strong>attivi</strong> legacy
+  spezza la stringa; gifts-content.tsx 657 è verbatim col markup identico);
+  'Scadenza attuale:' aveva i due punti che il label legacy non ha
+  (giftbox.php 2537).
+- ARCHIVIATI .superseded: e2e-gift-details (dettagli GiftBox/GiftCard
+  pre-audit: niente prefisso flash 'Errore:', chiavi redeem vecchie,
+  action=issue rimossa — coperto da e2e-giftbox 64/test-giftbox 27/
+  e2e-giftcard 94/test-giftcard 22) ed e2e-gift-advanced (G5/G8 assert
+  l'ASSENZA del lock strutturale e del conflitto clone introdotti
+  dall'audit; G6b setta fidelity_level manuale 'zzgold' impossibile con la
+  derivazione write-only — coperto da test-omaggi 49).
+Baseline: 1 campagna (98 attiva), 0 istanze, 0 eventi orfani, 5 clienti, 9
+vendite, 10 appuntamenti, campagna punti 37 attiva. DOMINIO CONFERMATO
+COMPLETO. Nessuna modifica al codice prodotto.
+
 ## Punti pass 2: ri-attestazione + fix leak campagna 37 — 286 verdi, nessun bug prodotto (2026-07-12)
 
 Seconda passata dedicata (audit completo 07-10 df19863 col fix derivazione
