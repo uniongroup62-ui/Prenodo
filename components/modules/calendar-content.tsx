@@ -280,6 +280,10 @@ function groupNotesByDate<T extends { noteDate: string }>(items: T[]): Array<{ d
 // Monday-first IT short weekday headers (Lun..Dom), matching itShortWeekdayLabel
 // in calendar.js (index 0 == Monday).
 const IT_SHORT_WEEKDAYS_MON = ["Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"];
+// Nomi INTERI per le intestazioni delle griglie Settimana/Mese (richiesta
+// utente 2026-07-13: niente sigle tagliate); il mini date-picker resta con
+// le sigle (spazio ridotto, convenzione dei mini calendari).
+const IT_FULL_WEEKDAYS_MON = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"];
 
 // Monday of the week containing `iso` (FullCalendar's firstDay=1 / startOfWeek).
 function weekStart(iso: string): string {
@@ -2864,7 +2868,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                 >
                   <span className="fc-col-header-cell-cushion">
                     <span className="calendar-weekday-full">
-                      <span className="calendar-weekday-short">{IT_SHORT_WEEKDAYS_MON[i]}</span>
+                      <span className="calendar-weekday-short">{IT_FULL_WEEKDAYS_MON[i]}</span>
                       <span className="calendar-weekday-date">{`${pad(d.getDate())}/${pad(d.getMonth() + 1)}`}</span>
                     </span>
                     {noteCount > 0 ? (
@@ -3095,7 +3099,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
       <div className="fc-daygrid-body" style={{ width: "100%" }}>
         {/* Weekday header row (Mon..Dom) */}
         <div className="fc-col-header" style={{ display: "flex", borderBottom: "1px solid var(--calendar-line, #e2e8f0)" }}>
-          {IT_SHORT_WEEKDAYS_MON.map((wd, i) => (
+          {IT_FULL_WEEKDAYS_MON.map((wd, i) => (
             <div key={i} className="fc-col-header-cell" style={{ flex: "1 1 0", minWidth: 0, textAlign: "center" }}>
               <span className="fc-col-header-cell-cushion">
                 <span className="calendar-weekday-full">{wd}</span>
