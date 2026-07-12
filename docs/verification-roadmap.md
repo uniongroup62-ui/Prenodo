@@ -1,5 +1,35 @@
 # Roadmap di verifica migrazione PHP → Next (2026-07-02)
 
+## Automazione pass 2: ri-attestazione + bonifica reminders — 134 verdi, nessun bug prodotto (2026-07-12)
+
+Seconda passata (audit 1:1 07-10 899d16a). DRIFT: zero.
+BATTERIA (verde a fine pass): test-automazione 20 + e2e-automation-page 18 +
+markers-automation 77 + e2e-notifications-automation 19 = 134.
+BONIFICA (estensione della bonifica orfani autorizzata il 12/07):
+- 54 reminders ORFANI (appointment_id inesistente, accumulati 05-12/07: ogni
+  suite che crea+cancella appuntamenti lasciava i reminder auto-schedulati
+  dallo scheduler) rimossi.
+- 10 appuntamenti ZZLG residui delle run di test-location-guard di OGGI
+  (le run uccise/appese non arrivavano al cleanup) + i loro 20 reminders
+  auto-creati: rimossi per pattern tracciato (client 9, coppie 21/51 a
+  +30gg/+2h, created oggi). ATTESTATO: i '20 reminders di produzione' della
+  vecchia baseline erano in realta' reminder di appuntamenti di test (i
+  reminder esistono solo per appuntamenti FUTURI; quelli di produzione sono
+  passati) — baseline reale reminders = 0.
+HARNESS SANATI:
+- test-location-guard: cleanup di fine run (la mia patch precedente non
+  matchava) + marcatore public_code ZZLG + SWEEP pre-run dei propri residui
+  + delete dei reminders auto-schedulati.
+- e2e-notifications-automation: action=create quotes (compat RIMOSSA) ->
+  save FEDELE; sessione forgiata sede 21 (i contatori campanella sono
+  sede-scoped); permessi esatti (notifications.view — NON .access —,
+  fidelity.membership per la card, automation.manage, appointments.*);
+  F1 riscritto al gating POST-28915f1: il contatore tessere si abilita
+  dalla CONFIG TESSERA (businesses.fidelity_adhesion_json reminder/renewal,
+  con snapshot+restore) e NON dal toggle email di automation_settings.
+Baseline: 10 appuntamenti, 0 reminders, 0 quotes, 0 cards, 5 clienti.
+DOMINIO CONFERMATO COMPLETO. Nessuna modifica al codice prodotto.
+
 ## Ruoli pass 3: ri-attestazione + sonda normalize — 89 verdi, nessun bug prodotto (2026-07-12)
 
 Terza passata (V6 07-03 + audit 07-06 + audit 1:1 07-10 f9851d3 con 5 fix).
