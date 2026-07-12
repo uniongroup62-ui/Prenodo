@@ -13133,3 +13133,31 @@ loading non torna mai true). Verifica headless con API rallentata di 2.5s:
 durante il fetch 'Caricamento…' visibile e 'Nessun appuntamento' assente;
 dopo, 4 card e nessun testo di caricamento. Regressione hub 16/16 +
 automation 19/19; tsc/eslint puliti.
+
+## Notifiche browser attive — test live end-to-end (2026-07-13)
+
+Richiesta: verificare che la funzione 'notifiche browser attive' funzioni
+correttamente. NUOVA SUITE e2e-browser-notifications-live.mjs (permesso
+notifications concesso al context, SPIA su window.Notification per
+catturare le native, document.hidden/hasFocus controllabili, seed pending
+ZZ tracciati con cleanup reminders): 7/7 PASS —
+(1) bottone in stato 'Notifiche browser attive' col permesso gia' concesso;
+(2) click → notifica di PROVA nativa coi testi verbatim ('Notifiche browser
+attive' / 'Riceverai avvisi quando la scheda CRM non e in primo piano.',
+tag browser-notification-test:<ts>) + toast 'Notifica browser di test
+inviata';
+(3) poller globale a scheda ATTIVA: nuovo pending seminato → TOAST 'Nuova
+prenotazione in attesa' entro un giro di poller e NESSUNA nativa (corretto:
+la nativa e' solo per scheda nascosta);
+(4) scheda NASCOSTA (hidden+senza focus): secondo pending → notifica NATIVA
+con titolo/body/tag legacy (appointment_pending:<id>:<seed created_at>);
+(5) badge campanella aggiornato. Cleanup CLEAN (baseline 10).
+
+VERDETTO: funziona correttamente; il flusso completo (permesso → prova →
+baseline senza spam → toast/nativa per visibilita' → raggruppo >3 gia'
+coperto da test-feed-engine 12/12) e' fedele al footer script legacy.
+Migliorie possibili (nessuna urgente): (a) gia' nota e opzionale — 'visto'
+server-side al posto del localStorage (cambio browser/pulizia storage
+ri-mostra eventi gia' visti); (b) le native su mobile richiederebbero un
+service worker/PWA — fuori scope per il gestionale desktop, da valutare
+solo come evoluzione di prodotto.
