@@ -13459,3 +13459,35 @@ reschedule reminder, restore credito/punti/riscatti) sono corrette,
 idempotenti cross-azione e verificate live. Zero bug, zero suggerimenti
 strutturali. Migliorie del dominio tutte gia' applicate (prefetch lista,
 data/ora pulita, rollback compensativo plan_create).
+
+## Pagamenti (POS) — ri-pass con probe annullo vendita (2026-07-13, Fable)
+
+Zero drift codice dominio; batteria core verde dopo aver sanato 3 harness
+STANTII (non bug): (1) e2e-pos-logic 12/16 → 16/16: usava unitPrice del
+payload aspettandosi sale_total=100, ma il pass 1 (b04a04d) PREZZA DAL
+LISTINO (servizio 9 = 12) → seed servizio ZZ a 100 + cleanup; (2)
+e2e-pos-audit 3/6 → 6/6: checkout senza installment_choice (obbligatoria
+dal pass Pagamenti) → aggiunto 'single'; (3) e2e-pos-camp-earn archiviato
+.superseded (import 'pg' bare non risolvibile). Verdi: pagamenti 13+15+11,
+pos-success 12, pos-logic 16, installments 43, audit 6, audit2 14.
+
+PROBE MUTATIVO NUOVO — ANNULLO VENDITA (il reversal contabile piu' critico
+del modulo denaro). Logica letta: guardia isCancelledStatus (anti-doppio),
+motivazione obbligatoria, BLOCKER prenotazioni collegate, check di
+FATTIBILITA' PRE-mutazione (assertNormalStornoFeasible +
+assertRechargeCreditFeasible: lo storno che porterebbe punti/credito
+negativi e' bloccato PRIMA di mutare, dato che l'annullo non e' una
+transazione unica), poi markSaleCancelled + cancelLinkedSaleResidues +
+giftInvalidateSource. Probe live: checkout servizio → +1 punto maturato;
+annulla senza motivazione → 'La motivazione e' obbligatoria...'; annulla
+con motivazione → status 'cancelled' + punto STORNATO (1→0); doppio
+annullo → 'Vendita gia' annullata.'. Baseline 9 vendite intatto.
+
+VALUTAZIONE LOGICHE MUTATIVE POS:
+- CHECKOUT: prezzi dal LISTINO server-side (payload mai fidato), detrazioni
+  ordinate, installment_choice obbligatoria, piano rate sul netto residui.
+- ANNULLO: pre-flight feasibility + storno punti/credito/giftcard +
+  ripristino stock (con scelta) + blocker prenotazioni; anti-doppio.
+- DELETE vendita annullata: gated pos.manage|movements, solo da cancelled.
+VERDETTO: corrette, ben difese (pre-flight evita stati parziali), zero
+bug. Nessun suggerimento strutturale.
