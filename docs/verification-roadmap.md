@@ -13517,3 +13517,28 @@ vendite gia' annullate.'). CORRETTO.
 DESIGN DELIBERATO confermato: CANCEL = contabilita' reversibile con
 pre-flight feasibility (evita stati parziali senza transazione); DELETE =
 purga distruttiva ATOMICA in transazione. Zero bug, nessun suggerimento.
+
+## Gestione Rate — ri-pass + probe guardia sede su incasso (2026-07-13, Fable)
+
+Zero drift codice dominio; batteria verde dopo aver sanato 2 marker
+STANTII (non bug): '>Filtra<'/'>Reset<' non contigui perche' il bottone
+Filtra ha l'icona bi-search prima del testo (whitespace JSX) → marker sul
+testo stabile → markers 49/49. e2e-installments-manage 43/43.
+
+La suite 43/43 gia' copre ESAUSTIVAMENTE tutte le mutazioni: incasso
+(status paid, tipo, nota NULL), re-incasso IDEMPOTENTE (aggiorna il tipo),
+guardia importo ('deve corrispondere'), piano 'Completato' su tutte pagate,
+riapertura (mark_pending → pending, paid_at NULL, piano 'Attivo'), annullo
+via vendita (piano cancelled + rate [ANNULLATA]), guardie incasso/riapertura
+su annullata verbatim, badge, piano annullato assente da open.
+
+PROBE NUOVO (unico gap non nella suite) — GUARDIA SEDE sulle mutazioni:
+una cassa non deve incassare rate di un'altra sede. Live: piano rate su
+vendita SEDE 21; incasso da sessione SEDE 51 → 'Rata non trovata o non
+aggiornata.' + rata INTATTA a pending; incasso da sessione SEDE 21 →
+paid. Isolamento per-sede confermato (port di locationScopeSql). Baseline
+9 vendite.
+
+VERDETTO: tutte le logiche mutative Rate (incasso, riapertura, annullo,
+guardie importo/stato/sede) corrette, idempotenti dove serve, isolate per
+sede. Zero bug, nessun suggerimento strutturale.
