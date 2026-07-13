@@ -13491,3 +13491,29 @@ VALUTAZIONE LOGICHE MUTATIVE POS:
 - DELETE vendita annullata: gated pos.manage|movements, solo da cancelled.
 VERDETTO: corrette, ben difese (pre-flight evita stati parziali), zero
 bug. Nessun suggerimento strutturale.
+
+## Pagamenti (POS) — probe stock-restore + delete transazionale (2026-07-13, seguito)
+
+Zero drift dall'ultimo pass; suite core riconfermate verdi (pos-logic
+16/16, installments 43/43). Estesa la copertura mutativa alle 2 vie non
+ancora esercitate live:
+
+STOCK RESTORE su annullo (l'annullo del pass precedente era su un
+SERVIZIO, senza magazzino): stock atomico anti-oversell (WHERE guard su
+COALESCE(stock,0)+delta>=0). Live: stock 10 → checkout 3 unita' → 7 →
+annulla con stock_cancel_mode='restore' → 10 ripristinato + 1 riga
+pos_sale_stock_cancel_actions (audit). Con 'no_restore' non tocca lo
+stock (registra comunque l'audit). CORRETTO.
+
+DELETE_SALE (deleteCancelledSale): a differenza dell'annullo (pre-flight,
+NON transazione), la purga usa withTenantTransaction (BEGIN/COMMIT/
+ROLLBACK VERO) con guardie PRE-flight sugli artefatti emessi (giftcard/
+giftbox/pacchetti/prepagati/ricariche devono essere gia' annullati/
+scollegati, stringhe legacy verbatim) + blocker prenotazione collegata.
+Live: delete della vendita annullata → vendita+figli purgati atomicamente,
+stock invariato. Solo da stato 'cancelled' ('E' possibile eliminare solo
+vendite gia' annullate.'). CORRETTO.
+
+DESIGN DELIBERATO confermato: CANCEL = contabilita' reversibile con
+pre-flight feasibility (evita stati parziali senza transazione); DELETE =
+purga distruttiva ATOMICA in transazione. Zero bug, nessun suggerimento.
