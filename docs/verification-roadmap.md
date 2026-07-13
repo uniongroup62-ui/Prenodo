@@ -13298,3 +13298,36 @@ stesso passaggio; morto-vecchio released → purgato; scaduto RECENTE →
 marcato 'expired' e CONSERVATO (retention); vivo futuro → intatto; seed e
 trigger ripuliti (0 residui). Regressione: QB 35/35 + 16/16, booking
 pubblico 13/13, calendar-move 33/33; tsc/eslint puliti.
+
+## Appuntamenti — ri-pass post-janitor + audit atomicita' Pianifica (2026-07-13)
+
+Batterie verdi post-janitor hold (27+13+18+14; il janitor passa nei flussi
+hold usati dal drawer). Drift codice dominio: zero.
+
+AUDIT MUTATIVO NUOVO — atomicita' di plan_create (l'unico punto mutativo
+mai sviscerato): CONFERMATA la divergenza documentata a suo tempo
+('create best-effort != transazione legacy'). Il legacy
+(appointments_plan.php 1966-1997) avvolge l'INTERO loop di creazione in
+beginTransaction/commit con rollBack su qualsiasi errore = batch
+ALL-OR-NOTHING (10 date confermate → 10 create oppure 0 + errore). Il
+port (planCreate, manage-planner) crea per-data con try/catch → skipped++
+= BEST-EFFORT con contatori {created, skipped} passati alla UI.
+Valutazione: finestra di fallimento STRETTA (la disponibilita' viene
+ri-validata server-side subito prima di ogni create: falliscono solo race
+o hiccup DB a meta' loop), ma il contratto diverge — il legacy non lascia
+mai un batch parziale, il port si' (es. 7/10 create da riconciliare a
+mano).
+
+OPZIONI: (a) ROLLBACK COMPENSATIVO — su errore a meta' loop, eliminare gli
+id appena creati con la cascata gia' provata (deleteDbAppointment) e
+rilanciare l'errore = ripristina l'all-or-nothing SENZA toccare
+createDbAppointment (cuore condiviso col QB, rischio contenuto);
+(b) transazione vera = parita' letterale ma richiede di infilare un tx
+client dentro createDbAppointment (rischio ALTO sul cuore del dominio);
+(c) tenere il best-effort documentato. RACCOMANDAZIONE: (a) — per
+un'operazione batch il contratto prevedibile vale piu' della lettera, e la
+compensazione riusa una cascata gia' verificata a 0 orfani. In attesa di
+approvazione.
+
+Il resto della valutazione mutativa (delete due-fasi, bulk coi 3
+contatori, swap, edit via motore QB) resta promosso dai pass precedenti.
