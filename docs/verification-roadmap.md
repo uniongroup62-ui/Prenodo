@@ -13437,3 +13437,25 @@ VALUTAZIONE LOGICHE MUTATIVE (completa):
 - Il ghost/auto-scroll sono feedback client-side, guardie server INVARIATE.
 VERDETTO: zero bug, nessun suggerimento strutturale. Il side-effect
 temporale piu' sottile del move (reminder) e' gestito correttamente.
+
+## Appuntamenti — ri-pass con probe restore CREDITO su annullo (2026-07-13, Fable)
+
+Zero drift codice dominio; batteria verde (27+13+18+14). Completata la
+verifica LIVE di TUTTE le famiglie di reversal degli appuntamenti:
+- riscatti pacchetto/prepaid (clear-colonna) — pass precedente
+- riscatti giftbox/gift (source_id guard) — pass QB
+- CREDITO cliente — probe di OGGI: saldo 50 → create con credit_use=8 →
+  saldo 42, credit_used=8 → ANNULLA (status=canceled) → saldo 50
+  rimborsato (movimento 'recharge' 'Storno credito #N'), credit_used=0 →
+  ELIMINA (rerun restoreAppointmentRedeems) → saldo RESTA 50, NON 58
+  (idempotenza dallo zeroing di credit_used). Baseline 10.
+- punti fidelity RISERVATI (pending/scheduled): solo azzerati (mai
+  addebitati dal wallet, il redeem si liquida su 'done') — logica letta e
+  corretta.
+
+VERDETTO: tutte le logiche mutative degli appuntamenti (delete due-fasi
+con cascata, bulk 3 contatori, swap, edit via motore QB, move con
+reschedule reminder, restore credito/punti/riscatti) sono corrette,
+idempotenti cross-azione e verificate live. Zero bug, zero suggerimenti
+strutturali. Migliorie del dominio tutte gia' applicate (prefetch lista,
+data/ora pulita, rollback compensativo plan_create).
