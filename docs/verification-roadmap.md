@@ -13216,3 +13216,40 @@ nessun suggerimento.
 Migliorie: le 5 del pass precedente reggono (API 228-349ms mediana ~297
 sul server appena riavviato, skeleton, refetch on focus, Chart.js locale,
 log errori costi); NESSUNA miglioria residua aperta sul dominio.
+
+## Quick Booking — ri-pass + analisi logiche mutative (2026-07-13)
+
+Richiesta: nuovo bug-hunt attento + valutazione logiche eliminazione/
+modifica. Drift: solo 0bd7915 (parallelizzazione notifiche su
+db-repositories, gia' regressato). Batteria COMPLETA (11 suite) TUTTA
+VERDE: motore 35/35 + contorno 21/21 + 16/16 + redeem-edit 28/28 +
+markers 24+6+37+5 + findings 3/3 + residui 6/6 + public-comm 19/19.
+
+ANALISI LOGICHE MUTATIVE:
+- SAVE (crea/modifica): gia' promosso nei pass — prezzi dal LISTINO,
+  coupon ricalcolato server-side, redeem RIVALIDATI e consumati nel save
+  (invalidi = skip+warning senza bloccare, fedele); guardie ordinate
+  (cabina prima del conflitto), auto-pick operatore mai-nullo, client_id
+  strict senza fallback per nome.
+- EDIT COI REDEEM (la logica di reversal piu' delicata dell'app): il
+  motore RIPRISTINA e RICONSUMA correttamente sedute pacchetto/prepagati/
+  item giftbox/reward omaggi/saldo giftcard al cambio di selezione —
+  coperto dai 28 check di e2e-qb-redeem-edit. CORRETTO.
+- STATUS/CANCEL_DONE: whitelist stati + preview + restore riserve
+  (idempotente). CORRETTO.
+- HOLD: create/renew/release gated per azione (edit=manage+access vs
+  create=quick_booking), release silenzioso su token ignoto, renew 'Hold
+  non trovato.'; i conflitti considerano SOLO active+non-scaduti.
+  SCOPERTA data-at-rest: il legacy marca gli scaduti status='expired'
+  (appointment_holds_cleanup, Helpers 13006 — MAI delete), il port li
+  lascia 'active' filtrando per expires_at>NOW() ad ogni lettura →
+  LETTURE EQUIVALENTI (tutte le where accoppiano status+expires), diverge
+  solo lo stato a riposo delle righe morte. Oggi 2 righe stantie (accumulo
+  lento). Non-bug documentato.
+VERDETTO: logiche corrette e ben difese; nessun suggerimento strutturale.
+
+MIGLIORIA OPZIONALE (non applicata, bassa priorita'): purge periodico o
+marcatura 'expired' degli hold scaduti per igiene tabella — il legacy
+stesso non cancella mai, quindi qualsiasi DELETE sarebbe una deviazione
+da valutare post go-live (es. cron EventBridge gia' previsto per i
+promemoria).
