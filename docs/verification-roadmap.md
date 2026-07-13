@@ -13276,3 +13276,25 @@ pass 2ec2faf, confermata.)
 ZERO bug; nessuna miglioria residua (prefetch lista e messaggio data/ora
 gia' applicati). Unica evoluzione possibile resta l'audit-trail/cestino
 (non raccomandata per la parita').
+
+## Quick Booking — janitor hold applicato (2026-07-13)
+
+Analisi 'scelta corretta' della miglioria approvata: la soluzione giusta e'
+in DUE pezzi, non uno — (1) PARITA' PRIMA: port fedele di
+appointment_holds_cleanup (Helpers 13006, UPDATE status='expired' degli
+attivi scaduti, MAI delete) che il port saltava; (2) la DEVIAZIONE
+approvata: PURGE (DELETE) delle sole righe MORTE (expired/released/
+converted) piu' vecchie di 7 GIORNI — retention che conserva la forensica
+recente. SEDE: opportunistica alla CREAZIONE di un hold
+(cleanupAppointmentHolds in holdPublicBookingSlot, unico punto di
+creazione usato sia dal booking pubblico che dal drawer QB) — stesso
+principio del legacy che pulisce alla lettura, nessuna infrastruttura
+nuova; il futuro cron EventBridge potra' invocare la stessa funzione
+esportata. GLOBALE sulla tabella come il janitor legacy; best-effort
+(errori mai bloccanti).
+
+VERIFICA live a 4 stati: morto-vecchio active → marcato+purgato nello
+stesso passaggio; morto-vecchio released → purgato; scaduto RECENTE →
+marcato 'expired' e CONSERVATO (retention); vivo futuro → intatto; seed e
+trigger ripuliti (0 residui). Regressione: QB 35/35 + 16/16, booking
+pubblico 13/13, calendar-move 33/33; tsc/eslint puliti.

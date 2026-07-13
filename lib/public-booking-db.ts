@@ -2,7 +2,7 @@ import "server-only";
 
 import { randomBytes } from "crypto";
 import type { RowDataPacket } from "@/lib/tenant-db";
-import { columnExists, dbQuery, quoteIdentifier, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
+import { columnExists, dbExecute, dbQuery, quoteIdentifier, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
 
 export type PublicBookingBusiness = {
   name: string;
@@ -872,6 +872,10 @@ export async function holdPublicBookingSlot({
   const normalizedTime = normalizeTime(time);
   const slots = await publicBookingSlots({ slug, date: normalizedDate, serviceIds, staffId, staffMap, locationId });
   const selected = slots.find((slot) => slot.time === normalizedTime && slot.available);
+  // Janitor opportunistico degli hold (miglioria approvata 2026-07-13):
+  // eseguito alla creazione, stesso principio del legacy che pulisce alla
+  // lettura; best-effort, non blocca mai la creazione.
+  await cleanupAppointmentHolds(slug);
   // Exact legacy hold refusal (booking.php:5259 / api_appointments.php:6378).
   if (!selected) throw new Error("Orario non piu disponibile. Ricarica e scegli un altro slot.");
 
@@ -908,6 +912,31 @@ export async function holdPublicBookingSlot({
     staffId: selectedStaffId ?? null,
     staffName: selected.staffName,
   };
+}
+
+// Janitor degli hold (miglioria approvata dall'utente 2026-07-13, in 2 pezzi):
+// (1) PARITA': marca 'expired' gli attivi scaduti — port fedele di
+//     appointment_holds_cleanup (Helpers.php 13006: UPDATE, MAI delete) che il
+//     port saltava filtrando per expires_at alle letture (letture equivalenti,
+//     ma le righe morte restavano 'active' a tempo indeterminato);
+// (2) DEVIAZIONE approvata: PURGE delle righe MORTE (expired/released/
+//     converted) più vecchie di 7 giorni — gli hold sono transienti (TTL in
+//     minuti), la retention conserva la forensica recente.
+// GLOBALE sulla tabella come il janitor legacy (cross-tenant); best-effort:
+// un errore non deve mai bloccare il chiamante. Quando in produzione ci sarà
+// il cron EventBridge potrà invocare questa stessa funzione.
+export async function cleanupAppointmentHolds(slug: string): Promise<void> {
+  try {
+    const table = await tenantTable(slug, "appointment_holds");
+    await dbExecute(
+      `UPDATE ${quoteIdentifier(table.name)} SET status='expired' WHERE status='active' AND expires_at <= NOW()`,
+    );
+    await dbExecute(
+      `DELETE FROM ${quoteIdentifier(table.name)} WHERE status IN ('expired','released','converted') AND expires_at <= NOW() - interval '7 days'`,
+    );
+  } catch {
+    // best-effort
+  }
 }
 
 export async function releasePublicBookingHold({
