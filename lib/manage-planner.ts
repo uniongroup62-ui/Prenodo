@@ -27,6 +27,7 @@ import {
   createDbAppointment,
   createDbClient,
   getDbClient,
+  rollbackPlannerAppointments,
   tenantCabinsEnabled,
 } from "@/lib/db-repositories";
 import {
@@ -679,6 +680,14 @@ export async function planCreate(
   const details: PlannerCreateResult["details"] = [];
   let created = 0;
   let skipped = 0;
+  // Id creati in questo batch: se una create fallisce a metà, il legacy fa
+  // rollBack dell'INTERA transazione (appointments_plan 1966-1997). Il port li
+  // traccia e li elimina in compensazione — ripristina l'all-or-nothing SENZA
+  // toccare createDbAppointment (cuore condiviso col QB). Lo SKIP per slot non
+  // disponibile resta best-effort come il legacy, che pre-filtra le date
+  // creabili PRIMA della transazione: solo il fallimento di una create
+  // (race/DB) innesca il rollback.
+  const createdIds: number[] = [];
 
   for (const date of dates) {
     const slot = await findSlotForDate(slug, date, form, resolved, locationId);
@@ -711,11 +720,16 @@ export async function planCreate(
         status: "scheduled",
       });
       created++;
+      createdIds.push(Number(appointment.id));
       details.push({ date, ok: true, appointmentId: appointment.id });
     } catch (error) {
-      // Best-effort: a single date's failure is reported but does not abort the rest.
-      skipped++;
-      details.push({ date, ok: false, reason: error instanceof Error ? error.message : "Errore creazione." });
+      // Fallimento di una create A METÀ BATCH (race/DB): rollback compensativo
+      // di tutte le create fatte finora (comprese quelle riuscite), poi rethrow
+      // → l'utente vede l'errore e NESSUNA prenotazione parziale resta, come la
+      // transazione legacy. La compensazione è best-effort: se un delete
+      // fallisse, l'errore originale prevale comunque.
+      await rollbackPlannerAppointments(slug, createdIds).catch(() => 0);
+      throw new Error(error instanceof Error ? error.message : "Errore creazione.");
     }
   }
 

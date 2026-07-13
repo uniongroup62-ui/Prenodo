@@ -5507,6 +5507,33 @@ export async function deleteDbAppointment(slug: string, id: number): Promise<boo
   return removed > 0;
 }
 
+// ROLLBACK COMPENSATIVO delle create del PLANNER (miglioria approvata
+// 2026-07-13): a differenza di deleteDbAppointment NON ha la guardia 'solo da
+// Annullato' (le create del planner sono 'scheduled') e NON esegue restore dei
+// riscatti — il planner crea prenotazioni PULITE (nessun redeem/coupon/promo,
+// nessun reminder/email side-effect, verificato). Serve a ripristinare
+// l'ALL-OR-NOTHING legacy (transazione del loop, appointments_plan 1966-1997):
+// se una create fallisce a metà batch, il planner elimina quelle già create.
+// Rimuove riga + figli che il planner popola; best-effort per id, tenant-scoped
+// via i child helper. Restituisce quanti appuntamenti sono stati rimossi.
+export async function rollbackPlannerAppointments(slug: string, ids: number[]): Promise<number> {
+  let removed = 0;
+  for (const raw of ids) {
+    const appointmentId = Number(raw);
+    if (!Number.isFinite(appointmentId) || appointmentId <= 0) continue;
+    await deleteAppointmentChildren(slug, "appointment_segments", appointmentId);
+    await deleteAppointmentChildren(slug, "appointment_services", appointmentId);
+    await deleteAppointmentChildren(slug, "appointment_staff", appointmentId);
+    await deleteAppointmentChildren(slug, "appointment_locations", appointmentId);
+    // reminders best-effort: il planner non ne crea, ma la pulizia è a prova di
+    // regressione futura (se createDbAppointment iniziasse a schedularli).
+    await deleteAppointmentChildren(slug, "reminders", appointmentId);
+    const n = await tenantDelete({ slug, table: "appointments", id: appointmentId }).catch(() => 0);
+    if (n > 0) removed += 1;
+  }
+  return removed;
+}
+
 // Inverse of the PACKAGE redeem consume (applyAppointmentPackageRedeems step 5):
 // +1 session on the package-level pool (re-activating a 'completed' package) and,
 // when a per-service client_package_services row is linked, +1 on that pool too,

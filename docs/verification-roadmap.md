@@ -13331,3 +13331,34 @@ approvazione.
 
 Il resto della valutazione mutativa (delete due-fasi, bulk coi 3
 contatori, swap, edit via motore QB) resta promosso dai pass precedenti.
+
+## Appuntamenti — rollback compensativo di plan_create applicato (2026-07-13)
+
+Analisi 'scelta corretta' confermata in 4 punti prima di procedere:
+(1) le create del planner sono SIDE-EFFECT-FREE — createDbAppointment nel
+percorso planner NON manda email, NON schedula reminder, NON passa
+redeem/coupon/promo (verificato nel corpo) → una create e' totalmente
+reversibile con delete cascata; (2) il cliente nuovo si crea PRIMA del
+loop (come il legacy fuori-transazione) → NON va compensato; (3)
+deleteDbAppointment NON e' usabile (guardia 'solo da Annullato', le create
+sono 'scheduled') → serve un delete compensativo dedicato; (4) l'ambito e'
+FEDELE: rollback solo sul fallimento di createDbAppointment, NON sullo
+skip per slot non disponibile (il legacy pre-filtra le date creabili prima
+della transazione — findSlotForDate = quel pre-filtro).
+
+Implementazione: rollbackPlannerAppointments(slug, ids[]) in db-repositories
+(no guardia stato, no restore redeem, riusa deleteAppointmentChildren) +
+tracking createdIds nel loop di planCreate; il catch di createDbAppointment
+compensa (delete degli id creati) e RILANCIA → all-or-nothing come la
+transazione legacy (appointments_plan 1966-1997), SENZA toccare
+createDbAppointment (cuore condiviso col QB).
+
+VERIFICA: creati 2 appuntamenti VIA IL PLANNER reale, letti i figli
+effettivi (services/staff/segments/locations 2 ciascuno, reminders 0),
+applicata la sequenza di rollback → 0 orfani in OGNI tabella figlia, righe
+rimosse, copertura COMPLETA dei figli creati, baseline 10 intatto. NB: il
+fallimento di createDbAppointment post-findSlotForDate e' non-riproducibile
+via dati (i conflitti sono sempre skip) → il rollback protegge il solo
+caso infrastrutturale raro (DB hiccup a meta' batch), che e' esattamente
+lo scopo. Regressione: plan 18/18 + 14/14, QB 35/35, lista 13/13;
+tsc/eslint puliti.
