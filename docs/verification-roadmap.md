@@ -13542,3 +13542,33 @@ paid. Isolamento per-sede confermato (port di locationScopeSql). Baseline
 VERDETTO: tutte le logiche mutative Rate (incasso, riapertura, annullo,
 guardie importo/stato/sede) corrette, idempotenti dove serve, isolate per
 sede. Zero bug, nessun suggerimento strutturale.
+
+## Commissioni — ri-pass (6 harness sanati, mutazioni verificate) (2026-07-13, Fable)
+
+Zero drift codice dominio; batteria verde dopo aver sanato 6 harness
+STANTII (NON bug del prodotto):
+- 3 MARKER: '>Dal<'/'>Aggiorna<'/'>Ricarica<' non contigui (icona
+  bi-search + whitespace JSX; "Ricarica" e' nel settings-component, tutti
+  presenti) → testo stabile, markers 63/63.
+- 3 SUITE (comm-base/comm-fixes/comm-sede): seminavano created_by=20 +
+  staff SENZA email, ma la risoluzione operatore e' per EMAIL (b541360:
+  created_by→users.email→staff.email) → la commissione finiva su luca/22
+  (email dell'admin), non sullo staff ZZ → by[stf.id] undefined. Fix:
+  utente+staff ZZ con email univoca + created_by su quell'utente + cleanup
+  utente. Ora comm-base 3/3, comm-fixes 5/5, comm-sede 5/5.
+
+VERDETTO LOGICHE MUTATIVE (verificato live post-heal, zero bug):
+- SETTINGS (save_module_settings/save_commission_settings): modulo +
+  percentuali per-staff; toggle apre/chiude i PERIODI.
+- DOPPIO GATE per-movimento: una vendita e' commissionata SOLO se ENTRAMBI
+  i periodi (modulo E staff) sono aperti al momento del movimento —
+  comm-fixes prova il GAP modulo (vendita 2025-07 tra P1 chiuso e P2
+  aperto) → NESSUNA commissione; P1/P2 aperti → commissione.
+- TOGGLE PERIODI (test-comm-toggles 6/6): modulo/staff ON→apre,
+  OFF→chiude, ON→NUOVO periodo (crea il gap).
+- CALC: base net-factor (line*total/subtotal, es. 100*80/100=80 → 10%=8);
+  sconto 100% (total 0) → NESSUNA commissione (no fallback landmine);
+  prodotto item_id=0 → pos_other 0% (nessuna commissione, classificazione
+  corretta).
+- RISOLUZIONE OPERATORE per EMAIL (mai per nome), SCOPE SEDE su lettura.
+Nessun bug, nessun suggerimento strutturale.
