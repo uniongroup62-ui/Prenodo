@@ -13362,3 +13362,27 @@ via dati (i conflitti sono sempre skip) → il rollback protegge il solo
 caso infrastrutturale raro (DB hiccup a meta' batch), che e' esattamente
 lo scopo. Regressione: plan 18/18 + 14/14, QB 35/35, lista 13/13;
 tsc/eslint puliti.
+
+## Quick Booking — ri-pass con probe idempotenza reversal (2026-07-13)
+
+Drift REALE regressato: janitor hold (77752c7) e rollback planner
+(f9e8b58) toccano codice condiviso col motore QB. Batteria COMPLETA verde:
+motore 35/35 + 21/21 + 16/16, redeem-edit 28/28, markers 24+6+37+5,
+residui 6/6, findings 3/3.
+
+PROBE MUTATIVO NUOVO — idempotenza CROSS-AZIONE del reversal riscatti (la
+garanzia piu' sottile: annulla e elimina rieseguono entrambi
+restoreAppointmentRedeems, solo il CLEAR della colonna linkage evita il
+doppio credito). Ciclo live su pacchetto 3 sedute: create+redeem 3→2 →
+annulla 2→3 (client_package_id azzerato) → elimina: pool RESTA 3, NON
+risale a 4. Idempotenza CONFERMATA sul valore esatto; baseline 10 intatto.
+
+VALUTAZIONE LOGICHE MUTATIVE (completa):
+- SAVE crea/modifica: prezzi da listino, coupon ricalcolato, redeem
+  rivalidati (invalidi=skip+warning); reversal su edit = restore+reapply
+  con clear idempotente (28 check + probe cross-azione). CORRETTO.
+- STATUS/CANCEL: restore riserve idempotente; whitelist stati. CORRETTO.
+- HOLD: create/renew/release gated, conflitti su active+non-scaduti,
+  janitor opportunistico. CORRETTO.
+VERDETTO: nessun bug, nessun suggerimento strutturale. Migliorie del
+dominio gia' tutte applicate (get parallelo, data/ora pulita, janitor).
