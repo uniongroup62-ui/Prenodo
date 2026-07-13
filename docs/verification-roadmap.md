@@ -13407,3 +13407,33 @@ DUE MECCANISMI DI IDEMPOTENZA DISTINTI, entrambi verificati:
 VERDETTO: entrambe le famiglie di reversal sono idempotenti per
 costruzione e verificate cross-azione (create→annulla→elimina). Logiche
 mutative QB COMPLETE e corrette; zero bug, zero suggerimenti strutturali.
+
+## Calendario — ri-pass con probe side-effect temporali del MOVE (2026-07-13)
+
+Drift regressato: modifiche dirette (ghost move 70bc327, auto-scroll
+b553e95, nomi giorni 72e9dce) + condivisi che alimentano il context
+(prefetch mapAppointment, janitor/staffUnavailability in
+public-booking-db). Batteria COMPLETA verde: markers 48/48,
+test-calendario 20/20, location-scope 6/6, e2e-calendar-move 33/33,
+hours 4/4.
+
+PROBE MUTATIVO NUOVO — il MOVE e i side-effect legati al TEMPO. Uno
+spostamento cambia starts_at/ends_at: i PROMEMORIA (schedulati a
+start-Nore) devono seguire, altrimenti restano stantii. Verificato che
+moveDbAppointmentCalendar NON tocca i reminder (mutazione DB pura), ma la
+ROUTE del move li rischedula a valle (automationScheduleReminder, riga
+946, con email 'modified' sui campi cliente-visibili). Probe live
+(reminder 24h abilitati): create appt scheduled 2027-12-06 10:00 →
+reminder email+sms a 12-05 10:00; MOVE +2h a 12-06 12:00 → reminder
+shiftati a 12-05 12:00 (upsert su appointment_id+channel ricalcola
+scheduled_at dal nuovo start). NESSUN reminder stantio. Baseline 10.
+
+VALUTAZIONE LOGICHE MUTATIVE (completa):
+- MOVE (drag+resize, endpoint unico): guardie ordinate (manage → scope
+  sede → stato → timeoff → conflitto), delta multi-segmento, email
+  'modified' condizionale + reschedule reminder. CORRETTO e completo.
+- NOTE CRUD: save/delete idempotente, scrittura gated appointments.manage,
+  JSON ordine tollerante. CORRETTO (pass precedenti).
+- Il ghost/auto-scroll sono feedback client-side, guardie server INVARIATE.
+VERDETTO: zero bug, nessun suggerimento strutturale. Il side-effect
+temporale piu' sottile del move (reminder) e' gestito correttamente.
