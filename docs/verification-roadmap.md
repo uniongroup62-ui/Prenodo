@@ -13253,3 +13253,26 @@ marcatura 'expired' degli hold scaduti per igiene tabella — il legacy
 stesso non cancella mai, quindi qualsiasi DELETE sarebbe una deviazione
 da valutare post go-live (es. cron EventBridge gia' previsto per i
 promemoria).
+
+## Appuntamenti — ri-pass con probe mutativi approfonditi (2026-07-13)
+
+Richiesta: nuovo bug-hunt attento + valutazione logiche eliminazione/
+modifica. Drift: ZERO sui file del dominio. Batterie verdi: markers 27/27,
+lista 13/13, plan 18/18 + 14/14.
+
+PROBE MUTATIVI NUOVI (live, seed ZZ tracciati, baseline 10 confermato):
+- BULK_DELETE su set MISTO reale (2 annullati ZZ + 1 scheduled di baseline
+  + 1 inesistente): contatori legacy ESATTI — deleted=2,
+  blockedNotCanceled=1, blockedUnavailable=1; il 408 scheduled INTATTO,
+  gli annullati rimossi con cascata. Nessun danno collaterale.
+- SWAP_SEGMENT live su multi-segmento ZZ (2 segmenti con
+  duration_minutes): swap down scambia posizioni+finestre (verificato in
+  DB), tentativo oltre il bordo → rifiutato pulito, direction garbage →
+  'Direzione non valida'. CORRETTO.
+(Il resto della valutazione mutativa — delete due-fasi con cascata a 0
+orfani, edit delegata al motore QB, status whitelist — resta quella del
+pass 2ec2faf, confermata.)
+
+ZERO bug; nessuna miglioria residua (prefetch lista e messaggio data/ora
+gia' applicati). Unica evoluzione possibile resta l'audit-trail/cestino
+(non raccomandata per la parita').
