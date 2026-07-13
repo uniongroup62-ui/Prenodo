@@ -397,47 +397,76 @@ export async function saveStockMovement(slug: string, body: Record<string, strin
   const notes = clean(body.notes ?? body.reason, 2000);
 
   const adjustedItems: Array<{ productId: number; qty: number; cause: "carico" | "scarico"; incomingFlag: boolean; incomingQty: number; incomingEta: string | null }> = [];
-  for (const item of items) {
-    const product = await getProductById(slug, item.productId);
-    let cause = type;
-    let qty = item.qty;
-    if ((body.type ?? "").toLowerCase() === "rettifica") {
-      const current = await currentProductStock(slug, item.productId, locationId, product);
-      const delta = item.qty - current;
-      cause = delta >= 0 ? "carico" : "scarico";
-      qty = Math.abs(delta);
-      if (qty === 0) continue;
+  // ATOMICITA' del documento (fix fedelta' 2026-07-13): il legacy avvolge
+  // l'INTERO save in beginTransaction/rollBack (stock_moves.php 386) — se un
+  // item fallisce (es. scarico > giacenza in un multi-prodotto) NIENTE stock
+  // viene mutato. adjustProductStock non usa un client transazionale (il suo
+  // WHERE atomico e' per singola riga), quindi qui si tiene traccia dei delta
+  // APPLICATI e su QUALSIASI errore (guardia sede, giacenza, insert documento)
+  // li si inverte in compensazione prima di rilanciare — ripristina
+  // l'all-or-nothing senza refactor invasivo di adjustProductStock.
+  const applied: Array<{ productId: number; delta: number }> = [];
+  const rollbackApplied = async () => {
+    for (const a of applied.reverse()) {
+      await adjustProductStock(slug, a.productId, locationId, -a.delta).catch(() => undefined);
     }
-    // Guardia sede legacy: il prodotto deve essere abbinato alla sede del documento.
-    if (locationId > 0 && !(await productEnabledForLocation(slug, item.productId, locationId))) {
-      throw new Error("Prodotto non abbinato alla sede selezionata");
+    applied.length = 0;
+  };
+  try {
+    for (const item of items) {
+      const product = await getProductById(slug, item.productId);
+      let cause = type;
+      let qty = item.qty;
+      if ((body.type ?? "").toLowerCase() === "rettifica") {
+        const current = await currentProductStock(slug, item.productId, locationId, product);
+        const delta = item.qty - current;
+        cause = delta >= 0 ? "carico" : "scarico";
+        qty = Math.abs(delta);
+        if (qty === 0) continue;
+      }
+      // Guardia sede legacy: il prodotto deve essere abbinato alla sede del documento.
+      if (locationId > 0 && !(await productEnabledForLocation(slug, item.productId, locationId))) {
+        throw new Error("Prodotto non abbinato alla sede selezionata");
+      }
+      const delta = cause === "carico" ? qty : -qty;
+      try {
+        await adjustProductStock(slug, item.productId, locationId, delta);
+      } catch {
+        throw new Error("Scarico superiore alla giacenza attuale per un prodotto");
+      }
+      applied.push({ productId: item.productId, delta });
+      adjustedItems.push({ ...item, qty, cause, incomingFlag: cause === "carico" && item.incomingFlag });
     }
-    try {
-      await adjustProductStock(slug, item.productId, locationId, cause === "carico" ? qty : -qty);
-    } catch {
-      throw new Error("Scarico superiore alla giacenza attuale per un prodotto");
-    }
-    adjustedItems.push({ ...item, qty, cause, incomingFlag: cause === "carico" && item.incomingFlag });
-  }
-  if (!adjustedItems.length) return getManageProductsContext(slug, { locationId, includeInactive: true });
+    if (!adjustedItems.length) return getManageProductsContext(slug, { locationId, includeInactive: true });
 
-  const effectiveCauses = [...new Set(adjustedItems.map((item) => item.cause))];
-  if (effectiveCauses.length > 1) throw new Error("Rettifica multi-prodotto con carichi e scarichi misti non supportata in un unico documento.");
-  const effectiveCause = effectiveCauses[0] ?? type;
-  const docId = await insertStockDocument(slug, {
-    locationId,
-    cause: effectiveCause,
-    operatorName: clean(userName, 190) || "Operatore",
-    operatorUserId: userId,
-    documentType: normalizeDocumentType(body.document_type),
-    documentNumber: clean(body.document_number, 80),
-    documentDate: normalizeDate(body.document_date),
-    notes,
-  });
-  for (const item of adjustedItems) {
-    await insertStockDocumentItem(slug, docId, item);
-    if (effectiveCause === "carico") await setProductIncoming(slug, item.productId, locationId, item.incomingFlag ? item.incomingQty : 0, item.incomingFlag ? item.incomingEta : null);
+    const effectiveCauses = [...new Set(adjustedItems.map((item) => item.cause))];
+    if (effectiveCauses.length > 1) throw new Error("Rettifica multi-prodotto con carichi e scarichi misti non supportata in un unico documento.");
+    const effectiveCause = effectiveCauses[0] ?? type;
+    const docId = await insertStockDocument(slug, {
+      locationId,
+      cause: effectiveCause,
+      operatorName: clean(userName, 190) || "Operatore",
+      operatorUserId: userId,
+      documentType: normalizeDocumentType(body.document_type),
+      documentNumber: clean(body.document_number, 80),
+      documentDate: normalizeDate(body.document_date),
+      notes,
+    });
+    for (const item of adjustedItems) {
+      await insertStockDocumentItem(slug, docId, item);
+      if (effectiveCause === "carico") await setProductIncoming(slug, item.productId, locationId, item.incomingFlag ? item.incomingQty : 0, item.incomingFlag ? item.incomingEta : null);
+    }
+    return await finalizeStockMovementContext(slug, locationId, docId);
+  } catch (error) {
+    // Compensazione: annulla i delta stock gia' applicati e rilancia l'errore
+    // originale — il chiamante vede il messaggio, lo stock resta INTATTO.
+    await rollbackApplied();
+    throw error;
   }
+}
+
+// Estratto per il return dentro il try/compensate di saveStockMovement.
+async function finalizeStockMovementContext(slug: string, locationId: number, docId: number): Promise<ManageProductsContext> {
   // stockDocId in risposta: serve al form per caricare l'allegato del
   // documento appena creato (stock-doc-attachment, port di stock_moves.php).
   const context = await getManageProductsContext(slug, { locationId, includeInactive: true });

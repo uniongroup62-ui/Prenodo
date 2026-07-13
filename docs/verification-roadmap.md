@@ -13572,3 +13572,38 @@ VERDETTO LOGICHE MUTATIVE (verificato live post-heal, zero bug):
   corretta).
 - RISOLUZIONE OPERATORE per EMAIL (mai per nome), SCOPE SEDE su lettura.
 Nessun bug, nessun suggerimento strutturale.
+
+## Magazzino — BUG atomicità documento stock TROVATO E CORRETTO (2026-07-13, Fable)
+
+Batteria verde dopo aver sanato 1 harness STANTIO (test-stock-atomic usava
+PID=15 hardcoded, non esistente nel tenant 25 con 0 prodotti → seed
+prodotto ZZ dedicato + cleanup): e2e-magazzino 39/39, markers 84/84,
+test-magazzino 41/41, test-stock-atomic 4/4 (concorrenza: 2 checkout
+paralleli sull'ultima unita' → esattamente 1 riesce, 'Giacenza
+insufficiente', stock mai negativo).
+
+BUG DI FEDELTA' (mutazione parziale) — saveStockMovement (lib/manage-products
+~415): adjustProductStock e' chiamato in LOOP per-item e il documento e'
+inserito DOPO il loop, SENZA transazione. Il legacy avvolge l'INTERO save
+in beginTransaction/rollBack (stock_moves.php 386). Confermato live:
+documento SCARICO multi-prodotto A(stock 5, scarico 3)+B(stock 1, scarico 5
+ECCEDE) → l'API rifiuta con 'Scarico superiore alla giacenza...' ma lo
+stock di A era gia' decrementato a 2 e NON ripristinato (nessun documento
+creato). Il legacy lascerebbe A=5.
+
+FIX: rollback compensativo (stessa classe del plan_create f9e8b58) — si
+tracciano i delta stock APPLICATI e su QUALSIASI errore (guardia sede,
+giacenza, insert documento) li si inverte prima di rilanciare, senza
+refactor invasivo di adjustProductStock (il suo WHERE atomico e' per riga,
+non transazionale). Il return del percorso felice estratto in
+finalizeStockMovementContext. VERIFICATO live post-fix: A resta 5
+(all-or-nothing come legacy); regressione completa verde (39+41+4+84).
+Nuova suite permanente test-stock-doc-atomic.mjs a protezione del fix.
+
+VALUTAZIONE LOGICHE MUTATIVE MAGAZZINO:
+- MOVIMENTO (carico/scarico/rettifica): stock atomico anti-oversell + ORA
+  atomicita' documento (compensazione); rettifica calcola il delta;
+  guardia sede sul prodotto.
+- ANNULLO documento (stock_move_cancel): reverse dei movimenti (gia' nella
+  batteria).
+Zero bug residui dopo il fix.
