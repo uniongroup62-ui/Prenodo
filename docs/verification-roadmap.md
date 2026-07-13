@@ -13386,3 +13386,24 @@ VALUTAZIONE LOGICHE MUTATIVE (completa):
   janitor opportunistico. CORRETTO.
 VERDETTO: nessun bug, nessun suggerimento strutturale. Migliorie del
 dominio gia' tutte applicate (get parallelo, data/ora pulita, janitor).
+
+## Quick Booking — probe reversal GIFTBOX cross-azione (2026-07-13, seguito)
+
+Nessun drift di codice dall'ultimo pass; suite core riconfermate verdi
+(35+16+28). Estesa la copertura del reversal al percorso GIFTBOX (diverso
+dal pacchetto: NON self-clear per-riga ma delete redemption headers +
+riattivazione istanza guardata da redeemed_source_id).
+
+DUE MECCANISMI DI IDEMPOTENZA DISTINTI, entrambi verificati:
+- PACCHETTO/PREPAID: restore + CLEAR della colonna linkage (2° restore =
+  no-op perche' il link e' NULL). Provato pass precedente.
+- GIFTBOX/GIFT: la riattivazione istanza scatta SOLO se status='redeemed'
+  AND redeemed_source_id === appointmentId (2° restore = no-op perche' il
+  source non combacia piu' dopo il 1o). Provato ORA live: create chiude
+  l'istanza a 'redeemed' (source=appt) + 1 redemption row → annulla la
+  riapre a 'issued' (source NULL, 0 redemption) → elimina la lascia
+  INVARIATA (nessun doppio processing). Baseline 10 intatto.
+
+VERDETTO: entrambe le famiglie di reversal sono idempotenti per
+costruzione e verificate cross-azione (create→annulla→elimina). Logiche
+mutative QB COMPLETE e corrette; zero bug, zero suggerimenti strutturali.
