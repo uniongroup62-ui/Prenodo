@@ -13192,3 +13192,27 @@ ri-notifica l'evento gia' visto (0 toast/native) e NOTIFICA il pending
 genuinamente nuovo seminato dopo il merge. Cleanup: seeds+reminders
 rimossi, colonna azzerata, baseline 10. Regressione notifiche COMPLETA:
 16+10+12+12+19+7; tsc pulito, eslint solo warning pre-esistenti.
+
+## Dashboard — ri-pass + analisi logiche mutative (2026-07-13)
+
+Richiesta: nuovo bug-hunt attento + valutazione logiche eliminazione/
+modifica. Drift: ZERO commit sui file dashboard dopo le migliorie 779a9f1;
+la shell ospitante e' cambiata ('visto' server-side 4f0caca) → batteria
+COMPLETA rieseguita: 16/16 + 5/5 + 7/7 + attestazione live 9/9 + e2e 13/13
+TUTTE VERDI. (Prima run falsata dal server freddo/wedge Turbopack post
+riavvio: API che rispondevano HTML di compilazione → ricetta kill+rm
+.next/dev+riavvio+warm, poi tutto verde — nessun bug.)
+
+ANALISI LOGICHE MUTATIVE: la Dashboard e' READ-ONLY BY DESIGN, verificato
+rigorosamente — la route esporta SOLO GET (nessun POST/PUT/DELETE), il
+client non emette alcuna richiesta mutativa (0 POST), le uniche uscite
+sono NAVIGAZIONI verso i moduli proprietari (calendario, hub notifiche
+per l'approvazione pending, scadenziario/magazzino/rate dai link degli
+avvisi) — ciascuno gia' auditato nel proprio pass con le proprie guardie.
+VERDETTO: e' l'architettura giusta (un pannello di sintesi non deve
+mutare nulla; ogni mutazione vive nel modulo che possiede le guardie) —
+nessun suggerimento.
+
+Migliorie: le 5 del pass precedente reggono (API 228-349ms mediana ~297
+sul server appena riavviato, skeleton, refetch on focus, Chart.js locale,
+log errori costi); NESSUNA miglioria residua aperta sul dominio.
