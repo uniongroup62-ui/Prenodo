@@ -13607,3 +13607,29 @@ VALUTAZIONE LOGICHE MUTATIVE MAGAZZINO:
 - ANNULLO documento (stock_move_cancel): reverse dei movimenti (gia' nella
   batteria).
 Zero bug residui dopo il fix.
+
+## Fornitori — ri-pass + probe univocita' case-insensitive e blocker costi (2026-07-13, Fable)
+
+Server ripartito col wedge Turbopack noto (tutte le pagine 404 dall'istanza
+precedente) → ricetta kill+rm .next/dev+riavvio. Zero drift codice dominio
+dall'ultimo fix (b11e34d univocita' LOWER). Batterie verdi: e2e-suppliers
+21/21, markers 49/49 — la suite
+
+## Fornitori — ri-pass + probe mutazioni (2026-07-13, Fable)
+
+Server riavviato pulito (wedge Turbopack post-restart: kill + rm .next/dev +
+riavvio, 200 ok). Batteria verde: e2e-suppliers 21/21, markers 49/49.
+
+VALUTAZIONE + PROBE LIVE delle logiche mutative (saveSupplier/deleteSupplier
+in lib/manage-products, azioni supplier_save/supplier_delete):
+- SALVA: nome obbligatorio, univocita' CASE-INSENSITIVE (fix b11e34d,
+  ensureSupplierNameAvailable con LOWER) — verificato live: 'zz CASEPROBE'
+  rifiutato come dup di 'ZZ CaseProbe' ('Esiste gia un fornitore...');
+  gate sedi (magazzino/costi devono avere >=1 sede se attivi e il tenant ha
+  sedi attive, verbatim); rename propaga products.supplier_name.
+- ELIMINA: blocker se usato in prodotti (products.supplier_name) O costi
+  (costs.supplier_id) — verificato live: costo collegato → 'Fornitore usato
+  in prodotti o costi...'; rimosso il costo → delete ok con cascata
+  supplier_locations. Delete inesistente → 'Fornitore non trovato'.
+VERDETTO: tutte le mutazioni corrette; zero bug, nessun suggerimento
+strutturale. Nuova suite permanente test-suppliers-mutations.mjs.
