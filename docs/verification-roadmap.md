@@ -13633,3 +13633,33 @@ in lib/manage-products, azioni supplier_save/supplier_delete):
   supplier_locations. Delete inesistente → 'Fornitore non trovato'.
 VERDETTO: tutte le mutazioni corrette; zero bug, nessun suggerimento
 strutturale. Nuova suite permanente test-suppliers-mutations.mjs.
+
+## Buoni (coupon) — ri-pass 2026-07-13 (Fable)
+
+Server riavviato (conflitto: un 2o dev server rimasto sulla 3001 impediva
+l'avvio → kill PID + rm .next/dev + riavvio, 200 ok). Zero drift codice
+dominio dopo 09c85d1.
+
+Batteria verde dopo aver sanato harness STANTIO: e2e-coupons usava login
+REALE → sede 0 fail-closed sul tenant multi-sede (currentLocationId 0,
+coupon creati senza sede, locationsCount 1 vs 2 reali) → forgiata sessione
+sede 21 + assertion locationsCount resa >=1; fluttuazione iniziale =
+residuo coupon ZZ di un run interrotto (0 residui dopo cleanup completo,
+baseline promo 2 righe). e2e-coupons 52/52 STABILE (2 run consecutivi),
+markers-coupons 70/70, test-buoni 33/33, test-buoni2 30/30. Archiviati
+e2e-coupons2/3/4 (bare-import 'pg' mai risolvibile dallo scratchpad,
+copertura sussunta da e2e-coupons).
+
+LOGICHE MUTATIVE (esaustivamente coperte dalla suite, design PROMOSSO):
+- DELETE a TRE VIE (deleteManageCoupon): (1) prenotazioni APERTE (pending/
+  scheduled col coupon) → BLOCCATO 'Coupon associato a prenotazioni in
+  sospeso/prenotate...' + redirectEdit; (2) storico d'uso (vendite/appt
+  passati, nessun aperto) → SOFT-delete (is_active=0 + deleted_at/by/reason,
+  RIGA CONSERVATA, codice riservato, escluso dalla lista); (3) nessun uso →
+  HARD-delete (riga + coupon_locations). Protegge integrita' referenziale +
+  preserva storico.
+- CANCEL/DISABLE: is_active=0 + audit cancelled_at/by/reason; doppio →
+  'Coupon già disattivato.' warning; not-found → danger.
+- Codice soft-deleted riservato (dup accentato); residual/partial per fixed.
+VERDETTO: mutazioni corrette, design a-tre-vie eccellente; zero bug, nessun
+suggerimento strutturale. (BUG date promo era gia' stato corretto in 09c85d1.)
