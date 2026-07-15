@@ -227,47 +227,40 @@ export function CouponsContent({ slug: slugProp, initialQuery }: { slug?: string
         </div>
       ) : null}
 
-      {hasAnyCoupons && showLocationsFilter ? (
-          <div className="card p-3 mb-3">
-            <form
-              className="row g-2 align-items-end"
-              onSubmit={(e) => {
-                e.preventDefault();
-                syncUrl(allLocations);
-                load(allLocations);
-              }}
-            >
-              <div className="col-lg-8 d-flex align-items-center justify-content-start">
-                <div className="form-check mb-2">
+      {hasAnyCoupons ? (
+          <div className="card">
+            {/* Filtro sede integrato nell'header della tabella (restyle approvato
+                2026-07-15): via la card dedicata al solo checkbox — switch con
+                auto-applicazione (micro-deviazione dal submit GET legacy; l'URL
+                ?all_locations=1 resta identico) + conteggio a sinistra. */}
+            <div className="card-header bg-transparent d-flex flex-wrap align-items-center justify-content-between gap-2 py-2">
+              <span className="text-muted small">
+                {coupons.length === 1 ? "1 buono" : `${coupons.length} buoni`}
+                {!allLocations && showLocationsFilter ? " nella sede corrente" : ""}
+              </span>
+              {showLocationsFilter ? (
+                <div className="form-check form-switch mb-0">
                   <input
                     className="form-check-input"
                     type="checkbox"
+                    role="switch"
                     id="couponsAllLocations"
                     name="all_locations"
                     value="1"
                     checked={allLocations}
-                    onChange={(e) => setAllLocations(e.target.checked)}
+                    onChange={(e) => {
+                      const v = e.target.checked;
+                      setAllLocations(v);
+                      syncUrl(v);
+                      load(v);
+                    }}
                   />
                   <label className="form-check-label" htmlFor="couponsAllLocations">
                     Tutte le sedi
                   </label>
                 </div>
-              </div>
-              <div className="col-lg-4 d-flex align-items-end gap-2 app-filter-actions">
-                <button className="btn btn-outline-primary app-filter-submit" type="submit">
-                  <i className="bi bi-search me-1" />
-                  Filtra
-                </button>
-                <a className="btn btn-outline-secondary app-filter-reset" href={href("")}>
-                  Reset
-                </a>
-              </div>
-            </form>
-          </div>
-      ) : null}
-
-      {hasAnyCoupons ? (
-          <div className="card">
+              ) : null}
+            </div>
             <div className="table-responsive">
               <table className="table mb-0 align-middle">
                 <thead>

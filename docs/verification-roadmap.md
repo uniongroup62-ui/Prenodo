@@ -13704,3 +13704,17 @@ NOTA BASELINE: coupon reale W8R8MGXX39 (id 209, default form + gen_code,
 created_by 20, 21:44 locale) creato FUORI dalle suite — verosimilmente
 dall'utente nel browser; NON toccato (regola anti-inferenza). I 3 FAIL di
 e2e-coupons sono solo il baseline 'zero coupon' non più vero.
+
+## Buoni — restyle filtro sede lista (2026-07-15, Fable, opzione A approvata)
+
+Via la card filtro dedicata al solo checkbox (con i bottoni Filtra/Reset a
+larghezza piena che sembravano una search bar vuota): il filtro vive ora
+nell'header della card-tabella — switch 'Tutte le sedi' (form-switch) con
+AUTO-applicazione al toggle (micro-deviazione dal submit GET legacy;
+?all_locations=1 nell'URL resta identico via syncUrl) + conteggio a sinistra
+('N buoni' / '1 buono', suffisso 'nella sede corrente' quando filtrato).
+Reset eliminato: lo switch spento È il reset. Solo markup coupons-content;
+lo stile app-filter-* globale delle altre liste NON è toccato.
+Markers sanati (i not() su app-filter-* sarebbero falsi FAIL nel blob
+multi-modulo; JSX minificato rende role:"switch"): 72/72. e2e 49+3 attesi
+(baseline W8R8MGXX39 reale). tsc/eslint puliti.
