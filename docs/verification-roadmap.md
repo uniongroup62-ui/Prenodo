@@ -13691,3 +13691,16 @@ edit con appt 'scheduled' che usa il buono (notes 'Coupon: CODE') →
 warning col conteggio corretto; save riuscito. Regressione completa verde
 52+70+33+30 (edit senza appt aperti = nessun avviso, confermato). tsc pulito,
 eslint solo warning pre-esistenti. Nuova suite test-coupon-edit-audit.
+
+## Buoni — resa UI delle 2 migliorie (2026-07-15, Fable)
+
+Cablata la resa visiva: (a) il save in EDIT propaga `warning` nel redirect
+(?warn=) e il form lo mostra come alert-warning SOTTO il flash di successo
+(SSR verificato: presente col param, assente senza); (b) card di stato
+dell'edit mostra 'Ultima modifica' (data + 'di <operatore>') da
+updatedAt/updatedByLabel, '—' se mai modificato. page.tsx passa query.warn.
+Regressione: markers-coupons 70/70, test-coupon-edit-audit verde.
+NOTA BASELINE: coupon reale W8R8MGXX39 (id 209, default form + gen_code,
+created_by 20, 21:44 locale) creato FUORI dalle suite — verosimilmente
+dall'utente nel browser; NON toccato (regola anti-inferenza). I 3 FAIL di
+e2e-coupons sono solo il baseline 'zero coupon' non più vero.

@@ -59,6 +59,9 @@ type CouponMeta = {
   activeUsedCount: number;
   createdAt: string;
   createdByLabel: string;
+  // Audit ultima modifica (miglioria 2026-07-13): vuoti se mai modificato.
+  updatedAt: string;
+  updatedByLabel: string;
   cancelledAt: string;
   cancelledByLabel: string;
   cancelledReason: string;
@@ -73,6 +76,9 @@ type CouponMeta = {
 export type CouponFormQuery = {
   msg?: string;
   type?: string;
+  // Flash warning AGGIUNTIVO (oltre al msg di successo): usato dal save in
+  // modifica quando il buono e' usato da prenotazioni ancora aperte.
+  warn?: string;
 };
 
 function tenantSlug(): string {
@@ -148,6 +154,9 @@ export function CouponFormContent({ slug: slugProp, initialQuery }: { slug?: str
   const [flash] = useState<{ msg: string; type: string } | null>(() =>
     initialQuery?.msg ? { msg: initialQuery.msg, type: initialQuery.type || "success" } : null,
   );
+  // Warning aggiuntivo dal save (prenotazioni aperte), mostrato SOTTO il flash
+  // di successo — non lo sostituisce.
+  const [flashWarn] = useState<string>(() => String(initialQuery?.warn ?? ""));
   const [showCancel, setShowCancel] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelling, setCancelling] = useState(false);
@@ -231,6 +240,8 @@ export function CouponFormContent({ slug: slugProp, initialQuery }: { slug?: str
                 activeUsedCount: Number(c.activeUsedCount ?? 0),
                 createdAt: String(c.createdAt ?? ""),
                 createdByLabel: String(c.createdByLabel ?? "—"),
+                updatedAt: String(c.updatedAt ?? ""),
+                updatedByLabel: String(c.updatedByLabel ?? "—"),
                 cancelledAt: String(c.cancelledAt ?? ""),
                 cancelledByLabel: String(c.cancelledByLabel ?? "—"),
                 cancelledReason: String(c.cancelledReason ?? ""),
@@ -417,7 +428,11 @@ export function CouponFormContent({ slug: slugProp, initialQuery }: { slug?: str
       // Legacy redirects: create -> list "Coupon creato"; edit -> stay on the
       // edit view with "Coupon aggiornato" (both type=success).
       if (form.id > 0) {
-        window.location.href = `/${encodeURIComponent(slug)}/coupons?action=edit&id=${form.id}&msg=${encodeURIComponent("Coupon aggiornato")}&type=success`;
+        // Warning aggiuntivo (prenotazioni aperte): viaggia nel redirect come
+        // ?warn= e viene mostrato sotto il flash di successo.
+        const warn = String(j.warning ?? "").trim();
+        const warnParam = warn !== "" ? `&warn=${encodeURIComponent(warn)}` : "";
+        window.location.href = `/${encodeURIComponent(slug)}/coupons?action=edit&id=${form.id}&msg=${encodeURIComponent("Coupon aggiornato")}&type=success${warnParam}`;
       } else {
         window.location.href = `/${encodeURIComponent(slug)}/coupons?msg=${encodeURIComponent("Coupon creato")}&type=success`;
       }
@@ -445,6 +460,8 @@ export function CouponFormContent({ slug: slugProp, initialQuery }: { slug?: str
           <div>{flash.msg}</div>
         </div>
       ) : null}
+
+      {flashWarn !== "" ? <div className="alert alert-warning">{flashWarn}</div> : null}
 
       <div className="bs-page-header">
         <div className="bs-page-heading">
@@ -499,6 +516,13 @@ export function CouponFormContent({ slug: slugProp, initialQuery }: { slug?: str
               <div>{meta.activeUsedCount}</div>
             </div>
             <div className="col-md-2">
+              <div className="text-muted small mb-1">Ultima modifica</div>
+              <div>{fmtDateTime(meta.updatedAt)}</div>
+              {meta.updatedAt !== "" && meta.updatedByLabel !== "—" ? (
+                <div className="text-muted small">di {meta.updatedByLabel}</div>
+              ) : null}
+            </div>
+            <div className="col-md-2">
               <div className="text-muted small mb-1">Data disattivazione</div>
               <div>{fmtDateTime(meta.cancelledAt)}</div>
             </div>
@@ -506,7 +530,7 @@ export function CouponFormContent({ slug: slugProp, initialQuery }: { slug?: str
               <div className="text-muted small mb-1">Disattivato da</div>
               <div>{meta.cancelledByLabel}</div>
             </div>
-            <div className="col-md-4">
+            <div className="col-md-2">
               <div className="text-muted small mb-1">Motivo</div>
               <div>{meta.cancelledReason !== "" ? meta.cancelledReason : "—"}</div>
             </div>
