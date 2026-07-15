@@ -156,42 +156,6 @@ export function PackagesCatalogContent({ slug: slugProp, initialQuery }: { slug?
         </div>
       </div>
 
-      {hasAny && showLocationsFilter ? (
-        <div className="card p-3 mb-3">
-          <form
-            className="row g-2 align-items-end"
-            onSubmit={(e) => {
-              e.preventDefault();
-              load(allLocations);
-            }}
-          >
-            <div className="col-lg-8 d-flex align-items-center justify-content-start">
-              <div className="form-check mb-2">
-                <input
-                  className="form-check-input"
-                  type="checkbox"
-                  id="pkgCatalogAllLocations"
-                  checked={allLocations}
-                  onChange={(e) => setAllLocations(e.target.checked)}
-                />
-                <label className="form-check-label" htmlFor="pkgCatalogAllLocations">
-                  Tutte le sedi
-                </label>
-              </div>
-            </div>
-            <div className="col-lg-4 d-flex align-items-end gap-2 app-filter-actions">
-              <button className="btn btn-outline-primary app-filter-submit" type="submit">
-                <i className="bi bi-search me-1" />
-                Filtra
-              </button>
-              <a className="btn btn-outline-secondary app-filter-reset" href={page("packages&tab=catalog")}>
-                Reset
-              </a>
-            </div>
-          </form>
-        </div>
-      ) : null}
-
       {!loading && !hasAny ? (
         <div className="card border-0 shadow-sm package-empty-card">
           <div className="package-empty-state">
@@ -214,6 +178,45 @@ export function PackagesCatalogContent({ slug: slugProp, initialQuery }: { slug?
         </div>
       ) : (
         <div className="card">
+          {/* Filtro sede integrato nell'header della tabella (restyle 2026-07-15,
+              stesso pattern approvato dei Buoni): via la card dedicata al solo
+              checkbox — switch con auto-applicazione (micro-deviazione dal submit
+              GET legacy; l'URL ?all_locations=1 resta allineato) + conteggio. */}
+          <div className="card-header bg-transparent d-flex flex-wrap align-items-center justify-content-between gap-2 py-2">
+            <span className="text-muted small">
+              {rows.length === 1 ? "1 pacchetto" : `${rows.length} pacchetti`}
+              {!allLocations && showLocationsFilter ? " nella sede corrente" : ""}
+            </span>
+            {showLocationsFilter ? (
+              <div className="form-check form-switch mb-0">
+                <input
+                  className="form-check-input"
+                  type="checkbox"
+                  role="switch"
+                  id="pkgCatalogAllLocations"
+                  name="all_locations"
+                  value="1"
+                  checked={allLocations}
+                  onChange={(e) => {
+                    const v = e.target.checked;
+                    setAllLocations(v);
+                    if (typeof window !== "undefined") {
+                      const url = new URL(window.location.href);
+                      url.searchParams.delete("msg");
+                      url.searchParams.delete("err");
+                      if (v) url.searchParams.set("all_locations", "1");
+                      else url.searchParams.delete("all_locations");
+                      window.history.replaceState(null, "", url.toString());
+                    }
+                    load(v);
+                  }}
+                />
+                <label className="form-check-label" htmlFor="pkgCatalogAllLocations">
+                  Tutte le sedi
+                </label>
+              </div>
+            ) : null}
+          </div>
           <div className="table-responsive">
             <table className="table mb-0 align-middle">
               <thead>

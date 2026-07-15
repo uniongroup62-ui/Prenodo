@@ -13718,3 +13718,16 @@ lo stile app-filter-* globale delle altre liste NON è toccato.
 Markers sanati (i not() su app-filter-* sarebbero falsi FAIL nel blob
 multi-modulo; JSX minificato rende role:"switch"): 72/72. e2e 49+3 attesi
 (baseline W8R8MGXX39 reale). tsc/eslint puliti.
+
+## Ricognizione pattern card-filtro solo-checkbox + Pacchetti Catalogo (2026-07-15, Fable)
+
+Censimento 'Tutte le sedi' su tutti i moduli: l'unico GEMELLO del caso Buoni
+(card filtro con SOLO il checkbox + Filtra/Reset) era Pacchetti > Catalogo
+(packages_catalog-content) — stesso restyle applicato: card eliminata,
+switch auto-applicante nell'header della card-tabella + conteggio
+('N pacchetti', 'nella sede corrente'), URL ?all_locations=1 allineato via
+history.replaceState. Le ALTRE card filtro con il checkbox (Clienti, Costi,
+GiftBox, GiftCard, Rate, Pacchetti>Clienti, Preventivi, Operatori) hanno
+campi veri (ricerca/select/date) e restano com'erano; Commissioni usa un
+select sede (pattern diverso, ok). markers-packages 92/92 senza modifiche
+(nessun marker sui filtri); tsc/eslint puliti.
