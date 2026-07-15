@@ -4583,3 +4583,10 @@ body:has(.app-shell) :is(
   width:min(180px, 46vw) !important;
   margin-bottom:16px !important;
 }
+
+/* Coda filtri liste (switch Tutte le sedi + Filtra + Reset), restyle 2026-07-15:
+   la colonna è ancorata al fondo riga (align-self-end nel markup) e alta quanto
+   un form-control, così il contenuto si centra ESATTAMENTE sulla riga degli
+   input (in linea con la freccia dei select), non sull'intera colonna
+   etichetta+campo. */
+.app-filter-tail{min-height:calc(1.5em + .75rem + 2px);}

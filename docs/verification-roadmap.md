@@ -13778,3 +13778,12 @@ in basso. Fix sugli 8 moduli: align-items-center + align-self-stretch sulle
 colonne col-lg-auto (la riga del form e' align-items-end: senza lo stretch
 la colonna non avrebbe altezza per centrare) e via il pb-2 compensativo
 dagli switch. Smoke markers verde (giftbox OK, staff 35, rate 49, costs 83).
+
+## Rifinitura filtri 3: coda in linea con gli INPUT (2026-07-15, Fable, richiesta utente)
+
+Il centraggio sull'intera colonna (rifinitura 2) alzava troppo la coda: il
+target giusto (feedback utente, 'in linea con la freccia giu del select') e'
+il centro della RIGA degli input. Fix: align-self-end (ancora al fondo riga)
++ classe condivisa .app-filter-tail in app.css (min-height = form-control,
+calc(1.5em+.75rem+2px)) con align-items-center -> il contenuto si centra
+esattamente sull'altezza dell'input. Applicata agli 8 moduli. Smoke verde.

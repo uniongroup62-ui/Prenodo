@@ -241,7 +241,7 @@ export function StaffContent({ slug: slugProp, initialQuery }: { slug?: string; 
               legacy), Filtra pieno a larghezza naturale, Reset visibile solo con
               filtri attivi. */}
           {locationsCount > 1 ? (
-            <div className="col-12 col-lg-auto d-flex align-items-center align-self-stretch">
+            <div className="col-12 col-lg-auto d-flex align-items-center align-self-end app-filter-tail">
               <div className="form-check form-switch mb-0">
                 <input className="form-check-input" type="checkbox" role="switch" id="staffAllLocations" checked={allLoc} onChange={(e) => setAllLoc(e.target.checked)} />
                 <label className="form-check-label" htmlFor="staffAllLocations">Tutte le sedi</label>
@@ -250,7 +250,7 @@ export function StaffContent({ slug: slugProp, initialQuery }: { slug?: string; 
           ) : null}
           {/* col-auto: il bottone si accoda ai campi (leggero distacco ms-lg-2)
               invece di galleggiare in una colonna fissa di griglia. */}
-          <div className="col-12 col-lg-auto d-flex align-items-center align-self-stretch gap-2 ms-lg-2">
+          <div className="col-12 col-lg-auto d-flex align-items-center align-self-end app-filter-tail gap-2 ms-lg-2">
             <button className="btn btn-primary" type="submit">
               <i className="bi bi-search me-1" />
               Filtra
