@@ -236,27 +236,39 @@ export function StaffContent({ slug: slugProp, initialQuery }: { slug?: string; 
               <option value="inactive">Non attivi</option>
             </select>
           </div>
+          {/* Restyle filtri 2026-07-15 (pattern unificato): switch al posto del
+              checkbox (SOLO stile: si applica comunque al submit come il form GET
+              legacy), Filtra pieno a larghezza naturale, Reset visibile solo con
+              filtri attivi. */}
           {locationsCount > 1 ? (
             <div className="col-xl-2 col-lg-3 col-md-6 d-flex align-items-end">
-              <div className="form-check pb-2">
-                <input className="form-check-input" type="checkbox" id="staffAllLocations" checked={allLoc} onChange={(e) => setAllLoc(e.target.checked)} />
+              <div className="form-check form-switch pb-2">
+                <input className="form-check-input" type="checkbox" role="switch" id="staffAllLocations" checked={allLoc} onChange={(e) => setAllLoc(e.target.checked)} />
                 <label className="form-check-label" htmlFor="staffAllLocations">Tutte le sedi</label>
               </div>
             </div>
           ) : null}
-          <div className="col-xl-2 col-lg-3 col-md-6 d-flex gap-2">
-            <button className="btn btn-outline-primary app-filter-submit" type="submit">
+          <div className="col-xl-2 col-lg-3 col-md-6 d-flex align-items-end gap-2">
+            <button className="btn btn-primary" type="submit">
               <i className="bi bi-search me-1" />
               Filtra
             </button>
-            <a className="btn btn-outline-secondary app-filter-reset" href={href("")}>
-              Reset
-            </a>
+            {appliedQ || appliedRole || appliedStatus || appliedAllLoc ? (
+              <a className="btn btn-link text-secondary text-decoration-none px-2" href={href("")}>
+                Reset
+              </a>
+            ) : null}
           </div>
         </form>
       </div>
 
       <div className="card">
+        <div className="card-header bg-transparent py-2">
+          <span className="text-muted small">
+            {loading ? "Caricamento…" : filtered.length === 1 ? "1 operatore" : `${filtered.length} operatori`}
+            {!loading && (appliedQ || appliedRole || appliedStatus || appliedAllLoc) ? " · filtri attivi" : ""}
+          </span>
+        </div>
         <div className="table-responsive">
           <table className="table mb-0 align-middle">
             <thead>

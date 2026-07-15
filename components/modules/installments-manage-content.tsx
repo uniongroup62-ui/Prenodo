@@ -187,6 +187,10 @@ export function InstallmentsManageContent({ slug: slugProp, initialQuery }: { sl
   // Applied filters (drive the fetch) vs draft filters (the form controls). Like the legacy
   // GET form, changing a control does nothing until "Filtra" submits the draft.
   const [filters, setFilters] = useState<Filters>(initial.filters);
+  // Filtri APPLICATI diversi dai default (stato 'open', nessun cliente/data/sede):
+  // guida il Reset condizionale e il '· filtri attivi' (restyle 2026-07-15).
+  const filtersActive =
+    filters.status !== "open" || filters.clientId !== "" || filters.dueFrom !== "" || filters.dueTo !== "" || filters.saleId > 0 || filters.allLocations;
   const [draft, setDraft] = useState<{ status: string; clientId: string; dueFrom: string; dueTo: string; allLocations: boolean }>({
     status: initial.filters.status,
     clientId: initial.filters.clientId,
@@ -565,12 +569,16 @@ export function InstallmentsManageContent({ slug: slugProp, initialQuery }: { sl
                   onChange={(e) => setDraft((f) => ({ ...f, dueTo: e.target.value }))}
                 />
               </div>
+              {/* Restyle filtri 2026-07-15 (pattern unificato): switch (solo stile,
+                  si applica al submit), Filtra pieno a larghezza naturale (via le
+                  classi custom outline), Reset visibile solo con filtri non-default. */}
               <div className="col-12 col-lg-3 d-flex mt-2 mt-lg-0 flex-wrap installments-filter-actions">
                 {showAllLocationsFilter ? (
-                  <div className="form-check mb-0">
+                  <div className="form-check form-switch mb-0">
                     <input
                       className="form-check-input"
                       type="checkbox"
+                      role="switch"
                       id="installmentsAllLocations"
                       name="all_locations"
                       value="1"
@@ -582,13 +590,15 @@ export function InstallmentsManageContent({ slug: slugProp, initialQuery }: { sl
                     </label>
                   </div>
                 ) : null}
-                <button type="submit" className="btn btn-outline-primary installments-filter-submit app-filter-submit">
+                <button type="submit" className="btn btn-primary">
                   <i className="bi bi-search me-1" />
                   Filtra
                 </button>
-                <a className="btn btn-outline-secondary installments-filter-reset app-filter-reset" href={`/${encodeURIComponent(slug)}/installments_manage`}>
-                  Reset
-                </a>
+                {filtersActive ? (
+                  <a className="btn btn-link text-secondary text-decoration-none px-2" href={`/${encodeURIComponent(slug)}/installments_manage`}>
+                    Reset
+                  </a>
+                ) : null}
               </div>
             </form>
           </div>
@@ -599,7 +609,10 @@ export function InstallmentsManageContent({ slug: slugProp, initialQuery }: { sl
               <div className="card installments-plan-card p-3 h-100">
                 <div className="d-flex align-items-center justify-content-between mb-2">
                   <div className="fw-semibold">Piani rateali</div>
-                  <div className="text-muted small">{plans.length} risultati</div>
+                  <div className="text-muted small">
+                    {plans.length} risultati
+                    {filtersActive ? " · filtri attivi" : ""}
+                  </div>
                 </div>
                 {plans.length === 0 ? (
                   <div className="installments-empty">Nessun piano trovato con i filtri selezionati.</div>

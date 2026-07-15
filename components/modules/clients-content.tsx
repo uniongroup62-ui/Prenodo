@@ -92,6 +92,13 @@ export function ClientsContent({ slug: slugProp, initialQuery }: { slug?: string
   const [allLocations, setAllLocations] = useState(() =>
     ["1", "true", "on", "yes", "all"].includes(String(initialQuery?.all_locations ?? "").trim().toLowerCase()),
   );
+  // Filtri APPLICATI (≠ bozza nei campi): guidano il Reset condizionale e il
+  // '· filtri attivi' nell'header tabella (restyle 2026-07-15); si aggiornano
+  // solo al submit, come il GET legacy.
+  const [applied, setApplied] = useState<{ q: string; all: boolean }>(() => ({
+    q: String(initialQuery?.q ?? ""),
+    all: ["1", "true", "on", "yes", "all"].includes(String(initialQuery?.all_locations ?? "").trim().toLowerCase()),
+  }));
   const [loading, setLoading] = useState(true);
   // Gate pagina legacy (clients.php requireAnyPerm sui 3 permessi clienti): la
   // route API ora ammette anche i permessi agenda per la ricerca del drawer, la
@@ -251,6 +258,7 @@ export function ClientsContent({ slug: slugProp, initialQuery }: { slug?: string
               className="row g-2 align-items-end"
               onSubmit={(e) => {
                 e.preventDefault();
+                setApplied({ q: q.trim(), all: allLocations });
                 syncUrl(q, allLocations);
                 load(q, allLocations);
               }}
@@ -265,12 +273,16 @@ export function ClientsContent({ slug: slugProp, initialQuery }: { slug?: string
                   onChange={(e) => setQ(e.target.value)}
                 />
               </div>
+              {/* Restyle filtri 2026-07-15 (pattern unificato): switch (solo stile,
+                  si applica al submit), Cerca pieno a larghezza naturale, Reset
+                  visibile solo con filtri attivi. */}
               {showAllLocationsFilter ? (
-                <div className="col-lg-2 d-flex align-items-center justify-content-start">
-                  <div className="form-check mb-2">
+                <div className="col-lg-2 d-flex align-items-end">
+                  <div className="form-check form-switch pb-2">
                     <input
                       className="form-check-input"
                       type="checkbox"
+                      role="switch"
                       id="clientsAllLocations"
                       name="all_locations"
                       value="1"
@@ -283,16 +295,27 @@ export function ClientsContent({ slug: slugProp, initialQuery }: { slug?: string
                   </div>
                 </div>
               ) : null}
-              <div className="col-lg-2 d-grid">
-                <button className="btn btn-outline-primary" type="submit">
+              <div className="col-lg-2 d-flex align-items-end gap-2">
+                <button className="btn btn-primary" type="submit">
                   <i className="bi bi-search me-1" />
                   Cerca
                 </button>
+                {applied.q !== "" || applied.all ? (
+                  <a className="btn btn-link text-secondary text-decoration-none px-2" href={href("")}>
+                    Reset
+                  </a>
+                ) : null}
               </div>
             </form>
           </div>
 
           <div className="card">
+            <div className="card-header bg-transparent py-2">
+              <span className="text-muted small">
+                {loading ? "Caricamento…" : clients.length === 1 ? "1 cliente" : `${clients.length} clienti`}
+                {!loading && (applied.q !== "" || applied.all) ? " · filtri attivi" : ""}
+              </span>
+            </div>
             <div className="table-responsive">
               <table className="table mb-0 align-middle">
                 <thead>

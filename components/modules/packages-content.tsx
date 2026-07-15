@@ -147,6 +147,19 @@ export function PackagesContent({ slug: slugProp, initialQuery }: { slug?: strin
   const [allLocations, setAllLocations] = useState(() =>
     ["1", "true", "on", "yes", "all"].includes(String(initialQuery?.all_locations ?? "").trim().toLowerCase()),
   );
+  // Filtri APPLICATI (≠ bozza nei campi): guidano il Reset condizionale e il
+  // '· filtri attivi' (restyle 2026-07-15); default = stato 'active' e nessun
+  // cliente/pacchetto/sede.
+  const [appliedView, setAppliedView] = useState<{ clientId: string; packageName: string; status: string; allLocations: boolean }>(() => ({
+    clientId: initialQuery?.client_id ?? "",
+    packageName: initialQuery?.package_name ?? "",
+    status: ["active", "completed", "expired", "canceled", "all"].includes(String(initialQuery?.status ?? "active").toLowerCase())
+      ? String(initialQuery?.status ?? "active").toLowerCase()
+      : "active",
+    allLocations: ["1", "true", "on", "yes", "all"].includes(String(initialQuery?.all_locations ?? "").trim().toLowerCase()),
+  }));
+  const filtersActive =
+    appliedView.clientId !== "" || appliedView.packageName !== "" || appliedView.status !== "active" || appliedView.allLocations;
 
   // Fetch puro (setState nei callback della Promise; loading gia' true di default).
   const fetchData = useCallback(
@@ -204,6 +217,9 @@ export function PackagesContent({ slug: slugProp, initialQuery }: { slug?: strin
       window.history.replaceState(null, "", url.toString());
     }
     setLoading(true);
+    // Aggiornato QUI (event handler) e non in fetchData: un setState sincrono
+    // nell'effect di mount violerebbe react-hooks/set-state-in-effect.
+    setAppliedView({ clientId, packageName, status, allLocations });
     fetchData({ clientId, packageName, status, allLocations });
   }
 
@@ -310,12 +326,16 @@ export function PackagesContent({ slug: slugProp, initialQuery }: { slug?: strin
                 </select>
               </div>
 
+              {/* Restyle filtri 2026-07-15 (pattern unificato): switch (solo stile,
+                  si applica al submit), Filtra pieno a larghezza naturale, Reset
+                  (prima assente) visibile solo con filtri non-default. */}
               {showAllLocationsFilter ? (
-                <div className="col-lg-2 d-flex align-items-center justify-content-start">
-                  <div className="form-check mb-2">
+                <div className="col-lg-2 d-flex align-items-end">
+                  <div className="form-check form-switch pb-2">
                     <input
                       className="form-check-input"
                       type="checkbox"
+                      role="switch"
                       id="clientPackagesAllLocations"
                       checked={allLocations}
                       onChange={(e) => setAllLocations(e.target.checked)}
@@ -327,16 +347,27 @@ export function PackagesContent({ slug: slugProp, initialQuery }: { slug?: strin
                 </div>
               ) : null}
 
-              <div className="col-lg-2 d-grid">
-                <button className="btn btn-outline-primary app-filter-submit" type="submit">
+              <div className="col-lg-2 d-flex align-items-end gap-2">
+                <button className="btn btn-primary" type="submit">
                   <i className="bi bi-search me-1" />
                   Filtra
                 </button>
+                {filtersActive ? (
+                  <a className="btn btn-link text-secondary text-decoration-none px-2" href={href("packages&tab=clients")}>
+                    Reset
+                  </a>
+                ) : null}
               </div>
             </form>
           </div>
 
           <div className="card">
+            <div className="card-header bg-transparent py-2">
+              <span className="text-muted small">
+                {loading ? "Caricamento…" : rows.length === 1 ? "1 pacchetto" : `${rows.length} pacchetti`}
+                {!loading && filtersActive ? " · filtri attivi" : ""}
+              </span>
+            </div>
             <div className="table-responsive">
               <table className="table mb-0 align-middle">
                 <thead>

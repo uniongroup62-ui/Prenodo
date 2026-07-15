@@ -461,12 +461,16 @@ export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string
                 </select>
               </div>
 
+              {/* Restyle filtri 2026-07-15 (pattern unificato): switch (solo stile,
+                  si applica al submit), Filtra pieno a larghezza naturale, Reset
+                  (prima assente) visibile solo con filtri attivi. */}
               {showAllLocationsFilter ? (
-                <div className="col-lg-2 d-flex align-items-center justify-content-start">
-                  <div className="form-check mb-2">
+                <div className="col-lg-2 d-flex align-items-end">
+                  <div className="form-check form-switch pb-2">
                     <input
                       className="form-check-input"
                       type="checkbox"
+                      role="switch"
                       id="giftboxAllLocations"
                       name="all_locations"
                       value="1"
@@ -480,16 +484,27 @@ export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string
                 </div>
               ) : null}
 
-              <div className="col-lg-2 d-grid">
-                <button className="btn btn-outline-primary" type="submit">
+              <div className="col-lg-2 d-flex align-items-end gap-2">
+                <button className="btn btn-primary" type="submit">
                   <i className="bi bi-search me-1" />
                   Filtra
                 </button>
+                {applied.clientId !== "0" || applied.q !== "" || applied.status !== "" || applied.allLocations ? (
+                  <a className="btn btn-link text-secondary text-decoration-none px-2" href={listUrl()}>
+                    Reset
+                  </a>
+                ) : null}
               </div>
             </form>
           </div>
 
           <div className="card">
+            <div className="card-header bg-transparent py-2">
+              <span className="text-muted small">
+                {loading ? "Caricamento…" : rows.length === 1 ? "1 GiftBox" : `${rows.length} GiftBox`}
+                {!loading && (applied.clientId !== "0" || applied.q !== "" || applied.status !== "" || applied.allLocations) ? " · filtri attivi" : ""}
+              </span>
+            </div>
             <div className="table-responsive">
               <table className="table mb-0 align-middle">
                 <thead>

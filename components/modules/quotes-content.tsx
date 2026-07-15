@@ -334,12 +334,16 @@ export function QuotesContent({ slug: slugProp, initialQuery }: { slug?: string;
                 />
               </div>
 
-              <div className="col-lg-3 d-flex align-items-center gap-3 flex-wrap app-filter-actions">
+              {/* Restyle filtri 2026-07-15 (pattern unificato): switch (solo stile,
+                  si applica al submit), Filtra pieno a larghezza naturale, Reset
+                  visibile solo con filtri attivi. */}
+              <div className="col-lg-3 d-flex align-items-end gap-2 flex-wrap">
                 {data?.multiLocation ? (
-                  <div className="form-check mb-0">
+                  <div className="form-check form-switch mb-0 pb-2">
                     <input
                       className="form-check-input"
                       type="checkbox"
+                      role="switch"
                       id="quotesAllLocations"
                       name="all_locations"
                       value="1"
@@ -351,18 +355,26 @@ export function QuotesContent({ slug: slugProp, initialQuery }: { slug?: string;
                     </label>
                   </div>
                 ) : null}
-                <button className="btn btn-outline-primary app-filter-submit" type="submit">
+                <button className="btn btn-primary" type="submit">
                   <i className="bi bi-search me-1" />
                   Filtra
                 </button>
-                <a className="btn btn-outline-secondary app-filter-reset" href={listUrl()}>
-                  Reset
-                </a>
+                {applied.clientId !== "0" || applied.status !== "" || applied.date !== "" || applied.number !== "" || applied.allLocations ? (
+                  <a className="btn btn-link text-secondary text-decoration-none px-2" href={listUrl()}>
+                    Reset
+                  </a>
+                ) : null}
               </div>
             </form>
           </div>
 
           <div className="card">
+            <div className="card-header bg-transparent py-2">
+              <span className="text-muted small">
+                {loading ? "Caricamento…" : rows.length === 1 ? "1 preventivo" : `${rows.length} preventivi`}
+                {!loading && (applied.clientId !== "0" || applied.status !== "" || applied.date !== "" || applied.number !== "" || applied.allLocations) ? " · filtri attivi" : ""}
+              </span>
+            </div>
             <div className="table-responsive">
               <table className="table mb-0 align-middle">
                 <thead>

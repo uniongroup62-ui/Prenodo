@@ -13731,3 +13731,30 @@ GiftBox, GiftCard, Rate, Pacchetti>Clienti, Preventivi, Operatori) hanno
 campi veri (ricerca/select/date) e restano com'erano; Commissioni usa un
 select sede (pattern diverso, ok). markers-packages 92/92 senza modifiche
 (nessun marker sui filtri); tsc/eslint puliti.
+
+## Restyle unificato card filtro su 8 moduli (2026-07-15, Fable, approvato 'procedi una ad una')
+
+Pattern unico applicato a Operatori/Clienti/Costi/GiftBox/GiftCard/Rate/
+Pacchetti-Clienti/Preventivi: (a) 'Tutte le sedi' checkbox -> form-switch
+(SOLO stile: resta submit-based, semantica GET legacy intatta); (b) Filtra
+btn-primary a larghezza naturale (via flex-grow-1/d-grid effetto search-bar
+e classi custom outline di Rate); (c) Reset declassato a btn-link e
+CONDIZIONALE (solo con filtri applicati non-default; aggiunto dove mancava:
+GiftBox/GiftCard/Pacchetti-Clienti); (d) conteggio risultati + '· filtri
+attivi' nell'header della card-tabella (Rate: nel pannello 'Piani rateali'
+gia' esistente; Costi: nella riga 'Voci'). Stato applicato ≠ bozza: dove
+mancava aggiunto appliedView/applied (Clienti/Costi/Pacchetti), aggiornato
+SOLO negli event handler (react-hooks/set-state-in-effect: il set sincrono
+in fetchData-da-mount e' un errore; fix in corsa, eslint tornato al baseline
+1 errore pre-esistente). Costi: filterDefaults con useState-lazy, NON useRef
+(react-hooks/refs vieta la lettura in render).
+
+HARNESS: markers-costs sanato (login reale -> needsLocationSelection=true ->
+dal fix flash post-login la SSR mostra il loader selezione-sede al posto del
+contenuto -> i marker '>X<' solo-SSR danno falsi FAIL; forge sede 21 come
+e2e-coupons + pagina ?q= per Reset/filtri-attivi condizionali). markers-
+installments: 2 marker sulle classi custom rimosse sostituiti. Residuo ZZ
+'ZZ InstSede' (client 28, seed Rate 13/07 orfano, 0 dipendenze) rimosso dopo
+crash di un run parallelo (memoria: MAI 2 suite node in parallelo).
+Regressioni TUTTE verdi: staff 35+27+7, clients 113+50, costs 83+52,
+giftbox OK+64, giftcard 92+94, rate 49+43, packages 92+OK, quotes 80+25.

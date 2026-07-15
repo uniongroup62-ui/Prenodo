@@ -164,6 +164,18 @@ export function CostsContent({ slug: slugProp, initialQuery }: { slug?: string; 
   const [q, setQ] = useState(initial.q);
   const [allLoc, setAllLoc] = useState(initial.allLocations);
   const appliedRef = useRef<Filters>(initial);
+  // Copia REATTIVA dei filtri applicati (appliedRef non ri-renderizza): guida
+  // il Reset condizionale e il '· filtri attivi' (restyle 2026-07-15). I
+  // default (range mese corrente, stato 'open') NON contano come filtro attivo.
+  const [appliedView, setAppliedView] = useState<Filters>(initial);
+  const [filterDefaults] = useState<Filters>(() => ({ cat: "", from: firstOfMonth(), to: lastOfMonth(), status: "open", q: "", allLocations: false }));
+  const filtersActive =
+    appliedView.cat !== filterDefaults.cat ||
+    appliedView.from !== filterDefaults.from ||
+    appliedView.to !== filterDefaults.to ||
+    appliedView.status !== filterDefaults.status ||
+    appliedView.q !== filterDefaults.q ||
+    appliedView.allLocations !== filterDefaults.allLocations;
 
   // Flash legacy (?msg / ?err dopo i redirect): success sopra, danger sotto.
   const [flash, setFlash] = useState("");
@@ -247,6 +259,10 @@ export function CostsContent({ slug: slugProp, initialQuery }: { slug?: string; 
   // Applica il draft (submit "Filtra") e riscrive l'URL come il GET legacy.
   function applyFilters() {
     const filters: Filters = { cat, from, to, status, q, allLocations: allLoc };
+    // Aggiornato QUI (event handler) e non in fetchData: un setState sincrono
+    // nell'effect di mount violerebbe react-hooks/set-state-in-effect; al mount
+    // appliedView è già inizializzato con gli stessi filtri iniziali.
+    setAppliedView(filters);
     load(filters);
     if (typeof window !== "undefined") {
       const sp = new URLSearchParams({ tab: "scadenziario", cat: filters.cat, from: filters.from, to: filters.to, status: filters.status, q: filters.q });
@@ -458,24 +474,30 @@ export function CostsContent({ slug: slugProp, initialQuery }: { slug?: string; 
                   placeholder="Titolo / documento"
                 />
               </div>
+              {/* Restyle filtri 2026-07-15 (pattern unificato): switch (solo stile,
+                  si applica al submit come il GET legacy), Filtra pieno a larghezza
+                  naturale (via il flex-grow effetto search-bar), Reset visibile solo
+                  con filtri non-default. */}
               {locations.length > 1 ? (
                 <div className="col-xl-2 col-lg-3 col-md-6 d-flex align-items-end">
-                  <div className="form-check">
+                  <div className="form-check form-switch pb-2">
                     {/* "Tutte le sedi" (port del checkbox legacy all_locations): mostra i costi di
                         tutte le sedi permesse invece della sola corrente. Applicato su "Filtra". */}
-                    <input className="form-check-input" type="checkbox" id="costsAllLocations" name="all_locations" checked={allLoc} onChange={(e) => setAllLoc(e.target.checked)} />
+                    <input className="form-check-input" type="checkbox" role="switch" id="costsAllLocations" name="all_locations" checked={allLoc} onChange={(e) => setAllLoc(e.target.checked)} />
                     <label className="form-check-label" htmlFor="costsAllLocations">Tutte le sedi</label>
                   </div>
                 </div>
               ) : null}
-              <div className="col-xl-3 col-lg-4 col-md-6 d-flex gap-2 app-filter-actions">
-                <button className="btn btn-outline-primary flex-grow-1 app-filter-submit" type="submit">
+              <div className="col-xl-2 col-lg-3 col-md-6 d-flex align-items-end gap-2">
+                <button className="btn btn-primary" type="submit">
                   <i className="bi bi-search me-1" />
                   Filtra
                 </button>
-                <a className="btn btn-outline-secondary app-filter-reset" href={href("&tab=scadenziario")}>
-                  Reset
-                </a>
+                {filtersActive ? (
+                  <a className="btn btn-link text-secondary text-decoration-none px-2" href={href("&tab=scadenziario")}>
+                    Reset
+                  </a>
+                ) : null}
               </div>
             </form>
           </div>
@@ -503,7 +525,13 @@ export function CostsContent({ slug: slugProp, initialQuery }: { slug?: string; 
 
           <div className="card p-3">
             <div className="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
-              <div className="fw-semibold">Voci</div>
+              <div className="fw-semibold">
+                Voci{" "}
+                <span className="text-muted small fw-normal">
+                  {loading ? "· caricamento…" : `· ${costs.length === 1 ? "1 voce" : `${costs.length} voci`}`}
+                  {!loading && filtersActive ? " · filtri attivi" : ""}
+                </span>
+              </div>
               <div className="d-flex gap-2">
                 <a className="btn btn-sm btn-outline-secondary" href={`${exportBase}&format=csv`}>
                   <i className="bi bi-download me-1" />
