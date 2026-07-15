@@ -13663,3 +13663,31 @@ LOGICHE MUTATIVE (esaustivamente coperte dalla suite, design PROMOSSO):
 - Codice soft-deleted riservato (dup accentato); residual/partial per fixed.
 VERDETTO: mutazioni corrette, design a-tre-vie eccellente; zero bug, nessun
 suggerimento strutturale. (BUG date promo era gia' stato corretto in 09c85d1.)
+
+## Buoni — 2 migliorie di prodotto APPLICATE (2026-07-13, Fable, approvate)
+
+Deviazioni volute dal legacy, su approvazione utente:
+(1) AVVISO su modifica con prenotazioni aperte: saveManageCoupon in EDIT
+calcola couponUsageStats e, se openAppointmentsCount>0, restituisce
+editWarning (esposto anche come `warning` dalla route) — 'Il buono e' usato
+in N prenotazione/i ancora aperta/e: la modifica cambiera' lo sconto
+applicato quando verranno concluse.' Non-bloccante (il save riesce),
+chiude l'unica insidia emersa dall'analisi (l'edit cambia in silenzio lo
+sconto degli appuntamenti code-only aperti che ricalcolano).
+(2) AUDIT modifica: colonne coupons.updated_by/updated_at (ensure best-effort
+con ADD COLUMN IF NOT EXISTS) scritte in EDIT; record espone
+updatedByLabel/updatedAt (letti da getManageCoupon). Allinea la modifica
+all'eliminazione che gia' tracciava deleted_by/reason.
+
+BUG DEL MIO CODICE trovato e corretto in corsa: ensureCouponAuditColumns
+usava columnExists() DOPO l'ALTER → la sua cache resta 'false' (poisoning)
+→ audit mai scritto. Fix: ADD COLUMN IF NOT EXISTS + verifica DIRETTA su
+information_schema (bypassa la cache). (Trappola probe: il marker note
+canonico e' 'Coupon: CODE' a FINE riga — extractCouponMetaFromNotes regex
+con \s*$ — un suffisso rompe il match.)
+
+VERIFICA live: edit → updated_by=20 + updatedByLabel 'luca' + updatedAt;
+edit con appt 'scheduled' che usa il buono (notes 'Coupon: CODE') →
+warning col conteggio corretto; save riuscito. Regressione completa verde
+52+70+33+30 (edit senza appt aperti = nessun avviso, confermato). tsc pulito,
+eslint solo warning pre-esistenti. Nuova suite test-coupon-edit-audit.

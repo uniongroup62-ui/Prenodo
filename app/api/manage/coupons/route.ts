@@ -116,7 +116,10 @@ export async function POST(request: Request) {
     if (action === "save" || action === "new" || action === "edit" || action === "update") {
       if (!can(session.user.perms, "coupons.manage")) return jsonError("Permesso buoni mancante.", 403);
       const coupon = await saveManageCoupon(tenantSlug, body, parseInteger(body.id, 0), session.user.id);
-      return Response.json({ ok: true, source: "coupons?action=save", sourceMode: "database", coupon, coupons: await listManageCoupons(tenantSlug) });
+      // Avviso non-bloccante (modifica di un buono con prenotazioni aperte): la
+      // UI lo mostra come flash 'warning' oltre al successo del salvataggio.
+      const warning = coupon.editWarning ?? "";
+      return Response.json({ ok: true, source: "coupons?action=save", sourceMode: "database", coupon, warning, coupons: await listManageCoupons(tenantSlug) });
     }
 
     // Delete a coupon (port of coupons.php action=delete). Refuses while open

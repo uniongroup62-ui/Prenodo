@@ -13306,6 +13306,10 @@ export type ManageCouponRecord = CouponRule & {
   applyScope: string;
   createdAt: string;
   createdByLabel: string;
+  // Audit dell'ultima modifica (miglioria 2026-07-13): data + etichetta
+  // operatore; vuoti finche' non c'e' una modifica registrata.
+  updatedAt: string;
+  updatedByLabel: string;
   cancelledAt: string;
   cancelledByLabel: string;
   cancelledReason: string;
@@ -13321,6 +13325,11 @@ export type ManageCouponRecord = CouponRule & {
   productCategoryIds: number[];
   productIds: number[];
   locationIds: number[];
+  // Avviso non-bloccante impostato dal SAVE in modifica quando il buono e' usato
+  // da prenotazioni ancora APERTE: quelle ricalcolano lo sconto dalla definizione
+  // corrente, quindi la modifica ne cambia l'effetto quando verranno concluse
+  // (miglioria di sicurezza 2026-07-13, deviazione voluta dal legacy).
+  editWarning?: string;
 };
 
 // Resolve a user id to a display label (name || email || #id), like the legacy
@@ -13368,6 +13377,11 @@ export async function getManageCoupon(slug: string, id: number): Promise<ManageC
     applyScope: String(row.apply_scope ?? "all"),
     createdAt: localOrEmpty(row.created_at),
     createdByLabel: await couponUserLabel(slug, Number(row.created_by ?? 0)),
+    // Audit modifica (miglioria 2026-07-13): chi/quando dell'ultima modifica —
+    // vuoti se le colonne non esistono ancora o se il buono non e' mai stato
+    // modificato dopo la creazione (createdAt copre quel caso).
+    updatedAt: localOrEmpty(row.updated_at),
+    updatedByLabel: await couponUserLabel(slug, Number(row.updated_by ?? 0)),
     cancelledAt: localOrEmpty(row.cancelled_at),
     cancelledByLabel: await couponUserLabel(slug, Number(row.cancelled_by ?? 0)),
     cancelledReason: String(row.cancelled_reason ?? ""),
@@ -13598,8 +13612,24 @@ export async function saveManageCoupon(slug: string, body: Record<string, string
   };
 
   let couponId = id;
+  let editWarning: string | undefined;
   if (couponId > 0 && existingRow) {
-    await tenantUpdate({ slug, table: "coupons", id: couponId, values });
+    // Audit modifica (miglioria 2026-07-13, deviazione voluta): il legacy fa un
+    // UPDATE puro senza tracciare CHI/QUANDO — l'eliminazione traccia gia'
+    // deleted_by/reason, qui si allinea la modifica. Colonne assicurate
+    // best-effort (installazioni senza dump aggiornato non falliscono).
+    const auditValues = { ...values } as Record<string, unknown>;
+    if (by > 0 && await ensureCouponAuditColumns(slug)) {
+      auditValues.updated_by = by;
+      auditValues.updated_at = new Date();
+    }
+    await tenantUpdate({ slug, table: "coupons", id: couponId, values: auditValues });
+    // Avviso non-bloccante sulle prenotazioni aperte (vedi editWarning nel type).
+    const stats = await couponUsageStats(slug, { code: String(existingRow.code ?? ""), type: type as "percent" | "fixed", value }).catch(() => null);
+    if (stats && stats.openAppointmentsCount > 0) {
+      const n = stats.openAppointmentsCount;
+      editWarning = `Il buono e' usato in ${n} prenotazione${n === 1 ? "" : "i"} ancora aperta${n === 1 ? "" : "e"}: la modifica cambiera' lo sconto applicato quando verranno concluse.`;
+    }
   } else {
     // Dup check WITHOUT the deleted filter (legacy: a soft-deleted coupon still
     // reserves its code), and with the legacy accented message.
@@ -13616,7 +13646,32 @@ export async function saveManageCoupon(slug: string, body: Record<string, string
 
   const saved = await getManageCoupon(slug, couponId);
   if (!saved) throw new Error("Coupon non salvato.");
-  return saved;
+  return editWarning ? { ...saved, editWarning } : saved;
+}
+
+// Assicura (best-effort) le colonne di audit modifica sulla tabella coupons.
+// Cache per-tabella per non ripetere l'information_schema a ogni save. NB:
+// NON si usa columnExists() qui — la sua cache resterebbe 'false' DOPO l'ALTER
+// (poisoning) e l'audit non verrebbe mai scritto; si fa ADD COLUMN IF NOT
+// EXISTS (idempotente) + una verifica DIRETTA su information_schema.
+const couponAuditColumnsReady = new Set<string>();
+async function ensureCouponAuditColumns(slug: string): Promise<boolean> {
+  const table = await tenantTable(slug, "coupons").catch(() => null);
+  if (!table) return false;
+  if (couponAuditColumnsReady.has(table.name)) return true;
+  try {
+    await dbExecute(`ALTER TABLE ${quoteIdentifier(table.name)} ADD COLUMN IF NOT EXISTS ${quoteIdentifier("updated_by")} INT NULL DEFAULT NULL`).catch(() => undefined);
+    await dbExecute(`ALTER TABLE ${quoteIdentifier(table.name)} ADD COLUMN IF NOT EXISTS ${quoteIdentifier("updated_at")} TIMESTAMP NULL DEFAULT NULL`).catch(() => undefined);
+    const rows = await dbQuery<RowDataPacket[]>(
+      "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ? AND column_name IN ('updated_by','updated_at')",
+      [table.name],
+    ).catch(() => [] as RowDataPacket[]);
+    const ok = rows.length >= 2;
+    if (ok) couponAuditColumnsReady.add(table.name);
+    return ok;
+  } catch {
+    return false;
+  }
 }
 
 // Port of coupon_scope_normalize (Helpers.php 2455-2463): alias legacy inclusi,
