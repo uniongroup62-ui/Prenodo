@@ -277,8 +277,8 @@ export function ClientsContent({ slug: slugProp, initialQuery }: { slug?: string
                   si applica al submit), Cerca pieno a larghezza naturale, Reset
                   visibile solo con filtri attivi. */}
               {showAllLocationsFilter ? (
-                <div className="col-12 col-lg-auto d-flex align-items-end">
-                  <div className="form-check form-switch pb-2">
+                <div className="col-12 col-lg-auto d-flex align-items-center align-self-stretch">
+                  <div className="form-check form-switch mb-0">
                     <input
                       className="form-check-input"
                       type="checkbox"
@@ -297,7 +297,7 @@ export function ClientsContent({ slug: slugProp, initialQuery }: { slug?: string
               ) : null}
               {/* col-auto: il bottone si accoda ai campi (leggero distacco ms-lg-2)
                   invece di galleggiare in una colonna fissa di griglia. */}
-              <div className="col-12 col-lg-auto d-flex align-items-end gap-2 ms-lg-2">
+              <div className="col-12 col-lg-auto d-flex align-items-center align-self-stretch gap-2 ms-lg-2">
                 <button className="btn btn-primary" type="submit">
                   <i className="bi bi-search me-1" />
                   Cerca

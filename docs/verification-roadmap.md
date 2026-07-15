@@ -13769,3 +13769,12 @@ leggero distacco, allineata in basso ai controlli; su mobile torna full-width.
 Rate: neutralizzato il flex-end del CSS custom (utility Bootstrap !important).
 Nessuna suite asserisce classi di layout; smoke completo verde (giftbox OK,
 staff 35, rate 49, giftcard 92, costs 83, packages 92, clients 113).
+
+## Rifinitura filtri 2: coda centrata verticalmente (2026-07-15, Fable, richiesta utente)
+
+Su feedback (screenshot GiftBox): la coda (switch+Filtra) era allineata al
+FONDO degli input, ma la colonna campo include l'etichetta sopra -> pendeva
+in basso. Fix sugli 8 moduli: align-items-center + align-self-stretch sulle
+colonne col-lg-auto (la riga del form e' align-items-end: senza lo stretch
+la colonna non avrebbe altezza per centrare) e via il pb-2 compensativo
+dagli switch. Smoke markers verde (giftbox OK, staff 35, rate 49, costs 83).

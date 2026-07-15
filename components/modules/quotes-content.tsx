@@ -339,9 +339,9 @@ export function QuotesContent({ slug: slugProp, initialQuery }: { slug?: string;
                   visibile solo con filtri attivi. */}
               {/* col-auto: la coda (switch+bottoni) si accoda ai campi con leggero
                   distacco invece di una colonna fissa di griglia. */}
-              <div className="col-12 col-lg-auto d-flex align-items-end gap-2 ms-lg-2 flex-wrap">
+              <div className="col-12 col-lg-auto d-flex align-items-center align-self-stretch gap-2 ms-lg-2 flex-wrap">
                 {data?.multiLocation ? (
-                  <div className="form-check form-switch mb-0 pb-2">
+                  <div className="form-check form-switch mb-0">
                     <input
                       className="form-check-input"
                       type="checkbox"

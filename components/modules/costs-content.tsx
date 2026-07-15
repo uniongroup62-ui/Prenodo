@@ -479,8 +479,8 @@ export function CostsContent({ slug: slugProp, initialQuery }: { slug?: string; 
                   naturale (via il flex-grow effetto search-bar), Reset visibile solo
                   con filtri non-default. */}
               {locations.length > 1 ? (
-                <div className="col-12 col-lg-auto d-flex align-items-end">
-                  <div className="form-check form-switch pb-2">
+                <div className="col-12 col-lg-auto d-flex align-items-center align-self-stretch">
+                  <div className="form-check form-switch mb-0">
                     {/* "Tutte le sedi" (port del checkbox legacy all_locations): mostra i costi di
                         tutte le sedi permesse invece della sola corrente. Applicato su "Filtra". */}
                     <input className="form-check-input" type="checkbox" role="switch" id="costsAllLocations" name="all_locations" checked={allLoc} onChange={(e) => setAllLoc(e.target.checked)} />
@@ -490,7 +490,7 @@ export function CostsContent({ slug: slugProp, initialQuery }: { slug?: string; 
               ) : null}
               {/* col-auto: il bottone si accoda ai campi (leggero distacco ms-lg-2)
                   invece di galleggiare in una colonna fissa di griglia. */}
-              <div className="col-12 col-lg-auto d-flex align-items-end gap-2 ms-lg-2">
+              <div className="col-12 col-lg-auto d-flex align-items-center align-self-stretch gap-2 ms-lg-2">
                 <button className="btn btn-primary" type="submit">
                   <i className="bi bi-search me-1" />
                   Filtra

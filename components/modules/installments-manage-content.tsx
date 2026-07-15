@@ -574,7 +574,7 @@ export function InstallmentsManageContent({ slug: slugProp, initialQuery }: { sl
                   classi custom outline), Reset visibile solo con filtri non-default. */}
               {/* col-auto: la coda (switch+bottoni) si accoda ai campi con leggero
                   distacco invece di una colonna fissa spinta a destra dal CSS. */}
-              <div className="col-12 col-lg-auto d-flex align-items-end gap-2 ms-lg-2 mt-2 mt-lg-0 flex-wrap installments-filter-actions">
+              <div className="col-12 col-lg-auto d-flex align-items-center align-self-stretch gap-2 ms-lg-2 mt-2 mt-lg-0 flex-wrap installments-filter-actions">
                 {showAllLocationsFilter ? (
                   <div className="form-check form-switch mb-0">
                     <input
