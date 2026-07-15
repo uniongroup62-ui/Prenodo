@@ -337,7 +337,9 @@ export function QuotesContent({ slug: slugProp, initialQuery }: { slug?: string;
               {/* Restyle filtri 2026-07-15 (pattern unificato): switch (solo stile,
                   si applica al submit), Filtra pieno a larghezza naturale, Reset
                   visibile solo con filtri attivi. */}
-              <div className="col-lg-3 d-flex align-items-end gap-2 flex-wrap">
+              {/* col-auto: la coda (switch+bottoni) si accoda ai campi con leggero
+                  distacco invece di una colonna fissa di griglia. */}
+              <div className="col-12 col-lg-auto d-flex align-items-end gap-2 ms-lg-2 flex-wrap">
                 {data?.multiLocation ? (
                   <div className="form-check form-switch mb-0 pb-2">
                     <input

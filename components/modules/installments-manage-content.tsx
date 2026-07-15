@@ -572,7 +572,9 @@ export function InstallmentsManageContent({ slug: slugProp, initialQuery }: { sl
               {/* Restyle filtri 2026-07-15 (pattern unificato): switch (solo stile,
                   si applica al submit), Filtra pieno a larghezza naturale (via le
                   classi custom outline), Reset visibile solo con filtri non-default. */}
-              <div className="col-12 col-lg-3 d-flex mt-2 mt-lg-0 flex-wrap installments-filter-actions">
+              {/* col-auto: la coda (switch+bottoni) si accoda ai campi con leggero
+                  distacco invece di una colonna fissa spinta a destra dal CSS. */}
+              <div className="col-12 col-lg-auto d-flex align-items-end gap-2 ms-lg-2 mt-2 mt-lg-0 flex-wrap installments-filter-actions">
                 {showAllLocationsFilter ? (
                   <div className="form-check form-switch mb-0">
                     <input

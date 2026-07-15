@@ -13758,3 +13758,14 @@ installments: 2 marker sulle classi custom rimosse sostituiti. Residuo ZZ
 crash di un run parallelo (memoria: MAI 2 suite node in parallelo).
 Regressioni TUTTE verdi: staff 35+27+7, clients 113+50, costs 83+52,
 giftbox OK+64, giftcard 92+94, rate 49+43, packages 92+OK, quotes 80+25.
+
+## Rifinitura filtri: bottone accodato ai campi (2026-07-15, Fable, richiesta utente)
+
+Su feedback (screenshot GiftBox): switch e bottone Filtra vivevano in colonne
+di griglia FISSE (col-lg-2) -> il bottone galleggiava lontano dai campi con
+spazio morto. Fix su tutti gli 8 moduli multi-campo: coda (switch + Filtra +
+Reset) in col-12 col-lg-auto con ms-lg-2 — si accoda all'ultimo campo con un
+leggero distacco, allineata in basso ai controlli; su mobile torna full-width.
+Rate: neutralizzato il flex-end del CSS custom (utility Bootstrap !important).
+Nessuna suite asserisce classi di layout; smoke completo verde (giftbox OK,
+staff 35, rate 49, giftcard 92, costs 83, packages 92, clients 113).

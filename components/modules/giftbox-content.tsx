@@ -465,7 +465,7 @@ export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string
                   si applica al submit), Filtra pieno a larghezza naturale, Reset
                   (prima assente) visibile solo con filtri attivi. */}
               {showAllLocationsFilter ? (
-                <div className="col-lg-2 d-flex align-items-end">
+                <div className="col-12 col-lg-auto d-flex align-items-end">
                   <div className="form-check form-switch pb-2">
                     <input
                       className="form-check-input"
@@ -484,7 +484,9 @@ export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string
                 </div>
               ) : null}
 
-              <div className="col-lg-2 d-flex align-items-end gap-2">
+              {/* col-auto: il bottone si accoda ai campi (leggero distacco ms-lg-2)
+                  invece di galleggiare in una colonna fissa di griglia. */}
+              <div className="col-12 col-lg-auto d-flex align-items-end gap-2 ms-lg-2">
                 <button className="btn btn-primary" type="submit">
                   <i className="bi bi-search me-1" />
                   Filtra
