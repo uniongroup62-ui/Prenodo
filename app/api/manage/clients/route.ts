@@ -413,7 +413,9 @@ export async function POST(request: Request) {
       const confirmText = String(body.delete_confirm_text ?? "").trim();
       if (confirmText !== "ELIMINA") return jsonError("Per confermare scrivi ELIMINA.");
       const stockRestoreMode = String(body.stock_restore_mode ?? "") === "restore_stock" ? "restore_stock" : "no_restore";
-      const result = await deleteDbClientCascade(tenantSlug, id, { reason, stockRestoreMode });
+      // Sede corrente di sessione = fallback del ripristino stock per le vendite
+      // senza location (legacy app_current_location_id in $locationBySale).
+      const result = await deleteDbClientCascade(tenantSlug, id, { reason, stockRestoreMode, currentLocationId: Number(session.user.currentLocationId ?? 0) || 0 });
       return Response.json({ ok: true, source: "clients?action=delete", sourceMode: "database", ...result, clients: await listDbClients({ slug: tenantSlug }) });
     }
 

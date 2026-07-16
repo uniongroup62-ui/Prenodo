@@ -13787,3 +13787,33 @@ il centro della RIGA degli input. Fix: align-self-end (ancora al fondo riga)
 + classe condivisa .app-filter-tail in app.css (min-height = form-control,
 calc(1.5em+.75rem+2px)) con align-items-center -> il contenuto si centra
 esattamente sull'altezza dell'input. Applicata agli 8 moduli. Smoke verde.
+
+## Clienti — pass 4 (2026-07-16, Fable): BUG restore-stock per-sede TROVATO+CORRETTO
+
+Drift dall'ultimo pass (9f222c3): solo il restyle filtri (gia' smoke-testato).
+Batteria completa VERDE al primo colpo: e2e-clients 50 + markers 113 +
+test-clienti 24 + sede 19 + tags 8 + history 9 + sheets 26 (=249).
+
+BUG DI FEDELTA' (unico trovato): restoreProductStockForSales (cascata
+delete-cliente con stock_restore_mode=restore_stock) raggruppava per SOLO
+prodotto e scriveva SOLO products.stock; il legacy (clients.php 1276-1313 +
+app_product_stock_adjust/ensure_row/sync_total Helpers 1962-2160) raggruppa
+per (prodotto, SEDE della vendita, fallback sede corrente) e ripristina
+product_stocks PER-SEDE risincronizzando products.stock = SUM(product_stocks).
+Nel Next product_stocks e' la fonte di verita' -> il ripristino era INVISIBILE
+in sede. FIX fedele dentro la stessa tx: locationBySale da sales.location_id,
+qtyByProductLocation, ensure-row con copyLegacy (prima riga eredita
+products.stock), UPDATE per-sede + sync totale, fallback products.stock se
+schema assente o sede 0; route passa session.currentLocationId.
+
+Mutazioni verificate live (nuova suite test-clienti-mutations 24/24):
+validazioni ostili verbatim (nome/email/PEC/date-calendario 30-feb/sede
+inesistente), create default (punti 0/credito 0/sede), edit sede postata
+obbligatoria, block nota obbligatoria + drop dalla lista, unblock pulisce
+nota+data, tag case-insensitive senza duplicati, delete a doppia guardia
+(motivazione + ELIMINA), cascata ATOMICA (cliente+appt+vendita+items) con
+stock per-sede 5->7 e totale risincronizzato, baseline 10/9/0 intatto.
+Regressione post-fix: battery clienti + stock-atomic 4 + stock-doc ATOMICO.
+
+VERDETTO: eliminazione (cascata a doppia conferma con log), modifica
+(validazioni legacy + sede obbligatoria), block/unblock, tag: tutte CORRETTE.

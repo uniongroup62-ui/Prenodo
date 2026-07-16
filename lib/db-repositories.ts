@@ -276,7 +276,7 @@ export type DeleteDbClientCascadeResult = {
 export async function deleteDbClientCascade(
   slug: string,
   clientId: number,
-  options: { reason?: string; stockRestoreMode?: StockRestoreMode } = {},
+  options: { reason?: string; stockRestoreMode?: StockRestoreMode; currentLocationId?: number } = {},
 ): Promise<DeleteDbClientCascadeResult> {
   if (clientId <= 0) throw new Error("ID cliente mancante.");
   const reason = String(options.reason ?? "").trim();
@@ -407,7 +407,7 @@ export async function deleteDbClientCascade(
 
     // (a) restore product stock from the sales' ordered product items.
     if (stockRestoreMode === "restore_stock") {
-      restoredStockQty = await restoreProductStockForSales(slug, saleIds, q, resolve, columnExists);
+      restoredStockQty = await restoreProductStockForSales(slug, saleIds, q, resolve, columnExists, Math.max(0, Number(options.currentLocationId ?? 0) || 0));
     }
 
     // (b) appointment ITEM links
@@ -612,6 +612,7 @@ async function restoreProductStockForSales(
   q: <T extends RowDataPacket = RowDataPacket>(sql: string, params?: unknown[]) => Promise<T[]>,
   resolve: (base: string) => Promise<{ name: string; tenantClause: string; tenantParams: number[] } | null>,
   colExists: (table: string, column: string) => Promise<boolean>,
+  currentLocationId = 0,
 ): Promise<number> {
   if (saleIds.length === 0) return 0;
   const saleItemsRes = await resolve("sale_items");
@@ -628,10 +629,21 @@ async function restoreProductStockForSales(
   const siWhere = [`sale_id IN (${ph})`, "LOWER(TRIM(COALESCE(item_type,''))) = 'product'", "item_id IS NOT NULL", saleItemsRes.tenantClause].filter(Boolean).join(" AND ");
   const siParams = [...saleIds, ...saleItemsRes.tenantParams];
   const items = await q(
-    `SELECT id AS sale_item_id, item_id AS product_id, qty, ${statusExpr} AS st FROM ${quoteIdentifier(saleItemsRes.name)} WHERE ${siWhere}`,
+    `SELECT id AS sale_item_id, sale_id, item_id AS product_id, qty, ${statusExpr} AS st FROM ${quoteIdentifier(saleItemsRes.name)} WHERE ${siWhere}`,
     siParams,
   );
   if (items.length === 0) return 0;
+
+  // Sede di ogni vendita (legacy $locationBySale, clients.php 1284-1289): il
+  // ripristino va sulla giacenza PER-SEDE della vendita (product_stocks), con
+  // fallback alla sede corrente di sessione come app_current_location_id().
+  const locationBySale = new Map<number, number>();
+  const salesRes = await resolve("sales");
+  if (salesRes && (await colExists(salesRes.name, "location_id"))) {
+    const sWhere = [`id IN (${ph})`, salesRes.tenantClause].filter(Boolean).join(" AND ");
+    const sRows = await q(`SELECT id, COALESCE(location_id, 0) AS location_id FROM ${quoteIdentifier(salesRes.name)} WHERE ${sWhere}`, [...saleIds, ...salesRes.tenantParams]);
+    for (const r of sRows) locationBySale.set(Math.trunc(Number((r as RowDataPacket).id)) || 0, Math.trunc(Number((r as RowDataPacket).location_id)) || 0);
+  }
 
   // Already-restored qty per sale_item from pos_sale_stock_cancel_actions.
   const restoredBySaleItem = new Map<number, number>();
@@ -652,8 +664,11 @@ async function restoreProductStockForSales(
     }
   }
 
-  // Sum the qty to restore per product.
-  const qtyByProduct = new Map<number, number>();
+  // Somma per (prodotto, SEDE della vendita) — legacy $qtyByProductLocation
+  // (clients.php 1284-1297); prima si raggruppava per solo prodotto e si
+  // scriveva SOLO products.stock, ma nel Next product_stocks per-sede e' la
+  // fonte di verita' ([[magazzino]]): il ripristino era invisibile in sede.
+  const qtyByProductLocation = new Map<string, { productId: number; locationId: number; qty: number }>();
   for (const row of items) {
     const r = row as RowDataPacket;
     const saleItemId = Math.trunc(Number(r.sale_item_id)) || 0;
@@ -665,16 +680,56 @@ async function restoreProductStockForSales(
     const alreadyRestored = restoredBySaleItem.get(saleItemId) ?? 0;
     const qtyToRestore = Math.max(0, qty - alreadyRestored);
     if (qtyToRestore <= 0.00001) continue;
-    qtyByProduct.set(productId, (qtyByProduct.get(productId) ?? 0) + qtyToRestore);
+    let locationId = locationBySale.get(Math.trunc(Number(r.sale_id)) || 0) ?? 0;
+    if (locationId <= 0) locationId = Math.max(0, currentLocationId);
+    const key = `${productId}:${locationId}`;
+    const entry = qtyByProductLocation.get(key) ?? { productId, locationId, qty: 0 };
+    entry.qty += qtyToRestore;
+    qtyByProductLocation.set(key, entry);
   }
 
+  // product_stocks disponibile? (app_product_stock_schema_available)
+  const stocksRes = await resolve("product_stocks");
+  const stocksUsable = !!stocksRes && (await colExists(stocksRes.name, "product_id")) && (await colExists(stocksRes.name, "location_id")) && (await colExists(stocksRes.name, "stock"));
+
   let restored = 0;
-  for (const [productId, rawQty] of qtyByProduct) {
+  for (const { productId, locationId, qty: rawQty } of qtyByProductLocation.values()) {
     const qty = Math.max(0, Math.round(rawQty));
     if (qty <= 0) continue;
-    const where = ["id = ?", productsRes.tenantClause].filter(Boolean).join(" AND ");
-    const params = [qty, productId, ...productsRes.tenantParams];
-    await q(`UPDATE ${quoteIdentifier(productsRes.name)} SET stock = stock + ? WHERE ${where}`, params);
+    if (stocksUsable && stocksRes && locationId > 0) {
+      // app_product_stock_ensure_row: se il prodotto non ha ANCORA righe
+      // per-sede, la prima creata eredita products.stock (copyLegacy); le
+      // successive nascono a 0.
+      const psWhereProd = ["product_id = ?", stocksRes.tenantClause].filter(Boolean).join(" AND ");
+      const existing = await q(`SELECT location_id FROM ${quoteIdentifier(stocksRes.name)} WHERE ${psWhereProd}`, [productId, ...stocksRes.tenantParams]);
+      const hasRow = existing.some((r) => (Math.trunc(Number((r as RowDataPacket).location_id)) || 0) === locationId);
+      if (!hasRow) {
+        let seed = 0;
+        if (existing.length === 0) {
+          const pWhere = ["id = ?", productsRes.tenantClause].filter(Boolean).join(" AND ");
+          const pRows = await q(`SELECT COALESCE(stock, 0) AS stock FROM ${quoteIdentifier(productsRes.name)} WHERE ${pWhere}`, [productId, ...productsRes.tenantParams]);
+          seed = Number((pRows[0] as RowDataPacket | undefined)?.stock ?? 0) || 0;
+        }
+        const cols = ["product_id", "location_id", "stock", "is_enabled"];
+        const vals: unknown[] = [productId, locationId, seed, 1];
+        if (stocksRes.tenantClause) {
+          cols.unshift("tenant_id");
+          vals.unshift(stocksRes.tenantParams[0]);
+        }
+        await q(`INSERT INTO ${quoteIdentifier(stocksRes.name)} (${cols.map((c) => quoteIdentifier(c)).join(",")}) VALUES (${vals.map(() => "?").join(",")})`, vals);
+      }
+      const psWhere = ["product_id = ?", "location_id = ?", stocksRes.tenantClause].filter(Boolean).join(" AND ");
+      await q(`UPDATE ${quoteIdentifier(stocksRes.name)} SET stock = stock + ? WHERE ${psWhere}`, [qty, productId, locationId, ...stocksRes.tenantParams]);
+      // app_product_stock_sync_total: products.stock = SUM(product_stocks).
+      const pWhere = ["id = ?", productsRes.tenantClause].filter(Boolean).join(" AND ");
+      await q(
+        `UPDATE ${quoteIdentifier(productsRes.name)} SET stock = COALESCE((SELECT SUM(ps.stock) FROM ${quoteIdentifier(stocksRes.name)} ps WHERE ps.product_id = ${quoteIdentifier(productsRes.name)}.id${stocksRes.tenantClause ? " AND ps.tenant_id = ?" : ""}), stock) WHERE ${pWhere}`,
+        stocksRes.tenantClause ? [stocksRes.tenantParams[0], productId, ...productsRes.tenantParams] : [productId, ...productsRes.tenantParams],
+      );
+    } else {
+      const where = ["id = ?", productsRes.tenantClause].filter(Boolean).join(" AND ");
+      await q(`UPDATE ${quoteIdentifier(productsRes.name)} SET stock = stock + ? WHERE ${where}`, [qty, productId, ...productsRes.tenantParams]);
+    }
     restored += qty;
   }
   return restored;
