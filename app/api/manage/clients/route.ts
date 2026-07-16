@@ -20,6 +20,7 @@ import {
   unblockDbClient,
   updateDbClient,
 } from "@/lib/db-repositories";
+import { logActivity } from "@/lib/activity-log";
 import { currentManageSession } from "@/lib/manage-auth";
 import { resolveManageLocationId } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -380,6 +381,7 @@ export async function POST(request: Request) {
         }
       }
       const client = await createDbClient(input, tenantSlug);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "clienti", action: "crea", entityType: "client", entityId: client.id, label: `Creato cliente "${client.name}"` });
       return Response.json({ ok: true, source: "clients?action=create", sourceMode: "database", client, clients: await listDbClients({ slug: tenantSlug }) });
     }
 
@@ -393,6 +395,7 @@ export async function POST(request: Request) {
       const input = await clientInputFromBody(body, tenantSlug, false);
       if (!input.locationId || input.locationId <= 0) return jsonError("Seleziona una sede valida.");
       const client = await updateDbClient(id, input, tenantSlug);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "clienti", action: "modifica", entityType: "client", entityId: id, label: `Modificato cliente "${client.name}"` });
       return Response.json({ ok: true, source: "clients?action=update", sourceMode: "database", client, clients: await listDbClients({ slug: tenantSlug }) });
     }
 
@@ -407,6 +410,7 @@ export async function POST(request: Request) {
     if (action === "block") {
       const note = String(body.blocked_internal_note ?? body.reason ?? "");
       const client = await blockDbClient(id, tenantSlug, note);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "clienti", action: "disattiva", entityType: "client", entityId: id, label: `Disattivato cliente "${client.name}" — nota: ${note.trim()}` });
       return Response.json({ ok: true, source: "clients?action=block", sourceMode: "database", client, clients: await listDbClients({ slug: tenantSlug }) });
     }
 
@@ -414,6 +418,7 @@ export async function POST(request: Request) {
     // clears blocked_at + note. No associated data is touched.
     if (action === "unblock") {
       const client = await unblockDbClient(id, tenantSlug);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "clienti", action: "riattiva", entityType: "client", entityId: id, label: `Riattivato cliente "${client.name}"` });
       return Response.json({ ok: true, source: "clients?action=unblock", sourceMode: "database", client, clients: await listDbClients({ slug: tenantSlug }) });
     }
 
@@ -444,6 +449,16 @@ export async function POST(request: Request) {
       // Sede corrente di sessione = fallback del ripristino stock per le vendite
       // senza location (legacy app_current_location_id in $locationBySale).
       const result = await deleteDbClientCascade(tenantSlug, id, { reason, stockRestoreMode, currentLocationId: Number(session.user.currentLocationId ?? 0) || 0 });
+      void logActivity(tenantSlug, {
+        user: session.user,
+        locationId: session.user.currentLocationId,
+        module: "clienti",
+        action: "elimina",
+        entityType: "client",
+        entityId: id,
+        label: `Eliminato cliente "${result.client.name}" — motivo: ${reason}${result.restoredStockQty > 0 ? ` (stock ripristinato: ${result.restoredStockQty} pezzi)` : ""}`,
+        details: result.counts,
+      });
       return Response.json({ ok: true, source: "clients?action=delete", sourceMode: "database", ...result, clients: await listDbClients({ slug: tenantSlug }) });
     }
 

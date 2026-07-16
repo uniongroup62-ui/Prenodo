@@ -13871,3 +13871,40 @@ VERIFICA: suite improvements riscritta 13/13 — blocco 409 senza creazione
 (count invariato), conferma crea, telefono +39-vs-nudo, percorso QB con
 sessione SOLO quick_booking bloccato e sbloccato con conferma. Regressione:
 e2e-clients 50 + markers 113 + mutations 24 + QB (markers 6+37, findings 3).
+
+## Feature LOG — registro attivita' operatori (2026-07-16, Fable, approvata)
+
+Pagina 'Log' nel menu sotto Booking (SOLO ADMIN, auto-gate come Ruoli: API
+403 'Accesso negato.' + card nel componente). Architettura:
+- lib/activity-log.ts: logActivity FIRE-AND-FORGET (mai fallisce l'operazione
+  registrata, fuori dalle tx), tabella activity_logs (ensure CREATE TABLE IF
+  NOT EXISTS + verifica DIRETTA information_schema, MAI tableExists post-DDL
+  — cache poisoning), user_label SNAPSHOT (nome||email||#id), created_at
+  new Date() LOCALE (coerente col resto dell'app; i probe NON devono
+  filtrare con NOW() del DB: +2h di scarto, trappola nota).
+- Retention 30 GIORNI: purge opportunistica (throttle 1h su write, forzata
+  sul list) — nessun cron, pattern hold-janitor.
+- listActivityLogs: filtri modulo/azione/operatore/testo + paginazione 25 +
+  DISTINCT per i select dei filtri.
+- API /api/manage/logs: view=activity | view=deletions (client_deletion_logs
+  PERMANENTE con etichette operatore risolte — la motivazione del delete
+  cliente ora e' VISIBILE, chiude la domanda utente).
+- Pagina log-content: 2 tab, filtri pattern unificato, badge azione colorati
+  (rosso distruttive/giallo modifiche/verde creazioni/azzurro login),
+  dettagli JSON in modal, pager.
+STRUMENTAZIONE FASE 1 (ogni punto = 1 riga post-successo): clienti
+(crea/modifica/disattiva/riattiva/elimina con motivo+conteggi), appuntamenti
+(crea/modifica via save, sposta, cambio stato con annulla-detect, storno
+cancel_done, elimina singolo+bulk), pagamenti (incasso/annulla/elimina
+vendita), magazzino (prodotto save/delete, documento save/cancel), fornitori
+(save/delete), buoni (save/delete con modalita'/disattiva), rate
+(paga/riapri/annulla piano), operatori (save/delete), orari (hours_save),
+accessi (login con IP).
+VERIFICA live test-log-attivita 11/11 (ciclo cliente tracciato, fornitori,
+login reale, filtri, 403 non-admin, vista eliminazioni col motivo, purge
+40gg->0, SSR pagina+menu). TRAPPOLE PROBE: marker unici per run (mai LIKE
+generici: i log si accumulano tra i run) e mai finestre NOW() del DB.
+Regressione superfici strumentate verde: clients 50+24, appuntamenti 13,
+stock 4, coupons 49+3(noti), rate 43, staff 27, fornitori 0 FAIL.
+FASE 2 (pendente): pacchetti/giftcard/giftbox/preventivi/servizi/promozioni/
+omaggi/impostazioni.

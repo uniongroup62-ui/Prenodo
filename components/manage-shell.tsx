@@ -87,6 +87,9 @@ const MENU: Group[] = [
       { page: "automation", icon: "lightning-charge", label: "Automazione" },
       { page: "reports", icon: "graph-up", label: "Report" },
       { page: "booking", icon: "globe2", label: "Booking" },
+      // Registro attività operatori (feature 2026-07-16): la pagina si
+      // auto-gata SOLO-Admin come Ruoli (il menu non filtra per permesso).
+      { page: "log", icon: "journal-text", label: "Log" },
     ],
   },
 ];

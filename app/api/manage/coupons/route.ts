@@ -1,4 +1,5 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
+import { logActivity } from "@/lib/activity-log";
 import { todayIso } from "@/lib/appointment-engine";
 import { cancelManageCoupon, couponGenerateCode, createDbCoupon, deleteManageCoupon, evalBestPromotionForAppointment, getCouponFormContext, getManageCoupon, listDbCoupons, listManageCoupons, posPreviewDiscount, previewDbCoupon, redeemDbCoupon, saveManageCoupon, type CouponPreviewItem, type PosPreviewCartInput } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
@@ -119,6 +120,8 @@ export async function POST(request: Request) {
       // Avviso non-bloccante (modifica di un buono con prenotazioni aperte): la
       // UI lo mostra come flash 'warning' oltre al successo del salvataggio.
       const warning = coupon.editWarning ?? "";
+      const isEdit = parseInteger(body.id, 0) > 0;
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "buoni", action: isEdit ? "modifica" : "crea", entityType: "coupon", entityId: coupon.id, label: `${isEdit ? "Modificato" : "Creato"} buono "${coupon.code}"` });
       return Response.json({ ok: true, source: "coupons?action=save", sourceMode: "database", coupon, warning, coupons: await listManageCoupons(tenantSlug) });
     }
 
@@ -132,6 +135,7 @@ export async function POST(request: Request) {
       // the EDIT page (redirectEdit). Successes flash success on the list.
       try {
         const result = await deleteManageCoupon(tenantSlug, parseInteger(body.id, 0), session.user.id);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "buoni", action: "elimina", entityType: "coupon", entityId: parseInteger(body.id, 0), label: `Eliminato buono #${parseInteger(body.id, 0)} (${result.mode === "soft" ? "storico conservato" : "definitivo"})` });
         return Response.json({ ok: true, source: "coupons?action=delete", sourceMode: "database", mode: result.mode, message: result.message, msgType: "success", coupons: await listManageCoupons(tenantSlug) });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Errore coupon.";
@@ -148,6 +152,7 @@ export async function POST(request: Request) {
       // -> warning flash on the edit page.
       try {
         await cancelManageCoupon(tenantSlug, parseInteger(body.id, 0), String(body.cancel_reason ?? body.reason ?? ""), session.user.id);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "buoni", action: "disattiva", entityType: "coupon", entityId: parseInteger(body.id, 0), label: `Disattivato buono #${parseInteger(body.id, 0)}` });
         return Response.json({ ok: true, source: "coupons?action=cancel", sourceMode: "database", coupons: await listManageCoupons(tenantSlug) });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Errore coupon.";

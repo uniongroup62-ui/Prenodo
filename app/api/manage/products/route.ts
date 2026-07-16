@@ -1,4 +1,5 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
+import { logActivity } from "@/lib/activity-log";
 import { currentManageSession } from "@/lib/manage-auth";
 import { assertLocationAccessById, locationAllowedForSedi, resolveManageLocationId, sessionAllowedLocationIds } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -156,9 +157,13 @@ export async function POST(request: Request) {
       case "save":
       case "update":
       case "edit":
-      case "product_save":
+      case "product_save": {
         if (!can(session.user.perms, "products.manage")) return jsonError("Permesso Magazzino richiesto.", 403);
-        return Response.json(await saveProduct(tenantSlug, body));
+        const out = await saveProduct(tenantSlug, body);
+        const isEdit = parseInteger(body.id ?? body.product_id, 0) > 0;
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "magazzino", action: isEdit ? "modifica" : "crea", entityType: "product", entityId: parseInteger(body.id ?? body.product_id, 0), label: `${isEdit ? "Modificato" : "Creato"} prodotto "${String(body.name ?? "").trim() || "senza nome"}"` });
+        return Response.json(out);
+      }
 
       case "delete":
       case "product_delete": {
@@ -174,7 +179,9 @@ export async function POST(request: Request) {
             deleteBlockers: blockers,
           });
         }
-        return Response.json(await deleteProduct(tenantSlug, productId));
+        const out = await deleteProduct(tenantSlug, productId);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "magazzino", action: "elimina", entityType: "product", entityId: productId, label: `Eliminato prodotto #${productId}` });
+        return Response.json(out);
       }
 
       case "category_save":
@@ -197,23 +204,37 @@ export async function POST(request: Request) {
         if (wantLoc > 0 && !locationAllowedForSedi(wantLoc, sessionAllowedLocationIds(session))) {
           return jsonError("Sede non disponibile per le tue sedi.", 403);
         }
-        return Response.json(await saveStockMovement(tenantSlug, body, session.user.name, session.user.id));
+        const out = await saveStockMovement(tenantSlug, body, session.user.name, session.user.id);
+        void logActivity(tenantSlug, { user: session.user, locationId: wantLoc || session.user.currentLocationId, module: "magazzino", action: "crea", entityType: "stock_doc", label: `Registrato documento magazzino (${String(body.cause ?? "movimento").trim() || "movimento"})` });
+        return Response.json(out);
       }
 
       case "stock_doc_cancel":
-      case "stock_move_cancel":
+      case "stock_move_cancel": {
         if (!can(session.user.perms, "stock_moves.manage")) return jsonError("Permesso Carico / Scarico richiesto.", 403);
         // Guardia per-sede: niente annullo di un documento di magazzino di un'altra sede.
         await assertLocationAccessById(tenantSlug, "stock_docs", parseInteger(body.id ?? body.stock_doc_id, 0), sessionAllowedLocationIds(session), "Documento non disponibile per le tue sedi.");
-        return Response.json(await cancelStockDocument(tenantSlug, parseInteger(body.id ?? body.stock_doc_id, 0), session.user.name, session.user.id));
+        const docId = parseInteger(body.id ?? body.stock_doc_id, 0);
+        const out = await cancelStockDocument(tenantSlug, docId, session.user.name, session.user.id);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "magazzino", action: "annulla", entityType: "stock_doc", entityId: docId, label: `Annullato documento magazzino #${docId}` });
+        return Response.json(out);
+      }
 
-      case "supplier_save":
+      case "supplier_save": {
         if (!can(session.user.perms, "suppliers.manage")) return jsonError("Permesso Fornitori richiesto.", 403);
-        return Response.json(await saveSupplier(tenantSlug, body));
+        const out = await saveSupplier(tenantSlug, body);
+        const isEdit = parseInteger(body.id ?? body.supplier_id, 0) > 0;
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "fornitori", action: isEdit ? "modifica" : "crea", entityType: "supplier", entityId: parseInteger(body.id ?? body.supplier_id, 0), label: `${isEdit ? "Modificato" : "Creato"} fornitore "${String(body.name ?? "").trim() || "senza nome"}"` });
+        return Response.json(out);
+      }
 
-      case "supplier_delete":
+      case "supplier_delete": {
         if (!can(session.user.perms, "suppliers.manage")) return jsonError("Permesso Fornitori richiesto.", 403);
-        return Response.json(await deleteSupplier(tenantSlug, parseInteger(body.id ?? body.supplier_id, 0)));
+        const supplierId = parseInteger(body.id ?? body.supplier_id, 0);
+        const out = await deleteSupplier(tenantSlug, supplierId);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "fornitori", action: "elimina", entityType: "supplier", entityId: supplierId, label: `Eliminato fornitore #${supplierId}` });
+        return Response.json(out);
+      }
 
       default:
         return jsonError("Azione magazzino non supportata.", 400);

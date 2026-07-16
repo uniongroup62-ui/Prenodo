@@ -1,4 +1,5 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
+import { logActivity } from "@/lib/activity-log";
 import { currentManageSession } from "@/lib/manage-auth";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import {
@@ -177,6 +178,8 @@ export async function POST(request: Request) {
       if (!can(activeUser.perms, "staff.manage")) return jsonError("Permesso Operatori richiesto.", 403);
       try {
         const staff = await saveStaffMember(tenantSlug, body, { actorIsAdmin: String(activeUser.role ?? "").toLowerCase() === "admin" });
+        const isEdit = parseInteger(body.id, 0) > 0;
+        void logActivity(tenantSlug, { user: activeUser, locationId: activeUser.currentLocationId, module: "operatori", action: isEdit ? "modifica" : "crea", entityType: "staff", entityId: parseInteger(body.id, 0), label: `${isEdit ? "Modificato" : "Creato"} operatore "${String(body.full_name ?? body.name ?? "").trim() || "senza nome"}"` });
         return Response.json({ ok: true, msg: "Operatore salvato", staff });
       } catch (error) {
         const flashKind = error instanceof Error ? (error as Error & { flashKind?: string }).flashKind : undefined;
@@ -188,6 +191,7 @@ export async function POST(request: Request) {
       if (!can(activeUser.perms, "staff.manage")) return jsonError("Permesso Operatori richiesto.", 403);
       try {
         await deleteStaffMember(tenantSlug, parseInteger(body.id, 0), { actorIsAdmin: String(activeUser.role ?? "").toLowerCase() === "admin" });
+        void logActivity(tenantSlug, { user: activeUser, locationId: activeUser.currentLocationId, module: "operatori", action: "elimina", entityType: "staff", entityId: parseInteger(body.id, 0), label: `Eliminato operatore #${parseInteger(body.id, 0)}` });
         return Response.json({ ok: true, msg: "Operatore eliminato" });
       } catch (error) {
         const err = error as Error & { popup?: unknown; flashKind?: string };
@@ -205,6 +209,7 @@ export async function POST(request: Request) {
 
     if (action === "hours_save") {
       const hours = await saveBusinessHours(tenantSlug, body);
+      void logActivity(tenantSlug, { user: activeUser, locationId: parseInteger(body.location_id, 0) || activeUser.currentLocationId, module: "orari", action: "modifica", entityType: "hours", label: "Salvati orari di apertura" });
       return Response.json({ ok: true, hours });
     }
 

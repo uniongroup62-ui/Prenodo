@@ -2,6 +2,7 @@ import {
   todayIso,
 } from "@/lib/appointment-engine";
 import { emptyToNull, jsonError, parseRequestBody } from "@/lib/api-utils";
+import { logActivity } from "@/lib/activity-log";
 import {
   appointmentCustomerVisibleChanged,
   appointmentLocationAllowedForUser,
@@ -664,6 +665,9 @@ export async function POST(request: Request) {
       }
 
       if (deleted === 0 && guardError && blockedUnavailable === 0) return jsonError(guardError);
+      if (deleted > 0) {
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "appuntamenti", action: "elimina", entityType: "appointment", entityId: ids[0], label: deleted === 1 ? `Eliminato appuntamento #${ids[0]}` : `Eliminati ${deleted} appuntamenti`, details: { ids } });
+      }
       return Response.json({
         ok: true,
         sourceMode: "database",
@@ -770,6 +774,7 @@ export async function POST(request: Request) {
       // Port di automation_handle_status_change: (ri)schedula i promemoria se
       // il nuovo stato e' prenotato, altrimenti cancella le righe pending.
       await automationScheduleReminder(tenantSlug, id);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "appuntamenti", action: /cancel|no_show/i.test(newPhpStatus) ? "annulla" : "modifica", entityType: "appointment", entityId: id, label: `Cambiato stato appuntamento #${id}: ${oldPhpStatus || "?"} -> ${newPhpStatus}` });
       return Response.json({ ok: true, sourceMode: "database", appointment, appointments: await listDbAppointments({ slug: tenantSlug, locationId: postListLocationId }) });
     }
 
@@ -830,6 +835,7 @@ export async function POST(request: Request) {
         // Annullo: lo stato non e' piu' prenotato, la schedule fa da clear
         // (port di automation_clear_pending_reminders sul cancel).
         await automationScheduleReminder(tenantSlug, id);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "appuntamenti", action: "annulla", entityType: "appointment", entityId: id, label: `Annullato appuntamento eseguito #${id} (storno completo)` });
         return Response.json({
           ok: true,
           sourceMode: "database",
@@ -945,6 +951,7 @@ export async function POST(request: Request) {
       // (port di automation_handle_customer_visible_change nel move PHP).
       await automationScheduleReminder(tenantSlug, id);
 
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "appuntamenti", action: "sposta", entityType: "appointment", entityId: id, label: `Spostato appuntamento #${id}` });
       return Response.json({
         ok: true,
         sourceMode: "database",
@@ -1169,6 +1176,9 @@ export async function POST(request: Request) {
     // e su un edit che cambia orario aggiorna la scheduled_at).
     const savedApptId = isEdit ? editId : Number((appointment as { id?: number } | null)?.id ?? 0);
     if (savedApptId > 0) await automationScheduleReminder(tenantSlug, savedApptId);
+    if (savedApptId > 0) {
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "appuntamenti", action: isEdit ? "modifica" : "crea", entityType: "appointment", entityId: savedApptId, label: `${isEdit ? "Modificato" : "Creato"} appuntamento #${savedApptId}` });
+    }
 
     return Response.json({
       ok: true,

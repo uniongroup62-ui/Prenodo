@@ -1,5 +1,6 @@
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
+import { logActivity } from "@/lib/activity-log";
 import { currentManageSession } from "@/lib/manage-auth";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { cancelDbInstallmentPlan, createDbInstallmentPlan, listDbInstallmentPlans, saveDbInstallmentAlertDays, searchDbInstallmentPlans } from "@/lib/db-repositories";
@@ -113,11 +114,13 @@ export async function POST(request: Request) {
         locationId: scopeLocationId,
         locationIds: scopeLocationIds,
       });
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "rate", action: "paga", entityType: "installment", entityId: parseInteger(body.installment_id ?? body.id), label: `Rata #${parseInteger(body.installment_id ?? body.id)} segnata pagata` });
       return Response.json({ ok: true, source: "installments?action=pay", sourceMode: "database", plan, plans: await listDbInstallmentPlans(tenantSlug) });
     }
 
     if (action === "pending" || action === "reopen" || action === "mark_pending") {
       const plan = await markInstallmentPending(tenantSlug, parseInteger(body.installment_id ?? body.id), session.user.id, scopeLocationId, scopeLocationIds);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "rate", action: "modifica", entityType: "installment", entityId: parseInteger(body.installment_id ?? body.id), label: `Rata #${parseInteger(body.installment_id ?? body.id)} riaperta (non pagata)` });
       return Response.json({ ok: true, source: "installments?action=mark_pending", sourceMode: "database", plan, plans: await listDbInstallmentPlans(tenantSlug) });
     }
 
@@ -132,6 +135,7 @@ export async function POST(request: Request) {
         ["1", "true", "yes"].includes(String(body.allow_paid ?? "").toLowerCase()),
         scopeLocationId,
       );
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "rate", action: "annulla", entityType: "installment_plan", entityId: parseInteger(body.plan_id ?? body.id, 0), label: `Annullato piano rateale #${parseInteger(body.plan_id ?? body.id, 0)}` });
       return Response.json({ ok: true, source: "installments?action=cancel", sourceMode: "database", plan, plans: await listDbInstallmentPlans(tenantSlug) });
     }
 

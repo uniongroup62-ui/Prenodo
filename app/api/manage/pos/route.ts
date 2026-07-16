@@ -1,4 +1,5 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
+import { logActivity } from "@/lib/activity-log";
 import { currentManageSession } from "@/lib/manage-auth";
 import { resolveManageLocationId } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -176,6 +177,7 @@ export async function POST(request: Request) {
         id: session.user.id,
         name: session.user.name,
       });
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "pagamenti", action: "incasso", entityType: "sale", entityId: Number(payload.sale?.id ?? 0), label: `Incasso vendita #${Number(payload.sale?.id ?? 0)} — € ${Number(payload.sale?.total ?? 0).toFixed(2)}` });
       return Response.json({
         ...payload,
       });
@@ -198,6 +200,7 @@ export async function POST(request: Request) {
         pointsStornoMode: normalizePointsStornoMode(body.points_storno_mode),
         rechargePointsModes: normalizeRechargePointsModes(body.recharge_points_storno_mode),
       });
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "pagamenti", action: "annulla", entityType: "sale", entityId: saleId, label: `Annullata vendita #${saleId}${String(body.reason ?? body.cancel_reason ?? "").trim() !== "" ? ` — motivo: ${String(body.reason ?? body.cancel_reason).trim()}` : ""}` });
       return Response.json({
         ...payload,
       });
@@ -215,6 +218,7 @@ export async function POST(request: Request) {
         saleId,
         userId: session.user.id,
       });
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "pagamenti", action: "elimina", entityType: "sale", entityId: saleId, label: `Eliminata vendita annullata #${saleId}` });
       return Response.json({
         ...payload,
         deleted: true,

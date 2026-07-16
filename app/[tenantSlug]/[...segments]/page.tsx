@@ -67,6 +67,7 @@ import { NotificationsBirthdaysContent } from "@/components/modules/notification
 import { NotificationsInstallmentsContent } from "@/components/modules/notifications_installments-content";
 import { NotificationsQuotesContent } from "@/components/modules/notifications_quotes-content";
 import { RolesContent } from "@/components/modules/roles-content";
+import { LogContent } from "@/components/modules/log-content";
 import { GiftcardSettingsContent } from "@/components/modules/giftcard_settings-content";
 import { GiftboxSettingsContent } from "@/components/modules/giftbox_settings-content";
 import { QuoteSettingsContent } from "@/components/modules/quote_settings-content";
@@ -184,7 +185,7 @@ export default async function TenantPage({
   searchParams,
 }: {
   params: Promise<{ tenantSlug: string; segments?: string[] }>;
-  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string; staff_id?: string; source?: string; detail_staff_id?: string; from?: string; to?: string; q?: string; cat?: string; cat_q?: string; cat_status?: string; category_filter_id?: string; low_stock?: string; supplier?: string; category?: string; code?: string; brand?: string; internal_code?: string; product_id?: string; category_search?: string; edit_id?: string; sku?: string; document_number?: string; number?: string; date?: string; include_canceled?: string; p?: string; category_id?: string; scope?: string; msg?: string; err?: string; type?: string; all_locations?: string; range?: string; granularity?: string; compare?: string; compare_mode?: string; compare_month?: string; compare_from?: string; compare_to?: string; package_name?: string; p_pending?: string; p_list?: string; warn_locked?: string; warn?: string; open_summary?: string; role?: string; inst_client_id?: string; inst_gift_id?: string; inst_state?: string; inst_p?: string; service_id?: string }>;
+  searchParams: Promise<{ public?: string; location_id?: string; service?: string; tab?: string; action?: string; token?: string; embed?: string; format?: string; id?: string; status?: string; client_id?: string; sale_id?: string; due_from?: string; due_to?: string; plan_id?: string; staff_id?: string; source?: string; detail_staff_id?: string; from?: string; to?: string; q?: string; cat?: string; cat_q?: string; cat_status?: string; category_filter_id?: string; low_stock?: string; supplier?: string; category?: string; code?: string; brand?: string; internal_code?: string; product_id?: string; category_search?: string; edit_id?: string; sku?: string; document_number?: string; number?: string; date?: string; include_canceled?: string; p?: string; category_id?: string; scope?: string; msg?: string; err?: string; type?: string; all_locations?: string; range?: string; granularity?: string; compare?: string; compare_mode?: string; compare_month?: string; compare_from?: string; compare_to?: string; package_name?: string; p_pending?: string; p_list?: string; warn_locked?: string; warn?: string; open_summary?: string; view?: string; module?: string; user?: string; role?: string; inst_client_id?: string; inst_gift_id?: string; inst_state?: string; inst_p?: string; service_id?: string }>;
 }) {
   const { tenantSlug, segments } = await params;
   const query = await searchParams;
@@ -1014,6 +1015,16 @@ export default async function TenantPage({
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <AutomationContent slug={tenantSlug} initialQuery={{ msg: query.msg }} />
+      </ManageShell>
+    );
+  }
+
+  // Log attività operatori (feature 2026-07-16, SOLO ADMIN — l'API risponde
+  // 403 e il componente mostra 'Accesso negato' per i non-admin, come Ruoli).
+  if (page === "log") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
+        <LogContent slug={tenantSlug} initialQuery={{ view: query.view, module: query.module, action: query.action, user: query.user, q: query.q, p: query.p }} />
       </ManageShell>
     );
   }
