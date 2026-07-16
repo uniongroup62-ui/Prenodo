@@ -55,7 +55,7 @@ function fmtDateTime(v: string): string {
 function actionBadge(action: string): { label: string; className: string } {
   const a = action.toLowerCase();
   if (["delete", "elimina", "cancel", "annulla", "block", "disattiva"].some((k) => a.includes(k))) return { label: action, className: "text-bg-danger" };
-  if (["update", "modifica", "move", "sposta", "save", "scala"].some((k) => a.includes(k))) return { label: action, className: "text-bg-warning" };
+  if (["update", "modifica", "move", "sposta", "save", "scala", "riscatta"].some((k) => a.includes(k))) return { label: action, className: "text-bg-warning" };
   if (["create", "crea", "checkout", "unblock", "riattiva", "ripristina", "paga", "incasso"].some((k) => a.includes(k))) return { label: action, className: "text-bg-success" };
   if (["login", "invia"].some((k) => a.includes(k))) return { label: action, className: "text-bg-info" };
   return { label: action, className: "text-bg-secondary" };
@@ -74,6 +74,7 @@ const MODULE_LABELS: Record<string, string> = {
   orari: "Orari",
   pacchetti: "Pacchetti",
   preventivi: "Preventivi",
+  giftbox: "GiftBox",
 };
 
 function moduleLabel(m: string): string {

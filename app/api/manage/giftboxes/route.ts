@@ -1,4 +1,5 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
+import { logActivity } from "@/lib/activity-log";
 import {
   cancelManageGiftBoxInstance,
   deleteManageGiftBoxTemplate,
@@ -151,7 +152,9 @@ export async function POST(request: Request) {
     // action=new|edit / GiftBox::saveGiftBox). id=0 creates, id>0 updates.
     if (action === "save" || action === "new" || action === "edit") {
       if (!can(session.user.perms, "giftbox.manage")) return jsonError("Permesso GiftBox mancante.", 403);
+      const isEdit = parseInteger(body.id, 0) > 0;
       const template = await saveManageGiftBoxTemplate(tenantSlug, body, parseInteger(body.id, 0));
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "giftbox", action: isEdit ? "modifica" : "crea", entityType: "giftbox_template", entityId: template.id, label: `${isEdit ? "Modificata" : "Creata"} GiftBox "${template.name}"` });
       return Response.json({ ok: true, source: "giftbox?action=save", sourceMode: "database", template, templates: await listManageGiftBoxTemplates(tenantSlug) });
     }
 
@@ -159,6 +162,7 @@ export async function POST(request: Request) {
     if (action === "delete") {
       if (!can(session.user.perms, "giftbox.manage")) return jsonError("Permesso GiftBox mancante.", 403);
       await deleteManageGiftBoxTemplate(tenantSlug, parseInteger(body.id, 0), session.user.id);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "giftbox", action: "elimina", entityType: "giftbox_template", entityId: parseInteger(body.id, 0), label: `Eliminata GiftBox dal catalogo #${parseInteger(body.id, 0)} (istanze emesse conservate)` });
       return Response.json({ ok: true, source: "giftbox?action=delete", sourceMode: "database", templates: await listManageGiftBoxTemplates(tenantSlug) });
     }
 
@@ -194,6 +198,7 @@ export async function POST(request: Request) {
       } catch (error) {
         return Response.json({ ok: false, error: `Errore: ${error instanceof Error ? error.message : ""}` });
       }
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "giftbox", action: "riscatta", entityType: "giftbox_instance", entityId: id, label: `Riscatto totale GiftBox #${id}` });
       return Response.json({ ok: true, source: "giftbox?action=redeem_full", sourceMode: "database", detail: await getGiftBoxInstanceFull(tenantSlug, id) });
     }
 
@@ -212,6 +217,7 @@ export async function POST(request: Request) {
           note: body.note,
           giftMessage: body.gift_message,
         }, session.user.id);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "giftbox", action: "modifica", entityType: "giftbox_instance", entityId: id, label: `Modificati dati GiftBox #${id}` });
         return Response.json({ ok: true, source: "giftbox?action=update_instance", sourceMode: "database", message: result.message });
       } catch (error) {
         return Response.json({ ok: false, error: `Errore: ${error instanceof Error ? error.message : ""}` });
@@ -223,6 +229,7 @@ export async function POST(request: Request) {
       const id = parseInteger(body.instance_id ?? body.id, 0);
       try {
         const result = await updateGiftBoxInstanceExpiry(tenantSlug, id, String(body.expires_at ?? ""), session.user.id);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "giftbox", action: "modifica", entityType: "giftbox_instance", entityId: id, label: `Aggiornata scadenza GiftBox #${id}` });
         return Response.json({ ok: true, source: "giftbox?action=update_instance_expiry", sourceMode: "database", message: result.message });
       } catch (error) {
         return Response.json({ ok: false, error: `Errore: ${error instanceof Error ? error.message : "Errore aggiornamento scadenza"}` });
@@ -256,6 +263,7 @@ export async function POST(request: Request) {
           session.user.id,
           locationContext ? { id: locationContext.currentLocationId, name: currentLocation?.name ?? "" } : null,
         );
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "giftbox", action: "riscatta", entityType: "giftbox_instance", entityId: id, label: `Riscatto parziale GiftBox #${id}` });
         return Response.json({ ok: true, source: "giftbox?action=redeem_instance_partial", sourceMode: "database", message: result.message });
       } catch (error) {
         return Response.json({ ok: false, error: `Errore: ${error instanceof Error ? error.message : ""}` });
@@ -280,6 +288,7 @@ export async function POST(request: Request) {
       const showDetails = ["1", "true", "on", "yes"].includes(String(body.show_details ?? "").toLowerCase());
       try {
         const result = await sendGiftBoxInstanceEmail(tenantSlug, id, String(body.send_to ?? ""), showDetails, String(body.send_gift_message ?? ""));
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "giftbox", action: "invia", entityType: "giftbox_instance", entityId: id, label: `Inviato voucher GiftBox #${id} via email` });
         return Response.json({ ok: true, source: "giftbox?action=send_email", sourceMode: "database", message: result.message });
       } catch (error) {
         return Response.json({ ok: false, error: (error instanceof Error ? error.message : "") || "Errore invio email" });
@@ -290,6 +299,7 @@ export async function POST(request: Request) {
     if (action === "cancel" || action === "cancel_instance") {
       const id = parseInteger(body.instance_id ?? body.id, 0);
       await cancelManageGiftBoxInstance(tenantSlug, id, session.user.id);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "giftbox", action: "annulla", entityType: "giftbox_instance", entityId: id, label: `Annullata GiftBox #${id}` });
       const detail = await getGiftBoxInstanceFull(tenantSlug, id);
       return Response.json({ ok: true, source: "giftbox?action=cancel", sourceMode: "database", detail });
     }

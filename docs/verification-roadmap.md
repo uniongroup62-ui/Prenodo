@@ -14041,3 +14041,26 @@ l'anagrafica (fedele al legacy) — i cleanup dei probe preventivi devono
 rimuovere anche il cliente auto-creato (residuo 1154 rimosso, tracciato).
 Regressione completa verde 80+20+25+11+10+11. eslint: window.location.href
 assegnato in handler nuovo = react-hooks/immutability -> location.assign().
+
+## GiftBox — pass 2 (2026-07-16, Fable): ZERO BUG + Log fase 2c
+
+Drift dall'ultimo pass (5a7880d): solo restyle filtri. Batteria VERDE:
+e2e-giftbox 64 + settings 15 + test-giftbox 27 + hostile 11 + markers OK.
+INFRA (non prodotto): pooler saturo EMAXCONNSESSION per (a) server orfano su
+:3002 acceso da stamattina, (b) processi node ZOMBIE di probe crashati che
+tenevano client pg aperti per sempre, (c) wedge Turbopack post-restart
+(API 404 HTML -> ricetta rm .next/dev). Sanato l'harness hostile con retry
+su EMAXCONNSESSION. LEZIONE: dopo un crash di probe controllare i node
+residui (tasklist), e mai lasciare server su porte alternative.
+
+Mutazioni analizzate + nuova suite test-giftbox-mutations 8/8 (cross-action
+live): edit template NON retroattivo (istanza con qty+snapshot congelati),
+delete template SOFT (deleted_at) con ISTANZE INTATTE e dettaglio ancora
+consultabile via service_snapshot_json, template sparito dai modelli, annullo
+istanza -> riscatto rifiutato verbatim 'GiftBox annullata: non riscattabile.'.
+Log fase 2c: giftbox strumentato (crea/modifica/elimina template,
+riscatta totale+parziale, modifica dati/scadenza, invia voucher, annulla
+istanza; badge 'riscatta' giallo; label modulo GiftBox). Suite log 16/16.
+
+VERDETTO: eliminazione (soft, istanze conservate), modifica (non
+retroattiva), riscatti (motore partial per-item+stock), annullo: CORRETTE.
