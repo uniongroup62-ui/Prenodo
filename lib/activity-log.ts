@@ -129,6 +129,10 @@ export type ActivityLogFilters = {
   userLabel?: string;
   q?: string;
   page?: number;
+  // Restrizione per-SEDE (non-admin con logs.view, [[sede-access-model]]):
+  // vuoto = tutte; altrimenti solo le voci delle sedi indicate + quelle senza
+  // sede (location_id NULL, es. salvataggi di configurazione globali).
+  locationIds?: number[];
 };
 
 export type ActivityLogList = {
@@ -170,8 +174,16 @@ export async function listActivityLogs(slug: string, filters: ActivityLogFilters
     clauses.push("(label ILIKE ? ESCAPE '!' OR user_label ILIKE ? ESCAPE '!')");
     params.push(like, like);
   }
+  const allowedLocs = (filters.locationIds ?? []).map((n) => Number(n) || 0).filter((n) => n > 0);
+  if (allowedLocs.length > 0) {
+    clauses.push(`(location_id IS NULL OR location_id IN (${allowedLocs.map(() => "?").join(",")}))`);
+    params.push(...allowedLocs);
+  }
   const where = clauses.join(" AND ");
   const page = Math.max(1, Math.floor(Number(filters.page ?? 1) || 1));
+  // Scope tenant+sede per i DISTINCT dei filtri (senza gli altri criteri).
+  const locScopeWhere = allowedLocs.length > 0 ? `tenant_id = ? AND (location_id IS NULL OR location_id IN (${allowedLocs.map(() => "?").join(",")}))` : "tenant_id = ?";
+  const locScopeParams = allowedLocs.length > 0 ? [table.tenantId, ...allowedLocs] : [table.tenantId];
 
   const [rows, countRows, moduleRows, actionRows, userRows] = await Promise.all([
     dbQuery<RowDataPacket[]>(
@@ -179,9 +191,11 @@ export async function listActivityLogs(slug: string, filters: ActivityLogFilters
       params,
     ),
     dbQuery<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM ${quoteIdentifier(table.name)} WHERE ${where}`, params),
-    dbQuery<RowDataPacket[]>(`SELECT DISTINCT module FROM ${quoteIdentifier(table.name)} WHERE tenant_id = ? ORDER BY module`, [table.tenantId]),
-    dbQuery<RowDataPacket[]>(`SELECT DISTINCT action FROM ${quoteIdentifier(table.name)} WHERE tenant_id = ? ORDER BY action`, [table.tenantId]),
-    dbQuery<RowDataPacket[]>(`SELECT DISTINCT user_label FROM ${quoteIdentifier(table.name)} WHERE tenant_id = ? ORDER BY user_label`, [table.tenantId]),
+    // Anche i DISTINCT dei filtri rispettano la restrizione per-sede (un
+    // operatore ristretto non deve vedere moduli/operatori di altre sedi).
+    dbQuery<RowDataPacket[]>(`SELECT DISTINCT module FROM ${quoteIdentifier(table.name)} WHERE ${locScopeWhere} ORDER BY module`, locScopeParams),
+    dbQuery<RowDataPacket[]>(`SELECT DISTINCT action FROM ${quoteIdentifier(table.name)} WHERE ${locScopeWhere} ORDER BY action`, locScopeParams),
+    dbQuery<RowDataPacket[]>(`SELECT DISTINCT user_label FROM ${quoteIdentifier(table.name)} WHERE ${locScopeWhere} ORDER BY user_label`, locScopeParams),
   ]);
 
   // I timestamp arrivano come stringhe locali (setTypeParser del tenant-db):

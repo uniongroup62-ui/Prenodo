@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 // Pagina "Log" (registro attività, feature approvata 2026-07-16, SOLO ADMIN).
 // Due viste: Attività (activity_logs, retention 30 giorni) ed Eliminazioni
@@ -94,6 +94,10 @@ export function LogContent({ slug: slugProp, initialQuery }: { slug?: string; in
   });
   const [loading, setLoading] = useState(true);
   const [accessDenied, setAccessDenied] = useState(false);
+  // Viste consentite (permessi logs.view / logs.deletions; admin entrambe):
+  // arrivano dalla risposta API e gatano i tab. Default entrambe finché non
+  // si sa (i tab compaiono al primo fetch).
+  const [views, setViews] = useState<{ activity: boolean; deletions: boolean }>({ activity: true, deletions: true });
   const [detailRow, setDetailRow] = useState<ActivityRow | DeletionRow | null>(null);
 
   // Bozza filtri (si applicano al submit) + filtri applicati.
@@ -109,8 +113,9 @@ export function LogContent({ slug: slugProp, initialQuery }: { slug?: string; in
   }));
   const filtersActive = applied.module !== "" || applied.action !== "" || applied.user !== "" || applied.q !== "";
 
-  const fetchData = useCallback(
-    (v: "activity" | "deletions", f: { module: string; action: string; user: string; q: string }, pageN: number) => {
+  // Funzione dichiarata (hoisted), NON useCallback: il ramo 403-switch la
+  // richiama ricorsivamente (profondità max 1: l'altra vista è permessa).
+  function fetchData(v: "activity" | "deletions", f: { module: string; action: string; user: string; q: string }, pageN: number) {
       const params = new URLSearchParams({ slug, view: v, p: String(Math.max(1, pageN)) });
       if (v === "activity") {
         if (f.module) params.set("module", f.module);
@@ -121,7 +126,16 @@ export function LogContent({ slug: slugProp, initialQuery }: { slug?: string; in
       fetch(`/api/manage/logs?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
         .then(async (r) => ({ status: r.status, j: await r.json() }))
         .then(({ status, j }) => {
+          if (j?.views) setViews({ activity: Boolean(j.views.activity), deletions: Boolean(j.views.deletions) });
           if (status === 403) {
+            // Vista richiesta non permessa ma l'altra sì -> switch automatico
+            // (es. operatore con SOLO logs.deletions che apre /log).
+            const other = v === "activity" ? "deletions" : "activity";
+            if (j?.views && j.views[other]) {
+              setView(other);
+              fetchData(other, f, 1);
+              return;
+            }
             setAccessDenied(true);
             return;
           }
@@ -141,15 +155,13 @@ export function LogContent({ slug: slugProp, initialQuery }: { slug?: string; in
           setDeletions([]);
         })
         .finally(() => setLoading(false));
-    },
-    [slug],
-  );
+  }
 
   useEffect(() => {
     fetchData(view, applied, page);
     // Mount only: i refetch passano da submit/tab/pager.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchData]);
+  }, []);
 
   function syncUrl(v: string, f: { module: string; action: string; user: string; q: string }, pageN: number) {
     if (typeof window === "undefined") return;
@@ -205,16 +217,20 @@ export function LogContent({ slug: slugProp, initialQuery }: { slug?: string; in
       </div>
 
       <ul className="nav nav-tabs mb-3">
-        <li className="nav-item">
-          <button type="button" className={`nav-link ${view === "activity" ? "active" : ""}`} onClick={() => view !== "activity" && switchView("activity")}>
-            Attività (30 giorni)
-          </button>
-        </li>
-        <li className="nav-item">
-          <button type="button" className={`nav-link ${view === "deletions" ? "active" : ""}`} onClick={() => view !== "deletions" && switchView("deletions")}>
-            Eliminazioni clienti (permanente)
-          </button>
-        </li>
+        {views.activity ? (
+          <li className="nav-item">
+            <button type="button" className={`nav-link ${view === "activity" ? "active" : ""}`} onClick={() => view !== "activity" && switchView("activity")}>
+              Attività (30 giorni)
+            </button>
+          </li>
+        ) : null}
+        {views.deletions ? (
+          <li className="nav-item">
+            <button type="button" className={`nav-link ${view === "deletions" ? "active" : ""}`} onClick={() => view !== "deletions" && switchView("deletions")}>
+              Eliminazioni clienti (permanente)
+            </button>
+          </li>
+        ) : null}
       </ul>
 
       {view === "activity" ? (

@@ -87,6 +87,11 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { perm: "automation.manage", label: "Automazione", groupName: "Impostazioni", sortOrder: 60, parent: "settings.manage" },
   { perm: "reports.view", label: "Report", groupName: "Impostazioni", sortOrder: 70, parent: "settings.manage" },
   { perm: "booking.manage", label: "Booking", groupName: "Impostazioni", sortOrder: 80, parent: "settings.manage" },
+  // Log attività (feature 2026-07-16): assegnabile dai Ruoli. Un non-admin con
+  // logs.view vede SOLO le voci delle sue sedi; logs.deletions (sotto-permesso)
+  // sblocca la vista Eliminazioni clienti permanente. L'admin li ha impliciti.
+  { perm: "logs.view", label: "Log attività", groupName: "Impostazioni", sortOrder: 84 },
+  { perm: "logs.deletions", label: "Eliminazioni clienti", groupName: "Impostazioni", sortOrder: 85, displayParent: "logs.view" },
   { perm: "roles.manage", label: "Ruoli", groupName: "Impostazioni", sortOrder: 90, assignable: false },
 
   { perm: "commissions.manage", label: "Commissioni", groupName: "Amministrazione", sortOrder: 10 },

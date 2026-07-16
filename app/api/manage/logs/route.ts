@@ -1,12 +1,15 @@
 // API della pagina "Log" (registro attività, feature approvata 2026-07-16).
-// SOLO ADMIN (come la pagina Ruoli): il registro rivela le azioni di tutti gli
-// operatori. Due viste: activity (30 giorni, activity_logs) e deletions
-// (eliminazioni clienti PERMANENTI da client_deletion_logs — la motivazione
-// obbligatoria del delete vive lì e serve anche mesi dopo).
+// Accesso a PERMESSI (rivisto su richiesta 2026-07-16): logs.view sblocca la
+// vista attività (per un NON-admin filtrata alle SUE sedi + voci senza sede,
+// Modello A) e il sotto-permesso logs.deletions la vista Eliminazioni clienti
+// PERMANENTE (client_deletion_logs — la motivazione obbligatoria del delete
+// vive lì). L'admin ha entrambi impliciti (allAssignablePermissions).
 import { jsonError } from "@/lib/api-utils";
 import { listActivityLogs, ACTIVITY_LOG_PAGE_SIZE } from "@/lib/activity-log";
 import { currentManageSession } from "@/lib/manage-auth";
+import { sessionAllowedLocationIds } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
+import { can } from "@/lib/role-permissions";
 import { tenantSelect, tenantTable, tableExists, type RowDataPacket } from "@/lib/tenant-db";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +19,12 @@ export async function GET(request: Request) {
   const tenantSlug = manageTenantSlugFromRequest(request);
   const session = await currentManageSession(tenantSlug);
   if (!session) return jsonError("Sessione scaduta o non valida.", 401);
-  if (String(session.user.role ?? "").toLowerCase() !== "admin") return jsonError("Accesso negato.", 403);
+  const isAdmin = String(session.user.role ?? "").toLowerCase() === "admin";
+  const views = {
+    activity: isAdmin || can(session.user.perms, "logs.view"),
+    deletions: isAdmin || can(session.user.perms, "logs.deletions"),
+  };
+  if (!views.activity && !views.deletions) return jsonError("Accesso negato.", 403);
 
   const url = new URL(request.url);
   const view = String(url.searchParams.get("view") ?? "activity");
@@ -25,10 +33,11 @@ export async function GET(request: Request) {
 
   try {
     if (view === "deletions") {
+      if (!views.deletions) return Response.json({ ok: false, error: "Accesso negato.", views }, { status: 403 });
       // Registro PERMANENTE delle eliminazioni clienti.
       const table = await tenantTable(tenantSlug, "client_deletion_logs");
       if (!(await tableExists(table.name))) {
-        return Response.json({ ok: true, sourceMode: "database", rows: [], totalCount: 0, pageSize: ACTIVITY_LOG_PAGE_SIZE, currentPage: 1 });
+        return Response.json({ ok: true, sourceMode: "database", views, rows: [], totalCount: 0, pageSize: ACTIVITY_LOG_PAGE_SIZE, currentPage: 1 });
       }
       const [rows, countRows] = await Promise.all([
         tenantSelect<RowDataPacket>({
@@ -68,6 +77,7 @@ export async function GET(request: Request) {
       return Response.json({
         ok: true,
         sourceMode: "database",
+        views,
         rows: rows.map((r) => ({
           id: Number(r.id) || 0,
           deletedAt: localOrEmpty(r.deleted_at),
@@ -84,14 +94,17 @@ export async function GET(request: Request) {
       });
     }
 
+    if (!views.activity) return Response.json({ ok: false, error: "Accesso negato.", views }, { status: 403 });
     const list = await listActivityLogs(tenantSlug, {
       module: url.searchParams.get("module") ?? "",
       action: url.searchParams.get("action") ?? "",
       userLabel: url.searchParams.get("user") ?? "",
       q: url.searchParams.get("q") ?? "",
       page,
+      // Non-admin: solo le voci delle sue sedi (+ senza sede). [] = admin.
+      locationIds: sessionAllowedLocationIds(session),
     });
-    return Response.json({ ok: true, sourceMode: "database", ...list });
+    return Response.json({ ok: true, sourceMode: "database", views, ...list });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Errore log attività.");
   }

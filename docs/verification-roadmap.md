@@ -13908,3 +13908,21 @@ Regressione superfici strumentate verde: clients 50+24, appuntamenti 13,
 stock 4, coupons 49+3(noti), rate 43, staff 27, fornitori 0 FAIL.
 FASE 2 (pendente): pacchetti/giftcard/giftbox/preventivi/servizi/promozioni/
 omaggi/impostazioni.
+
+## Log — accesso a PERMESSI con sotto-permesso (2026-07-16 bis, richiesta utente)
+
+Da solo-admin a Ruoli-driven: logs.view ('Log attivita'', gruppo Impostazioni,
+assegnabile) + logs.deletions ('Eliminazioni clienti', SOTTO-permesso
+displayParent) nel catalogo role-permissions -> compaiono da soli nella
+pagina Ruoli (catalog-driven, verificato nel payload) e l'admin li eredita
+impliciti (allAssignablePermissions). Route: gate per-vista con mappa `views`
+nella risposta (403 con views se la vista richiesta non e' permessa -> la UI
+fa switch automatico all'altra); NON-admin con logs.view vede SOLO le voci
+delle sue sedi + senza-sede (filtro locationIds in listActivityLogs, anche
+sui DISTINCT dei filtri — niente leak di moduli/operatori altrui); tab
+renderizzati solo se permessi. Trappola eslint: niente useCallback che si
+auto-richiama (403-switch) -> funzione hoisted.
+VERIFICA live suite estesa 16/16: ristretto sede-51 vede solo 51/senza-sede
+(zero leak sede 21), logs.view senza sotto-permesso -> deletions 403,
+logs.deletions da solo -> activity 403 + switch info, senza nulla -> 403.
+Regressione Ruoli verde (16+16+35, nuovi permessi nel payload).
