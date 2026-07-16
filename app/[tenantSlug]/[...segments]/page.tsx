@@ -739,6 +739,7 @@ export default async function TenantPage({
             all_locations: query.all_locations,
             msg: query.msg,
             err: query.err,
+            p: query.p,
           }}
         />
       </ManageShell>

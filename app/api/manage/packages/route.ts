@@ -1,6 +1,6 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import { logActivity } from "@/lib/activity-log";
-import { addManageClientPackageUsage, consumeDbClientPackage, deleteManagePackageCatalog, getClientPackageCancelInfo, getManageClientPackage, getManageClientPackageForEdit, getManagePackageCatalog, getManagePackagesFilters, getPackageCatalogFormContext, issueDbClientPackage, listDbPackageState, listManageClientPackages, listManagePackageCatalog, saveManageClientPackage, saveManagePackageCatalog, updateManageClientPackageExpiry } from "@/lib/db-repositories";
+import { addManageClientPackageUsage, consumeDbClientPackage, deleteManagePackageCatalog, getClientPackageCancelInfo, getManageClientPackage, getManageClientPackageForEdit, getManagePackageCatalog, getManagePackagesFilters, getPackageCatalogFormContext, issueDbClientPackage, listDbPackageState, listManageClientPackagesPaged, listManagePackageCatalog, saveManageClientPackage, saveManagePackageCatalog, updateManageClientPackageExpiry } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
 import { assertLocationAccessById, getManageLocationContext, sessionAllowedLocationIds } from "@/lib/manage-locations";
 
@@ -105,18 +105,26 @@ export async function GET(request: Request) {
       const allLocations = ["1", "true", "on", "yes", "all"].includes(String(url.searchParams.get("all_locations") ?? "").trim().toLowerCase());
       const locationContext = await getManageLocationContext(tenantSlug).catch(() => null);
       const filterLocationId = allLocations ? 0 : (locationContext?.currentLocationId ?? 0);
-      const clientPackages = await listManageClientPackages(tenantSlug, {
+      // Paginazione 25 (2026-07-16): SOLO con ?p= — gli altri consumer restano
+      // sul comportamento storico (cap 300 senza finestra).
+      const rawPage = Number.parseInt(String(url.searchParams.get("p") ?? ""), 10);
+      const page = Number.isFinite(rawPage) && rawPage >= 1 ? rawPage : 0;
+      const paged = await listManageClientPackagesPaged(tenantSlug, {
         clientId: parseInteger(url.searchParams.get("client_id"), 0),
         packageName: url.searchParams.get("package_name") ?? "",
         q: url.searchParams.get("q") ?? "",
         status: url.searchParams.get("status") ?? "active",
         locationId: filterLocationId,
+        page,
       });
       const filters = await getManagePackagesFilters(tenantSlug);
       return Response.json({
         ok: true,
         sourceMode: "database",
-        clientPackages,
+        clientPackages: paged.rows,
+        totalCount: paged.totalCount,
+        pageSize: paged.pageSize,
+        currentPage: page >= 1 ? page : 1,
         clients: filters.clients,
         packageNames: filters.packageNames,
         hasAnyClientPackages: filters.hasAnyClientPackages,
@@ -159,6 +167,8 @@ export async function POST(request: Request) {
         clientId: parseInteger(body.client_id, 0),
         clientName: body.client_name,
         expiresAt: body.expires_at,
+        // Sede di sessione (igiene dati 2026-07-16): come il path POS.
+        locationId: Number(session.user.currentLocationId ?? 0) || 0,
       };
       const clientPackage = await issueDbClientPackage(input, tenantSlug);
       void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "pacchetti", action: "crea", entityType: "client_package", entityId: clientPackage.id, label: `Emesso pacchetto "${clientPackage.name}" a ${clientPackage.clientName || `cliente #${clientPackage.clientId}`}` });

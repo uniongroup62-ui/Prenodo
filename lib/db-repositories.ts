@@ -10159,10 +10159,26 @@ export type ManageClientPackageRow = {
 // filtro sede (location_id o sede della vendita; senza sede -> visibile),
 // ORDER BY updated_at DESC, id DESC LIMIT 300, contenuto da snapshot con
 // fallback catalogo/servizio.
+// Page size lista pacchetti clienti (paginazione 2026-07-16, come Clienti: il
+// LIMIT 300 secco troncava in silenzio gli storici lunghi).
+export const CLIENT_PACKAGES_PAGE_SIZE = 25;
+
+// Compat: i consumer storici (suite, azioni che ritornano la lista) ricevono
+// le sole righe col comportamento di sempre (cap 300, nessuna paginazione).
 export async function listManageClientPackages(
   slug: string,
   opts: { clientId?: number; packageName?: string; q?: string; status?: string; locationId?: number } = {},
 ): Promise<ManageClientPackageRow[]> {
+  return (await listManageClientPackagesPaged(slug, opts)).rows;
+}
+
+// Variante paginata (pagina >= 1 => finestra da 25 sul risultato FILTRATO —
+// sede e ricerca si applicano post-query, quindi la finestra va tagliata qui,
+// mappando snapshot/servizi SOLO per le righe della pagina).
+export async function listManageClientPackagesPaged(
+  slug: string,
+  opts: { clientId?: number; packageName?: string; q?: string; status?: string; locationId?: number; page?: number } = {},
+): Promise<{ rows: ManageClientPackageRow[]; totalCount: number; pageSize: number }> {
   const clauses: string[] = [];
   const params: unknown[] = [];
   if (opts.clientId && opts.clientId > 0) { clauses.push("client_id = ?"); params.push(opts.clientId); }
@@ -10211,8 +10227,23 @@ export async function listManageClientPackages(
     filtered.push(r);
   }
 
+  // Ricerca libera (legacy q su full_name/package_name) PRIMA della finestra:
+  // il totale del pager deve contare le righe che matchano, non quelle grezze.
+  const needle = String(opts.q ?? "").trim().toLowerCase();
+  const matched = needle === ""
+    ? filtered
+    : filtered.filter((r) => {
+        const clientName = (clientNames.get(Number(r.client_id ?? 0)) ?? "").toLowerCase();
+        return clientName.includes(needle) || String(r.package_name ?? "").toLowerCase().includes(needle);
+      });
+
+  const page = Math.max(0, Math.floor(Number(opts.page ?? 0)));
+  const windowRows = page >= 1
+    ? matched.slice((page - 1) * CLIENT_PACKAGES_PAGE_SIZE, (page - 1) * CLIENT_PACKAGES_PAGE_SIZE + CLIENT_PACKAGES_PAGE_SIZE)
+    : matched.slice(0, 300);
+
   const out: ManageClientPackageRow[] = [];
-  for (const r of filtered.slice(0, 300)) {
+  for (const r of windowRows) {
     const cpId = Number(r.id ?? 0);
     const snapItems = await clientPackageSnapshotItems(slug, cpId, Number(r.package_id ?? 0));
     let contentSummary = packageItemsSummaryText(snapItems);
@@ -10220,12 +10251,7 @@ export async function listManageClientPackages(
       const sid = Number(r.service_id ?? 0);
       if (sid > 0) contentSummary = await serviceNameById(slug, sid, "—");
     }
-    // Ricerca libera (legacy q su full_name/package_name).
     const clientName = clientNames.get(Number(r.client_id ?? 0)) ?? "";
-    if (opts.q && opts.q.trim() !== "") {
-      const needle = opts.q.trim().toLowerCase();
-      if (!clientName.toLowerCase().includes(needle) && !String(r.package_name ?? "").toLowerCase().includes(needle)) continue;
-    }
     const key = recomputeClientPackageStatus(String(r.status ?? "active"), Math.max(0, Number(r.sessions_remaining ?? 0)), r.expires_at ? pgDateOnly(r.expires_at) : "");
     const meta = pkgStatusMeta(key);
     const locId = Number(r.location_id ?? 0);
@@ -10244,7 +10270,7 @@ export async function listManageClientPackages(
       statusBadge: meta.badge,
     });
   }
-  return out;
+  return { rows: out, totalCount: matched.length, pageSize: CLIENT_PACKAGES_PAGE_SIZE };
 }
 
 // Opzioni filtri lista (clienti + nomi pacchetto distinti) e catalogo per il form.
@@ -10442,7 +10468,7 @@ export async function getClientPackageCancelInfo(slug: string, id: number): Prom
 }
 
 export async function issueDbClientPackage(
-  input: { packageId?: number; clientId?: number; clientName?: string; expiresAt?: string; sourceSaleId?: number },
+  input: { packageId?: number; clientId?: number; clientName?: string; expiresAt?: string; sourceSaleId?: number; locationId?: number },
   slug: string,
 ): Promise<ClientPackage> {
   const catalogRows = await tenantSelect<RowDataPacket>({
@@ -10474,6 +10500,10 @@ export async function issueDbClientPackage(
     sessions_remaining: totalSessions,
     status: "active",
     sale_id: input.sourceSaleId && input.sourceSaleId > 0 ? input.sourceSaleId : null,
+    // Sede di contesto (igiene dati 2026-07-16): il path POS la imposta da
+    // sempre (pos_update_client_package_context); questo path compat la
+    // lasciava NULL e il pacchetto sfuggiva ai filtri per sede.
+    location_id: Number(input.locationId ?? 0) > 0 ? Number(input.locationId) : null,
   });
   await insertClientPackageItemsFromCatalog(slug, id, catalog);
 
@@ -23009,10 +23039,7 @@ async function issueDbPackageFromSale({ slug, saleId, clientId, item, locationId
       // qui aggiungiamo solo la sede (pos_update_client_package_context $posLocationId).
       // Una emissione per unità venduta (una riga client_packages per pacchetto acquistato).
       for (let n = 0; n < units; n += 1) {
-        const cp = await issueDbClientPackage({ packageId: item.refId, clientId, sourceSaleId: saleId }, slug);
-        if (locationId && locationId > 0 && cp && cp.id > 0) {
-          await tenantUpdate({ slug, table: "client_packages", id: cp.id, values: { location_id: locationId } }).catch(() => 0);
-        }
+        await issueDbClientPackage({ packageId: item.refId, clientId, sourceSaleId: saleId, locationId: locationId && locationId > 0 ? locationId : 0 }, slug);
       }
     } else {
       // Pacchetto ad-hoc senza catalogo: nessuno snapshot possibile, aggregato semplice.

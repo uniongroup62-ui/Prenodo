@@ -13964,3 +13964,26 @@ disattiva->rosso, scala->giallo, riattiva/ripristina/paga->verde. Verificato
 live (voci leggibili in activity_logs dopo la suite mutations 13/13);
 regressione pacchetti 48+10+92+8 + log 16 verdi. Restano in fase 2:
 giftcard/giftbox/preventivi/servizi/promozioni/omaggi/impostazioni.
+
+## Pacchetti — 3 migliorie di prodotto APPLICATE (2026-07-16, Fable, approvate)
+
+(1) BADGE 'Scade tra N giorni' (lista + dettaglio): pacchetto ATTIVO con
+sedute residue e scadenza entro 14gg -> badge warning accanto alla data
+('Scade oggi'/'Scade domani'/'Scade tra N giorni'); prima l'unico segnale
+era 'Scaduto' a cose fatte. Helper packageExpiryWarning esportato da
+packages-content, riusato dal dettaglio.
+(2) PAGINAZIONE lista pacchetti clienti 25/pagina: il LIMIT 300 secco
+troncava in silenzio. listManageClientPackagesPaged (core con q-filter PRIMA
+della finestra e mapping snapshot SOLO per la pagina — anche micro-perf);
+wrapper compat invariato per gli altri consumer; route con ?p= opzionale
+(senza = storico); UI header 'N pacchetti · pagina X di Y' + chevron; nuova
+ricerca riparte da p1.
+(3) SEDE ALL'EMISSIONE COMPAT: issueDbClientPackage ora accetta locationId
+(route issue passa la sede di sessione; issueDbPackageFromSale la passa
+direttamente invece del doppio UPDATE) — niente piu' pacchetti senza sede
+dal path non-POS.
+
+VERIFICA live test-pacchetti-improvements 7/7 (31 seed: p1=25/p2=6 zero
+overlap, no-?p= storico; riga in-scadenza con statusKey/dati corretti a 5gg;
+testi badge nel bundle; emissione compat loc=21). Regressione completa verde
+48+10+12+26+13+92+8. tsc/eslint puliti.

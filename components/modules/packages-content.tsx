@@ -18,6 +18,7 @@ type Row = {
   sessionsRemaining: number;
   sessionsTotal: number;
   expiresAt: string;
+  statusKey?: string;
   statusLabel: string;
   statusBadge: string;
 };
@@ -37,7 +38,26 @@ export type PackagesQuery = {
   all_locations?: string;
   msg?: string;
   err?: string;
+  // Pagina corrente (paginazione 25/pagina, miglioria 2026-07-16).
+  p?: string;
 };
+
+// Badge 'Scade tra N giorni' (miglioria 2026-07-16): pacchetto ATTIVO con
+// sedute residue che scade entro 14 giorni — prima l'unico segnale era il
+// badge 'Scaduto' a cose fatte. Ritorna null fuori dalla finestra.
+export function packageExpiryWarning(expiresAt: string, sessionsRemaining: number, statusKey: string): string | null {
+  if (statusKey !== "active" || sessionsRemaining <= 0) return null;
+  const m = String(expiresAt ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const exp = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const days = Math.round((exp.getTime() - today.getTime()) / 86400000);
+  if (days < 0 || days > 14) return null;
+  if (days === 0) return "Scade oggi";
+  if (days === 1) return "Scade domani";
+  return `Scade tra ${days} giorni`;
+}
 
 function tenantSlug(): string {
   if (typeof window === "undefined") return "";
@@ -160,11 +180,18 @@ export function PackagesContent({ slug: slugProp, initialQuery }: { slug?: strin
   }));
   const filtersActive =
     appliedView.clientId !== "" || appliedView.packageName !== "" || appliedView.status !== "active" || appliedView.allLocations;
+  // Paginazione 25 (miglioria 2026-07-16): pagina da ?p=, totale dal server.
+  const [page, setPage] = useState(() => {
+    const n = Number.parseInt(String(initialQuery?.p ?? ""), 10);
+    return Number.isFinite(n) && n >= 1 ? n : 1;
+  });
+  const [totalCount, setTotalCount] = useState(0);
+  const [pageSize, setPageSize] = useState(25);
 
   // Fetch puro (setState nei callback della Promise; loading gia' true di default).
   const fetchData = useCallback(
-    (f: { clientId: string; packageName: string; status: string; allLocations: boolean }) => {
-      const qs = new URLSearchParams({ slug, action: "client_list", status: f.status });
+    (f: { clientId: string; packageName: string; status: string; allLocations: boolean }, pageN = 1) => {
+      const qs = new URLSearchParams({ slug, action: "client_list", status: f.status, p: String(Math.max(1, pageN)) });
       if (f.clientId !== "") qs.set("client_id", f.clientId);
       if (f.packageName !== "") qs.set("package_name", f.packageName);
       if (f.allLocations) qs.set("all_locations", "1");
@@ -172,6 +199,8 @@ export function PackagesContent({ slug: slugProp, initialQuery }: { slug?: strin
         .then((r) => r.json())
         .then((j) => {
           setRows(Array.isArray(j.clientPackages) ? j.clientPackages : []);
+          setTotalCount(Number(j.totalCount ?? (Array.isArray(j.clientPackages) ? j.clientPackages.length : 0)));
+          setPageSize(Math.max(1, Number(j.pageSize ?? 25)));
           setClients((j.clients ?? []).map((c: { id: number; label: string }) => ({ id: String(c.id), label: c.label })));
           setPackageNames((j.packageNames ?? []).map((n: string) => ({ id: n, label: n })));
           setHasAny(Boolean(j.hasAnyClientPackages));
@@ -185,6 +214,7 @@ export function PackagesContent({ slug: slugProp, initialQuery }: { slug?: strin
   );
 
   useEffect(() => {
+    const p0 = Number.parseInt(String(initialQuery?.p ?? ""), 10);
     fetchData({
       clientId: initialQuery?.client_id ?? "",
       packageName: initialQuery?.package_name ?? "",
@@ -192,10 +222,25 @@ export function PackagesContent({ slug: slugProp, initialQuery }: { slug?: strin
         ? String(initialQuery?.status ?? "active").toLowerCase()
         : "active",
       allLocations: ["1", "true", "on", "yes", "all"].includes(String(initialQuery?.all_locations ?? "").trim().toLowerCase()),
-    });
+    }, Number.isFinite(p0) && p0 >= 1 ? p0 : 1);
     // initialQuery è il GET del primo render: il refetch avviene solo con "Filtra".
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchData]);
+
+  // Cambio pagina: stato + URL (?p=) + refetch coi filtri applicati.
+  function goToPage(pageN: number) {
+    const p = Math.max(1, Math.floor(pageN));
+    setPage(p);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      if (p > 1) url.searchParams.set("p", String(p));
+      else url.searchParams.delete("p");
+      window.history.replaceState(null, "", url.toString());
+      window.scrollTo(0, 0);
+    }
+    setLoading(true);
+    fetchData(appliedView, p);
+  }
 
   function href(suffix: string): string {
     return `/${encodeURIComponent(slug)}/${`${suffix}`.replace("&", "?")}`;
@@ -214,13 +259,16 @@ export function PackagesContent({ slug: slugProp, initialQuery }: { slug?: strin
       url.searchParams.set("status", status);
       if (allLocations) url.searchParams.set("all_locations", "1");
       else url.searchParams.delete("all_locations");
+      // Nuova ricerca -> sempre da pagina 1.
+      url.searchParams.delete("p");
       window.history.replaceState(null, "", url.toString());
     }
     setLoading(true);
+    setPage(1);
     // Aggiornato QUI (event handler) e non in fetchData: un setState sincrono
     // nell'effect di mount violerebbe react-hooks/set-state-in-effect.
     setAppliedView({ clientId, packageName, status, allLocations });
-    fetchData({ clientId, packageName, status, allLocations });
+    fetchData({ clientId, packageName, status, allLocations }, 1);
   }
 
   const showEmptyState = !loading && !hasAny;
@@ -364,11 +412,22 @@ export function PackagesContent({ slug: slugProp, initialQuery }: { slug?: strin
           </div>
 
           <div className="card">
-            <div className="card-header bg-transparent py-2">
+            <div className="card-header bg-transparent d-flex flex-wrap align-items-center justify-content-between gap-2 py-2">
               <span className="text-muted small">
-                {loading ? "Caricamento…" : rows.length === 1 ? "1 pacchetto" : `${rows.length} pacchetti`}
+                {loading ? "Caricamento…" : totalCount === 1 ? "1 pacchetto" : `${totalCount} pacchetti`}
+                {!loading && totalCount > pageSize ? ` · pagina ${page} di ${Math.max(1, Math.ceil(totalCount / pageSize))}` : ""}
                 {!loading && filtersActive ? " · filtri attivi" : ""}
               </span>
+              {!loading && totalCount > pageSize ? (
+                <div className="d-flex align-items-center gap-1">
+                  <button type="button" className="btn btn-sm btn-outline-secondary" disabled={page <= 1} onClick={() => goToPage(page - 1)}>
+                    <i className="bi bi-chevron-left" />
+                  </button>
+                  <button type="button" className="btn btn-sm btn-outline-secondary" disabled={page >= Math.ceil(totalCount / pageSize)} onClick={() => goToPage(page + 1)}>
+                    <i className="bi bi-chevron-right" />
+                  </button>
+                </div>
+              ) : null}
             </div>
             <div className="table-responsive">
               <table className="table mb-0 align-middle">
@@ -411,7 +470,18 @@ export function PackagesContent({ slug: slugProp, initialQuery }: { slug?: strin
                         </td>
                         <td className="fw-semibold">{row.sessionsRemaining}</td>
                         <td className="text-muted">{row.sessionsTotal}</td>
-                        <td className="text-muted">{row.expiresAt !== "" ? row.expiresAt : "—"}</td>
+                        <td className="text-muted">
+                          {row.expiresAt !== "" ? row.expiresAt : "—"}
+                          {(() => {
+                            const warn = packageExpiryWarning(row.expiresAt, row.sessionsRemaining, String(row.statusKey ?? ""));
+                            return warn ? (
+                              <>
+                                {" "}
+                                <span className="badge text-bg-warning">{warn}</span>
+                              </>
+                            ) : null;
+                          })()}
+                        </td>
                         <td>
                           <span className={`badge text-bg-${row.statusBadge}`}>{row.statusLabel}</span>
                         </td>

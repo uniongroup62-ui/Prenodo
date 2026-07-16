@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { packageExpiryWarning } from "@/components/modules/packages-content";
 
 // Faithful port of the PHP client-package DETAIL (packages.php action=client_view):
 // card header (Pacchetto cliente / cliente linkato - Sede - Servizi/Contenuto -
@@ -373,6 +374,10 @@ export function ClientPackageDetailContent({ slug: slugProp, initialQuery }: { s
             <div className="text-muted small">Scadenza</div>
             <div className="d-flex align-items-center gap-2 flex-wrap">
               <span className="fw-semibold">{d.expiresAt !== "" ? fmtDate(d.expiresAt) : "-"}</span>
+              {(() => {
+                const warn = packageExpiryWarning(d.expiresAt, d.sessionsRemaining, d.status);
+                return warn ? <span className="badge text-bg-warning">{warn}</span> : null;
+              })()}
               {d.canEditExpiry ? (
                 <button
                   type="button"
