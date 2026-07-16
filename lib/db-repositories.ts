@@ -14141,6 +14141,9 @@ export type ManagePromotionRecord = PromotionRule & {
   blackoutDates: string[];
   targetFidelityLevels: string[];
   excludedClientIds: number[];
+  // Etichette dei soli clienti esclusi (per l'editor): il form non riceve più
+  // l'anagrafica completa, quindi i nomi arrivano già risolti qui.
+  excludedClientRows: { id: number; name: string }[];
 };
 
 // Edit-form prefill: return ONE promotion's editable fields for one id. Port of
@@ -14169,6 +14172,14 @@ export async function getManagePromotion(slug: string, id: number): Promise<Mana
   const parseJsonList = (raw: unknown): unknown[] => { try { const p = JSON.parse(String(raw ?? "[]")); return Array.isArray(p) ? p : []; } catch { return []; } };
   const stackable = Number(row.stackable ?? 0);
 
+  const excludedIds = parseJsonList(row.excluded_client_ids).map((v) => Math.trunc(Number(v)) || 0).filter((n) => n > 0);
+  const excludedClientRows = excludedIds.length > 0
+    ? await tenantSelect<RowDataPacket>({
+        slug, table: "clients", columns: "id, full_name",
+        where: `id IN (${excludedIds.map(() => "?").join(",")})`, params: excludedIds, orderBy: "full_name ASC",
+      }).then((rows2) => rows2.map((r) => ({ id: Number(r.id ?? 0), name: String(r.full_name ?? "") }))).catch(() => [] as { id: number; name: string }[])
+    : [];
+
   return {
     ...mapPromotion(row),
     description: String(row.description ?? ""),
@@ -14192,7 +14203,8 @@ export async function getManagePromotion(slug: string, id: number): Promise<Mana
     timeWindows: twRows.map((r) => ({ day: Number(r.day_of_week ?? 0), start: String(r.start_time ?? "").slice(0, 5), end: String(r.end_time ?? "").slice(0, 5) })),
     blackoutDates: boRows.map((r) => (typeof r.blackout_date === "string" ? r.blackout_date.slice(0, 10) : r.blackout_date ? dateIsoLocal(new Date(String(r.blackout_date))) : "")).filter((s) => /^\d{4}-\d{2}-\d{2}$/.test(s)),
     targetFidelityLevels: parseJsonList(row.target_fidelity_levels).map((v) => String(v ?? "").trim()).filter((s) => s !== ""),
-    excludedClientIds: parseJsonList(row.excluded_client_ids).map((v) => Math.trunc(Number(v)) || 0).filter((n) => n > 0),
+    excludedClientIds: excludedIds,
+    excludedClientRows,
   };
 }
 
@@ -14618,13 +14630,13 @@ export async function promotionFormContext(slug: string): Promise<{
   products: { id: number; name: string; price: number; sku: string }[];
   locations: { id: number; name: string }[];
   fidelityLevels: { key: string; name: string }[];
-  clients: { id: number; name: string }[];
 }> {
-  const [svc, prd, loc, clients] = await Promise.all([
+  // Niente anagrafica completa nel payload (era LIMIT 1000, introvabili oltre il
+  // cap): il picker "Clienti esclusi" cerca server-side via action=client_search.
+  const [svc, prd, loc] = await Promise.all([
     tenantSelect<RowDataPacket>({ slug, table: "services", columns: "id, name, price", where: "COALESCE(is_active,1) = 1", orderBy: "name ASC" }).catch(() => [] as RowDataPacket[]),
     tenantSelect<RowDataPacket>({ slug, table: "products", columns: "id, name, price, sku", where: "COALESCE(is_active,1) = 1", orderBy: "name ASC" }).catch(() => [] as RowDataPacket[]),
     tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "id, name", orderBy: "name ASC" }).catch(() => [] as RowDataPacket[]),
-    tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, full_name", orderBy: "full_name ASC", limit: 1000 }).catch(() => [] as RowDataPacket[]),
   ]);
   const levels = await getFidelityLevelsSettings(slug).catch(() => ({ levels: [] as { key: string; name: string }[] }));
   return {
@@ -14632,7 +14644,6 @@ export async function promotionFormContext(slug: string): Promise<{
     products: prd.map((r) => ({ id: Number(r.id), name: String(r.name ?? ""), price: roundMoney(Number(r.price ?? 0)), sku: String(r.sku ?? "") })),
     locations: loc.map((r) => ({ id: Number(r.id), name: String(r.name ?? "") })),
     fidelityLevels: (levels.levels ?? []).map((l) => ({ key: l.key, name: l.name })),
-    clients: clients.map((r) => ({ id: Number(r.id), name: String(r.full_name ?? "") })),
   };
 }
 
@@ -20080,7 +20091,9 @@ export type CreditMovement = {
 };
 export type CreditPending = { id: number; publicCode: string; clientId: number; clientName: string; startsAt: string; status: string; creditUsed: number };
 export type CreditMovementsData = {
-  clients: { id: number; name: string; email: string; credit: number }[];
+  // Solo il cliente FILTRATO con nome+saldo (2026-07-16): la lista completa
+  // con saldi (`clients`) non viaggia più — il picker fa ricerca server-side.
+  selectedClient: { id: number; name: string; credit: number } | null;
   movements: CreditMovement[];
   pending: CreditPending[];
   total: number;
@@ -20098,10 +20111,16 @@ export async function getManageCreditMovements(slug: string, clientId: number, p
   const scoped = clientId > 0;
   const cw = (col: string): { where: string; params: unknown[] } => (scoped ? { where: `${col} = ?`, params: [clientId] } : { where: "", params: [] });
 
-  const clientRows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, full_name, email, credit_balance", orderBy: "full_name ASC" }).catch(() => [] as RowDataPacket[]);
+  // Mappa nomi per le righe (solo id+nome, niente più saldi per tutta
+  // l'anagrafica); il cliente filtrato porta nome+saldo in selectedClient.
+  const clientRows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, full_name" }).catch(() => [] as RowDataPacket[]);
   const clientMap = new Map<number, string>();
   for (const c of clientRows) clientMap.set(Number(c.id), String(c.full_name ?? ""));
-  const clients = clientRows.map((c) => ({ id: Number(c.id), name: String(c.full_name ?? ""), email: String(c.email ?? ""), credit: roundMoney(Number(c.credit_balance ?? 0)) }));
+  let selectedClient: { id: number; name: string; credit: number } | null = null;
+  if (scoped) {
+    const selRows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, full_name, credit_balance", where: "id = ?", params: [clientId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    if (selRows[0]) selectedClient = { id: Number(selRows[0].id ?? 0), name: String(selRows[0].full_name ?? ""), credit: roundMoney(Number(selRows[0].credit_balance ?? 0)) };
+  }
 
   // Location id -> name (for appointment/sale rows; recharges/adjustments carry their own name).
   const locRows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "id, name" }).catch(() => [] as RowDataPacket[]);
@@ -20233,7 +20252,7 @@ export async function getManageCreditMovements(slug: string, clientId: number, p
     creditUsed: roundMoney(Number(a.credit_used ?? 0)),
   }));
 
-  return { clients, movements: capped, pending, total, page, perPage, totalPages };
+  return { selectedClient, movements: capped, pending, total, page, perPage, totalPages };
 }
 
 // La tessera ATTIVA del cliente per il tracciamento card_id/card_code sulle

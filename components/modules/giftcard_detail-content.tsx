@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { ClientSearchCombobox } from "@/components/client-search-combobox";
 
 // Port fedele del DETTAGLIO GiftCard (giftcard.php action=edit): header con
 // [Torna alla lista][Dettaglio vendita][Voucher][Crea GiftCard] gated, alert
@@ -71,7 +72,6 @@ type Detail = {
   expiryMinBeyondToday: boolean;
 };
 
-type ClientOpt = { id: number; name: string };
 type EventOpt = { key: string; label: string };
 type SearchClient = { id: number; full_name: string; email: string; phone: string };
 
@@ -93,7 +93,6 @@ export function GiftCardDetailContent({ slug: slugProp, initialQuery }: { slug?:
   const slug = slugProp || tenantSlug();
   const [id, setId] = useState(0);
   const [detail, setDetail] = useState<Detail | null>(null);
-  const [clients, setClients] = useState<ClientOpt[]>([]);
   const [events, setEvents] = useState<EventOpt[]>([]);
   const [canCreate, setCanCreate] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -150,7 +149,6 @@ export function GiftCardDetailContent({ slug: slugProp, initialQuery }: { slug?:
         }
         const d = j.detail as Detail;
         setDetail(d);
-        setClients(Array.isArray(j.clients) ? j.clients : []);
         setEvents(Array.isArray(j.events) ? j.events : []);
         setCanCreate(j.canCreate === true);
         setSenderClientId(d.senderClientId);
@@ -487,23 +485,16 @@ export function GiftCardDetailContent({ slug: slugProp, initialQuery }: { slug?:
               >
                 <div className="mb-2">
                   <label className="form-label">Mittente</label>
-                  <select
-                    className="form-select"
-                    name="client_id"
-                    required
+                  {/* Ricerca server-side (2026-07-16): l'anagrafica completa non viaggia
+                      più nel payload del dettaglio; il nome corrente arriva da senderName. */}
+                  <ClientSearchCombobox
+                    value={senderClientId > 0 ? String(senderClientId) : ""}
+                    initialLabel={detail?.senderName && detail.senderName !== "—" ? detail.senderName : ""}
+                    placeholder="— seleziona —"
                     disabled={readOnly}
-                    value={String(senderClientId || "")}
-                    onChange={(e) => setSenderClientId(Number(e.target.value) || 0)}
-                  >
-                    <option value="" disabled>
-                      — seleziona —
-                    </option>
-                    {clients.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
+                    searchUrl={(qq) => `/api/manage/giftcards?slug=${encodeURIComponent(slug)}&action=client_search&q=${encodeURIComponent(qq)}`}
+                    onChange={(cid) => setSenderClientId(Number(cid) || 0)}
+                  />
                 </div>
 
                 <div className="row g-2">

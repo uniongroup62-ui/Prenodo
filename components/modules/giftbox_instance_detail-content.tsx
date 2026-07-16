@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { giftboxExpiryWarning } from "@/components/modules/giftbox-content";
+import { ClientSearchCombobox } from "@/components/client-search-combobox";
 
 // Port fedele del DETTAGLIO istanza GiftBox (giftbox.php tab=instances
 // action=edit_instance): header con [Lista GiftBox][Dettagli vendita][Voucher]
@@ -91,7 +92,6 @@ type Detail = {
   availabilityWarnings: Issue[];
 };
 
-type ClientOpt = { id: number; name: string };
 type EventOpt = { key: string; label: string };
 type SearchClient = { id: number; full_name: string; email: string; phone: string };
 
@@ -106,7 +106,6 @@ export function GiftBoxInstanceDetailContent({ slug: slugProp, initialQuery }: {
   const slug = slugProp || tenantSlug();
   const [id, setId] = useState(0);
   const [detail, setDetail] = useState<Detail | null>(null);
-  const [clients, setClients] = useState<ClientOpt[]>([]);
   const [events, setEvents] = useState<EventOpt[]>([]);
   const [canSettings, setCanSettings] = useState(false);
   const [canCreate, setCanCreate] = useState(false);
@@ -161,7 +160,6 @@ export function GiftBoxInstanceDetailContent({ slug: slugProp, initialQuery }: {
         }
         const d = j.detail as Detail;
         setDetail(d);
-        setClients(Array.isArray(j.clients) ? j.clients : []);
         setEvents(Array.isArray(j.events) ? j.events : []);
         setCanSettings(j.canSettings === true);
         setCanCreate(j.canCreate === true);
@@ -574,14 +572,15 @@ export function GiftBoxInstanceDetailContent({ slug: slugProp, initialQuery }: {
                 >
                   <div className="mb-2">
                     <label className="form-label">Mittente</label>
-                    <select className="form-select" name="client_id" required value={String(senderClientId || "")} onChange={(e) => setSenderClientId(Number(e.target.value) || 0)}>
-                      <option value="">— seleziona —</option>
-                      {clients.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
+                    {/* Ricerca server-side (2026-07-16): l'anagrafica completa non viaggia
+                        più nel payload del dettaglio; il nome corrente arriva da senderName. */}
+                    <ClientSearchCombobox
+                      value={senderClientId > 0 ? String(senderClientId) : ""}
+                      initialLabel={detail?.senderName && detail.senderName !== "—" ? detail.senderName : ""}
+                      placeholder="— seleziona —"
+                      searchUrl={(qq) => `/api/manage/giftboxes?slug=${encodeURIComponent(slug)}&action=client_search&q=${encodeURIComponent(qq)}`}
+                      onChange={(cid) => setSenderClientId(Number(cid) || 0)}
+                    />
                   </div>
 
                   <div className="row g-2">

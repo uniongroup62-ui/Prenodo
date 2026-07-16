@@ -1,5 +1,5 @@
 import { jsonError, parseInteger } from "@/lib/api-utils";
-import { listDbClients, listDbProducts, listDbSales, posDbSummary } from "@/lib/db-repositories";
+import { countDbClients, listDbProducts, listDbSales, posDbSummary } from "@/lib/db-repositories";
 import { getManageReports } from "@/lib/manage-reports";
 import { currentManageSession } from "@/lib/manage-auth";
 import { getManageLocationContext } from "@/lib/manage-locations";
@@ -53,10 +53,11 @@ export async function GET(request: Request) {
         : locationIds.length === 1
           ? String(locationContext.allLocations.find((l) => Number(l.id) === locationIds[0])?.name ?? `Sede #${locationIds[0]}`)
           : "Tutte le sedi";
-    const [summary, sales, clients, products, analytics] = await Promise.all([
+    const [summary, sales, clientsCount, products, analytics] = await Promise.all([
       posDbSummary(tenantSlug),
       listDbSales({ slug: tenantSlug }),
-      listDbClients({ slug: tenantSlug }),
+      // Solo il CONTEGGIO (2026-07-16): la lista completa serviva solo per .length.
+      countDbClients({ slug: tenantSlug }),
       listDbProducts({ slug: tenantSlug }),
       // Date-filtered analytics (from/to = YYYY-MM-DD; default = current month).
       // Costi/Commissioni sono perm-gated come nel legacy (reports.php:1203/1268);
@@ -77,7 +78,7 @@ export async function GET(request: Request) {
         revenue: summary.activeTotal,
         cancelledRevenue: summary.cancelledTotal,
         averageTicket: summary.saleCount > 0 ? Math.round((summary.activeTotal / summary.saleCount) * 100) / 100 : 0,
-        clients: clients.length,
+        clients: clientsCount,
         lowStock: products.filter((product) => product.stock <= product.minStock).length,
       },
       paymentTotals: summary.paymentTotals,

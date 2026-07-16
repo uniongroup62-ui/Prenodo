@@ -2,6 +2,7 @@ import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/ap
 import { addManagePromotionExcludedClient, deleteManagePromotion, evaluatePromotionsForCart, getManagePromotion, listDbPromotions, listManagePromotionPage, previewDbPromotion, promotionFormContext, promotionStructuralBlockReason, removeManagePromotionExcludedClient, saveManagePromotion, toggleManagePromotion, updateManagePromotionConditions, type PromoCartLine } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
+import { searchGiftRecipientClients } from "@/lib/gift-issue-details";
 import { can, canAny } from "@/lib/role-permissions";
 
 export const dynamic = "force-dynamic";
@@ -31,10 +32,18 @@ export async function GET(request: Request) {
       return Response.json({ ok: true, reason });
     }
 
-    // Editor form catalogs (services/products/locations/fidelity levels/clients).
+    // Editor form catalogs (services/products/locations/fidelity levels).
     if (url.searchParams.get("action") === "context") {
       if (!can(session.user.perms, "promotions.manage")) return jsonError("Permesso promozioni mancante.", 403);
       return Response.json({ ok: true, sourceMode: "database", ...(await promotionFormContext(tenantSlug)) });
+    }
+
+    // Ricerca clienti server-side per il picker "Clienti esclusi" (2026-07-16):
+    // sostituisce l'anagrafica LIMIT 1000 nel context (legacy: lista senza LIMIT).
+    if (url.searchParams.get("action") === "client_search") {
+      if (!can(session.user.perms, "promotions.manage")) return jsonError("Permesso promozioni mancante.", 403);
+      const clients = await searchGiftRecipientClients(tenantSlug, url.searchParams.get("q") ?? "");
+      return Response.json({ ok: true, clients });
     }
 
     // Edit-form prefill: return ONE promotion's editable fields for one id. Port

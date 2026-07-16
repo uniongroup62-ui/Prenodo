@@ -14106,3 +14106,57 @@ Nuova suite Playwright test-dom-badges-combobox 6/6: badge RENDERIZZATI su
 pacchetti/preventivi/giftbox + combobox (digita->trova->label) + payload
 senza anagrafica. Regressione 4 moduli verde (64+94+80+92 + improvements
 7+11+6 + markers-giftcard 92).
+
+## 2026-07-16 — Sweep anagrafica completa (7 punti): ricerca clienti server-side ovunque
+
+Completata la ricognizione "dove viaggia ancora l'INTERA anagrafica" e chiusi
+i 7 punti in ordine di priorita' concordato:
+
+1. REPORT: il KPI clienti usava listDbClients().length -> countDbClients
+   (COUNT SQL). Suite 15/15 + 20/20 (e2e-reports-page sanata con sessione
+   forgiata sede 21; wedge Turbopack 404 risolto con touch della route).
+2. PORTAFOGLIO: il feed vero (action=wallet) era gia' efficiente; il fallback
+   compat GET faceva un N+1 dbWalletBalance PER CLIENTE -> una sola SELECT
+   lookup (walletById). Rimosso anche un blocco client_search DUPLICATO morto
+   nella route fidelity (il primo a riga ~92 vince).
+3. CREDITO: payload credit senza piu' clients[] -> selectedClient
+   {id,name,credit}; entrambe le select (filtro + scalo manuale) ->
+   ClientSearchCombobox su action=client_search fidelity. Trappola UI: dopo
+   la selezione l'overrideLabel interno vinceva sul label col saldo dal
+   reload -> fix con key remount su selectedClient. e2e-credit 10/10 CLEAN +
+   DOM Playwright 5/5.
+4. POS (delicato): il catalogo clients resta cappato a 500 MA con >=2
+   caratteri la colonna Clienti e i picker destinatario GiftBox/GiftCard
+   cercano l'ANAGRAFICA COMPLETA via nuova action=client_search della route
+   POS (il legacy renderizzava tutti i clienti senza LIMIT: oltre il cap i
+   clienti erano introvabili). Hook usePosClientSearch (debounce 300ms, seq
+   guard, reset via timeout — niente setState sincrono in effect); nomi
+   destinatario preferiti dallo state salvato alla selezione. Il checkout
+   invia clientId dallo state (il select nascosto name=client_id e'
+   cosmetico). Regressione POS completa 47/47 (logic 16, checkout 8, gift
+   11, pkg-pos 8, stock-atomic 4) + test-dom-pos-clientsearch 6/6 (API gate
+   401 + ricerca per cifre telefono + DOM lista/selezione/ripristino).
+5. PROMOZIONI FORM: context senza piu' l'anagrafica LIMIT 1000; picker
+   "Clienti esclusi" -> ClientSearchCombobox su action=client_search (gate
+   promotions.manage, NON basta pos.manage) con reset via key nonce dopo
+   l'aggiunta; getManagePromotion ora ritorna excludedClientRows {id,name}
+   (query sui soli id esclusi) per i nomi in edit. Suite
+   test-promo-exclude-search 9/9 + regressione promo 84 verdi (list 30,
+   engine 10, checkout 6, form 38). NOTA: networkidle non scatta mai nelle
+   pagine shell (poller notifiche 5s) -> Playwright con domcontentloaded +
+   waitForSelector. Il form promo e' montato su /promotions?action=new|edit
+   (NON /promotion_form).
+6-7. MODALI "Dati GiftBox"/"Dati GiftCard": le route view/edit caricavano
+   listDbClients per il select Mittente -> payload senza clients; il
+   combobox usa il client_search del modulo e il nome corrente arriva da
+   detail.senderName (gia' presente). ClientSearchCombobox ora supporta
+   disabled (lock readOnly GiftCard). Regressione gift 211 verdi
+   (e2e-giftcard 94, markers 92, mutations 8, hostile 11, improvements 6) +
+   test-dom-gift-sender-combobox 4/4 (label senderName + save round-trip
+   nuovo mittente + ricerca server).
+
+RESIDUI DELIBERATI (pickers semanticamente filtrati, non dump di anagrafica):
+la pagina LISTA promozioni (action=page) e il modulo Omaggi (gifts form
+context + lista) usano ancora promoClientSnapshots(slug) completo perche' i
+candidati sono filtrati per target/adesione/livello + associazioni
+(fedele al legacy); da rivisitare eventualmente nel pass Omaggi.

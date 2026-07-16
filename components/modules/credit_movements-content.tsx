@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { ClientSearchCombobox } from "@/components/client-search-combobox";
 
 // Faithful port of the PHP credit movements page (app/pages/credit_movements.php,
 // ?page=credit_movements): "Movimenti Credito". Wired to /api/manage/fidelity:
@@ -10,7 +11,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 // manual credit_adjustments (newest first). The manual debit is guarded
 // (blocked client / note required / sufficient balance), like the legacy.
 
-type CreditClient = { id: number; name: string; email: string; credit: number };
 type MovementKind = "recharge" | "void" | "redeem" | "manual_debit" | "manual_credit";
 type Movement = {
   createdAt: string;
@@ -26,7 +26,7 @@ type Movement = {
   note: string;
 };
 type Pending = { id: number; publicCode: string; clientId: number; clientName: string; startsAt: string; status: string; creditUsed: number };
-type CreditData = { clients: CreditClient[]; movements: Movement[]; pending: Pending[]; total: number; page?: number; perPage?: number; totalPages?: number };
+type CreditData = { selectedClient: { id: number; name: string; credit: number } | null; movements: Movement[]; pending: Pending[]; total: number; page?: number; perPage?: number; totalPages?: number };
 
 function tenantSlug(): string {
   if (typeof window === "undefined") return "";
@@ -88,12 +88,7 @@ export function CreditMovementsContent({ slug: slugProp }: { slug?: string } = {
     load();
   }, [load]);
 
-  // Cambiando filtro cliente si torna alla prima pagina (come il legacy).
-  useEffect(() => {
-    setPage(1);
-  }, [selectedClientId]);
-
-  const clients = useMemo(() => data?.clients ?? [], [data]);
+  const selectedClient = data?.selectedClient ?? null;
   const movements = data?.movements ?? [];
   const pending = data?.pending ?? [];
 
@@ -153,14 +148,20 @@ export function CreditMovementsContent({ slug: slugProp }: { slug?: string } = {
             <div className="row g-2 align-items-end">
               <div className="col-lg-8">
                 <label className="form-label">Cliente</label>
-                <select className="form-select" value={selectedClientId} onChange={(e) => setSelectedClientId(Number(e.target.value))}>
-                  <option value={0}>Tutti i clienti</option>
-                  {clients.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} {c.credit ? `— € ${c.credit.toFixed(2).replace(".", ",")}` : ""}
-                    </option>
-                  ))}
-                </select>
+                <ClientSearchCombobox
+                  // Il rimontaggio su selectedClient fa vincere il label col saldo
+                  // (dal reload) su quello del risultato di ricerca appena cliccato.
+                  key={selectedClient ? `${selectedClient.id}:${selectedClient.credit}` : "none"}
+                  value={selectedClientId > 0 ? String(selectedClientId) : ""}
+                  initialLabel={selectedClient ? `${selectedClient.name} — € ${selectedClient.credit.toFixed(2).replace(".", ",")}` : ""}
+                  placeholder="Tutti i clienti"
+                  searchUrl={(qq) => `/api/manage/fidelity?slug=${encodeURIComponent(slug)}&action=client_search&q=${encodeURIComponent(qq)}`}
+                  onChange={(id) => {
+                    // Cambiando filtro cliente si torna alla prima pagina (come il legacy).
+                    setPage(1);
+                    setSelectedClientId(Number(id) || 0);
+                  }}
+                />
               </div>
             </div>
           </div>
@@ -278,14 +279,12 @@ export function CreditMovementsContent({ slug: slugProp }: { slug?: string } = {
               <form className="row g-3" onSubmit={submitManual}>
                 <div className="col-12">
                   <label className="form-label fw-semibold">Cliente</label>
-                  <select className="form-select" value={manualClientId} onChange={(e) => setManualClientId(e.target.value)}>
-                    <option value="">Seleziona…</option>
-                    {clients.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} {c.credit ? `— € ${c.credit.toFixed(2).replace(".", ",")}` : ""}
-                      </option>
-                    ))}
-                  </select>
+                  <ClientSearchCombobox
+                    value={manualClientId}
+                    placeholder="Seleziona…"
+                    searchUrl={(qq) => `/api/manage/fidelity?slug=${encodeURIComponent(slug)}&action=client_search&q=${encodeURIComponent(qq)}`}
+                    onChange={(id) => setManualClientId(id)}
+                  />
                 </div>
                 <div className="col-12">
                   <label className="form-label fw-semibold">Importo da scalare</label>

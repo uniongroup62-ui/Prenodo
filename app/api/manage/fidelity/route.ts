@@ -1,11 +1,12 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
-import { addDbWalletMovement, dbWalletBalance, deleteFidelityCampaign, deleteFidelityCard, fidelityCampaignPreview, fidelityDisableImpact, fidelityLinkedAppointmentsDetailed, fidelityWalletManualMove, getFidelityEnabled, getFidelityLevelsEditorData, getFidelityMembership, getFidelityPointsSettings, getFidelityPointsStats, getFidelityWallet, getManageCreditMovements, issueFidelityCard, listDbClients, listDbWalletMovements, listFidelityCampaigns, manualCreditDebit, previewFidelityLevelDelete, previewFidelityLevelThresholds, reactivateFidelityCard, saveFidelityCampaign, saveFidelityLevels, saveFidelityPointsSettings, setFidelityEnabled, toggleFidelityCampaign, updateFidelityCardStatus } from "@/lib/db-repositories";
+import { addDbWalletMovement, deleteFidelityCampaign, deleteFidelityCard, fidelityCampaignPreview, fidelityDisableImpact, fidelityLinkedAppointmentsDetailed, fidelityWalletManualMove, getFidelityEnabled, getFidelityLevelsEditorData, getFidelityMembership, getFidelityPointsSettings, getFidelityPointsStats, getFidelityWallet, getManageCreditMovements, issueFidelityCard, listDbClients, listDbWalletMovements, listFidelityCampaigns, manualCreditDebit, previewFidelityLevelDelete, previewFidelityLevelThresholds, reactivateFidelityCard, saveFidelityCampaign, saveFidelityLevels, saveFidelityPointsSettings, setFidelityEnabled, toggleFidelityCampaign, updateFidelityCardStatus } from "@/lib/db-repositories";
 import { searchGiftRecipientClients } from "@/lib/gift-issue-details";
 import { currentManageSession } from "@/lib/manage-auth";
 import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can, canAny } from "@/lib/role-permissions";
 import type { WalletMovementType } from "@/lib/tenant-store";
+import { tenantSelect, type RowDataPacket } from "@/lib/tenant-db";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -115,11 +116,19 @@ export async function GET(request: Request) {
       });
     }
 
+    // Feed compat (nessun consumer UI): stessa shape ma SENZA l'N+1 storico —
+    // dbWalletBalance faceva una query PER CLIENTE per rileggere
+    // credit_balance/points; ora un'unica SELECT di lookup (fix 2026-07-16).
     const clients = await listDbClients({ slug: tenantSlug });
+    const walletRows = await tenantSelect<RowDataPacket>({ slug: tenantSlug, table: "clients", columns: "id, credit_balance, points" }).catch(() => [] as RowDataPacket[]);
+    const walletById = new Map(walletRows.map((r) => [Number(r.id ?? 0), { credit: Math.round(Number(r.credit_balance ?? 0) * 100) / 100, points: Math.round(Number(r.points ?? 0)) }]));
     return Response.json({
       ok: true,
       sourceMode: "database",
-      clients: await Promise.all(clients.map(async (client) => ({ ...client, wallet: await dbWalletBalance(client.id, tenantSlug) }))),
+      clients: clients.map((client) => ({
+        ...client,
+        wallet: walletById.get(client.id) ?? { credit: 0, points: 0 },
+      })),
       movements: await listDbWalletMovements(tenantSlug),
     });
   } catch (error) {

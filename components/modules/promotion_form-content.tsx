@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { ClientSearchCombobox } from "@/components/client-search-combobox";
 
 // Port PIXEL-FEDELE dell'editor promozioni PHP (promotions.php action=new|edit,
 // markup estratto dall'istanza live): form dentro un <div class="card"> con
@@ -88,7 +89,6 @@ type FormContext = {
   products: CatItem[];
   locations: { id: number; name: string }[];
   fidelityLevels: { key: string; name: string }[];
-  clients: { id: number; name: string }[];
 };
 
 const DAY_LABELS = ["", "Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"];
@@ -105,7 +105,7 @@ export function PromotionFormContent({ slug: slugProp }: { slug?: string } = {})
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  const [ctx, setCtx] = useState<FormContext>({ services: [], products: [], locations: [], fidelityLevels: [], clients: [] });
+  const [ctx, setCtx] = useState<FormContext>({ services: [], products: [], locations: [], fidelityLevels: [] });
   const [services, setServices] = useState<ItemRow[]>([]);
   const [products, setProducts] = useState<ItemRow[]>([]);
   const [locationIds, setLocationIds] = useState<number[]>([]);
@@ -113,6 +113,9 @@ export function PromotionFormContent({ slug: slugProp }: { slug?: string } = {})
   const [blackoutDates, setBlackoutDates] = useState<string[]>([]);
   const [fidelityLevels, setFidelityLevels] = useState<string[]>([]);
   const [excludedClients, setExcludedClients] = useState<number[]>([]);
+  // Etichette dei clienti esclusi: dal get (excludedClientRows) in edit, dalla
+  // selezione nel combobox per le nuove aggiunte (l'anagrafica non viaggia più).
+  const [excludedLabels, setExcludedLabels] = useState<Record<number, string>>({});
   const [stackableMaster, setStackableMaster] = useState(false);
   const [stackableFidelity, setStackableFidelity] = useState(false);
   const [stackableCoupon, setStackableCoupon] = useState(false);
@@ -124,19 +127,21 @@ export function PromotionFormContent({ slug: slugProp }: { slug?: string } = {})
   const [svcFilter, setSvcFilter] = useState("");
   const [prdFilter, setPrdFilter] = useState("");
   const [excludeCandidate, setExcludeCandidate] = useState("");
+  const [excludeCandidateLabel, setExcludeCandidateLabel] = useState("");
+  // Nonce per rimontare il combobox (svuotarlo) dopo "Aggiungi all'esclusione".
+  const [excludeComboNonce, setExcludeComboNonce] = useState(0);
 
   useEffect(() => {
     fetch(`/api/manage/promotions?slug=${encodeURIComponent(slug)}&action=context`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
       .then((j) => {
         if (j?.ok) {
-          setCtx({ services: j.services ?? [], products: j.products ?? [], locations: j.locations ?? [], fidelityLevels: j.fidelityLevels ?? [], clients: j.clients ?? [] });
+          setCtx({ services: j.services ?? [], products: j.products ?? [], locations: j.locations ?? [], fidelityLevels: j.fidelityLevels ?? [] });
           // Legacy: nel form nuovo tutte le sedi partono spuntate.
           setLocationIds((prev) => (prev.length ? prev : (j.locations ?? []).map((l: { id: number }) => Number(l.id))));
         }
       })
       .catch(() => undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
 
   useEffect(() => {
@@ -207,6 +212,7 @@ export function PromotionFormContent({ slug: slugProp }: { slug?: string } = {})
               setBlackoutDates(Array.isArray(p.blackoutDates) ? p.blackoutDates.map(String) : []);
               setFidelityLevels(Array.isArray(p.targetFidelityLevels) ? p.targetFidelityLevels.map(String) : []);
               setExcludedClients(Array.isArray(p.excludedClientIds) ? p.excludedClientIds.map(Number) : []);
+              setExcludedLabels(Object.fromEntries(((p.excludedClientRows ?? []) as { id: number; name: string }[]).map((c) => [Number(c.id), String(c.name ?? "")])));
               setStackableFidelity(Boolean(p.stackableFidelity));
               setStackableCoupon(Boolean(p.stackableCoupon));
               setStackableMaster(Boolean(p.stackableFidelity) || Boolean(p.stackableCoupon));
@@ -248,8 +254,13 @@ export function PromotionFormContent({ slug: slugProp }: { slug?: string } = {})
   }
   function addExcluded() {
     const id = Number.parseInt(excludeCandidate, 10) || 0;
-    if (id > 0 && !excludedClients.includes(id)) setExcludedClients((prev) => [...prev, id]);
+    if (id > 0 && !excludedClients.includes(id)) {
+      setExcludedClients((prev) => [...prev, id]);
+      if (excludeCandidateLabel) setExcludedLabels((prev) => ({ ...prev, [id]: excludeCandidateLabel }));
+    }
     setExcludeCandidate("");
+    setExcludeCandidateLabel("");
+    setExcludeComboNonce((n) => n + 1);
   }
   function removeExcluded(id: number) {
     setExcludedClients((prev) => prev.filter((x) => x !== id));
@@ -362,8 +373,10 @@ export function PromotionFormContent({ slug: slugProp }: { slug?: string } = {})
   const title = action === "edit" ? "Modifica promozione" : action === "duplicate" ? "Clona campagna" : "Nuova promozione";
   const filteredServices = useMemo(() => ctx.services.filter((s) => s.name.toLowerCase().includes(svcFilter.toLowerCase())), [ctx.services, svcFilter]);
   const filteredProducts = useMemo(() => ctx.products.filter((p) => `${p.name} ${p.sku ?? ""}`.toLowerCase().includes(prdFilter.toLowerCase())), [ctx.products, prdFilter]);
-  const excludeCandidates = useMemo(() => ctx.clients.filter((c) => !excludedClients.includes(c.id)), [ctx.clients, excludedClients]);
-  const excludedRows = useMemo(() => ctx.clients.filter((c) => excludedClients.includes(c.id)), [ctx.clients, excludedClients]);
+  const excludedRows = useMemo(
+    () => excludedClients.map((id) => ({ id, name: excludedLabels[id] || `Cliente #${id}` })),
+    [excludedClients, excludedLabels],
+  );
   const showDiscountSection = form.apply_services_mode === "all" || form.apply_products_mode === "all";
   const discountHelp = [
     form.apply_services_mode === "all" ? '"Tutti i servizi"' : "",
@@ -819,12 +832,17 @@ export function PromotionFormContent({ slug: slugProp }: { slug?: string } = {})
                     <div className="row g-2 align-items-end">
                       <div className="col-12 col-lg-8">
                         <label className="form-label small">Aggiungi cliente all&apos;esclusione</label>
-                        <select className="form-select form-select-sm" id="promoExcludeCandidateSelect" value={excludeCandidate} onChange={(e) => setExcludeCandidate(e.target.value)}>
-                          <option value="">— seleziona cliente —</option>
-                          {excludeCandidates.map((c) => (
-                            <option value={c.id} key={c.id}>{c.name}</option>
-                          ))}
-                        </select>
+                        <ClientSearchCombobox
+                          key={excludeComboNonce}
+                          value={excludeCandidate}
+                          initialLabel={excludeCandidateLabel}
+                          placeholder="— seleziona cliente —"
+                          searchUrl={(qq) => `/api/manage/promotions?slug=${encodeURIComponent(slug)}&action=client_search&q=${encodeURIComponent(qq)}`}
+                          onChange={(id, label) => {
+                            setExcludeCandidate(id);
+                            setExcludeCandidateLabel(label);
+                          }}
+                        />
                       </div>
                       <div className="col-12 col-lg-4">
                         <button className="btn btn-outline-primary btn-sm w-100" type="button" id="promoExcludeAddBtn" onClick={addExcluded}>Aggiungi all&apos;esclusione</button>

@@ -6,6 +6,7 @@ import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { cancelManageSale, checkoutManageSale, deleteCancelledSale, getManagePosAppointmentCart, getManagePosContext, getManagePosQuoteCart, getManagePosResiduals, getManagePosSuccess, getManageRechargePointsPreview, getManageSaleDetail, markManageSaleItemCollected, markPrepaidManualExecution, undoManageSaleItemCollected, undoPrepaidManualExecution } from "@/lib/manage-pos";
 import type { PointsStornoMode } from "@/lib/manage-pos";
 import { evaluateCatalogTilePromos } from "@/lib/db-repositories";
+import { searchGiftRecipientClients } from "@/lib/gift-issue-details";
 import { can, canAny } from "@/lib/role-permissions";
 import type {
   PosCheckoutInput,
@@ -40,6 +41,15 @@ export async function GET(request: Request) {
     } catch (error) {
       return jsonError(error instanceof Error ? error.message : "Errore residui POS.");
     }
+  }
+
+  // Ricerca clienti server-side (2026-07-16) per la colonna Clienti + i picker
+  // destinatario GiftBox/GiftCard: il catalogo iniziale resta cappato (500) ma la
+  // ricerca copre l'ANAGRAFICA COMPLETA come la lista senza LIMIT del legacy
+  // (pos.php 1896). Gate = ombrello POS già verificato sopra.
+  if (url.searchParams.get("action") === "client_search") {
+    const clients = await searchGiftRecipientClients(tenantSlug, url.searchParams.get("q") ?? "");
+    return Response.json({ ok: true, clients });
   }
 
   // "Vendita da appuntamento" pre-load: the cart seed (client + service lines with the

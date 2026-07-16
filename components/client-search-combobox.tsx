@@ -19,6 +19,7 @@ export function ClientSearchCombobox({
   placeholder = "Tutti",
   searchUrl,
   onChange,
+  disabled = false,
 }: {
   value: string;
   // Label del cliente già selezionato (es. filtro ?client_id= dall'URL).
@@ -27,6 +28,8 @@ export function ClientSearchCombobox({
   // Costruisce l'URL di ricerca del modulo (q già trim-mato, mai vuoto).
   searchUrl: (q: string) => string;
   onChange: (id: string, label: string) => void;
+  // Come il disabled di un <select>: toggle bloccato, dropdown mai aperto.
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -89,6 +92,7 @@ export function ClientSearchCombobox({
         className="btn btn-outline-secondary dropdown-toggle w-100 app-combobox-toggle"
         type="button"
         aria-expanded={open}
+        disabled={disabled}
         onClick={() => setOpen((v) => !v)}
       >
         {hasSelection ? (

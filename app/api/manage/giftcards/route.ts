@@ -1,5 +1,5 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
-import { listDbClients, listDbGiftCards } from "@/lib/db-repositories";
+import { listDbGiftCards } from "@/lib/db-repositories";
 import {
   GIFT_EVENT_OPTIONS,
   expireDueGiftCards,
@@ -46,12 +46,12 @@ export async function GET(request: Request) {
       await sendDueScheduledGiftCards(tenantSlug, 20, session.user.id).catch(() => null);
       const detail = await getGiftCardFull(tenantSlug, parseInteger(url.searchParams.get("id"), 0));
       if (!detail) return jsonError("GiftCard non trovata", 404);
-      const clients = (await listDbClients({ slug: tenantSlug })).map((c) => ({ id: c.id, name: c.name }));
+      // Niente anagrafica completa (2026-07-16): il Mittente usa action=client_search
+      // e il nome corrente arriva da detail.senderName.
       return Response.json({
         ok: true,
         sourceMode: "database",
         detail,
-        clients,
         events: GIFT_EVENT_OPTIONS,
         canCreate: can(session.user.perms, "pos.manage"),
         canSettings: can(session.user.perms, "giftcard.settings"),

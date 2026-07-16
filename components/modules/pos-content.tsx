@@ -435,6 +435,39 @@ function buildInstallmentSchedule(
   });
 }
 
+// Ricerca clienti SERVER-SIDE (2026-07-16): con >=2 caratteri la lista clienti e i
+// picker destinatario cercano sull'ANAGRAFICA COMPLETA via GET action=client_search
+// (il catalogo iniziale resta cappato a 500 — il legacy renderizzava tutti i clienti
+// senza LIMIT, quindi oltre il cap i clienti erano introvabili). null = query corta,
+// si usa il filtro locale come prima. Debounce 300ms + seq guard anti-stantio.
+type PosClientHit = { id: number; name: string; email: string; phone: string };
+function usePosClientSearch(slug: string, query: string): PosClientHit[] | null {
+  const [hits, setHits] = useState<PosClientHit[] | null>(null);
+  const seqRef = useRef(0);
+  useEffect(() => {
+    const q = query.trim();
+    const seq = ++seqRef.current;
+    if (q.length < 2) {
+      const t = setTimeout(() => {
+        if (seq === seqRef.current) setHits(null);
+      }, 0);
+      return () => clearTimeout(t);
+    }
+    const t = setTimeout(() => {
+      fetch(`/api/manage/pos?slug=${encodeURIComponent(slug)}&action=client_search&q=${encodeURIComponent(q)}`, { headers: { "x-tenant-slug": slug } })
+        .then((r) => r.json())
+        .then((j: { clients?: Array<{ id?: number; full_name?: string; email?: string; phone?: string }> }) => {
+          if (seq !== seqRef.current) return;
+          const rows = Array.isArray(j?.clients) ? j.clients : [];
+          setHits(rows.map((row) => ({ id: Number(row.id ?? 0), name: String(row.full_name ?? ""), email: String(row.email ?? ""), phone: String(row.phone ?? "") })));
+        })
+        .catch(() => undefined);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [slug, query]);
+  return hits;
+}
+
 export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
@@ -560,6 +593,8 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   const [gcRecipientClientId, setGcRecipientClientId] = useState(0);
   const [gcRecipientIsClient, setGcRecipientIsClient] = useState(false);
   const [gcRecipientSearch, setGcRecipientSearch] = useState("");
+  // Ricerca server-side del destinatario GiftCard (anagrafica completa, >=2 char).
+  const gcRecipientHits = usePosClientSearch(slug, gcRecipientSearch);
   const [gcMessage, setGcMessage] = useState("");
   const [gcHideAmount, setGcHideAmount] = useState(false);
   // Legacy items[gc_*]: nota per il cliente, nota interna, invio email
@@ -602,6 +637,8 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   const [gbRecipientClientId, setGbRecipientClientId] = useState(0);
   const [gbRecipientIsClient, setGbRecipientIsClient] = useState(false);
   const [gbRecipientSearch, setGbRecipientSearch] = useState("");
+  // Ricerca server-side del destinatario GiftBox (anagrafica completa, >=2 char).
+  const gbRecipientHits = usePosClientSearch(slug, gbRecipientSearch);
   const [gbMessage, setGbMessage] = useState("");
   const [gbHideAmount, setGbHideAmount] = useState(false);
   const [gbNote, setGbNote] = useState("");
@@ -844,13 +881,17 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   );
   const rechargeTemplates = useMemo(() => ctx?.catalog?.rechargeTemplates ?? [], [ctx]);
 
-  const filteredClients = useMemo(() => {
+  // Con >=2 caratteri la ricerca è server-side sull'anagrafica completa; sotto,
+  // filtro locale sul catalogo iniziale come prima.
+  const clientHits = usePosClientSearch(slug, clientSearch);
+  const filteredClients = useMemo<Array<{ id: number; name: string; email?: string; phone?: string }>>(() => {
+    if (clientHits) return clientHits;
     const q = clientSearch.trim().toLowerCase();
     if (!q) return clients;
     return clients.filter(
       (c) => c.name.toLowerCase().includes(q) || (c.phone ?? "").toLowerCase().includes(q) || (c.email ?? "").toLowerCase().includes(q),
     );
-  }, [clients, clientSearch]);
+  }, [clients, clientSearch, clientHits]);
 
   // Aree/categorie del catalogo per il select "Tutte le aree" (legacy
   // posCatalogCategory): distinte dalla modalità corrente.
@@ -4265,7 +4306,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                     <div className="border rounded p-3 mb-2" id="posGbRecipientSelectedBox">
                       <div className="d-flex justify-content-between align-items-start">
                         <div>
-                          <div className="fw-semibold" id="posGbRecipientSelectedName">{clients.find((c) => c.id === gbRecipientClientId)?.name ?? `Cliente #${gbRecipientClientId}`}</div>
+                          <div className="fw-semibold" id="posGbRecipientSelectedName">{gbRecipientName.trim() || clients.find((c) => c.id === gbRecipientClientId)?.name || `Cliente #${gbRecipientClientId}`}</div>
                           <div className="text-muted small" id="posGbRecipientSelectedMeta">ID {gbRecipientClientId}</div>
                         </div>
                         <button
@@ -4293,8 +4334,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                         />
                       </div>
                       <div className="border rounded pos-scroll-160" id="posGbRecipientClientList">
-                        {clients
-                          .filter((c) => gbRecipientSearch.trim() === "" || c.name.toLowerCase().includes(gbRecipientSearch.trim().toLowerCase()))
+                        {(gbRecipientHits ?? clients.filter((c) => gbRecipientSearch.trim() === "" || c.name.toLowerCase().includes(gbRecipientSearch.trim().toLowerCase())))
                           .slice(0, 20)
                           .map((c) => (
                             <button
@@ -4541,7 +4581,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                     <div className="border rounded p-3 mb-2" id="posGcRecipientSelectedBox">
                       <div className="d-flex justify-content-between align-items-start">
                         <div>
-                          <div className="fw-semibold" id="posGcRecipientSelectedName">{clients.find((c) => c.id === gcRecipientClientId)?.name ?? `Cliente #${gcRecipientClientId}`}</div>
+                          <div className="fw-semibold" id="posGcRecipientSelectedName">{gcRecipientName.trim() || clients.find((c) => c.id === gcRecipientClientId)?.name || `Cliente #${gcRecipientClientId}`}</div>
                           <div className="text-muted small" id="posGcRecipientSelectedMeta">ID {gcRecipientClientId}</div>
                         </div>
                         <button
@@ -4569,8 +4609,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                         />
                       </div>
                       <div className="border rounded pos-scroll-160" id="posGcRecipientClientList">
-                        {clients
-                          .filter((c) => gcRecipientSearch.trim() === "" || c.name.toLowerCase().includes(gcRecipientSearch.trim().toLowerCase()))
+                        {(gcRecipientHits ?? clients.filter((c) => gcRecipientSearch.trim() === "" || c.name.toLowerCase().includes(gcRecipientSearch.trim().toLowerCase())))
                           .slice(0, 20)
                           .map((c) => (
                             <button

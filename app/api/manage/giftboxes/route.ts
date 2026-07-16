@@ -5,7 +5,6 @@ import {
   deleteManageGiftBoxTemplate,
   getManageGiftBoxTemplate,
   giftFormCatalog,
-  listDbClients,
   listDbGiftBoxes,
   listManageGiftBoxTemplates,
   saveManageGiftBoxTemplate,
@@ -83,12 +82,12 @@ export async function GET(request: Request) {
       await expireDueGiftBoxInstances(tenantSlug);
       const detail = await getGiftBoxInstanceFull(tenantSlug, parseInteger(url.searchParams.get("id"), 0));
       if (!detail) return jsonError("Istanza non trovata", 404);
-      const clients = (await listDbClients({ slug: tenantSlug })).map((c) => ({ id: c.id, name: c.name }));
+      // Niente anagrafica completa (2026-07-16): il Mittente usa action=client_search
+      // e il nome corrente arriva da detail.senderName.
       return Response.json({
         ok: true,
         sourceMode: "database",
         detail,
-        clients,
         events: GIFTBOX_EVENT_OPTIONS,
         canSettings: can(session.user.perms, "giftbox.settings"),
         canCreate: can(session.user.perms, "pos.manage"),
