@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { quoteExpiryWarning } from "@/components/modules/quotes-content";
 
 // Port fedele del DETTAGLIO preventivo (app/pages/quotes.php action=view):
 // header con azioni condizionali (Modifica solo se non bloccato, Dettaglio
@@ -84,6 +85,29 @@ export function QuoteDetailContent({ slug: slugProp, initialQuery }: { slug?: st
   const [data, setData] = useState<ViewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [sendOpen, setSendOpen] = useState(false);
+  // Duplica (feature 2026-07-16): nuova bozza dalle righe di questo preventivo.
+  const [duplicating, setDuplicating] = useState(false);
+
+  async function duplicateQuote() {
+    if (!data || duplicating) return;
+    if (typeof window !== "undefined" && !window.confirm("Creare una nuova bozza copiando le righe di questo preventivo? I prezzi di listino verranno aggiornati ai valori attuali.")) return;
+    setDuplicating(true);
+    try {
+      const res = await fetch(`/api/manage/quotes?slug=${encodeURIComponent(slug)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+        body: JSON.stringify({ action: "duplicate", id: String(data.id) }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j.ok || !j.id) {
+        window.location.assign(pageUrl(`quotes?action=view&id=${data.id}&err=${encodeURIComponent(String(j.error ?? "Errore duplicazione preventivo."))}`));
+        return;
+      }
+      window.location.assign(pageUrl(`quotes?action=edit&id=${j.id}&msg=${encodeURIComponent("Preventivo duplicato")}`));
+    } catch {
+      setDuplicating(false);
+    }
+  }
   const [toEmail, setToEmail] = useState("");
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
@@ -178,6 +202,15 @@ export function QuoteDetailContent({ slug: slugProp, initialQuery }: { slug?: st
                   </>
                 ) : null}{" "}
                 • Stato: <span className={`badge text-bg-${data.badge}`}>{data.statusLabel}</span>
+                {(() => {
+                  const warn = quoteExpiryWarning(data.validUntil, data.statusKey);
+                  return warn ? (
+                    <>
+                      {" "}
+                      <span className="badge text-bg-warning">{warn}</span>
+                    </>
+                  ) : null;
+                })()}
               </>
             ) : (
               "Dettaglio preventivo."
@@ -218,6 +251,12 @@ export function QuoteDetailContent({ slug: slugProp, initialQuery }: { slug?: st
                 <i className="bi bi-filetype-pdf me-1" />
                 PDF
               </a>
+            ) : null}
+            {data ? (
+              <button className="btn btn-outline-secondary" type="button" disabled={duplicating} onClick={() => void duplicateQuote()} title="Crea una nuova bozza copiando le righe di questo preventivo">
+                <i className="bi bi-copy me-1" />
+                Duplica
+              </button>
             ) : null}
             {data && data.hasPublicToken && data.availabilityErrors.length === 0 && data.canSendEmail ? (
               <button className="btn btn-primary" type="button" onClick={() => setSendOpen(true)}>

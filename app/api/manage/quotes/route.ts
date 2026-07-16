@@ -51,17 +51,23 @@ export async function GET(request: Request) {
     // Lista legacy con filtri server-side (quotes.php action=list).
     if (action === "list") {
       const ctx = await quoteLocationCtx(tenantSlug);
+      // Paginazione 25 (miglioria 2026-07-16): SOLO con ?p= — senza, il
+      // comportamento resta storico (LIMIT 300).
+      const rawPage = Number.parseInt(String(url.searchParams.get("p") ?? ""), 10);
+      const page = Number.isFinite(rawPage) && rawPage >= 1 ? rawPage : 0;
       const list = await getManageQuotesList(tenantSlug, {
         clientId: parseInteger(url.searchParams.get("client_id"), 0),
         status: (url.searchParams.get("status") ?? "").trim(),
         date: (url.searchParams.get("date") ?? "").trim(),
         number: (url.searchParams.get("number") ?? "").trim(),
         allLocations: ["1", "true", "on", "yes", "all"].includes((url.searchParams.get("all_locations") ?? "").trim().toLowerCase()),
+        page,
       }, ctx);
       return Response.json({
         ok: true,
         sourceMode: "database",
         ...list,
+        currentPage: page >= 1 ? page : 1,
         selectedClientId: String(parseInteger(url.searchParams.get("client_id"), 0)),
         canSettings: can(session.user.perms, "quotes.settings"),
       });
@@ -180,6 +186,50 @@ export async function POST(request: Request) {
     // quotes.php, che non ha convert). Avviene dalla cassa via "Vai a Pagamenti"
     // (pos?quote_id=X -> getManagePosQuoteCart + checkout con source_quote_id), che
     // applica il gate accepted-only, l'idempotenza e l'emissione pacchetti.
+
+    // DUPLICA (feature 2026-07-16, NON nel legacy): nuova BOZZA precompilata
+    // dal preventivo sorgente — numero nuovo auto (N/YYYY), data odierna,
+    // stato draft; le righe passano dal save normale, quindi i prezzi di
+    // listino vengono ri-bloccati ai valori ATTUALI (i custom restano).
+    if (action === "duplicate") {
+      const ctx = await quoteLocationCtx(tenantSlug);
+      const src = await getManageQuoteFormData(tenantSlug, { action: "edit", id, locationId: 0 }, ctx);
+      if (!src.form) return Response.json({ ok: false, error: src.redirect?.err || "Preventivo non trovato" });
+      const f = src.form as typeof src.form & { terms?: string; publicNote?: string };
+      const items = (f.itemsInitial ?? []).map((it) => ({
+        item_type: it.item_type,
+        item_id: it.item_id,
+        description: it.description,
+        qty: it.qty,
+        unit_price: it.unit_price,
+        tax_rate: it.tax_rate,
+        discount_percent: it.discount_percent,
+      }));
+      const result = await saveManageQuote(tenantSlug, "new", {
+        client_id: String(f.clientId || 0),
+        client_name: `${f.clientFirstName ?? ""} ${f.clientLastName ?? ""}`.trim(),
+        client_last_name: f.clientLastName ?? "",
+        client_email: f.clientEmail ?? "",
+        client_phone: f.clientPhone ?? "",
+        client_address: f.clientAddress ?? "",
+        client_cap: f.clientCap ?? "",
+        client_city: f.clientCity ?? "",
+        client_province: f.clientProvince ?? "",
+        client_region: f.clientRegion ?? "",
+        client_company_name: f.clientCompanyName ?? "",
+        client_vat_number: f.clientVatNumber ?? "",
+        client_tax_code: f.clientTaxCode ?? "",
+        location_id: String(f.locationId || 0),
+        status: "draft",
+        notes: f.notes ?? "",
+        terms: f.terms ?? "",
+        public_note: f.publicNote ?? "",
+        items_json: JSON.stringify(items),
+      }, session.user.id, ctx);
+      if (!result.ok) return Response.json({ ok: false, error: result.error });
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "preventivi", action: "crea", entityType: "quote", entityId: result.id, label: `Creato preventivo #${result.id} (duplicato da #${id})` });
+      return Response.json({ ok: true, sourceMode: "database", id: result.id, message: "Preventivo duplicato" });
+    }
 
     // Delete legacy (quotes.php action=delete): solo bozze, messaggi verbatim.
     if (action === "delete") {

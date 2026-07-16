@@ -16,7 +16,25 @@ type QuotesQuery = {
   all_locations?: string;
   msg?: string;
   err?: string;
+  // Pagina corrente (paginazione 25/pagina, miglioria 2026-07-16).
+  p?: string;
 };
+
+// Badge 'Scade tra N giorni' (miglioria 2026-07-16): preventivo INVIATO con
+// 'Valido fino al' entro 7 giorni — prima scadeva in silenzio (auto-expire).
+export function quoteExpiryWarning(validUntil: string, statusKey: string): string | null {
+  if (statusKey !== "sent") return null;
+  const m = String(validUntil ?? "").match(/^(d{4})-(d{2})-(d{2})/);
+  if (!m) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const exp = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const days = Math.round((exp.getTime() - today.getTime()) / 86400000);
+  if (days < 0 || days > 7) return null;
+  if (days === 0) return "Scade oggi";
+  if (days === 1) return "Scade domani";
+  return `Scade tra ${days} giorni`;
+}
 
 type ListRow = {
   id: number;
@@ -29,11 +47,14 @@ type ListRow = {
   badge: string;
   total: number;
   canDelete: boolean;
+  validUntil?: string;
 };
 
 type ListPayload = {
   ok?: boolean;
   rows?: ListRow[];
+  totalCount?: number;
+  pageSize?: number;
   hasAnyQuotes?: boolean;
   clientItems?: Array<{ id: string; label: string }>;
   multiLocation?: boolean;
@@ -161,6 +182,7 @@ export function QuotesContent({ slug: slugProp, initialQuery }: { slug?: string;
     date: String(initialQuery?.date ?? ""),
     number: String(initialQuery?.number ?? ""),
     allLocations: ["1", "true", "on", "yes", "all"].includes(String(initialQuery?.all_locations ?? "").toLowerCase()),
+    page: (() => { const n = Number.parseInt(String(initialQuery?.p ?? ""), 10); return Number.isFinite(n) && n >= 1 ? n : 1; })(),
   }));
 
   const [data, setData] = useState<ListPayload | null>(null);
@@ -184,6 +206,7 @@ export function QuotesContent({ slug: slugProp, initialQuery }: { slug?: string;
     if (applied.date !== "") params.set("date", applied.date);
     if (applied.number !== "") params.set("number", applied.number);
     if (applied.allLocations) params.set("all_locations", "1");
+    params.set("p", String(applied.page ?? 1));
     fetch(`/api/manage/quotes?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
       .then((j: ListPayload) => setData(j))
@@ -194,6 +217,18 @@ export function QuotesContent({ slug: slugProp, initialQuery }: { slug?: string;
   function listUrl(params?: URLSearchParams): string {
     const qs = params && Array.from(params.keys()).length > 0 ? `?${params.toString()}` : "";
     return `/${encodeURIComponent(slug)}/quotes${qs}`;
+  }
+
+  // Cambio pagina: navigazione GET coi filtri applicati (?p=).
+  function goToPage(pageN: number) {
+    const params = new URLSearchParams();
+    if (applied.clientId !== "" && applied.clientId !== "0") params.set("client_id", applied.clientId);
+    if (applied.status !== "") params.set("status", applied.status);
+    if (applied.date !== "") params.set("date", applied.date);
+    if (applied.number !== "") params.set("number", applied.number);
+    if (applied.allLocations) params.set("all_locations", "1");
+    if (pageN > 1) params.set("p", String(Math.floor(pageN)));
+    window.location.href = listUrl(params);
   }
 
   function applyFilters(e: React.FormEvent) {
@@ -371,11 +406,31 @@ export function QuotesContent({ slug: slugProp, initialQuery }: { slug?: string;
           </div>
 
           <div className="card">
-            <div className="card-header bg-transparent py-2">
+            <div className="card-header bg-transparent d-flex flex-wrap align-items-center justify-content-between gap-2 py-2">
               <span className="text-muted small">
-                {loading ? "Caricamento…" : rows.length === 1 ? "1 preventivo" : `${rows.length} preventivi`}
-                {!loading && (applied.clientId !== "0" || applied.status !== "" || applied.date !== "" || applied.number !== "" || applied.allLocations) ? " · filtri attivi" : ""}
+                {(() => {
+                  const total = Number(data?.totalCount ?? rows.length);
+                  const pageSize = Math.max(1, Number(data?.pageSize ?? 25));
+                  const pageN = Number(applied.page ?? 1);
+                  return (
+                    <>
+                      {loading ? "Caricamento…" : total === 1 ? "1 preventivo" : `${total} preventivi`}
+                      {!loading && total > pageSize ? ` · pagina ${pageN} di ${Math.max(1, Math.ceil(total / pageSize))}` : ""}
+                      {!loading && (applied.clientId !== "0" || applied.status !== "" || applied.date !== "" || applied.number !== "" || applied.allLocations) ? " · filtri attivi" : ""}
+                    </>
+                  );
+                })()}
               </span>
+              {!loading && Number(data?.totalCount ?? 0) > Math.max(1, Number(data?.pageSize ?? 25)) ? (
+                <div className="d-flex align-items-center gap-1">
+                  <button type="button" className="btn btn-sm btn-outline-secondary" disabled={Number(applied.page ?? 1) <= 1} onClick={() => goToPage(Number(applied.page ?? 1) - 1)}>
+                    <i className="bi bi-chevron-left" />
+                  </button>
+                  <button type="button" className="btn btn-sm btn-outline-secondary" disabled={Number(applied.page ?? 1) >= Math.ceil(Number(data?.totalCount ?? 0) / Math.max(1, Number(data?.pageSize ?? 25)))} onClick={() => goToPage(Number(applied.page ?? 1) + 1)}>
+                    <i className="bi bi-chevron-right" />
+                  </button>
+                </div>
+              ) : null}
             </div>
             <div className="table-responsive">
               <table className="table mb-0 align-middle">
@@ -399,6 +454,15 @@ export function QuotesContent({ slug: slugProp, initialQuery }: { slug?: string;
                       <td>{r.location}</td>
                       <td>
                         <span className={`badge text-bg-${r.badge}`}>{r.statusLabel}</span>
+                        {(() => {
+                          const warn = quoteExpiryWarning(String(r.validUntil ?? ""), r.statusKey);
+                          return warn ? (
+                            <>
+                              {" "}
+                              <span className="badge text-bg-warning">{warn}</span>
+                            </>
+                          ) : null;
+                        })()}
                       </td>
                       <td className="text-end fw-semibold">€ {fmtMoney(r.total)}</td>
                       <td className="text-end">

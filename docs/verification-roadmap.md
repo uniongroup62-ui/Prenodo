@@ -14016,3 +14016,28 @@ suite log 16/16 (L12 sanato: seed cercato via ?q=, trappola NOW-vs-locale).
 
 VERDETTO: eliminazione (draft-only con cascata righe), modifica (lock stati,
 prezzi listino bloccati), invio, conversione (gate+idempotenza): CORRETTE.
+
+## Preventivi — 3 migliorie di prodotto APPLICATE (2026-07-16, Fable, approvate)
+
+(1) PAGINAZIONE lista 25/pagina (QUOTES_LIST_PAGE_SIZE): SQL LIMIT/OFFSET +
+COUNT con lo stesso WHERE (SOLO con ?p=; senza = storico LIMIT 300); header
+'N preventivi · pagina X di Y' + chevron con navigazione GET coerente al
+form legacy; validUntil aggiunto alle righe lista.
+(2) BADGE 'Scade tra N giorni' sugli INVIATI (<=7gg, quoteExpiryWarning
+esportato da quotes-content, riusato dal dettaglio accanto allo Stato):
+prima l'auto-expire marcava 'Scaduto' a cose fatte.
+(3) DUPLICA PREVENTIVO (feature NON nel legacy): action=duplicate ->
+getManageQuoteFormData(edit) + saveManageQuote(new) — nuova BOZZA con numero
+auto N/YYYY, data odierna, cliente/note copiati, righe ripassate dal save
+(prezzi LISTINO ri-bloccati ai valori attuali, custom conservati); bottone
+'Duplica' nel dettaglio con confirm + redirect all'edit con flash
+'Preventivo duplicato'; voce Log 'Creato preventivo #Y (duplicato da #X)'.
+
+VERIFICA live test-preventivi-improvements 11/11 (31 seed p1=25/p2=6 zero
+overlap + storico; riga sent con validUntil a 3gg + testi badge nel bundle;
+duplica con rilock listino 999->12 e custom 33 conservato + log).
+TRAPPOLA trovata dal probe: il save con solo client_name AUTO-CREA
+l'anagrafica (fedele al legacy) — i cleanup dei probe preventivi devono
+rimuovere anche il cliente auto-creato (residuo 1154 rimosso, tracciato).
+Regressione completa verde 80+20+25+11+10+11. eslint: window.location.href
+assegnato in handler nuovo = react-hooks/immutability -> location.assign().

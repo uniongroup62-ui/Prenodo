@@ -7104,16 +7104,25 @@ export type ManageQuoteListRow = {
   badge: string;
   total: number;
   canDelete: boolean;
+  // Scadenza (miglioria 2026-07-16): alimenta il badge 'Scade tra N giorni'
+  // sui preventivi INVIATI in lista.
+  validUntil: string;
 };
 export type ManageQuotesList = {
   rows: ManageQuoteListRow[];
+  // Paginazione 25 (miglioria 2026-07-16, via il LIMIT 300 silenzioso):
+  // totale filtrato per il pager; senza page il comportamento resta storico.
+  totalCount: number;
+  pageSize: number;
   hasAnyQuotes: boolean;
   clientItems: Array<{ id: string; label: string }>;
   multiLocation: boolean;
 };
+export const QUOTES_LIST_PAGE_SIZE = 25;
+
 export async function getManageQuotesList(
   slug: string,
-  filters: { clientId: number; status: string; date: string; number: string; allLocations: boolean },
+  filters: { clientId: number; status: string; date: string; number: string; allLocations: boolean; page?: number },
   ctx: QuoteLocationCtx,
 ): Promise<ManageQuotesList> {
   await quoteAutoExpireAndSyncPaid(slug);
@@ -7139,15 +7148,24 @@ export async function getManageQuotesList(
   if (filters.number !== "") { where.push("q.number ILIKE ?"); params.push(`%${filters.number}%`); }
   if (filterLocation > 0) { where.push("(q.location_id = ? OR q.location_id IS NULL)"); params.push(filterLocation); }
 
+  // Paginazione 25 (SOLO con page>=1): LIMIT/OFFSET + COUNT con lo stesso
+  // WHERE; senza page resta il comportamento storico (LIMIT 300).
+  const page = Math.max(0, Math.floor(Number(filters.page ?? 0)));
+  const limitSql = page >= 1 ? `LIMIT ${QUOTES_LIST_PAGE_SIZE} OFFSET ${(page - 1) * QUOTES_LIST_PAGE_SIZE}` : "LIMIT 300";
   const rows = await dbQuery<RowDataPacket[]>(
     `SELECT q.*, COALESCE(q.client_name, c.full_name) AS client_display
        FROM \`${quotesTable}\` q
        LEFT JOIN \`${clientsTable}\` c ON c.id = q.client_id${scoped ? " AND c.tenant_id = q.tenant_id" : ""}
       ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
       ORDER BY q.id DESC
-      LIMIT 300`,
+      ${limitSql}`,
     params,
   ).catch(() => [] as RowDataPacket[]);
+  const countRows = await dbQuery<RowDataPacket[]>(
+    `SELECT COUNT(*) AS n FROM \`${quotesTable}\` q ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}`,
+    params,
+  ).catch(() => [] as RowDataPacket[]);
+  const totalCount = Number(countRows[0]?.n ?? rows.length) || 0;
 
   const linkedActive = await quoteLinkedSalesActiveSet(slug, rows.map((r) => Number(r.id ?? 0)));
 
@@ -7167,6 +7185,7 @@ export async function getManageQuotesList(
       badge: quoteStatusBadgeLegacy(statusKey),
       total: Number(r.total ?? 0),
       canDelete: quoteCanDeleteEffective(statusKey),
+      validUntil: r.valid_until ? pgDateOnly(r.valid_until) : "",
     });
   }
 
@@ -7175,6 +7194,8 @@ export async function getManageQuotesList(
 
   return {
     rows: listRows,
+    totalCount,
+    pageSize: QUOTES_LIST_PAGE_SIZE,
     hasAnyQuotes: anyRows.length > 0,
     clientItems: clientRows.map((c) => ({ id: String(Number(c.id ?? 0)), label: String(c.full_name ?? "") })),
     multiLocation: ctx.locations.length > 1,
