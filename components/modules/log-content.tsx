@@ -54,9 +54,9 @@ function fmtDateTime(v: string): string {
 // creazioni, azzurro login, grigio il resto.
 function actionBadge(action: string): { label: string; className: string } {
   const a = action.toLowerCase();
-  if (["delete", "elimina", "cancel", "annulla", "block"].some((k) => a.includes(k))) return { label: action, className: "text-bg-danger" };
-  if (["update", "modifica", "move", "sposta", "save"].some((k) => a.includes(k))) return { label: action, className: "text-bg-warning" };
-  if (["create", "crea", "checkout", "unblock"].some((k) => a.includes(k))) return { label: action, className: "text-bg-success" };
+  if (["delete", "elimina", "cancel", "annulla", "block", "disattiva"].some((k) => a.includes(k))) return { label: action, className: "text-bg-danger" };
+  if (["update", "modifica", "move", "sposta", "save", "scala"].some((k) => a.includes(k))) return { label: action, className: "text-bg-warning" };
+  if (["create", "crea", "checkout", "unblock", "riattiva", "ripristina", "paga", "incasso"].some((k) => a.includes(k))) return { label: action, className: "text-bg-success" };
   if (a.includes("login")) return { label: action, className: "text-bg-info" };
   return { label: action, className: "text-bg-secondary" };
 }

@@ -13953,3 +13953,14 @@ da edit rifiutato, sede non abilitata, usage su annullato. Cleanup 0 residui
 VERDETTO: eliminazione (detach non distruttivo), modifica (guardie completi),
 usage (doppio path con magazzino), emissione: tutte CORRETTE. Nessun bug.
 Miglioria proposta: strumentazione Log fase 2 per pacchetti.
+
+## Log fase 2a — Pacchetti strumentati (2026-07-16, Fable, approvato)
+
+6 azioni della route packages agganciate a logActivity: issue ('Emesso
+pacchetto "X" a <cliente>'), use compat ('scala'), catalog_save crea/modifica,
+catalog_delete ('assegnazioni clienti conservate'), update_expiry, usage_add
+(action scala/ripristina col message del motore), client_save. Badge estesi:
+disattiva->rosso, scala->giallo, riattiva/ripristina/paga->verde. Verificato
+live (voci leggibili in activity_logs dopo la suite mutations 13/13);
+regressione pacchetti 48+10+92+8 + log 16 verdi. Restano in fase 2:
+giftcard/giftbox/preventivi/servizi/promozioni/omaggi/impostazioni.

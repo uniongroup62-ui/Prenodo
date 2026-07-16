@@ -1,4 +1,5 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
+import { logActivity } from "@/lib/activity-log";
 import { addManageClientPackageUsage, consumeDbClientPackage, deleteManagePackageCatalog, getClientPackageCancelInfo, getManageClientPackage, getManageClientPackageForEdit, getManagePackageCatalog, getManagePackagesFilters, getPackageCatalogFormContext, issueDbClientPackage, listDbPackageState, listManageClientPackages, listManagePackageCatalog, saveManageClientPackage, saveManagePackageCatalog, updateManageClientPackageExpiry } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
 import { assertLocationAccessById, getManageLocationContext, sessionAllowedLocationIds } from "@/lib/manage-locations";
@@ -160,6 +161,7 @@ export async function POST(request: Request) {
         expiresAt: body.expires_at,
       };
       const clientPackage = await issueDbClientPackage(input, tenantSlug);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "pacchetti", action: "crea", entityType: "client_package", entityId: clientPackage.id, label: `Emesso pacchetto "${clientPackage.name}" a ${clientPackage.clientName || `cliente #${clientPackage.clientId}`}` });
       return Response.json({ ok: true, source: "packages?action=issue", sourceMode: "database", clientPackage, ...await listDbPackageState(tenantSlug) });
     }
 
@@ -168,13 +170,16 @@ export async function POST(request: Request) {
       await assertLocationAccessById(tenantSlug, "client_packages", id, sessionAllowedLocationIds(session), PKG_SEDE_ERR);
       const sessions = parseInteger(body.sessions, 1);
       const clientPackage = await consumeDbClientPackage(id, sessions, tenantSlug);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "pacchetti", action: "scala", entityType: "client_package", entityId: id, label: `Scalate ${sessions} sedute dal pacchetto cliente #${id}` });
       return Response.json({ ok: true, source: "packages?action=use", sourceMode: "database", clientPackage, ...await listDbPackageState(tenantSlug) });
     }
 
     // Create / update a catalog template (port of catalog_new/catalog_edit).
     if (action === "catalog_save" || action === "catalog_new" || action === "catalog_edit") {
       if (!canAny(session.user.perms, packageCatalogPerms)) return jsonError("Permesso catalogo pacchetti mancante.", 403);
+      const isEdit = parseInteger(body.id, 0) > 0;
       const saved = await saveManagePackageCatalog(tenantSlug, body, parseInteger(body.id, 0));
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "pacchetti", action: isEdit ? "modifica" : "crea", entityType: "package", entityId: saved.id, label: `${isEdit ? "Modificato" : "Creato"} pacchetto catalogo "${String(body.name ?? "").trim() || `#${saved.id}`}"` });
       return Response.json({ ok: true, source: "packages?action=catalog_save", sourceMode: "database", ...saved, catalog: await listManagePackageCatalog(tenantSlug) });
     }
 
@@ -190,6 +195,7 @@ export async function POST(request: Request) {
         return Response.json({ ok: false, error: `Errore: ${detailMsg}` }, { status: 400 });
       }
       const detail = await getManageClientPackage(tenantSlug, cpId);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "pacchetti", action: "modifica", entityType: "client_package", entityId: cpId, label: `Aggiornata scadenza pacchetto cliente #${cpId} (${String(body.expires_at ?? "").trim() || "—"})` });
       return Response.json({ ok: true, source: "packages?action=update_expiry", sourceMode: "database", message: "Scadenza pacchetto aggiornata", detail });
     }
 
@@ -215,6 +221,8 @@ export async function POST(request: Request) {
         },
       );
       const detail = await getManageClientPackage(tenantSlug, cpId);
+      const usageOp = String(body.op ?? "").trim().toLowerCase();
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "pacchetti", action: usageOp === "restore" ? "ripristina" : "scala", entityType: "client_package", entityId: cpId, label: `${result.message} — pacchetto cliente #${cpId}` });
       return Response.json({ ok: true, source: "packages?action=usage_add", sourceMode: "database", message: result.message, detail });
     }
 
@@ -223,6 +231,7 @@ export async function POST(request: Request) {
     if (action === "client_save") {
       await assertLocationAccessById(tenantSlug, "client_packages", parseInteger(body.id ?? body.client_package_id, 0), sessionAllowedLocationIds(session), PKG_SEDE_ERR);
       const result = await saveManageClientPackage(tenantSlug, body);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "pacchetti", action: "modifica", entityType: "client_package", entityId: result.id, label: `Modificato pacchetto cliente #${result.id} ("${String(body.package_name ?? "").trim() || "senza nome"}")` });
       return Response.json({ ok: true, source: "packages?action=client_save", sourceMode: "database", ...result });
     }
 
@@ -231,6 +240,7 @@ export async function POST(request: Request) {
     if (action === "catalog_delete") {
       if (!canAny(session.user.perms, packageCatalogPerms)) return jsonError("Permesso catalogo pacchetti mancante.", 403);
       await deleteManagePackageCatalog(tenantSlug, parseInteger(body.id, 0));
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "pacchetti", action: "elimina", entityType: "package", entityId: parseInteger(body.id, 0), label: `Eliminato pacchetto dal catalogo #${parseInteger(body.id, 0)} (assegnazioni clienti conservate)` });
       return Response.json({ ok: true, source: "packages?action=catalog_delete", sourceMode: "database", catalog: await listManagePackageCatalog(tenantSlug) });
     }
 
