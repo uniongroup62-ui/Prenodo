@@ -14160,3 +14160,21 @@ la pagina LISTA promozioni (action=page) e il modulo Omaggi (gifts form
 context + lista) usano ancora promoClientSnapshots(slug) completo perche' i
 candidati sono filtrati per target/adesione/livello + associazioni
 (fedele al legacy); da rivisitare eventualmente nel pass Omaggi.
+
+### Addendum (stesso giorno, richiesta utente): POS colonna Clienti SOLO-ricerca
+
+Su indicazione dell'utente ("lascerei solo cerca") eliminata anche la lista
+iniziale cappata a 500: l'anagrafica NON viaggia piu' nel context POS.
+- Server: via listPosClients; nuovo flag context hasClients (SELECT id LIMIT 1)
+  che alimenta SOLO l'empty-state di onboarding "non hai ancora clienti"
+  (prima scattava su clients.length===0).
+- UI: colonna Clienti = campo ricerca + risultati server (>=2 char); sotto i
+  2 caratteri hint "Digita almeno 2 caratteri per cercare un cliente…", stati
+  Ricerca…/Nessun cliente trovato. Stesso pattern nei picker destinatario
+  GiftBox/GiftCard (niente slice(0,20) sulla lista locale). Select nascosto
+  name=client_id ridotto alla sola opzione selezionata (cosmetico: il
+  checkout invia clientId dallo state). recipientName solo dallo state
+  salvato alla selezione.
+- Verifiche: test-dom-pos-clientsearch aggiornato 8/8 (hint al clear,
+  selezione conservata senza lista, onboarding non attivo con hasClients=true)
+  + regressione POS completa ri-eseguita 60/60 marker + 16+8+11+8+4+13 verdi.

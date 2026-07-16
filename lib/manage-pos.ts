@@ -4,7 +4,6 @@ import { randomBytes } from "node:crypto";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { businessTodayIso, businessNowDateTime } from "@/lib/business-datetime";
 import type {
-  ManagedClient,
   ManagedProduct,
   ManagedService,
   PosCheckoutInput,
@@ -79,8 +78,11 @@ export type ManagePosContext = {
   // recharges + giftbox instances + giftcards (deduped against the sale that issued them),
   // newest-first, 200 cap. Feeds the Movimenti page; the sidebar filters are applied over it.
   movements: PosMovement[];
+  // Miglioria 2026-07-16: l'anagrafica NON viaggia più nel context (era cap 500,
+  // introvabili oltre) — la colonna Clienti cerca via action=client_search; questo
+  // flag alimenta solo l'empty-state di onboarding "non hai ancora clienti".
+  hasClients: boolean;
   catalog: {
-    clients: ManagedClient[];
     services: ManagedService[];
     products: ManagedProduct[];
     // Sellable PACKAGE templates (id, name, price, total sessions, validity days) for the
@@ -220,9 +222,9 @@ export async function getManagePosContext(
 ): Promise<ManagePosContext> {
   const locationContext = await getManageLocationContext(slug);
   const activeLocationId = normalizeLocationId(options.locationId ?? locationContext.currentLocationId, locationContext.locations);
-  const [sales, clients, services, products, packages, giftboxes, rechargeTemplates, business] = await Promise.all([
+  const [sales, hasClients, services, products, packages, giftboxes, rechargeTemplates, business] = await Promise.all([
     listPosSales(slug, { locationId: activeLocationId, includeCancelled: options.includeCancelled ?? true, query: options.query ?? "", from: options.from, to: options.to }),
-    listPosClients(slug),
+    posHasClients(slug),
     listPosServices(slug, activeLocationId),
     listPosProducts(slug, activeLocationId),
     listPosPackages(slug, activeLocationId),
@@ -254,7 +256,8 @@ export async function getManagePosContext(
     summary: summarizeSales(sales),
     sales,
     movements,
-    catalog: { clients, services, products, packages, giftboxes, rechargeTemplates },
+    hasClients,
+    catalog: { services, products, packages, giftboxes, rechargeTemplates },
     locations: locationContext.locations.map((location) => ({ id: location.id, name: location.name })),
     fidelityRedeemEnabled: redeemSettings.redeemEnabled,
     fidelityEarnInfo: { euroPerPoint: redeemSettings.euroPerPoint, earnStep: earnInfoSettings.earnStep, campaignActiveToday },
@@ -3931,23 +3934,11 @@ async function movementOperator(slug: string, row: RowDataPacket): Promise<strin
   return (await operatorNameFromUserId(slug, Number(row.created_by ?? 0))) || "";
 }
 
-async function listPosClients(slug: string): Promise<ManagedClient[]> {
-  const rows = await tenantSelect<RowDataPacket>({ slug, table: "clients", orderBy: "full_name ASC, id ASC", limit: 500 }).catch(() => []);
-  return rows.map((row) => ({
-    id: Number(row.id ?? 0),
-    name: String(row.full_name ?? row.name ?? "Cliente"),
-    email: String(row.email ?? ""),
-    phone: String(row.phone ?? ""),
-    lastVisit: "",
-    value: "0 euro",
-    next: "",
-    note: String(row.notes ?? ""),
-    locationId: Number(row.location_id ?? 0),
-    tags: [],
-    archived: Number(row.is_blocked ?? 0) === 1,
-    createdAt: dateTimeString(row.created_at ?? row.registration_date),
-    updatedAt: dateTimeString(row.updated_at),
-  }));
+// Esiste almeno un cliente? Alimenta l'empty-state di onboarding del POS
+// (la lista clienti non viaggia più nel context: si cerca via client_search).
+async function posHasClients(slug: string): Promise<boolean> {
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id", limit: 1 }).catch(() => [] as RowDataPacket[]);
+  return rows.length > 0;
 }
 
 async function listPosServices(slug: string, locationId: number): Promise<ManagedService[]> {

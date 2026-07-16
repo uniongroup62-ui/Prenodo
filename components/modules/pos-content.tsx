@@ -71,13 +71,6 @@ type CatalogProduct = {
   category?: string;
 };
 
-type CatalogClient = {
-  id: number;
-  name: string;
-  email?: string;
-  phone?: string;
-};
-
 // A sellable PACKAGE template from /api/manage/pos (port of pos.php $packages):
 // id, name, price, total sessions (-> client_packages.sessions_total when issued) and
 // validity days (seeds the proposed "Valido al" expiry).
@@ -136,8 +129,10 @@ type PosBusinessHeader = {
 type PosContext = {
   activeLocationId?: number;
   business?: PosBusinessHeader;
+  // L'anagrafica non viaggia più nel context: la colonna Clienti cerca via
+  // client_search; questo flag alimenta solo l'empty-state di onboarding.
+  hasClients?: boolean;
   catalog?: {
-    clients?: CatalogClient[];
     services?: CatalogService[];
     products?: CatalogProduct[];
     packages?: CatalogPackage[];
@@ -871,7 +866,6 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
     // Runs once on mount; slug is stable for the page lifetime.
   }, [slug]);
 
-  const clients = useMemo(() => ctx?.catalog?.clients ?? [], [ctx]);
   const services = useMemo(() => ctx?.catalog?.services ?? [], [ctx]);
   const products = useMemo(() => ctx?.catalog?.products ?? [], [ctx]);
   const packages = useMemo(() => ctx?.catalog?.packages ?? [], [ctx]);
@@ -881,17 +875,10 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
   );
   const rechargeTemplates = useMemo(() => ctx?.catalog?.rechargeTemplates ?? [], [ctx]);
 
-  // Con >=2 caratteri la ricerca è server-side sull'anagrafica completa; sotto,
-  // filtro locale sul catalogo iniziale come prima.
+  // La colonna Clienti è SOLO ricerca (2026-07-16): nessuna lista iniziale —
+  // con >=2 caratteri i risultati arrivano dal server sull'anagrafica completa.
   const clientHits = usePosClientSearch(slug, clientSearch);
-  const filteredClients = useMemo<Array<{ id: number; name: string; email?: string; phone?: string }>>(() => {
-    if (clientHits) return clientHits;
-    const q = clientSearch.trim().toLowerCase();
-    if (!q) return clients;
-    return clients.filter(
-      (c) => c.name.toLowerCase().includes(q) || (c.phone ?? "").toLowerCase().includes(q) || (c.email ?? "").toLowerCase().includes(q),
-    );
-  }, [clients, clientSearch, clientHits]);
+  const filteredClients = useMemo<Array<{ id: number; name: string; email?: string; phone?: string }>>(() => clientHits ?? [], [clientHits]);
 
   // Aree/categorie del catalogo per il select "Tutte le aree" (legacy
   // posCatalogCategory): distinte dalla modalità corrente.
@@ -1732,7 +1719,8 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
       setErrorMsg("Seleziona il cliente destinatario.");
       return;
     }
-    const recipientName = gcRecipientName.trim() || (recipientClientId > 0 ? clients.find((c) => c.id === recipientClientId)?.name?.trim() ?? "" : "");
+    // Il nome viene salvato nello state alla selezione (la lista clienti non è più caricata).
+    const recipientName = gcRecipientName.trim();
     if (!recipientName) {
       setErrorMsg("Inserisci il destinatario.");
       return;
@@ -1885,7 +1873,8 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
       setGbError("GiftBox: seleziona il cliente destinatario.");
       return;
     }
-    const recipientName = gbRecipientName.trim() || (recipientClientId > 0 ? clients.find((c) => c.id === recipientClientId)?.name?.trim() ?? "" : "");
+    // Il nome viene salvato nello state alla selezione (la lista clienti non è più caricata).
+    const recipientName = gbRecipientName.trim();
     if (!recipientName) {
       setGbError("GiftBox: inserisci il destinatario.");
       return;
@@ -2621,7 +2610,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
       {/* Stato vuoto legacy (pos.php 5943-5959): senza clienti attivi la cassa
           non è operabile — GiftBox/GiftCard/ricariche/pacchetti richiedono
           sempre un mittente o titolare. */}
-      {ctx && clients.length === 0 ? (
+      {ctx && ctx.hasClients === false ? (
         <div className="card p-4 text-center">
           <h5 className="fw-bold">Nessun cliente disponibile</h5>
           <p className="text-muted mb-3">
@@ -2641,7 +2630,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
         </div>
       ) : null}
 
-      <form method="post" id="posForm" onSubmit={handleCheckout} className={ctx && clients.length === 0 ? "d-none" : undefined}>
+      <form method="post" id="posForm" onSubmit={handleCheckout} className={ctx && ctx.hasClients === false ? "d-none" : undefined}>
         <input type="hidden" name="location_id" value={ctx?.activeLocationId ?? ""} />
 
         <div className="pos-grid">
@@ -2676,19 +2665,27 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
             </div>
 
             <div className="pos-client-list" id="posClientList">
-              {filteredClients.map((c) => (
-                <button
-                  type="button"
-                  className={`pos-client-row${clientId === c.id ? " active" : ""}`}
-                  data-client-id={c.id}
-                  data-client-name={c.name}
-                  key={c.id}
-                  onClick={() => selectClient(c.id, c.name)}
-                >
-                  <div className="fw-semibold">{c.name}</div>
-                  <div className="small text-muted">{c.phone ? c.phone : `ID: ${c.id}`}</div>
-                </button>
-              ))}
+              {clientSearch.trim().length < 2 ? (
+                <div className="text-muted small p-3">Digita almeno 2 caratteri per cercare un cliente…</div>
+              ) : clientHits === null ? (
+                <div className="text-muted small p-3">Ricerca…</div>
+              ) : filteredClients.length === 0 ? (
+                <div className="text-muted small p-3">Nessun cliente trovato.</div>
+              ) : (
+                filteredClients.map((c) => (
+                  <button
+                    type="button"
+                    className={`pos-client-row${clientId === c.id ? " active" : ""}`}
+                    data-client-id={c.id}
+                    data-client-name={c.name}
+                    key={c.id}
+                    onClick={() => selectClient(c.id, c.name)}
+                  >
+                    <div className="fw-semibold">{c.name}</div>
+                    <div className="small text-muted">{c.phone ? c.phone : `ID: ${c.id}`}</div>
+                  </button>
+                ))
+              )}
             </div>
           </div>
 
@@ -3046,15 +3043,12 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
             </div>
 
             <div className="p-3">
-              {/* Select cliente reale (nascosto) */}
+              {/* Select cliente reale (nascosto) — cosmetico: il checkout invia clientId
+                  dallo state. Solo l'opzione selezionata (l'anagrafica non è più caricata). */}
               <div className="d-none">
                 <select className="form-select" name="client_id" id="posClient" value={clientId ?? ""} onChange={() => undefined}>
                   <option value="">Nessuno</option>
-                  {clients.map((c) => (
-                    <option value={c.id} data-email={c.email ?? ""} key={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
+                  {clientId ? <option value={clientId}>{clientName || `Cliente #${clientId}`}</option> : null}
                 </select>
               </div>
 
@@ -4306,7 +4300,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                     <div className="border rounded p-3 mb-2" id="posGbRecipientSelectedBox">
                       <div className="d-flex justify-content-between align-items-start">
                         <div>
-                          <div className="fw-semibold" id="posGbRecipientSelectedName">{gbRecipientName.trim() || clients.find((c) => c.id === gbRecipientClientId)?.name || `Cliente #${gbRecipientClientId}`}</div>
+                          <div className="fw-semibold" id="posGbRecipientSelectedName">{gbRecipientName.trim() || `Cliente #${gbRecipientClientId}`}</div>
                           <div className="text-muted small" id="posGbRecipientSelectedMeta">ID {gbRecipientClientId}</div>
                         </div>
                         <button
@@ -4334,7 +4328,14 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                         />
                       </div>
                       <div className="border rounded pos-scroll-160" id="posGbRecipientClientList">
-                        {(gbRecipientHits ?? clients.filter((c) => gbRecipientSearch.trim() === "" || c.name.toLowerCase().includes(gbRecipientSearch.trim().toLowerCase())))
+                        {gbRecipientSearch.trim().length < 2 ? (
+                          <div className="text-muted small p-2">Digita almeno 2 caratteri per cercare…</div>
+                        ) : gbRecipientHits === null ? (
+                          <div className="text-muted small p-2">Ricerca…</div>
+                        ) : gbRecipientHits.length === 0 ? (
+                          <div className="text-muted small p-2">Nessun cliente trovato.</div>
+                        ) : null}
+                        {(gbRecipientHits ?? [])
                           .slice(0, 20)
                           .map((c) => (
                             <button
@@ -4581,7 +4582,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                     <div className="border rounded p-3 mb-2" id="posGcRecipientSelectedBox">
                       <div className="d-flex justify-content-between align-items-start">
                         <div>
-                          <div className="fw-semibold" id="posGcRecipientSelectedName">{gcRecipientName.trim() || clients.find((c) => c.id === gcRecipientClientId)?.name || `Cliente #${gcRecipientClientId}`}</div>
+                          <div className="fw-semibold" id="posGcRecipientSelectedName">{gcRecipientName.trim() || `Cliente #${gcRecipientClientId}`}</div>
                           <div className="text-muted small" id="posGcRecipientSelectedMeta">ID {gcRecipientClientId}</div>
                         </div>
                         <button
@@ -4609,7 +4610,14 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
                         />
                       </div>
                       <div className="border rounded pos-scroll-160" id="posGcRecipientClientList">
-                        {(gcRecipientHits ?? clients.filter((c) => gcRecipientSearch.trim() === "" || c.name.toLowerCase().includes(gcRecipientSearch.trim().toLowerCase())))
+                        {gcRecipientSearch.trim().length < 2 ? (
+                          <div className="text-muted small p-2">Digita almeno 2 caratteri per cercare…</div>
+                        ) : gcRecipientHits === null ? (
+                          <div className="text-muted small p-2">Ricerca…</div>
+                        ) : gcRecipientHits.length === 0 ? (
+                          <div className="text-muted small p-2">Nessun cliente trovato.</div>
+                        ) : null}
+                        {(gcRecipientHits ?? [])
                           .slice(0, 20)
                           .map((c) => (
                             <button
