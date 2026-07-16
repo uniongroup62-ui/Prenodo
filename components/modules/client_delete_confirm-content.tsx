@@ -7,9 +7,11 @@ import { useEffect, useState } from "react";
 // "Rimozione cliente" con subtitle "<nome> (email) ID: N", alert danger di
 // conferma, card "Cosa verrà eliminato" con le voci legacy (incluso il quirk
 // "gifts" minuscolo e Punti formattati fmt_money), Motivazione obbligatoria +
-// conferma testuale ELIMINA, submit "Elimina definitivamente". La scelta stock
-// NON è esposta (hidden legacy stock_restore_mode=no_restore). Il successo
+// conferma testuale ELIMINA, submit "Elimina definitivamente". Il successo
 // redirige alla lista con "Clienti eliminati definitivamente: N".
+// DEVIAZIONE APPROVATA (2026-07-16): la scelta del ripristino magazzino, che il
+// legacy calcola ma NON espone (hidden stock_restore_mode=no_restore), è ora un
+// checkbox visibile quando ci sono pezzi ripristinabili (prodotti_scalati_stock).
 
 type DeleteSummary = Record<string, number>;
 
@@ -42,6 +44,7 @@ export function ClientDeleteConfirmContent({ slug: slugProp }: { slug?: string }
   const [error, setError] = useState("");
   const [reason, setReason] = useState("");
   const [confirmText, setConfirmText] = useState("");
+  const [restoreStock, setRestoreStock] = useState(false);
   const [busy, setBusy] = useState(false);
 
   // Microtask: evita il setState sincrono nell'effect (primo paint invariato).
@@ -97,7 +100,7 @@ export function ClientDeleteConfirmContent({ slug: slugProp }: { slug?: string }
           id: String(clientId),
           delete_reason: reason,
           delete_confirm_text: confirmText,
-          stock_restore_mode: "no_restore",
+          stock_restore_mode: restoreStock ? "restore_stock" : "no_restore",
         }),
       });
       const j = await res.json();
@@ -232,6 +235,26 @@ export function ClientDeleteConfirmContent({ slug: slugProp }: { slug?: string }
                 />
                 <div className="form-text">Per procedere devi scrivere esattamente ELIMINA.</div>
               </div>
+              {Number(s.prodotti_scalati_stock ?? 0) > 0 ? (
+                <div className="mt-3 mb-0">
+                  <div className="form-check form-switch">
+                    <input
+                      className="form-check-input"
+                      type="checkbox"
+                      role="switch"
+                      id="clientDeleteRestoreStock"
+                      checked={restoreStock}
+                      onChange={(e) => setRestoreStock(e.target.checked)}
+                    />
+                    <label className="form-check-label" htmlFor="clientDeleteRestoreStock">
+                      Ripristina la giacenza dei prodotti venduti ({Number(s.prodotti_scalati_stock ?? 0)} pezzi)
+                    </label>
+                  </div>
+                  <div className="form-text">
+                    Le quantità tornano al magazzino della sede in cui era avvenuta ogni vendita.
+                  </div>
+                </div>
+              ) : null}
             </div>
           </div>
 

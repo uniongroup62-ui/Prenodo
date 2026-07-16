@@ -922,7 +922,7 @@ export default async function TenantPage({
   if (page === "clients" && query.action === "view") {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
-        <ClientDetailContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err }} />
+        <ClientDetailContent slug={tenantSlug} initialQuery={{ msg: query.msg, err: query.err, warn: query.warn }} />
       </ManageShell>
     );
   }
@@ -934,7 +934,7 @@ export default async function TenantPage({
       <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
         <ClientsContent
           slug={tenantSlug}
-          initialQuery={{ q: query.q, all_locations: query.all_locations, msg: query.msg, err: query.err }}
+          initialQuery={{ q: query.q, all_locations: query.all_locations, msg: query.msg, err: query.err, p: query.p }}
         />
       </ManageShell>
     );

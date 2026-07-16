@@ -13817,3 +13817,30 @@ Regressione post-fix: battery clienti + stock-atomic 4 + stock-doc ATOMICO.
 
 VERDETTO: eliminazione (cascata a doppia conferma con log), modifica
 (validazioni legacy + sede obbligatoria), block/unblock, tag: tutte CORRETTE.
+
+## Clienti — 3 migliorie di prodotto APPLICATE (2026-07-16, Fable, approvate)
+
+Deviazioni volute dal legacy, su approvazione utente ('procedi e diminuisci
+anche il limite di 200 della lista per pagina'):
+(1) RIPRISTINO MAGAZZINO ESPOSTO nel delete-confirm: switch 'Ripristina la
+giacenza dei prodotti venduti (N pezzi)' visibile quando
+prodotti_scalati_stock>0 (il legacy lo calcola ma invia hidden no_restore);
+wired a stock_restore_mode=restore_stock (per-sede, fix pass 4).
+(2) AVVISO DUPLICATI non bloccante sul create: duplicateClientWarning cerca
+email LOWER o telefono per ULTIME 9 CIFRE (i formati '+39 333...' vs
+'333...' collidono; <9 cifre match esatto su cifre) -> warning nella
+risposta -> ?warn= nel redirect -> alert-warning nella scheda (SSR ok).
+TRAPPOLA trovata dal probe: il confronto a cifre INTERE non collega i
+prefissi internazionali — da qui le ultime-9.
+(3) PAGINAZIONE lista 50/pagina: tenantSelect ora supporta offset;
+listDbClients con page (SOLO legacyList e SOLO con ?p= — drawer/planner e
+consumer legacy invariati a LIMIT 200); countDbClients per il totale
+filtrato; header 'N clienti · pagina X di Y · filtri attivi' + pager
+chevron; nuova ricerca riparte da pagina 1 e syncUrl pulisce ?p=.
+hasAnyClients ora via COUNT (micro-perf, prima fetchava 200 righe intere).
+
+VERIFICA live: test-clienti-improvements 10/10 (duplicati email case-diverso
++ telefono formato-diverso + SSR warn; paginazione p1/p2 senza overlap +
+no-?p= storico; summary espone il ripristinabile + delete restore per-sede
+3->4) + probe 60 seed 'ZZ Pager' (p1=50, p2=11, tot 61, zero overlap,
+cleanup 0). Regressione completa verde: 50+113+24+19+24+8. tsc/eslint puliti.

@@ -32,6 +32,8 @@ export type ClientsQuery = {
   all_locations?: string;
   msg?: string;
   err?: string;
+  // Pagina corrente (paginazione 50/pagina, miglioria 2026-07-16).
+  p?: string;
 };
 
 function tenantSlug(): string {
@@ -100,6 +102,15 @@ export function ClientsContent({ slug: slugProp, initialQuery }: { slug?: string
     all: ["1", "true", "on", "yes", "all"].includes(String(initialQuery?.all_locations ?? "").trim().toLowerCase()),
   }));
   const [loading, setLoading] = useState(true);
+  // Paginazione (miglioria 2026-07-16): 50/pagina lato server al posto del
+  // LIMIT 200 secco del legacy. page dalla querystring ?p=, totale filtrato
+  // dal server per il pager.
+  const [page, setPage] = useState(() => {
+    const n = Number.parseInt(String(initialQuery?.p ?? ""), 10);
+    return Number.isFinite(n) && n >= 1 ? n : 1;
+  });
+  const [totalCount, setTotalCount] = useState(0);
+  const [pageSize, setPageSize] = useState(50);
   // Gate pagina legacy (clients.php requireAnyPerm sui 3 permessi clienti): la
   // route API ora ammette anche i permessi agenda per la ricerca del drawer, la
   // PAGINA si gata col flag pageAllowed -> card 'Accesso negato'.
@@ -109,15 +120,17 @@ export function ClientsContent({ slug: slugProp, initialQuery }: { slug?: string
 
   // Fetch puro (setState nei callback della Promise; loading gia' true di default).
   const fetchData = useCallback(
-    (query: string, all: boolean) => {
+    (query: string, all: boolean, pageN = 1) => {
       fetch(
-        `/api/manage/clients?slug=${encodeURIComponent(slug)}&q=${encodeURIComponent(query)}${all ? "&all_locations=1" : ""}`,
+        `/api/manage/clients?slug=${encodeURIComponent(slug)}&q=${encodeURIComponent(query)}${all ? "&all_locations=1" : ""}&p=${Math.max(1, pageN)}`,
         { headers: { "x-tenant-slug": slug } },
       )
         .then((r) => r.json())
         .then((j) => {
           if (j?.pageAllowed === false) setAccessDenied(true);
           setClients(Array.isArray(j.clients) ? j.clients : []);
+          setTotalCount(Number(j.totalCount ?? (Array.isArray(j.clients) ? j.clients.length : 0)));
+          setPageSize(Math.max(1, Number(j.pageSize ?? 50)));
           setHasAnyClients(Boolean(j.hasAnyClients ?? (Array.isArray(j.clients) && j.clients.length > 0)));
           if (j.perms) {
             setPerms({
@@ -133,7 +146,8 @@ export function ClientsContent({ slug: slugProp, initialQuery }: { slug?: string
   );
 
   useEffect(() => {
-    fetchData(initialQuery?.q ?? "", ["1", "true", "on", "yes", "all"].includes(String(initialQuery?.all_locations ?? "").trim().toLowerCase()));
+    const p0 = Number.parseInt(String(initialQuery?.p ?? ""), 10);
+    fetchData(initialQuery?.q ?? "", ["1", "true", "on", "yes", "all"].includes(String(initialQuery?.all_locations ?? "").trim().toLowerCase()), Number.isFinite(p0) && p0 >= 1 ? p0 : 1);
     fetch(`/api/manage/locations?slug=${encodeURIComponent(slug)}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
       .then((j) => {
@@ -150,11 +164,28 @@ export function ClientsContent({ slug: slugProp, initialQuery }: { slug?: string
   }, [fetchData, slug]);
 
   const load = useCallback(
-    (query: string, all: boolean) => {
+    (query: string, all: boolean, pageN = 1) => {
       setLoading(true);
-      fetchData(query, all);
+      fetchData(query, all, pageN);
     },
     [fetchData],
+  );
+
+  // Cambio pagina: aggiorna stato + URL (?p=) e rifetcha coi filtri applicati.
+  const goToPage = useCallback(
+    (pageN: number) => {
+      const p = Math.max(1, Math.floor(pageN));
+      setPage(p);
+      if (typeof window !== "undefined") {
+        const url = new URL(window.location.href);
+        if (p > 1) url.searchParams.set("p", String(p));
+        else url.searchParams.delete("p");
+        window.history.replaceState(null, "", url.toString());
+        window.scrollTo(0, 0);
+      }
+      load(applied.q, applied.all, p);
+    },
+    [applied, load],
   );
 
   function href(suffix: string): string {
@@ -162,11 +193,13 @@ export function ClientsContent({ slug: slugProp, initialQuery }: { slug?: string
   }
 
   // Mantiene l'URL allineato (il form legacy è un GET con ?q=&all_locations=).
+  // Una nuova ricerca riparte sempre da pagina 1 (?p= rimosso).
   function syncUrl(query: string, all: boolean) {
     if (typeof window === "undefined") return;
     const url = new URL(window.location.href);
     url.searchParams.delete("msg");
     url.searchParams.delete("err");
+    url.searchParams.delete("p");
     if (query !== "") url.searchParams.set("q", query);
     else url.searchParams.delete("q");
     if (all) url.searchParams.set("all_locations", "1");
@@ -258,9 +291,11 @@ export function ClientsContent({ slug: slugProp, initialQuery }: { slug?: string
               className="row g-2 align-items-end"
               onSubmit={(e) => {
                 e.preventDefault();
+                // Nuova ricerca -> sempre da pagina 1 (e ?p= rimosso dall'URL).
                 setApplied({ q: q.trim(), all: allLocations });
+                setPage(1);
                 syncUrl(q, allLocations);
-                load(q, allLocations);
+                load(q, allLocations, 1);
               }}
             >
               <div className={showAllLocationsFilter ? "col-lg-8" : "col-lg-10"}>
@@ -312,11 +347,22 @@ export function ClientsContent({ slug: slugProp, initialQuery }: { slug?: string
           </div>
 
           <div className="card">
-            <div className="card-header bg-transparent py-2">
+            <div className="card-header bg-transparent d-flex flex-wrap align-items-center justify-content-between gap-2 py-2">
               <span className="text-muted small">
-                {loading ? "Caricamento…" : clients.length === 1 ? "1 cliente" : `${clients.length} clienti`}
+                {loading ? "Caricamento…" : totalCount === 1 ? "1 cliente" : `${totalCount} clienti`}
+                {!loading && totalCount > pageSize ? ` · pagina ${page} di ${Math.max(1, Math.ceil(totalCount / pageSize))}` : ""}
                 {!loading && (applied.q !== "" || applied.all) ? " · filtri attivi" : ""}
               </span>
+              {!loading && totalCount > pageSize ? (
+                <div className="d-flex align-items-center gap-1">
+                  <button type="button" className="btn btn-sm btn-outline-secondary" disabled={page <= 1} onClick={() => goToPage(page - 1)}>
+                    <i className="bi bi-chevron-left" />
+                  </button>
+                  <button type="button" className="btn btn-sm btn-outline-secondary" disabled={page >= Math.ceil(totalCount / pageSize)} onClick={() => goToPage(page + 1)}>
+                    <i className="bi bi-chevron-right" />
+                  </button>
+                </div>
+              ) : null}
             </div>
             <div className="table-responsive">
               <table className="table mb-0 align-middle">

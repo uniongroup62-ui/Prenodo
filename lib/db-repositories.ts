@@ -83,23 +83,12 @@ export async function listDbLocations(slug: string): Promise<Location[]> {
 const CLIENTS_UNKNOWN_FILTER_SQL =
   "NOT (LOWER(TRIM(COALESCE(full_name,'')))='sconosciuto' AND LOWER(TRIM(COALESCE(notes,''))) LIKE 'creato automaticamente (vendite giftbox/giftcard senza cliente).%')";
 
-export async function listDbClients({
-  slug,
-  query = "",
-  locationId = 0,
-  includeArchived = false,
-  legacyList = false,
-}: {
-  slug: string;
-  query?: string;
-  locationId?: number;
-  includeArchived?: boolean;
-  // TRUE only for the faithful clients LIST page: legacy ordering
-  // (created_at DESC LIMIT 200), strict sede filter (NO-location clients
-  // excluded — verified live) and blocked clients INCLUDED (badge in list).
-  // Other consumers (fidelity/gift selects, QB) keep the permissive defaults.
-  legacyList?: boolean;
-}): Promise<ManagedClient[]> {
+// Page size della lista clienti fedele (miglioria approvata 2026-07-16: il
+// LIMIT 200 secco del legacy troncava in silenzio — ora paginazione vera).
+export const CLIENTS_LIST_PAGE_SIZE = 50;
+
+// Clausole condivise lista/conteggio (stessa semantica del legacy).
+function clientListClauses({ query = "", locationId = 0, includeArchived = false, legacyList = false }: { query?: string; locationId?: number; includeArchived?: boolean; legacyList?: boolean }): { where: string; params: unknown[] } {
   const clauses: string[] = [CLIENTS_UNKNOWN_FILTER_SQL];
   const params: unknown[] = [];
   const normalizedQuery = query.trim();
@@ -119,14 +108,49 @@ export async function listDbClients({
     params.push(locationId);
   }
   if (!legacyList && !includeArchived) clauses.push("COALESCE(is_blocked, 0) = 0");
+  return { where: clauses.join(" AND "), params };
+}
+
+// Conteggio TOTALE (filtrato) per il pager della lista fedele.
+export async function countDbClients(options: { slug: string; query?: string; locationId?: number; includeArchived?: boolean; legacyList?: boolean }): Promise<number> {
+  const { where, params } = clientListClauses(options);
+  const rows = await tenantSelect<RowDataPacket>({ slug: options.slug, table: "clients", columns: "COUNT(*) AS n", where, params });
+  return Number(rows[0]?.n ?? 0) || 0;
+}
+
+export async function listDbClients({
+  slug,
+  query = "",
+  locationId = 0,
+  includeArchived = false,
+  legacyList = false,
+  page = 0,
+}: {
+  slug: string;
+  query?: string;
+  locationId?: number;
+  includeArchived?: boolean;
+  // TRUE only for the faithful clients LIST page: legacy ordering
+  // (created_at DESC), strict sede filter (NO-location clients excluded —
+  // verified live) and blocked clients INCLUDED (badge in list). Other
+  // consumers (fidelity/gift selects, QB) keep the permissive defaults.
+  // Paginazione (page>=1, solo legacyList): 50/pagina al posto del LIMIT 200
+  // secco del legacy (miglioria approvata 2026-07-16); page=0 mantiene il
+  // comportamento storico (LIMIT 200) per i consumer non paginati.
+  legacyList?: boolean;
+  page?: number;
+}): Promise<ManagedClient[]> {
+  const { where, params } = clientListClauses({ query, locationId, includeArchived, legacyList });
+  const paged = legacyList && page >= 1;
 
   const rows = await tenantSelect<RowDataPacket>({
     slug,
     table: "clients",
-    where: clauses.join(" AND "),
+    where,
     params,
     orderBy: legacyList ? "created_at DESC" : "full_name ASC, id DESC",
-    limit: legacyList ? 200 : undefined,
+    limit: paged ? CLIENTS_LIST_PAGE_SIZE : legacyList ? 200 : undefined,
+    offset: paged ? (Math.floor(page) - 1) * CLIENTS_LIST_PAGE_SIZE : undefined,
   });
 
   return rows.map(mapClient);

@@ -313,10 +313,14 @@ export function ClientFormContent({ slug: slugProp, initialQuery }: { slug?: str
         setSaving(false);
         return;
       }
-      // Redirect legacy: alla SCHEDA con il flash.
+      // Redirect legacy: alla SCHEDA con il flash. L'eventuale avviso duplicati
+      // (non bloccante, solo create) viaggia come ?warn= e la scheda lo mostra
+      // sotto il flash di successo.
       const newId = Number(j.client?.id ?? form.id);
       const msg = action === "edit" ? "Cliente aggiornato" : "Cliente creato";
-      window.location.href = listUrl(`?action=view&id=${newId}&msg=${encodeURIComponent(msg)}`);
+      const warn = String(j.warning ?? "").trim();
+      const warnParam = warn !== "" ? `&warn=${encodeURIComponent(warn)}` : "";
+      window.location.href = listUrl(`?action=view&id=${newId}&msg=${encodeURIComponent(msg)}${warnParam}`);
     } catch {
       setError("Errore nel salvataggio del cliente.");
       setSaving(false);

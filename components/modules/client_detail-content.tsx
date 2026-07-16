@@ -68,6 +68,8 @@ type DetailPayload = {
 export type ClientDetailQuery = {
   msg?: string;
   err?: string;
+  // Avviso AGGIUNTIVO non bloccante (es. duplicati al create), sotto il flash.
+  warn?: string;
 };
 
 function tenantSlug(): string {
@@ -410,6 +412,14 @@ export function ClientDetailContent({ slug: slugProp, initialQuery }: { slug?: s
             <i className="bi bi-info-circle" />
           </div>
           <div>{flash.err}</div>
+        </div>
+      ) : null}
+      {String(initialQuery?.warn ?? "") !== "" ? (
+        <div className="alert alert-warning d-flex align-items-start gap-2">
+          <div>
+            <i className="bi bi-exclamation-triangle" />
+          </div>
+          <div>{initialQuery?.warn}</div>
         </div>
       ) : null}
 

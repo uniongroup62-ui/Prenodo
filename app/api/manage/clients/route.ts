@@ -11,6 +11,8 @@ import {
   getManageClientDetail,
   getManageClientHistory,
   listDbClients,
+  countDbClients,
+  CLIENTS_LIST_PAGE_SIZE,
   quickBookClientCard,
   quickBookClientContext,
   quickBookClientResidualsDetail,
@@ -256,19 +258,32 @@ export async function GET(request: Request) {
     // exclude_blocked=1 (search del drawer/planner, api_clients search legacy):
     // i clienti disattivati non compaiono tra i risultati selezionabili.
     const excludeBlocked = ["1", "true", "on", "yes"].includes(String(url.searchParams.get("exclude_blocked") ?? "").trim().toLowerCase());
+    // Paginazione (miglioria approvata 2026-07-16): SOLO quando la pagina
+    // chiede ?p=N — drawer/planner e gli altri consumer restano sul
+    // comportamento storico (LIMIT 200, nessun offset).
+    const rawPage = Number.parseInt(String(url.searchParams.get("p") ?? ""), 10);
+    const page = Number.isFinite(rawPage) && rawPage >= 1 ? rawPage : 0;
+    const q = url.searchParams.get("q") ?? "";
     let clients = await listDbClients({
       slug: tenantSlug,
-      query: url.searchParams.get("q") ?? "",
+      query: q,
       locationId: filterLocationId,
       legacyList: true,
+      page,
     });
     if (excludeBlocked) clients = clients.filter((c) => !(c as { archived?: boolean }).archived);
-    const anyRows = await listDbClients({ slug: tenantSlug, legacyList: true });
+    const [totalCount, anyCount] = await Promise.all([
+      page >= 1 ? countDbClients({ slug: tenantSlug, query: q, locationId: filterLocationId, legacyList: true }) : Promise.resolve(clients.length),
+      countDbClients({ slug: tenantSlug, legacyList: true }),
+    ]);
     return Response.json({
       ok: true,
       sourceMode: "database",
       clients,
-      hasAnyClients: anyRows.length > 0,
+      totalCount,
+      pageSize: CLIENTS_LIST_PAGE_SIZE,
+      currentPage: page >= 1 ? page : 1,
+      hasAnyClients: anyCount > 0,
       // Gate della PAGINA Clienti (clients.php requireAnyPerm sui 3 permessi):
       // l'ombrello API è a 9 per drawer/planner, la pagina si gata con questo.
       pageAllowed: canAny(session.user.perms, CLIENTS_PAGE_PERMS),
@@ -351,8 +366,13 @@ export async function POST(request: Request) {
       if (invalid) return jsonError(invalid);
       const input = await clientInputFromBody(body, tenantSlug);
       if (!input.locationId || input.locationId <= 0) return jsonError("Seleziona una sede valida.");
+      // Avviso duplicati NON bloccante (miglioria approvata 2026-07-16, il
+      // legacy non ha alcun controllo): stessa email (case-insensitive) o
+      // stesso telefono (solo cifre) di un cliente esistente -> `warning`
+      // nella risposta; la creazione procede comunque.
+      const warning = await duplicateClientWarning(tenantSlug, String(body.email ?? ""), String(body.phone ?? ""));
       const client = await createDbClient(input, tenantSlug);
-      return Response.json({ ok: true, source: "clients?action=create", sourceMode: "database", client, clients: await listDbClients({ slug: tenantSlug }) });
+      return Response.json({ ok: true, source: "clients?action=create", sourceMode: "database", client, warning, clients: await listDbClients({ slug: tenantSlug }) });
     }
 
     const id = parseInteger(body.id);
@@ -423,6 +443,42 @@ export async function POST(request: Request) {
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Errore clienti.");
   }
+}
+
+// Avviso duplicati non bloccante per il CREATE (miglioria 2026-07-16): cerca un
+// cliente esistente con la stessa email (LOWER, [[pg-case-sensitivity]]) o lo
+// stesso telefono confrontato SOLO sulle cifre (i formati '+39 333...' vs
+// '333...' devono collidere). Ritorna il testo dell'avviso o "".
+async function duplicateClientWarning(slug: string, email: string, phone: string): Promise<string> {
+  try {
+    const em = email.trim().toLowerCase();
+    const digits = phone.replace(/\D/g, "");
+    if (em !== "") {
+      const rows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "full_name", where: "LOWER(TRIM(COALESCE(email,''))) = ?", params: [em], limit: 1 });
+      if (rows[0]) return `Esiste già un cliente con questa email: ${String(rows[0].full_name ?? "").trim() || "senza nome"}.`;
+    }
+    if (digits.length >= 6) {
+      // Confronto sulle ULTIME 9 cifre quando il numero e' abbastanza lungo:
+      // '+39 333 7654321' e '3337654321' devono collidere nonostante il
+      // prefisso internazionale. Sotto le 9 cifre, match esatto.
+      const needle = digits.length >= 9 ? digits.slice(-9) : digits;
+      const expr = (col: string) => digits.length >= 9
+        ? `RIGHT(regexp_replace(COALESCE(${col},''), '\\D', '', 'g'), 9) = ?`
+        : `regexp_replace(COALESCE(${col},''), '\\D', '', 'g') = ?`;
+      const rows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "clients",
+        columns: "full_name",
+        where: `${expr("phone")} OR ${expr("phone2")} OR ${expr("phone_home")}`,
+        params: [needle, needle, needle],
+        limit: 1,
+      });
+      if (rows[0]) return `Esiste già un cliente con questo telefono: ${String(rows[0].full_name ?? "").trim() || "senza nome"}.`;
+    }
+  } catch {
+    // best-effort: nessun avviso se la query fallisce
+  }
+  return "";
 }
 
 // client_resolve_location_id (clients.php 583-596): la sede del CLIENTE si

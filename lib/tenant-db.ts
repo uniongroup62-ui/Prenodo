@@ -183,6 +183,7 @@ export async function tenantSelect<T extends RowDataPacket = RowDataPacket>({
   params = [],
   orderBy = "",
   limit,
+  offset,
 }: {
   slug: string;
   table: string;
@@ -191,6 +192,7 @@ export async function tenantSelect<T extends RowDataPacket = RowDataPacket>({
   params?: unknown[];
   orderBy?: string;
   limit?: number;
+  offset?: number;
 }): Promise<T[]> {
   const target = await tenantTable(slug, table);
   const clauses: string[] = [];
@@ -207,6 +209,7 @@ export async function tenantSelect<T extends RowDataPacket = RowDataPacket>({
     clauses.length ? `WHERE ${clauses.join(" AND ")}` : "",
     orderBy.trim() ? `ORDER BY ${orderBy}` : "",
     limit && limit > 0 ? `LIMIT ${Math.floor(limit)}` : "",
+    offset && offset > 0 ? `OFFSET ${Math.floor(offset)}` : "",
   ].filter(Boolean).join(" ");
 
   return dbQuery<T[]>(sql, queryParams);
