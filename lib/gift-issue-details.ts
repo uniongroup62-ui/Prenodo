@@ -1577,11 +1577,25 @@ export type GiftBoxManageListRow = {
   redeemedDate: string;
 };
 
+export const GIFTBOX_LIST_PAGE_SIZE = 25;
+
+// Compat: i consumer storici ricevono le sole righe (cap 200).
 export async function listGiftBoxInstancesManage(
   slug: string,
   filters: { q?: string; status?: string; clientId?: number; locationId?: number } = {},
   limit = 200,
 ): Promise<GiftBoxManageListRow[]> {
+  return (await listGiftBoxInstancesManagePaged(slug, filters, 0, limit)).rows;
+}
+
+// Variante paginata 25/pagina (miglioria 2026-07-16, via il cap 200 silenzioso):
+// page>=1 => LIMIT/OFFSET SQL + COUNT con lo stesso WHERE; page=0 => storico.
+export async function listGiftBoxInstancesManagePaged(
+  slug: string,
+  filters: { q?: string; status?: string; clientId?: number; locationId?: number } = {},
+  page = 0,
+  legacyLimit = 200,
+): Promise<{ rows: GiftBoxManageListRow[]; totalCount: number; pageSize: number }> {
   const giT = await tenantTable(slug, "giftbox_instances");
   const gbT = await tenantTable(slug, "giftboxes");
   const cT = await tenantTable(slug, "clients");
@@ -1607,7 +1621,9 @@ export async function listGiftBoxInstancesManage(
   const locationId = Math.max(0, Math.trunc(Number(filters.locationId ?? 0)));
   if (locationId > 0) { where.push("gi.location_id = ?"); params.push(locationId); }
 
-  const lim = Math.max(1, Math.min(500, Math.trunc(limit) || 200));
+  const pageN = Math.max(0, Math.floor(Number(page) || 0));
+  const lim = Math.max(1, Math.min(500, Math.trunc(legacyLimit) || 200));
+  const limitSql = pageN >= 1 ? `LIMIT ${GIFTBOX_LIST_PAGE_SIZE} OFFSET ${(pageN - 1) * GIFTBOX_LIST_PAGE_SIZE}` : `LIMIT ${lim}`;
   const rows = await dbQuery<RowDataPacket[]>(
     `SELECT gi.*, gb.name AS giftbox_name, c.full_name AS client_name,
             COALESCE(NULLIF(gi.location_name,''), l.name) AS location_display_name
@@ -1617,9 +1633,17 @@ export async function listGiftBoxInstancesManage(
        LEFT JOIN \`${lT.name}\` l ON l.id = gi.location_id${scoped ? " AND l.tenant_id = gi.tenant_id" : ""}
       WHERE ${where.join(" AND ")}
       ORDER BY gi.id DESC
-      LIMIT ${lim}`,
+      ${limitSql}`,
     params,
   ).catch(() => [] as RowDataPacket[]);
+  const countRows = await dbQuery<RowDataPacket[]>(
+    `SELECT COUNT(*) AS n
+       FROM \`${giT.name}\` gi
+       JOIN \`${gbT.name}\` gb ON gb.id = gi.giftbox_id${scoped ? " AND gb.tenant_id = gi.tenant_id" : ""}
+      WHERE ${where.join(" AND ")}`,
+    params,
+  ).catch(() => [] as RowDataPacket[]);
+  const totalCount = Number(countRows[0]?.n ?? rows.length) || 0;
 
   const out: GiftBoxManageListRow[] = [];
   for (const r of rows) {
@@ -1642,7 +1666,7 @@ export async function listGiftBoxInstancesManage(
       redeemedDate: localDate(r.redeemed_at) || "—",
     });
   }
-  return out;
+  return { rows: out, totalCount, pageSize: GIFTBOX_LIST_PAGE_SIZE };
 }
 
 // hasAnyGiftboxInstances (empty state legacy: nessuna istanza in assoluto,

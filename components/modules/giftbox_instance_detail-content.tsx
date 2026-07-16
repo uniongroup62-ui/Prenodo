@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { giftboxExpiryWarning } from "@/components/modules/giftbox-content";
 
 // Port fedele del DETTAGLIO istanza GiftBox (giftbox.php tab=instances
 // action=edit_instance): header con [Lista GiftBox][Dettagli vendita][Voucher]
@@ -431,6 +432,10 @@ export function GiftBoxInstanceDetailContent({ slug: slugProp, initialQuery }: {
                     <div className="text-muted small">Scadenza</div>
                     <div className="d-flex align-items-center gap-2 flex-wrap">
                       <span>{d.expiresLabel}</span>
+                      {(() => {
+                        const warn = giftboxExpiryWarning(d.expiresDate, d.status);
+                        return warn ? <span className="badge text-bg-warning">{warn}</span> : null;
+                      })()}
                       {d.expiryEditable ? (
                         <button
                           type="button"

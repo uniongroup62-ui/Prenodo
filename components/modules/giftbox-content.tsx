@@ -22,7 +22,27 @@ type GiftboxQuery = {
   all_locations?: string;
   msg?: string;
   err?: string;
+  // Pagina corrente (paginazione 25/pagina, miglioria 2026-07-16).
+  p?: string;
 };
+
+// Badge 'Scade tra N giorni' (miglioria 2026-07-16): istanza ATTIVA (issued)
+// con scadenza entro 14 giorni — le GiftBox vivono mesi come i pacchetti,
+// quindi finestra 14 e non 7. Prima l'auto-expire marcava 'Scaduta' a cose
+// fatte. expiresDate arriva come YYYY-MM-DD ('—' se assente).
+export function giftboxExpiryWarning(expiresDate: string, status: string): string | null {
+  if (status !== "issued") return null;
+  const m = String(expiresDate ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const exp = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const days = Math.round((exp.getTime() - today.getTime()) / 86400000);
+  if (days < 0 || days > 14) return null;
+  if (days === 0) return "Scade oggi";
+  if (days === 1) return "Scade domani";
+  return `Scade tra ${days} giorni`;
+}
 
 type InstanceRow = {
   id: number;
@@ -41,6 +61,8 @@ type InstanceRow = {
 type ListPayload = {
   ok?: boolean;
   rows?: InstanceRow[];
+  totalCount?: number;
+  pageSize?: number;
   hasAnyInstances?: boolean;
   clientItems?: Array<{ id: string; label: string }>;
   showAllLocationsFilter?: boolean;
@@ -169,6 +191,7 @@ export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string
     q: String(initialQuery?.q ?? ""),
     status: String(initialQuery?.status ?? ""),
     allLocations: ["1", "true", "on", "yes", "all"].includes(String(initialQuery?.all_locations ?? "").toLowerCase()),
+    page: (() => { const n = Number.parseInt(String(initialQuery?.p ?? ""), 10); return Number.isFinite(n) && n >= 1 ? n : 1; })(),
   }));
 
   const [data, setData] = useState<ListPayload | null>(null);
@@ -202,6 +225,7 @@ export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string
     if (applied.q !== "") params.set("q", applied.q);
     if (applied.status !== "") params.set("status", applied.status);
     if (applied.allLocations) params.set("all_locations", "1");
+    params.set("p", String(applied.page ?? 1));
     fetch(`/api/manage/giftboxes?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
       .then((j: ListPayload) => setData(j))
@@ -226,7 +250,18 @@ export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string
     if (q !== "") params.set("q", q);
     if (statusFilter !== "") params.set("status", statusFilter);
     if (allLocations) params.set("all_locations", "1");
-    window.location.href = listUrl(params);
+    window.location.assign(listUrl(params));
+  }
+
+  // Cambio pagina: navigazione GET coi filtri applicati (?p=), come il submit.
+  function goToPage(pageN: number) {
+    const params = new URLSearchParams();
+    if (applied.clientId !== "" && applied.clientId !== "0") params.set("client_id", applied.clientId);
+    if (applied.q !== "") params.set("q", applied.q);
+    if (applied.status !== "") params.set("status", applied.status);
+    if (applied.allLocations) params.set("all_locations", "1");
+    if (pageN > 1) params.set("p", String(Math.floor(pageN)));
+    window.location.assign(listUrl(params));
   }
 
   // Elimina template (soft): confirm legacy + redirect flash 'GiftBox eliminata'
@@ -501,11 +536,30 @@ export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string
           </div>
 
           <div className="card">
-            <div className="card-header bg-transparent py-2">
+            <div className="card-header bg-transparent d-flex flex-wrap align-items-center justify-content-between gap-2 py-2">
               <span className="text-muted small">
-                {loading ? "Caricamento…" : rows.length === 1 ? "1 GiftBox" : `${rows.length} GiftBox`}
-                {!loading && (applied.clientId !== "0" || applied.q !== "" || applied.status !== "" || applied.allLocations) ? " · filtri attivi" : ""}
+                {(() => {
+                  const total = Number(data?.totalCount ?? rows.length);
+                  const pageSize = Math.max(1, Number(data?.pageSize ?? 25));
+                  return (
+                    <>
+                      {loading ? "Caricamento…" : total === 1 ? "1 GiftBox" : `${total} GiftBox`}
+                      {!loading && total > pageSize ? ` · pagina ${applied.page} di ${Math.max(1, Math.ceil(total / pageSize))}` : ""}
+                      {!loading && (applied.clientId !== "0" || applied.q !== "" || applied.status !== "" || applied.allLocations) ? " · filtri attivi" : ""}
+                    </>
+                  );
+                })()}
               </span>
+              {!loading && Number(data?.totalCount ?? 0) > Math.max(1, Number(data?.pageSize ?? 25)) ? (
+                <div className="d-flex align-items-center gap-1">
+                  <button type="button" className="btn btn-sm btn-outline-secondary" disabled={applied.page <= 1} onClick={() => goToPage(applied.page - 1)}>
+                    <i className="bi bi-chevron-left" />
+                  </button>
+                  <button type="button" className="btn btn-sm btn-outline-secondary" disabled={applied.page >= Math.ceil(Number(data?.totalCount ?? 0) / Math.max(1, Number(data?.pageSize ?? 25)))} onClick={() => goToPage(applied.page + 1)}>
+                    <i className="bi bi-chevron-right" />
+                  </button>
+                </div>
+              ) : null}
             </div>
             <div className="table-responsive">
               <table className="table mb-0 align-middle">
@@ -537,7 +591,18 @@ export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string
                         <span className={`badge bg-${r.statusBadge}`}>{r.statusLabel}</span>
                       </td>
                       <td className="text-muted">{r.issuedDate}</td>
-                      <td className="text-muted">{r.expiresDate}</td>
+                      <td className="text-muted">
+                        {r.expiresDate}
+                        {(() => {
+                          const warn = giftboxExpiryWarning(r.expiresDate, r.status);
+                          return warn ? (
+                            <>
+                              {" "}
+                              <span className="badge text-bg-warning">{warn}</span>
+                            </>
+                          ) : null;
+                        })()}
+                      </td>
                       <td className="text-muted">{r.redeemedDate}</td>
                       <td className="text-end">
                         <a

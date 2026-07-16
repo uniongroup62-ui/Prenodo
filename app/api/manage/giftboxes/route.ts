@@ -15,7 +15,7 @@ import {
   expireDueGiftBoxInstances,
   getGiftBoxInstanceFull,
   hasAnyGiftBoxInstances,
-  listGiftBoxInstancesManage,
+  listGiftBoxInstancesManagePaged,
   redeemGiftBoxInstancePartial,
   searchGiftRecipientClients,
   sendGiftBoxInstanceEmail,
@@ -108,18 +108,24 @@ export async function GET(request: Request) {
       const allLocations = ["1", "true", "on", "yes", "all"].includes(String(url.searchParams.get("all_locations") ?? "").trim().toLowerCase());
       const locationContext = await getManageLocationContext(tenantSlug).catch(() => null);
       const filterLocationId = allLocations ? 0 : (locationContext?.currentLocationId ?? 0);
-      const rows = await listGiftBoxInstancesManage(tenantSlug, {
+      // Paginazione 25 (miglioria 2026-07-16): SOLO con ?p= — senza, storico cap 200.
+      const rawPage = Number.parseInt(String(url.searchParams.get("p") ?? ""), 10);
+      const page = Number.isFinite(rawPage) && rawPage >= 1 ? rawPage : 0;
+      const paged = await listGiftBoxInstancesManagePaged(tenantSlug, {
         q: url.searchParams.get("q") ?? "",
         status: url.searchParams.get("status") ?? "",
         clientId: parseInteger(url.searchParams.get("client_id"), 0),
         locationId: filterLocationId,
-      }, 200);
+      }, page, 200);
       const hasAny = await hasAnyGiftBoxInstances(tenantSlug);
       const clientRows = (await listDbClients({ slug: tenantSlug })).map((c) => ({ id: String(c.id), label: c.name }));
       return Response.json({
         ok: true,
         sourceMode: "database",
-        rows,
+        rows: paged.rows,
+        totalCount: paged.totalCount,
+        pageSize: paged.pageSize,
+        currentPage: page >= 1 ? page : 1,
         hasAnyInstances: hasAny,
         clientItems: clientRows,
         showAllLocationsFilter: (locationContext?.locations.length ?? 0) > 1,

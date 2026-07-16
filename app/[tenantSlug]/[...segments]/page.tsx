@@ -910,6 +910,7 @@ export default async function TenantPage({
             status: query.status,
             client_id: query.client_id,
             all_locations: query.all_locations,
+            p: query.p,
             msg: query.msg,
             err: query.err,
           }}

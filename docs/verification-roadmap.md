@@ -14064,3 +14064,21 @@ istanza; badge 'riscatta' giallo; label modulo GiftBox). Suite log 16/16.
 
 VERDETTO: eliminazione (soft, istanze conservate), modifica (non
 retroattiva), riscatti (motore partial per-item+stock), annullo: CORRETTE.
+
+## GiftBox — 2 migliorie di prodotto APPLICATE (2026-07-16, Fable, approvate)
+
+(1) PAGINAZIONE lista istanze 25/pagina (GIFTBOX_LIST_PAGE_SIZE): SQL
+LIMIT/OFFSET + COUNT nello stesso WHERE via listGiftBoxInstancesManagePaged
+(wrapper compat invariato, senza ?p= = storico cap 200); header 'N GiftBox ·
+pagina X di Y' + chevron con navigazione GET.
+(2) BADGE 'Scade tra N giorni' su istanze ATTIVE entro 14gg (le GiftBox
+vivono mesi: finestra 14 come i pacchetti, non 7 come i preventivi) —
+giftboxExpiryWarning esportato da giftbox-content, riusato dal dettaglio
+accanto a expiresLabel (il payload aveva gia' expiresDate raw).
+
+VERIFICA live test-giftbox-improvements 6/6 (31 seed: p1=25/p2=6 zero
+overlap + storico; riga issued a 5gg con dati corretti; testi badge nel
+bundle). Trappola seed: giftboxes usa colonna 'active' NON 'is_active'.
+Regressione completa verde 64+27+8+11+markers. Micro-nota annotata (filtro
+Mittente scarica tutta l'anagrafica): da valutare ricerca server-side se
+l'anagrafica crescera'.
