@@ -366,13 +366,21 @@ export async function POST(request: Request) {
       if (invalid) return jsonError(invalid);
       const input = await clientInputFromBody(body, tenantSlug);
       if (!input.locationId || input.locationId <= 0) return jsonError("Seleziona una sede valida.");
-      // Avviso duplicati NON bloccante (miglioria approvata 2026-07-16, il
-      // legacy non ha alcun controllo): stessa email (case-insensitive) o
-      // stesso telefono (solo cifre) di un cliente esistente -> `warning`
-      // nella risposta; la creazione procede comunque.
-      const warning = await duplicateClientWarning(tenantSlug, String(body.email ?? ""), String(body.phone ?? ""));
+      // BLOCCO duplicati con conferma (miglioria 2026-07-16, rivista su
+      // feedback: il warning post-create era tardivo e il drawer QB lo
+      // ignorava — questo gate vive nella route quindi copre OGNI percorso
+      // di creazione). Stessa email (case-insensitive) o stesso telefono
+      // (ultime 9 cifre) di un cliente esistente -> 409 needsDuplicateConfirm;
+      // la UI chiede conferma e reinvia con duplicate_confirmed=1.
+      const duplicateConfirmed = ["1", "true", "on", "yes"].includes(String(body.duplicate_confirmed ?? "").trim().toLowerCase());
+      if (!duplicateConfirmed) {
+        const warning = await duplicateClientWarning(tenantSlug, String(body.email ?? ""), String(body.phone ?? ""));
+        if (warning !== "") {
+          return Response.json({ ok: false, needsDuplicateConfirm: true, error: warning }, { status: 409 });
+        }
+      }
       const client = await createDbClient(input, tenantSlug);
-      return Response.json({ ok: true, source: "clients?action=create", sourceMode: "database", client, warning, clients: await listDbClients({ slug: tenantSlug }) });
+      return Response.json({ ok: true, source: "clients?action=create", sourceMode: "database", client, clients: await listDbClients({ slug: tenantSlug }) });
     }
 
     const id = parseInteger(body.id);

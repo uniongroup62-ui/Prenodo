@@ -2875,13 +2875,23 @@ export function QuickBookingDrawer() {
         for (const [key, value] of fd.entries()) {
           if (typeof value === "string" && key !== "action") body[key] = value;
         }
-        const res = await fetch(`/api/manage/clients?slug=${encodeURIComponent(slug)}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-          body: JSON.stringify(body),
-        });
-        const data: { ok?: boolean; error?: string; client?: { id: number; name: string; email?: string; phone?: string } } =
+        const submit = (extra: Record<string, string> = {}) =>
+          fetch(`/api/manage/clients?slug=${encodeURIComponent(slug)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+            body: JSON.stringify({ ...body, ...extra }),
+          });
+        let res = await submit();
+        let data: { ok?: boolean; error?: string; needsDuplicateConfirm?: boolean; client?: { id: number; name: string; email?: string; phone?: string } } =
           await res.json().catch(() => ({}));
+        // Blocco duplicati PRE-creazione (2026-07-16): stesso gate della pagina
+        // Clienti — conferma esplicita e reinvio con duplicate_confirmed=1.
+        if (data.needsDuplicateConfirm) {
+          const proceed = window.confirm(`${String(data.error || "Cliente già esistente.")}\n\nVuoi creare comunque il cliente?`);
+          if (!proceed) return;
+          res = await submit({ duplicate_confirmed: "1" });
+          data = await res.json().catch(() => ({}));
+        }
         if (!res.ok || data.ok === false || !data.client) {
           setCreateError(String(data.error || "Errore creazione cliente."));
           return;

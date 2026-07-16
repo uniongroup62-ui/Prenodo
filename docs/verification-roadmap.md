@@ -13852,3 +13852,22 @@ pagine piu' corte leggibili. Suite improvements sanata a 25: 10/10.
 Nota baseline: in sede 21 esistono 2 'Luca berlingeri' creati dall'UTENTE
 dal form (15-16/07) — doppione reale che il nuovo avviso ora intercetta;
 NON toccati (anti-inferenza).
+
+## Clienti — duplicati: da warning post-create a BLOCCO pre-create (2026-07-16, Fable, su feedback utente)
+
+FEEDBACK: il warning post-create era tardivo ('prima creato, poi avviso') e
+il drawer QB — che crea via la STESSA route ma con UI propria — lo ignorava
+del tutto (clone creato senza alcun segnale). LEZIONE: testare sempre TUTTE
+le superfici che consumano l'endpoint modificato, non solo quella primaria.
+
+FIX: gate spostato nella ROUTE (copre ogni percorso presente e futuro):
+action=create con duplicato e senza duplicate_confirmed -> 409
+{needsDuplicateConfirm, error}; NIENTE riga creata. Le due UI (form Clienti
++ drawer QB) intercettano il 409, chiedono window.confirm('...Vuoi creare
+comunque il cliente?') e reinviano con duplicate_confirmed=1. Rimosso il
+warning post-create (?warn= dal form; l'alert generico del detail resta).
+
+VERIFICA: suite improvements riscritta 13/13 — blocco 409 senza creazione
+(count invariato), conferma crea, telefono +39-vs-nudo, percorso QB con
+sessione SOLO quick_booking bloccato e sbloccato con conferma. Regressione:
+e2e-clients 50 + markers 113 + mutations 24 + QB (markers 6+37, findings 3).

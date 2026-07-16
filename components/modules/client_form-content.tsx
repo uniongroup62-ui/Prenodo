@@ -302,25 +302,35 @@ export function ClientFormContent({ slug: slugProp, initialQuery }: { slug?: str
         company_name: form.company_name,
         pec: form.pec,
       };
-      const res = await fetch(`/api/manage/clients?slug=${encodeURIComponent(slug)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-        body: JSON.stringify(payload),
-      });
-      const j = await res.json();
+      const submit = (extra: Record<string, string> = {}) =>
+        fetch(`/api/manage/clients?slug=${encodeURIComponent(slug)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
+          body: JSON.stringify({ ...payload, ...extra }),
+        });
+      let res = await submit();
+      let j = await res.json();
+      // Blocco duplicati PRE-creazione (2026-07-16): il server risponde 409
+      // needsDuplicateConfirm; si chiede conferma esplicita e si reinvia con
+      // duplicate_confirmed=1 (niente più warning post-create tardivo).
+      if (j?.needsDuplicateConfirm) {
+        const proceed = typeof window !== "undefined" && window.confirm(`${String(j.error ?? "Cliente già esistente.")}\n\nVuoi creare comunque il cliente?`);
+        if (!proceed) {
+          setSaving(false);
+          return;
+        }
+        res = await submit({ duplicate_confirmed: "1" });
+        j = await res.json();
+      }
       if (!res.ok || !j.ok) {
         setError(String(j.error ?? "Errore nel salvataggio del cliente."));
         setSaving(false);
         return;
       }
-      // Redirect legacy: alla SCHEDA con il flash. L'eventuale avviso duplicati
-      // (non bloccante, solo create) viaggia come ?warn= e la scheda lo mostra
-      // sotto il flash di successo.
+      // Redirect legacy: alla SCHEDA con il flash.
       const newId = Number(j.client?.id ?? form.id);
       const msg = action === "edit" ? "Cliente aggiornato" : "Cliente creato";
-      const warn = String(j.warning ?? "").trim();
-      const warnParam = warn !== "" ? `&warn=${encodeURIComponent(warn)}` : "";
-      window.location.href = listUrl(`?action=view&id=${newId}&msg=${encodeURIComponent(msg)}${warnParam}`);
+      window.location.href = listUrl(`?action=view&id=${newId}&msg=${encodeURIComponent(msg)}`);
     } catch {
       setError("Errore nel salvataggio del cliente.");
       setSaving(false);
