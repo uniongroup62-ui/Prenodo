@@ -13987,3 +13987,32 @@ VERIFICA live test-pacchetti-improvements 7/7 (31 seed: p1=25/p2=6 zero
 overlap, no-?p= storico; riga in-scadenza con statusKey/dati corretti a 5gg;
 testi badge nel bundle; emissione compat loc=21). Regressione completa verde
 48+10+12+26+13+92+8. tsc/eslint puliti.
+
+## Preventivi — pass 2 (2026-07-16, Fable): ZERO BUG + Log fase 2b
+
+Drift dall'ultimo pass (5964360): solo restyle filtri. Batteria VERDE:
+e2e-quotes 80 + settings 20 + test-preventivi 25 + decision 10 (harness
+sanato: conteggio public_customer_accounts da ===9 ASSOLUTO a snapshot
+RELATIVO — registro GLOBALE marketplace, 2 account legittimamente spariti
+tra i run; 5 clienti reali intatti, nessun danno).
+
+Analisi mutazioni: save con lock per stato effettivo ('Preventivo in stato
+"X" non modificabile.'), sede guard, numero max 32 + unicita'; delete SOLO
+bozze (guardia verbatim 'Puoi eliminare solo preventivi in bozza...') con
+quote_items rimossi; send con guardie in ordine legacy e mark-sent solo su
+invio riuscito; NIENTE action=convert (come il legacy): conversione SOLO
+via POS quote_cart accepted-only + checkout source_quote_id.
+
+Nuova suite test-preventivi-mutations 11/11 (cross-action live): numerazione
+1/YYYY, crea bozza, EDITOR non puo' impostare 'sent' (solo invio email:
+draft/accepted/rejected/canceled — il probe inizialmente lo scambiava per
+bug), delete su sent rifiutato verbatim, quote_cart su sent rifiutato
+verbatim, editor->accepted, carrello bloccato dal preventivo, checkout ->
+vendita + stato paid, SECONDO import bloccato ('gia' stato trasformato in
+vendita', idempotenza via vendita attiva collegata NON via status), delete
+bozza con righe. Log fase 2b: preventivi strumentati (crea/modifica/
+elimina/invia, badge info per 'invia', MODULE_LABELS pacchetti+preventivi);
+suite log 16/16 (L12 sanato: seed cercato via ?q=, trappola NOW-vs-locale).
+
+VERDETTO: eliminazione (draft-only con cascata righe), modifica (lock stati,
+prezzi listino bloccati), invio, conversione (gate+idempotenza): CORRETTE.

@@ -1,4 +1,5 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
+import { logActivity } from "@/lib/activity-log";
 import {
   deleteManageQuoteLegacy,
   getManageQuoteFormData,
@@ -157,6 +158,7 @@ export async function POST(request: Request) {
       const mode = String(rawBody.mode ?? "new") === "edit" ? "edit" : "new";
       const result = await saveManageQuote(tenantSlug, mode, rawBody, session.user.id, ctx);
       if (!result.ok) return Response.json({ ok: false, error: result.error });
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "preventivi", action: mode === "edit" ? "modifica" : "crea", entityType: "quote", entityId: result.id, label: `${mode === "edit" ? "Modificato" : "Creato"} preventivo #${result.id}` });
       return Response.json({ ok: true, sourceMode: "database", id: result.id, message: "Preventivo salvato" });
     }
 
@@ -168,6 +170,9 @@ export async function POST(request: Request) {
     if (action === "send") {
       const ctx = await quoteLocationCtx(tenantSlug);
       const result = await sendManageQuoteEmailLegacy(tenantSlug, id, { toEmail: body.to_email, message: body.message }, ctx);
+      if (!result.err) {
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "preventivi", action: "invia", entityType: "quote", entityId: id, label: `Inviato preventivo #${id} via email` });
+      }
       return Response.json({ ok: !result.err, sourceMode: "database", ...result });
     }
 
@@ -180,6 +185,9 @@ export async function POST(request: Request) {
     if (action === "delete") {
       const ctx = await quoteLocationCtx(tenantSlug);
       const result = await deleteManageQuoteLegacy(tenantSlug, id, ctx);
+      if (!result.err) {
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "preventivi", action: "elimina", entityType: "quote", entityId: id, label: `Eliminato preventivo in bozza #${id}` });
+      }
       return Response.json({ ok: !result.err, sourceMode: "database", ...result });
     }
 
