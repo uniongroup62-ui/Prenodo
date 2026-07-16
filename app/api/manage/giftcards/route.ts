@@ -25,7 +25,10 @@ import { can, canAny } from "@/lib/role-permissions";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const giftCardPerms = ["giftcard.manage", "pos.manage"];
+// Gate legacy: giftcard.php:2 Auth::requirePerm('giftcard.manage') — PAGINA INTERA,
+// mutazioni comprese. pos.manage NON basta (fix 2026-07-16: l'ombrello includeva
+// pos.manage e apriva update/redeem/send_email ai soli permessi POS).
+const giftCardPerms = ["giftcard.manage"];
 
 export async function GET(request: Request) {
   const tenantSlug = manageTenantSlugFromRequest(request);

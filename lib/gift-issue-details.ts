@@ -1898,6 +1898,43 @@ function gcCleanClientNote(raw: string): string {
   return note.trim();
 }
 
+// GiftLoyaltyAttribution::isLegacyUnknownClientId — cliente sentinella
+// 'sconosciuto' auto-creato dal legacy per vendite gift senza cliente.
+async function gcIsLegacyUnknownClient(slug: string, clientId: number): Promise<boolean> {
+  if (clientId <= 0) return false;
+  const rows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "full_name, notes, email, phone", where: "id = ?", params: [clientId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  if (!rows[0]) return false;
+  const name = clean(rows[0].full_name).toLowerCase();
+  if (name !== "sconosciuto") return false;
+  const notes = clean(rows[0].notes).toLowerCase();
+  if (notes !== "" && notes.startsWith("creato automaticamente (vendite giftbox/giftcard senza cliente).")) return true;
+  return clean(rows[0].email) === "" && clean(rows[0].phone) === "";
+}
+
+// GiftLoyaltyAttribution::findSaleIdByGiftCode (LIKE %code% su item_name,
+// senza prefisso 'GiftCard%', max 40 char) + syncAnonymousSaleClientByRecipient:
+// se la vendita di emissione è anonima (o il mittente è il sentinella legacy),
+// l'abbinamento destinatario intesta la vendita al destinatario. Best-effort.
+async function gcSyncAnonymousSaleClientByRecipient(slug: string, code: string, buyerClientId: number, recipientClientId: number): Promise<void> {
+  const c = clean(code).toUpperCase();
+  if (c === "" || c.length > 40) return;
+  const siT = await tenantTable(slug, "sale_items");
+  const scoped = siT.mode === "shared" && (await columnExists(siT.name, "tenant_id"));
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT sale_id FROM \`${siT.name}\` WHERE item_name LIKE ?${scoped ? " AND tenant_id = ?" : ""} ORDER BY sale_id DESC LIMIT 1`,
+    scoped ? [`%${c}%`, siT.tenantId ?? 0] : [`%${c}%`],
+  ).catch(() => [] as RowDataPacket[]);
+  const saleId = Number(rows[0]?.sale_id ?? 0);
+  if (saleId <= 0) return;
+  const sRows = await tenantSelect<RowDataPacket>({ slug, table: "sales", columns: "client_id", where: "id = ?", params: [saleId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  if (!sRows[0]) return;
+  const saleClientId = Number(sRows[0].client_id ?? 0) || 0;
+  const buyerAnonymous = buyerClientId <= 0 || (await gcIsLegacyUnknownClient(slug, buyerClientId));
+  const saleAnonymous = saleClientId <= 0 || (await gcIsLegacyUnknownClient(slug, saleClientId));
+  if (!buyerAnonymous && !saleAnonymous) return;
+  await tenantUpdate({ slug, table: "sales", id: saleId, values: { client_id: recipientClientId > 0 ? recipientClientId : null } }).catch(() => 0);
+}
+
 // Link "Dettaglio vendita" legacy: righe vendita GiftCard con il codice.
 async function gcFindSaleByCode(slug: string, code: string): Promise<number> {
   const c = clean(code);
@@ -2221,6 +2258,13 @@ export async function updateGiftCardData(
       updated_by: by > 0 ? by : null,
     },
   });
+
+  // Vendita di emissione ANONIMA (o mittente sentinella legacy): l'abbinamento
+  // destinatario intesta la vendita al destinatario, come
+  // GiftLoyaltyAttribution::syncAnonymousSaleClientByRecipient nel flusso update.
+  if (!lock.locked) {
+    await gcSyncAnonymousSaleClientByRecipient(slug, clean(card.code), senderClientId, recipientClientId).catch(() => undefined);
+  }
 
   // Movimento "Cambio destinatario: X -> Y" (adjust 0 + meta), solo se cambia.
   if (!lock.locked) {

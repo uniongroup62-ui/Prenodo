@@ -31,7 +31,9 @@ import { can, canAny } from "@/lib/role-permissions";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const giftBoxPerms = ["giftbox.manage", "pos.manage"];
+// Gate legacy: giftbox.php:2 Auth::requirePerm('giftbox.manage') — PAGINA INTERA,
+// mutazioni comprese. pos.manage NON basta (fix 2026-07-16, stesso pattern GiftCard).
+const giftBoxPerms = ["giftbox.manage"];
 
 export async function GET(request: Request) {
   const tenantSlug = manageTenantSlugFromRequest(request);

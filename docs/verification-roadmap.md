@@ -14178,3 +14178,39 @@ iniziale cappata a 500: l'anagrafica NON viaggia piu' nel context POS.
 - Verifiche: test-dom-pos-clientsearch aggiornato 8/8 (hint al clear,
   selezione conservata senza lista, onboarding non attivo con hasClients=true)
   + regressione POS completa ri-eseguita 60/60 marker + 16+8+11+8+4+13 verdi.
+
+## 2026-07-16 — GiftCard pass 2 (funzioni/logiche + guardie): 2 BUG trovati e corretti
+
+Censimento completo route vs giftcard.php (issue bloccato, update con lock
+destinatario, update_expiry, note interna/cliente, redeem credito, redeem_item,
+send_email, topup/cancel bloccati, expire-due, invii programmati con claim 15',
+lista+filtri): logiche di modifica/riscatto/scadenza CORRETTE e verbatim.
+GiftCard non prevede eliminazione nel legacy (nemmeno annullamento da backend:
+solo via annullo della vendita POS di emissione) — parita' confermata.
+
+BUG 1 (gate, anche GiftBox): l'ombrello delle route giftcards/giftboxes
+accettava pos.manage OLTRE a giftcard.manage/giftbox.manage — le MUTAZIONI POST
+(update/redeem/redeem_item/send_email/update_instance...) erano raggiungibili
+con i soli permessi POS, mentre il legacy gata l'INTERA pagina con
+requirePerm('giftcard.manage'/'giftbox.manage'). Confermato live (pos-only
+arrivava al dispatcher), fix: ombrello = solo il permesso modulo (nessun
+consumer POS delle due route: la UI POS usa /api/manage/pos).
+
+BUG 2 (parita' mancante): il flusso update legacy passa da
+GiftLoyaltyAttribution::assignRecipientClient che include
+syncAnonymousSaleClientByRecipient — se la vendita di EMISSIONE e' anonima
+(client_id NULL o sentinella 'sconosciuto'), l'abbinamento destinatario
+intesta la vendita al destinatario. Il port non lo faceva (raggiungibile:
+1 vendita anonima nel dataset migrato). Portato fedele in updateGiftCardData
+(match sale_items item_name LIKE %code% max 40 char, early-return se vendita
+e compratore hanno gia' un cliente reale — la rimozione abbinamento NON
+riporta anonima una vendita ormai intestata, come nel legacy).
+
+Suite nuova test-giftcard-pass2 11/11 (gate 403 pos-only su entrambe le route,
+sync anonima set/no-op/rimozione, compat update_note + blocco su annullata,
+event_type invalido conserva il corrente, redeem_item qty=0 -> 1).
+Regressione: e2e-giftcard 94 + markers-giftcard 92 + giftbox 8+11+6 +
+e2e-pos-gift 11 + test-pos-checkout 8 + DOM sender 4 — tutte verdi.
+Trappole seed: sale_items usa qty (non quantity) e il CHECK item_type ammette
+solo service/product/package (le righe GiftCard sono 'product' item_id NULL);
+sales.sale_date NOT NULL.
