@@ -85,7 +85,7 @@ const CLIENTS_UNKNOWN_FILTER_SQL =
 
 // Page size della lista clienti fedele (miglioria approvata 2026-07-16: il
 // LIMIT 200 secco del legacy troncava in silenzio — ora paginazione vera).
-export const CLIENTS_LIST_PAGE_SIZE = 50;
+export const CLIENTS_LIST_PAGE_SIZE = 25;
 
 // Clausole condivise lista/conteggio (stessa semantica del legacy).
 function clientListClauses({ query = "", locationId = 0, includeArchived = false, legacyList = false }: { query?: string; locationId?: number; includeArchived?: boolean; legacyList?: boolean }): { where: string; params: unknown[] } {

@@ -110,7 +110,7 @@ export function ClientsContent({ slug: slugProp, initialQuery }: { slug?: string
     return Number.isFinite(n) && n >= 1 ? n : 1;
   });
   const [totalCount, setTotalCount] = useState(0);
-  const [pageSize, setPageSize] = useState(50);
+  const [pageSize, setPageSize] = useState(25);
   // Gate pagina legacy (clients.php requireAnyPerm sui 3 permessi clienti): la
   // route API ora ammette anche i permessi agenda per la ricerca del drawer, la
   // PAGINA si gata col flag pageAllowed -> card 'Accesso negato'.

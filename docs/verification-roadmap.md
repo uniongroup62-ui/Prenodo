@@ -13844,3 +13844,11 @@ VERIFICA live: test-clienti-improvements 10/10 (duplicati email case-diverso
 no-?p= storico; summary espone il ripristinabile + delete restore per-sede
 3->4) + probe 60 seed 'ZZ Pager' (p1=50, p2=11, tot 61, zero overlap,
 cleanup 0). Regressione completa verde: 50+113+24+19+24+8. tsc/eslint puliti.
+
+## Clienti — page size 25 (2026-07-16, Fable, richiesta utente)
+
+CLIENTS_LIST_PAGE_SIZE 50 -> 25 (+ fallback UI): righe alte (avatar/badge),
+pagine piu' corte leggibili. Suite improvements sanata a 25: 10/10.
+Nota baseline: in sede 21 esistono 2 'Luca berlingeri' creati dall'UTENTE
+dal form (15-16/07) — doppione reale che il nuovo avviso ora intercetta;
+NON toccati (anti-inferenza).
