@@ -1,5 +1,6 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import { logActivity } from "@/lib/activity-log";
+import { searchGiftRecipientClients } from "@/lib/gift-issue-details";
 import {
   deleteManageQuoteLegacy,
   getManageQuoteFormData,
@@ -85,6 +86,13 @@ export async function GET(request: Request) {
       const ctx = await quoteLocationCtx(tenantSlug);
       const result = await getManageQuotePrintData(tenantSlug, parseInteger(url.searchParams.get("id"), 0), ctx);
       return Response.json({ ok: true, sourceMode: "database", ...result });
+    }
+
+    // Ricerca clienti per il combobox filtro (server-side, 2026-07-16): il
+    // gate resta quello del modulo (quotes), non serve clients.*.
+    if (action === "client_search") {
+      const clients = await searchGiftRecipientClients(tenantSlug, url.searchParams.get("q") ?? "");
+      return Response.json({ ok: true, clients });
     }
 
     // Dati form new/edit (quotes.php action=new|edit GET).

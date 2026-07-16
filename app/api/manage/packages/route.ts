@@ -7,6 +7,8 @@ import { assertLocationAccessById, getManageLocationContext, sessionAllowedLocat
 // Messaggio legacy per un pacchetto cliente di un'altra sede (packages.php).
 const PKG_SEDE_ERR = "Pacchetto cliente non disponibile per la sede selezionata.";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
+import { searchGiftRecipientClients } from "@/lib/gift-issue-details";
+import { tenantSelect, type RowDataPacket } from "@/lib/tenant-db";
 import { can, canAny } from "@/lib/role-permissions";
 
 export const dynamic = "force-dynamic";
@@ -101,6 +103,12 @@ export async function GET(request: Request) {
 
     // LISTA pacchetti clienti fedele (tab=clients action=list): filtri
     // cliente/pacchetto/stato + sede corrente (all_locations=1 la disattiva).
+    // Ricerca clienti per il combobox filtro (server-side, 2026-07-16).
+    if (url.searchParams.get("action") === "client_search") {
+      const clients = await searchGiftRecipientClients(tenantSlug, url.searchParams.get("q") ?? "");
+      return Response.json({ ok: true, clients });
+    }
+
     if (url.searchParams.get("action") === "client_list") {
       const allLocations = ["1", "true", "on", "yes", "all"].includes(String(url.searchParams.get("all_locations") ?? "").trim().toLowerCase());
       const locationContext = await getManageLocationContext(tenantSlug).catch(() => null);
@@ -117,7 +125,14 @@ export async function GET(request: Request) {
         locationId: filterLocationId,
         page,
       });
-      const filters = await getManagePackagesFilters(tenantSlug);
+      // skipClients: il combobox Cliente fa ricerca server-side (2026-07-16).
+      const filters = await getManagePackagesFilters(tenantSlug, { skipClients: true });
+      const selClientId = parseInteger(url.searchParams.get("client_id"), 0);
+      let selectedClientLabel = "";
+      if (selClientId > 0) {
+        const cRows = await tenantSelect<RowDataPacket>({ slug: tenantSlug, table: "clients", columns: "full_name", where: "id = ?", params: [selClientId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+        selectedClientLabel = String(cRows[0]?.full_name ?? "").trim();
+      }
       return Response.json({
         ok: true,
         sourceMode: "database",
@@ -125,7 +140,7 @@ export async function GET(request: Request) {
         totalCount: paged.totalCount,
         pageSize: paged.pageSize,
         currentPage: page >= 1 ? page : 1,
-        clients: filters.clients,
+        selectedClientLabel,
         packageNames: filters.packageNames,
         hasAnyClientPackages: filters.hasAnyClientPackages,
         locationsCount: locationContext?.locations.length ?? 0,

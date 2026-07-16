@@ -14082,3 +14082,27 @@ bundle). Trappola seed: giftboxes usa colonna 'active' NON 'is_active'.
 Regressione completa verde 64+27+8+11+markers. Micro-nota annotata (filtro
 Mittente scarica tutta l'anagrafica): da valutare ricerca server-side se
 l'anagrafica crescera'.
+
+## Combobox cliente: ricerca SERVER-SIDE su 4 moduli (2026-07-16, Fable, approvato)
+
+Chiusa la micro-nota: i filtri Mittente/Cliente di GiftBox, GiftCard,
+Preventivi e Pacchetti scaricavano l'INTERA anagrafica a ogni load della
+lista (costo lineare coi clienti). Ora componente CONDIVISO
+ClientSearchCombobox (components/client-search-combobox.tsx): dropdown vuoto,
+ricerca sull'endpoint del PROPRIO modulo (client_search — gia' esistente su
+giftbox/giftcard, AGGIUNTO a quotes/packages via searchGiftRecipientClients,
+gate del modulo non clients.*), debounce 300ms, min 2 caratteri, max 50;
+payload lista SENZA clientItems/clients, con solo selectedClientLabel per il
+preselezionato da URL (label derivato overrideLabel ?? initialLabel — niente
+setState-in-effect). Suite sanate: e2e-giftcard (clientItems -> assenza),
+markers-giftcard (id legacy -> testo nuovo).
+
+INCIDENTE SFIORATO trovato durante il lavoro: la regex di quoteExpiryWarning
+era CORROTTA ((d{4}) senza backslash — un edit via script node aveva perso
+gli escape) => il badge preventivi non avrebbe MAI matchato. I probe su
+dati+bundle non lo coglievano. LEZIONE: mai inserire regex via stringhe
+template di script node (usare il tool Edit) e verificare i badge NEL DOM.
+Nuova suite Playwright test-dom-badges-combobox 6/6: badge RENDERIZZATI su
+pacchetti/preventivi/giftbox + combobox (digita->trova->label) + payload
+senza anagrafica. Regressione 4 moduli verde (64+94+80+92 + improvements
+7+11+6 + markers-giftcard 92).

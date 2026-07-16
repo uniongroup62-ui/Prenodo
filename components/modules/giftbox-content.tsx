@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { ClientSearchCombobox } from "@/components/client-search-combobox";
 
 // Port fedele della pagina GiftBox (app/pages/giftbox.php):
 // - tab default (instances): filtri SERVER-SIDE Mittente (combobox ricercabile
@@ -64,7 +65,7 @@ type ListPayload = {
   totalCount?: number;
   pageSize?: number;
   hasAnyInstances?: boolean;
-  clientItems?: Array<{ id: string; label: string }>;
+  selectedClientLabel?: string;
   showAllLocationsFilter?: boolean;
   canSettings?: boolean;
   canCreate?: boolean;
@@ -99,82 +100,6 @@ function fmtDmy(iso: string): string {
   return y && m && d ? `${d}/${m}/${y}` : "—";
 }
 
-// norm() di giftbox.js: lowercase + rimozione accenti.
-function normSearch(s: string): string {
-  return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
-}
-
-// Combobox filtro Mittente (gbInitFilterCombobox: dropdown-item + "Nessun
-// risultato", voce "Tutti").
-function SenderFilterCombobox({
-  items,
-  value,
-  onChange,
-}: {
-  items: Array<{ id: string; label: string }>;
-  value: string;
-  onChange: (id: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState("");
-  const boxRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    function onDoc(e: MouseEvent) {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
-    }
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, []);
-  const data = [{ id: "0", label: "Tutti" }, ...items];
-  const q = normSearch(search);
-  const shown = data.filter((it) => !q || normSearch(it.label).includes(q));
-  const selected = data.find((it) => it.id === value);
-  const hasSelection = value !== "" && value !== "0" && selected;
-  return (
-    <div className={`app-combobox dropdown ${open ? "show" : ""}`} id="giftboxClientFilterBox" ref={boxRef}>
-      <button
-        className="btn btn-outline-secondary dropdown-toggle w-100 app-combobox-toggle"
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <span className={`app-combobox-text ${hasSelection ? "" : "d-none"}`}>{hasSelection ? selected?.label : ""}</span>
-        <span className={`text-muted app-combobox-placeholder ${hasSelection ? "d-none" : ""}`}>Tutti</span>
-      </button>
-      <div className={`dropdown-menu p-2 w-100 ${open ? "show" : ""}`}>
-        <input
-          type="text"
-          className="form-control form-control-sm app-combobox-search"
-          placeholder="Cerca…"
-          autoComplete="off"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-        <div className="app-combobox-list mt-2" style={{ maxHeight: "14rem", overflowY: "auto" }}>
-          {shown.length === 0 ? (
-            <div className="text-muted small px-2 py-1">Nessun risultato</div>
-          ) : (
-            shown.map((it) => (
-              <button
-                key={it.id}
-                type="button"
-                className="dropdown-item d-flex justify-content-between align-items-center"
-                onClick={() => {
-                  onChange(it.id);
-                  setSearch("");
-                  setOpen(false);
-                }}
-              >
-                {it.label}
-              </button>
-            ))
-          )}
-        </div>
-      </div>
-      <input type="hidden" name="client_id" value={value} readOnly />
-    </div>
-  );
-}
 
 export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: GiftboxQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
@@ -229,7 +154,7 @@ export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string
     fetch(`/api/manage/giftboxes?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
       .then((j: ListPayload) => setData(j))
-      .catch(() => setData({ rows: [], hasAnyInstances: false, clientItems: [] }))
+      .catch(() => setData({ rows: [], hasAnyInstances: false }))
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug, tab]);
@@ -477,7 +402,12 @@ export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string
             <form className="row g-2 align-items-end" method="get" onSubmit={applyFilters}>
               <div className="col-lg-3">
                 <label className="form-label">Mittente</label>
-                <SenderFilterCombobox items={data?.clientItems ?? []} value={clientFilter} onChange={setClientFilter} />
+                <ClientSearchCombobox
+                  value={clientFilter}
+                  initialLabel={data?.selectedClientLabel ?? ""}
+                  searchUrl={(qq) => `/api/manage/giftboxes?slug=${encodeURIComponent(slug)}&action=client_search&q=${encodeURIComponent(qq)}`}
+                  onChange={(id) => setClientFilter(id)}
+                />
               </div>
 
               <div className={showAllLocationsFilter ? "col-lg-3" : "col-lg-4"}>

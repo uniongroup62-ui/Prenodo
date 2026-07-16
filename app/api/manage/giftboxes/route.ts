@@ -25,6 +25,7 @@ import {
 } from "@/lib/gift-issue-details";
 import { currentManageSession } from "@/lib/manage-auth";
 import { getManageLocationContext } from "@/lib/manage-locations";
+import { tenantSelect, type RowDataPacket } from "@/lib/tenant-db";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can, canAny } from "@/lib/role-permissions";
 
@@ -118,7 +119,14 @@ export async function GET(request: Request) {
         locationId: filterLocationId,
       }, page, 200);
       const hasAny = await hasAnyGiftBoxInstances(tenantSlug);
-      const clientRows = (await listDbClients({ slug: tenantSlug })).map((c) => ({ id: String(c.id), label: c.name }));
+      // Solo il LABEL del mittente filtrato: il combobox fa ricerca server-side
+      // (2026-07-16) — niente più anagrafica completa a ogni load.
+      const selClientId = parseInteger(url.searchParams.get("client_id"), 0);
+      let selectedClientLabel = "";
+      if (selClientId > 0) {
+        const cRows = await tenantSelect<RowDataPacket>({ slug: tenantSlug, table: "clients", columns: "full_name", where: "id = ?", params: [selClientId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+        selectedClientLabel = String(cRows[0]?.full_name ?? "").trim();
+      }
       return Response.json({
         ok: true,
         sourceMode: "database",
@@ -127,7 +135,7 @@ export async function GET(request: Request) {
         pageSize: paged.pageSize,
         currentPage: page >= 1 ? page : 1,
         hasAnyInstances: hasAny,
-        clientItems: clientRows,
+        selectedClientLabel,
         showAllLocationsFilter: (locationContext?.locations.length ?? 0) > 1,
         canSettings: can(session.user.perms, "giftbox.settings"),
         canCreate: can(session.user.perms, "pos.manage"),

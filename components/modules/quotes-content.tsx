@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { ClientSearchCombobox } from "@/components/client-search-combobox";
 
 // Port fedele della LISTA preventivi (app/pages/quotes.php action=list):
 // filtri server-side Cliente (combobox ricercabile) / Stato / Data / Numero
@@ -24,7 +25,7 @@ type QuotesQuery = {
 // 'Valido fino al' entro 7 giorni — prima scadeva in silenzio (auto-expire).
 export function quoteExpiryWarning(validUntil: string, statusKey: string): string | null {
   if (statusKey !== "sent") return null;
-  const m = String(validUntil ?? "").match(/^(d{4})-(d{2})-(d{2})/);
+  const m = String(validUntil ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!m) return null;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -56,7 +57,7 @@ type ListPayload = {
   totalCount?: number;
   pageSize?: number;
   hasAnyQuotes?: boolean;
-  clientItems?: Array<{ id: string; label: string }>;
+  selectedClientLabel?: string;
   multiLocation?: boolean;
   canSettings?: boolean;
 };
@@ -93,82 +94,6 @@ function fmtDate(d: string): string {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : s;
 }
 
-// norm() di quotes.js: lowercase + rimozione accenti.
-function normSearch(s: string): string {
-  return String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
-}
-
-// Combobox filtro Cliente (markup app-combobox + comportamento quotes.js:
-// dropdown-item, ricerca normalizzata, "Nessun risultato").
-function ClientFilterCombobox({
-  items,
-  value,
-  onChange,
-}: {
-  items: Array<{ id: string; label: string }>;
-  value: string;
-  onChange: (id: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState("");
-  const boxRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    function onDoc(e: MouseEvent) {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
-    }
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, []);
-  const data = [{ id: "0", label: "Tutti" }, ...items];
-  const q = normSearch(search);
-  const shown = data.filter((it) => !q || normSearch(it.label).includes(q));
-  const selected = data.find((it) => it.id === value);
-  const hasSelection = value !== "" && value !== "0" && selected;
-  return (
-    <div className={`app-combobox dropdown ${open ? "show" : ""}`} id="clientFilterBox" ref={boxRef}>
-      <button
-        className="btn btn-outline-secondary dropdown-toggle w-100 app-combobox-toggle"
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <span className={`app-combobox-text ${hasSelection ? "" : "d-none"}`}>{hasSelection ? selected?.label : ""}</span>
-        <span className={`text-muted app-combobox-placeholder ${hasSelection ? "d-none" : ""}`}>Tutti</span>
-      </button>
-      <div className={`dropdown-menu p-2 ${open ? "show" : ""}`}>
-        <input
-          type="text"
-          className="form-control form-control-sm app-combobox-search"
-          placeholder="Cerca…"
-          autoComplete="off"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-        <div className="app-combobox-list mt-2" style={{ maxHeight: "14rem", overflowY: "auto" }}>
-          {shown.length === 0 ? (
-            <div className="text-muted small px-2 py-1">Nessun risultato</div>
-          ) : (
-            shown.map((it) => (
-              <button
-                key={it.id}
-                type="button"
-                className="dropdown-item d-flex justify-content-between align-items-center"
-                onClick={() => {
-                  onChange(it.id);
-                  setSearch("");
-                  setOpen(false);
-                }}
-              >
-                {it.label}
-              </button>
-            ))
-          )}
-        </div>
-      </div>
-      <input type="hidden" name="client_id" value={value} readOnly />
-    </div>
-  );
-}
 
 export function QuotesContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: QuotesQuery } = {}) {
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
@@ -210,7 +135,7 @@ export function QuotesContent({ slug: slugProp, initialQuery }: { slug?: string;
     fetch(`/api/manage/quotes?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
       .then((j: ListPayload) => setData(j))
-      .catch(() => setData({ rows: [], hasAnyQuotes: false, clientItems: [] }))
+      .catch(() => setData({ rows: [], hasAnyQuotes: false }))
       .finally(() => setLoading(false));
   }, [slug, applied]);
 
@@ -338,7 +263,12 @@ export function QuotesContent({ slug: slugProp, initialQuery }: { slug?: string;
             <form method="get" className="row g-2 align-items-end" onSubmit={applyFilters}>
               <div className="col-lg-3">
                 <label className="form-label">Cliente</label>
-                <ClientFilterCombobox items={data?.clientItems ?? []} value={clientId} onChange={setClientId} />
+                <ClientSearchCombobox
+                  value={clientId === "0" ? "" : clientId}
+                  initialLabel={data?.selectedClientLabel ?? ""}
+                  searchUrl={(qq) => `/api/manage/quotes?slug=${encodeURIComponent(slug)}&action=client_search&q=${encodeURIComponent(qq)}`}
+                  onChange={(id) => setClientId(id === "" ? "0" : id)}
+                />
               </div>
 
               <div className="col-lg-2">

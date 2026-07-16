@@ -7115,7 +7115,9 @@ export type ManageQuotesList = {
   totalCount: number;
   pageSize: number;
   hasAnyQuotes: boolean;
-  clientItems: Array<{ id: string; label: string }>;
+  // Label del cliente filtrato (?client_id=): sostituisce clientItems — la
+  // lista NON scarica più l'intera anagrafica (ricerca server-side 2026-07-16).
+  selectedClientLabel: string;
   multiLocation: boolean;
 };
 export const QUOTES_LIST_PAGE_SIZE = 25;
@@ -7190,14 +7192,20 @@ export async function getManageQuotesList(
   }
 
   const anyRows = await tenantSelect<RowDataPacket>({ slug, table: "quotes", columns: "id", limit: 1 }).catch(() => [] as RowDataPacket[]);
-  const clientRows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, full_name", orderBy: "full_name ASC" }).catch(() => [] as RowDataPacket[]);
+  // Solo il LABEL del cliente filtrato (niente più anagrafica completa: il
+  // combobox filtro fa ricerca server-side).
+  let selectedClientLabel = "";
+  if (filters.clientId > 0) {
+    const cRows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "full_name", where: "id = ?", params: [filters.clientId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    selectedClientLabel = String(cRows[0]?.full_name ?? "").trim();
+  }
 
   return {
     rows: listRows,
     totalCount,
     pageSize: QUOTES_LIST_PAGE_SIZE,
     hasAnyQuotes: anyRows.length > 0,
-    clientItems: clientRows.map((c) => ({ id: String(Number(c.id ?? 0)), label: String(c.full_name ?? "") })),
+    selectedClientLabel,
     multiLocation: ctx.locations.length > 1,
   };
 }
@@ -10295,8 +10303,12 @@ export async function listManageClientPackagesPaged(
 }
 
 // Opzioni filtri lista (clienti + nomi pacchetto distinti) e catalogo per il form.
-export async function getManagePackagesFilters(slug: string): Promise<{ clients: { id: number; label: string }[]; packageNames: string[]; catalog: { id: number; name: string; sessionsTotal: number; serviceId: number; validityDays: number }[]; hasAnyClientPackages: boolean }> {
-  const clientRows = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, full_name", orderBy: "full_name ASC" }).catch(() => [] as RowDataPacket[]);
+// skipClients (2026-07-16): la LISTA non scarica più l'intera anagrafica — il
+// combobox Cliente fa ricerca server-side; il form editor continua a riceverla.
+export async function getManagePackagesFilters(slug: string, options: { skipClients?: boolean } = {}): Promise<{ clients: { id: number; label: string }[]; packageNames: string[]; catalog: { id: number; name: string; sessionsTotal: number; serviceId: number; validityDays: number }[]; hasAnyClientPackages: boolean }> {
+  const clientRows = options.skipClients
+    ? ([] as RowDataPacket[])
+    : await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "id, full_name", orderBy: "full_name ASC" }).catch(() => [] as RowDataPacket[]);
   const nameRows = await tenantSelect<RowDataPacket>({ slug, table: "client_packages", columns: "DISTINCT package_name", where: "package_name IS NOT NULL AND package_name <> ''", orderBy: "package_name ASC" }).catch(() => [] as RowDataPacket[]);
   const anyRows = await tenantSelect<RowDataPacket>({ slug, table: "client_packages", columns: "id", limit: 1 }).catch(() => [] as RowDataPacket[]);
   const catalogRows = await tenantSelect<RowDataPacket>({ slug, table: "packages", columns: "id, name, sessions_total, service_id, validity_days, is_active", orderBy: "COALESCE(is_active,1) DESC, name ASC" }).catch(() => [] as RowDataPacket[]);

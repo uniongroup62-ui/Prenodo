@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ClientSearchCombobox } from "@/components/client-search-combobox";
 
 // Faithful port of the PHP packages page, CLIENTS tab (packages.php tab=clients
 // action=list): filtri Cliente/Pacchetto (combobox ricercabili "Tutti") + Stato
@@ -149,7 +150,7 @@ export function PackagesContent({ slug: slugProp, initialQuery }: { slug?: strin
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
   const [rows, setRows] = useState<Row[]>([]);
-  const [clients, setClients] = useState<Array<{ id: string; label: string }>>([]);
+  const [selectedClientLabel, setSelectedClientLabel] = useState("");
   const [packageNames, setPackageNames] = useState<Array<{ id: string; label: string }>>([]);
   const [hasAny, setHasAny] = useState(true);
   const [locationsCount, setLocationsCount] = useState(0);
@@ -201,7 +202,7 @@ export function PackagesContent({ slug: slugProp, initialQuery }: { slug?: strin
           setRows(Array.isArray(j.clientPackages) ? j.clientPackages : []);
           setTotalCount(Number(j.totalCount ?? (Array.isArray(j.clientPackages) ? j.clientPackages.length : 0)));
           setPageSize(Math.max(1, Number(j.pageSize ?? 25)));
-          setClients((j.clients ?? []).map((c: { id: number; label: string }) => ({ id: String(c.id), label: c.label })));
+          setSelectedClientLabel(String(j.selectedClientLabel ?? ""));
           setPackageNames((j.packageNames ?? []).map((n: string) => ({ id: n, label: n })));
           setHasAny(Boolean(j.hasAnyClientPackages));
           setLocationsCount(Number(j.locationsCount ?? 0));
@@ -355,7 +356,12 @@ export function PackagesContent({ slug: slugProp, initialQuery }: { slug?: strin
             >
               <div className="col-lg-3">
                 <label className="form-label">Cliente</label>
-                <PkgCombobox options={clients} value={clientId} placeholder="Tutti" onChange={setClientId} />
+                <ClientSearchCombobox
+                  value={clientId}
+                  initialLabel={selectedClientLabel}
+                  searchUrl={(qq) => `/api/manage/packages?slug=${encodeURIComponent(slug)}&action=client_search&q=${encodeURIComponent(qq)}`}
+                  onChange={(id) => setClientId(id)}
+                />
               </div>
 
               <div className="col-lg-3">
