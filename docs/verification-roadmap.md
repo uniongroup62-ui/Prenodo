@@ -13926,3 +13926,30 @@ VERIFICA live suite estesa 16/16: ristretto sede-51 vede solo 51/senza-sede
 (zero leak sede 21), logs.view senza sotto-permesso -> deletions 403,
 logs.deletions da solo -> activity 403 + switch info, senza nulla -> 403.
 Regressione Ruoli verde (16+16+35, nuovi permessi nel payload).
+
+## Pacchetti — pass 2 (2026-07-16, Fable): ZERO BUG
+
+Drift dall'ultimo pass (aec1139/2e48ff5): solo restyle filtri (gia' regressato).
+Batteria completa VERDE al primo colpo (251): e2e-packages 48 + catalog 27+13
++ clientdetail 12 + editor 15 + usage 10 + markers 92 + verify OK +
+test-pacchetti 26 + test-pkg-pos 8.
+
+Analisi mutazioni (route 7 azioni + funzioni db-repositories): catalog_delete
+= detach client_packages (package_id NULL, nome+snapshot conservati) + figli
++ template; client_save con autofill catalogo, gate sede template, lock
+scadenza-se-usato, annullo solo-da-vendita, riattivazione-da-scaduto bloccata
+con contenuti eliminati; usage_add doppio path servizi (riserve per-servizio)
+/ prodotti (stock PER-SEDE + documento magazzino carico/scarico); emissione
+sedute = SOLO servizi (sessions_total memorizzato).
+
+Nuova suite test-pacchetti-mutations 13/13 (cross-action live): emissione con
+snapshot, edit catalogo NON retroattivo (nome congelato + snapshot 2 voci
+mentre il template passa a 1), ritiro prodotto stock sede 5->4 + doc scarico
+e ripristino inverso, guardie oltre-quantita'/stock-insufficiente verbatim,
+lock scadenza (client_save E update_expiry col prefisso 'Errore: '), annullo
+da edit rifiutato, sede non abilitata, usage su annullato. Cleanup 0 residui
+(trappola shape: risposta usa totalSessions, non sessionsTotal).
+
+VERDETTO: eliminazione (detach non distruttivo), modifica (guardie completi),
+usage (doppio path con magazzino), emissione: tutte CORRETTE. Nessun bug.
+Miglioria proposta: strumentazione Log fase 2 per pacchetti.
