@@ -1,4 +1,5 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
+import { logActivity } from "@/lib/activity-log";
 import { addManageGiftExcludedClient, deleteManageGift, getManageGift, giftFormCatalog, giftStructureBlockReason, issueDbGift, listDbGifts, listManageGiftPage, listManageGifts, redeemDbGift, removeManageGiftExcludedClient, saveManageGift, toggleManageGift, updateManageGiftTerms } from "@/lib/db-repositories";
 import { assignGiftManual, cancelGiftInstance, checkGiftManualAssignmentEligibility, deleteClosedGiftInstance, getGiftInstanceDetail, giftCampaignSummaryStats, listGiftInstances, redeemGiftInstanceItems, sendGiftVoucherEmailManage, updateGiftInstanceInternalNote, updateGiftInstanceNote } from "@/lib/gifts-instances";
 import { currentManageSession } from "@/lib/manage-auth";
@@ -130,7 +131,10 @@ export async function POST(request: Request) {
     // / Gifts::saveGift). id=0 creates, id>0 updates. Gated by gifts.manage.
     if (action === "save" || action === "new" || action === "edit") {
       if (!can(session.user.perms, "gifts.manage")) return jsonError("Permesso omaggi mancante.", 403);
-      const gift = await saveManageGift(tenantSlug, body, parseInteger(body.id, 0));
+      const giftEditId = parseInteger(body.id, 0);
+      const isGiftClone = parseInteger(body.clone_source_id, 0) > 0;
+      const gift = await saveManageGift(tenantSlug, body, giftEditId);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "omaggi", action: isGiftClone || giftEditId <= 0 ? "crea" : "modifica", entityType: "gift", entityId: gift.id, label: isGiftClone ? `Clonata campagna omaggio "${gift.name}" (da #${parseInteger(body.clone_source_id, 0)})` : `${giftEditId > 0 ? "Modificata" : "Creata"} campagna omaggio "${gift.name}"${giftEditId > 0 ? ` (#${giftEditId})` : ""}` });
       return Response.json({ ok: true, source: "gifts?action=save", sourceMode: "database", gift, gifts: await listDbGifts(tenantSlug) });
     }
 
@@ -142,6 +146,7 @@ export async function POST(request: Request) {
       const active = ["1", "true", "on", "yes"].includes(String(body.active ?? "").toLowerCase());
       try {
         const result = await toggleManageGift(tenantSlug, parseInteger(body.id, 0), active, session.user.id);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "omaggi", action: result.active ? "riattiva" : "disattiva", entityType: "gift", entityId: parseInteger(body.id, 0), label: `Campagna omaggio #${parseInteger(body.id, 0)} ${result.active ? "attivata" : "disattivata"}` });
         return Response.json({ sourceMode: "database", ...result, msg: result.active ? "Campagna attivata" : "Campagna disattivata", campaigns: await listManageGifts(tenantSlug) });
       } catch (error) {
         const openSummary = error instanceof Error ? (error as Error & { openSummary?: number }).openSummary ?? 0 : 0;
@@ -155,6 +160,7 @@ export async function POST(request: Request) {
       if (!can(session.user.perms, "gifts.manage")) return jsonError("Permesso omaggi mancante.", 403);
       try {
         const result = await deleteManageGift(tenantSlug, parseInteger(body.id, 0), session.user.id);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "omaggi", action: "elimina", entityType: "gift", entityId: parseInteger(body.id, 0), label: `Eliminata campagna omaggio #${parseInteger(body.id, 0)} (storico conservato)` });
         return Response.json({ sourceMode: "database", ...result, msg: "Campagna eliminata", campaigns: await listManageGifts(tenantSlug) });
       } catch {
         return Response.json({ ok: false, error: "Errore eliminazione campagna" }, { status: 400 });
@@ -168,6 +174,7 @@ export async function POST(request: Request) {
       const giftId = parseInteger(body.gift_id ?? body.id, 0);
       const enabled = ["1", "true", "on", "yes"].includes(String(body.terms_enabled ?? "").toLowerCase());
       await updateManageGiftTerms(tenantSlug, giftId, enabled, String(body.terms_text ?? ""), session.user.id);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "omaggi", action: "modifica", entityType: "gift", entityId: giftId, label: `Aggiornate condizioni campagna omaggio #${giftId}` });
       return Response.json({ ok: true, sourceMode: "database", msg: "Condizioni gift aggiornate", open_summary: giftId });
     }
 
@@ -177,6 +184,7 @@ export async function POST(request: Request) {
       if (!can(session.user.perms, "gifts.manage")) return jsonError("Permesso omaggi mancante.", 403);
       const giftId = parseInteger(body.gift_id ?? body.id, 0);
       await addManageGiftExcludedClient(tenantSlug, giftId, parseInteger(body.client_id, 0), session.user.id);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "omaggi", action: "modifica", entityType: "gift", entityId: giftId, label: `Cliente #${parseInteger(body.client_id, 0)} escluso dalla campagna omaggio #${giftId}` });
       return Response.json({ ok: true, sourceMode: "database", msg: "Cliente aggiunto all'esclusione", open_summary: giftId });
     }
 
@@ -184,6 +192,7 @@ export async function POST(request: Request) {
       if (!can(session.user.perms, "gifts.manage")) return jsonError("Permesso omaggi mancante.", 403);
       const giftId = parseInteger(body.gift_id ?? body.id, 0);
       await removeManageGiftExcludedClient(tenantSlug, giftId, parseInteger(body.client_id, 0), session.user.id);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "omaggi", action: "modifica", entityType: "gift", entityId: giftId, label: `Cliente #${parseInteger(body.client_id, 0)} riammesso nella campagna omaggio #${giftId}` });
       return Response.json({ ok: true, sourceMode: "database", msg: "Cliente rimosso dall'esclusione", open_summary: giftId });
     }
 
@@ -216,17 +225,20 @@ export async function POST(request: Request) {
           note: String(body.redeem_note ?? ""),
           location: locationContext ? { id: locationContext.currentLocationId, name: currentLocation?.name ?? "" } : null,
         });
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "omaggi", action: "riscatta", entityType: "gift_instance", entityId: instanceId, label: `${result.redeemedAll ? "Riscatto completo" : "Riscatto parziale"} omaggio #${instanceId} (${result.redeemedQty} unità)` });
         return Response.json({ sourceMode: "database", ...result, instance: await getGiftInstanceDetail(tenantSlug, instanceId) });
       }
 
       if (action === "cancel_instance") {
         const confirmed = ["1", "true", "on", "yes"].includes(String(body.confirm_cancel_linked_appointments ?? "").toLowerCase());
         const result = await cancelGiftInstance(tenantSlug, instanceId, session.user.id, String(body.cancel_reason ?? ""), confirmed);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "omaggi", action: "annulla", entityType: "gift_instance", entityId: instanceId, label: `Annullato omaggio #${instanceId}` });
         return Response.json({ sourceMode: "database", ...result, instance: await getGiftInstanceDetail(tenantSlug, instanceId) });
       }
 
       if (action === "delete_instance") {
         const result = await deleteClosedGiftInstance(tenantSlug, instanceId, session.user.id);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "omaggi", action: "elimina", entityType: "gift_instance", entityId: instanceId, label: `Eliminato omaggio chiuso #${instanceId}` });
         return Response.json({ sourceMode: "database", ...result });
       }
 
@@ -242,6 +254,7 @@ export async function POST(request: Request) {
 
       if (action === "send_email") {
         const result = await sendGiftVoucherEmailManage(tenantSlug, instanceId, String(body.send_to ?? ""));
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "omaggi", action: "invia", entityType: "gift_instance", entityId: instanceId, label: `Inviato voucher omaggio #${instanceId} via email` });
         return Response.json({ sourceMode: "database", ...result, instance: await getGiftInstanceDetail(tenantSlug, instanceId) });
       }
 
@@ -258,6 +271,7 @@ export async function POST(request: Request) {
           forceIneligible: ["1", "true", "on", "yes"].includes(String(body.force_ineligible ?? "").toLowerCase()),
           location: locationContext ? { id: locationContext.currentLocationId, name: currentLocation?.name ?? "" } : null,
         });
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "omaggi", action: "crea", entityType: "gift_instance", entityId: Number((result as { instanceId?: number }).instanceId ?? 0), label: `Assegnato manualmente omaggio campagna #${parseInteger(body.gift_id, 0)} a cliente #${parseInteger(body.client_id, 0)}` });
         return Response.json({ sourceMode: "database", ...result });
       }
     }
