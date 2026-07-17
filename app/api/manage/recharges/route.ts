@@ -1,4 +1,5 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
+import { logActivity } from "@/lib/activity-log";
 import { currentManageSession } from "@/lib/manage-auth";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import {
@@ -52,20 +53,41 @@ export async function POST(request: Request) {
     // Accept both the new action= verbs and the legacy _mode= names.
     const action = String(body.action ?? body._mode ?? url.searchParams.get("action") ?? "save");
 
-    switch (action) {
-      case "create_template":
-        return Response.json(await saveManageRechargeTemplate(tenantSlug, body, "create"));
+    // Log attività (2026-07-17): traccia crea/modifica/elimina modello nel
+    // registro Log (module 'ricariche'); l'emissione/annullo ricariche è già
+    // tracciata dal log POS (incasso/annullo vendita).
+    const logTemplate = (verb: "crea" | "modifica" | "elimina", entityId: number, label: string) =>
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "ricariche", action: verb, entityType: "recharge_template", entityId, label });
+    const templateId = parseInteger(body.template_id ?? body.id, 0);
+    const templateTitle = String(body.title ?? "").trim();
 
-      case "update_template":
-        return Response.json(await saveManageRechargeTemplate(tenantSlug, body, "update"));
+    switch (action) {
+      case "create_template": {
+        const out = await saveManageRechargeTemplate(tenantSlug, body, "create");
+        logTemplate("crea", 0, `Creato modello ricarica "${templateTitle}"`);
+        return Response.json(out);
+      }
+
+      case "update_template": {
+        const out = await saveManageRechargeTemplate(tenantSlug, body, "update");
+        logTemplate("modifica", templateId, `Modificato modello ricarica "${templateTitle}" (#${templateId})`);
+        return Response.json(out);
+      }
 
       // Compat: il vecchio verbo unico distingue per id.
-      case "save":
-        return Response.json(await saveManageRechargeTemplate(tenantSlug, body, parseInteger(body.template_id ?? body.id, 0) > 0 ? "update" : "create"));
+      case "save": {
+        const isEdit = templateId > 0;
+        const out = await saveManageRechargeTemplate(tenantSlug, body, isEdit ? "update" : "create");
+        logTemplate(isEdit ? "modifica" : "crea", isEdit ? templateId : 0, `${isEdit ? "Modificato" : "Creato"} modello ricarica "${templateTitle}"${isEdit ? ` (#${templateId})` : ""}`);
+        return Response.json(out);
+      }
 
       case "delete":
-      case "delete_template":
-        return Response.json(await deleteManageRechargeTemplate(tenantSlug, parseInteger(body.template_id ?? body.id, 0)));
+      case "delete_template": {
+        const out = await deleteManageRechargeTemplate(tenantSlug, templateId);
+        logTemplate("elimina", templateId, `Eliminato modello ricarica #${templateId}`);
+        return Response.json(out);
+      }
 
       // Stub legacy: le ricariche si registrano dalla cassa (recharges.php ~178).
       case "create_recharge":
