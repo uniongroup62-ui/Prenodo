@@ -14214,3 +14214,38 @@ e2e-pos-gift 11 + test-pos-checkout 8 + DOM sender 4 — tutte verdi.
 Trappole seed: sale_items usa qty (non quantity) e il CHECK item_type ammette
 solo service/product/package (le righe GiftCard sono 'product' item_id NULL);
 sales.sale_date NOT NULL.
+
+## 2026-07-17 — GiftCard pass 2b: riscatti POS/prenotazione fedeli + atomici (0ec411f)
+
+4 bug reali trovati e corretti nel percorso redeemDbGiftCard (tender POS +
+riscatto da prenotazione — il ledger che il dettaglio Movimenti mostra):
+1. SEGNO: scriveva importi POSITIVI su type='redeem' (legacy: negativi) — la
+   tabella Movimenti colorava i riscatti in VERDE come accrediti.
+2. NOTA/OPERATORE/SEDE: nota generica 'Riscatto GiftCard' senza vendita/
+   prenotazione, senza created_by ne' location (legacy: 'Riscatto GiftCard in
+   vendita #id (CODE)' / 'Riscatto su prenotazione #code' + by + sede). La
+   nota-prenotazione e' ANCHE il pattern che il dettaglio normalizza in
+   'In sospeso su prenotazione #X' -> quella logica era MORTA per i dati Next.
+3. CARD IBRIDE: status flippava a 'redeemed' su saldo 0 anche con item
+   inclusi residui (legacy: redeemed solo con credito 0 E item esauriti).
+4. ATOMICITA': read-then-write senza lock (legacy: SELECT ... FOR UPDATE) ->
+   double-spend con riscatti concorrenti. Fix: decremento condizionale
+   (WHERE balance >= x) sia in redeemDbGiftCard che in redeemGiftCardCredit.
+5. LISTA: ricerca con LIKE (case-sensitive in PG) -> ILIKE come la GiftBox.
+
+BONUS (Appuntamenti, scoperto dalla regressione): resolveStaffForAppointment
+era LIMIT 1 SENZA ORDER BY -> risoluzione NON-deterministica con omonimi
+'luca'/'Luca' (e2e-qb-redeem-edit falliva 24 check per questo, pre-esistente).
+Fix: match esatto preferito + id ASC. Sanato anche test-appuntamenti O2
+(fixture drift: staff 22 ora ha staff_locations(21) -> seed temporaneo 22->51).
+
+Verifiche: test-giftcard-pass2b 17/17 CLEAN (ILIKE, ledger POS con void,
+ibrida, prenotazione con 'In sospeso', parallelo 60+60 su 100 -> 1 solo ok) +
+test-dom-giftcard-movements 3/3 (rosso/side/operatore renderizzati) +
+regressione: e2e-giftcard 94, markers-giftcard 92, pass2a 11, qb-redeem-edit
+28/28, pos-logic 16, pos-checkout 8, pos-gift 11, appuntamenti 41/41.
+
+Residui deliberati: operatore '—' sui movimenti da prenotazione (plumbing by
+in create/updateDbAppointment); refundDbGiftCard rimborsa anche card scadute
+(il legacy addTransaction rifiuterebbe il topup — il nostro comportamento
+garantisce che l'annullo vendita ripristini sempre il saldo).
