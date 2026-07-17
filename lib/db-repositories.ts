@@ -17305,6 +17305,18 @@ export async function toggleDbConfigRecord(moduleId: string, recordId: number, a
   const normalized = normalizeConfigModuleId(moduleId);
   const def = configDefinitions[normalized];
   if (!def?.activeColumn) throw new Error("Toggle DB non disponibile per questo modulo.");
+  // Invariante ConsentModules legacy: il modulo di sistema 'PDF privacy GDPR'
+  // è SEMPRE attivo (l'editor mostra 'Sempre attivo', il save forza is_active=1
+  // e nessuna superficie legacy permette di spegnerlo). Questo toggle generico
+  // esiste solo nel port: senza guardia poteva scrivere is_active=0 facendo
+  // sparire il modulo dai flussi consenso filtrati in SQL.
+  if (def.table === "consent_modules" && !active) {
+    const rows = await tenantSelect<RowDataPacket>({ slug, table: "consent_modules", columns: "is_system, system_key, type", where: "id = ?", params: [recordId], limit: 1 }).catch(() => []);
+    const row = rows[0];
+    if (row && (Number(row.is_system ?? 0) === 1 || String(row.system_key ?? "") === "privacy_gdpr" || String(row.type ?? "") === "privacy_gdpr")) {
+      throw new Error("Il modulo PDF privacy GDPR e di sistema e non puo essere disattivato.");
+    }
+  }
   await tenantUpdate({ slug, table: def.table, id: recordId, values: { [def.activeColumn]: active ? 1 : 0 } });
   return listDbConfigModule(normalized, slug);
 }

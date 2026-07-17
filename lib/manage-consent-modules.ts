@@ -2,7 +2,7 @@ import "server-only";
 
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { parseInteger } from "@/lib/api-utils";
-import { columnExists, dbQuery, quoteIdentifier, tenantDelete, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
+import { columnExists, dbQuery, quoteIdentifier, tenantInsert, tenantSelect, tenantTable, tenantUpdate, withTenantTransaction } from "@/lib/tenant-db";
 import {
   privacyConsentLabels,
   privacyDefaultTemplate,
@@ -399,7 +399,8 @@ export async function saveManageConsentModule(slug: string, body: Record<string,
     try {
       const bizTable = await tenantTable(slug, "businesses");
       if (await columnExists(bizTable.name, "gdpr_template_body")) {
-        const rows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "id", limit: 1 });
+        // privacy_business_row = PRIMA riga (ORDER BY id ASC — mai LIMIT 1 nudo).
+        const rows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "id", orderBy: "id ASC", limit: 1 });
         const bizId = Number(rows[0]?.id ?? 0);
         if (bizId > 0) await tenantUpdate({ slug, table: "businesses", id: bizId, values: { gdpr_template_body: bodyTemplate } });
       }
@@ -432,25 +433,36 @@ export async function deleteManageConsentModule(slug: string, moduleId: number):
   }).catch(() => []);
 
   const associationCount = records.length;
-  const signedCount = records.filter((r) => Number(r.document_id ?? 0) > 0 || String(r.status ?? "") === "signed").length;
+  // consent_module_record_status_normalize (494-506): lo stato viene
+  // NORMALIZZATO lowercase/trim prima del confronto ('Signed' conta come
+  // firmato); un document_id > 0 vale firmato a prescindere dallo stato.
+  const signedCount = records.filter((r) => Number(r.document_id ?? 0) > 0 || String(r.status ?? "").trim().toLowerCase() === "signed").length;
   if (signedCount > 0) {
     throw new Error("Il modulo ha documenti firmati collegati e non puo essere eliminato. Disattivalo per non usarlo nei nuovi consensi e conserva lo storico cliente.");
   }
 
-  // Come la transazione legacy (consent_module_delete 412-422): se la pulizia
-  // delle associazioni fallisce l'eliminazione ABORTISCE (niente catch-swallow,
-  // il modulo non va rimosso lasciando record orfani).
+  // TRANSAZIONE come il legacy (consent_module_delete 407-419: beginTransaction
+  // -> delete associazioni bozza + delete modulo -> commit, rollback su errore):
+  // mai bozze cancellate col modulo ancora presente o viceversa.
   const recordsTable = await tenantTable(slug, "client_consent_records").catch(() => null);
-  if (recordsTable) {
-    const clauses = ["module_id=?"];
-    const params: unknown[] = [moduleId];
-    if (recordsTable.mode === "shared" && (await columnExists(recordsTable.name, "tenant_id"))) {
-      clauses.unshift("tenant_id=?");
-      params.unshift(recordsTable.tenantId ?? 0);
+  const modulesTable = await tenantTable(slug, "consent_modules");
+  await withTenantTransaction(slug, async (q) => {
+    if (recordsTable) {
+      const clauses = ["module_id = ?"];
+      const params: unknown[] = [moduleId];
+      if (recordsTable.mode === "shared" && (await columnExists(recordsTable.name, "tenant_id"))) {
+        clauses.unshift("tenant_id = ?");
+        params.unshift(recordsTable.tenantId ?? 0);
+      }
+      await q(`DELETE FROM ${quoteIdentifier(recordsTable.name)} WHERE ${clauses.join(" AND ")}`, params);
     }
-    await dbQuery(`DELETE FROM ${quoteIdentifier(recordsTable.name)} WHERE ${clauses.join(" AND ")}`, params);
-  }
-
-  await tenantDelete({ slug, table: "consent_modules", id: moduleId });
+    const modClauses = ["id = ?"];
+    const modParams: unknown[] = [moduleId];
+    if (modulesTable.mode === "shared") {
+      modClauses.unshift("tenant_id = ?");
+      modParams.unshift(modulesTable.tenantId ?? 0);
+    }
+    await q(`DELETE FROM ${quoteIdentifier(modulesTable.name)} WHERE ${modClauses.join(" AND ")}`, modParams);
+  });
   return { associationCount };
 }

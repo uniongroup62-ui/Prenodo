@@ -14880,3 +14880,42 @@ gallery sede #id' (elimina), move -> 'Riordinata gallery sede #id'
 (sposta). Errori (sniff MIME, foto inesistente) NON loggano. Verifica
 test-sedi-gallery-log 5/5 CLEAN; regressione e2e-locations-page 32/32,
 test-sedi-pass2 17/17, test-profilo-log 5/5.
+
+## 2026-07-17 — Moduli consenso pass 2: 4 fix (tx delete, firmati normalizzati, guardia toggle sistema, prima-riga)
+
+Ri-analisi di consent_modules.php (426) + ConsentModules.php (731) vs
+manage-consent-modules + configuration route.
+
+FIX 1 — DELETE TRANSAZIONALE. consent_module_delete (407-419) avvolge
+delete-bozze + delete-modulo in beginTransaction; il port era sequenziale
+(bozze perse col modulo ancora presente su errore a meta'). Ora
+withTenantTransaction.
+
+FIX 2 — CHECK FIRMATI NORMALIZZATO. Il legacy normalizza lo status
+(lowercase/trim, consent_module_record_status_normalize 494-506) prima del
+confronto: un record 'Signed' bloccava la delete; il port confrontava
+case-sensitive e l'avrebbe cascato via. Ora .trim().toLowerCase().
+
+FIX 3 — GUARDIA TOGGLE SISTEMA. Il toggle generico della route
+configuration (superficie SOLO-Next: nessuna pagina legacy espone toggle su
+consent_modules) poteva scrivere is_active=0 sul modulo di SISTEMA
+violando l'invariante legacy 'sempre attivo' (il modulo sarebbe sparito
+dai flussi consenso filtrati in SQL). toggleDbConfigRecord ora rifiuta con
+'Il modulo PDF privacy GDPR e di sistema e non puo essere disattivato.'.
+
+FIX 4 — PRIMA RIGA. Il mirror gdpr_template_body leggeva businesses con
+LIMIT 1 senza ORDER BY (classe LIMIT-1 non deterministico): ora ORDER BY
+id ASC come privacy_business_row.
+
+Verifica live test-moduli-consenso-pass2 14/14 CLEAN (sistema
+ripristinato via API+SQL, mirror incluso): create con slug derivato e
+footer del tipo, slug unico '-2' su nome duplicato, privacy_gdpr
+duplicato vietato, template vuoto rifiutato, edit SISTEMA (nome NON
+forzato, type/slug/attivo blindati, mirror su gdpr_template_body),
+toggle sistema rifiutato vs toggle informato ok, delete con bozza
+(associationCount=1, cascata tx), record 'Signed' che blocca, delete
+sistema rifiutata, id inesistente, ensure senza doppioni.
+
+Regressione: test-consensi 25/25, e2e-consent-modules 18/18,
+markers-consent-modules 88/88, test-consensi-cliente 38/38 (consumer dei
+record). Baseline (1 modulo di sistema, 0 record) CLEAN.
