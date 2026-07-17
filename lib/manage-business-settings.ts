@@ -24,6 +24,8 @@ import {
   tenantSelect,
   tenantTable,
   tenantUpdate,
+  withTenantTransaction,
+  type TenantTxQuery,
 } from "@/lib/tenant-db";
 
 type TenantTarget = Awaited<ReturnType<typeof tenantTable>>;
@@ -537,15 +539,24 @@ export async function moveBusinessLocation(slug: string, locationId: number, dir
   const target = await tenantTable(slug, "locations");
   // Messaggio verbatim locations.php 367.
   if (!await columnExists(target.name, "sort_order")) throw new Error("Per ordinare le sedi importa il dump SQL completo aggiornato.");
-  const rows = await normalizeLocationOrder(slug);
-  const index = rows.findIndex((row) => Number(row.id ?? 0) === locationId);
+  // sede_move_location legacy (locations.php 253-292): normalize + swap DENTRO
+  // una transazione (rollback su errore).
+  let moved = false;
+  await withTenantTransaction(slug, async (q) => {
+    const rows = await normalizeLocationOrder(slug, q);
+    const index = rows.findIndex((row) => Number(row.id ?? 0) === locationId);
+    if (index < 0) return;
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= rows.length) return;
+    const scopeA = await tenantScope(target, ["id = ?"], [Number(rows[index].id)]);
+    await q(`UPDATE ${quoteIdentifier(target.name)} SET sort_order = ${Number(rows[targetIndex].sort_order ?? 0)}${scopeA.where}`, scopeA.params);
+    const scopeB = await tenantScope(target, ["id = ?"], [Number(rows[targetIndex].id)]);
+    await q(`UPDATE ${quoteIdentifier(target.name)} SET sort_order = ${Number(rows[index].sort_order ?? 0)}${scopeB.where}`, scopeB.params);
+    moved = true;
+  });
   // Flash legacy: msg='Ordine sedi aggiornato' se spostata, msg='La sede e gia
   // in posizione limite.' altrimenti (entrambi SUCCESS in locations.php 372).
-  if (index < 0) return { ...await getBusinessSettingsContext(slug, publicOrigin), moved: false, message: "La sede e gia in posizione limite." };
-  const targetIndex = direction === "up" ? index - 1 : index + 1;
-  if (targetIndex < 0 || targetIndex >= rows.length) return { ...await getBusinessSettingsContext(slug, publicOrigin), moved: false, message: "La sede e gia in posizione limite." };
-  await tenantUpdate({ slug, table: "locations", id: Number(rows[index].id), values: { sort_order: Number(rows[targetIndex].sort_order ?? 0) } });
-  await tenantUpdate({ slug, table: "locations", id: Number(rows[targetIndex].id), values: { sort_order: Number(rows[index].sort_order ?? 0) } });
+  if (!moved) return { ...await getBusinessSettingsContext(slug, publicOrigin), moved: false, message: "La sede e gia in posizione limite." };
   await syncMarketplaceProfile(slug, publicOrigin);
   return { ...await getBusinessSettingsContext(slug, publicOrigin), moved: true, message: "Ordine sedi aggiornato" };
 }
@@ -711,11 +722,10 @@ export async function deleteBusinessLocation(slug: string, locationId: number, c
 
   await ensureLocationDeletionLogTables(slug);
   const locationName = clean(String(preview.location?.name ?? `Sede #${locationId}`), 190);
-  const logId = await insertLocationDeletionLog(slug, locationId, locationName, reason, preview);
   const deleted: Record<string, number> = {};
   // LocationDeletion 591-599: i file della gallery vengono eliminati PRIMA
-  // delle righe (qui gli oggetti R2, best-effort; i path legacy /uploads via
-  // deletePublicUpload).
+  // delle righe (oggetti R2 / path legacy, best-effort NON transazionale —
+  // come il delete_local_upload legacy dentro il try).
   const galleryRows = await tenantSelect<RowDataPacket>({ slug, table: "location_gallery_images", columns: "path", where: "location_id = ?", params: [locationId] }).catch(() => [] as RowDataPacket[]);
   for (const row of galleryRows) {
     const storedPath = String(row.path ?? "");
@@ -723,53 +733,69 @@ export async function deleteBusinessLocation(slug: string, locationId: number, c
     if (key) await deletePublicObject(key).catch(() => undefined);
     else await deletePublicUpload(storedPath).catch(() => undefined);
   }
-  for (const table of locationCleanupTables) {
-    const count = await deleteRowsWithLocation(slug, table, locationId);
-    if (count > 0) deleted[table] = (deleted[table] ?? 0) + count;
-  }
-  await deleteLocationActivityCategories(slug, locationId);
 
-  // LocationDeletion 604-624: per ogni gruppo stacca le mappature dei master
-  // CONDIVISI e cancella i master ESCLUSIVI con i figli (gifts = grafo dedicato,
-  // prodotti via productSpec). Ids presi dal preview appena calcolato.
-  const exclusiveGroups = (preview.exclusive ?? {}) as Record<string, Record<string, string>>;
-  const sharedGroups = (preview.shared ?? {}) as Record<string, Record<string, string>>;
-  for (const [key, spec] of Object.entries(locationMappingSpecs)) {
-    const exclusiveIds = Object.keys(exclusiveGroups[key] ?? {}).map(Number).filter((id) => id > 0);
-    const sharedIds = Object.keys(sharedGroups[key] ?? {}).map(Number).filter((id) => id > 0);
-    if (sharedIds.length) {
-      const count = await deleteMappingRowsForLocation(slug, spec, locationId, sharedIds);
-      if (count > 0) deleted[spec.mapping] = (deleted[spec.mapping] ?? 0) + count;
+  // CASCATA ATOMICA come il legacy (LocationDeletion 557-646: beginTransaction
+  // -> log + cleanup + master/mappature + riassegnazione clienti + delete sede
+  // + reorder + log items -> commit, rollback su QUALSIASI errore): mai una
+  // sede semi-svuotata.
+  const logsTable = await tenantTable(slug, "location_deletion_logs");
+  const locationsTable = await tenantTable(slug, "locations");
+  await withTenantTransaction(slug, async (q) => {
+    const exec = txExec(q);
+    const inserted = await q(
+      `INSERT INTO ${quoteIdentifier(logsTable.name)} (location_id, location_name, reason, summary_json, deleted_by) VALUES (?, ?, ?, ?, NULL) RETURNING id`,
+      [locationId, locationName, emptyToNull(reason), JSON.stringify(preview)],
+    );
+    const logId = Number(inserted[0]?.id ?? 0);
+    for (const table of locationCleanupTables) {
+      const count = await deleteRowsWithLocation(slug, table, locationId, exec);
+      if (count > 0) deleted[table] = (deleted[table] ?? 0) + count;
     }
-    if (exclusiveIds.length) {
-      await deleteMappedMasters(slug, spec, exclusiveIds, deleted);
+    await deleteLocationActivityCategories(slug, locationId, exec);
+
+    // LocationDeletion 604-624: per ogni gruppo stacca le mappature dei master
+    // CONDIVISI e cancella i master ESCLUSIVI con i figli (gifts = grafo dedicato,
+    // prodotti via productSpec). Ids presi dal preview appena calcolato.
+    const exclusiveGroups = (preview.exclusive ?? {}) as Record<string, Record<string, string>>;
+    const sharedGroups = (preview.shared ?? {}) as Record<string, Record<string, string>>;
+    for (const [key, spec] of Object.entries(locationMappingSpecs)) {
+      const exclusiveIds = Object.keys(exclusiveGroups[key] ?? {}).map(Number).filter((id) => id > 0);
+      const sharedIds = Object.keys(sharedGroups[key] ?? {}).map(Number).filter((id) => id > 0);
+      if (sharedIds.length) {
+        const count = await deleteMappingRowsForLocation(slug, spec, locationId, sharedIds, exec);
+        if (count > 0) deleted[spec.mapping] = (deleted[spec.mapping] ?? 0) + count;
+      }
+      if (exclusiveIds.length) {
+        await deleteMappedMasters(slug, spec, exclusiveIds, deleted, exec);
+      }
     }
-  }
-  const productExclusive = Object.keys(exclusiveGroups.products ?? {}).map(Number).filter((id) => id > 0);
-  const productShared = Object.keys(sharedGroups.products ?? {}).map(Number).filter((id) => id > 0);
-  if (productShared.length) {
-    const count = await deleteMappingRowsForLocation(slug, locationProductSpec, locationId, productShared);
-    if (count > 0) deleted.product_stocks = (deleted.product_stocks ?? 0) + count;
-  }
-  if (productExclusive.length) {
-    await deleteMappedMasters(slug, locationProductSpec, productExclusive, deleted);
-  }
+    const productExclusive = Object.keys(exclusiveGroups.products ?? {}).map(Number).filter((id) => id > 0);
+    const productShared = Object.keys(sharedGroups.products ?? {}).map(Number).filter((id) => id > 0);
+    if (productShared.length) {
+      const count = await deleteMappingRowsForLocation(slug, locationProductSpec, locationId, productShared, exec);
+      if (count > 0) deleted.product_stocks = (deleted.product_stocks ?? 0) + count;
+    }
+    if (productExclusive.length) {
+      await deleteMappedMasters(slug, locationProductSpec, productExclusive, deleted, exec);
+    }
 
-  // RIASSEGNAZIONE CLIENTI (LocationDeletion 626-634 + 698-720): piano del
-  // preview (sede con più attività) con ricalcolo/fallback per-cliente; mai
-  // lasciare location_id orfani.
-  const clientIds = Object.keys(sharedGroups.clients ?? {}).map(Number).filter((id) => id > 0);
-  if (clientIds.length) {
-    const planned = (preview.clientReassignments ?? {}) as Record<string, { location_id?: number }>;
-    const result = await reassignSharedClientLocations(slug, clientIds, locationId, planned);
-    if (result.reassigned > 0) deleted.clients_reassigned = result.reassigned;
-    if (result.withoutLocation > 0) deleted.clients_without_location = result.withoutLocation;
-  }
+    // RIASSEGNAZIONE CLIENTI (LocationDeletion 626-634 + 698-720): piano del
+    // preview (sede con più attività) con ricalcolo/fallback per-cliente; mai
+    // lasciare location_id orfani.
+    const clientIds = Object.keys(sharedGroups.clients ?? {}).map(Number).filter((id) => id > 0);
+    if (clientIds.length) {
+      const planned = (preview.clientReassignments ?? {}) as Record<string, { location_id?: number }>;
+      const result = await reassignSharedClientLocations(slug, clientIds, locationId, planned, exec);
+      if (result.reassigned > 0) deleted.clients_reassigned = result.reassigned;
+      if (result.withoutLocation > 0) deleted.clients_without_location = result.withoutLocation;
+    }
 
-  await tenantDelete({ slug, table: "locations", id: locationId });
-  deleted.locations = (deleted.locations ?? 0) + 1;
-  await normalizeLocationOrder(slug);
-  await logLocationDeletionItems(slug, logId, preview, deleted);
+    const locScope = await tenantScope(locationsTable, ["id = ?"], [locationId]);
+    await q(`DELETE FROM ${quoteIdentifier(locationsTable.name)}${locScope.where}`, locScope.params);
+    deleted.locations = (deleted.locations ?? 0) + 1;
+    await normalizeLocationOrder(slug, q);
+    await logLocationDeletionItems(slug, logId, preview, deleted, q);
+  });
   await syncMarketplaceProfile(slug, publicOrigin);
   return { ...await getBusinessSettingsContext(slug, publicOrigin), message: "Sede eliminata definitivamente" };
 }
@@ -997,12 +1023,12 @@ async function saveLocationActivityCategories(slug: string, locationId: number, 
   }
 }
 
-async function deleteLocationActivityCategories(slug: string, locationId: number) {
+async function deleteLocationActivityCategories(slug: string, locationId: number, exec: WriteExec = poolExec) {
   const tenantId = await tenantIdForSlug(slug);
   if (!tenantId || !await tableExists("marketplace_location_activity_categories")) return;
-  await dbExecute("DELETE FROM marketplace_location_activity_categories WHERE tenant_id=? AND location_id=?", [tenantId, locationId]);
+  await exec("DELETE FROM marketplace_location_activity_categories WHERE tenant_id=? AND location_id=?", [tenantId, locationId]);
   if (await tableExists("tenant_directory_location_categories")) {
-    await dbExecute("DELETE FROM tenant_directory_location_categories WHERE tenant_id=? AND location_id=?", [tenantId, locationId]);
+    await exec("DELETE FROM tenant_directory_location_categories WHERE tenant_id=? AND location_id=?", [tenantId, locationId]);
   }
 }
 
@@ -1380,16 +1406,22 @@ async function nextLocationSortOrder(slug: string) {
   return Number(rows[0]?.next_order ?? 0);
 }
 
-async function normalizeLocationOrder(slug: string) {
-  const rows = await tenantSelect<RowDataPacket>({
-    slug,
-    table: "locations",
-    columns: "id, COALESCE(sort_order,999999) AS sort_order",
-    orderBy: "COALESCE(sort_order,999999) ASC, id ASC",
-  });
+// Con `q` (transazione delete-sede / move) legge E scrive sul client
+// transazionale: la lettura dal pool NON vedrebbe la sede appena cancellata
+// (delete non committata) e la rimetterebbe in conteggio.
+async function normalizeLocationOrder(slug: string, q?: TenantTxQuery) {
+  const target = await tenantTable(slug, "locations");
+  const scope = await tenantScope(target, [], []);
+  const sql = `SELECT id, COALESCE(sort_order,999999) AS sort_order FROM ${quoteIdentifier(target.name)}${scope.where} ORDER BY COALESCE(sort_order,999999) ASC, id ASC`;
+  const rows = q
+    ? await q<RowDataPacket>(sql, scope.params)
+    : await dbQuery<RowDataPacket[]>(sql, scope.params);
   for (const [pos, row] of rows.entries()) {
     if (Number(row.sort_order ?? -1) !== pos) {
-      await tenantUpdate({ slug, table: "locations", id: Number(row.id ?? 0), values: { sort_order: pos } });
+      const upScope = await tenantScope(target, ["id = ?"], [Number(row.id ?? 0)]);
+      const upSql = `UPDATE ${quoteIdentifier(target.name)} SET sort_order = ${pos}${upScope.where}`;
+      if (q) await q(upSql, upScope.params);
+      else await dbExecute(upSql, upScope.params);
       row.sort_order = pos;
     }
   }
@@ -1419,13 +1451,12 @@ async function scopedAppointmentCount(slug: string, locationId: number) {
   return count;
 }
 
-async function deleteRowsWithLocation(slug: string, table: string, locationId: number) {
+async function deleteRowsWithLocation(slug: string, table: string, locationId: number, exec: WriteExec = poolExec) {
   if (!await tableExistsForTenant(slug, table)) return 0;
   const target = await tenantTable(slug, table);
   if (!await columnExists(target.name, "location_id")) return 0;
   const scope = await tenantScope(target, ["location_id = ?"], [locationId]);
-  const result = await dbExecute(`DELETE FROM ${quoteIdentifier(target.name)}${scope.where}`, scope.params);
-  return result.affectedRows;
+  return exec(`DELETE FROM ${quoteIdentifier(target.name)}${scope.where}`, scope.params);
 }
 
 async function tableExistsForTenant(slug: string, table: string) {
@@ -1447,6 +1478,21 @@ async function tenantScope(target: TenantTarget, clauses: string[], params: unkn
   return {
     where: scopedClauses.length ? ` WHERE ${scopedClauses.join(" AND ")}` : "",
     params: scopedParams,
+  };
+}
+
+// Esecutore scritture della cascata delete-sede: di default il pool
+// (dbExecute); DENTRO withTenantTransaction è il client transazionale, con le
+// righe toccate contate via RETURNING (in PG affectedRows richiede RETURNING
+// sul client raw). Le letture di catalogo (tableExists/columnExists/tenantScope)
+// restano sul pool: non dipendono dallo stato non committato.
+type WriteExec = (sql: string, params: unknown[]) => Promise<number>;
+const poolExec: WriteExec = async (sql, params) => (await dbExecute(sql, params)).affectedRows;
+function txExec(q: TenantTxQuery): WriteExec {
+  return async (sql, params) => {
+    const needsReturning = /^\s*(delete|update)\s/i.test(sql) && !/\breturning\b/i.test(sql);
+    const rows = await q(needsReturning ? `${sql} RETURNING 1 AS one` : sql, params);
+    return rows.length;
   };
 }
 
@@ -1487,17 +1533,8 @@ async function ensureLocationDeletionLogTables(slug: string) {
   }
 }
 
-async function insertLocationDeletionLog(slug: string, locationId: number, locationName: string, reason: string, preview: unknown) {
-  const table = await tenantTable(slug, "location_deletion_logs");
-  const values: Record<string, unknown> = {
-    location_id: locationId,
-    location_name: locationName,
-    reason: emptyToNull(reason),
-    summary_json: JSON.stringify(preview),
-    deleted_by: null,
-  };
-  return tenantInsert(table, values);
-}
+// NB: l'insert del log di eliminazione ora vive DENTRO la transazione di
+// deleteBusinessLocation (come il legacy: rollback = niente log fantasma).
 
 // exclusiveMappedIds (LocationDeletion.php 182-200): master con mappature SOLO
 // verso la sede eliminata. In PG l'HAVING non può usare gli alias del SELECT.
@@ -1689,41 +1726,39 @@ function formatActivityDmy(raw: string): string {
 }
 
 // deleteMappingRows (654-659): stacca le mappature della sede per i CONDIVISI.
-async function deleteMappingRowsForLocation(slug: string, spec: LocationMappingSpec, locationId: number, ids: number[]) {
+async function deleteMappingRowsForLocation(slug: string, spec: LocationMappingSpec, locationId: number, ids: number[], exec: WriteExec = poolExec) {
   if (!ids.length || !await tableExistsForTenant(slug, spec.mapping)) return 0;
   const target = await tenantTable(slug, spec.mapping);
   const scope = await tenantScope(target, [`location_id = ?`, `${quoteIdentifier(spec.mappingColumn)} IN (${ids.map(() => "?").join(",")})`], [locationId, ...ids]);
-  const result = await dbExecute(`DELETE FROM ${quoteIdentifier(target.name)}${scope.where}`, scope.params);
-  return result.affectedRows;
+  return exec(`DELETE FROM ${quoteIdentifier(target.name)}${scope.where}`, scope.params);
 }
 
-async function deleteByIdsScoped(slug: string, table: string, ids: number[], column = "id") {
+async function deleteByIdsScoped(slug: string, table: string, ids: number[], column = "id", exec: WriteExec = poolExec) {
   const unique = Array.from(new Set(ids.filter((id) => id > 0)));
   if (!unique.length || !await tableExistsForTenant(slug, table)) return 0;
   const target = await tenantTable(slug, table);
   if (!await columnExists(target.name, column)) return 0;
   const scope = await tenantScope(target, [`${quoteIdentifier(column)} IN (${unique.map(() => "?").join(",")})`], unique);
-  const result = await dbExecute(`DELETE FROM ${quoteIdentifier(target.name)}${scope.where}`, scope.params);
-  return result.affectedRows;
+  return exec(`DELETE FROM ${quoteIdentifier(target.name)}${scope.where}`, scope.params);
 }
 
 // deleteMappedMasters (661-675): figli poi master; i gifts passano dal grafo.
-async function deleteMappedMasters(slug: string, spec: LocationMappingSpec, ids: number[], deleted: Record<string, number>) {
+async function deleteMappedMasters(slug: string, spec: LocationMappingSpec, ids: number[], deleted: Record<string, number>, exec: WriteExec = poolExec) {
   if (spec.table === "gifts") {
-    await deleteGiftGraphForLocation(slug, ids, deleted);
+    await deleteGiftGraphForLocation(slug, ids, deleted, exec);
     return;
   }
   for (const child of spec.children) {
-    const count = await deleteByIdsScoped(slug, child.table, ids, child.column);
+    const count = await deleteByIdsScoped(slug, child.table, ids, child.column, exec);
     if (count > 0) deleted[child.table] = (deleted[child.table] ?? 0) + count;
   }
-  const count = await deleteByIdsScoped(slug, spec.table, ids);
+  const count = await deleteByIdsScoped(slug, spec.table, ids, "id", exec);
   if (count > 0) deleted[spec.table] = (deleted[spec.table] ?? 0) + count;
 }
 
 // deleteGiftGraph (677-696): transazioni -> voci appuntamento -> reset ->
 // istanze -> regole -> rule_sets -> mappature -> campagne.
-async function deleteGiftGraphForLocation(slug: string, giftIds: number[], deleted: Record<string, number>) {
+async function deleteGiftGraphForLocation(slug: string, giftIds: number[], deleted: Record<string, number>, exec: WriteExec = poolExec) {
   const ids = Array.from(new Set(giftIds.filter((id) => id > 0)));
   if (!ids.length) return;
   const instanceRows = await tenantSelect<RowDataPacket>({ slug, table: "gift_instances", columns: "id", where: `gift_id IN (${ids.map(() => "?").join(",")})`, params: ids }).catch(() => [] as RowDataPacket[]);
@@ -1743,14 +1778,14 @@ async function deleteGiftGraphForLocation(slug: string, giftIds: number[], delet
   ];
   for (const [table, stepIds, column] of steps) {
     if (!stepIds.length) continue;
-    const count = await deleteByIdsScoped(slug, table, stepIds, column);
+    const count = await deleteByIdsScoped(slug, table, stepIds, column, exec);
     if (count > 0) deleted[table] = (deleted[table] ?? 0) + count;
   }
 }
 
 // reassignSharedClientLocations (698-720): piano del preview con ricalcolo di
 // riserva; senza sede valida -> location_id NULL.
-async function reassignSharedClientLocations(slug: string, clientIds: number[], deletedLocationId: number, planned: Record<string, { location_id?: number }>) {
+async function reassignSharedClientLocations(slug: string, clientIds: number[], deletedLocationId: number, planned: Record<string, { location_id?: number }>, exec: WriteExec = poolExec) {
   const out = { reassigned: 0, withoutLocation: 0 };
   const clientsTable = await tenantTable(slug, "clients");
   if (!await columnExists(clientsTable.name, "location_id")) return out;
@@ -1762,12 +1797,10 @@ async function reassignSharedClientLocations(slug: string, clientIds: number[], 
     }
     if (newLocationId > 0 && newLocationId !== deletedLocationId && await locationExistsForTenant(slug, newLocationId)) {
       const scope = await tenantScope(clientsTable, ["id = ?", "location_id = ?"], [clientId, deletedLocationId]);
-      const result = await dbExecute(`UPDATE ${quoteIdentifier(clientsTable.name)} SET location_id = ${newLocationId}${scope.where}`, scope.params);
-      out.reassigned += result.affectedRows;
+      out.reassigned += await exec(`UPDATE ${quoteIdentifier(clientsTable.name)} SET location_id = ${newLocationId}${scope.where}`, scope.params);
     } else {
       const scope = await tenantScope(clientsTable, ["id = ?", "location_id = ?"], [clientId, deletedLocationId]);
-      const result = await dbExecute(`UPDATE ${quoteIdentifier(clientsTable.name)} SET location_id = NULL${scope.where}`, scope.params);
-      out.withoutLocation += result.affectedRows;
+      out.withoutLocation += await exec(`UPDATE ${quoteIdentifier(clientsTable.name)} SET location_id = NULL${scope.where}`, scope.params);
     }
   }
   return out;
@@ -1782,10 +1815,21 @@ async function locationExistsForTenant(slug: string, locationId: number) {
 // logItems (733-762): conteggi per tabella + voce per ogni entita esclusiva
 // (delete_master) / condivisa (detach_location; clients = reassign_location con
 // il piano nel meta).
-async function logLocationDeletionItems(slug: string, logId: number, preview: Record<string, unknown>, deleted: Record<string, number>) {
+async function logLocationDeletionItems(slug: string, logId: number, preview: Record<string, unknown>, deleted: Record<string, number>, q?: TenantTxQuery) {
   if (logId <= 0 || !await tableExistsForTenant(slug, "location_deletion_log_items")) return;
   const table = await tenantTable(slug, "location_deletion_log_items");
-  const insert = async (values: Record<string, unknown>) => tenantInsert(table, values).catch(() => 0);
+  // In transazione niente catch per-insert (in PG un errore aborta comunque la
+  // tx, come il logItems legacy dentro il beginTransaction).
+  const insert = async (values: Record<string, unknown>) => {
+    if (q) {
+      await q(
+        `INSERT INTO ${quoteIdentifier(table.name)} (log_id, group_name, table_name, entity_id, entity_label, action, meta_json) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [values.log_id, values.group_name, values.table_name, values.entity_id, values.entity_label, values.action, values.meta_json],
+      );
+      return 1;
+    }
+    return tenantInsert(table, values).catch(() => 0);
+  };
   for (const [tableName, count] of Object.entries(deleted)) {
     if (count <= 0) continue;
     await insert({ log_id: logId, group_name: "deleted_count", table_name: tableName, entity_id: null, entity_label: null, action: "delete", meta_json: JSON.stringify({ count }) });

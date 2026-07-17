@@ -14828,3 +14828,46 @@ regressione test-orari-pass2 14/14, test-orari 37/37, e2e-hours-page
 watermark MAX(id) pre-run (le righe probe accumulate stasera, 55,
 verificate tutte odierne e rimosse). Il registro attivita' copre cosi'
 TUTTE le azioni dei 22 moduli strumentati.
+
+## 2026-07-17 — Sedi pass 2: 1 bug corretto (cascata delete e move in transazione)
+
+Ri-analisi di locations.php (1253) + LocationDeletion.php (763) vs
+manage-business-settings + route con le classi post-12/07.
+
+BUG — ATOMICITA' SULLA CASCATA PIU' PESANTE DELL'APP. Il legacy avvolge
+LocationDeletion::delete (557-646) in beginTransaction/rollBack: log +
+17 tabelle cleanup + master esclusivi con figli (grafo gift incluso) +
+distacco mappature condivise + riassegnazione clienti + delete sede +
+reorder + log items — tutto o niente. Il port eseguiva la stessa catena
+in sequenza sul pool: un errore a meta' lasciava una sede SEMI-SVUOTATA
+(orari/cabine/mappature perse, sede ancora presente) senza recupero.
+Stesso difetto su sede_move_location (253-292, normalize+swap in tx).
+FIX: deleteBusinessLocation ora gira in withTenantTransaction — esecutore
+WriteExec (pool di default, client tx con conteggi via RETURNING) passato
+a tutti gli helper della cascata; l'insert del log di eliminazione vive
+DENTRO la tx (rollback = niente log fantasma); normalizeLocationOrder
+legge/scrive sul client transazionale (dal pool NON vedrebbe la sede
+appena cancellata e la rimetterebbe in conteggio); log items senza catch
+per-insert (in PG un errore aborta comunque la tx, come il legacy).
+moveBusinessLocation idem (normalize+swap atomici).
+
+Verifica live test-sedi-pass2 17/17 CLEAN (sede ZZ seminata con orari,
+cabina, staff condiviso 56, resource ESCLUSIVA vs CONDIVISA, cliente,
+gallery): nuova sede marketplace OFF + sort in coda, duplicato
+case/trim-insensitive, gate piano booking (nudo) e marketplace (wrapper
+legacy 'Errore salvataggio marketplace sede: ...', locations.php 447 —
+attesa del probe corretta), marketplace senza categorie bloccato, preview
+con classificazione esclusivi/condivisi e piano clienti, conferma
+'elimina' minuscola rifiutata, DELETE COMPLETA (sede+righe azzerate,
+esclusiva eliminata, condivisa conservata con mappatura sede 21, cliente
+riassegnato a 21, staff 56@51 intatto, log permanente con 12 items e
+reason, ordine ricompattato), sede con storico bloccata e intatta, move
+up/limite/down con ripristino ordine produzione.
+
+Regressione: e2e-locations-page 32/32, markers-locations 119/119,
+e2e-business-profile 25/25, test-profilo-pass2 14/14, e2e-marketplace
+28/28. Baseline (2 sedi, ordine 21-51, flags piano, 5 clienti) CLEAN.
+
+Migliorie proposte (in attesa di approvazione): log attivita' su gallery
+sede (upload/delete/move) e su location_disable/enable — oggi loggano
+solo save/delete/marketplace.
