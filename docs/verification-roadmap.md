@@ -15063,3 +15063,44 @@ confronto UTC coerenti tra loro (finestra transiente 15'). SELECT
 replicate read-only sul DB per la verifica di eseguibilita'.
 
 Regressione: test-automazioni-pass2 8/8, test-automazione 20/20.
+
+## 2026-07-17 — Report pass 2: 2 fix (guardia sede sul param extra, default date locali)
+
+Ri-analisi di reports.php (2155) vs manage-reports.ts + route con le classi
+post-12/07. Il motore (incasso a eventi di cassa, netto credito/giftcard,
+bucket prenotazioni, archivio clienti, costi BETWEEN, commissioni,
+confronto) era gia' fedele.
+
+FIX 1 — GUARDIA SEDE SUL PARAM EXTRA location_id. Il parametro esplicito
+(extra dell'API Next, la pagina non lo manda) veniva onorato RAW: un
+non-admin ristretto alla sede 21 poteva leggere i report della sede 51.
+Ora e' accettato SOLO se dentro la lista autorizzata dell'utente; fuori
+lista (inclusa sede inesistente) viene IGNORATO col ripiego sulla sede di
+sessione — convenzione allineata a Cabine/Orari.
+
+FIX 2 — DEFAULT DATE IN ORA LOCALE. Il fallback senza from/to usava l'UTC
+(toISOString): tra mezzanotte e le 2 locali il default scivolava al
+giorno/mese precedente. Ora businessTodayIso (primo del mese / oggi Roma),
+come date('Y-m-01')/date('Y-m-d') del legacy.
+
+NOTA payment_method: la colonna non esiste nello schema sales del Next
+(il POS scrive 'Tipo pagamento: X' nelle note) — il ramo colonna del
+legacy e' quindi morto in questo schema e la classificazione via note e'
+identica (verificato su dati reali). sale_date confermato WALL-TIME
+LOCALE (Date del driver: offset scartato dal cast timestamp) — le
+finestre-giorno del report sono coerenti.
+
+Verifica live test-report-pass2 12/12 CLEAN (finestra remota 2027-02,
+fixture rate complete): incasso a eventi = istantanee + netto-credito +
+acconto piano + rata per paid_at (275 su venduto 350), annullata esclusa,
+metodi dalle note (Contanti/Carte/Bonifico con acconto+rata), daily per
+data-EVENTO, composizione con 'Ricarica' classificata dal NOME e Prodotto
+sempre presente, costi/commissioni perm-gated null, guardia sede
+(ristretto con location_id=51 -> ripiego 21; admin -> 51; all_locations
+ristretto=sue sedi vs admin=tutte), default date locali, confronto
+periodo precedente di pari durata.
+
+Regressione: test-report 24/24, test-reports-net 4/4, e2e-reports 20/20 e
+e2e-reports-page 15/15 (2 sonde sanate: 'sede inesistente' codificava il
+comportamento pre-guardia — ora fuori-lista = ripiego con label/dati
+della sede di sessione), markers-reports 114/114.

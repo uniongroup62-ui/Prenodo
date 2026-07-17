@@ -35,7 +35,10 @@ export async function GET(request: Request) {
     let locationIds: number[];
     if (failClosed) {
       locationIds = [];
-    } else if (requestedLocation > 0) {
+    } else if (requestedLocation > 0 && allowedIds.includes(requestedLocation)) {
+      // GUARDIA SEDE: il param extra è onorato SOLO se la sede è nella lista
+      // AUTORIZZATA dell'utente (un ristretto non legge i report di altre sedi);
+      // fuori lista viene ignorato e si ripiega sulla sede di sessione.
       locationIds = [requestedLocation];
     } else if (allLocations) {
       locationIds = allowedIds;

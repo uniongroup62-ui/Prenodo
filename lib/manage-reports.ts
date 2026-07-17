@@ -2,6 +2,7 @@ import "server-only";
 
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { dbQuery, quoteIdentifier, tableExists, tenantTable } from "@/lib/tenant-db";
+import { businessTodayIso } from "@/lib/business-datetime";
 
 // Port DB-backed di app/pages/reports.php (Report / Analisi). Punti chiave di
 // parita' col legacy:
@@ -165,10 +166,12 @@ export async function getManageReports(
   compare = false,
   options: { includeCosts?: boolean; includeCommissions?: boolean; compareFrom?: string; compareTo?: string } = {},
 ): Promise<ManageReports> {
-  const today = new Date();
-  const monthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
-  const from = /^\d{4}-\d{2}-\d{2}$/.test(fromRaw) ? fromRaw : ymd(monthStart);
-  const to = /^\d{4}-\d{2}-\d{2}$/.test(toRaw) ? toRaw : ymd(today);
+  // Default = mese corrente in ORA LOCALE (date('Y-m-01')/date('Y-m-d') del
+  // legacy) — con l'UTC, tra mezzanotte e le 2 locali il default scivolava al
+  // giorno (o mese) precedente.
+  const todayIso = businessTodayIso();
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(fromRaw) ? fromRaw : `${todayIso.slice(0, 7)}-01`;
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(toRaw) ? toRaw : todayIso;
   const toExclusive = addDaysYmd(to, 1);
 
   const loc: ReportLocationFilter = typeof locationFilter === "number"
