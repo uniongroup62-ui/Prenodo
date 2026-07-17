@@ -127,7 +127,9 @@ export async function POST(request: Request) {
     if (action === "resource_save") {
       if (!can(activeUser.perms, "resources.manage")) return jsonError("Permesso Risorse richiesto.", 403);
       try {
+        const isResourceEdit = parseInteger(body.id, 0) > 0;
         const resource = await saveSharedResource(tenantSlug, body);
+        void logActivity(tenantSlug, { user: activeUser, locationId: activeUser.currentLocationId, module: "risorse", action: isResourceEdit ? "modifica" : "crea", entityType: "resource", entityId: resource.id, label: `${isResourceEdit ? "Modificata" : "Creata"} risorsa "${resource.name}" (qtà ${resource.qtyTotal})` });
         return Response.json({ ok: true, resource });
       } catch (error) {
         const popup = error instanceof Error ? (error as Error & { popup?: ResourceBlockPopup }).popup : undefined;
@@ -139,6 +141,7 @@ export async function POST(request: Request) {
       if (!can(activeUser.perms, "resources.manage")) return jsonError("Permesso Risorse richiesto.", 403);
       try {
         await deleteSharedResource(tenantSlug, parseInteger(body.id, 0));
+        void logActivity(tenantSlug, { user: activeUser, locationId: activeUser.currentLocationId, module: "risorse", action: "elimina", entityType: "resource", entityId: parseInteger(body.id, 0), label: `Eliminata risorsa #${parseInteger(body.id, 0)}` });
         return Response.json({ ok: true });
       } catch (error) {
         const popup = error instanceof Error ? (error as Error & { popup?: ResourceBlockPopup }).popup : undefined;

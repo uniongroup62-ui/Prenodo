@@ -80,6 +80,7 @@ const MODULE_LABELS: Record<string, string> = {
   ricariche: "Ricariche",
   promozioni: "Promozioni",
   omaggi: "Omaggi",
+  risorse: "Risorse",
 };
 
 function moduleLabel(m: string): string {
