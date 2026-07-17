@@ -388,9 +388,12 @@ export async function GET(request: Request) {
     // Fail-closed legacy della list (api_appointments.php 8005-8016): sede
     // richiesta non consentita, oppure NESSUNA sede risolta mentre l'utente ha
     // sedi assegnate -> eventi VUOTI (le install senza sedi continuano intere).
+    // allLocations, NON la lista autorizzata filtrata: un ristretto con sedi
+    // TUTTE revocate/cancellate ha locations=[] e col check debole leggeva
+    // l'INTERO tenant (stessa classe del fail-closed completo di Dashboard/Report).
     if (listLocationId <= 0) {
       const locationContext = await getManageLocationContext(tenantSlug);
-      if (locationContext.locations.length > 0) {
+      if (locationContext.allLocations.length > 0) {
         return Response.json({ ok: true, sourceMode: "database", appointments: [], holds: [] });
       }
     }

@@ -15257,3 +15257,34 @@ test-calendar-location-scope 6/6, e2e-calendar-move 33/33,
 e2e-hours-calendar 4/4, test-moduli-consenso-pass2 14/14,
 test-notifiche-pass2 10/10, test-automazioni-pass2 8/8,
 e2e-notifications-automation 19/19, test-booking-pass2 9/9.
+
+## 2026-07-18 — Calendario RICONTROLLO: 1 fix sicurezza (fail-closed COMPLETO su sedi revocate) 
+
+Secondo giro richiesto sull'intero dominio. TROVATO E CORRETTO un leak
+reale: una sessione ristretta con sedi TUTTE revocate/cancellate
+(locationIds=[9999]) leggeva l'INTERO tenant sia dalla list appuntamenti
+sia dal payload context del calendario — il fail-closed usava la lista
+autorizzata FILTRATA (vuota per il revocato) invece del totale sedi del
+tenant. Verificato nel legacy (Helpers app_user_location_options): il
+revocato ha ids=[] -> count 0 -> il fail-close legacy NON scatta = bug
+del legacy stesso; chiuso come deviazione di sicurezza deliberata, stessa
+classe del fail-closed COMPLETO di Dashboard/Report (17/07). Confermato
+invece fedele l'admin a sede 0 multi-sede -> eventi VUOTI (nel legacy
+app_user_location_ids>0 vale anche per l'admin). Fix su 3 punti:
+list appuntamenti (allLocations), context calendario (appointments a
+[] con tenant multi-sede e nessuna sede risolta), bande indisponibilita
+(niente bande senza sede risolta, param esplicito autorizzato onorato).
+
+Suite test-calendario-pass2 estesa a 25/25 CLEAN (F1-F4: list/context
+revocato a 0, admin sede 0 a 0, param esplicito valido onorato a sede 0);
+test-calendar-location-scope SANATA (attendeva 'admin a sede 0 vede
+tutto' = semantica stantia) e portata a 7/7 con scoping admin per-sede.
+Regressione: test-calendario 20/20, e2e-calendar-move 33/33,
+e2e-hours-calendar 4/4, e2e-appointments-list 13/13, test-appuntamenti
+41+8+12, quickbooking 35+21+16+3+6, e2e-qb-redeem-edit 28/28,
+markers-calendar 48/48, test-notifiche-pass2 10/10.
+
+OSSERVAZIONE CROSS-MODULO (non toccata): il save preventivi ha la stessa
+forma debole (ctx.locations.length>0) — per un revocato salta solo la
+guardia 'Seleziona una sede valida' (write con sede 0, nessun leak di
+lettura); candidata a un eventuale pass Preventivi.

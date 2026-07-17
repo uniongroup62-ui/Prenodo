@@ -151,11 +151,17 @@ export async function calendarContext(input: {
   // :8044-8052 "a.location_id = ? OR a.location_id IS NULL"): il calendario della
   // sede attiva NON deve mostrare gli appuntamenti di un'altra sede (un utente
   // ristretto vedrebbe altrimenti prenotazioni fuori dalla propria sede). Le righe
-  // globali (location_id NULL) restano visibili ovunque; in single-sede o senza
-  // sede attiva (currentLocationId<=0) nessun filtro, come app_current_location_id()==0.
+  // globali (location_id NULL) restano visibili ovunque; senza sedi configurate
+  // nessun filtro, come app_current_location_id()==0 (install single-sede).
+  // FAIL-CLOSED come la list (api_appointments.php 8005-8016): nessuna sede
+  // risolta MA il tenant ha sedi (sessione stantia/sede revocata) -> eventi
+  // VUOTI — la pagina usa la list, ma il payload context non deve servire
+  // l'unione. allLocations, NON la lista autorizzata (vuota a sedi revocate).
   const scopedAppointments = currentLocationId > 0
     ? appointments.filter((a) => a.locationId === null || a.locationId === undefined || a.locationId === currentLocationId)
-    : appointments;
+    : (locationContext?.allLocations.length ?? 0) > 0
+      ? []
+      : appointments;
 
   // Colonne/operatori PER SEDE (calendar.php:149-150 app_filter_staff_ids_by_location):
   // un operatore assegnato SOLO ad un'altra sede non compare come colonna nella sede

@@ -75,7 +75,11 @@ export async function GET(request: Request) {
     const unavailabilityLocation = locationParam > 0 && allowedLocationIds.includes(locationParam)
       ? locationParam
       : (locationContext.currentLocationId > 0 ? locationContext.currentLocationId : null);
-    const staffUnavailability = date
+    // Fail-closed coerente con gli eventi: tenant con sedi ma NESSUNA sede
+    // risolta (né param autorizzato né sede di sessione: stantia/revocata) ->
+    // niente bande.
+    const hoursFailClosed = unavailabilityLocation === null && locationContext.allLocations.length > 0;
+    const staffUnavailability = date && !hoursFailClosed
       ? await staffUnavailabilityForDate(tenantSlug, date, unavailabilityLocation).catch(() => [])
       : [];
     return Response.json({
