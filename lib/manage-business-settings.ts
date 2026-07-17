@@ -93,6 +93,20 @@ const imageMimeToExt: Record<string, string> = {
   "image/webp": "webp",
 };
 
+// MIME REALE dai magic bytes come getimagesize del legacy (process_uploaded_
+// logo/branding_image/gallery): mai fidarsi del Content-Type dichiarato dal
+// browser. Contenuto non riconoscibile -> 'Formato immagine non supportato'
+// (il messaggio getimagesize-fail legacy), immagine riconosciuta ma non
+// ammessa -> messaggio 'Formato non valido' specifico del chiamante.
+function sniffImageMime(bytes: Uint8Array): string | null {
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) return "image/png";
+  if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return "image/webp";
+  if (bytes.length >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38 && (bytes[4] === 0x37 || bytes[4] === 0x39) && bytes[5] === 0x61) return "image/gif";
+  if (bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4d) return "image/bmp";
+  return null;
+}
+
 // LocationDeletion::mappingSpecs (LocationDeletion.php 59-153): per ogni gruppo
 // il master, la label, la tabella di mapping sede e i FIGLI da cancellare in
 // cascata quando il master è ESCLUSIVO della sede eliminata.
@@ -394,10 +408,15 @@ export async function uploadBusinessBrandingImage(slug: string, kind: "logo" | "
   if (!file) throw new Error(kind === "logo" ? "Seleziona un file (JPG o PNG) da caricare." : "Seleziona un file immagine da caricare.");
   if (file.size <= 0) throw new Error("Upload non valido");
   if (file.size > 5 * 1024 * 1024) throw new Error(kind === "logo" ? "Logo troppo grande (max 5 MB)" : "Immagine di copertina troppo grande (max 5 MB)");
-  if (kind === "logo" && !["image/jpeg", "image/png"].includes(file.type)) {
+  // Tipo AUTORITATIVO dal contenuto (magic bytes), come getimagesize legacy:
+  // il type dichiarato dal browser viene ignorato.
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const sniffedMime = sniffImageMime(bytes);
+  if (!sniffedMime) throw new Error("Formato immagine non supportato");
+  if (kind === "logo" && !["image/jpeg", "image/png"].includes(sniffedMime)) {
     throw new Error("Formato non valido: carica un file JPG o PNG");
   }
-  if (kind === "cover" && !imageMimeToExt[file.type]) throw new Error("Formato non valido");
+  if (kind === "cover" && !imageMimeToExt[sniffedMime]) throw new Error("Formato non valido");
 
   // Cloudflare R2 PUBBLICO (come foto staff / immagini prodotto): su Amplify il
   // filesystem è effimero, quindi il branding vive su R2 e nel DB si salva
@@ -405,14 +424,14 @@ export async function uploadBusinessBrandingImage(slug: string, kind: "logo" | "
   // URL assoluti). I vecchi path /uploads/... restano leggibili finché non
   // vengono sostituiti.
   if (!storageConfigured()) throw new Error(STORAGE_NOT_CONFIGURED_ERROR);
-  const ext = imageMimeToExt[file.type] ?? "jpg";
+  const ext = imageMimeToExt[sniffedMime] ?? "jpg";
   const target = await tenantTable(slug, "businesses");
   const key = tenantStorageKey(
     Number(target.tenantId ?? 0),
     "branding",
     kind === "logo" ? `logo-${Number(business.id ?? 1)}-${Date.now()}.${ext}` : `cover-${Date.now()}.${ext}`,
   );
-  const publicPath = await putPublicObject(key, new Uint8Array(await file.arrayBuffer()), file.type);
+  const publicPath = await putPublicObject(key, bytes, sniffedMime);
 
   const values: Record<string, unknown> = kind === "logo"
     ? { logo_path: publicPath, logo_position_x: 50, logo_position_y: 50 }
@@ -574,7 +593,11 @@ export async function uploadLocationGalleryImages(slug: string, locationId: numb
   const table = await tenantTable(slug, "location_gallery_images");
   for (const file of valid) {
     if (file.size > 5 * 1024 * 1024) throw new Error("Foto troppo grande (max 5 MB)");
-    const ext = galleryMimeToExt[file.type];
+    // Magic bytes autoritativi (getimagesize legacy), mai il type dichiarato.
+    const galleryBytes = new Uint8Array(await file.arrayBuffer());
+    const galleryMime = sniffImageMime(galleryBytes);
+    if (!galleryMime) throw new Error("Formato immagine non supportato");
+    const ext = galleryMimeToExt[galleryMime];
     if (!ext) throw new Error("Formato non valido: carica JPG, PNG o WEBP");
     if (!storageConfigured()) throw new Error(STORAGE_NOT_CONFIGURED_ERROR);
     const stamp = new Date();
@@ -583,7 +606,7 @@ export async function uploadLocationGalleryImages(slug: string, locationId: numb
     const rand = Math.random().toString(16).slice(2, 10).padEnd(8, "0");
     // R2 pubblico: nel DB va l'URL completo (i path legacy /uploads restano validi).
     const key = tenantStorageKey(Number(table.tenantId ?? 0), "branding", `locations-${locationId}-gallery-${ymdhis}_${rand}.${ext}`);
-    const publicPath = await putPublicObject(key, new Uint8Array(await file.arrayBuffer()), file.type);
+    const publicPath = await putPublicObject(key, galleryBytes, galleryMime);
     const sortRows = await tenantSelect<RowDataPacket>({ slug, table: "location_gallery_images", columns: "COALESCE(MAX(sort_order), 0) AS m", where: "location_id = ?", params: [locationId] }).catch(() => [] as RowDataPacket[]);
     await tenantInsert(table, { location_id: locationId, path: publicPath, sort_order: Number(sortRows[0]?.m ?? 0) + 10, is_active: 1 });
   }

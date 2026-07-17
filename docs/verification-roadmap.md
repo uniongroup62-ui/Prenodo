@@ -14762,3 +14762,42 @@ chiusure' vive solo nell'SSR con sede) -> sessione forgiata sede 21.
 Miglioria proposta (in attesa di approvazione): log attivita' anche su
 chiusure/straordinari (closure_save/closure_delete_range/exception_save/
 exception_delete_range — oggi logga solo hours_save).
+
+## 2026-07-17 — Profilo attivita' pass 2: 1 bug corretto (magic bytes su logo/copertina/gallery)
+
+Ri-analisi di business_profile.php (475) + Helpers (process_uploaded_logo/
+branding_image/gallery) vs manage-business-settings + route.
+
+BUG — MIME DAL TYPE DICHIARATO. Il legacy valida il contenuto reale con
+getimagesize; il port si fidava del Content-Type del browser in TRE punti:
+upload logo, upload copertina, upload gallery sede. Un file non-immagine
+rinominato .png passava; un PNG vero con type sbagliato veniva rifiutato
+(divergenza dal legacy in entrambi i versi). FIX: sniffImageMime condiviso
+(jpeg/png/webp/gif/bmp dai magic bytes) — contenuto non riconoscibile ->
+'Formato immagine non supportato' (testo getimagesize-fail legacy);
+immagine riconosciuta ma non ammessa -> 'Formato non valido: carica un
+file JPG o PNG' (logo) / 'Formato non valido' (copertina, secco) /
+'Formato non valido: carica JPG, PNG o WEBP' (gallery); estensione e
+content-type R2 dal MIME sniffato, mai dal dichiarato.
+
+Verifica live test-profilo-pass2 14/14 CLEAN (snapshot+restore riga
+businesses, upload REALI su R2 ripuliti): save profilo con wrapper strict
+'Errore salvataggio profilo attivita': ... (se persiste...)' e ripristino
+via API (marketplace ri-sincronizzato), validazioni 190/3000, garbage->
+'Formato immagine non supportato', WEBP reale su logo rifiutato col testo
+legacy, PNG reale con type text/plain ACCETTATO + posizione reset 50/50,
+guardia 'Rimuovi il logo attuale...', clamp posizione 0-100, delete che
+NON resetta la posizione, gallery (garbage/BMP rifiutati coi wrapper
+'Errore upload gallery sede: ...', WEBP reale accettato con estensione
+.webp, delete pulita).
+
+Regressione: e2e-business-profile 25/25 e e2e-locations-page 32/32 — 
+SANATE: i probe formato usavano PNG reale con type dichiarato
+webp/gif (il vecchio port rifiutava sul type; il legacy e il port nuovo
+accettano sniffando PNG): ora usano bytes REALI webp/gif e le attese
+tornano legacy-fedeli. markers-business-profile 73/73, e2e-marketplace
+28/28. Baseline businesses/locations/gallery CLEAN (verificato via probe).
+
+Migliorie proposte (in attesa di approvazione): log attivita' anche su
+upload logo/copertina e salvataggio posizione (oggi loggano solo save
+profilo e branding delete).
