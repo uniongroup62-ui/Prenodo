@@ -14523,3 +14523,25 @@ logActivity (module 'risorse'): creata/modificata (con nome e qtà)/eliminata;
 log dopo il successo (delete bloccata dai servizi = nessuna riga, verificato).
 Suite test-risorse-log 7/7 CLEAN + regressione 25+3+16.
 Log fase 2 residui: servizi, impostazioni (+cabine col loro pass).
+
+## 2026-07-17 — Log attività fase 2 COMPLETA (fb2d3ca): servizi + impostazioni
+
+Ultimi due blocchi strumentati:
+- SERVIZI: servizio creato/modificato/eliminato — il pannello di CONFERMA
+  (pending, es. name_update con promo scope-all) NON salva e NON logga
+  (verificato live); categorie CRUD; servizi consigliati; visibilità
+  marketplace categorie.
+- IMPOSTAZIONI: profilo attività, logo/copertina rimossi, impostazioni
+  Prenotazioni online, sedi (creata/modificata/eliminata solo-a-successo,
+  marketplace), permessi ruolo (route permissions), impostazioni POS
+  scadenze, impostazioni moduli feature, moduli consenso CRUD, toggle
+  record configurazione.
+
+REGISTRO ATTIVITÀ COMPLETO — 21 moduli: accessi, clienti, appuntamenti,
+pagamenti, magazzino, fornitori, buoni, rate, operatori, orari, pacchetti,
+preventivi, giftbox, giftcard, fidelity, ricariche, promozioni, omaggi,
+risorse, servizi, impostazioni. Residuo deliberato: cabine (col loro pass).
+
+Suite test-servizi-impostazioni-log 11/11 CLEAN + regressione: services 40,
+business-profile 25, booking-settings 12, locations 18, roles 16,
+consent-modules 18, log-attivita 16.
