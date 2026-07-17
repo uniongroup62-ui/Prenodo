@@ -8645,29 +8645,63 @@ export async function issueDbGiftCard(input: Partial<GiftCard>, slug: string): P
   return getSingleGiftCard(slug, id);
 }
 
-export async function redeemDbGiftCard(id: number, amount: number, slug: string, note?: string): Promise<GiftCard> {
+export async function redeemDbGiftCard(
+  id: number,
+  amount: number,
+  slug: string,
+  opts: { note?: string; by?: number | null; locationId?: number; locationName?: string } = {},
+): Promise<GiftCard> {
   const giftCard = await getSingleGiftCard(slug, id);
+  // mapGiftCard restituisce già lo stato EFFETTIVO (giftCardStatus: status +
+  // scadenza per data) — come le guardie del legacy addTransaction.
   if (giftCard.status !== "active") throw new Error("GiftCard non utilizzabile.");
   const value = roundMoney(Math.max(0, amount));
   if (value <= 0 || value > giftCard.balance) throw new Error("Importo riscatto non valido.");
 
-  const balance = roundMoney(giftCard.balance - value);
+  // Decremento ATOMICO (il legacy serializzava con SELECT ... FOR UPDATE): la
+  // guardia balance >= value nel WHERE impedisce il double-spend concorrente.
+  const gcT = await tenantTable(slug, "giftcards");
+  const scoped = gcT.mode === "shared" && (await columnExists(gcT.name, "tenant_id"));
+  const res = await dbExecute(
+    `UPDATE \`${gcT.name}\` SET balance = balance - ? WHERE id = ? AND balance >= ?${scoped ? " AND tenant_id = ?" : ""}`,
+    scoped ? [value, id, value, gcT.tenantId ?? 0] : [value, id, value],
+  );
+  if (Number((res as { affectedRows?: number }).affectedRows ?? 0) <= 0) throw new Error("Importo riscatto non valido.");
+
+  // Status flip legacy (GiftCard::addTransaction): 'redeemed' SOLO con credito 0
+  // E item inclusi tutti consumati; redeemed_at NULL quando resta attiva.
+  const balRows = await tenantSelect<RowDataPacket>({ slug, table: "giftcards", columns: "balance", where: "id = ?", params: [id], limit: 1 });
+  const balance = roundMoney(parseMoney(balRows[0]?.balance, 0));
+  const remRows = await tenantSelect<RowDataPacket>({ slug, table: "giftcard_items", columns: "COALESCE(SUM(GREATEST(qty - redeemed_qty, 0)),0) AS rem", where: "giftcard_id = ?", params: [id] }).catch(() => [] as RowDataPacket[]);
+  const itemsRemaining = Number(remRows[0]?.rem ?? 0);
+  const redeemed = balance <= 0 && itemsRemaining <= 0;
   await tenantUpdate({
     slug,
     table: "giftcards",
     id,
     values: {
-      balance,
-      status: balance <= 0 ? "redeemed" : "active",
-      redeemed_at: balance <= 0 ? new Date() : undefined,
+      status: redeemed ? "redeemed" : "active",
+      redeemed_at: redeemed ? new Date() : null,
+      updated_at: new Date(),
     },
   });
+  // Ledger legacy: redeem con importo NEGATIVO (il dettaglio colora per segno)
+  // + nota/operatore/sede snapshot come GiftCard::insertTransaction.
+  const locationId = Math.max(0, Math.trunc(Number(opts.locationId ?? 0)));
+  let locationName = String(opts.locationName ?? "").trim();
+  if (locationId > 0 && locationName === "") {
+    const lRows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "name", where: "id = ?", params: [locationId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    locationName = String(lRows[0]?.name ?? "").trim();
+  }
   await tenantInsert(await tenantTable(slug, "giftcard_transactions"), {
     giftcard_id: id,
     type: "redeem",
-    amount: value,
-    note: String(note ?? "").trim() || "Riscatto GiftCard",
+    amount: -value,
+    note: String(opts.note ?? "").trim() || "Riscatto GiftCard",
     created_at: new Date(),
+    created_by: opts.by && opts.by > 0 ? opts.by : null,
+    location_id: locationId > 0 ? locationId : null,
+    location_name: locationName !== "" ? locationName : null,
   });
 
   return getSingleGiftCard(slug, id);
@@ -11509,6 +11543,25 @@ export async function applyAppointmentGiftcardRedeem({
     payableTotal = 0;
   }
 
+  // Nota/sede legacy del movimento (api_appointments.php 1419-1421: 'Riscatto su
+  // prenotazione #<publicCode>' + location della prenotazione) — è ANCHE il pattern
+  // che il dettaglio GiftCard normalizza in 'In sospeso su prenotazione #X'.
+  let apptRef = String(appointmentId);
+  let apptLocationId = 0;
+  if (appointmentsTable) {
+    const hasPublicCode = await columnExists(appointmentsTable.name, "public_code").catch(() => false);
+    const aRows = await tenantSelect<RowDataPacket>({
+      slug, table: "appointments",
+      columns: hasPublicCode ? "public_code, location_id" : "location_id",
+      where: "id = ?", params: [appointmentId], limit: 1,
+    }).catch(() => [] as RowDataPacket[]);
+    if (aRows[0]) {
+      const code = hasPublicCode ? String(aRows[0].public_code ?? "").trim() : "";
+      if (code !== "") apptRef = code;
+      apptLocationId = Math.max(0, Number(aRows[0].location_id ?? 0) || 0);
+    }
+  }
+
   // ONE giftcard per appointment: take the FIRST entry that validates + clamps > 0.
   for (const redeem of redeems) {
     const giftcardId = Number(redeem.giftcardId ?? 0);
@@ -11572,7 +11625,10 @@ export async function applyAppointmentGiftcardRedeem({
       // 5) Decrement the giftcard via the authoritative primitive (re-reads the
       //    balance and THROWS on over-redeem, so we never over-decrement; flips status
       //    to 'redeemed' at 0 and writes the giftcard_transactions movement).
-      await redeemDbGiftCard(giftcardId, clamped, slug);
+      await redeemDbGiftCard(giftcardId, clamped, slug, {
+        note: `Riscatto su prenotazione #${apptRef}`,
+        locationId: apptLocationId,
+      });
 
       // 6) Link the appointment: giftcard_id + giftcard_used = clamped amount.
       if (hasLinkColumns && appointmentsTable) {
@@ -24190,15 +24246,19 @@ async function resolveServiceForAppointment(slug: string, serviceName: string): 
 async function resolveStaffForAppointment(slug: string, staffName: string): Promise<RowDataPacket | null> {
   const normalized = staffName.trim();
   if (!normalized) return null;
+  // Con omonimi case-insensitive ('luca'/'Luca' nel tenant reale) il vecchio
+  // LIMIT 1 senza ORDER BY era NON-deterministico in Postgres: preferisci il
+  // match ESATTO, poi il piu' vecchio (id ASC, l'ordine di fatto di MySQL).
   const rows = await tenantSelect<RowDataPacket>({
     slug,
     table: "staff",
     columns: "id,full_name",
     where: "LOWER(full_name) = ? AND COALESCE(is_active, 1) = 1",
     params: [normalized.toLowerCase()],
-    limit: 1,
+    orderBy: "id ASC",
   });
-  return rows[0] ?? null;
+  const exact = rows.find((r) => String(r.full_name ?? "").trim() === normalized);
+  return exact ?? rows[0] ?? null;
 }
 
 // One snapshot row per selected service. `promo` (when the save detected an

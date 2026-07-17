@@ -938,7 +938,13 @@ export async function checkoutManageSale(
   // CONSUME the residui, linking each consumption to the sale id so a later void can
   // restore it (cancelLinkedSaleResidues reverses both). GiftCard first, then credit.
   if (residui.giftcardId > 0 && residui.giftcardUsed > 0) {
-    await redeemDbGiftCard(residui.giftcardId, residui.giftcardUsed, slug);
+    // Nota/operatore/sede legacy (pos.php 5723-5725): 'Riscatto GiftCard in
+    // vendita #<id> (CODE)' + $by + $posLocationId sul movimento.
+    await redeemDbGiftCard(residui.giftcardId, residui.giftcardUsed, slug, {
+      note: `Riscatto GiftCard in vendita #${saleId}${residui.giftcardCode ? ` (${residui.giftcardCode})` : ""}`,
+      by: operator.id,
+      locationId,
+    });
   }
   if (residui.creditUsed > 0 && client.id > 0) {
     // Negative wallet movement (debit): inserts a credit_adjustments row + decrements

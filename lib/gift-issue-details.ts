@@ -2371,9 +2371,20 @@ export async function redeemGiftCardCredit(slug: string, id: number, amountRaw: 
   }
 
   const balance = round2(Number(card.balance ?? 0));
-  const newBal = round2(balance - amount);
-  if (newBal < 0) throw new Error("Saldo insufficiente.");
+  if (round2(balance - amount) < 0) throw new Error("Saldo insufficiente.");
 
+  // Decremento ATOMICO (il legacy serializzava con SELECT ... FOR UPDATE): la
+  // guardia balance >= amount nel WHERE impedisce il double-spend concorrente.
+  const gcT = await tenantTable(slug, "giftcards");
+  const scopedGc = gcT.mode === "shared" && (await columnExists(gcT.name, "tenant_id"));
+  const decRes = await dbExecute(
+    `UPDATE \`${gcT.name}\` SET balance = balance - ? WHERE id = ? AND balance >= ?${scopedGc ? " AND tenant_id = ?" : ""}`,
+    scopedGc ? [amount, id, amount, gcT.tenantId ?? 0] : [amount, id, amount],
+  );
+  if (Number((decRes as { affectedRows?: number }).affectedRows ?? 0) <= 0) throw new Error("Saldo insufficiente.");
+
+  const balRows = await tenantSelect<RowDataPacket>({ slug, table: "giftcards", columns: "balance", where: "id = ?", params: [id], limit: 1 });
+  const newBal = round2(Number(balRows[0]?.balance ?? 0));
   const remRows = await tenantSelect<RowDataPacket>({ slug, table: "giftcard_items", columns: "COALESCE(SUM(GREATEST(qty - redeemed_qty, 0)),0) AS rem", where: "giftcard_id = ?", params: [id] }).catch(() => [] as RowDataPacket[]);
   const itemsRemaining = Number(remRows[0]?.rem ?? 0);
   const newStatus = newBal <= 0 && itemsRemaining <= 0 ? "redeemed" : "active";
@@ -2382,7 +2393,6 @@ export async function redeemGiftCardCredit(slug: string, id: number, amountRaw: 
   await tenantUpdate({
     slug, table: "giftcards", id,
     values: {
-      balance: newBal,
       status: newStatus,
       redeemed_at: newStatus === "redeemed" ? now : null,
       updated_at: now,
@@ -2811,7 +2821,9 @@ export async function listGiftCardsManage(
   if (scoped) { where.push("gc.tenant_id = ?"); params.push(gcT.tenantId ?? 0); }
   const q = clean(filters.q);
   if (q !== "") {
-    where.push("(gc.code LIKE ? OR gc.recipient_name LIKE ? OR gc.recipient_email LIKE ?)");
+    // ILIKE: il LIKE MySQL (collation general_ci) è case-insensitive, quello di
+    // Postgres no — la ricerca 'gc-...' minuscola deve trovare i codici maiuscoli.
+    where.push("(gc.code ILIKE ? OR gc.recipient_name ILIKE ? OR gc.recipient_email ILIKE ?)");
     const like = `%${q}%`;
     params.push(like, like, like);
   }
