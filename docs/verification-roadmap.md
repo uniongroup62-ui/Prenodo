@@ -14654,3 +14654,72 @@ etichetta 'Cabine', entrambe le voci e badge ROSSO su 'elimina'.
 Regressione: test-cabine 34/34, test-cabine-pass2 20/20, e2e-cabins-page
 20/20, test-log-attivita 16/16. Con questo il registro attivita' copre 22
 moduli: NESSUN residuo di strumentazione.
+
+## 2026-07-17 — Operatori pass 2-bis: 3 bug corretti (sedi attive, atomicita', magic bytes)
+
+Ri-analisi con le classi di bug scoperte dopo il pass del 12/07 (che aveva
+attestato zero bug). Tre divergenze reali trovate e corrette:
+
+BUG 1 — LOCATION_IDS NON FILTRATI ALLE SEDI ATTIVE. Il legacy lavora sulle
+sole sedi attive (app_locations(true), staff.php 493+817-826): i
+location_ids POSTati vengono filtrati su quel set e 'Seleziona almeno una
+sede per l'operatore.' scatta se dopo il filtro non resta nulla; con
+nessuna sede attiva le righe staff_locations NON vengono toccate. Il port
+scriveva i posted RAW: location_ids=9999 (sede inesistente) superava la
+guardia e creava una riga staff_locations fantasma. FIX: filtro su set
+attivo + guardie sedi/disattivazione calcolate sul perimetro attivo
+(staff_location_effective_ids fedele).
+
+BUG 2 — ATOMICITA'. staff.php avvolge save (875-1044) e delete (673-698)
+in beginTransaction/rollBack; il port scriveva in sequenza staff -> users
+-> staff_locations (e nel delete account+righe collegate+staff): un errore
+a meta' lasciava operatori senza account o senza sedi. FIX: fase di
+scrittura di saveStaffMember e cascata di deleteStaffMember in
+withTenantTransaction (SQL raw scopato, INSERT..RETURNING, ON CONFLICT DO
+NOTHING per l'INSERT IGNORE legacy, bcrypt PRE-transazione, tabelle
+pre-risolte fuori tx perche' in PG un errore aborta la transazione);
+errori in tx -> messaggi fissi legacy ('Errore durante il salvataggio
+dell'operatore.' / 'Errore durante l'eliminazione operatore.').
+L'upsert/delete dell'account login ora vive dentro la transazione
+(helper legacy-compat rimossi).
+
+BUG 3 — FOTO: MIME DAI MAGIC BYTES. Il legacy valida il contenuto reale
+con getimagesize (process_uploaded_staff_photo, Helpers 10827); il port si
+fidava del Content-Type DICHIARATO dal browser. FIX in staff-photo route:
+sniffing jpeg/png/webp/gif dai magic bytes (bmp/tiff/ico riconosciuti per
+il messaggio 'Formato non valido: carica JPG, PNG, WEBP o GIF', contenuto
+non-immagine -> 'Formato immagine non supportato'); il tipo dichiarato e'
+ignorato, content-type R2 = MIME sniffato.
+
+Verifica live test-operatori-pass2 21/21 CLEAN: create completa
+(staff+account non verificato+sede), sede inesistente senza scritture,
+'21,9999' filtrato a [21], rename propagato a users.name, cambio email
+stesso account con verified azzerato, guardie rimozione-sede/disattivazione
+con prenotazione aperta e servizio-senza-operatori (nome sede nel
+messaggio), catena delete legacy (storico -> popup servizi -> commissioni
+-> cascata atomica staff+account+sedi), email duplicata flash msg, foto
+(garbage rifiutato, BMP rifiutato col testo giusto, PNG reale dichiarato
+octet-stream ACCETTATO e caricato su R2), SSO, ruolo Admin negato ai
+non-admin, owner forzato attivo+admin e non eliminabile.
+
+Regressione: test-operatori 48/48 (F2 sanato: PNG reale con type sbagliato
+ora ACCETTATO come getimagesize; baseline staff_locations 3->2, la riga
+extra era di un assetto temporaneo pre-15/07 non ricostruibile — mai
+reinserita per inferenza), e2e-staff-page 27/27, markers-staff 35/35,
+e2e-staff-availability 16/16, e2e-staff-for-service 6/6, test-staff-filter
+4/4, test-staff-sede2 4/4, test-operator 8/8, test-operator-regress 7/7,
+test-staff-list 1/1; cross-check file condiviso: test-cabine 34/34,
+e2e-cabins-resources 14/14, test-risorse-pass2 3/3.
+
+NOTE HARNESS: (a) la cleanup di test-operatori (LIKE 'ZZ%') ha rimosso i
+residui staff ZZV4 169-180 leakati dai pass Appuntamenti — verificati
+ORFANI (zero referenze su appointment_staff/segments/staff_services/
+availability/commissioni): baseline produzione tornata a 2 staff.
+(b) test-operator-column-match e test-staff-location-columns sono sonde
+STANTIE legate ad appt 408 e all'assetto temporaneo 22@21+51 (spariti):
+il comportamento colonne-per-sede live e' corretto per lo stato attuale
+(Sede1 -> luca, Sede2 -> Luca); da riseminare solo in un pass Calendario.
+
+Residuo deliberato: il backfill legacy dell'owner in tabella staff
+(staff.php 557-609, auto-create alla visita pagina) non e' portato — il
+provisioning crea gia' la riga; quirk di riparazione one-shot.

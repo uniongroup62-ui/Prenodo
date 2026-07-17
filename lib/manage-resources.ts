@@ -741,7 +741,7 @@ export async function saveStaffMember(slug: string, body: Record<string, string>
   let role = normalizeRole(body.role ?? body.ui_role);
   const password = String(body.password ?? "");
   let isActive = truthy(body.is_active ?? body.isActive ?? "1");
-  const locationIds = parseIdList(body.location_ids ?? body.locationIds);
+  const postedLocationIds = parseIdList(body.location_ids ?? body.locationIds);
 
   // ORDINE VALIDAZIONI LEGACY (staff.php 742-896): SSO -> Solo-Admin-edit ->
   // colore -> Solo-Admin-assegna -> owner-email -> sede obbligatoria -> guardie
@@ -780,16 +780,24 @@ export async function saveStaffMember(slug: string, body: Record<string, string>
     role = "admin";
   }
 
-  // "Seleziona almeno una sede per l'operatore." (staff.php:823) — solo quando
-  // il tenant ha sedi configurate (con la tabella assente il legacy salta il check).
+  // Il legacy lavora sulle sole sedi ATTIVE (app_locations(true), staff.php
+  // 493+817-826): i location_ids POSTati vengono FILTRATI su quel set (sedi
+  // inattive o inesistenti scartate) e "Seleziona almeno una sede per
+  // l'operatore." scatta se dopo il filtro non resta nulla. Con nessuna sede
+  // attiva (staffLocationsAvailable falso) il legacy NON tocca le righe
+  // staff_locations esistenti.
   const allLocations = await listLocations(slug);
-  if (locationIds.length === 0 && allLocations.length > 0) {
+  const activeLocations = allLocations.filter((location) => location.isActive);
+  const activeLocationIdSet = new Set(activeLocations.map((location) => location.id));
+  const staffLocationsAvailable = activeLocations.length > 0 && await tenantTable(slug, "staff_locations").then(() => true).catch(() => false);
+  const locationIds = staffLocationsAvailable ? postedLocationIds.filter((lid) => activeLocationIdSet.has(lid)) : [];
+  if (staffLocationsAvailable && locationIds.length === 0) {
     throw new Error("Seleziona almeno una sede per l'operatore.");
   }
 
   // Guardie sede/disattivazione legacy (staff.php 828-873), solo in edit non-owner.
   if (id > 0 && !isOwnerEditing) {
-    const allLocationIds = allLocations.map((location) => location.id);
+    const allLocationIds = activeLocations.map((location) => location.id);
     const oldStoredRows = await tenantSelect<RowDataPacket>({ slug, table: "staff_locations", columns: "location_id", where: "staff_id = ?", params: [id], orderBy: "location_id ASC" }).catch(() => []);
     const oldStored = uniquePositive(oldStoredRows.map((row) => Number(row.location_id ?? 0)));
     const oldEffective = oldStored.filter((lid) => allLocationIds.includes(lid));
@@ -799,7 +807,7 @@ export async function saveStaffMember(slug: string, body: Record<string, string>
       if (await staffHasOpenAppointmentsInLocations(slug, id, removedLocationIds)) {
         throw new Error("Non puoi rimuovere questa sede: l'operatore ha prenotazioni in sospeso o prenotate collegate.");
       }
-      const blockers = await staffServiceLocationBlockers(slug, id, removedLocationIds, allLocations);
+      const blockers = await staffServiceLocationBlockers(slug, id, removedLocationIds, activeLocations);
       if (blockers.length) {
         throw new Error(`Non puoi rimuovere la sede "${blockers[0].locationName}": il servizio "${blockers[0].serviceName}" resterebbe senza operatori abilitati.`);
       }
@@ -809,7 +817,7 @@ export async function saveStaffMember(slug: string, body: Record<string, string>
       if (await staffHasAppointmentRefs(slug, id, true)) {
         throw new Error("Non puoi disattivare l'operatore: ha prenotazioni in sospeso o prenotate collegate.");
       }
-      const blockers = await staffServiceLocationBlockers(slug, id, oldEffective.length ? oldEffective : allLocationIds, allLocations);
+      const blockers = await staffServiceLocationBlockers(slug, id, oldEffective.length ? oldEffective : allLocationIds, activeLocations);
       if (blockers.length) {
         throw new Error(`Non puoi disattivare l'operatore: il servizio "${blockers[0].serviceName}" resterebbe senza operatori abilitati in "${blockers[0].locationName}".`);
       }
@@ -854,19 +862,74 @@ export async function saveStaffMember(slug: string, body: Record<string, string>
     calendar_color: color,
   });
 
-  let staffId = id;
-  if (id > 0) {
-    await tenantUpdate({ slug, table: "staff", id, values });
-  } else {
-    staffId = await tenantInsert(table, values);
-  }
-
+  // Fase di scrittura ATOMICA come il legacy (staff.php 875-1044:
+  // beginTransaction -> staff + users + staff_locations -> commit, rollback e
+  // 'Errore durante il salvataggio dell'operatore.' su qualsiasi errore): mai
+  // un operatore salvato senza account login o senza sedi per un errore a metà.
+  const staffTableName = quoteIdentifier(table.name);
+  const staffScope = tenantClause(table);
+  const usersTable = await tenantTable(slug, "users");
+  const staffLocationsTable = staffLocationsAvailable ? await tenantTable(slug, "staff_locations").catch(() => null) : null;
+  // Hash bcrypt calcolato PRIMA della transazione (nessun lavoro lento in tx).
+  const passwordHash = password ? await bcrypt.hash(password, 10) : null;
   // L'utente login va risolto con l'email PRE-write (oldLoginUserId): la riga
   // staff è già stata aggiornata, rileggerla troverebbe l'email NUOVA e il
   // cambio-email non aggancerebbe mai l'account esistente (staff.php 970-998).
-  if (email) await upsertStaffLoginUser(slug, { staffId, fullName, email, role, password, oldLoginUserId });
-  else if (id > 0) await deleteLoginUserForStaffWithoutEmail(slug, oldLoginUserId);
-  await replaceOwnerLinks(slug, "staff_locations", "staff_id", staffId, "location_id", locationIds);
+  const verifTable = await tenantTable(slug, "user_email_verifications").catch(() => null);
+  const userLocationsTable = await tenantTable(slug, "user_locations").catch(() => null);
+  let staffId = id;
+  try {
+    await withTenantTransaction(slug, async (q) => {
+      const cols = Object.keys(values);
+      if (id > 0) {
+        await q(`UPDATE ${staffTableName} SET ${cols.map((c) => `${quoteIdentifier(c)} = ?`).join(", ")} WHERE id = ?${staffScope.sql}`, [...cols.map((c) => values[c]), id, ...staffScope.params]);
+      } else {
+        const inserted = await q(`INSERT INTO ${staffTableName} (${cols.map((c) => quoteIdentifier(c)).join(", ")}) VALUES (${cols.map(() => "?").join(", ")}) RETURNING id`, cols.map((c) => values[c]));
+        staffId = Number(inserted[0]?.id ?? 0);
+      }
+      if (email) {
+        const uScope = tenantClause(usersTable);
+        const uT = quoteIdentifier(usersTable.name);
+        const existing = await q(`SELECT id FROM ${uT} WHERE LOWER(email) = ?${uScope.sql} LIMIT 1`, [email, ...uScope.params]);
+        const existingId = Number(existing[0]?.id ?? 0);
+        if (existingId > 0) {
+          await q(`UPDATE ${uT} SET name = ?, email = ?, role = ?${passwordHash ? ", password_hash = ?" : ""} WHERE id = ?${uScope.sql}`, [fullName, email, role, ...(passwordHash ? [passwordHash] : []), existingId, ...uScope.params]);
+        } else if (oldLoginUserId > 0) {
+          // Cambio email (staff.php 970-998): account sotto la VECCHIA email
+          // aggiornato alla nuova con email_verified_at azzerata.
+          await q(`UPDATE ${uT} SET name = ?, email = ?, role = ?, email_verified_at = NULL${passwordHash ? ", password_hash = ?" : ""} WHERE id = ?${uScope.sql}`, [fullName, email, role, ...(passwordHash ? [passwordHash] : []), oldLoginUserId, ...uScope.params]);
+        } else {
+          if (!passwordHash) throw new Error("Password obbligatoria per creare l'account login dell'operatore.");
+          await q(`INSERT INTO ${uT} (name, email, password_hash, role, email_verified_at) VALUES (?, ?, ?, ?, NULL)`, [fullName, email, passwordHash, role]);
+        }
+      } else if (id > 0 && oldLoginUserId > 0 && !(ownerUserId > 0 && oldLoginUserId === ownerUserId)) {
+        // staff.php 999-1004: email svuotata in edit -> account login eliminato
+        // con verifiche email e user_locations (owner mai raggiungibile qui).
+        for (const t of [verifTable, userLocationsTable]) {
+          if (!t) continue;
+          const s = tenantClause(t);
+          await q(`DELETE FROM ${quoteIdentifier(t.name)} WHERE user_id = ?${s.sql}`, [oldLoginUserId, ...s.params]);
+        }
+        const uScope = tenantClause(usersTable);
+        await q(`DELETE FROM ${quoteIdentifier(usersTable.name)} WHERE id = ?${uScope.sql}`, [oldLoginUserId, ...uScope.params]);
+      }
+      if (staffLocationsTable) {
+        const slScope = tenantClause(staffLocationsTable);
+        const slT = quoteIdentifier(staffLocationsTable.name);
+        await q(`DELETE FROM ${slT} WHERE staff_id = ?${slScope.sql}`, [staffId, ...slScope.params]);
+        // INSERT IGNORE legacy -> ON CONFLICT DO NOTHING (un errore in PG
+        // aborterebbe l'intera transazione).
+        for (const lid of uniquePositive(locationIds)) {
+          await q(`INSERT INTO ${slT} (staff_id, location_id) VALUES (?, ?) ON CONFLICT DO NOTHING`, [staffId, lid]);
+        }
+      }
+    });
+  } catch (error) {
+    // Le validazioni sono già passate: qualsiasi errore in transazione diventa
+    // il messaggio fisso legacy (staff.php 1041-1044).
+    if (error instanceof Error && error.message === "Password obbligatoria per creare l'account login dell'operatore.") throw error;
+    throw new Error("Errore durante il salvataggio dell'operatore.");
+  }
 
   // Staff-invite email (port of the "Conferma email account" code mail in
   // staff.php). It fires in the same two cases as the legacy handler:
@@ -929,21 +992,52 @@ export async function deleteStaffMember(slug: string, id: number, options: { act
   }
   if (await staffHasCommissionHistory(slug, staffId)) throw new Error("Operatore non eliminabile: risulta usato nello storico commissioni. Disattivalo per mantenere lo storico.");
 
+  // Cascata ATOMICA come il legacy (staff.php 673-698: beginTransaction ->
+  // account login + righe collegate + staff -> commit, rollback e 'Errore
+  // durante l'eliminazione operatore.' su qualsiasi errore). Le tabelle sono
+  // pre-risolte FUORI dalla transazione (in PG un errore aborta la tx anche
+  // se intercettato: dentro girano solo statement sicuri).
   const email = normalizeEmail(row.email ?? "");
+  let loginUserId = 0;
   if (email && !await staffEmailUsed(slug, email, staffId)) {
     const users = await tenantSelect<RowDataPacket>({ slug, table: "users", columns: "id", where: "LOWER(email) = ?", params: [email], limit: 1 }).catch(() => []);
-    const loginUserId = Number(users[0]?.id ?? 0);
-    if (loginUserId > 0) {
-      await deleteByOwner(slug, "user_email_verifications", "user_id", loginUserId);
-      await deleteByOwner(slug, "user_locations", "user_id", loginUserId);
-      await tenantDelete({ slug, table: "users", id: loginUserId }).catch(() => undefined);
-    }
+    loginUserId = Number(users[0]?.id ?? 0);
+  }
+  const usersTable = await tenantTable(slug, "users").catch(() => null);
+  const userOwnedTables = [] as Awaited<ReturnType<typeof tenantTable>>[];
+  for (const name of ["user_email_verifications", "user_locations"]) {
+    const t = await tenantTable(slug, name).catch(() => null);
+    if (t && await columnExists(t.name, "user_id")) userOwnedTables.push(t);
   }
   // staff_delete_related_rows (staff.php 188-196).
-  for (const tableName of ["staff_locations", "staff_availability", "staff_timeoff", "staff_services", "staff_commission_settings", "staff_commission_periods"]) {
-    await deleteByOwner(slug, tableName, "staff_id", staffId);
+  const relatedTables = [] as Awaited<ReturnType<typeof tenantTable>>[];
+  for (const name of ["staff_locations", "staff_availability", "staff_timeoff", "staff_services", "staff_commission_settings", "staff_commission_periods"]) {
+    const t = await tenantTable(slug, name).catch(() => null);
+    if (t && await columnExists(t.name, "staff_id")) relatedTables.push(t);
   }
-  await tenantDelete({ slug, table: "staff", id: staffId });
+  const staffTable = await tenantTable(slug, "staff");
+  try {
+    await withTenantTransaction(slug, async (q) => {
+      if (loginUserId > 0) {
+        for (const t of userOwnedTables) {
+          const s = tenantClause(t);
+          await q(`DELETE FROM ${quoteIdentifier(t.name)} WHERE user_id = ?${s.sql}`, [loginUserId, ...s.params]);
+        }
+        if (usersTable) {
+          const s = tenantClause(usersTable);
+          await q(`DELETE FROM ${quoteIdentifier(usersTable.name)} WHERE id = ?${s.sql}`, [loginUserId, ...s.params]);
+        }
+      }
+      for (const t of relatedTables) {
+        const s = tenantClause(t);
+        await q(`DELETE FROM ${quoteIdentifier(t.name)} WHERE staff_id = ?${s.sql}`, [staffId, ...s.params]);
+      }
+      const s = tenantClause(staffTable);
+      await q(`DELETE FROM ${quoteIdentifier(staffTable.name)} WHERE id = ?${s.sql}`, [staffId, ...s.params]);
+    });
+  } catch {
+    throw new Error("Errore durante l'eliminazione operatore.");
+  }
   // staff.php 699-701: il file foto rimosso DOPO il commit (best-effort, su R2).
   const photoKey = storageKeyFromPublicUrl(String(row.photo_path ?? "").trim());
   if (photoKey) await deletePublicObject(photoKey).catch(() => undefined);
@@ -1638,15 +1732,6 @@ async function selectOwnerRows(slug: string, tableName: string, ownerColumn: str
   return dbQuery<RowDataPacket[]>(`SELECT * FROM ${quoteIdentifier(table.name)} WHERE ${clauses.join(" AND ")}`, params);
 }
 
-async function replaceOwnerLinks(slug: string, tableName: string, ownerColumn: string, ownerId: number, valueColumn: string, values: number[]): Promise<void> {
-  const table = await tenantTable(slug, tableName).catch(() => null);
-  if (!table || !ownerId) return;
-  await deleteByOwner(slug, tableName, ownerColumn, ownerId);
-  for (const value of uniquePositive(values)) {
-    await tenantInsert(table, await filterColumns(table.name, { [ownerColumn]: ownerId, [valueColumn]: value })).catch(() => undefined);
-  }
-}
-
 async function deleteByOwner(slug: string, tableName: string, ownerColumn: string, ownerId: number): Promise<void> {
   const table = await tenantTable(slug, tableName).catch(() => null);
   if (!table || !ownerId) return;
@@ -1846,40 +1931,9 @@ async function staffEmailUsed(slug: string, email: string, currentStaffId: numbe
   return rows.length > 0;
 }
 
-async function upsertStaffLoginUser(slug: string, input: { staffId: number; fullName: string; email: string; role: string; password: string; oldLoginUserId: number }): Promise<void> {
-  const users = await tenantTable(slug, "users");
-  const existing = await tenantSelect<RowDataPacket>({ slug, table: "users", columns: "id,email", where: "LOWER(email) = ?", params: [input.email], limit: 1 }).catch(() => []);
-  const values: Record<string, unknown> = { name: input.fullName, email: input.email, role: input.role };
-  if (input.password) values.password_hash = await bcrypt.hash(input.password, 10);
-  if (existing[0]?.id) {
-    await tenantUpdate({ slug, table: "users", id: Number(existing[0].id), values: await filterColumns(users.name, values) });
-    return;
-  }
-
-  // Cambio email (staff.php 970-998): l'account trovato sotto la VECCHIA email
-  // (risolto dal chiamante PRIMA delle scritture) viene aggiornato alla nuova
-  // con email_verified_at azzerata — nessuna password richiesta.
-  if (input.oldLoginUserId > 0) {
-    await tenantUpdate({ slug, table: "users", id: input.oldLoginUserId, values: await filterColumns(users.name, { ...values, email_verified_at: null }) });
-    return;
-  }
-
-  if (!input.password) throw new Error("Password obbligatoria per creare l'account login dell'operatore.");
-  await tenantInsert(users, await filterColumns(users.name, { ...values, email_verified_at: null }));
-}
-
-// staff.php 999-1004: email svuotata in edit -> l'account login (risolto dal
-// chiamante con l'email PRE-write) viene eliminato con le verifiche email e le
-// user_locations. L'owner (primo admin del tenant, equivalente PG di users.id=1)
-// non è raggiungibile qui (email obbligatoria), ma la guardia resta per sicurezza.
-async function deleteLoginUserForStaffWithoutEmail(slug: string, userId: number): Promise<void> {
-  if (userId <= 0) return;
-  const ownerUserId = await tenantOwnerUserId(slug);
-  if (ownerUserId > 0 && userId === ownerUserId) return;
-  await deleteByOwner(slug, "user_email_verifications", "user_id", userId);
-  await deleteByOwner(slug, "user_locations", "user_id", userId);
-  await tenantDelete({ slug, table: "users", id: userId }).catch(() => undefined);
-}
+// NB: l'upsert dell'account login e la cancellazione per email svuotata ora
+// vivono DENTRO la transazione di saveStaffMember (parità col beginTransaction
+// legacy, staff.php 875-1044).
 
 // Scope tenant per le query manuali (tabelle shared).
 function tenantClause(table: Awaited<ReturnType<typeof tenantTable>>): { sql: string; params: unknown[] } {
