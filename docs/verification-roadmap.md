@@ -14516,3 +14516,10 @@ sanata (filtro per sede) e riverificata senza leak; test-cabine torna
 34/34 con la baseline documentata [9,10,45].
 
 Miglioria proposta: log attivita' risorse (+cabine nel prossimo pass).
+
+### Addendum Risorse (stesso giorno): log attività
+
+logActivity (module 'risorse'): creata/modificata (con nome e qtà)/eliminata;
+log dopo il successo (delete bloccata dai servizi = nessuna riga, verificato).
+Suite test-risorse-log 7/7 CLEAN + regressione 25+3+16.
+Log fase 2 residui: servizi, impostazioni (+cabine col loro pass).
