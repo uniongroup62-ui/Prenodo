@@ -1,3 +1,5 @@
+import { businessTodayIso } from "@/lib/business-datetime";
+
 // Appointment domain types + pure scheduling/formatting helpers.
 //
 // This module used to also host an in-memory demo appointment/hold store
@@ -182,6 +184,9 @@ export function updateAppointmentStatus(
   );
 }
 
+// "Oggi" in ORA DI ROMA (classe TZ, fix 2026-07-17): con toISOString (UTC) tra
+// la mezzanotte e le 2 locali tutti i default/date-stamp dei consumer
+// scivolavano al giorno precedente (booking, POS, costi, coupon, prodotti...).
 export function todayIso(now = new Date()): string {
-  return now.toISOString().slice(0, 10);
+  return businessTodayIso(now);
 }

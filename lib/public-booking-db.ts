@@ -1,6 +1,7 @@
 import "server-only";
 
 import { randomBytes } from "crypto";
+import { businessNowDateTime, businessTodayIso } from "@/lib/business-datetime";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { columnExists, dbExecute, dbQuery, quoteIdentifier, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
 
@@ -708,8 +709,8 @@ export async function manageAvailabilityBrowser({
   const pad = (n: number) => String(n).padStart(2, "0");
   const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const anchor = new Date(`${normalizeDate(date)}T00:00:00`);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  // "Oggi" in ora di Roma (server-TZ-safe), come il resto del motore.
+  const today = new Date(`${businessTodayIso()}T00:00:00`);
   const start = anchor < today ? new Date(today) : anchor;
   const mode = ["day", "week", "month"].includes(range) ? range : "month";
   const end = new Date(start);
@@ -928,11 +929,17 @@ export async function holdPublicBookingSlot({
 export async function cleanupAppointmentHolds(slug: string): Promise<void> {
   try {
     const table = await tenantTable(slug, "appointment_holds");
+    // TZ: expires_at è in ORA DI ROMA — confronto con businessNowDateTime, MAI
+    // NOW() UTC (gli hold restavano 'active' e BLOCCAVANO gli slot per 2 ore
+    // oltre la scadenza).
+    const nowRome = businessNowDateTime();
     await dbExecute(
-      `UPDATE ${quoteIdentifier(table.name)} SET status='expired' WHERE status='active' AND expires_at <= NOW()`,
+      `UPDATE ${quoteIdentifier(table.name)} SET status='expired' WHERE status='active' AND expires_at <= ?`,
+      [nowRome],
     );
     await dbExecute(
-      `DELETE FROM ${quoteIdentifier(table.name)} WHERE status IN ('expired','released','converted') AND expires_at <= NOW() - interval '7 days'`,
+      `DELETE FROM ${quoteIdentifier(table.name)} WHERE status IN ('expired','released','converted') AND expires_at <= ?::timestamp - interval '7 days'`,
+      [nowRome],
     );
   } catch {
     // best-effort
@@ -1140,7 +1147,7 @@ export async function confirmPublicBooking({
         appointment_id: appointmentId,
         discount_amount: roundMoney(legacyBenefits.promoDiscount),
         location_id: locationId && locationId > 0 ? locationId : null,
-        redeemed_at: new Date(),
+        redeemed_at: businessNowDateTime(),
       }).catch(() => 0);
     }
   }
@@ -1383,9 +1390,9 @@ export async function publicBookingClosures(slug: string, locationId: number | n
     dt.setUTCDate(dt.getUTCDate() + 1);
     return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
   };
-  const today = new Date();
-  const from = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
-  const toDateObj = new Date(today);
+  // Finestra chiusure da OGGI (Roma) a +365 giorni, server-TZ-safe.
+  const from = businessTodayIso();
+  const toDateObj = new Date(`${from}T00:00:00`);
   toDateObj.setDate(toDateObj.getDate() + 365);
   const to = `${toDateObj.getFullYear()}-${pad(toDateObj.getMonth() + 1)}-${pad(toDateObj.getDate())}`;
 
@@ -1597,7 +1604,8 @@ async function locationWeekHours(slug: string, locationId: number | null): Promi
   const days: Array<[number, string]> = [
     [1, "lunedi"], [2, "martedi"], [3, "mercoledi"], [4, "giovedi"], [5, "venerdi"], [6, "sabato"], [0, "domenica"],
   ];
-  const todayDow = new Date().getDay(); // 0=domenica..6=sabato, come date('w')
+  // 0=domenica..6=sabato come date('w'), sul GIORNO DI ROMA (server-TZ-safe).
+  const todayDow = new Date(`${businessTodayIso()}T00:00:00`).getDay();
   const items: WeekHourItem[] = [];
   for (const [dow, label] of days) {
     const rows = await tenantSelect<RowDataPacket>({
@@ -1664,10 +1672,11 @@ export async function busyRangesForDate(
     : "starts_at::date = ?";
   const segmentParams = excludeAppointmentId ? [date, excludeAppointmentId] : [date];
 
+  // TZ: expires_at è ora-di-Roma — confronto col now di Roma, mai NOW() UTC.
   const holdWhere = excludeHoldToken
-    ? "starts_at::date = ? AND status = 'active' AND expires_at > NOW() AND token <> ?"
-    : "starts_at::date = ? AND status = 'active' AND expires_at > NOW()";
-  const holdParams = excludeHoldToken ? [date, excludeHoldToken] : [date];
+    ? "starts_at::date = ? AND status = 'active' AND expires_at > ? AND token <> ?"
+    : "starts_at::date = ? AND status = 'active' AND expires_at > ?";
+  const holdParams = excludeHoldToken ? [date, businessNowDateTime(), excludeHoldToken] : [date, businessNowDateTime()];
 
   const [appointmentRows, segmentRows, holdRows] = await Promise.all([
     tenantSelect<RowDataPacket>({
@@ -1774,10 +1783,11 @@ export async function busyCabinRangesForDate(
     : "starts_at::date = ?";
   const segmentParams = excludeAppointmentId ? [date, excludeAppointmentId] : [date];
 
+  // TZ: expires_at è ora-di-Roma — confronto col now di Roma, mai NOW() UTC.
   const holdWhere = excludeHoldToken
-    ? "starts_at::date = ? AND status = 'active' AND expires_at > NOW() AND token <> ?"
-    : "starts_at::date = ? AND status = 'active' AND expires_at > NOW()";
-  const holdParams = excludeHoldToken ? [date, excludeHoldToken] : [date];
+    ? "starts_at::date = ? AND status = 'active' AND expires_at > ? AND token <> ?"
+    : "starts_at::date = ? AND status = 'active' AND expires_at > ?";
+  const holdParams = excludeHoldToken ? [date, businessNowDateTime(), excludeHoldToken] : [date, businessNowDateTime()];
 
   const [appointmentRows, segmentRows, holdRows] = await Promise.all([
     tenantSelect<RowDataPacket>({
@@ -2228,8 +2238,8 @@ async function assertActivePublicHold({
   const rows = await tenantSelect<RowDataPacket>({
     slug,
     table: "appointment_holds",
-    where: "token = ? AND owner_key = ? AND status = 'active' AND expires_at > NOW()",
-    params: [token, ownerKey || "public"],
+    where: "token = ? AND owner_key = ? AND status = 'active' AND expires_at > ?",
+    params: [token, ownerKey || "public", businessNowDateTime()],
     limit: 1,
   });
   const hold = rows[0];
@@ -2536,13 +2546,15 @@ function sqlDateTime(date: string, time: string): string {
   return `${normalizeDate(date)} ${normalizeTime(time)}:00`;
 }
 
+// TZ: gli orari di business vivono in ORA DI ROMA a prescindere dal fuso del
+// server (in dev il server è a Roma e coincide; su Amplify/UTC i componenti
+// locali del server sballerebbero cutoff, "oggi" e scadenze hold di 2 ore).
 function addSecondsSqlDate(date: Date, seconds: number): string {
-  const next = new Date(date.getTime() + seconds * 1000);
-  return `${dateIsoLocal(next)} ${String(next.getHours()).padStart(2, "0")}:${String(next.getMinutes()).padStart(2, "0")}:${String(next.getSeconds()).padStart(2, "0")}`;
+  return businessNowDateTime(new Date(date.getTime() + seconds * 1000));
 }
 
 function todayIsoLocal(): string {
-  return dateIsoLocal(new Date());
+  return businessTodayIso();
 }
 
 function dateIsoLocal(date: Date): string {
@@ -2555,8 +2567,9 @@ function dateIsoLocal(date: Date): string {
 
 function minimumStartForDate(date: string): number {
   if (date !== todayIsoLocal()) return 0;
-  const now = new Date();
-  return now.getHours() * 60 + now.getMinutes();
+  // Minuti di "adesso" in ORA DI ROMA (server-TZ-safe).
+  const now = businessNowDateTime();
+  return Number(now.slice(11, 13)) * 60 + Number(now.slice(14, 16));
 }
 
 function overlaps(start: number, end: number, otherStart: number, otherEnd: number): boolean {

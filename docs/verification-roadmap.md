@@ -15104,3 +15104,48 @@ Regressione: test-report 24/24, test-reports-net 4/4, e2e-reports 20/20 e
 e2e-reports-page 15/15 (2 sonde sanate: 'sede inesistente' codificava il
 comportamento pre-guardia — ora fuori-lista = ripiego con label/dati
 della sede di sessione), markers-reports 114/114.
+
+## 2026-07-17 — Booking pass 2: 1 bug corretto (classe TZ server-safe sul motore pubblico)
+
+Ri-analisi del flusso pubblico (booking.php 13665 + booking-wizard.js 5056)
+vs public-booking-db.ts + route /api/booking con le classi post-12/07.
+
+BUG — CLASSE TZ SU HOLD/OGGI/ADESSO. (a) Le scadenze hold (expires_at,
+scritte in ora locale) erano confrontate con NOW() UTC in QUATTRO punti
+(janitor mark+purge, letture busy slot x2, validazione hold al confirm):
+un hold abbandonato BLOCCAVA lo slot per 2 ORE oltre la scadenza e un
+hold scaduto veniva ancora accettato al confirm. (b) Il file usava i
+componenti locali DEL SERVER (new Date().getHours/getDay/todayIsoLocal):
+corretto solo finche' il server e' a Roma — su Amplify (UTC) cutoff
+"adesso", "oggi", dow settimana orari e finestra chiusure sarebbero
+sfasati di 2 ore sistematiche. FIX: tutto ancorato a Europe/Rome via
+business-datetime (addSecondsSqlDate -> wall Rome dell'istante,
+todayIsoLocal -> businessTodayIso, minimumStartForDate/dow/finestre da
+stringhe Rome, redeemed_at esplicito); confronti expires_at
+parametrizzati col now di Roma. (c) ALLA RADICE: todayIso() condiviso di
+appointment-engine (usato da booking route, POS, costi, coupon, prodotti,
+appointments route) era toISOString UTC -> ora delega a businessTodayIso
+(tra mezzanotte e le 2 locali "oggi" scivolava a ieri per TUTTI i
+consumer).
+
+CONFERMA fedelta' (non-bug): il confirm pubblico legacy NON e'
+transazionale (booking.php senza beginTransaction) — il port sequenziale
+e' bug-faithful; appointment_staff scritto SOLO con operatore esplicito
+(any-staff = nessuna riga, identico).
+
+Verifica live test-booking-pass2 9/9 CLEAN: slot dentro l'orario, cutoff
+oggi >= adesso-Roma, hold SCADUTO che non blocca piu' lo slot vs attivo
+che blocca (il discriminante del bug), expires_at del hold API = Roma
++150s, janitor che marca 'expired' senza delete, confirm con hold scaduto
+rifiutato verbatim, confirm completo (pending + cliente riusato per email
+case-insensitive senza duplicati + righe servizio/staff/sede/segmento +
+hold converted), doppia prenotazione 'Orario non disponibile.'.
+
+Regressione (motore condiviso): test-quickbooking 35/35, test-calendario
+20/20, test-appuntamenti 41/41, test-booking-settings 13/13,
+markers-booking-wizard 64/64, e2e-pos-logic 16/16, e2e-booking-admin 9/9
+(SANATA: login reale = sede 0 -> schermata selezione, marker SSR solo con
+sede — forge sede 21, stessa trappola di markers-hours). NOTA: e2e-coupons
+49/3 con gli STESSI 3 fail anche a codice stashato (drift preesistente del
+dominio Buoni: baseline lista/totalCount col coupon di produzione — da
+risanare in un eventuale pass Buoni, non correlato a Booking).
