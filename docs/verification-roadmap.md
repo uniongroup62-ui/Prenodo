@@ -14398,3 +14398,31 @@ D) clamp txPage oltre l'ultima pagina (20/pagina legacy).
 
 Nessuna miglioria proposta: log, atomicità, paginazione e ricerca del
 modulo sono già allineati al pattern.
+
+## 2026-07-17 — Promozioni pass 2: ZERO bug, lock strutturale sul SAVE verificato live
+
+Nessuna modifica al prodotto. Baseline pass-1 riconfermata (93 check: form 38,
+list 30, engine 10, checkout 6, exclude-search 9). Caccia sulle classi note,
+tutte a posto: gate per-azione (mutazioni promotions.manage, evaluate/preview
+anche pos.manage), confini data in ora business (activeWindow/engine su
+todayIso), match promo-per-codice gia' case-insensitive (UPPER(TRIM)).
+
+Pass 2 (test-promo-pass2 8/8 CLEAN) — percorsi prima non coperti:
+A) LOCK STRUTTURALE sul SAVE diretto (bypass del form): con utilizzi
+   collegati il save che cambia la REGOLA e' rifiutato col messaggio verbatim
+   (firma strutturale: date/sconti/target/scope/sedi/fasce/blackout/limiti);
+   la modifica SOLO-titolo/descrizione/condizioni/esclusioni/stato resta
+   consentita — equivalente-o-piu'-stretto del legacy che blocca il form.
+B) ESCLUSIONI dal riepilogo: guardia associazione verbatim; target
+   'fidelity' richiede adesione (+livelli); per target new/inattivo/
+   compleanno l'esclusione e' una BLACKLIST ESPLICITA non filtrata
+   dinamicamente (Promotions.php 3038-3043, il primo atteso del probe era
+   sbagliato, comportamento port FEDELE).
+
+Osservazioni (nessuna azione): per_customer_limit al checkout e' conta-poi-
+applica senza lock anche nel legacy (race teorica bug-faithful); la pagina
+LISTA carica gli snapshot clienti completi per i candidati esclusione
+(residuo deliberato documentato nello sweep 2026-07-16).
+
+Miglioria proposta: log attivita' promozioni (save/toggle/delete/condizioni/
+esclusioni) — unico modulo del gruppo ancora senza registro.
