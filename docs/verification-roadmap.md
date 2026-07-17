@@ -14594,3 +14594,47 @@ altrui rifiutato, rename sul proprio nome ok. Regressione: e2e-services
 impostazioni-log 11/11, markers-services2 60/60. NOTA probe: il C1 di
 test-servizi-pass2 (category_save 'Non categorizzato') passa solo perche'
 la baseline non contiene la default — commento aggiornato nel probe.
+
+## 2026-07-17 — Cabine pass 2: 2 bug corretti (guardia sede + atomicita'), semantica verificata live
+
+Pass completo su cabins.php (bulk #cabinsForm + action=delete) vs port
+(lib/manage-resources.ts + route resources section=cabins + cabins-content).
+
+BUG 1 — GUARDIA SEDE MANCANTE sull'override location_id. Nel legacy
+app_current_location_id (Helpers.php 796-820) onora l'override query/POST
+SOLO passando da app_resolve_location_id -> app_location_allowed_for_user:
+sede inesistente/non attiva o NON assegnata all'utente risolve a 0
+('Tutte') e il bulk save viene rifiutato con 'Seleziona una sede per
+configurare le cabine.'. Il port si fidava del location_id del body: un
+non-admin ristretto alla sede 21 poteva creare/rinominare/disattivare
+cabine della sede 51 (Modello A violato). FIX: nuovo
+resolveCabinsLocationId (exists-attiva + assegnazione; admin e
+locationIds vuoto = senza restrizioni, convenzione port) applicato a GET
+section=cabins, cabins_save e cabin_delete (dove la sede non valida
+risolve a 0 e il delete procede senza filtro sede — quirk fedele del
+legacy). NOTA: corretta anche la vecchia lettura 'sede inesistente resta
+tale' (A5 di test-cabine sanato: 9999 -> 0 'Tutte').
+
+BUG 2 — ATOMICITA'. Il legacy avvolge bulk save (476-509) e delete
+(387-393) in beginTransaction/commit/rollBack; il port faceva scritture
+sequenziali (upsert + disattivazioni + reorder) senza transazione:
+un errore a meta' lasciava salvataggi parziali. FIX: entrambe le
+mutazioni ora girano in withTenantTransaction (SQL raw scopato per
+tenant, INSERT ... RETURNING id, reorder DENTRO la transazione via
+reorderActiveCabinsTx come nel legacy).
+
+Verifica live test-cabine-pass2 20/20 CLEAN: blocco rimozione-da-conteggio
+con guardia PRE-mutazione (nessuna riga scritta), ordine submit=position,
+rename per id, precedenza errori (nome vuoto VINCE sull'errore sede,
+cabins.php 426-436), delete bloccata da servizio (popup variante servizi,
+flash senza accento) e da prenotazione futura (popup variante prenotazioni,
+blocker 'Prenotazione CODE' con dettaglio data-cliente-stato), TZ Rome
+(appuntamento finito 30' fa NON blocca — businessNowDateTime), soft delete
++ reorder compattato, guardia sede (ristretto->0, inesistente->0, admin
+onorato). Regressione: test-cabine 34/34 (A5 sanato), e2e-cabins-page
+20/20, markers-cabins 24/24, e2e-cabins-resources 14/14, test-risorse-pass2
+3/3, test-risorse-log 7/7. Baseline cabine [9 attiva@21, 10 inattiva@21,
+45 attiva@51] CLEAN.
+
+Migliorie proposte (in attesa di approvazione): log attivita' modulo
+'cabine' su cabins_save/cabin_delete (residuo deliberato della fase 2).

@@ -15,6 +15,7 @@ import {
   getManageStaffMember,
   getSharedResource,
   listManageStaff,
+  resolveCabinsLocationId,
   resourceContext,
   type ResourceBlockPopup,
   saveAvailabilityEvent,
@@ -89,11 +90,15 @@ export async function GET(request: Request) {
     // 0 = stato 'Tutte' legittimo (cabins.php 356-361).
     const locationParam = url.searchParams.get("location_id") ?? url.searchParams.get("locationId");
     const requestedLocation = locationParam !== null ? parseInteger(locationParam, 0) : Number(session.user.currentLocationId ?? 0) || 0;
+    // Pagina Cabine: l'override di sede passa da app_location_allowed_for_user
+    // nel legacy (app_current_location_id, Helpers.php 796-820) — sede
+    // inesistente/non assegnata risolve a 0 = 'Tutte'.
+    const cabinsLocation = section === "cabins" ? await resolveCabinsLocationId(tenantSlug, requestedLocation, session.user) : requestedLocation;
     const context = await resourceContext({
       slug: tenantSlug,
       // Solo hours.php passa il param da app_resolve_location_id (autorizzazione
       // per-utente, hours.php 134-143): sede fuori lista -> ripiego.
-      locationId: section === "hours" ? resolveAllowedLocation(session.user, requestedLocation) : requestedLocation,
+      locationId: section === "hours" ? resolveAllowedLocation(session.user, requestedLocation) : section === "cabins" ? cabinsLocation : requestedLocation,
       date: url.searchParams.get("date") ?? undefined,
       rawLocation: section === "cabins",
     });
@@ -158,6 +163,10 @@ export async function POST(request: Request) {
     // removed cabin is still linked to a service / future appointment.
     if (action === "cabins_save") {
       if (!can(activeUser.perms, "cabins.manage")) return jsonError("Permesso Cabine richiesto.", 403);
+      // Guardia sede legacy (app_current_location_id -> allowed_for_user): una
+      // sede inesistente o non assegnata risolve a 0 e il save viene rifiutato
+      // con 'Seleziona una sede per configurare le cabine.' (cabins.php 426).
+      body.location_id = String(await resolveCabinsLocationId(tenantSlug, parseInteger(body.location_id ?? body.locationId, 0), activeUser));
       const result = await saveCabinsBulk(tenantSlug, body);
       return Response.json(result, { status: result.ok ? 200 : 400 });
     }
@@ -167,7 +176,9 @@ export async function POST(request: Request) {
     if (action === "cabin_delete") {
       if (!can(activeUser.perms, "cabins.manage")) return jsonError("Permesso Cabine richiesto.", 403);
       try {
-        await deleteCabin(tenantSlug, parseInteger(body.id, 0), parseInteger(body.location_id ?? body.locationId, 0));
+        // Stessa risoluzione sede del legacy: sede non valida -> 0 (il delete
+        // procede senza filtro sede, quirk fedele di cabins.php 367-371).
+        await deleteCabin(tenantSlug, parseInteger(body.id, 0), await resolveCabinsLocationId(tenantSlug, parseInteger(body.location_id ?? body.locationId, 0), activeUser));
         return Response.json({ ok: true, msg: "Cabina eliminata" });
       } catch (error) {
         const popup = error instanceof Error ? (error as Error & { popup?: unknown }).popup : undefined;

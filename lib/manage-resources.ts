@@ -3,7 +3,7 @@ import "server-only";
 import bcrypt from "bcryptjs";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { parseInteger } from "@/lib/api-utils";
-import { dbExecute, dbQuery, quoteIdentifier, columnExists, tenantDelete, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
+import { dbExecute, dbQuery, quoteIdentifier, columnExists, tenantDelete, tenantInsert, tenantSelect, tenantTable, tenantUpdate, withTenantTransaction, type TenantTxQuery } from "@/lib/tenant-db";
 import { sendStaffInviteEmailCode } from "@/lib/manage-accessibility";
 import { businessNowDateTime } from "@/lib/business-datetime";
 import { deletePublicObject, storageKeyFromPublicUrl } from "@/lib/storage";
@@ -358,6 +358,24 @@ export async function getManageStaffMember(slug: string, id: number): Promise<Re
 // rimossa perche' permetteva di creare cabine fuori dalle regole legacy (senza
 // sede, inattive, senza reorder).
 
+// Porta di app_current_location_id per la superficie Cabine (Helpers.php
+// 796-820): l'override location_id (query/POST) e' onorato SOLO se la sede
+// esiste ATTIVA ed e' assegnata all'utente (app_resolve_location_id ->
+// app_location_allowed_for_user, Helpers.php 762-766); altrimenti risolve a 0
+// ('Tutte') — il bulk save viene poi rifiutato con 'Seleziona una sede per
+// configurare le cabine.' esattamente come nel legacy. Admin e utenti senza
+// restrizioni di sede (locationIds vuoto, convenzione del port) passano sempre.
+export async function resolveCabinsLocationId(slug: string, requested: number, user: { role?: string; locationIds?: number[] }): Promise<number> {
+  const id = Math.max(0, Number(requested) || 0);
+  if (!id) return 0;
+  const locations = await listLocations(slug);
+  if (!locations.some((loc) => loc.id === id && loc.isActive)) return 0;
+  const isAdmin = String(user.role ?? "").toLowerCase() === "admin";
+  const allowed = Array.isArray(user.locationIds) ? user.locationIds.map(Number).filter((n) => n > 0) : [];
+  if (isAdmin || allowed.length === 0 || allowed.includes(id)) return id;
+  return 0;
+}
+
 export type SaveCabinsBulkResult =
   | { ok: true; cabins: ResourceCabin[] }
   | { ok: false; error: string; blockingServices?: CabinBlockerItem[]; popup?: CabinDeleteBlockPopup; cabins: ResourceCabin[] };
@@ -445,32 +463,44 @@ export async function saveCabinsBulk(slug: string, body: Record<string, string>)
   }
 
   // Upsert kept rows in submitted order (position = index+1), then deactivate
-  // the removed ones.
-  const keptIds = new Set<number>();
-  for (let i = 0; i < count; i++) {
-    const name = cleanName(names[i] ?? "", 120);
-    const id = ids[i] ?? 0;
-    const position = i + 1;
-    if (id > 0 && activeById.has(id)) {
-      const existingLocationId = hasLocationCol ? Number(activeById.get(id)?.location_id ?? 0) : 0;
-      const values: Record<string, unknown> = { name, position, is_active: 1 };
-      if (hasLocationCol && locationId > 0 && existingLocationId > 0) values.location_id = locationId;
-      await tenantUpdate({ slug, table: "cabins", id, values: await filterColumns(table.name, values) });
-      keptIds.add(id);
-    } else {
-      const values: Record<string, unknown> = { name, position, is_active: 1 };
-      if (hasLocationCol && locationId > 0) values.location_id = locationId;
-      const newId = await tenantInsert(table, await filterColumns(table.name, values));
-      if (newId > 0) keptIds.add(newId);
+  // the removed ones — ATOMICO come il legacy (cabins.php 476-509:
+  // beginTransaction -> upsert + disattivazioni + reorder -> commit, rollback
+  // su QUALSIASI errore): mai salvataggi parziali se una scrittura fallisce.
+  const cabinsTable = quoteIdentifier(table.name);
+  const scopeSql = table.mode === "shared" ? " AND tenant_id = ?" : "";
+  const scopeParams: number[] = table.mode === "shared" ? [Number(table.tenantId ?? 0)] : [];
+  await withTenantTransaction(slug, async (q) => {
+    const keptIds = new Set<number>();
+    for (let i = 0; i < count; i++) {
+      const name = cleanName(names[i] ?? "", 120);
+      const id = ids[i] ?? 0;
+      const position = i + 1;
+      if (id > 0 && activeById.has(id)) {
+        const existingLocationId = hasLocationCol ? Number(activeById.get(id)?.location_id ?? 0) : 0;
+        if (hasLocationCol && locationId > 0 && existingLocationId > 0) {
+          await q(`UPDATE ${cabinsTable} SET name = ?, position = ?, is_active = 1, location_id = ? WHERE id = ?${scopeSql}`, [name, position, locationId, id, ...scopeParams]);
+        } else {
+          await q(`UPDATE ${cabinsTable} SET name = ?, position = ?, is_active = 1 WHERE id = ?${scopeSql}`, [name, position, id, ...scopeParams]);
+        }
+        keptIds.add(id);
+      } else if (hasLocationCol && locationId > 0) {
+        const inserted = await q(`INSERT INTO ${cabinsTable} (name, position, is_active, location_id) VALUES (?, ?, 1, ?) RETURNING id`, [name, position, locationId]);
+        const newId = Number(inserted[0]?.id ?? 0);
+        if (newId > 0) keptIds.add(newId);
+      } else {
+        const inserted = await q(`INSERT INTO ${cabinsTable} (name, position, is_active) VALUES (?, ?, 1) RETURNING id`, [name, position]);
+        const newId = Number(inserted[0]?.id ?? 0);
+        if (newId > 0) keptIds.add(newId);
+      }
     }
-  }
-  for (const rid of activeById.keys()) {
-    if (!keptIds.has(rid)) {
-      await tenantUpdate({ slug, table: "cabins", id: rid, values: { is_active: 0 } });
+    for (const rid of activeById.keys()) {
+      if (!keptIds.has(rid)) {
+        await q(`UPDATE ${cabinsTable} SET is_active = 0 WHERE id = ?${scopeSql}`, [rid, ...scopeParams]);
+      }
     }
-  }
-  // cabin_reorder_active dopo il salvataggio (cabins.php 508).
-  await reorderActiveCabins(slug, hasLocationCol ? locationId : 0);
+    // cabin_reorder_active DENTRO la transazione (cabins.php 508).
+    await reorderActiveCabinsTx(q, cabinsTable, scopeSql, scopeParams, hasLocationCol ? locationId : 0);
+  });
 
   return { ok: true, cabins: await listCabins(slug, locationId, await listLocations(slug)) };
 }
@@ -641,23 +671,17 @@ function cabinBlockPopup(title: string, message: string, services: CabinBlockerI
   };
 }
 
-// cabin_reorder_active: ricompatta position 1..N per le cabine attive della sede.
-async function reorderActiveCabins(slug: string, locationId: number): Promise<void> {
-  const table = await tenantTable(slug, "cabins").catch(() => null);
-  if (!table) return;
-  const hasLocation = await columnExists(table.name, "location_id");
-  const rows = await tenantSelect<RowDataPacket>({
-    slug,
-    table: "cabins",
-    columns: "id",
-    where: hasLocation && locationId > 0 ? "COALESCE(is_active,1)=1 AND location_id = ?" : "COALESCE(is_active,1)=1",
-    params: hasLocation && locationId > 0 ? [locationId] : [],
-    orderBy: "position ASC, id ASC",
-  }).catch(() => []);
+// cabin_reorder_active: ricompatta position 1..N per le cabine attive della
+// sede, DENTRO la transazione chiamante (nel legacy il reorder sta dentro il
+// beginTransaction sia del bulk save sia del delete).
+async function reorderActiveCabinsTx(q: TenantTxQuery, cabinsTable: string, scopeSql: string, scopeParams: number[], locationId: number): Promise<void> {
+  const where = locationId > 0 ? "COALESCE(is_active,1)=1 AND location_id = ?" : "COALESCE(is_active,1)=1";
+  const whereParams = locationId > 0 ? [locationId, ...scopeParams] : [...scopeParams];
+  const rows = await q(`SELECT id FROM ${cabinsTable} WHERE ${where}${scopeSql} ORDER BY position ASC, id ASC`, whereParams);
   let position = 1;
   for (const row of rows) {
     const rid = Number(row.id ?? 0);
-    if (rid > 0) await tenantUpdate({ slug, table: "cabins", id: rid, values: { position: position++ } }).catch(() => undefined);
+    if (rid > 0) await q(`UPDATE ${cabinsTable} SET position = ? WHERE id = ?${scopeSql}`, [position++, rid, ...scopeParams]);
   }
 }
 
@@ -665,7 +689,8 @@ async function reorderActiveCabins(slug: string, locationId: number): Promise<vo
 export async function deleteCabin(slug: string, id: number, locationId = 0): Promise<void> {
   const cabinId = Math.max(0, Number(id) || 0);
   const table = await tenantTable(slug, "cabins").catch(() => null);
-  const hasLocation = table ? await columnExists(table.name, "location_id") : false;
+  if (!table) throw new Error("Cabina non trovata");
+  const hasLocation = await columnExists(table.name, "location_id");
   const rows = await tenantSelect<RowDataPacket>({
     slug,
     table: "cabins",
@@ -687,8 +712,15 @@ export async function deleteCabin(slug: string, id: number, locationId = 0): Pro
     );
     throw error;
   }
-  await tenantUpdate({ slug, table: "cabins", id: cabinId, values: { is_active: 0 } });
-  await reorderActiveCabins(slug, locationId);
+  // Soft delete + reorder in transazione (cabins.php 387-393: beginTransaction
+  // -> UPDATE is_active=0 -> cabin_reorder_active -> commit, rollback su errore).
+  const cabinsTable = quoteIdentifier(table.name);
+  const scopeSql = table.mode === "shared" ? " AND tenant_id = ?" : "";
+  const scopeParams: number[] = table.mode === "shared" ? [Number(table.tenantId ?? 0)] : [];
+  await withTenantTransaction(slug, async (q) => {
+    await q(`UPDATE ${cabinsTable} SET is_active = 0 WHERE id = ?${scopeSql}`, [cabinId, ...scopeParams]);
+    await reorderActiveCabinsTx(q, cabinsTable, scopeSql, scopeParams, hasLocation ? locationId : 0);
+  });
 }
 
 // Errori che il legacy veicola come ?msg= (alert VERDE, staff.php 883-955) vs
