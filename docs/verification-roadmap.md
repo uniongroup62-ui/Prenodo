@@ -14481,3 +14481,13 @@ esclusioni con reset-marker. Residuo deliberato: form context con snapshot
 clienti completo (picker filtrato per adesione/livello, documentato).
 
 Miglioria proposta: log attivita' omaggi (campagne + istanze).
+
+### Addendum Omaggi (stesso giorno): log attività campagne + istanze
+
+logActivity (module 'omaggi'): campagna creata/modificata/clonata/attivata/
+disattivata/eliminata + condizioni + esclusioni; istanza riscattata (con
+unità), annullata, eliminata, assegnata manualmente, voucher inviato. Log
+dopo il successo (verificato: il delete RIFIUTATO di un'istanza riscattata
+— guardia 'solo omaggi in accumulo, annullati o scaduti' — non logga).
+Suite test-omaggi-log 10/10 CLEAN + regressione 21+17+20+3+16.
+Log fase 2: restano SOLO servizi e impostazioni.
