@@ -76,6 +76,7 @@ const MODULE_LABELS: Record<string, string> = {
   preventivi: "Preventivi",
   giftbox: "GiftBox",
   giftcard: "GiftCard",
+  fidelity: "Fidelity",
 };
 
 function moduleLabel(m: string): string {

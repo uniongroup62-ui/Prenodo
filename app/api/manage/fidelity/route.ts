@@ -1,12 +1,12 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
-import { addDbWalletMovement, deleteFidelityCampaign, deleteFidelityCard, fidelityCampaignPreview, fidelityDisableImpact, fidelityLinkedAppointmentsDetailed, fidelityWalletManualMove, getFidelityEnabled, getFidelityLevelsEditorData, getFidelityMembership, getFidelityPointsSettings, getFidelityPointsStats, getFidelityWallet, getManageCreditMovements, issueFidelityCard, listDbClients, listDbWalletMovements, listFidelityCampaigns, manualCreditDebit, previewFidelityLevelDelete, previewFidelityLevelThresholds, reactivateFidelityCard, saveFidelityCampaign, saveFidelityLevels, saveFidelityPointsSettings, setFidelityEnabled, toggleFidelityCampaign, updateFidelityCardStatus } from "@/lib/db-repositories";
+import { logActivity } from "@/lib/activity-log";
+import { addDbWalletMovement, deleteFidelityCampaign, deleteFidelityCard, fidelityCampaignPreview, fidelityDisableImpact, fidelityLinkedAppointmentsDetailed, fidelityWalletManualMove, getFidelityEnabled, getFidelityLevelsEditorData, getFidelityMembership, getFidelityPointsSettings, getFidelityPointsStats, getFidelityWallet, getManageCreditMovements, issueFidelityCard, listDbWalletMovements, listFidelityCampaigns, manualCreditDebit, previewFidelityLevelDelete, previewFidelityLevelThresholds, reactivateFidelityCard, saveFidelityCampaign, saveFidelityLevels, saveFidelityPointsSettings, setFidelityEnabled, toggleFidelityCampaign, updateFidelityCardStatus } from "@/lib/db-repositories";
 import { searchGiftRecipientClients } from "@/lib/gift-issue-details";
 import { currentManageSession } from "@/lib/manage-auth";
 import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can, canAny } from "@/lib/role-permissions";
 import type { WalletMovementType } from "@/lib/tenant-store";
-import { tenantSelect, type RowDataPacket } from "@/lib/tenant-db";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -116,24 +116,10 @@ export async function GET(request: Request) {
       });
     }
 
-    // Feed compat (nessun consumer UI): stessa shape ma SENZA l'N+1 storico —
-    // dbWalletBalance faceva una query PER CLIENTE per rileggere
-    // credit_balance/points; ora un'unica SELECT di lookup (fix 2026-07-16).
-    // Gate STRETTO (2026-07-17): espone TUTTA l'anagrafica coi saldi — non deve
-    // bastare l'ombrello readPerms (che include pos.manage).
-    if (!can(session.user.perms, "fidelity.wallet") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso portafoglio fidelity mancante.", 403);
-    const clients = await listDbClients({ slug: tenantSlug });
-    const walletRows = await tenantSelect<RowDataPacket>({ slug: tenantSlug, table: "clients", columns: "id, credit_balance, points" }).catch(() => [] as RowDataPacket[]);
-    const walletById = new Map(walletRows.map((r) => [Number(r.id ?? 0), { credit: Math.round(Number(r.credit_balance ?? 0) * 100) / 100, points: Math.round(Number(r.points ?? 0)) }]));
-    return Response.json({
-      ok: true,
-      sourceMode: "database",
-      clients: clients.map((client) => ({
-        ...client,
-        wallet: walletById.get(client.id) ?? { credit: 0, points: 0 },
-      })),
-      movements: await listDbWalletMovements(tenantSlug),
-    });
+    // Il feed compat GET (TUTTA l'anagrafica coi saldi) è stato RIMOSSO
+    // (2026-07-17): nessun consumer UI, esponeva anagrafica+saldi all'ombrello
+    // perms. Ogni lettura passa dalle action dedicate qui sopra.
+    return jsonError("Azione fidelity non supportata.");
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Errore fidelity.");
   }
@@ -153,6 +139,9 @@ export async function POST(request: Request) {
       const enabled = ["1", "true", "on", "yes"].includes(String(body.fidelity_enabled ?? body.enabled ?? "").toLowerCase());
       const confirmed = ["1", "true", "on", "yes"].includes(String(body.disable_appointments_confirmed ?? body.confirmed ?? "").toLowerCase());
       const result = await setFidelityEnabled(tenantSlug, enabled, confirmed);
+      if ((result as { ok?: boolean }).ok !== false) {
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "fidelity", action: enabled ? "riattiva" : "disattiva", entityType: "settings", entityId: 0, label: `Fidelity ${enabled ? "attivata" : "disattivata"}` });
+      }
       return Response.json({ sourceMode: "database", ...result });
     }
 
@@ -170,6 +159,7 @@ export async function POST(request: Request) {
     if (body.action === "save_points_settings" || body._mode === "save_settings") {
       if (!can(session.user.perms, "fidelity.points") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso punti fidelity mancante.", 403);
       const settings = await saveFidelityPointsSettings(tenantSlug, body);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "fidelity", action: "modifica", entityType: "settings", entityId: 0, label: "Salvate impostazioni Punti Fidelity" });
       return Response.json({ ok: true, sourceMode: "database", settings });
     }
 
@@ -177,6 +167,7 @@ export async function POST(request: Request) {
     if (body.action === "save_levels" || body._mode === "save_levels") {
       if (!can(session.user.perms, "fidelity.levels") && !can(session.user.perms, "fidelity.points") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso livelli fidelity mancante.", 403);
       const levels = await saveFidelityLevels(tenantSlug, body as Record<string, unknown>, session.user.id);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "fidelity", action: "modifica", entityType: "settings", entityId: 0, label: "Salvati Livelli Card Fidelity" });
       return Response.json({ ok: true, sourceMode: "database", levels, message: (levels as { message?: string }).message });
     }
 
@@ -221,6 +212,7 @@ export async function POST(request: Request) {
         id: locationContext.currentLocationId,
         name: currentLocation?.name ?? "",
       });
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "fidelity", action: "scala", entityType: "client", entityId: parseInteger(body.client_id, 0), label: `Scalo manuale credito cliente #${parseInteger(body.client_id, 0)} (€ ${parseNumber(body.amount, 0).toFixed(2).replace(".", ",")})` });
       return Response.json({ sourceMode: "database", ...result });
     }
 
@@ -231,6 +223,8 @@ export async function POST(request: Request) {
       if (!can(session.user.perms, "fidelity.wallet") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso portafoglio fidelity mancante.", 403);
       try {
         const result = await fidelityWalletManualMove(tenantSlug, parseInteger(body.client_id, 0), String(body.op ?? "add"), body.points, String(body.note ?? ""), session.user.id);
+        const opAdd = String(body.op ?? "add").toLowerCase() !== "remove";
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "fidelity", action: opAdd ? "crea" : "scala", entityType: "client", entityId: parseInteger(body.client_id, 0), label: `${opAdd ? "Aggiunti" : "Rimossi"} ${parseInteger(body.points, 0)} punti — cliente #${parseInteger(body.client_id, 0)}` });
         return Response.json({ sourceMode: "database", ...result });
       } catch (error) {
         const warnLocked = Number((error as { warnLocked?: number })?.warnLocked ?? 0) || 0;
@@ -245,17 +239,21 @@ export async function POST(request: Request) {
       const cardId = parseInteger(body.card_id, 0);
       if (cardAction === "card_create" || cardAction === "create_card") {
         const result = await issueFidelityCard(tenantSlug, body);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "fidelity", action: "crea", entityType: "fidelity_card", entityId: result.cardId, label: `Emessa tessera Fidelity ${result.code} — cliente #${parseInteger(body.client_id, 0)}` });
         return Response.json({ sourceMode: "database", ...result, membership: await getFidelityMembership(tenantSlug, "") });
       }
       if (cardAction === "card_update" || cardAction === "update_card") {
         const result = await updateFidelityCardStatus(tenantSlug, cardId, String(body.status ?? "active"));
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "fidelity", action: result.status === "inactive" ? "disattiva" : "riattiva", entityType: "fidelity_card", entityId: cardId, label: `Tessera Fidelity #${cardId} ${result.status === "inactive" ? "disattivata" : "attivata"}` });
         return Response.json({ sourceMode: "database", ...result, membership: await getFidelityMembership(tenantSlug, "") });
       }
       if (cardAction === "card_reactivate" || cardAction === "reactivate_card") {
         const result = await reactivateFidelityCard(tenantSlug, cardId);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "fidelity", action: "riattiva", entityType: "fidelity_card", entityId: cardId, label: `Riattivata tessera Fidelity #${cardId} (nuova scadenza ${result.expiresAt})` });
         return Response.json({ sourceMode: "database", ...result, membership: await getFidelityMembership(tenantSlug, "") });
       }
       const result = await deleteFidelityCard(tenantSlug, cardId);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "fidelity", action: "elimina", entityType: "fidelity_card", entityId: cardId, label: `Eliminata tessera Fidelity #${cardId} (punti/livello azzerati, codice non riutilizzabile)` });
       return Response.json({ sourceMode: "database", ...result, membership: await getFidelityMembership(tenantSlug, "") });
     }
 
@@ -264,15 +262,19 @@ export async function POST(request: Request) {
     if (["campaign_save", "campaign_toggle", "campaign_delete"].includes(String(campaignAction))) {
       if (!can(session.user.perms, "fidelity.points") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso punti fidelity mancante.", 403);
       if (campaignAction === "campaign_save") {
+        const isEdit = parseInteger(body.id, 0) > 0;
         const campaign = await saveFidelityCampaign(tenantSlug, body, parseInteger(body.id, 0));
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "fidelity", action: isEdit ? "modifica" : "crea", entityType: "fidelity_campaign", entityId: campaign.id, label: `${isEdit ? "Modificata" : "Creata"} campagna punti "${campaign.name}"` });
         return Response.json({ ok: true, sourceMode: "database", campaign, campaigns: await listFidelityCampaigns(tenantSlug) });
       }
       if (campaignAction === "campaign_toggle") {
         const active = ["1", "true", "on", "yes"].includes(String(body.active ?? "").toLowerCase());
         const campaign = await toggleFidelityCampaign(tenantSlug, parseInteger(body.id, 0), active);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "fidelity", action: active ? "riattiva" : "disattiva", entityType: "fidelity_campaign", entityId: campaign.id, label: `Campagna punti "${campaign.name}" ${active ? "attivata" : "disattivata"}` });
         return Response.json({ ok: true, sourceMode: "database", campaign, campaigns: await listFidelityCampaigns(tenantSlug) });
       }
       const result = await deleteFidelityCampaign(tenantSlug, parseInteger(body.id, 0), session.user.id, String(body.reason ?? body.delete_reason ?? ""));
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "fidelity", action: "elimina", entityType: "fidelity_campaign", entityId: parseInteger(body.id, 0), label: `Eliminata campagna punti #${parseInteger(body.id, 0)}${result.mode === "soft" ? " (storico conservato)" : ""}` });
       return Response.json({ ok: true, sourceMode: "database", mode: result.mode, campaigns: await listFidelityCampaigns(tenantSlug) });
     }
 
@@ -289,6 +291,7 @@ export async function POST(request: Request) {
       source: body.source ?? "manual",
     };
     const movement = await addDbWalletMovement(input, tenantSlug);
+    void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "fidelity", action: "modifica", entityType: "client", entityId: input.clientId, label: `Movimento wallet manuale cliente #${input.clientId} (${input.type})` });
     return Response.json({ ok: true, source: "wallet?action=movement", sourceMode: "database", movement, movements: await listDbWalletMovements(tenantSlug) });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Errore fidelity.");
