@@ -18,6 +18,7 @@ import { currentManageSession } from "@/lib/manage-auth";
 import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { jsonError, parseRequestBody } from "@/lib/api-utils";
+import { logActivity } from "@/lib/activity-log";
 import { columnExists, dbExecute, quoteIdentifier, tableExists, tenantInsert, tenantSelect, tenantTable } from "@/lib/tenant-db";
 import type { RowDataPacket } from "@/lib/tenant-db";
 
@@ -117,6 +118,7 @@ export async function POST(request: Request) {
         email: activeUser.email,
       },
     });
+    void logActivity(tenantSlug, { user: activeUser, locationId: activeUser.currentLocationId, module: "impostazioni", action: "modifica", entityType: "role", entityId: 0, label: `Salvati permessi ruolo "${role}"` });
     const assignments = await roleAssignments(tenantSlug);
     return Response.json({
       ok: true,

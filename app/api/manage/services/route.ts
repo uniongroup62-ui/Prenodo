@@ -1,4 +1,5 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
+import { logActivity } from "@/lib/activity-log";
 import { currentManageSession } from "@/lib/manage-auth";
 import { resolveManageLocationId } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -88,8 +89,11 @@ export async function POST(request: Request) {
         if (!can(session.user.perms, "services.manage")) return jsonError("Permesso Servizi richiesto.", 403);
         // Il save legacy puo' rispondere con un pannello di CONFERMA (pending)
         // invece di salvare; il form ripete il POST con i confirm_* accumulati.
+        const isSvcEdit = parseInteger(body.id ?? body.service_id, 0) > 0;
         const result = await saveManageService(tenantSlug, body);
+        // Il pannello di CONFERMA (pending) non salva nulla: niente log.
         if (result.pending) return Response.json({ ok: true, pending: result.pending });
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "servizi", action: isSvcEdit ? "modifica" : "crea", entityType: "service", entityId: parseInteger(body.id ?? body.service_id, 0), label: `${isSvcEdit ? "Modificato" : "Creato"} servizio "${String(body.name ?? "").trim() || "senza nome"}"` });
         return Response.json({ ...result.context, ok: true, msg: result.msg });
       }
 
@@ -98,6 +102,7 @@ export async function POST(request: Request) {
         if (!can(session.user.perms, "services.manage")) return jsonError("Permesso Servizi richiesto.", 403);
         try {
           const context = await deleteManageService(tenantSlug, parseInteger(body.id ?? body.service_id, 0));
+          void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "servizi", action: "elimina", entityType: "service", entityId: parseInteger(body.id ?? body.service_id, 0), label: `Eliminato servizio #${parseInteger(body.id ?? body.service_id, 0)}` });
           return Response.json({ ...context, ok: true, msg: "Servizio eliminato" });
         } catch (error) {
           const popup = error instanceof Error ? (error as Error & { popup?: unknown }).popup : undefined;
@@ -111,6 +116,7 @@ export async function POST(request: Request) {
       case "category_edit": {
         if (!can(session.user.perms, "service_categories.manage")) return jsonError("Permesso Categorie servizi richiesto.", 403);
         const context = await saveServiceCategory(tenantSlug, body);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "servizi", action: parseInteger(body.id, 0) > 0 ? "modifica" : "crea", entityType: "service_category", entityId: parseInteger(body.id, 0), label: `${parseInteger(body.id, 0) > 0 ? "Modificata" : "Creata"} categoria servizi "${String(body.name ?? "").trim() || "senza nome"}"` });
         return Response.json({ ...context, ok: true, msg: parseInteger(body.id, 0) > 0 ? "Categoria aggiornata" : "Categoria creata" });
       }
 
@@ -119,6 +125,7 @@ export async function POST(request: Request) {
         if (!can(session.user.perms, "service_categories.manage")) return jsonError("Permesso Categorie servizi richiesto.", 403);
         try {
           const context = await deleteServiceCategory(tenantSlug, parseInteger(body.id ?? body.category_id, 0));
+          void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "servizi", action: "elimina", entityType: "service_category", entityId: parseInteger(body.id ?? body.category_id, 0), label: `Eliminata categoria servizi #${parseInteger(body.id ?? body.category_id, 0)}` });
           return Response.json({ ...context, ok: true, msg: "Categoria eliminata" });
         } catch (error) {
           const popup = error instanceof Error ? (error as Error & { popup?: unknown }).popup : undefined;
@@ -157,6 +164,7 @@ export async function POST(request: Request) {
       case "recommended_save": {
         if (!can(session.user.perms, "service_recommendations.manage")) return jsonError("Permesso Servizi consigliati richiesto.", 403);
         const context = await saveServiceRecommendations(tenantSlug, body);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "servizi", action: "modifica", entityType: "service", entityId: 0, label: "Salvati servizi consigliati" });
         return Response.json({ ...context, ok: true, msg: "Servizi consigliati aggiornati" });
       }
 

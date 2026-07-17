@@ -1,4 +1,5 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
+import { logActivity } from "@/lib/activity-log";
 import {
   deleteBusinessBrandingImage,
   deleteBusinessLocation,
@@ -108,7 +109,9 @@ export async function POST(request: Request) {
         if (!can(session.user.perms, "settings.general")) return jsonError("Permesso Profilo attivita richiesto.", 403);
         // Wrapper errore della pagina legacy (business_profile.php 118).
         try {
-          return Response.json(await saveBusinessProfile(tenantSlug, body, publicOrigin(request)));
+          const out = await saveBusinessProfile(tenantSlug, body, publicOrigin(request));
+          void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "impostazioni", action: "modifica", entityType: "business", entityId: 0, label: "Salvato profilo attività" });
+          return Response.json(out);
         } catch (error) {
           const inner = error instanceof Error ? error.message : "Operazione non riuscita.";
           return jsonError(`Errore salvataggio profilo attività: ${inner} (se persiste, controlla che lo schema business sia aggiornato e che il DB possa eseguire ALTER/UPDATE)`);
@@ -138,7 +141,9 @@ export async function POST(request: Request) {
         if (!kind) return jsonError("Tipo immagine non valido.", 422);
         // Errori come l'AJAX legacy: {errors:['Errore rimozione logo: ...']}.
         try {
-          return Response.json(await deleteBusinessBrandingImage(tenantSlug, kind, publicOrigin(request)));
+          const out = await deleteBusinessBrandingImage(tenantSlug, kind, publicOrigin(request));
+          void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "impostazioni", action: "elimina", entityType: "business", entityId: 0, label: `Rimosso ${kind === "logo" ? "logo" : "copertina"} attività` });
+          return Response.json(out);
         } catch (error) {
           const wrapped = `Errore rimozione ${kind === "logo" ? "logo" : "copertina"}: ${error instanceof Error ? error.message : "Operazione non riuscita."}`;
           return Response.json({ ok: false, error: wrapped, errors: [wrapped] }, { status: 400 });
@@ -152,7 +157,9 @@ export async function POST(request: Request) {
         if (!can(session.user.perms, "booking.manage")) return jsonError("Permesso Prenotazioni online richiesto.", 403);
         // Wrapper errore verbatim di booking.php 2926.
         try {
-          return Response.json(await saveBookingSettings(tenantSlug, body));
+          const out = await saveBookingSettings(tenantSlug, body);
+          void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "impostazioni", action: "modifica", entityType: "business", entityId: 0, label: "Salvate impostazioni Prenotazioni online" });
+          return Response.json(out);
         } catch (error) {
           const inner = error instanceof Error ? error.message : "Operazione non riuscita.";
           return jsonError(`Errore salvataggio impostazioni booking: ${inner} (verifica schema o permessi ALTER TABLE)`);
@@ -164,7 +171,10 @@ export async function POST(request: Request) {
         // _error + gate piano) escono NUDE, gli errori imprevisti col wrapper
         // 'Errore salvataggio sede: '.
         try {
-          return Response.json(await saveBusinessLocation(tenantSlug, body, publicOrigin(request)));
+          const isLocEdit = parseInteger(body.id ?? body.location_id, 0) > 0;
+          const out = await saveBusinessLocation(tenantSlug, body, publicOrigin(request));
+          void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "impostazioni", action: isLocEdit ? "modifica" : "crea", entityType: "location", entityId: parseInteger(body.id ?? body.location_id, 0), label: `${isLocEdit ? "Modificata" : "Creata"} sede "${String(body.name ?? "").trim() || "senza nome"}"` });
+          return Response.json(out);
         } catch (error) {
           const inner = error instanceof Error ? error.message : "Operazione non riuscita.";
           const isValidation = inner === "Inserisci il nome della sede."
@@ -201,7 +211,9 @@ export async function POST(request: Request) {
         // categorie) escono come 'Errore salvataggio marketplace sede: ...';
         // solo 'Sede non valida per il marketplace.' arriva nudo (427).
         try {
-          return Response.json(await saveLocationMarketplace(tenantSlug, body, publicOrigin(request)));
+          const out = await saveLocationMarketplace(tenantSlug, body, publicOrigin(request));
+          void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "impostazioni", action: "modifica", entityType: "location", entityId: parseInteger(body.location_id ?? body.id, 0), label: `Salvato marketplace sede #${parseInteger(body.location_id ?? body.id, 0)}` });
+          return Response.json(out);
         } catch (error) {
           const inner = error instanceof Error ? error.message : "Operazione non riuscita.";
           if (inner === "Sede non valida per il marketplace.") return jsonError(inner, 422);
@@ -214,13 +226,19 @@ export async function POST(request: Request) {
 
       case "location_delete":
         if (!can(session.user.perms, "settings.location")) return jsonError("Permesso Sedi richiesto.", 403);
-        return Response.json(await deleteBusinessLocation(
-          tenantSlug,
-          parseInteger(body.id ?? body.location_id, 0),
-          body.confirm_text ?? "",
-          body.reason ?? "",
-          publicOrigin(request),
-        ));
+        {
+          const delOut = await deleteBusinessLocation(
+            tenantSlug,
+            parseInteger(body.id ?? body.location_id, 0),
+            body.confirm_text ?? "",
+            body.reason ?? "",
+            publicOrigin(request),
+          );
+          if ((delOut as { ok?: boolean }).ok !== false) {
+            void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "impostazioni", action: "elimina", entityType: "location", entityId: parseInteger(body.id ?? body.location_id, 0), label: `Eliminata sede #${parseInteger(body.id ?? body.location_id, 0)}` });
+          }
+          return Response.json(delOut);
+        }
 
       case "location_gallery_delete":
         if (!can(session.user.perms, "settings.location")) return jsonError("Permesso Sedi richiesto.", 403);

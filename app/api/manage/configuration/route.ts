@@ -1,4 +1,5 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
+import { logActivity } from "@/lib/activity-log";
 import { currentManageSession } from "@/lib/manage-auth";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { listDbConfigModule, toggleDbConfigRecord, touchDbConfigModule } from "@/lib/db-repositories";
@@ -139,6 +140,7 @@ export async function POST(request: Request) {
     if (moduleId === "pos_settings") {
       if (action === "save" || action === "save_pos_expiry_settings") {
         const moduleState = await saveManagePosSettings(tenantSlug, body, session.user.id);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "impostazioni", action: "modifica", entityType: "settings", entityId: 0, label: "Salvate impostazioni POS (scadenze)" });
         return Response.json({ ok: true, source: "pos_settings?action=save_pos_expiry_settings", sourceMode: "database", module: moduleState, records: moduleState.records });
       }
 
@@ -159,6 +161,7 @@ export async function POST(request: Request) {
     if (FEATURE_SETTINGS_GET[moduleId]) {
       const saved = await saveFeatureSettings(moduleId, action, tenantSlug, body);
       if (saved) {
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "impostazioni", action: "modifica", entityType: "settings", entityId: 0, label: `Salvate impostazioni modulo ${moduleId}` });
         return Response.json({ ok: true, source: `${moduleId}?action=${action}`, sourceMode: "database", message: saved.message, module: saved.module, records: saved.module.records });
       }
       // Unknown action for a settings module: return current state untouched.
@@ -184,12 +187,15 @@ export async function POST(request: Request) {
     }
 
     if (moduleId === "consent_modules" && (action === "save" || action === "save_module")) {
+      const isConsentEdit = parseInteger(body.id ?? body.record_id, 0) > 0;
       const consentModule = await saveManageConsentModule(tenantSlug, body);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "impostazioni", action: isConsentEdit ? "modifica" : "crea", entityType: "consent_module", entityId: parseInteger(body.id ?? body.record_id, 0), label: `${isConsentEdit ? "Modificato" : "Creato"} modulo consenso "${String(body.title ?? body.name ?? "").trim() || "senza titolo"}"` });
       const moduleState = await listDbConfigModule(moduleId, tenantSlug);
       return Response.json({ ok: true, source: "consent_modules?action=save", sourceMode: "database", consentModule, module: moduleState, records: moduleState.records });
     }
     if (moduleId === "consent_modules" && (action === "delete" || action === "delete_module")) {
       const result = await deleteManageConsentModule(tenantSlug, parseInteger(body.id ?? body.record_id, 0));
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "impostazioni", action: "elimina", entityType: "consent_module", entityId: parseInteger(body.id ?? body.record_id, 0), label: `Eliminato modulo consenso #${parseInteger(body.id ?? body.record_id, 0)}` });
       const moduleState = await listDbConfigModule(moduleId, tenantSlug);
       return Response.json({ ok: true, source: "consent_modules?action=delete", sourceMode: "database", ...result, module: moduleState, records: moduleState.records });
     }
@@ -198,6 +204,7 @@ export async function POST(request: Request) {
       const recordId = parseInteger(body.record_id ?? body.id);
       const active = ["1", "true", "yes", "on"].includes((body.active ?? "").toLowerCase());
       const moduleState = await toggleDbConfigRecord(moduleId, recordId, active, tenantSlug);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "impostazioni", action: active ? "riattiva" : "disattiva", entityType: "config_record", entityId: recordId, label: `Record #${recordId} del modulo ${moduleId} ${active ? "attivato" : "disattivato"}` });
       return Response.json({ ok: true, source: `configuration?action=toggle&module=${moduleId}`, sourceMode: "database", module: moduleState, records: moduleState.records });
     }
 

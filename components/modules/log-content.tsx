@@ -81,6 +81,8 @@ const MODULE_LABELS: Record<string, string> = {
   promozioni: "Promozioni",
   omaggi: "Omaggi",
   risorse: "Risorse",
+  servizi: "Servizi",
+  impostazioni: "Impostazioni",
 };
 
 function moduleLabel(m: string): string {
