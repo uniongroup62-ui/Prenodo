@@ -15288,3 +15288,20 @@ OSSERVAZIONE CROSS-MODULO (non toccata): il save preventivi ha la stessa
 forma debole (ctx.locations.length>0) — per un revocato salta solo la
 guardia 'Seleziona una sede valida' (write con sede 0, nessun leak di
 lettura); candidata a un eventuale pass Preventivi.
+
+MIGLIORIA APPROVATA (post-ricontrollo): note del calendario nel registro
+attività — modulo NUOVO 'calendario' (label esplicita nella mappa della
+pagina Log): note_save -> crea/modifica "Salvata nota calendario del
+d/m/Y", note_delete -> elimina "Eliminata nota calendario del d/m/Y"
+(deleteCalendarNote ora ritorna la data via DELETE..RETURNING; delete di
+nota inesistente resta idempotente e NON logga). Segnali DOPO il
+successo. Suite test-calendario-log 5/5 CLEAN; regressione
+test-calendario-pass2 25/25, test-calendario 20/20, test-log-pass2 10/10,
+test-log-attivita 16/16.
+
+HARNESS: purgate 33 voci ZZ% + 159 voci 'luca' accumulate dalle batterie
+di stasera (suite pre-strumentazione senza cleanup log; range 1929-2171
+verificato: TUTTE le entità citate = fixture morte, baseline sales 9 /
+appts 10 intatte). test-calendario e test-calendario-pass2 ora ripuliscono
+a watermark. RICETTA per le prossime batterie: dopo i re-run delle suite
+storiche, purge del range con verifica entità-morte prima del delete.

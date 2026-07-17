@@ -1,3 +1,4 @@
+import { logActivity } from "@/lib/activity-log";
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import { businessTodayIso } from "@/lib/business-datetime";
 import { currentManageSession } from "@/lib/manage-auth";
@@ -116,14 +117,16 @@ export async function POST(request: Request) {
       if (!can(activeUser.perms, "appointments.manage")) {
         return jsonError("Permesso Appuntamenti richiesto.", 403);
       }
+      const editId = parseInteger(body.id, 0);
       const note = await saveCalendarNote({
         slug: tenantSlug,
-        id: parseInteger(body.id, 0),
+        id: editId,
         noteDate: body.note_date ?? body.noteDate ?? "",
         title: body.title ?? "",
         noteText: body.note_text ?? body.noteText ?? "",
         userId: activeUser.id,
       });
+      void logActivity(tenantSlug, { user: activeUser, locationId: activeUser.currentLocationId, module: "calendario", action: editId > 0 ? "modifica" : "crea", entityType: "calendar_note", entityId: note.id, label: `Salvata nota calendario del ${dateLabelIt(note.noteDate)}` });
       return Response.json({ ok: true, note });
     }
 
@@ -133,7 +136,13 @@ export async function POST(request: Request) {
       if (!can(activeUser.perms, "appointments.manage")) {
         return jsonError("Permesso Appuntamenti richiesto.", 403);
       }
-      await deleteCalendarNote({ slug: tenantSlug, id: parseInteger(body.id, 0) });
+      const deleteId = parseInteger(body.id, 0);
+      const deletedDate = await deleteCalendarNote({ slug: tenantSlug, id: deleteId });
+      // Segnale SOLO se una riga è stata davvero rimossa (deletedDate null =
+      // nota inesistente: il delete resta idempotente e non logga).
+      if (deletedDate !== null) {
+        void logActivity(tenantSlug, { user: activeUser, locationId: activeUser.currentLocationId, module: "calendario", action: "elimina", entityType: "calendar_note", entityId: deleteId, label: `Eliminata nota calendario del ${dateLabelIt(deletedDate)}` });
+      }
       return Response.json({ ok: true });
     }
 
@@ -152,6 +161,12 @@ export async function POST(request: Request) {
 // server sbaglia giorno a cavallo di mezzanotte su un server UTC).
 function todayIsoLocal(): string {
   return businessTodayIso();
+}
+
+// "YYYY-MM-DD" -> "d/m/Y" per le label del registro attività.
+function dateLabelIt(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  return m ? `${Number(m[3])}/${Number(m[2])}/${m[1]}` : iso;
 }
 
 function addDays(date: string, days: number): string {

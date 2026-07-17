@@ -406,13 +406,15 @@ export async function saveCalendarNote({
   return fetchCalendarNote(slug, result.insertId);
 }
 
+// Ritorna la data (YYYY-MM-DD) della nota eliminata, o null se non trovata —
+// serve alla route per la label del registro attività.
 export async function deleteCalendarNote({
   slug,
   id,
 }: {
   slug: string;
   id: number;
-}): Promise<void> {
+}): Promise<string | null> {
   const notesTable = await ensureCalendarNotesTable(slug);
   const noteId = Math.max(0, Number(id) || 0);
   if (noteId <= 0) throw new Error("Nota non valida.");
@@ -422,7 +424,11 @@ export async function deleteCalendarNote({
     clauses.push("tenant_id = ?");
     params.push(notesTable.tenantId ?? 0);
   }
-  await dbExecute(`DELETE FROM ${quoteIdentifier(notesTable.name)} WHERE ${clauses.join(" AND ")}`, params);
+  const deleted = await dbQuery<RowDataPacket[]>(
+    `DELETE FROM ${quoteIdentifier(notesTable.name)} WHERE ${clauses.join(" AND ")} RETURNING note_date`,
+    params,
+  );
+  return deleted[0] ? normalizeDate(deleted[0].note_date) || null : null;
 }
 
 export async function getCalendarDayStaffOrder(slug: string, userId = 1): Promise<number[]> {
