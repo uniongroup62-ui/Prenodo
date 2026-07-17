@@ -119,6 +119,9 @@ export async function GET(request: Request) {
     // Feed compat (nessun consumer UI): stessa shape ma SENZA l'N+1 storico —
     // dbWalletBalance faceva una query PER CLIENTE per rileggere
     // credit_balance/points; ora un'unica SELECT di lookup (fix 2026-07-16).
+    // Gate STRETTO (2026-07-17): espone TUTTA l'anagrafica coi saldi — non deve
+    // bastare l'ombrello readPerms (che include pos.manage).
+    if (!can(session.user.perms, "fidelity.wallet") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso portafoglio fidelity mancante.", 403);
     const clients = await listDbClients({ slug: tenantSlug });
     const walletRows = await tenantSelect<RowDataPacket>({ slug: tenantSlug, table: "clients", columns: "id, credit_balance, points" }).catch(() => [] as RowDataPacket[]);
     const walletById = new Map(walletRows.map((r) => [Number(r.id ?? 0), { credit: Math.round(Number(r.credit_balance ?? 0) * 100) / 100, points: Math.round(Number(r.points ?? 0)) }]));
@@ -273,6 +276,10 @@ export async function POST(request: Request) {
       return Response.json({ ok: true, sourceMode: "database", mode: result.mode, campaigns: await listFidelityCampaigns(tenantSlug) });
     }
 
+    // Fallback compat (movimento wallet generico): gate STRETTO come il
+    // Portafoglio — l'ombrello writePerms da solo aprirebbe i movimenti
+    // punti/credito anche a chi ha solo membership/recharges (2026-07-17).
+    if (!can(session.user.perms, "fidelity.wallet") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso portafoglio fidelity mancante.", 403);
     const input = {
       clientId: parseInteger(body.client_id, 0),
       type: normalizeMovementType(body.type),

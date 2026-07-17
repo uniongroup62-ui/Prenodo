@@ -8538,18 +8538,26 @@ export async function addDbWalletMovement(
   let id = 0;
 
   if (amount !== 0) {
-    const balanceAfter = roundMoney(before.credit + amount);
+    // Incremento ATOMICO (il legacy serializzava con FOR UPDATE in
+    // credit_wallet_adjust): RETURNING dà il saldo reale post-movimento, così
+    // il ledger before/after resta corretto anche con scritture concorrenti.
+    const cliT = await tenantTable(slug, "clients");
+    const scopedCli = cliT.mode === "shared" && (await columnExists(cliT.name, "tenant_id"));
+    const updRows = await dbQuery<RowDataPacket[]>(
+      `UPDATE \`${cliT.name}\` SET credit_balance = COALESCE(credit_balance,0) + ? WHERE id = ?${scopedCli ? " AND tenant_id = ?" : ""} RETURNING credit_balance`,
+      scopedCli ? [amount, clientId, cliT.tenantId ?? 0] : [amount, clientId],
+    );
+    const balanceAfter = roundMoney(Number(updRows[0]?.credit_balance ?? before.credit + amount));
     id = await tenantInsert(await tenantTable(slug, "credit_adjustments"), {
       client_id: clientId,
       direction: amount >= 0 ? "credit" : "debit",
       amount: Math.abs(amount),
       delta_amount: amount,
-      balance_before: before.credit,
+      balance_before: roundMoney(balanceAfter - amount),
       balance_after: balanceAfter,
       note,
       created_at: new Date(),
     });
-    await tenantUpdate({ slug, table: "clients", id: clientId, values: { credit_balance: balanceAfter } });
     source = "credit_adjustments";
   }
 
@@ -8564,10 +8572,6 @@ export async function addDbWalletMovement(
       await expireClientLots(slug, clientId).catch(() => 0);
     }
     await ensureLotsInitialized(slug, clientId, lotsSettings).catch(() => undefined);
-    const currentPoints = normalizeFidelityPoints(
-      (await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "points", where: "id = ?", params: [clientId], limit: 1 }).catch(() => []))[0]?.points ?? before.points,
-    );
-    const nextPoints = currentPoints + points;
     const txKind = type === "points_redeem" ? "redeem" : type === "points_earn" ? "earn" : "manual";
     const txSourceType = input.source_type ?? input.source ?? source;
     const transactionId = await tenantInsert(await tenantTable(slug, "transactions"), {
@@ -8585,7 +8589,15 @@ export async function addDbWalletMovement(
       created_at: new Date(),
     });
     if (!id) id = transactionId;
-    await tenantUpdate({ slug, table: "clients", id: clientId, values: { points: nextPoints } });
+    // Incremento ATOMICO dei punti (il legacy serializzava con FOR UPDATE,
+    // Fidelity::addTransaction): niente read-then-write che perde gli
+    // aggiornamenti concorrenti (earn POS + storno + manuale in parallelo).
+    const cliPtsT = await tenantTable(slug, "clients");
+    const scopedPts = cliPtsT.mode === "shared" && (await columnExists(cliPtsT.name, "tenant_id"));
+    await dbExecute(
+      `UPDATE \`${cliPtsT.name}\` SET points = COALESCE(points,0) + ? WHERE id = ?${scopedPts ? " AND tenant_id = ?" : ""}`,
+      scopedPts ? [points, clientId, cliPtsT.tenantId ?? 0] : [points, clientId],
+    );
     await applyLotsDelta(
       slug,
       { clientId, transactionId, kind: txKind, sourceType: String(txSourceType ?? "manual"), sourceId: input.source_id, delta: points },
@@ -19537,7 +19549,9 @@ export async function getFidelityMembership(slug: string, q: string, pageRaw = 1
   const params: unknown[] = [];
   if (scoped) { whereParts.push("fc.tenant_id = ?"); params.push(cardsT.tenantId ?? 0); }
   if (term !== "") {
-    whereParts.push("(fc.code LIKE ? OR c.full_name LIKE ? OR c.email LIKE ?)");
+    // ILIKE: il LIKE MySQL (collation general_ci) è case-insensitive, quello
+    // di Postgres no — 'mario' deve trovare 'Mario' come nel legacy.
+    whereParts.push("(fc.code ILIKE ? OR c.full_name ILIKE ? OR c.email ILIKE ?)");
     const like = `%${term}%`;
     params.push(like, like, like);
   }
@@ -20112,13 +20126,23 @@ export async function fidelityWalletManualMove(
   }
 
   const delta = op === "remove" ? -pts : pts;
-  const nextPoints = normalizeFidelityPoints(curPts + delta);
-  if (delta < 0 && nextPoints < 0) throw new Error("Operazione non riuscita (punti insufficienti o movimento duplicato).");
+  if (delta < 0 && normalizeFidelityPoints(curPts + delta) < 0) throw new Error("Operazione non riuscita (punti insufficienti o movimento duplicato).");
 
   const manualKind = delta < 0 ? "adjust" : "manual";
   // POINT_LOTS (F1): init dei lotti sul saldo PRE-movimento, poi il movimento
   // crea/consuma lotti come ogni transazione punti (Fidelity::addTransaction).
   await ensureLotsInitialized(slug, clientId).catch(() => undefined);
+  // Incremento ATOMICO (il legacy serializzava con SELECT ... FOR UPDATE,
+  // Fidelity.php:1607): la guardia >= 0 nel WHERE impedisce la rimozione
+  // concorrente oltre il saldo; PRIMA dell'insert così un rifiuto non lascia
+  // una transazione orfana.
+  const cliT = await tenantTable(slug, "clients");
+  const scopedCli = cliT.mode === "shared" && (await columnExists(cliT.name, "tenant_id"));
+  const updRows = await dbQuery<RowDataPacket[]>(
+    `UPDATE \`${cliT.name}\` SET points = COALESCE(points,0) + ? WHERE id = ? AND COALESCE(points,0) + ? >= 0${scopedCli ? " AND tenant_id = ?" : ""} RETURNING points`,
+    scopedCli ? [delta, clientId, delta, cliT.tenantId ?? 0] : [delta, clientId, delta],
+  );
+  if (!updRows[0]) throw new Error("Operazione non riuscita (punti insufficienti o movimento duplicato).");
   const manualTxId = await tenantInsert(await tenantTable(slug, "transactions"), {
     client_id: clientId,
     kind: manualKind,
@@ -20128,7 +20152,6 @@ export async function fidelityWalletManualMove(
     created_by: by > 0 ? by : null,
     created_at: new Date(),
   });
-  await tenantUpdate({ slug, table: "clients", id: clientId, values: { points: nextPoints } });
   await applyLotsDelta(slug, { clientId, transactionId: manualTxId, kind: manualKind, sourceType: "manual", delta }).catch(() => undefined);
   await reconcilePointLots(slug, clientId).catch(() => false);
 
@@ -20375,7 +20398,21 @@ export async function manualCreditDebit(
 
   const balanceBefore = roundMoney(Number(rows[0].credit_balance ?? 0));
   if (balanceBefore + 0.00001 < amount) throw new Error(`Credito insufficiente. Saldo attuale € ${formatMoneyIt(balanceBefore)}.`);
-  const balanceAfter = roundMoney(balanceBefore - amount);
+
+  // Decremento ATOMICO (il legacy serializzava con SELECT ... FOR UPDATE,
+  // credit_wallet_adjust): la guardia >= amount nel WHERE impedisce il
+  // double-spend concorrente; il ledger viene scritto DOPO coi saldi reali.
+  const cliT = await tenantTable(slug, "clients");
+  const scopedCli = cliT.mode === "shared" && (await columnExists(cliT.name, "tenant_id"));
+  const updRows = await dbQuery<RowDataPacket[]>(
+    `UPDATE \`${cliT.name}\` SET credit_balance = COALESCE(credit_balance,0) - ? WHERE id = ? AND COALESCE(credit_balance,0) >= ?${scopedCli ? " AND tenant_id = ?" : ""} RETURNING credit_balance`,
+    scopedCli ? [amount, clientId, amount, cliT.tenantId ?? 0] : [amount, clientId, amount],
+  );
+  if (!updRows[0]) {
+    const cur = await tenantSelect<RowDataPacket>({ slug, table: "clients", columns: "credit_balance", where: "id = ?", params: [clientId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+    throw new Error(`Credito insufficiente. Saldo attuale € ${formatMoneyIt(roundMoney(Number(cur[0]?.credit_balance ?? 0)))}.`);
+  }
+  const balanceAfter = roundMoney(Number(updRows[0].credit_balance ?? 0));
 
   const activeCard = await creditWalletActiveCard(slug, clientId);
   await tenantInsert(await tenantTable(slug, "credit_adjustments"), {
@@ -20385,7 +20422,7 @@ export async function manualCreditDebit(
     direction: "debit",
     amount,
     delta_amount: -amount,
-    balance_before: balanceBefore,
+    balance_before: roundMoney(balanceAfter + amount),
     balance_after: balanceAfter,
     note,
     location_id: location.id,
@@ -20393,7 +20430,6 @@ export async function manualCreditDebit(
     created_by: by > 0 ? by : null,
     created_at: new Date(),
   });
-  await tenantUpdate({ slug, table: "clients", id: clientId, values: { credit_balance: balanceAfter } });
 
   return { ok: true, message: `Credito scalato manualmente: -€ ${formatMoneyIt(amount)}.`, movements: await getManageCreditMovements(slug, clientId) };
 }
