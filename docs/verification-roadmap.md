@@ -14364,3 +14364,10 @@ badge 'Disattivata da Punti'), port fedele. Sanature harness:
 
 Suite finali: e2e-recharges 23, test-recharges 32/32 CLEAN, markers 63,
 test-recharge-void-guard 3, e2e-fidelity-toggle 27/27 x2.
+
+### Addendum Ricariche (stesso giorno): log attività modelli
+
+logActivity (module 'ricariche') su crea/modifica/elimina modello + verbo
+compat 'save' (crea o modifica per id); log DOPO il successo. Emissione e
+annullo ricariche restano tracciati dal log POS (incasso/annullo vendita).
+Suite test-recharges-log 10/10 CLEAN + regressione 23+32+16.
