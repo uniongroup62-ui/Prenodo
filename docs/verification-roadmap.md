@@ -14334,3 +14334,33 @@ delete hard con 0 riferimenti) + pass2 10/10 (D2 aggiornato al GET rimosso) +
 regressione fidelity completa + test-fidelity 42/42 + log-attivita 16.
 NOTA: e2e-fidelity-toggle ha un flake intermittente pre-esistente
 (26/1 -> 27/0 al rerun, identico sulla baseline PRE-modifiche).
+
+## 2026-07-17 — Ricariche pass 2 (4496c4a): 1 bug TZ + indagine fallout campagna 37
+
+BUG CORRETTO: getManageRechargesContext calcolava 'oggi' in UTC
+(toISOString) per il badge campagna attiva — tra mezzanotte e le ~2 di Roma
+il giorno UTC e' quello precedente (trappola TZ nota). Fix: businessTodayIso,
+allineato al resto del port.
+
+LOGICHE CONFERMATE CORRETTE: CRUD modelli (validazioni/messaggi/massimali
+fmt_money verbatim; earn_points gated dalla Fidelity generale: create forzato
+0, update conserva; delete senza guardie come il legacy — le righe recharges
+conservano lo snapshot); emissione SOLO-POS (esclusivita' verbatim: no
+credito/GiftCard/coupon/sconto/punti/rate su ricariche; punti campaign-aware
+con base flag-dipendente; wallet ora atomico) e storno via annullo vendita
+(guardia 'credito insufficiente per lo storno' + scelte punti per-ricarica).
+
+INDAGINE (7 FAIL iniziali di test-recharges): la campagna 37 era rimasta
+auto-disabilitata (active=0 + auto_disabled_by_points=1) — fallout di
+e2e-fidelity-toggle, NON bug prodotto: il legacy sul re-enable globale
+ripristina promozioni/omaggi ma NON le campagne punti (riattivazione manuale,
+badge 'Disattivata da Punti'), port fedele. Sanature harness:
+- e2e-fidelity-toggle: snapshot+restore delle campagne di produzione attive;
+- FLAKE STORICO RISOLTO (26/1 -> 27/0): l'atteso fisso '1 campagna punti
+  attiva disattivata' passava SOLO nello stato leakato (37 spenta) che la
+  suite stessa creava -> conteggio dinamico; ora 27/27 stabile (x2 run);
+- test-recharges: baseline di cleanup RELATIVA (come test-fidelity);
+- campagna 37 ripristinata attiva (baseline documentata).
+
+Suite finali: e2e-recharges 23, test-recharges 32/32 CLEAN, markers 63,
+test-recharge-void-guard 3, e2e-fidelity-toggle 27/27 x2.
