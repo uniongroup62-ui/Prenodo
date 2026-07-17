@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { RowDataPacket } from "@/lib/tenant-db";
+import { businessNowDateTime, businessTodayIso } from "@/lib/business-datetime";
 import { dbQuery, tenantIdForSlug } from "@/lib/tenant-db";
 import { fidelityAddCardDurationYmd, fidelityCardExpiryNotificationConfig } from "@/lib/db-repositories";
 import { can } from "@/lib/role-permissions";
@@ -135,12 +136,15 @@ async function getStaffOff(slug: string, tenantId: number | null, currentLocatio
       if (tenantId !== null) staffLocationParams.push(tenantId);
     }
 
+    // TZ: starts_at/ends_at dei timeoff sono app-locali (Roma) — confine con
+    // l'adesso di Roma, mai NOW() UTC (finestra 'assente ora' sfasata di 2h).
     const baseWhere = `WHERE st.is_active=1${tenantSt}
-          AND t.starts_at <= NOW()
-          AND t.ends_at >= NOW()${tenantT}
+          AND t.starts_at <= ?
+          AND t.ends_at >= ?${tenantT}
           ${staffLocationSql}`;
     const baseParams: unknown[] = [];
     if (tenantId !== null) baseParams.push(tenantId); // st.tenant_id
+    baseParams.push(businessNowDateTime(), businessNowDateTime());
     if (tenantId !== null) baseParams.push(tenantId); // t.tenant_id
     baseParams.push(...staffLocationParams);
 
@@ -597,8 +601,10 @@ export async function listBirthdayNotificationRows(slug: string, daysAhead: numb
       params,
     );
 
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    // "Oggi" in ORA DI ROMA (server-TZ-safe): i componenti locali del server
+    // sarebbero UTC su Amplify.
+    const [ty, tm, td] = businessTodayIso().split("-").map(Number);
+    const today = new Date(ty, tm - 1, td);
     const pad = (n: number) => String(n).padStart(2, "0");
     // client_birthday_next_occurrence: 29/02 in anno non bisestile → 28/02.
     const make = (year: number, month: number, day: number): Date | null => {
@@ -782,8 +788,10 @@ export async function getDashboardAlerts(slug: string, options: DashboardAlertOp
 // Date helpers (UTC-day arithmetic, matching the legacy DateTimeImmutable diffs).
 // ---------------------------------------------------------------------------
 function startOfToday(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  // Giorno di ROMA (server-TZ-safe) ancorato a mezzanotte UTC per l'aritmetica
+  // dei giorni (le diff restano intere).
+  const [y, m, d] = businessTodayIso().split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d));
 }
 
 function addDays(date: Date, days: number): Date {

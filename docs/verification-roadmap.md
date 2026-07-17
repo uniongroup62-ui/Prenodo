@@ -15176,3 +15176,34 @@ dei probe di vari pass che loggavano col nome fittizio e non ripulivano
 — aggregato verificato prima del delete). TRAPPOLA da ricordare: ogni
 suite con utente forgiato non-'luca' che colpisce endpoint strumentati
 DEVE ripulire activity_logs (watermark o user_label).
+
+## 2026-07-17 — Notifiche pass 2: 1 fix (classe TZ server-safe, 3 punti) + verifica hub/feed/azioni
+
+FIX — TZ SERVER-SAFE (stessa classe dei pass Log/Booking, 3 punti):
+(1) avvisi dashboard 'assente ora' (timeoff) confrontava starts_at/
+ends_at (wall-time Roma) con NOW() del DB (UTC su Supabase -> finestra
+sfasata di 1-2h); ora parametri businessNowDateTime. (2) compleanni di
+oggi negli avvisi: new Date() locale del server -> giorno di Roma via
+businessTodayIso. (3) startOfToday() e la chiave todayYmd del feed
+compleanni delle notifiche: idem.
+
+Verifica live test-notifiche-pass2 10/10 CLEAN: pending sede-scoped
+(sede 51 invisibile al ristretto), guardie approva verbatim ('Operazione
+non autorizzata.'/'Operazione non valida.'/'Appuntamento non piu in
+attesa.') col ramo bridge, approve -> scheduled + promemoria a
+inizio-24h, doppia-approve respinta, cancel lifecycle (canceled + zero
+pending reminders), count coerente con timeoff attivo, feed
+appointment_pending.
+
+Regressione: test-notifiche 17/17, test-notifiche-hub 16/16,
+test-notifiche-feed 10/10, test-notifiche-shell 12/12,
+test-notifiche-coupon 6/6, e2e-dashboard 13/13, test-dashboard 16/16,
+e2e-notifications-automation 19/19 (il fail R3 era il PROBE contaminato:
+seminava starts_at con NOW()+2h del DB = ora-di-Roma esatta, quindi la
+rischedulazione — ora correttamente Roma-based — lo vedeva sul confine;
+sanato il seed con timestamp Roma espliciti. Trappola nota: mai NOW()
+DB nei probe).
+
+HARNESS: rimossa rata orfana 239 (primo run di test-report-pass2
+fallito PRIMA del push cumulativo degli id; suite indurita con track
+per-riga immediato).

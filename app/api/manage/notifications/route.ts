@@ -1,4 +1,5 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
+import { businessTodayIso } from "@/lib/business-datetime";
 import { automationScheduleReminder, getAutomationSettings, saveClientBirthdayAlertDays } from "@/lib/automation-reminders";
 import { getBrowserNotificationSeenState, saveBrowserNotificationSeenState } from "@/lib/browser-notification-seen";
 import { lifecycleKindForStatusChange, sendAppointmentLifecycleEmail } from "@/lib/appointment-lifecycle-email";
@@ -291,9 +292,8 @@ export async function GET(request: Request) {
         const all = await listBirthdayNotificationRows(tenantSlug, settings.client_birthday_alert_days, 0);
         if (all.length > 0) {
           const first = all[0];
-          const today = new Date();
-          const pad2 = (n: number) => String(n).padStart(2, "0");
-          const todayYmd = `${today.getFullYear()}-${pad2(today.getMonth() + 1)}-${pad2(today.getDate())}`;
+          // Seed chiave sul GIORNO DI ROMA (server-TZ-safe).
+          const todayYmd = businessTodayIso();
           const fmtD = (iso: string) => iso.split("-").reverse().join("/");
           push({
             key: `birthdays:${todayYmd}:${all.length}:${seed(first.birthdayNextDate)}`,
