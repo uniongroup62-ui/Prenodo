@@ -14459,3 +14459,25 @@ SEMANTICA LIVELLI verificata live (test-punti-pass2 5/5 CLEAN):
   rifiutato verbatim.
 Stats sede-asimmetriche e campagna-oggi con guardia DATE-column: fedeli
 (nessuna azione). Log attivita' gia' strumentato (pass Fidelity).
+
+## 2026-07-17 — Omaggi pass 2 (race riscatto corretta)
+
+Baseline riconfermata (145+ check: omaggi 20, engine 16+8, form 17, page 51,
+instance 21, appt-cycle 12, test-omaggi). Classi note tutte a posto: gate
+gifts.manage per-azione su OGNI ramo GET/POST; niente ricerca testuale
+(filtri id/stato); date evento/validita' senza usi UTC.
+
+BUG CORRETTO: riscatto (redeemGiftInstanceItems) con clamp su lettura
+stantia del residuo -> over-redeem concorrente possibile (legacy: FOR
+UPDATE). Fix: INSERT ... SELECT guardato (net redeem-cancel per chiave
+reward_item_index:service_id + qty <= qty totale nel WHERE); rifiuto con
+'Quantità non disponibile per "label".'. Probe parallelo 1+1 su qty 1:
+uno passa, ledger mai oltre, chiusura a residuo 0 corretta (3/3 CLEAN).
+
+Confermate senza modifiche: lock strutturale nel save + conflitto a
+toggle/clone, eliminazione soft con storico, punti MAI scalati
+(points_spent=0), stati italiani, stock premio prodotto best-effort,
+esclusioni con reset-marker. Residuo deliberato: form context con snapshot
+clienti completo (picker filtrato per adesione/livello, documentato).
+
+Miglioria proposta: log attivita' omaggi (campagne + istanze).
