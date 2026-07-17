@@ -15149,3 +15149,30 @@ sede — forge sede 21, stessa trappola di markers-hours). NOTA: e2e-coupons
 49/3 con gli STESSI 3 fail anche a codice stashato (drift preesistente del
 dominio Buoni: baseline lista/totalCount col coupon di produzione — da
 risanare in un eventuale pass Buoni, non correlato a Booking).
+
+## 2026-07-17 — Log pass 2: 1 fix (classe TZ server-safe) + verifica completa del registro
+
+Feature Next-only (nessun legacy): review su correttezza/sicurezza.
+
+FIX — TZ SERVER-SAFE. created_at delle voci e cutoff della retention
+passavano Date al driver (fuso del SERVER: giusto in dev-Roma, UTC su
+Amplify -> voci timbrate -2h e retention sfasata): ora wall-time di Roma
+esplicito via businessNowDateTime (stessa classe del pass Booking).
+
+Verifica live test-log-pass2 10/10 CLEAN: retention 30gg FORZATA sul list
+(voce di 31gg purgata, 29gg conservata), created_at in ora di Roma,
+scoping per-sede del NON-admin (sede 51 nascosta, NULL/globali visibili,
+DISTINCT operatori/moduli scoped — 'ZZ SoloSede51' assente dai filtri del
+ristretto), admin senza restrizioni, gate 'Accesso negato.' senza
+permessi e 403-con-mappa-views su deletions senza logs.deletions,
+ricerca con escape LIKE (q='100%' matcha solo il % letterale), filtro
+azione esatto, vista Eliminazioni clienti permanente (25/pagina su 103).
+
+Regressione: test-log-attivita 16/16, test-cabine-log 7/7 (consumer
+logActivity + DOM).
+
+HARNESS: rimosse 70 voci-rumore con user_label 'ZZ%' (sessioni FORGIATE
+dei probe di vari pass che loggavano col nome fittizio e non ripulivano
+— aggregato verificato prima del delete). TRAPPOLA da ricordare: ogni
+suite con utente forgiato non-'luca' che colpisce endpoint strumentati
+DEVE ripulire activity_logs (watermark o user_label).

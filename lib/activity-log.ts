@@ -7,6 +7,7 @@
 //   anche se l'operatore viene rinominato o eliminato.
 // - La verifica post-DDL usa information_schema DIRETTO (mai tableExists/
 //   columnExists dopo una CREATE: la loro cache resterebbe avvelenata).
+import { businessNowDateTime } from "@/lib/business-datetime";
 import { dbExecute, dbQuery, quoteIdentifier, tenantTable, type RowDataPacket } from "@/lib/tenant-db";
 
 export const ACTIVITY_LOG_RETENTION_DAYS = 30;
@@ -92,7 +93,9 @@ async function purgeOldEntries(table: { name: string; tenantId: number }, force 
   const now = Date.now();
   if (!force && now - lastPurgeAt < 60 * 60 * 1000) return;
   lastPurgeAt = now;
-  const cutoff = new Date(now - ACTIVITY_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+  // Cutoff in ORA DI ROMA (server-TZ-safe, classe TZ fix 17/07): created_at è
+  // wall-time Roma, un Date passato al driver userebbe il fuso del SERVER.
+  const cutoff = businessNowDateTime(new Date(now - ACTIVITY_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000));
   await dbExecute(`DELETE FROM ${quoteIdentifier(table.name)} WHERE tenant_id = ? AND created_at < ?`, [table.tenantId, cutoff]).catch(() => undefined);
 }
 
@@ -105,7 +108,9 @@ export async function logActivity(slug: string, entry: ActivityEntry): Promise<v
       `INSERT INTO ${quoteIdentifier(table.name)} (tenant_id, created_at, user_id, user_label, location_id, module, action, entity_type, entity_id, label, details_json) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
       [
         table.tenantId,
-        new Date(),
+        // Wall-time di ROMA esplicito (server-TZ-safe): con new Date() il
+        // driver serializzerebbe nel fuso del server (UTC su Amplify).
+        businessNowDateTime(),
         Number(entry.user?.id ?? 0) || null,
         userLabelOf(entry.user),
         Number(entry.locationId ?? 0) || null,
