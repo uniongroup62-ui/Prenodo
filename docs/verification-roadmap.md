@@ -14974,3 +14974,32 @@ azione 'modifica' con user_label snapshot. Regola segnali-DOPO-successo:
 codice errato e password attuale errata NON loggano. Verifica
 test-accessibilita-log 5/5 CLEAN; regressione test-accessibilita-pass2
 17/17, test-accessibilita 40/40, test-log-attivita 16/16.
+
+## 2026-07-17 — Ruoli pass 2: 1 bug corretto (replace permessi transazionale) + TZ audit
+
+Ri-analisi di roles.php (310) + RolePermissions.php vs role-permissions +
+permissions route.
+
+BUG — REPLACE NON TRANSAZIONALE. roles.php 119-128 avvolge DELETE +
+INSERT-per-permesso in beginTransaction/rollBack; il port era sequenziale:
+un errore a meta' lasciava il ruolo con un set PARZIALE (o azzerato) di
+permessi — per un modulo che governa gli accessi e' il caso peggiore.
+FIX: withTenantTransaction (tenant_id via trigger BEFORE INSERT); flash
+verbatim invariato ('Impossibile aggiornare i permessi: verifica schema
+DB e riprova.'). MINORE (classe TZ): created_at dell'audit
+role_permission_audit_log ora timbrato esplicito in ora app-locale (il
+DEFAULT CURRENT_TIMESTAMP di PG e' UTC, il MySQL legacy era locale).
+
+Verifica live test-ruoli-pass2 10/10 CLEAN (baseline role_permissions
+VUOTA verificata pre-run e ripristinata; audit oltre-watermark rimosso):
+gate solo-Admin (non-admin CON roles.manage in sessione negato su GET e
+POST — legacyCan nega i non-assegnabili), normalize che auto-aggiunge
+packages.access dal figlio, audit con old RAW []/new ordinato/created_at
+locale, skip-se-identico, non-assegnabili filtrati dal save, validate
+requireChild ('Per attivare Pacchetti seleziona almeno una funzione del
+modulo.') col save fallito che NON tocca i permessi esistenti, ruolo
+sconosciuto coerce a staff, svuotamento ruoli.
+
+Regressione: test-ruoli 21/21 (A1 sanata: catalogo 61->63 con
+logs.view/logs.deletions aggiunti dalla feature Log del 16/07),
+e2e-roles-page 16/16, markers-roles 35/35, e2e-auth-roles 16/16.

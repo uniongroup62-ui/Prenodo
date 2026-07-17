@@ -19,7 +19,7 @@ import { getManageLocationContext } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { jsonError, parseRequestBody } from "@/lib/api-utils";
 import { logActivity } from "@/lib/activity-log";
-import { columnExists, dbExecute, quoteIdentifier, tableExists, tenantInsert, tenantSelect, tenantTable } from "@/lib/tenant-db";
+import { columnExists, dbExecute, quoteIdentifier, tableExists, tenantInsert, tenantSelect, tenantTable, withTenantTransaction } from "@/lib/tenant-db";
 import type { RowDataPacket } from "@/lib/tenant-db";
 
 export const dynamic = "force-dynamic";
@@ -284,6 +284,10 @@ async function roleAssignments(slug: string): Promise<Record<string, string[]>> 
 
 async function replaceRolePermissions(slug: string, role: string, perms: string[]): Promise<void> {
   try {
+    // TRANSAZIONE come il legacy (roles.php 119-128: beginTransaction ->
+    // DELETE + INSERT per permesso -> commit, rollback su errore): un errore a
+    // metà non deve MAI lasciare il ruolo con un set parziale (o vuoto) di
+    // permessi. Il tenant_id sulle insert lo mette il trigger BEFORE INSERT.
     const table = await tenantTable(slug, "role_permissions");
     const clauses = ["role = ?"];
     const params: unknown[] = [role];
@@ -291,10 +295,12 @@ async function replaceRolePermissions(slug: string, role: string, perms: string[
       clauses.unshift("tenant_id = ?");
       params.unshift(table.tenantId ?? 0);
     }
-    await dbExecute(`DELETE FROM ${quoteIdentifier(table.name)} WHERE ${clauses.join(" AND ")}`, params);
-    for (const perm of perms) {
-      await tenantInsert(table, { role, perm });
-    }
+    await withTenantTransaction(slug, async (q) => {
+      await q(`DELETE FROM ${quoteIdentifier(table.name)} WHERE ${clauses.join(" AND ")}`, params);
+      for (const perm of perms) {
+        await q(`INSERT INTO ${quoteIdentifier(table.name)} (\`role\`, \`perm\`) VALUES (?, ?)`, [role, perm]);
+      }
+    });
   } catch {
     // Flash verbatim del rollback legacy (roles.php 129-134).
     throw new Error("Impossibile aggiornare i permessi: verifica schema DB e riprova.");
@@ -341,6 +347,8 @@ async function auditRoleChange(slug: string, input: {
         `CREATE INDEX IF NOT EXISTS ${quoteIdentifier(`idx_role_created`)} ON ${quoteIdentifier(table.name)} (\`role\`, \`created_at\`)`,
       );
     }
+    // created_at ESPLICITO in ora app-locale (classe TZ: il DEFAULT
+    // CURRENT_TIMESTAMP di PG è UTC, il legacy MySQL timbrava in ora locale).
     await tenantInsert(table, {
       actor_user_id: input.actor.id || null,
       actor_name: input.actor.name || null,
@@ -348,6 +356,7 @@ async function auditRoleChange(slug: string, input: {
       role: input.role,
       old_perms: JSON.stringify(oldPerms),
       new_perms: JSON.stringify(newPerms),
+      created_at: auditSqlNow(),
     });
   } catch {
     // Audit best-effort, come nel PHP.
@@ -370,6 +379,12 @@ function parsePerms(value: unknown): string[] {
     // fallback to comma-separated payload.
   }
   return raw.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function auditSqlNow(): string {
+  const date = new Date();
+  const pad = (value: number) => value.toString().padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
 function normalizedAuditPerms(perms: string[]): string[] {
