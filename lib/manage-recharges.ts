@@ -4,6 +4,7 @@ import type { RowDataPacket } from "@/lib/tenant-db";
 import { parseInteger } from "@/lib/api-utils";
 import { columnExists, tenantDelete, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
 import { getFidelityPointsSettings, listFidelityCampaigns } from "@/lib/db-repositories";
+import { businessTodayIso } from "@/lib/business-datetime";
 
 // DB-backed port of the recharge_templates CRUD in app/pages/recharges.php
 // (_mode=create_template|update_template|delete_template). These are the
@@ -130,8 +131,9 @@ export async function getManageRechargesContext(slug: string): Promise<ManageRec
   // Campagna attiva oggi (Fidelity::campaignForDate): active + oggi dentro
   // [starts_at, ends_at]; listFidelityCampaigns è già nell'ordine legacy, quindi
   // il primo match coincide con la ORDER BY di campaignForDate. Nome vuoto ->
-  // fallback legacy 'Campagna punti'.
-  const today = new Date().toISOString().slice(0, 10);
+  // fallback legacy 'Campagna punti'. 'Oggi' in ora di BUSINESS (Roma), non UTC:
+  // tra mezzanotte e le 2 il giorno UTC è ancora quello precedente (trappola TZ).
+  const today = businessTodayIso();
   const activeCampaign = campaigns.find((c) => c.active && (c.startsAt === "" || c.startsAt <= today) && (c.endsAt === "" || c.endsAt >= today));
 
   return {
