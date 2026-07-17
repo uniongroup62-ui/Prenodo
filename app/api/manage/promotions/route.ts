@@ -2,6 +2,7 @@ import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/ap
 import { addManagePromotionExcludedClient, deleteManagePromotion, evaluatePromotionsForCart, getManagePromotion, listDbPromotions, listManagePromotionPage, previewDbPromotion, promotionFormContext, promotionStructuralBlockReason, removeManagePromotionExcludedClient, saveManagePromotion, toggleManagePromotion, updateManagePromotionConditions, type PromoCartLine } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
+import { logActivity } from "@/lib/activity-log";
 import { searchGiftRecipientClients } from "@/lib/gift-issue-details";
 import { can, canAny } from "@/lib/role-permissions";
 
@@ -80,6 +81,7 @@ export async function POST(request: Request) {
     if (action === "toggle") {
       if (!can(session.user.perms, "promotions.manage")) return jsonError("Permesso promozioni mancante.", 403);      const active = ["1", "true", "yes", "on"].includes((body.active ?? "").toLowerCase());
       const promotion = await toggleManagePromotion(tenantSlug, id, active, session.user.id);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "promozioni", action: active ? "riattiva" : "disattiva", entityType: "promotion", entityId: id, label: `Promozione "${promotion.name}" ${active ? "attivata" : "disattivata"}` });
       return Response.json({
         ok: true,
         source: "promotions?action=toggle",
@@ -106,7 +108,9 @@ export async function POST(request: Request) {
 
     // Delete a promotion (port of promotions.php action=delete / Promotions::delete).
     if (action === "delete") {
-      if (!can(session.user.perms, "promotions.manage")) return jsonError("Permesso promozioni mancante.", 403);      const result = await deleteManagePromotion(tenantSlug, id);
+      if (!can(session.user.perms, "promotions.manage")) return jsonError("Permesso promozioni mancante.", 403);
+      const result = await deleteManagePromotion(tenantSlug, id);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "promozioni", action: "elimina", entityType: "promotion", entityId: id, label: `Eliminata promozione #${id} (prenotazioni aperte scollegate)` });
       return Response.json({
         source: "promotions?action=delete",
         sourceMode: "database",
@@ -123,6 +127,7 @@ export async function POST(request: Request) {
       try {
         const enabled = ["1", "true", "yes", "on"].includes(String(body.promo_conditions_enabled ?? "").toLowerCase());
         await updateManagePromotionConditions(tenantSlug, promotionId, enabled, String(body.promo_conditions ?? ""), session.user.id);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "promozioni", action: "modifica", entityType: "promotion", entityId: promotionId, label: `Aggiornate condizioni promozionali #${promotionId}` });
         return Response.json({ ok: true, message: "Condizioni promozionali aggiornate", promotionId });
       } catch (error) {
         return jsonError(error instanceof Error ? error.message : "Errore aggiornamento condizioni promozionali");
@@ -135,6 +140,7 @@ export async function POST(request: Request) {
       const promotionId = parseInteger(body.promotion_id ?? body.id, 0);
       try {
         await addManagePromotionExcludedClient(tenantSlug, promotionId, parseInteger(body.client_id, 0), session.user.id);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "promozioni", action: "modifica", entityType: "promotion", entityId: promotionId, label: `Cliente #${parseInteger(body.client_id, 0)} escluso dalla promozione #${promotionId}` });
         return Response.json({ ok: true, message: "Cliente aggiunto all'esclusione", promotionId });
       } catch (error) {
         return jsonError(error instanceof Error ? error.message : "Errore aggiornamento esclusioni promozione");
@@ -145,6 +151,7 @@ export async function POST(request: Request) {
       const promotionId = parseInteger(body.promotion_id ?? body.id, 0);
       try {
         await removeManagePromotionExcludedClient(tenantSlug, promotionId, parseInteger(body.client_id, 0), session.user.id);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "promozioni", action: "modifica", entityType: "promotion", entityId: promotionId, label: `Cliente #${parseInteger(body.client_id, 0)} riammesso nella promozione #${promotionId}` });
         return Response.json({ ok: true, message: "Cliente rimosso dall'esclusione", promotionId });
       } catch (error) {
         return jsonError(error instanceof Error ? error.message : "Errore aggiornamento esclusioni promozione");
@@ -154,8 +161,16 @@ export async function POST(request: Request) {
     // Faithful promotion editor save (port of promotions.php POST action=new|edit).
     // id=0 creates, id>0 updates the core promotion record.
     if (action === "save" || action === "new" || action === "edit" || action === "update") {
-      if (!can(session.user.perms, "promotions.manage")) return jsonError("Permesso promozioni mancante.", 403);      const promotion = await saveManagePromotion(tenantSlug, body, id);
+      if (!can(session.user.perms, "promotions.manage")) return jsonError("Permesso promozioni mancante.", 403);
+      const promotion = await saveManagePromotion(tenantSlug, body, id);
       const isClone = (parseInteger(body.replace_source_id, 0) || 0) > 0;
+      void logActivity(tenantSlug, {
+        user: session.user, locationId: session.user.currentLocationId, module: "promozioni",
+        action: isClone || id <= 0 ? "crea" : "modifica", entityType: "promotion", entityId: promotion.id,
+        label: isClone
+          ? `Clonata campagna "${promotion.name}" (sostituisce #${parseInteger(body.replace_source_id, 0)})`
+          : `${id > 0 ? "Modificata" : "Creata"} promozione "${promotion.name}"${id > 0 ? ` (#${id})` : ""}`,
+      });
       return Response.json({
         ok: true,
         source: "promotions?action=save",
