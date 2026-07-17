@@ -14273,3 +14273,46 @@ compat senza ?p + 3 log + pagina Log) + test-dom-giftcard-improvements 5/5
 scadenza va seminata con l'id PIU' ALTO per stare in pagina 1 —, badge
 dettaglio) + pass2b 17/17 con D2 esteso all'operatore + regressione 94+92+11+
 28+16.
+
+## 2026-07-17 — Fidelity pass 2 (e813147): 3 classi di bug corrette
+
+Baseline pass 1 riconfermata verde PRIMA delle modifiche (6 suite e2e: toggle
+27, membership 32, wallet 29, points 42, levels 31, membership-settings 29).
+Poi caccia mirata sulle classi di bug emerse negli altri domini:
+
+1. RICERCA ADESIONE case-sensitive: getFidelityMembership usava LIKE
+   (Postgres) su codice/nome/email — 'mario' non trovava 'Mario' (MySQL
+   general_ci si'). Fix: ILIKE, come GiftCard/GiftBox.
+2. RACE SUI SALDI (il legacy serializza con SELECT ... FOR UPDATE,
+   Fidelity.php:1607 + credit_wallet_adjust): fidelityWalletManualMove,
+   manualCreditDebit e il PRIMITIVO addDbWalletMovement (usato da POS
+   checkout, appuntamenti, storni, ricariche) erano read-then-write ->
+   double-spend/lost-update concorrente. Fix: incrementi atomici
+   UPDATE ... SET x = x + delta [guardia >= 0/amount nel WHERE] RETURNING,
+   ledger before/after dai valori REALI post-update; nel manual move
+   l'update precede l'insert cosi' un rifiuto non lascia transazioni orfane.
+3. GATE FALLBACK: il POST default (movimento wallet generico compat) e il
+   GET compat (TUTTA l'anagrafica coi saldi) erano aperti all'ombrello
+   perms — chi aveva solo fidelity.membership poteva muovere punti, chi
+   aveva solo pos.manage leggeva l'anagrafica coi saldi. Fix: gate stretto
+   fidelity.wallet|fidelity.manage su entrambi.
+
+Verifiche: test-fidelity-pass2 10/10 CLEAN (ILIKE nome+codice tessera;
+remove parallelo 60+60 su 100 punti -> 1 solo pieno e saldo=somma ledger;
+debit parallelo -> 1 solo ok, ledger 100->40; gate 403 membership-only e
+pos-only, ok con fidelity.wallet, nessun movimento scritto dai negati) +
+regressione trasversale: fidelity 190 + test-fidelity 42/42 + test-punti 26
++ e2e-credit 10 + pos-logic 16 + pos-checkout 8 + qb-redeem-edit 28.
+
+HEALING test-fidelity: il check di cleanup confrontava conteggi ASSOLUTI
+stantii (tx82/lots36/ccr11 di una baseline vecchia: la bonifica orfani del
+12/07 ha rimosso 2 tx, i lots dei clienti reali crescono coi reconcile, il
+registry codici e' permanente by-design) -> ora confronto RELATIVO col
+snapshot pre-run (ccr ammesso crescere). Nessun residuo ZZ trovato.
+
+Logiche confermate corrette senza modifiche: tessere (emissione con registry
+anti-riuso permanente, update con blocco su scadenza, riattiva con ricalcolo
+scadenza+sync credito, delete con release prenotazioni + wipe punti/lotti/
+livello), campagne (1 attiva/periodo su save E toggle, soft-delete con
+riferimenti, guardie livelli), toggle globale (impatto campagne/omaggi/
+prenotazioni con conferma), livelli (firma sha256, preview soglie/delete).
