@@ -1,4 +1,5 @@
 import { activeTenantSlugs, assertCronAuth } from "@/lib/cron";
+import { businessNowDateTime, businessTodayIso } from "@/lib/business-datetime";
 import { dbExecute, dbQuery, tenantIdForSlug } from "@/lib/tenant-db";
 import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
 import type { RowDataPacket } from "@/lib/tenant-db";
@@ -333,8 +334,10 @@ export async function GET(request: Request) {
             AND status='issued'
             AND expires_at IS NOT NULL
             AND expires_at > '1000-01-01 00:00:00'
-            AND expires_at < NOW()`,
-        [tenantId],
+            AND expires_at < ?`,
+        // TZ: expires_at è app-locale (Rome) — confine con l'ora locale, non
+        // con NOW() UTC (scadenze applicate con 2h di ritardo).
+        [tenantId, businessNowDateTime()],
       );
       const expired = expiredRes.affectedRows;
 
@@ -355,15 +358,19 @@ export async function GET(request: Request) {
           WHERE gi.tenant_id = ?
             AND gi.status='issued'
             AND gi.scheduled_send_on IS NOT NULL
-            AND gi.scheduled_send_on <= CURRENT_DATE
-            AND (gi.expires_at IS NULL OR gi.expires_at >= NOW())
+            AND gi.scheduled_send_on <= ?
+            AND (gi.expires_at IS NULL OR gi.expires_at >= ?)
             AND gi.last_email_sent_at IS NULL
             AND gi.recipient_email IS NOT NULL
             AND gi.recipient_email <> ''
             AND (gi.email_send_claimed_at IS NULL OR gi.email_send_claimed_at < (NOW() - INTERVAL '15 minutes'))
           ORDER BY gi.scheduled_send_on ASC, gi.id ASC
           LIMIT ${SELECT_LIMIT}`,
-        [tenantId],
+        // TZ: scheduled_send_on/expires_at app-locali — oggi/adesso di Roma
+        // (con CURRENT_DATE UTC gli invii di oggi partivano solo dalle 2 di
+        // notte locali). Il claim resta su NOW(): scrittura e confronto UTC
+        // coerenti tra loro (finestra transiente di 15 minuti).
+        [tenantId, businessTodayIso(), businessNowDateTime()],
       );
 
       if (!sendEnabled) {
@@ -416,13 +423,13 @@ export async function GET(request: Request) {
               AND id = ?
               AND status='issued'
               AND scheduled_send_on IS NOT NULL
-              AND scheduled_send_on <= CURRENT_DATE
-              AND (expires_at IS NULL OR expires_at >= NOW())
+              AND scheduled_send_on <= ?
+              AND (expires_at IS NULL OR expires_at >= ?)
               AND recipient_email IS NOT NULL
               AND recipient_email <> ''
               AND last_email_sent_at IS NULL
               AND (email_send_claimed_at IS NULL OR email_send_claimed_at < (NOW() - INTERVAL '15 minutes'))`,
-          [tenantId, id],
+          [tenantId, id, businessTodayIso(), businessNowDateTime()],
         );
         if (claim.affectedRows <= 0) continue;
 
@@ -510,13 +517,13 @@ export async function GET(request: Request) {
           // sendGiftBoxEmail success-path writes) and clear the claim.
           const recorded = await dbExecute(
             `UPDATE giftbox_instances
-                SET last_email_sent_at=NOW(),
+                SET last_email_sent_at=?,
                     last_email_sent_to=?,
                     last_email_hide_details=?,
                     email_send_claimed_at=NULL
               WHERE tenant_id = ?
                 AND id = ?`,
-            [to, showDetails ? 0 : 1, tenantId, id],
+            [businessNowDateTime(), to, showDetails ? 0 : 1, tenantId, id],
           );
           if (recorded.affectedRows > 0) {
             sent += 1;

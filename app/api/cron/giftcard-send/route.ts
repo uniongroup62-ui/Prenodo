@@ -1,4 +1,5 @@
 import { activeTenantSlugs, assertCronAuth } from "@/lib/cron";
+import { businessTodayIso } from "@/lib/business-datetime";
 import { emailConfigured } from "@/lib/email";
 import { sendGiftCardEmailManage } from "@/lib/gift-issue-details";
 import { dbExecute, dbQuery, tenantIdForSlug } from "@/lib/tenant-db";
@@ -69,15 +70,19 @@ export async function GET(request: Request) {
           WHERE gc.tenant_id = ?
             AND gc.status='active'
             AND gc.scheduled_send_on IS NOT NULL
-            AND gc.scheduled_send_on <= CURRENT_DATE
-            AND (gc.expires_at IS NULL OR gc.expires_at >= CURRENT_DATE)
+            AND gc.scheduled_send_on <= ?
+            AND (gc.expires_at IS NULL OR gc.expires_at >= ?)
             AND gc.last_email_sent_at IS NULL
             AND gc.recipient_email IS NOT NULL
             AND gc.recipient_email <> ''
             AND (gc.email_send_claimed_at IS NULL OR gc.email_send_claimed_at < (NOW() - INTERVAL '15 minutes'))
           ORDER BY gc.scheduled_send_on ASC, gc.id ASC
           LIMIT ${SELECT_LIMIT}`,
-        [tenantId],
+        // TZ: scheduled_send_on/expires_at sono date app-locali — 'oggi' di
+        // Roma, non CURRENT_DATE UTC (tra mezzanotte e le 2 locali gli invii
+        // del giorno restavano fermi e le scadute-di-oggi risultavano valide).
+        // Il claim resta su NOW(): scrittura e confronto UTC coerenti tra loro.
+        [tenantId, businessTodayIso(), businessTodayIso()],
       );
 
       if (!SEND_ENABLED) {
@@ -104,13 +109,13 @@ export async function GET(request: Request) {
               AND id = ?
               AND status='active'
               AND scheduled_send_on IS NOT NULL
-              AND scheduled_send_on <= CURRENT_DATE
-              AND (expires_at IS NULL OR expires_at >= CURRENT_DATE)
+              AND scheduled_send_on <= ?
+              AND (expires_at IS NULL OR expires_at >= ?)
               AND recipient_email IS NOT NULL
               AND recipient_email <> ''
               AND last_email_sent_at IS NULL
               AND (email_send_claimed_at IS NULL OR email_send_claimed_at < (NOW() - INTERVAL '15 minutes'))`,
-          [tenantId, id],
+          [tenantId, id, businessTodayIso(), businessTodayIso()],
         );
         if (claim.affectedRows <= 0) continue;
 

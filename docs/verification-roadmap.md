@@ -15044,3 +15044,22 @@ CURRENT_DATE (UTC) — proposta di fix come miglioria.
 
 Miglioria proposta (in attesa di approvazione): log attivita' sul save
 della pagina Automazioni + fix TZ dei confini nei cron giftbox/giftcard.
+
+## 2026-07-17 — Automazioni: log save + fix TZ cron giftbox/giftcard (migliorie approvate)
+
+(1) LOG: il save della pagina Automazioni logga nel NUOVO modulo
+'automazioni' con riepilogo ('Salvate impostazioni automazioni
+(promemoria email 12h, SMS OFF)'); etichetta in MODULE_LABELS. Verifica
+test-automazioni-log 2/2 CLEAN.
+
+(2) TZ CRON ADIACENTI (stessa classe del pass): giftbox-send — scadenza
+istanze (expires_at < ora Roma), dueness invii (scheduled_send_on <=
+oggi-Roma, expires_at >= ora Roma, anche nel claim atomico) e
+last_email_sent_at app-locale; giftcard-send — dueness invii e claim su
+oggi-Roma (con CURRENT_DATE UTC gli invii del giorno restavano fermi tra
+la mezzanotte e le 2 locali e le scadute-di-oggi risultavano valide). Il
+meccanismo di claim (email_send_claimed_at) resta su NOW(): scrittura e
+confronto UTC coerenti tra loro (finestra transiente 15'). SELECT
+replicate read-only sul DB per la verifica di eseguibilita'.
+
+Regressione: test-automazioni-pass2 8/8, test-automazione 20/20.

@@ -1,4 +1,5 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
+import { logActivity } from "@/lib/activity-log";
 import { getAutomationPageContext, getAutomationSettings, saveAutomationSettings } from "@/lib/automation-reminders";
 import { listDbAutomationRules, runDbAutomationRule, toggleDbAutomationRule } from "@/lib/db-repositories";
 import { currentManageSession } from "@/lib/manage-auth";
@@ -46,6 +47,7 @@ export async function POST(request: Request) {
     // toggle + ore promemoria, poi rischedulazione dei reminder futuri.
     if (action === "save") {
       const settings = await saveAutomationSettings(tenantSlug, body);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "automazioni", action: "modifica", entityType: "automation_settings", entityId: 0, label: `Salvate impostazioni automazioni (promemoria ${settings.reminder_enabled ? `email ${settings.reminder_hours}h` : "email OFF"}, SMS ${settings.sms_reminder_enabled ? `${settings.sms_reminder_hours}h` : "OFF"})` });
       return Response.json({
         ok: true,
         sourceMode: "database",
