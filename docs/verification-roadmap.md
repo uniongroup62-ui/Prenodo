@@ -14371,3 +14371,30 @@ logActivity (module 'ricariche') su crea/modifica/elimina modello + verbo
 compat 'save' (crea o modifica per id); log DOPO il successo. Emissione e
 annullo ricariche restano tracciati dal log POS (incasso/annullo vendita).
 Suite test-recharges-log 10/10 CLEAN + regressione 23+32+16.
+
+## 2026-07-17 — Portafoglio pass 2: ZERO bug, 4 angoli nuovi coperti
+
+Nessuna modifica al prodotto necessaria. La suite pass-1 (e2e-fidelity-wallet
+29 + markers 72) copriva già guardie verbatim, manual move (parziale/
+warnLocked/kind adjust), dettaglio (saldo/prenotati/disponibile RAW, sospesi,
+refs, sede fallback, paginazione) e scadenze (expire-on-read, calendario,
+riallineamento). Le race del manual move e i gate del fallback erano già
+stati corretti nel pass Fidelity (e813147); il log attività del Portafoglio
+(wallet_move/credit_debit) era già strumentato (c538245).
+
+Pass 2 (test-portafoglio-pass2 10/10 CLEAN) — angoli non coperti prima:
+A) disponibile RAW NEGATIVO (saldo 10, riservati 30 -> -20 mai clampato) +
+   riservati SOLO da pending/scheduled (done/canceled esclusi);
+B) refs 'Vincolati su' inline troncati a 3 con '+N' (title completo);
+C) flusso REALE lock-lots: lotto in scadenza + prenotazione protetta
+   (created_at < oggi) -> l'expire-on-read sposta il residuo in lock-lot
+   (quota 'vincolata' nel calendario, lockedExpired esposto, esclusa da
+   nextExpiry, saldo intatto). TRAPPOLA HARNESS scoperta: lock-lot seminati
+   a mano senza prenotazione protetta vengono legittimamente SBLOCCATI dal
+   motore (unlock con scadenza originale dal metadato lock@) — comportamento
+   corretto, non un bug; e l'expire-on-read può aggiungere tx di sistema
+   (i conteggi paginazione nei test devono essere self-consistenti).
+D) clamp txPage oltre l'ultima pagina (20/pagina legacy).
+
+Nessuna miglioria proposta: log, atomicità, paginazione e ricerca del
+modulo sono già allineati al pattern.
