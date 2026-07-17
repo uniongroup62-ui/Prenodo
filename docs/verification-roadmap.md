@@ -14723,3 +14723,42 @@ il comportamento colonne-per-sede live e' corretto per lo stato attuale
 Residuo deliberato: il backfill legacy dell'owner in tabella staff
 (staff.php 557-609, auto-create alla visita pagina) non e' portato — il
 provisioning crea gia' la riga; quirk di riparazione one-shot.
+
+## 2026-07-17 — Orari pass 2-bis: 1 bug corretto (transazione + upsert nativo)
+
+Ri-analisi di hours.php vs port con le classi post-12/07. UNICO bug reale:
+
+BUG — ATOMICITA' + SEMANTICA UPSERT. hours.php avvolge i tre salvataggi in
+beginTransaction/rollBack (orari 213-233, chiusure 323-339, straordinari
+447-471) e usa INSERT ... ON DUPLICATE KEY UPDATE; il port faceva
+select-then-insert/update SENZA transazione: (a) un errore a meta' range
+lasciava salvataggi parziali (es. chiusura di 10 giorni scritta a meta');
+(b) in corsa concorrente il select-then-insert violava l'indice univoco
+(closures uq (tenant,location,date), business_hours uq (tenant,location,
+dow), exceptions uq (tenant,location_id_norm,date)) fallendo con 'errore
+database' dove il legacy aggiornava. FIX: le tre save ora girano in
+withTenantTransaction con UPSERT NATIVO ON CONFLICT sui rispettivi indici
+(per gli straordinari il target e' location_id_norm, colonna generata
+COALESCE(location_id,0)); messaggi fissi legacy invariati su errore.
+
+Verifica live test-orari-pass2 14/14 CLEAN (sede 51 vergine, azzerata a
+fine run): 7 righe orari con spezzato, ri-save che AGGIORNA senza
+duplicare (orari/chiusure/straordinari), validazione aggregata '; ' con
+etichette giorno accentate (verificato $days legacy: 'Lunedì' CON accento
+— la vecchia nota audit era sul verso opposto), quirk (int) PHP 'aa:bb'
+-> 00:00 salvato, conflitti incrociati con date d/m/Y (chiusura su
+straordinario, chiusura su appuntamento attivo, straordinario su data
+chiusa), delete_range con filtro reason esatto e date invertite
+(swappate), guardia sede hours: manager ristretto che posta la sede 51
+ripiega sulla sede di sessione 21 (deviazione documentata) — la 51 non
+viene mai scritta.
+
+Regressione: test-orari 37/37, e2e-hours-page 37/37, e2e-hours-calendar
+4/4, e2e-staff-availability 16/16 (consumer del motore intervalli),
+test-cabine 34/34 (file condiviso), markers-hours 62/62 — SANATO: usava
+il login reale (sede 0 -> schermata selezione sede, l'h1 'Orari &amp;
+chiusure' vive solo nell'SSR con sede) -> sessione forgiata sede 21.
+
+Miglioria proposta (in attesa di approvazione): log attivita' anche su
+chiusure/straordinari (closure_save/closure_delete_range/exception_save/
+exception_delete_range — oggi logga solo hours_save).

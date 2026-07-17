@@ -1053,29 +1053,25 @@ export async function saveBusinessHours(slug: string, body: Record<string, strin
   const errors = rows.flatMap((row) => hoursRowErrors(row));
   if (errors.length) throw new Error(`Orari non validi: ${errors.slice(0, 8).join("; ")}${errors.length > 8 ? " ..." : ""}`);
 
+  // Scritture ATOMICHE come il legacy (hours.php 213-233: beginTransaction ->
+  // upsert per dow -> commit, rollback su errore) con UPSERT NATIVO sull'indice
+  // univoco (tenant, location_id, dow) — il select-then-insert precedente
+  // perdeva la semantica ON DUPLICATE KEY e in caso di corsa falliva con
+  // violazione univocità invece di aggiornare.
   const table = await tenantTable(slug, "business_hours");
+  const bhTable = quoteIdentifier(table.name);
+  const bhConflict = table.mode === "shared" ? "(tenant_id, location_id, dow)" : "(location_id, dow)";
   try {
-    for (const row of rows) {
-      const existing = await tenantSelect<RowDataPacket>({
-        slug,
-        table: "business_hours",
-        columns: "id",
-        where: "location_id = ? AND dow = ?",
-        params: [locationId, row.dow],
-        limit: 1,
-      }).catch(() => []);
-      const values = await filterColumns(table.name, {
-        location_id: locationId,
-        dow: row.dow,
-        opens: hourTimeOrNull(row.opens),
-        closes: hourTimeOrNull(row.closes),
-        opens2: hourTimeOrNull(row.opens2),
-        closes2: hourTimeOrNull(row.closes2),
-        is_closed: row.is_closed,
-      });
-      if (existing[0]?.id) await tenantUpdate({ slug, table: "business_hours", id: Number(existing[0].id), values });
-      else await tenantInsert(table, values);
-    }
+    await withTenantTransaction(slug, async (q) => {
+      for (const row of rows) {
+        await q(
+          `INSERT INTO ${bhTable} (location_id, dow, opens, closes, opens2, closes2, is_closed)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT ${bhConflict} DO UPDATE SET opens = EXCLUDED.opens, closes = EXCLUDED.closes, opens2 = EXCLUDED.opens2, closes2 = EXCLUDED.closes2, is_closed = EXCLUDED.is_closed`,
+          [locationId, row.dow, hourTimeOrNull(row.opens), hourTimeOrNull(row.closes), hourTimeOrNull(row.opens2), hourTimeOrNull(row.closes2), row.is_closed],
+        );
+      }
+    });
   } catch {
     // hours.php 232: rollback + testo fisso (mai l'errore DB raw).
     throw new Error("Impossibile salvare gli orari: errore database.");
@@ -1120,14 +1116,18 @@ export async function saveClosure(slug: string, body: Record<string, string>): P
   }
   if (errors.length) throw new Error(`Impossibile salvare: ${errors.slice(0, 3).join(" ")}${errors.length > 3 ? " ..." : ""}`);
 
+  // Transazione + upsert nativo come il legacy (hours.php 323-339:
+  // beginTransaction -> INSERT ... ON DUPLICATE KEY UPDATE reason -> commit).
   const table = await tenantTable(slug, "closures");
+  const clTable = quoteIdentifier(table.name);
+  const clConflict = table.mode === "shared" ? "(tenant_id, location_id, date)" : "(location_id, date)";
   const dates = datesBetween(start!, end!);
   try {
-    for (const date of dates) {
-      const existing = await tenantSelect<RowDataPacket>({ slug, table: "closures", columns: "id", where: "location_id = ? AND date = ?", params: [locationId, date], limit: 1 }).catch(() => []);
-      if (existing[0]?.id) await tenantUpdate({ slug, table: "closures", id: Number(existing[0].id), values: { reason } });
-      else await tenantInsert(table, await filterColumns(table.name, { location_id: locationId, date, reason }));
-    }
+    await withTenantTransaction(slug, async (q) => {
+      for (const date of dates) {
+        await q(`INSERT INTO ${clTable} (location_id, date, reason) VALUES (?, ?, ?) ON CONFLICT ${clConflict} DO UPDATE SET reason = EXCLUDED.reason`, [locationId, date, reason]);
+      }
+    });
   } catch {
     // hours.php 338: testo fisso, mai l'errore DB raw.
     throw new Error("Impossibile salvare la chiusura: errore database.");
@@ -1205,31 +1205,24 @@ export async function saveException(slug: string, body: Record<string, string>):
   }
   if (errors.length) throw new Error(`Impossibile salvare: ${errors.slice(0, 6).join(" ")}${errors.length > 6 ? " ..." : ""}`);
 
+  // Transazione + upsert nativo come il legacy (hours.php 447-471:
+  // beginTransaction -> INSERT ... ON DUPLICATE KEY UPDATE -> commit).
+  // L'indice univoco usa location_id_norm (colonna generata COALESCE(location_id,0)).
   const table = await tenantTable(slug, "business_hours_exceptions");
+  const exTable = quoteIdentifier(table.name);
+  const exConflict = table.mode === "shared" ? "(tenant_id, location_id_norm, date)" : "(location_id_norm, date)";
   const dates = datesBetween(start!, end!);
   try {
-    for (const date of dates) {
-      const existing = await tenantSelect<RowDataPacket>({
-        slug,
-        table: "business_hours_exceptions",
-        columns: "id",
-        where: "location_id = ? AND date = ?",
-        params: [locationId, date],
-        limit: 1,
-      }).catch(() => []);
-      const values = await filterColumns(table.name, {
-        location_id: locationId,
-        date,
-        opens: hourTimeOrNull(opens),
-        closes: hourTimeOrNull(closes),
-        opens2: hourTimeOrNull(opens2),
-        closes2: hourTimeOrNull(closes2),
-        is_closed: 0,
-        note: note || null,
-      });
-      if (existing[0]?.id) await tenantUpdate({ slug, table: "business_hours_exceptions", id: Number(existing[0].id), values });
-      else await tenantInsert(table, values);
-    }
+    await withTenantTransaction(slug, async (q) => {
+      for (const date of dates) {
+        await q(
+          `INSERT INTO ${exTable} (location_id, date, opens, closes, opens2, closes2, is_closed, note)
+           VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+           ON CONFLICT ${exConflict} DO UPDATE SET opens = EXCLUDED.opens, closes = EXCLUDED.closes, opens2 = EXCLUDED.opens2, closes2 = EXCLUDED.closes2, is_closed = EXCLUDED.is_closed, note = EXCLUDED.note`,
+          [locationId, date, hourTimeOrNull(opens), hourTimeOrNull(closes), hourTimeOrNull(opens2), hourTimeOrNull(closes2), note || null],
+        );
+      }
+    });
   } catch {
     // hours.php 470: testo fisso, mai l'errore DB raw.
     throw new Error("Impossibile salvare lo straordinario: errore database.");
