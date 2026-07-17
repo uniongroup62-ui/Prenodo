@@ -1,11 +1,12 @@
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
+import { logActivity } from "@/lib/activity-log";
 import { listDbGiftCards } from "@/lib/db-repositories";
 import {
   GIFT_EVENT_OPTIONS,
   expireDueGiftCards,
   getGiftCardFull,
   hasAnyGiftCards,
-  listGiftCardsManage,
+  listGiftCardsManagePaged,
   redeemGiftCardCredit,
   redeemGiftCardItemManage,
   searchGiftRecipientClients,
@@ -77,12 +78,15 @@ export async function GET(request: Request) {
       const allLocations = ["1", "true", "on", "yes", "all"].includes(String(url.searchParams.get("all_locations") ?? "").trim().toLowerCase());
       const locationContext = await getManageLocationContext(tenantSlug).catch(() => null);
       const filterLocationId = allLocations ? 0 : (locationContext?.currentLocationId ?? 0);
-      const rows = await listGiftCardsManage(tenantSlug, {
+      // Paginazione 25 (miglioria 2026-07-17): SOLO con ?p= — senza, storico cap 200.
+      const rawPage = Number.parseInt(String(url.searchParams.get("p") ?? ""), 10);
+      const page = Number.isFinite(rawPage) && rawPage >= 1 ? rawPage : 0;
+      const paged = await listGiftCardsManagePaged(tenantSlug, {
         q: url.searchParams.get("q") ?? "",
         status: url.searchParams.get("status") ?? "",
         clientId: parseInteger(url.searchParams.get("client_id"), 0),
         locationId: filterLocationId,
-      }, 200);
+      }, page, 200);
       // Solo il LABEL del mittente filtrato: il combobox fa ricerca server-side
       // (2026-07-16) — niente più anagrafica completa a ogni load.
       const selClientId = parseInteger(url.searchParams.get("client_id"), 0);
@@ -94,7 +98,10 @@ export async function GET(request: Request) {
       return Response.json({
         ok: true,
         sourceMode: "database",
-        rows,
+        rows: paged.rows,
+        totalCount: paged.totalCount,
+        pageSize: paged.pageSize,
+        currentPage: page >= 1 ? page : 1,
         hasAnyGiftCards: await hasAnyGiftCards(tenantSlug),
         selectedClientLabel,
         showAllLocationsFilter: (locationContext?.locations.length ?? 0) > 1,
@@ -146,6 +153,7 @@ export async function POST(request: Request) {
           note: body.note,
           giftMessage: body.gift_message,
         }, session.user.id);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "giftcard", action: "modifica", entityType: "giftcard", entityId: id, label: `Modificati dati GiftCard #${id}` });
         return Response.json({ ok: true, source: "giftcard?action=update", sourceMode: "database", message: result.message });
       } catch (error) {
         return flashError(error, "Errore aggiornamento");
@@ -157,6 +165,7 @@ export async function POST(request: Request) {
       const id = parseInteger(body.id);
       try {
         const result = await updateGiftCardExpiry(tenantSlug, id, String(body.expires_at ?? ""), session.user.id);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "giftcard", action: "modifica", entityType: "giftcard", entityId: id, label: `Aggiornata scadenza GiftCard #${id}` });
         return Response.json({ ok: true, source: "giftcard?action=update_expiry", sourceMode: "database", message: result.message });
       } catch (error) {
         return flashError(error, "Errore aggiornamento scadenza");
@@ -168,6 +177,7 @@ export async function POST(request: Request) {
       const id = parseInteger(body.id);
       try {
         const result = await updateGiftCardInternalNote(tenantSlug, id, String(body.internal_note ?? ""), session.user.id);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "giftcard", action: "modifica", entityType: "giftcard", entityId: id, label: `Salvata nota interna GiftCard #${id}` });
         return Response.json({ ok: true, source: "giftcard?action=update_internal_note", sourceMode: "database", message: result.message });
       } catch (error) {
         return flashError(error, "Errore salvataggio nota interna");
@@ -179,6 +189,7 @@ export async function POST(request: Request) {
       const id = parseInteger(body.id);
       try {
         const result = await updateGiftCardClientNote(tenantSlug, id, String(body.note ?? ""), session.user.id);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "giftcard", action: "modifica", entityType: "giftcard", entityId: id, label: `Salvata nota cliente GiftCard #${id}` });
         return Response.json({ ok: true, source: "giftcard?action=update_note", sourceMode: "database", message: result.message });
       } catch (error) {
         return flashError(error, "Errore salvataggio nota");
@@ -199,6 +210,7 @@ export async function POST(request: Request) {
           session.user.id,
           locationContext ? { id: locationContext.currentLocationId, name: currentLocation?.name ?? "" } : null,
         );
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "giftcard", action: "riscatta", entityType: "giftcard", entityId: id, label: `Riscatto credito GiftCard #${id} (€ ${parseNumber(body.redeem_amount ?? body.amount, 0).toFixed(2).replace(".", ",")})` });
         return Response.json({ ok: true, source: "giftcard?action=redeem", sourceMode: "database", message: result.message });
       } catch (error) {
         return flashError(error, "Errore riscatto");
@@ -225,6 +237,7 @@ export async function POST(request: Request) {
           session.user.id,
           locationContext ? { id: locationContext.currentLocationId, name: currentLocation?.name ?? "" } : null,
         );
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "giftcard", action: "riscatta", entityType: "giftcard", entityId: id, label: `Riscatto item GiftCard #${id}` });
         return Response.json({ ok: true, source: "giftcard?action=redeem_item", sourceMode: "database", message: result.message });
       } catch (error) {
         return flashError(error, "Errore riscatto item");
@@ -237,6 +250,7 @@ export async function POST(request: Request) {
       const showAmount = ["1", "true", "on", "yes"].includes(String(body.show_amount ?? "").toLowerCase());
       try {
         const result = await sendGiftCardEmailManage(tenantSlug, id, String(body.send_to ?? ""), showAmount, String(body.send_gift_message ?? ""), session.user.id);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "giftcard", action: "invia", entityType: "giftcard", entityId: id, label: `Inviato voucher GiftCard #${id} via email` });
         return Response.json({ ok: true, source: "giftcard?action=send_email", sourceMode: "database", message: result.message });
       } catch (error) {
         return flashError(error, "Errore invio email");

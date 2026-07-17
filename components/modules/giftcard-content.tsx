@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { ClientSearchCombobox } from "@/components/client-search-combobox";
 
 // Port fedele della LISTA GiftCard (app/pages/giftcard.php action=list):
@@ -19,9 +19,26 @@ type GiftcardQuery = {
   status?: string;
   client_id?: string;
   all_locations?: string;
+  p?: string;
   msg?: string;
   err?: string;
 };
+
+// Badge 'Scade tra N giorni' (miglioria 2026-07-17, come GiftBox/Pacchetti):
+// card ATTIVA con scadenza entro 14 giorni. expiresDate = YYYY-MM-DD ('—' se assente).
+export function giftcardExpiryWarning(expiresDate: string, status: string): string | null {
+  if (status !== "active") return null;
+  const m = String(expiresDate ?? "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const exp = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const days = Math.round((exp.getTime() - today.getTime()) / 86400000);
+  if (days < 0 || days > 14) return null;
+  if (days === 0) return "Scade oggi";
+  if (days === 1) return "Scade domani";
+  return `Scade tra ${days} giorni`;
+}
 
 type Row = {
   id: number;
@@ -42,6 +59,9 @@ type Row = {
 type ListPayload = {
   ok?: boolean;
   rows?: Row[];
+  totalCount?: number;
+  pageSize?: number;
+  currentPage?: number;
   hasAnyGiftCards?: boolean;
   selectedClientLabel?: string;
   showAllLocationsFilter?: boolean;
@@ -73,6 +93,7 @@ export function GiftcardContent({ slug: slugProp, initialQuery }: { slug?: strin
     q: String(initialQuery?.q ?? ""),
     status: String(initialQuery?.status ?? ""),
     allLocations: ["1", "true", "on", "yes", "all"].includes(String(initialQuery?.all_locations ?? "").toLowerCase()),
+    page: (() => { const n = Number.parseInt(String(initialQuery?.p ?? ""), 10); return Number.isFinite(n) && n >= 1 ? n : 1; })(),
   }));
 
   const [data, setData] = useState<ListPayload | null>(null);
@@ -95,6 +116,7 @@ export function GiftcardContent({ slug: slugProp, initialQuery }: { slug?: strin
     if (applied.q !== "") params.set("q", applied.q);
     if (applied.status !== "") params.set("status", applied.status);
     if (applied.allLocations) params.set("all_locations", "1");
+    params.set("p", String(applied.page ?? 1));
     fetch(`/api/manage/giftcards?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
       .then((j: ListPayload) => setData(j))
@@ -116,6 +138,18 @@ export function GiftcardContent({ slug: slugProp, initialQuery }: { slug?: strin
     if (allLocations) params.set("all_locations", "1");
     const qs = params.toString();
     window.location.href = href(`giftcard${qs !== "" ? `?${qs}` : ""}`);
+  }
+
+  // Cambio pagina: navigazione GET coi filtri applicati (?p=), come il submit.
+  function goToPage(pageN: number) {
+    const params = new URLSearchParams();
+    if (applied.clientId !== "" && applied.clientId !== "0") params.set("client_id", applied.clientId);
+    if (applied.q !== "") params.set("q", applied.q);
+    if (applied.status !== "") params.set("status", applied.status);
+    if (applied.allLocations) params.set("all_locations", "1");
+    if (pageN > 1) params.set("p", String(Math.floor(pageN)));
+    const qs = params.toString();
+    window.location.assign(href(`giftcard${qs !== "" ? `?${qs}` : ""}`));
   }
 
   const rows = data?.rows ?? [];
@@ -260,11 +294,26 @@ export function GiftcardContent({ slug: slugProp, initialQuery }: { slug?: strin
           </div>
 
           <div className="card">
-            <div className="card-header bg-transparent py-2">
+            <div className="card-header bg-transparent py-2 d-flex align-items-center justify-content-between">
               <span className="text-muted small">
-                {loading ? "Caricamento…" : rows.length === 1 ? "1 GiftCard" : `${rows.length} GiftCard`}
+                {loading ? "Caricamento…" : (() => {
+                  const total = Number(data?.totalCount ?? rows.length);
+                  const pageSize = Math.max(1, Number(data?.pageSize ?? 25));
+                  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+                  return `${total === 1 ? "1 GiftCard" : `${total} GiftCard`}${total > pageSize ? ` · pagina ${applied.page} di ${totalPages}` : ""}`;
+                })()}
                 {!loading && (applied.clientId !== "0" || applied.q !== "" || applied.status !== "" || applied.allLocations) ? " · filtri attivi" : ""}
               </span>
+              {!loading && Number(data?.totalCount ?? 0) > Math.max(1, Number(data?.pageSize ?? 25)) ? (
+                <div className="d-flex gap-1">
+                  <button type="button" className="btn btn-sm btn-outline-secondary" disabled={applied.page <= 1} onClick={() => goToPage(applied.page - 1)}>
+                    <i className="bi bi-chevron-left" />
+                  </button>
+                  <button type="button" className="btn btn-sm btn-outline-secondary" disabled={applied.page >= Math.ceil(Number(data?.totalCount ?? 0) / Math.max(1, Number(data?.pageSize ?? 25)))} onClick={() => goToPage(applied.page + 1)}>
+                    <i className="bi bi-chevron-right" />
+                  </button>
+                </div>
+              ) : null}
             </div>
             <div className="table-responsive">
               <table className="table mb-0 align-middle">
@@ -297,6 +346,10 @@ export function GiftcardContent({ slug: slugProp, initialQuery }: { slug?: strin
                       <td className="text-end fw-semibold">€ {fmtMoney(r.balance)}</td>
                       <td>
                         <span className={`badge bg-${r.statusBadge}`}>{r.statusLabel}</span>
+                        {(() => {
+                          const warn = giftcardExpiryWarning(r.expiresDate, r.status);
+                          return warn ? <span className="badge text-bg-warning ms-1">{warn}</span> : null;
+                        })()}
                       </td>
                       <td className="text-muted">{r.issuedDate}</td>
                       <td className="text-muted">{r.expiresDate}</td>

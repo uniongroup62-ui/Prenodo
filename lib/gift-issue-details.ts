@@ -2806,11 +2806,25 @@ export type GiftCardManageListRow = {
   expiresDate: string;
 };
 
+export const GIFTCARD_LIST_PAGE_SIZE = 25;
+
+// Compat: i consumer storici ricevono le sole righe (cap 200).
 export async function listGiftCardsManage(
   slug: string,
   filters: { q?: string; status?: string; clientId?: number; locationId?: number } = {},
   limit = 200,
 ): Promise<GiftCardManageListRow[]> {
+  return (await listGiftCardsManagePaged(slug, filters, 0, limit)).rows;
+}
+
+// Variante paginata 25/pagina (miglioria 2026-07-17, come la GiftBox):
+// page>=1 => LIMIT/OFFSET SQL + COUNT con lo stesso WHERE; page=0 => storico.
+export async function listGiftCardsManagePaged(
+  slug: string,
+  filters: { q?: string; status?: string; clientId?: number; locationId?: number } = {},
+  page = 0,
+  legacyLimit = 200,
+): Promise<{ rows: GiftCardManageListRow[]; totalCount: number; pageSize: number }> {
   const gcT = await tenantTable(slug, "giftcards");
   const cT = await tenantTable(slug, "clients");
   const lT = await tenantTable(slug, "locations");
@@ -2837,16 +2851,25 @@ export async function listGiftCardsManage(
   const locationId = Math.max(0, Math.trunc(Number(filters.locationId ?? 0)));
   if (locationId > 0) { where.push("gc.location_id = ?"); params.push(locationId); }
 
-  const lim = Math.max(1, Math.min(500, Math.trunc(limit) || 200));
+  const pageN = Math.max(0, Math.floor(Number(page) || 0));
+  const lim = Math.max(1, Math.min(500, Math.trunc(legacyLimit) || 200));
+  const limitSql = pageN >= 1 ? `LIMIT ${GIFTCARD_LIST_PAGE_SIZE} OFFSET ${(pageN - 1) * GIFTCARD_LIST_PAGE_SIZE}` : `LIMIT ${lim}`;
   const rows = await dbQuery<RowDataPacket[]>(
     `SELECT gc.*, c.full_name AS client_name
        FROM \`${gcT.name}\` gc
        LEFT JOIN \`${cT.name}\` c ON c.id = gc.client_id${scoped ? " AND c.tenant_id = gc.tenant_id" : ""}
       ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
       ORDER BY gc.id DESC
-      LIMIT ${lim}`,
+      ${limitSql}`,
     params,
   ).catch(() => [] as RowDataPacket[]);
+  const countRows = await dbQuery<RowDataPacket[]>(
+    `SELECT COUNT(*) AS n
+       FROM \`${gcT.name}\` gc
+      ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}`,
+    params,
+  ).catch(() => [] as RowDataPacket[]);
+  const totalCount = Number(countRows[0]?.n ?? rows.length) || 0;
 
   // Label sede risolta in batch (gc_page_location_label).
   const locIds = [...new Set(rows.map((r) => Number(r.location_id ?? 0)).filter((n) => n > 0))];
@@ -2870,7 +2893,7 @@ export async function listGiftCardsManage(
     return "-";
   };
 
-  return rows.map((r) => {
+  const out: GiftCardManageListRow[] = rows.map((r) => {
     const meta = giftCardStatusMeta(String(r.status ?? ""));
     return {
       id: Number(r.id ?? 0),
@@ -2888,6 +2911,7 @@ export async function listGiftCardsManage(
       expiresDate: localDate(r.expires_at) || "—",
     };
   });
+  return { rows: out, totalCount, pageSize: GIFTCARD_LIST_PAGE_SIZE };
 }
 
 export async function hasAnyGiftCards(slug: string): Promise<boolean> {

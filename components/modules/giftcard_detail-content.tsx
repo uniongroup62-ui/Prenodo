@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ClientSearchCombobox } from "@/components/client-search-combobox";
+import { giftcardExpiryWarning } from "@/components/modules/giftcard-content";
 
 // Port fedele del DETTAGLIO GiftCard (giftcard.php action=edit): header con
 // [Torna alla lista][Dettaglio vendita][Voucher][Crea GiftCard] gated, alert
@@ -327,7 +328,13 @@ export function GiftCardDetailContent({ slug: slugProp, initialQuery }: { slug?:
                   <div className="text-muted small">Codice</div>
                   <div className="h5 fw-semibold mb-0">{d.code}</div>
                 </div>
-                <span className={`badge bg-${d.statusBadge}`}>{d.statusLabel}</span>
+                <span>
+                  <span className={`badge bg-${d.statusBadge}`}>{d.statusLabel}</span>
+                  {(() => {
+                    const warn = giftcardExpiryWarning(d.expiresDate, d.status);
+                    return warn ? <span className="badge text-bg-warning ms-1">{warn}</span> : null;
+                  })()}
+                </span>
               </div>
 
               <div className="row g-2 mt-2">

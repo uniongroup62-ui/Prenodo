@@ -2954,6 +2954,7 @@ export async function createDbAppointment({
   fidelityPointsUsed,
   creditUsed,
   couponCode,
+  byUserId = null,
   // couponDiscount del payload NON viene destrutturato: lo sconto salvato è
   // SEMPRE ricalcolato server-side (legacy 11132, coupon_discount_for_save).
 }: {
@@ -2979,6 +2980,8 @@ export async function createDbAppointment({
   fidelityPointsUsed?: number;
   creditUsed?: number;
   couponCode?: string;
+  // Operatore del salvataggio (per i movimenti ledger, es. riscatto GiftCard).
+  byUserId?: number | null;
   couponDiscount?: number;
 } & MultiServiceAppointmentInput): Promise<AppointmentWithMeta> {
   const client = await resolveClientForAppointment(slug, clientName, locationId, clientId);
@@ -3250,6 +3253,7 @@ export async function createDbAppointment({
       appointmentId: id,
       clientId: client.id,
       redeems: giftcardRedeems,
+      byUserId,
     });
     if (giftcardWarnings) giftcardWarnings.push(...warnings);
   }
@@ -3311,6 +3315,7 @@ export async function updateDbAppointment({
   fidelityPointsUsed,
   creditUsed,
   couponCode,
+  byUserId = null,
   couponDiscount,
   packageRedeems = [],
   packageWarnings,
@@ -3345,6 +3350,8 @@ export async function updateDbAppointment({
   fidelityPointsUsed?: number;
   creditUsed?: number;
   couponCode?: string;
+  // Operatore del salvataggio (per i movimenti ledger, es. riscatto GiftCard).
+  byUserId?: number | null;
   couponDiscount?: number;
 } & MultiServiceAppointmentInput): Promise<AppointmentWithMeta> {
   // Tenant-scoped existence guard: the SELECT only returns rows for this tenant,
@@ -3653,6 +3660,7 @@ export async function updateDbAppointment({
         appointmentId: id,
         clientId: client.id,
         redeems: giftcardRedeems,
+        byUserId,
       });
       if (giftcardWarnings) giftcardWarnings.push(...warnings);
     }
@@ -11505,11 +11513,14 @@ export async function applyAppointmentGiftcardRedeem({
   appointmentId,
   clientId,
   redeems,
+  byUserId = null,
 }: {
   slug: string;
   appointmentId: number;
   clientId: number;
   redeems: AppointmentGiftcardRedeem[];
+  // Operatore del movimento ledger (legacy $byUserId); null per il booking pubblico.
+  byUserId?: number | null;
 }): Promise<{ applied: AppointmentGiftcardRedeem | null; warnings: string[] }> {
   const warnings: string[] = [];
   if (!redeems.length) return { applied: null, warnings };
@@ -11627,6 +11638,7 @@ export async function applyAppointmentGiftcardRedeem({
       //    to 'redeemed' at 0 and writes the giftcard_transactions movement).
       await redeemDbGiftCard(giftcardId, clamped, slug, {
         note: `Riscatto su prenotazione #${apptRef}`,
+        by: byUserId,
         locationId: apptLocationId,
       });
 

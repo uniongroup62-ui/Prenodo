@@ -1103,6 +1103,8 @@ export async function POST(request: Request) {
 
     const dbAppointmentInput = {
       slug: tenantSlug,
+      // Operatore di sessione per i movimenti ledger del save (riscatto GiftCard).
+      byUserId: session.user.id,
       // Prefer the drawer's selected client id (#qb_client_id) over the name so the save
       // binds to the exact client — name resolution alone mis-binds when clients share a name.
       clientId: parseOptionalId(body.client_id),
