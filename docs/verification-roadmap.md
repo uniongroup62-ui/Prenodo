@@ -14491,3 +14491,28 @@ dopo il successo (verificato: il delete RIFIUTATO di un'istanza riscattata
 — guardia 'solo omaggi in accumulo, annullati o scaduti' — non logga).
 Suite test-omaggi-log 10/10 CLEAN + regressione 21+17+20+3+16.
 Log fase 2: restano SOLO servizi e impostazioni.
+
+## 2026-07-17 — Risorse pass 2 (75c5b11): 1 bug TZ + leak harness cabine sanato
+
+Baseline riconfermata (resources 25, test-risorse, markers 36,
+cabins-resources 14). Gate resources.manage/cabins.manage per-azione OK;
+popup di blocco propagati nel JSON; delete risorsa bloccata SOLO dai servizi
+(fedele); guardie riduzione (qty_required per sede + picco prenotazioni) OK.
+
+BUG CORRETTO (classe TZ): 3 confronti `ends_at >= NOW()` (picco riduzione
+risorse + 2 query blockers cabine) usavano NOW() UTC del DB contro timestamp
+in ora di Roma -> finestra 'futuro' sfasata di ~2h (guardia piu' severa del
+legacy: un appuntamento finito da 1h bloccava ancora riduzione/delete).
+Fix: businessNowDateTime() come parametro. Probe live 3/3: passato-Roma non
+blocca, picco futuro 2>1 blocca col popup verbatim 'fino a 2 unita'.
+
+LEAK HARNESS TROVATO E SANATO (e2e-cabins-page): baseCabins presi dal
+context con la sessione reale (sede 0 = TUTTE le sedi) includevano la cabina
+della sede 51; ogni bulk sulla sede 21 la RICREAVA come nuova (id estraneo
+alla sede -> nuova riga: semantica corretta del motore bulk) lasciando una
+'cabina Sede2' attiva/soft-disattivata per run. Righe leakate 133 (12/07,
+storica) + 155/164 (oggi) rimosse dopo verifica zero riferimenti; suite
+sanata (filtro per sede) e riverificata senza leak; test-cabine torna
+34/34 con la baseline documentata [9,10,45].
+
+Miglioria proposta: log attivita' risorse (+cabine nel prossimo pass).
