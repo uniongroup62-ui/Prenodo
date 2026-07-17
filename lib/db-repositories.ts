@@ -20154,6 +20154,10 @@ export async function fidelityWalletManualMove(
   });
   await applyLotsDelta(slug, { clientId, transactionId: manualTxId, kind: manualKind, sourceType: "manual", delta }).catch(() => undefined);
   await reconcilePointLots(slug, clientId).catch(() => false);
+  // Ricalcolo livello card come il legacy: Fidelity::addTransaction ricalcola
+  // dopo OGNI transazione punti (Fidelity.php ~1706) — il movimento manuale
+  // può far salire/scendere i punti MATURATI nel periodo.
+  await recalcClientFidelityLevel(slug, clientId).catch(() => "");
 
   let message = delta > 0 ? `Aggiunti ${pts} ${fidLabel}` : `Rimossi ${pts} ${fidLabel}`;
   if (op === "remove") {
