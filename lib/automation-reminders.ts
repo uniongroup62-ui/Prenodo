@@ -3,6 +3,7 @@ import "server-only";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { columnExists, dbExecute, dbQuery, tenantInsert, tenantSelect, tenantTable } from "@/lib/tenant-db";
 import { normalizeSmsRecipient } from "@/lib/sms";
+import { businessNowDateTime } from "@/lib/business-datetime";
 import { fidelityCardExpiryReminderConfig } from "@/lib/manage-feature-settings";
 
 // Port fedele dello scheduling promemoria legacy (Helpers.php
@@ -71,6 +72,14 @@ async function deletePendingChannel(scope: ReminderScope, appointmentId: number,
   ).catch(() => undefined);
 }
 
+// scheduled_at ESPLICITO in ora locale (stringa): un Date passato al driver pg
+// verrebbe serializzato con offset e il comportamento dipenderebbe dal cast —
+// la stringa wall-time locale è deterministica come il date() del PHP.
+function sqlLocalDateTime(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
 // Upsert legacy: una sola riga pending per (appuntamento, canale) — aggiorna
 // la scheduled_at se esiste, altrimenti inserisce.
 async function upsertPendingReminder(slug: string, scope: ReminderScope, appointmentId: number, channel: "email" | "sms", scheduledAt: Date): Promise<void> {
@@ -87,7 +96,7 @@ async function upsertPendingReminder(slug: string, scope: ReminderScope, appoint
               provider_total_price = NULL, sms_segments = NULL, sms_credits_used = NULL,
               provider_response_json = NULL, delivered_at = NULL, last_checked_at = NULL
         WHERE id = ?${scope.clause}`,
-      [scheduledAt, Number(rows[0].id), ...scope.params],
+      [sqlLocalDateTime(scheduledAt), Number(rows[0].id), ...scope.params],
     );
     return;
   }
@@ -95,7 +104,7 @@ async function upsertPendingReminder(slug: string, scope: ReminderScope, appoint
   await tenantInsert(table, {
     appointment_id: appointmentId,
     channel,
-    scheduled_at: scheduledAt,
+    scheduled_at: sqlLocalDateTime(scheduledAt),
     status: "pending",
   });
 }
@@ -314,11 +323,14 @@ export async function saveAutomationSettings(slug: string, body: Record<string, 
   // Rischedula i promemoria di tutti gli appuntamenti futuri "prenotati"
   // (automation.php 57-68) cosi' le nuove ore hanno effetto immediato.
   try {
+    // TZ: starts_at è app-locale (Rome) — confine col "now" locale, MAI NOW()
+    // del DB (UTC): la finestra futura sarebbe sfasata di 2 ore.
     const future = await tenantSelect<RowDataPacket>({
       slug,
       table: "appointments",
       columns: "id",
-      where: "LOWER(TRIM(COALESCE(status,''))) IN ('scheduled','prenotato','prenotata','confirmed','confermato','confermata') AND starts_at > NOW()",
+      where: "LOWER(TRIM(COALESCE(status,''))) IN ('scheduled','prenotato','prenotata','confirmed','confermato','confermata') AND starts_at > ?",
+      params: [businessNowDateTime()],
       orderBy: "starts_at ASC",
     });
     for (const row of future) {

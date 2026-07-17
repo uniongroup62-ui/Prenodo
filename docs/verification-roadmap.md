@@ -15003,3 +15003,44 @@ sconosciuto coerce a staff, svuotamento ruoli.
 Regressione: test-ruoli 21/21 (A1 sanata: catalogo 61->63 con
 logs.view/logs.deletions aggiunti dalla feature Log del 16/07),
 e2e-roles-page 16/16, markers-roles 35/35, e2e-auth-roles 16/16.
+
+## 2026-07-17 — Automazioni pass 2: 1 bug corretto (TZ promemoria: invii in ritardo di 2h)
+
+Ri-analisi di automation.php (537) + Helpers (automation_schedule_reminder/
+clear/save) vs automation-reminders.ts + route automation + CRON reminders.
+
+BUG — CLASSE TZ SUI CONFINI TEMPORALI DEI PROMEMORIA. scheduled_at e
+starts_at sono in ORA LOCALE dell'app (Rome), ma: (a) la dueness del cron
+(reminders e card_reminders) confrontava scheduled_at <= NOW() con NOW()
+UTC di Supabase -> OGNI promemoria email/SMS e ogni avviso scadenza
+tessera partiva con 2 ORE DI RITARDO; (b) la rischedulazione post-save
+usava starts_at > NOW() -> gli appuntamenti iniziati da meno di 2h
+venivano trattati come futuri e ri-accodati (promemoria spurio a
+now+5min per appuntamenti gia' iniziati). FIX: businessNowDateTime() su
+tutti i confini (dueness email/SMS/card, finestra futura della
+rischedulazione, INSERT card_reminders); timbri sent_at/last_checked_at
+espliciti app-locali; scheduled_at scritto come stringa wall-time locale
+(niente Date al driver). I 3 confronti di retention (NOW() - N giorni)
+restano su NOW(): skew 2h irrilevante su finestre multi-giorno.
+
+Verifica live test-automazioni-pass2 8/8 CLEAN — con SNAPSHOT/RESTORE
+byte-uguale delle 20 pending di PRODUZIONE (il save della pagina
+rischedula tutto il tenant, per design): scheduling reale (email+sms
+pending con scheduled_at = inizio-24h LOCALE esatto), TZ discriminante
+(appuntamento iniziato 1h fa NON rischedulato), upsert per-canale senza
+duplicati (24h->12h stessa riga), whitelist ore (7->24, sms 99->ore
+email), sender 'Prenodo' + testi default riscritti, fidelity gated dalla
+config tessera, toggle OFF = CLEAR, replica dueness (riga schedulata 30
+minuti fa: due con ora-Roma, NON due con NOW() UTC — la prova del
+ritardo). Niente run live del cron multi-tenant (avrebbe toccato il
+tenant 'elite').
+
+Regressione: test-automazione 20/20, e2e-automation-page 18/18,
+markers-automation 77/77, e2e-notifications-automation 19/19.
+
+OSSERVAZIONE (stessa classe, domini adiacenti): i cron giftbox-send /
+giftcard-send confrontano expires_at / date di invio con NOW() /
+CURRENT_DATE (UTC) — proposta di fix come miglioria.
+
+Miglioria proposta (in attesa di approvazione): log attivita' sul save
+della pagina Automazioni + fix TZ dei confini nei cron giftbox/giftcard.

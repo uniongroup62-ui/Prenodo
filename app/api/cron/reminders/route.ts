@@ -1,4 +1,5 @@
 import { activeTenantSlugs, assertCronAuth } from "@/lib/cron";
+import { businessNowDateTime } from "@/lib/business-datetime";
 import { dbExecute, dbQuery, tenantIdForSlug } from "@/lib/tenant-db";
 import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
 import { sendSmsItaly, smsConfigured } from "@/lib/sms";
@@ -565,9 +566,12 @@ function appointmentReminderSelect(channel: "email" | "sms"): string {
            WHERE r.tenant_id = ?
              AND r.channel='${channel}'
              AND r.status='pending'
-             AND r.scheduled_at <= NOW()
+             AND r.scheduled_at <= ?
            ORDER BY r.scheduled_at ASC
            LIMIT ${SELECT_LIMIT}`;
+  // NB TZ: scheduled_at è in ORA LOCALE dell'app (Rome) — il confronto va
+  // fatto con businessNowDateTime(), MAI con NOW() del DB (UTC su Supabase:
+  // i promemoria partivano con 2 ore di RITARDO).
 }
 
 export async function GET(request: Request) {
@@ -660,7 +664,7 @@ export async function GET(request: Request) {
       if (reminderEnabled) {
         const due = await dbQuery<DueAppointmentReminder[]>(
           appointmentReminderSelect("email"),
-          [tenantId],
+          [tenantId, businessNowDateTime()],
         );
 
         for (const r of due) {
@@ -711,9 +715,9 @@ export async function GET(request: Request) {
 
           if (sendRes.ok) {
             await dbExecute(
-              `UPDATE reminders SET status='sent', sent_at=NOW(), last_error=NULL
+              `UPDATE reminders SET status='sent', sent_at=?, last_error=NULL
                 WHERE tenant_id = ? AND id = ?`,
-              [tenantId, reminderId],
+              [businessNowDateTime(), tenantId, reminderId],
             );
             result.sent += 1;
           } else {
@@ -740,7 +744,7 @@ export async function GET(request: Request) {
       if (smsEnabled) {
         const smsDue = await dbQuery<DueAppointmentReminder[]>(
           appointmentReminderSelect("sms"),
-          [tenantId],
+          [tenantId, businessNowDateTime()],
         );
 
         for (const r of smsDue) {
@@ -809,18 +813,20 @@ export async function GET(request: Request) {
             // Port of automation_update_sms_reminder_after_send (success branch).
             await dbExecute(
               `UPDATE reminders
-                  SET status='sent', sent_at=NOW(), last_error=NULL,
+                  SET status='sent', sent_at=?, last_error=NULL,
                       provider='openapi_sms', provider_message_id=?, provider_state=?,
                       provider_price=?, provider_total_price=?,
-                      sms_segments=?, sms_credits_used=?, last_checked_at=NOW()
+                      sms_segments=?, sms_credits_used=?, last_checked_at=?
                 WHERE tenant_id = ? AND id = ?`,
               [
+                businessNowDateTime(),
                 providerId !== "" ? providerId : null,
                 providerState !== "" ? providerState : null,
                 price,
                 totalPrice,
                 segments,
                 segments,
+                businessNowDateTime(),
                 tenantId,
                 reminderId,
               ],
@@ -833,13 +839,14 @@ export async function GET(request: Request) {
               `UPDATE reminders
                   SET status='failed', sent_at=NULL, last_error=?,
                       provider='openapi_sms', provider_message_id=?, provider_state=?,
-                      sms_segments=?, sms_credits_used=0, last_checked_at=NOW()
+                      sms_segments=?, sms_credits_used=0, last_checked_at=?
                 WHERE tenant_id = ? AND id = ?`,
               [
                 String(smsRes.error ?? "").trim() || "Invio SMS fallito",
                 providerId !== "" ? providerId : null,
                 providerState !== "" ? providerState : null,
                 segments,
+                businessNowDateTime(),
                 tenantId,
                 reminderId,
               ],
@@ -900,8 +907,8 @@ export async function GET(request: Request) {
               const ins = await dbExecute(
                 `INSERT INTO card_reminders
                    (tenant_id, card_id, client_id, reminder_kind, card_expires_at, scheduled_at, status, last_error)
-                 VALUES (?, ?, ?, 'expiry_window', ?, NOW(), 'pending', NULL)`,
-                [tenantId, cardId, clientId, expiresAt],
+                 VALUES (?, ?, ?, 'expiry_window', ?, ?, 'pending', NULL)`,
+                [tenantId, cardId, clientId, expiresAt, businessNowDateTime()],
               );
               if (ins.affectedRows > 0) result.fidelityQueued += 1;
             } catch {
@@ -926,10 +933,10 @@ export async function GET(request: Request) {
           WHERE cr.tenant_id = ?
             AND cr.reminder_kind='expiry_window'
             AND cr.status='pending'
-            AND cr.scheduled_at <= NOW()
+            AND cr.scheduled_at <= ?
           ORDER BY cr.scheduled_at ASC, cr.id ASC
           LIMIT ${SELECT_LIMIT}`,
-        [tenantId],
+        [tenantId, businessNowDateTime()],
       );
 
       for (const row of dueCards) {
@@ -985,9 +992,9 @@ export async function GET(request: Request) {
 
         if (sendRes.ok) {
           await dbExecute(
-            `UPDATE card_reminders SET status='sent', sent_at=NOW(), last_error=NULL
+            `UPDATE card_reminders SET status='sent', sent_at=?, last_error=NULL
               WHERE tenant_id = ? AND id = ?`,
-            [tenantId, id],
+            [businessNowDateTime(), tenantId, id],
           );
           result.sent += 1;
         } else {
