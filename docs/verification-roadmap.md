@@ -14871,3 +14871,12 @@ e2e-business-profile 25/25, test-profilo-pass2 14/14, e2e-marketplace
 Migliorie proposte (in attesa di approvazione): log attivita' su gallery
 sede (upload/delete/move) e su location_disable/enable — oggi loggano
 solo save/delete/marketplace.
+
+## 2026-07-17 — Sedi: log gallery (miglioria approvata)
+
+Strumentata la gallery sede nel modulo 'impostazioni': upload ok ->
+'Caricate foto gallery sede #id (N)' (crea), delete -> 'Rimossa foto
+gallery sede #id' (elimina), move -> 'Riordinata gallery sede #id'
+(sposta). Errori (sniff MIME, foto inesistente) NON loggano. Verifica
+test-sedi-gallery-log 5/5 CLEAN; regressione e2e-locations-page 32/32,
+test-sedi-pass2 17/17, test-profilo-log 5/5.

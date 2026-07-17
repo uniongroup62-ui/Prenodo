@@ -72,7 +72,9 @@ export async function POST(request: Request) {
         if (locationId <= 0) return jsonError("Sede non valida per la gallery.", 422);
         try {
           const files = form.getAll("location_gallery_images").filter((f): f is File => f instanceof File);
-          return Response.json(await uploadLocationGalleryImages(tenantSlug, locationId, files, publicOrigin(request)));
+          const out = await uploadLocationGalleryImages(tenantSlug, locationId, files, publicOrigin(request));
+          void logActivity(tenantSlug, { user: session.user, locationId, module: "impostazioni", action: "crea", entityType: "location", entityId: locationId, label: `Caricate foto gallery sede #${locationId} (${Number((out as { uploaded?: number }).uploaded ?? 0)})` });
+          return Response.json(out);
         } catch (error) {
           return jsonError(`Errore upload gallery sede: ${error instanceof Error ? error.message : "Operazione non riuscita."}`);
         }
@@ -247,7 +249,9 @@ export async function POST(request: Request) {
       case "location_gallery_delete":
         if (!can(session.user.perms, "settings.location")) return jsonError("Permesso Sedi richiesto.", 403);
         try {
-          return Response.json(await deleteLocationGalleryImage(tenantSlug, parseInteger(body.location_id, 0), parseInteger(body.gallery_image_id ?? body.id, 0), publicOrigin(request)));
+          const out = await deleteLocationGalleryImage(tenantSlug, parseInteger(body.location_id, 0), parseInteger(body.gallery_image_id ?? body.id, 0), publicOrigin(request));
+          void logActivity(tenantSlug, { user: session.user, locationId: parseInteger(body.location_id, 0), module: "impostazioni", action: "elimina", entityType: "location", entityId: parseInteger(body.location_id, 0), label: `Rimossa foto gallery sede #${parseInteger(body.location_id, 0)}` });
+          return Response.json(out);
         } catch (error) {
           return jsonError(`Errore rimozione foto gallery sede: ${error instanceof Error ? error.message : "Operazione non riuscita."}`);
         }
@@ -255,7 +259,9 @@ export async function POST(request: Request) {
       case "location_gallery_move":
         if (!can(session.user.perms, "settings.location")) return jsonError("Permesso Sedi richiesto.", 403);
         try {
-          return Response.json(await moveLocationGalleryImage(tenantSlug, parseInteger(body.location_id, 0), parseInteger(body.gallery_image_id ?? body.id, 0), body.direction === "up" ? "up" : "down", publicOrigin(request)));
+          const out = await moveLocationGalleryImage(tenantSlug, parseInteger(body.location_id, 0), parseInteger(body.gallery_image_id ?? body.id, 0), body.direction === "up" ? "up" : "down", publicOrigin(request));
+          void logActivity(tenantSlug, { user: session.user, locationId: parseInteger(body.location_id, 0), module: "impostazioni", action: "sposta", entityType: "location", entityId: parseInteger(body.location_id, 0), label: `Riordinata gallery sede #${parseInteger(body.location_id, 0)}` });
+          return Response.json(out);
         } catch (error) {
           return jsonError(`Errore ordinamento gallery sede: ${error instanceof Error ? error.message : "Operazione non riuscita."}`);
         }
