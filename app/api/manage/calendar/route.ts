@@ -1,5 +1,7 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
+import { businessTodayIso } from "@/lib/business-datetime";
 import { currentManageSession } from "@/lib/manage-auth";
+import { getManageLocationContext } from "@/lib/manage-locations";
 import {
   calendarContext,
   deleteCalendarNote,
@@ -63,11 +65,16 @@ export async function GET(request: Request) {
     // port of the legacy include_unavailability=1 (off-shift + time-off clipped
     // to the store's open intervals). Best-effort: never blocks the context.
     const locationParam = Number.parseInt(String(url.searchParams.get("location_id") ?? "0"), 10) || 0;
-    // Fallback sulla sede di sessione quando il param manca o è invalido: le
-    // bande grigie devono seguire gli orari della sede attiva, non l'unione.
-    const unavailabilityLocation = locationParam > 0
+    // GUARDIA SEDE (il param è un extra dell'API Next, la pagina non lo manda):
+    // onorato SOLO se la sede è nella lista AUTORIZZATA dell'utente — un
+    // ristretto non legge le bande di assenza di altre sedi. Fuori lista (o
+    // param assente) fallback sulla sede di sessione RISOLTA: le bande grigie
+    // devono seguire gli orari della sede attiva, non l'unione.
+    const locationContext = await getManageLocationContext(tenantSlug);
+    const allowedLocationIds = locationContext.locations.map((l) => Number(l.id)).filter((n) => n > 0);
+    const unavailabilityLocation = locationParam > 0 && allowedLocationIds.includes(locationParam)
       ? locationParam
-      : (Number(activeUser.currentLocationId ?? 0) > 0 ? Number(activeUser.currentLocationId) : null);
+      : (locationContext.currentLocationId > 0 ? locationContext.currentLocationId : null);
     const staffUnavailability = date
       ? await staffUnavailabilityForDate(tenantSlug, date, unavailabilityLocation).catch(() => [])
       : [];
@@ -137,8 +144,10 @@ export async function POST(request: Request) {
   }
 }
 
+// Giorno "oggi" in ora di ROMA (classe TZ server-safe: new Date() locale del
+// server sbaglia giorno a cavallo di mezzanotte su un server UTC).
 function todayIsoLocal(): string {
-  return dateIsoLocal(new Date());
+  return businessTodayIso();
 }
 
 function addDays(date: string, days: number): string {

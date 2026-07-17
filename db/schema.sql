@@ -3527,9 +3527,20 @@ CREATE TRIGGER "bi_users_tenant_id" BEFORE INSERT ON "users" FOR EACH ROW EXECUT
 CREATE TRIGGER "bi_user_email_verifications_tenant_id" BEFORE INSERT ON "user_email_verifications" FOR EACH ROW EXECUTE FUNCTION app_set_tenant_id();
 CREATE TRIGGER "bi_user_locations_tenant_id" BEFORE INSERT ON "user_locations" FOR EACH ROW EXECUTE FUNCTION app_set_tenant_id();
 
--- ON UPDATE CURRENT_TIMESTAMP replacement triggers
+-- ON UPDATE CURRENT_TIMESTAMP replacement triggers.
+-- Semantica MySQL fedele: la colonna viene toccata SOLO se l'UPDATE non l'ha
+-- assegnata esplicitamente (in MySQL un SET updated_at=... esplicito vince
+-- sull'auto-touch; il clobber incondizionato impediva all'app di scrivere
+-- wall-time di Roma, es. calendar_notes). Unico edge dell'approssimazione:
+-- un assegnamento esplicito IDENTICO al valore precedente è indistinguibile
+-- da "non assegnato" e viene toccato comunque.
 CREATE OR REPLACE FUNCTION "app_touch_updated_at"() RETURNS trigger AS $$
-BEGIN NEW."updated_at" := CURRENT_TIMESTAMP; RETURN NEW; END; $$ LANGUAGE plpgsql;
+BEGIN
+  IF NEW."updated_at" IS NOT DISTINCT FROM OLD."updated_at" THEN
+    NEW."updated_at" := CURRENT_TIMESTAMP;
+  END IF;
+  RETURN NEW;
+END; $$ LANGUAGE plpgsql;
 CREATE TRIGGER "bu_appointment_giftbox_items_updated_at" BEFORE UPDATE ON "appointment_giftbox_items" FOR EACH ROW EXECUTE FUNCTION "app_touch_updated_at"();
 CREATE TRIGGER "bu_appointment_gift_items_updated_at" BEFORE UPDATE ON "appointment_gift_items" FOR EACH ROW EXECUTE FUNCTION "app_touch_updated_at"();
 CREATE TRIGGER "bu_appointment_holds_updated_at" BEFORE UPDATE ON "appointment_holds" FOR EACH ROW EXECUTE FUNCTION "app_touch_updated_at"();

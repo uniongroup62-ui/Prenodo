@@ -15217,3 +15217,43 @@ appointments (loggata), scoperta era solo la route della pagina.
 Suite test-notifiche-log 4/4 CLEAN (guardie respinte NON loggano, nessun
 doppio log, label/sede verbatim); regressione test-notifiche-pass2 10/10
 + test-log-pass2 10/10.
+
+## 2026-07-18 — Calendario pass 2: 3 fix (guardia sede + classe TZ + trigger updated_at) + riverifica note/ordine
+
+FIX 1 — GUARDIA SEDE. Il param extra location_id delle bande di
+indisponibilità (staffUnavailability) era onorato senza validarlo contro
+le sedi AUTORIZZATE: un ristretto leggeva le bande di assenza di altre
+sedi. Ora: onorato solo se in lista, altrimenti ripiego sulla sede di
+sessione RISOLTA (getManageLocationContext, prima era il raw di sessione).
+La pagina non manda il param: nessun impatto UI.
+
+FIX 2 — CLASSE TZ SERVER-SAFE. Default "oggi" (contesto e lista note) da
+new Date() locale del server -> businessTodayIso; created_at/updated_at
+delle note da NOW() UTC -> ora di Roma esplicita (il meta della card
+mostra dd/mm/yyyy hh:mm: era -2h su Supabase).
+
+FIX 3 — TRIGGER app_touch_updated_at INFEDELE (schema-wide, 73 tabelle).
+Il rimpiazzo PG di ON UPDATE CURRENT_TIMESTAMP clobberava SEMPRE
+updated_at (UTC), mentre MySQL rispetta l'assegnamento esplicito della
+colonna: il fix 2 era impossibile da esprimere. Ora il touch scatta solo
+se l'UPDATE non ha assegnato la colonna (IS NOT DISTINCT FROM OLD).
+Edge documentato: assegnamento esplicito IDENTICO al valore precedente =
+indistinguibile da non-assegnato (tocca comunque). Applicato live +
+db/schema.sql.
+
+Verifica live test-calendario-pass2 21/21 CLEAN: guardia sede (admin
+onorato su sede 51 chiusa -> 0 bande; ristretto con location_id=51 ->
+ripiego 21 con bande timeoff; param invalido -> ripiego sessione),
+note CRUD (timestamp Roma, a-capo conservati, autore nel payload,
+validazioni verbatim 'Il testo della nota e obbligatorio.'/'Seleziona un
+giorno valido.'/'Nota non trovata.', permessi 403 'Permesso Appuntamenti
+richiesto.'/'Permesso negato.', lista con count_by_date + 'Intervallo non
+valido.', delete), ordine colonne (contratto client = STRINGA JSON,
+normalizzazione dedup/>0, JSON corrotto tollerato -> []), flag permessi
+context per view-only.
+
+Regressione (trigger condiviso!): test-calendario 20/20,
+test-calendar-location-scope 6/6, e2e-calendar-move 33/33,
+e2e-hours-calendar 4/4, test-moduli-consenso-pass2 14/14,
+test-notifiche-pass2 10/10, test-automazioni-pass2 8/8,
+e2e-notifications-automation 19/19, test-booking-pass2 9/9.

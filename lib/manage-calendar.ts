@@ -1,5 +1,6 @@
 import "server-only";
 
+import { businessNowDateTime, businessTodayIso } from "@/lib/business-datetime";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { listDbAppointments, listDbLocations, listDbServices } from "@/lib/db-repositories";
 import { getManageLocationContext } from "@/lib/manage-locations";
@@ -358,7 +359,9 @@ export async function saveCalendarNote({
 
   if (noteId > 0) {
     const clauses = ["id = ?"];
-    const params: unknown[] = [normalizedDate, cleanTitle || null, cleanText, userId || null, noteId];
+    // updated_at in ORA DI ROMA esplicita (classe TZ server-safe: NOW() del DB
+    // è UTC su Supabase, ma la colonna è wall-time mostrata nel meta della card).
+    const params: unknown[] = [normalizedDate, cleanTitle || null, cleanText, userId || null, businessNowDateTime(), noteId];
     if (notesTable.mode === "shared" && await columnExists(notesTable.name, "tenant_id")) {
       clauses.push("tenant_id = ?");
       params.push(notesTable.tenantId ?? 0);
@@ -369,7 +372,7 @@ export async function saveCalendarNote({
               title=?,
               note_text=?,
               updated_by=?,
-              updated_at=NOW()
+              updated_at=?
         WHERE ${clauses.join(" AND ")}`,
       params,
     );
@@ -388,9 +391,11 @@ export async function saveCalendarNote({
   }
   const columns = Object.keys(values).map(quoteIdentifier).join(",");
   const placeholders = Object.keys(values).map(() => "?").join(",");
+  // created_at/updated_at in ORA DI ROMA esplicita (come l'update sopra).
+  const nowRome = businessNowDateTime();
   const result = await dbExecute(
-    `INSERT INTO ${quoteIdentifier(notesTable.name)} (${columns},created_at,updated_at) VALUES(${placeholders},NOW(),NOW())`,
-    Object.values(values),
+    `INSERT INTO ${quoteIdentifier(notesTable.name)} (${columns},created_at,updated_at) VALUES(${placeholders},?,?)`,
+    [...Object.values(values), nowRome, nowRome],
   );
   return fetchCalendarNote(slug, result.insertId);
 }
@@ -735,8 +740,10 @@ function normalizeDate(value: unknown): string {
   return dateIsoLocal(date);
 }
 
+// Giorno "oggi" in ora di ROMA (classe TZ server-safe: new Date() locale del
+// server sbaglia giorno a cavallo di mezzanotte su un server UTC).
 function todayIsoLocal(): string {
-  return dateIsoLocal(new Date());
+  return businessTodayIso();
 }
 
 function addDays(date: string, days: number): string {
