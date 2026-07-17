@@ -3,7 +3,7 @@ import "server-only";
 import { createHash, randomInt } from "node:crypto";
 import bcrypt from "bcryptjs";
 import type { RowDataPacket } from "@/lib/tenant-db";
-import { columnExists, dbExecute, dbQuery, tableExists, tenantIdForSlug, tenantSelect, tenantTable } from "@/lib/tenant-db";
+import { columnExists, dbExecute, dbQuery, tableExists, tenantIdForSlug, tenantSelect, tenantTable, withTenantTransaction } from "@/lib/tenant-db";
 import { invalidateManagePasswordResets } from "@/lib/manage-password-reset";
 import { normalizeTenantSlug } from "@/lib/tenant-runtime";
 import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
@@ -190,26 +190,47 @@ export async function confirmEmailCode({
   if (newEmail !== normalizedCurrent) await ensureEmailAvailable(tenantSlug, userId, newEmail, normalizedCurrent);
 
   const verifiedAt = sqlNow();
-  // Blocco transazionale legacy (accessibility.php 326-344): qualsiasi errore
-  // DB nell'applicazione del cambio → flash catch-all 'Errore verifica email'
-  // (i flash specifici sopra escono dal try legacy via redirect).
+  // Blocco TRANSAZIONALE legacy (accessibility.php 326-344: beginTransaction ->
+  // update users + sync email staff + delete pending -> commit, rollback su
+  // errore): mai un'email cambiata a metà (users aggiornata ma staff no, o
+  // pending rimasta). Qualsiasi errore DB → flash catch-all 'Errore verifica
+  // email' (i flash specifici sopra escono dal try legacy via redirect).
   try {
     const users = await tenantTable(tenantSlug, "users");
-    const userClauses = ["id = ?"];
-    const userParams: unknown[] = newEmail === normalizedCurrent
-      ? [userId]
-      : [newEmail, userId];
-    if (users.mode === "shared" && await columnExists(users.name, "tenant_id")) {
-      userClauses.push("tenant_id = ?");
-      userParams.push(users.tenantId ?? 0);
-    }
-    if (newEmail === normalizedCurrent) {
-      await dbExecute(`UPDATE \`${users.name}\` SET email_verified_at = ? WHERE ${userClauses.join(" AND ")}`, [verifiedAt, ...userParams]);
-    } else {
-      await dbExecute(`UPDATE \`${users.name}\` SET email = ?, email_verified_at = ? WHERE ${userClauses.join(" AND ")}`, [newEmail, verifiedAt, ...userParams.slice(1)]);
-      await syncStaffEmail(tenantSlug, normalizedCurrent, newEmail);
-    }
-    await deletePendingEmailVerification(tenantSlug, userId);
+    const verifications = await ensureEmailVerificationTable(tenantSlug);
+    const staff = newEmail !== normalizedCurrent ? await tenantTable(tenantSlug, "staff").catch(() => null) : null;
+    const staffHasEmail = staff ? await columnExists(staff.name, "email") : false;
+    const staffHasFullName = staff && staffHasEmail ? await columnExists(staff.name, "full_name") : false;
+    await withTenantTransaction(tenantSlug, async (q) => {
+      const userClauses = ["id = ?"];
+      const userScopeParams: unknown[] = [userId];
+      if (users.mode === "shared") {
+        userClauses.push("tenant_id = ?");
+        userScopeParams.push(users.tenantId ?? 0);
+      }
+      if (newEmail === normalizedCurrent) {
+        await q(`UPDATE \`${users.name}\` SET email_verified_at = ? WHERE ${userClauses.join(" AND ")}`, [verifiedAt, ...userScopeParams]);
+      } else {
+        await q(`UPDATE \`${users.name}\` SET email = ?, email_verified_at = ? WHERE ${userClauses.join(" AND ")}`, [newEmail, verifiedAt, ...userScopeParams]);
+        if (staff && staffHasEmail) {
+          const staffClauses = ["LOWER(email) = ?"];
+          const staffParams: unknown[] = [newEmail, normalizedCurrent];
+          if (staffHasFullName) staffClauses.push("COALESCE(full_name,'') <> 'SSO'");
+          if (staff.mode === "shared") {
+            staffClauses.push("tenant_id = ?");
+            staffParams.push(staff.tenantId ?? 0);
+          }
+          await q(`UPDATE \`${staff.name}\` SET email = ? WHERE ${staffClauses.join(" AND ")}`, staffParams);
+        }
+      }
+      const pendClauses = ["user_id = ?"];
+      const pendParams: unknown[] = [userId];
+      if (verifications.mode === "shared" && await columnExists(verifications.name, "tenant_id")) {
+        pendClauses.unshift("tenant_id = ?");
+        pendParams.unshift(verifications.tenantId ?? 0);
+      }
+      await q(`DELETE FROM \`${verifications.name}\` WHERE ${pendClauses.join(" AND ")}`, pendParams);
+    });
   } catch {
     throw new Error("Errore verifica email");
   }
@@ -541,9 +562,11 @@ async function badEmailCodeAttempt(slug: string, userId: number, row: RowDataPac
     clauses.push("tenant_id = ?");
     params.push(table.tenantId ?? 0);
   }
+  // last_attempt_at in ORA LOCALE dell'app (classe TZ: NOW() del DB è UTC su
+  // Supabase mentre expires_at/created_at sono app-locali).
   await dbExecute(
-    `UPDATE \`${table.name}\` SET attempt_count = attempt_count + 1, last_attempt_at = NOW() WHERE ${clauses.join(" AND ")}`,
-    params,
+    `UPDATE \`${table.name}\` SET attempt_count = attempt_count + 1, last_attempt_at = ? WHERE ${clauses.join(" AND ")}`,
+    [sqlNow(), ...params],
   ).catch(() => undefined);
   if (Number(row.attempt_count ?? 0) + 1 >= EMAIL_CODE_MAX_ATTEMPTS) {
     await deletePendingEmailVerification(slug, userId);
@@ -598,20 +621,8 @@ async function staffEmailInUse(slug: string, email: string, currentEmail: string
   return Number(rows[0]?.count ?? 0) > 0;
 }
 
-async function syncStaffEmail(slug: string, oldEmail: string, newEmail: string): Promise<void> {
-  if (oldEmail === newEmail) return;
-  const staff = await tenantTable(slug, "staff").catch(() => null);
-  if (!staff || !await columnExists(staff.name, "email")) return;
-  const hasFullName = await columnExists(staff.name, "full_name");
-  const clauses = ["LOWER(email) = ?"];
-  const params: unknown[] = [newEmail, oldEmail];
-  if (hasFullName) clauses.push("COALESCE(full_name,'') <> 'SSO'");
-  if (staff.mode === "shared" && await columnExists(staff.name, "tenant_id")) {
-    clauses.push("tenant_id = ?");
-    params.push(staff.tenantId ?? 0);
-  }
-  await dbExecute(`UPDATE \`${staff.name}\` SET email = ? WHERE ${clauses.join(" AND ")}`, params).catch(() => undefined);
-}
+// NB: il sync email staff (accessibility_sync_staff_email) ora vive DENTRO la
+// transazione di confirmEmailCode, come nel beginTransaction legacy.
 
 function mapPending(row: RowDataPacket): EmailVerificationPending {
   // I timestamp del driver pg sono Date: resi in ORA LOCALE (mai toISOString,

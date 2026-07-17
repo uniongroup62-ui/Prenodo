@@ -14919,3 +14919,48 @@ sistema rifiutata, id inesistente, ensure senza doppioni.
 Regressione: test-consensi 25/25, e2e-consent-modules 18/18,
 markers-consent-modules 88/88, test-consensi-cliente 38/38 (consumer dei
 record). Baseline (1 modulo di sistema, 0 record) CLEAN.
+
+## 2026-07-17 — Accessibilita' pass 2: 2 bug corretti (confirm transazionale, NOW() UTC)
+
+Ri-analisi di accessibility.php (539) vs manage-accessibility +
+manage-password-reset + route.
+
+BUG 1 — CONFIRM EMAIL NON TRANSAZIONALE. Il legacy (326-344) avvolge in
+beginTransaction l'applicazione del cambio: UPDATE users (email +
+email_verified_at) + sync email sulla riga staff (LOWER match, SSO esclusa)
++ DELETE della pending. Il port eseguiva in sequenza: un errore a meta'
+lasciava l'email cambiata su users ma non su staff (rompendo il link
+staff<->users per EMAIL) o la pending viva. FIX: withTenantTransaction col
+sync staff INLINE nella tx (helper syncStaffEmail rimosso).
+
+BUG 2 — NOW() DEL DB (UTC) IN COLONNE APP-LOCALI. last_attempt_at dei
+tentativi codice e used_at dei password_resets venivano timbrati con NOW()
+(UTC su Supabase) mentre expires_at/created_at degli stessi flussi sono
+app-locali (fix TZ storico): -2h di incoerenza forense. FIX: timestamp
+espliciti app-locali (sqlNow/resetSqlNow).
+
+Verifica live test-accessibilita-pass2 17/17 CLEAN (utente+staff ZZ
+dedicati): invio codice con codice esposto in dev (SES off), cooldown 60s
+verbatim, tentativi (attempt=1 con last_attempt_at in ORA LOCALE, 5o ->
+'Troppi tentativi non validi...' + pending rimossa), conferma ok con
+verified_at locale, cambio email (stessa email/'L email e gia questa',
+password errata, email di altro account CASE-insensitive, invio alla
+nuova), resend permesso su pending SCADUTA, conferma cambio con users+
+staff SINCRONIZZATE in tx, codice scaduto (flash senza punto + pending
+rimossa), cambio password (4 flash verbatim + hash sostituito).
+
+Regressione: test-accessibilita 40/40, e2e-accessibility 34/34,
+markers-accessibility 40/40, test-operatori-pass2 21/21 (consumer del
+flusso invito).
+
+HARNESS — LEAK STORICO ZZV4 RISOLTO ALLA RADICE: in e2e-cabins-resources
+`zzStaff` era dichiarata DENTRO il try e nel finally risultava
+out-of-scope -> cleanup SALTATA in silenzio a ogni run (origine degli
+operatori ZZV4 Op1/Op2 accumulati, inclusi i 169-180 rimossi stamattina e
+i 208/209 di oggi, orfani verificati e rimossi). Variabile hoistata fuori
+dal try: la suite ora ripulisce (ri-verificato con run live, staff torna
+a [22,56]).
+
+Miglioria proposta (in attesa di approvazione): log attivita' sugli eventi
+di sicurezza (email verificata/cambiata, password aggiornata) nel modulo
+'accessi' — oggi si logga solo il login.

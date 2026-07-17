@@ -386,6 +386,14 @@ async function hasRecentResetRequest(slug: string, userId: number): Promise<bool
   return rows.length > 0;
 }
 
+// used_at in ORA LOCALE dell'app (classe TZ: NOW() del DB è UTC su Supabase
+// mentre expires_at/created_at del flusso reset sono app-locali).
+function resetSqlNow(): string {
+  const date = new Date();
+  const pad = (value: number) => value.toString().padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
 async function invalidatePendingResets(slug: string, userId: number): Promise<void> {
   const table = await ensurePasswordResetsTable(slug);
   const clauses = ["user_type = ?", "user_id = ?", "used_at IS NULL"];
@@ -394,7 +402,7 @@ async function invalidatePendingResets(slug: string, userId: number): Promise<vo
     clauses.unshift("tenant_id = ?");
     params.unshift(table.tenantId ?? 0);
   }
-  await dbExecute(`UPDATE \`${table.name}\` SET used_at = NOW() WHERE ${clauses.join(" AND ")}`, params).catch(() => undefined);
+  await dbExecute(`UPDATE \`${table.name}\` SET used_at = ? WHERE ${clauses.join(" AND ")}`, [resetSqlNow(), ...params]).catch(() => undefined);
 }
 
 async function markResetUsed(slug: string, resetId: number): Promise<void> {
@@ -405,7 +413,7 @@ async function markResetUsed(slug: string, resetId: number): Promise<void> {
     clauses.push("tenant_id = ?");
     params.push(table.tenantId ?? 0);
   }
-  await dbExecute(`UPDATE \`${table.name}\` SET used_at = NOW() WHERE ${clauses.join(" AND ")}`, params).catch(() => undefined);
+  await dbExecute(`UPDATE \`${table.name}\` SET used_at = ? WHERE ${clauses.join(" AND ")}`, [resetSqlNow(), ...params]).catch(() => undefined);
 }
 
 function genericResetResult(): PasswordResetRequestResult {
