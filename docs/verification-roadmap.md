@@ -14249,3 +14249,27 @@ Residui deliberati: operatore '—' sui movimenti da prenotazione (plumbing by
 in create/updateDbAppointment); refundDbGiftCard rimborsa anche card scadute
 (il legacy addTransaction rifiuterebbe il topup — il nostro comportamento
 garantisce che l'annullo vendita ripristini sempre il saldo).
+
+### Addendum GiftCard (stesso giorno, 7218af5): 4 migliorie approvate
+
+1. LOG ATTIVITA': strumentate le 7 mutazioni della route giftcards (modifica
+   dati/scadenza/nota interna/nota cliente, riscatto credito con importo,
+   riscatto item, invio voucher email) — module 'giftcard' nella pagina Log.
+   NOTA: il log si scrive DOPO il successo (una scadenza rifiutata perche' la
+   card e' riscattata non genera riga).
+2. PAGINAZIONE: listGiftCardsManagePaged 25/pagina SOLO con ?p= (senza, cap
+   storico 200 per i consumer legacy); header 'N GiftCard · pagina X di Y' +
+   chevron pager con navigazione GET; ?p= passato dal mount.
+3. BADGE 'Scade tra N giorni' (14 giorni, card ATTIVE) in lista e nel
+   dettaglio accanto allo Stato — pattern identico a GiftBox/Pacchetti.
+4. OPERATORE sui movimenti da prenotazione: byUserId opzionale in
+   create/updateDbAppointment -> applyAppointmentGiftcardRedeem -> created_by
+   sul ledger (la route appuntamenti passa session.user.id; il booking
+   pubblico resta null come il legacy). Chiuso il residuo del pass 2b.
+
+Verifiche: test-giftcard-improvements 8/8 CLEAN (paginazione disgiunta +
+compat senza ?p + 3 log + pagina Log) + test-dom-giftcard-improvements 5/5
+(25 righe, header pager, badge lista con ordinamento id DESC — la card in
+scadenza va seminata con l'id PIU' ALTO per stare in pagina 1 —, badge
+dettaglio) + pass2b 17/17 con D2 esteso all'operatore + regressione 94+92+11+
+28+16.
