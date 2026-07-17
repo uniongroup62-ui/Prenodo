@@ -1,4 +1,5 @@
 import { jsonError, parseRequestBody } from "@/lib/api-utils";
+import { logActivity } from "@/lib/activity-log";
 import {
   confirmEmailCode,
   getEmailVerificationPending,
@@ -88,6 +89,10 @@ export async function POST(request: Request) {
         },
         issuedAt: Date.now(),
       });
+      // Evento di sicurezza nel registro (module 'accessi'), SOLO dopo il
+      // successo: cambio email vs semplice verifica dell'attuale.
+      const emailChanged = result.email !== String(session.user.email ?? "").trim().toLowerCase();
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "accessi", action: "modifica", entityType: "user", entityId: session.user.id, label: emailChanged ? `Cambiata email di accesso in ${result.email}` : "Email di accesso verificata" });
       return Response.json(result);
     }
 
@@ -111,6 +116,7 @@ export async function POST(request: Request) {
         currentPassword,
         newPassword,
       });
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "accessi", action: "modifica", entityType: "user", entityId: session.user.id, label: "Password di accesso aggiornata" });
       return Response.json({ ok: true, message: "Password aggiornata" });
     }
 

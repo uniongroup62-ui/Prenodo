@@ -14964,3 +14964,13 @@ a [22,56]).
 Miglioria proposta (in attesa di approvazione): log attivita' sugli eventi
 di sicurezza (email verificata/cambiata, password aggiornata) nel modulo
 'accessi' — oggi si logga solo il login.
+
+## 2026-07-17 — Accessibilita': log eventi di sicurezza (miglioria approvata)
+
+Strumentati nel modulo 'accessi' (finora solo login): 'Email di accesso
+verificata' (conferma dell'email attuale), 'Cambiata email di accesso in
+<nuova>' (conferma cambio), 'Password di accesso aggiornata' — tutte
+azione 'modifica' con user_label snapshot. Regola segnali-DOPO-successo:
+codice errato e password attuale errata NON loggano. Verifica
+test-accessibilita-log 5/5 CLEAN; regressione test-accessibilita-pass2
+17/17, test-accessibilita 40/40, test-log-attivita 16/16.
