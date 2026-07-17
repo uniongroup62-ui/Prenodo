@@ -14576,3 +14576,21 @@ track dell'id creato). Baseline categorie = [genera].
 
 Miglioria opzionale (non applicata): guardia anti-duplicato sul nome
 categoria in creazione — divergerebbe dal legacy, solo su richiesta.
+
+## 2026-07-17 — Servizi: guardia anti-duplicato nome categoria (miglioria approvata)
+
+DIVERGENZA DELIBERATA dal legacy (approvata dall'utente): services.php 3648
+inseriva la categoria senza alcuna guardia (duplicati e nome-default
+permessi). Il port ora, in saveServiceCategory (lib/manage-services.ts),
+blocca il salvataggio se esiste gia' una categoria con lo stesso nome —
+match case-insensitive LOWER(name) (Postgres e' case-sensitive, MySQL no)
+ESCLUDENDO la riga in modifica (id <> ?): il rename che conserva il proprio
+nome resta permesso. Errore: "Esiste già una categoria con questo nome".
+
+Verifica live (test-servizi-catdup 7/7 CLEAN): duplicato esatto rifiutato,
+duplicato case-variant rifiutato, nessuna riga scritta, rename su nome
+altrui rifiutato, rename sul proprio nome ok. Regressione: e2e-services
+40/40, test-servizi CLEAN, test-servizi-pass2 10/10, test-servizi-
+impostazioni-log 11/11, markers-services2 60/60. NOTA probe: il C1 di
+test-servizi-pass2 (category_save 'Non categorizzato') passa solo perche'
+la baseline non contiene la default — commento aggiornato nel probe.

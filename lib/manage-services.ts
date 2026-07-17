@@ -413,6 +413,20 @@ export async function saveServiceCategory(slug: string, body: Record<string, str
   // Flash legacy senza punto (services.php 3641, 3601-3605).
   if (!name) throw new Error("Nome categoria obbligatorio");
 
+  // MIGLIORIA deliberata (approvata 2026-07-17, diverge dal legacy che
+  // inseriva senza guardie, services.php 3648): niente categorie duplicate —
+  // match case-insensitive (Postgres è case-sensitive, MySQL no) escludendo
+  // la riga in modifica.
+  const dup = await tenantSelect<RowDataPacket>({
+    slug,
+    table: "service_categories",
+    columns: "id",
+    where: "LOWER(name) = ? AND id <> ?",
+    params: [name.toLowerCase(), id],
+    limit: 1,
+  }).catch(() => [] as RowDataPacket[]);
+  if (dup.length > 0) throw new Error("Esiste già una categoria con questo nome");
+
   const imageUrl = truthy(body.delete_image ?? body.remove_image) ? null : emptyToNull(clean(body.image_url ?? body.imageUrl, 255));
   if (id > 0) {
     const existing = await getCategoryById(slug, id);
