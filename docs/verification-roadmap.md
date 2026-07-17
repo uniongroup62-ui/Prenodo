@@ -14437,3 +14437,25 @@ Con questo il registro Log copre: clienti, appuntamenti, pagamenti,
 magazzino, fornitori, buoni, rate, operatori, orari, accessi, pacchetti,
 preventivi, giftbox, giftcard, fidelity, ricariche, promozioni.
 Restano: servizi, omaggi, impostazioni.
+
+## 2026-07-17 — Punti pass 2: 1 bug (ricalcolo livello sul manual move)
+
+Baseline riconfermata (points 42, levels 31, punti 26, markers 102).
+
+BUG CORRETTO: fidelityWalletManualMove non ricalcolava il Livello Card — il
+legacy ricalcola dopo OGNI transazione punti (Fidelity.php ~1706) e il
+movimento manuale sposta i punti MATURATI nel periodo (la base del livello).
+Il livello restava stantio dopo un'operazione manuale dal Portafoglio.
+
+SEMANTICA LIVELLI verificata live (test-punti-pass2 5/5 CLEAN):
+- livello = punti MATURATI (delta>0) nel periodo, NON il saldo: earn 60 +
+  redeem 50 -> saldo 10 ma livello 'argento' (il riscatto non declassa);
+- finestra fidelity_level_period_days rispettata (earn backdatato escluso);
+  period_days=0 = all-time;
+- lettura livelli: flag write-only IGNORATO, derivazione = Punti attivi &&
+  >=1 livello (migrazione Bronze/Silver/Gold se JSON vuoto) — conferma della
+  trappola nota (colonna fidelity_card_levels_json, non fidelity_levels_json);
+- tiers campagne: dedup per minSpend col MAX punti + ordinamento; tutti-zero
+  rifiutato verbatim.
+Stats sede-asimmetriche e campagna-oggi con guardia DATE-column: fedeli
+(nessuna azione). Log attivita' gia' strumentato (pass Fidelity).
