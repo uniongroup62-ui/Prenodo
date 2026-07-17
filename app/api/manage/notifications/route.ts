@@ -1,3 +1,4 @@
+import { logActivity } from "@/lib/activity-log";
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import { businessTodayIso } from "@/lib/business-datetime";
 import { automationScheduleReminder, getAutomationSettings, saveClientBirthdayAlertDays } from "@/lib/automation-reminders";
@@ -489,6 +490,7 @@ export async function POST(request: Request) {
         const kind = lifecycleKindForStatusChange("pending", "scheduled");
         if (kind) await sendAppointmentLifecycleEmail({ slug: tenantSlug, appointmentId: id, kind });
         await automationScheduleReminder(tenantSlug, id);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "appuntamenti", action: "modifica", entityType: "appointment", entityId: id, label: `Approvata prenotazione #${id}` });
         return Response.json({ ok: true, message: "Appuntamento approvato" });
       }
 
@@ -502,6 +504,7 @@ export async function POST(request: Request) {
       const kind = lifecycleKindForStatusChange("pending", "canceled");
       if (kind) await sendAppointmentLifecycleEmail({ slug: tenantSlug, appointmentId: id, kind });
       await automationScheduleReminder(tenantSlug, id);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "appuntamenti", action: "annulla", entityType: "appointment", entityId: id, label: `Annullata prenotazione #${id}` });
       return Response.json({ ok: true, message: "Appuntamento annullato" });
     }
 
