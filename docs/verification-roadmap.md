@@ -15207,3 +15207,13 @@ DB nei probe).
 HARNESS: rimossa rata orfana 239 (primo run di test-report-pass2
 fallito PRIMA del push cumulativo degli id; suite indurita con track
 per-riga immediato).
+
+MIGLIORIA APPROVATA (post-pass): approve/cancel dalla route notifications
+ora loggano nel registro attività (modulo appuntamenti, DOPO il successo:
+approve -> 'modifica' "Approvata prenotazione #id", cancel/reject ->
+'annulla' "Annullata prenotazione #id"). Chiuso l'ultimo buco della
+copertura 23 moduli: il popup Annulla passava già dalla route
+appointments (loggata), scoperta era solo la route della pagina.
+Suite test-notifiche-log 4/4 CLEAN (guardie respinte NON loggano, nessun
+doppio log, label/sede verbatim); regressione test-notifiche-pass2 10/10
++ test-log-pass2 10/10.
