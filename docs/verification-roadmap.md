@@ -14426,3 +14426,14 @@ LISTA carica gli snapshot clienti completi per i candidati esclusione
 
 Miglioria proposta: log attivita' promozioni (save/toggle/delete/condizioni/
 esclusioni) — unico modulo del gruppo ancora senza registro.
+
+### Addendum Promozioni (stesso giorno): log attività
+
+logActivity (module 'promozioni') su creata/modificata/clonata (con
+sorgente sostituita), attivata/disattivata, eliminata (nota prenotazioni
+scollegate), condizioni aggiornate, cliente escluso/riammesso; log dopo il
+successo. Suite test-promo-log 9/9 CLEAN + regressione 38+30+6+8+16.
+Con questo il registro Log copre: clienti, appuntamenti, pagamenti,
+magazzino, fornitori, buoni, rate, operatori, orari, accessi, pacchetti,
+preventivi, giftbox, giftcard, fidelity, ricariche, promozioni.
+Restano: servizi, omaggi, impostazioni.
