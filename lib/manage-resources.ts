@@ -5,6 +5,7 @@ import type { RowDataPacket } from "@/lib/tenant-db";
 import { parseInteger } from "@/lib/api-utils";
 import { dbExecute, dbQuery, quoteIdentifier, columnExists, tenantDelete, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
 import { sendStaffInviteEmailCode } from "@/lib/manage-accessibility";
+import { businessNowDateTime } from "@/lib/business-datetime";
 import { deletePublicObject, storageKeyFromPublicUrl } from "@/lib/storage";
 
 export type ManageResourceContext = {
@@ -586,10 +587,10 @@ export async function cabinDeleteBlockersLegacy(slug: string, cabinId: number, c
            JOIN ${quoteIdentifier(appt.name)} a ON a.id = sg.appointment_id
            ${segSvcJoin}
            ${clientJoin}
-          WHERE a.status IN ('pending','scheduled') AND sg.ends_at >= NOW()
+          WHERE a.status IN ('pending','scheduled') AND sg.ends_at >= ?
             AND ${segCabinExpr} = ?${scope}
           ORDER BY a.starts_at ASC, a.id ASC`,
-        [cabinId, ...scopeParams],
+        [businessNowDateTime(), cabinId, ...scopeParams],
       ).catch(() => [] as RowDataPacket[]);
       rows.forEach(pushAppt);
     }
@@ -617,10 +618,10 @@ export async function cabinDeleteBlockersLegacy(slug: string, cabinId: number, c
              FROM ${quoteIdentifier(appt.name)} a
              ${svcJoin}
              ${clientJoin}
-            WHERE a.status IN ('pending','scheduled') AND a.ends_at >= NOW()${excludeSegmented}
+            WHERE a.status IN ('pending','scheduled') AND a.ends_at >= ?${excludeSegmented}
               AND (${conditions.join(" OR ")})${scope}
             ORDER BY a.starts_at ASC, a.id ASC`,
-          [...conditionParams, ...scopeParams],
+          [businessNowDateTime(), ...conditionParams, ...scopeParams],
         ).catch(() => [] as RowDataPacket[]);
         rows.forEach(pushAppt);
       }
@@ -1747,9 +1748,9 @@ async function resourceFuturePeakUsage(slug: string, resourceId: number, locatio
          FROM ${quoteIdentifier(apptTable.name)} a
          JOIN ${quoteIdentifier(asTable.name)} sv ON sv.appointment_id = a.id AND sv.tenant_id = a.tenant_id
          JOIN ${quoteIdentifier(srTable.name)} sr ON sr.service_id = sv.service_id AND sr.tenant_id = a.tenant_id
-        WHERE a.tenant_id = ? AND sr.resource_id = ? AND a.ends_at >= NOW()
+        WHERE a.tenant_id = ? AND sr.resource_id = ? AND a.ends_at >= ?
           AND LOWER(TRIM(COALESCE(a.status,''))) IN ('pending','scheduled')${locationClause}`,
-      locationClause ? [apptTable.tenantId ?? 0, resourceId, locationId] : [apptTable.tenantId ?? 0, resourceId],
+      locationClause ? [apptTable.tenantId ?? 0, resourceId, businessNowDateTime(), locationId] : [apptTable.tenantId ?? 0, resourceId, businessNowDateTime()],
     );
     const blocks = rows
       .map((r) => ({
