@@ -14545,3 +14545,34 @@ risorse, servizi, impostazioni. Residuo deliberato: cabine (col loro pass).
 Suite test-servizi-impostazioni-log 11/11 CLEAN + regressione: services 40,
 business-profile 25, booking-settings 12, locations 18, roles 16,
 consent-modules 18, log-attivita 16.
+
+## 2026-07-17 — Servizi pass 2: ZERO bug, semantica pannelli/snapshot verificata live
+
+Nessuna modifica al prodotto. Baseline riconfermata (e2e-services 40,
+test-servizi, markers 60, location-filter 4, staff-for-service 6). Classi
+note tutte a posto: ricerca LOWER-normalizzata, NESSUN NOW() UTC (gli
+impatti usano gli stati aperti senza finestra data, 1:1 col legacy), gate
+per-azione, log attivita' strumentato in giornata (pending non logga).
+
+Pass 2 (test-servizi-pass2 10/10 CLEAN) — semantica fine verificata live:
+- SEQUENZA pannelli su edit nome+prezzo+durata con prenotazione aperta:
+  name_update -> price_update (con old/new) -> impacted_appointments ->
+  save. L'impacted panel scatta SOLO per Durata/Cabine/Operatori/Risorse
+  (campi che toccano l'agenda), NON per nome/prezzo.
+- SNAPSHOT: la conferma name_update PROPAGA il nome agli snapshot storici
+  (svc_apply_service_name_snapshot_updates, services.php 4555) mentre il
+  PREZZO resta CONGELATO sulle righe appuntamento — il freeze e' solo
+  monetario, il nome segue il catalogo. (Precisazione della nota memoria
+  'snapshot-freeze nome/prezzo'.)
+- DELETE servizio: rifiutata con prenotazione aperta (blockers), consentita
+  dopo la chiusura.
+- CATEGORIA default 'Non categorizzato' NON eliminabile (verbatim); la
+  CREAZIONE di duplicati/nome-default e' PERMESSA anche nel legacy
+  (services.php 3648: INSERT senza guardie) — bug-faithful.
+
+HARNESS: il probe iniziale creava categorie 'Non categorizzato' senza
+pulirle (2 righe leakate oggi, rimosse a zero riferimenti; probe sanato con
+track dell'id creato). Baseline categorie = [genera].
+
+Miglioria opzionale (non applicata): guardia anti-duplicato sul nome
+categoria in creazione — divergerebbe dal legacy, solo su richiesta.
