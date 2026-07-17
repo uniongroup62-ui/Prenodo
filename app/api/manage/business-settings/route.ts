@@ -90,7 +90,9 @@ export async function POST(request: Request) {
           const file = form.get(fileKey) ?? form.get("file");
           // File mancante gestito nella lib DOPO la guardia "Rimuovi ... attuale"
           // (ordine legacy business_profile.php 125-132).
-          return Response.json(await uploadBusinessBrandingImage(tenantSlug, kind, file instanceof File ? file : null, publicOrigin(request)));
+          const out = await uploadBusinessBrandingImage(tenantSlug, kind, file instanceof File ? file : null, publicOrigin(request));
+          void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "impostazioni", action: "modifica", entityType: "business", entityId: 0, label: kind === "logo" ? "Caricato logo attività" : "Caricata copertina attività" });
+          return Response.json(out);
         } catch (error) {
           const wrapped = `Errore upload ${kind === "logo" ? "logo" : "copertina"}: ${error instanceof Error ? error.message : "Upload non valido"}`;
           return Response.json({ ok: false, error: wrapped, errors: [wrapped] }, { status: 400 });
@@ -126,7 +128,9 @@ export async function POST(request: Request) {
         const x = parseInteger(body[`${kind}_position_x`] ?? body.x, 50);
         const y = parseInteger(body[`${kind}_position_y`] ?? body.y, 50);
         try {
-          return Response.json(await saveBusinessBrandingPosition(tenantSlug, kind, x, y, publicOrigin(request)));
+          const out = await saveBusinessBrandingPosition(tenantSlug, kind, x, y, publicOrigin(request));
+          void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "impostazioni", action: "modifica", entityType: "business", entityId: 0, label: `Salvata posizione ${kind === "logo" ? "logo" : "copertina"}` });
+          return Response.json(out);
         } catch (error) {
           const inner = error instanceof Error ? error.message : "Operazione non riuscita.";
           return jsonError(`Errore salvataggio posizione ${kind === "logo" ? "logo" : "copertina"}: ${inner}`);

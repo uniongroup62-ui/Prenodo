@@ -14801,3 +14801,15 @@ tornano legacy-fedeli. markers-business-profile 73/73, e2e-marketplace
 Migliorie proposte (in attesa di approvazione): log attivita' anche su
 upload logo/copertina e salvataggio posizione (oggi loggano solo save
 profilo e branding delete).
+
+## 2026-07-17 — Profilo attivita': log su upload branding + posizione (miglioria approvata)
+
+Strumentati anche upload logo/copertina ('Caricato logo attivita'' /
+'Caricata copertina attivita'', azione modifica) e salvataggio posizione
+('Salvata posizione logo/copertina') nel modulo 'impostazioni' — prima
+loggavano solo save profilo e rimozioni branding. Regola segnali-DOPO-
+successo: upload fallito (sniff) e bloccato dalla guardia 'Rimuovi...'
+NON loggano. Verifica live test-profilo-log 5/5 CLEAN (log ids tracciati);
+regressione test-profilo-pass2 14/14, e2e-business-profile 25/25,
+test-servizi-impostazioni-log 11/11. Resta proposta (non applicata) la
+miglioria log Orari su chiusure/straordinari.
