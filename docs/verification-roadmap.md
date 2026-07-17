@@ -14316,3 +14316,21 @@ scadenza+sync credito, delete con release prenotazioni + wipe punti/lotti/
 livello), campagne (1 attiva/periodo su save E toggle, soft-delete con
 riferimenti, guardie livelli), toggle globale (impatto campagne/omaggi/
 prenotazioni con conferma), livelli (firma sha256, preview soglie/delete).
+
+### Addendum Fidelity (stesso giorno, c538245): 2 migliorie approvate
+
+1. LOG ATTIVITA' (module 'fidelity', label in pagina Log): toggle globale,
+   impostazioni Punti, Livelli Card, scalo manuale credito (con importo),
+   movimenti manuali punti (Aggiunti/Rimossi N), tessere (emessa/disattivata/
+   attivata/riattivata/eliminata), campagne (creata/modificata/attivata/
+   disattivata/eliminata + nota 'storico conservato' sul soft-delete),
+   movimento wallet compat. Log DOPO il successo dell'operazione.
+2. GET COMPAT RIMOSSO del tutto (non solo gate-ato): il feed anagrafica+saldi
+   senza action non ha consumer UI -> 'Azione fidelity non supportata.'.
+
+Verifiche: test-fidelity-improvements 11/11 CLEAN (campagna di test SEMPRE
+inattiva: una attiva colliderebbe con la 37 per l'invariante 1-attiva/periodo;
+delete hard con 0 riferimenti) + pass2 10/10 (D2 aggiornato al GET rimosso) +
+regressione fidelity completa + test-fidelity 42/42 + log-attivita 16.
+NOTA: e2e-fidelity-toggle ha un flake intermittente pre-esistente
+(26/1 -> 27/0 al rerun, identico sulla baseline PRE-modifiche).
