@@ -168,6 +168,10 @@ export async function POST(request: Request) {
       // con 'Seleziona una sede per configurare le cabine.' (cabins.php 426).
       body.location_id = String(await resolveCabinsLocationId(tenantSlug, parseInteger(body.location_id ?? body.locationId, 0), activeUser));
       const result = await saveCabinsBulk(tenantSlug, body);
+      if (result.ok) {
+        const cabinsLocationId = parseInteger(body.location_id, 0);
+        void logActivity(tenantSlug, { user: activeUser, locationId: cabinsLocationId || activeUser.currentLocationId, module: "cabine", action: "modifica", entityType: "cabins", label: `Salvate cabine (${parseInteger(body.cabins_count ?? body.cabinsCount, 0)} cabine)` });
+      }
       return Response.json(result, { status: result.ok ? 200 : 400 });
     }
 
@@ -179,6 +183,7 @@ export async function POST(request: Request) {
         // Stessa risoluzione sede del legacy: sede non valida -> 0 (il delete
         // procede senza filtro sede, quirk fedele di cabins.php 367-371).
         await deleteCabin(tenantSlug, parseInteger(body.id, 0), await resolveCabinsLocationId(tenantSlug, parseInteger(body.location_id ?? body.locationId, 0), activeUser));
+        void logActivity(tenantSlug, { user: activeUser, locationId: activeUser.currentLocationId, module: "cabine", action: "elimina", entityType: "cabin", entityId: parseInteger(body.id, 0), label: `Eliminata cabina #${parseInteger(body.id, 0)}` });
         return Response.json({ ok: true, msg: "Cabina eliminata" });
       } catch (error) {
         const popup = error instanceof Error ? (error as Error & { popup?: unknown }).popup : undefined;

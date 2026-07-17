@@ -14638,3 +14638,19 @@ onorato). Regressione: test-cabine 34/34 (A5 sanato), e2e-cabins-page
 
 Migliorie proposte (in attesa di approvazione): log attivita' modulo
 'cabine' su cabins_save/cabin_delete (residuo deliberato della fase 2).
+
+## 2026-07-17 — Cabine: log attivita' (miglioria approvata, chiude il residuo fase 2)
+
+Strumentato il modulo 'cabine' (ultimo residuo deliberato della fase 2 log):
+cabins_save ok -> 1 riga 'modifica' "Salvate cabine (N cabine)" con la sede
+risolta; cabin_delete ok -> 'elimina' "Eliminata cabina #id" (stile
+simmetrico a Risorse). Regola segnali-DOPO-successo rispettata: save in
+errore/bloccato dai blockers e delete bloccata NON loggano. Etichetta
+'Cabine' aggiunta a MODULE_LABELS (log-content).
+
+Verifica live test-cabine-log 7/7 CLEAN (log ids tracciati, mai cleanup per
+inferenza) incluso DOM Playwright: pagina Log filtro cabine renderizza
+etichetta 'Cabine', entrambe le voci e badge ROSSO su 'elimina'.
+Regressione: test-cabine 34/34, test-cabine-pass2 20/20, e2e-cabins-page
+20/20, test-log-attivita 16/16. Con questo il registro attivita' copre 22
+moduli: NESSUN residuo di strumentazione.
