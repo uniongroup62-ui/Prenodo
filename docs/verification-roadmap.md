@@ -14813,3 +14813,18 @@ NON loggano. Verifica live test-profilo-log 5/5 CLEAN (log ids tracciati);
 regressione test-profilo-pass2 14/14, e2e-business-profile 25/25,
 test-servizi-impostazioni-log 11/11. Resta proposta (non applicata) la
 miglioria log Orari su chiusure/straordinari.
+
+## 2026-07-17 — Orari: log su chiusure/straordinari (miglioria approvata)
+
+Strumentate le 4 azioni restanti del modulo 'orari': closure_save
+('Salvata chiusura <range d/m/Y>', crea), closure_delete_range
+('Eliminata chiusura ...', elimina), exception_save ('Salvato
+straordinario ...', crea), exception_delete_range ('Eliminato
+straordinario ...', elimina) — singola data senza trattino, sede =
+location_id risolto. Regola segnali-DOPO-successo: data invalida e
+straordinario-su-chiusa NON loggano. Verifica test-orari-log 5/5 CLEAN;
+regressione test-orari-pass2 14/14, test-orari 37/37, e2e-hours-page
+37/37. HARNESS: le suite orari ora ripuliscono i log di sessione via
+watermark MAX(id) pre-run (le righe probe accumulate stasera, 55,
+verificate tutte odierne e rimosse). Il registro attivita' copre cosi'
+TUTTE le azioni dei 22 moduli strumentati.

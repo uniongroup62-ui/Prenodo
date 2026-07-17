@@ -234,21 +234,25 @@ export async function POST(request: Request) {
 
     if (action === "closure_save") {
       const closures = await saveClosure(tenantSlug, body);
+      void logActivity(tenantSlug, { user: activeUser, locationId: parseInteger(body.location_id, 0) || activeUser.currentLocationId, module: "orari", action: "crea", entityType: "closure", label: `Salvata chiusura ${hoursRangeLabel(body)}` });
       return Response.json({ ok: true, closures });
     }
 
     if (action === "closure_delete_range") {
       const closures = await deleteClosureRange(tenantSlug, body);
+      void logActivity(tenantSlug, { user: activeUser, locationId: parseInteger(body.location_id, 0) || activeUser.currentLocationId, module: "orari", action: "elimina", entityType: "closure", label: `Eliminata chiusura ${hoursRangeLabel(body)}` });
       return Response.json({ ok: true, closures });
     }
 
     if (action === "exception_save") {
       const exceptions = await saveException(tenantSlug, body);
+      void logActivity(tenantSlug, { user: activeUser, locationId: parseInteger(body.location_id, 0) || activeUser.currentLocationId, module: "orari", action: "crea", entityType: "exception", label: `Salvato straordinario ${hoursRangeLabel(body)}` });
       return Response.json({ ok: true, exceptions });
     }
 
     if (action === "exception_delete_range") {
       const exceptions = await deleteExceptionRange(tenantSlug, body);
+      void logActivity(tenantSlug, { user: activeUser, locationId: parseInteger(body.location_id, 0) || activeUser.currentLocationId, module: "orari", action: "elimina", entityType: "exception", label: `Eliminato straordinario ${hoursRangeLabel(body)}` });
       return Response.json({ ok: true, exceptions });
     }
 
@@ -282,6 +286,18 @@ export async function POST(request: Request) {
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Errore risorse.", 400);
   }
+}
+
+// Etichetta range d/m/Y per i log di chiusure/straordinari (singola data se
+// from == to); le date arrivano gia' validate dalle save.
+function hoursRangeLabel(body: Record<string, string>): string {
+  const dmy = (value: string) => {
+    const parts = String(value ?? "").trim().split("-");
+    return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : String(value ?? "").trim();
+  };
+  const from = String(body.date_from ?? body.from ?? "").trim();
+  const to = String(body.date_to ?? body.to ?? "").trim() || from;
+  return from === to ? dmy(from) : `${dmy(from)} - ${dmy(to)}`;
 }
 
 function permissionForResourceSection(section: string): string {
