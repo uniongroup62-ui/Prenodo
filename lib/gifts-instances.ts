@@ -25,7 +25,7 @@ import "server-only";
 
 import { randomBytes } from "crypto";
 import type { RowDataPacket } from "@/lib/tenant-db";
-import { columnExists, dbQuery, quoteIdentifier, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
+import { columnExists, dbExecute, dbQuery, quoteIdentifier, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
 import { giftClientLevelKey, giftExpireInstance, giftRecalcClient, parseGiftEligibleLevels } from "@/lib/gifts-engine";
 import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
 import { deleteDbAppointment } from "@/lib/db-repositories";
@@ -679,19 +679,30 @@ export async function redeemGiftInstanceItems(
   const txTable = await tenantTable(slug, "gift_transactions");
   let redeemedNow = 0;
   for (const sel of selection) {
-    await tenantInsert(txTable, {
-      instance_id: instanceId,
-      appointment_id: input.sourceType === "appointment" && input.sourceId ? input.sourceId : null,
-      reward_item_index: sel.item.index,
-      service_id: sel.item.serviceId > 0 ? sel.item.serviceId : null,
-      type: "redeem",
-      qty: sel.qty,
-      note,
-      created_by: input.by && input.by > 0 ? input.by : null,
-      created_at: now,
-      location_id: input.location?.id && input.location.id > 0 ? input.location.id : null,
-      location_name: clean(input.location?.name) || null,
-    });
+    // INSERT GUARDATO (il legacy serializzava con SELECT ... FOR UPDATE,
+    // Gifts.php ~5034): il residuo viene ricontrollato ATOMICAMENTE nel WHERE
+    // (net redeem-cancel della stessa chiave + qty richiesta <= qty totale),
+    // così due riscatti concorrenti non superano mai il premio.
+    const guard = await dbExecute(
+      `INSERT INTO ${quoteIdentifier(txTable.name)} (tenant_id, instance_id, appointment_id, reward_item_index, service_id, type, qty, note, created_by, created_at, location_id, location_name)
+       SELECT ?, ?, ?, ?, ?, 'redeem', ?, ?, ?, ?, ?, ?
+        WHERE (SELECT COALESCE(SUM(CASE WHEN type = 'redeem' THEN qty WHEN type = 'cancel' THEN -qty ELSE 0 END), 0)
+                 FROM ${quoteIdentifier(txTable.name)}
+                WHERE tenant_id = ? AND instance_id = ? AND COALESCE(reward_item_index, -1) = ? AND COALESCE(service_id, 0) = ?) + ? <= ?`,
+      [
+        txTable.tenantId ?? 0, instanceId,
+        input.sourceType === "appointment" && input.sourceId ? input.sourceId : null,
+        sel.item.index, sel.item.serviceId > 0 ? sel.item.serviceId : null,
+        sel.qty, note, input.by && input.by > 0 ? input.by : null, now,
+        input.location?.id && input.location.id > 0 ? input.location.id : null,
+        clean(input.location?.name) || null,
+        txTable.tenantId ?? 0, instanceId, sel.item.index, sel.item.serviceId > 0 ? sel.item.serviceId : 0,
+        sel.qty, sel.item.qtyTotal,
+      ],
+    );
+    if (Number((guard as { affectedRows?: number }).affectedRows ?? 0) <= 0) {
+      throw new Error(`Quantità non disponibile per "${sel.item.label}".`);
+    }
     redeemedNow += sel.qty;
     // Stock premio prodotto (decrementRedeemedProductStock, best-effort).
     if (sel.item.productId > 0) {
