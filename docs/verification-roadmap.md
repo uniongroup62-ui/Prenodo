@@ -16015,3 +16015,28 @@ colori-dato di report/stati restano intatti).
 Verifica: tsc pulito; screenshot dashboard forgiata — '+ Prenotazione'
 teal, linea ricavi teal, sidebar teal-ink, P mark. Un solo accent da
 email a gestionale.
+
+## 2026-07-18 — Audit colori gestionale COMPLETO (richiesta utente)
+
+Censimento programmatico di TUTTI gli hex nei CSS (app.css + admin.css
++ 30 pages/*.css) con classificazione per tonalità. Trovati e sanati i
+resti che il retint dell'accent non copriva:
+- #4e6da5 ×15 in app.css (variante del vecchio indaco marketplace,
+  sfuggita allo sweep su #4e6da6) + #2f63d8 ×7;
+- famiglia NAVY dei moduli legacy (#31518f ×28, #183b7a, #174bb8,
+  #061433/#071733/#06183f come inchiostri titoli, bordi azzurrini
+  #b9c9e2/#d2dbea/#d5dfed) → mappata su inchiostri/bordi teal;
+- icone empty-state azzurre #9db7ef in 17 CSS di modulo → teal soft;
+- fallback #93c5fd (staff-color/appt-soft-border) e blues di
+  onboarding/manage_account/locations → tinte teal;
+- CODA LUNGA (~85 hex unici): ROTAZIONE DI TONALITÀ programmatica
+  hue 205-262 → 172 (teal) preservando S/L, con keep-list per gli
+  slate Tailwind (#64748b, #0f172a, #475569…) e il blu Facebook.
+- calendar-content: tema stato 'scheduled' (il più comune) da indaco
+  a teal brand; palette DATI intatte (staffColorHex, STAFF_FALLBACK,
+  MS_STATUS, CHART_COLORS, --ms-accent viola multi-servizio).
+
+Censimento finale: restano SOLO slate neutri + #1877f2 Facebook.
+Verifica: tsc pulito; screenshot calendario/POS/clienti/appuntamenti
+— lista appuntamenti con inchiostri e badge teal, semantici intatti
+(attesa ambra, annullato scuro, elimina rosso).

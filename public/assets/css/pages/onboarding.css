@@ -1,10 +1,10 @@
 :root {
-  --onboarding-ink: #0b0b0f;
+  --onboarding-ink: #0b0f0e;
   --onboarding-muted: #70737a;
-  --onboarding-line: #e9e9ed;
-  --onboarding-border: #d8d9df;
-  --onboarding-accent: #7457ff;
-  --onboarding-soft: #f6f6f8;
+  --onboarding-line: #e9edec;
+  --onboarding-border: #d8dfde;
+  --onboarding-accent: #6fe7d7;
+  --onboarding-soft: #f6f8f8;
 }
 
 html,
@@ -30,9 +30,9 @@ body {
   gap: 18px;
   width: min(760px, calc(100% - 32px));
   padding: 10px 12px 10px 16px;
-  border: 1px solid #bfdbfe;
+  border: 1px solid #c4e5df;
   border-radius: 16px;
-  color: #0f2756;
+  color: #0f564d;
   background: #edf6f4;
   box-shadow: 0 12px 34px rgba(15, 23, 42, .12);
   transform: translateX(-50%);
@@ -55,7 +55,7 @@ body {
 
 .onboarding-support-copy span {
   margin-top: 2px;
-  color: #465c86;
+  color: #46867d;
   font-size: 12px;
   line-height: 1.35;
 }
@@ -67,7 +67,7 @@ body {
   justify-content: center;
   min-height: 34px;
   padding: 0 12px;
-  border: 1px solid #93c5fd;
+  border: 1px solid #8fd0c7;
   border-radius: 999px;
   color: #0a5b54;
   background: #fff;
@@ -78,9 +78,9 @@ body {
 }
 
 .onboarding-support-banner a:hover {
-  color: #084298;
-  border-color: #60a5fa;
-  background: #f8fbff;
+  color: #0a5b54;
+  border-color: #2fa89a;
+  background: #f7faf9;
 }
 
 .onboarding-body.onboarding-support-active .onboarding-progress {
@@ -155,7 +155,7 @@ body {
 
 .onboarding-back:hover {
   color: var(--onboarding-ink);
-  border-color: #bfc1ca;
+  border-color: #bfcac9;
   background: var(--onboarding-soft);
 }
 
@@ -180,7 +180,7 @@ body {
   border: 0;
   border-radius: 999px;
   color: #fff;
-  background: #050506;
+  background: #050606;
   font-weight: 600;
   line-height: 1;
   box-shadow: none;
@@ -318,8 +318,8 @@ textarea.onboarding-input {
 }
 
 .onboarding-category-card:hover {
-  border-color: #b8b2ff;
-  background: #fbfaff;
+  border-color: #bdf4ed;
+  background: #fbfefe;
 }
 
 .onboarding-category-card.is-selected {
@@ -341,7 +341,7 @@ textarea.onboarding-input {
   height: 38px;
   border-radius: 8px;
   color: var(--onboarding-ink);
-  background: #f5f5f7;
+  background: #f5f7f7;
   font-size: 20px;
 }
 
@@ -415,7 +415,7 @@ textarea.onboarding-input {
 }
 
 .app-combobox .app-combobox-toggle:disabled {
-  background-color: #f7f7f9;
+  background-color: #f7f9f9;
   opacity: 1;
 }
 
@@ -513,7 +513,7 @@ textarea.onboarding-input {
 }
 
 .hours-split-button:hover {
-  border-color: #babcc5;
+  border-color: #bac5c4;
   background: var(--onboarding-soft);
 }
 
@@ -647,7 +647,7 @@ textarea.onboarding-input {
 }
 
 .secondary-command:hover {
-  border-color: #babcc5;
+  border-color: #bac5c4;
   background: var(--onboarding-soft);
 }
 

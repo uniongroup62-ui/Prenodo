@@ -1,6 +1,6 @@
 .commissions-tabs {
   gap: 22px;
-  border-bottom: 1px solid #cfd9ea;
+  border-bottom: 1px solid #cfeae6;
   margin-bottom: 16px !important;
 }
 
@@ -17,7 +17,7 @@
   border-bottom: 2px solid transparent;
   border-radius: 0;
   background: transparent;
-  color: #526b95;
+  color: #52958c;
 }
 
 .commissions-tabs .nav-link i {
@@ -29,7 +29,7 @@
 
 .commissions-tabs .nav-link:hover,
 .commissions-tabs .nav-link:focus {
-  color: #526b95;
+  color: #52958c;
   background: transparent;
   border-color: transparent;
   text-decoration: none;
@@ -38,13 +38,13 @@
 .commissions-tabs .nav-link.active {
   color: #0f766e;
   background: transparent;
-  border-color: transparent transparent #2f6cff;
+  border-color: transparent transparent #4ce2ce;
 }
 
 .commissions-tabs .nav-link.active:hover,
 .commissions-tabs .nav-link.active:focus {
   color: #0f766e;
-  border-color: transparent transparent #2f6cff;
+  border-color: transparent transparent #4ce2ce;
 }
 
 .commissions-empty-card {
@@ -68,7 +68,7 @@
   margin: 0 auto 18px;
   display: grid;
   place-items: center;
-  color: #9db7ef;
+  color: #9cc8c0;
   font-size: 64px;
   line-height: 1;
 }

@@ -17,7 +17,7 @@
   margin:0 auto 18px;
   display:grid;
   place-items:center;
-  color:#9db7ef;
+  color:#9cc8c0;
   font-size:64px;
   line-height:1;
 }
@@ -67,7 +67,7 @@
 .package-catalog-blocked p{
   max-width:650px;
   margin:0 auto;
-  color:#5f6673;
+  color:#5f7370;
   line-height:1.55;
 }
 .package-catalog-blocked__actions{

@@ -17,7 +17,7 @@
 .voucher-meta .value{ font-weight:600; }
 #barcode{ width:100%; max-width:340px; height:80px; }
 .giftbox-voucher-logo{ max-height:52px; max-width:140px; }
-.giftbox-voucher-event-image{ width:100%; max-width:560px; height:auto; border-radius:14px; border:1px solid #e5e7eb; display:block; }
+.giftbox-voucher-event-image{ width:100%; max-width:560px; height:auto; border-radius:14px; border:1px solid #e5ebea; display:block; }
 .giftbox-voucher-prewrap{ white-space:pre-wrap; }
 .giftbox-voucher-col-price{ width:140px; }
 .giftbox-voucher-col-total,

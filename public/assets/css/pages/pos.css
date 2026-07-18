@@ -13,14 +13,14 @@
 }
 .pos-panel{
   background:#fff;
-  border:1px solid #eef2f7;
+  border:1px solid #eef3f1;
   border-radius:16px;
   overflow:hidden;
 }
 .pos-panel-head{
   padding:12px 14px;
-  border-bottom:1px solid #eef2f7;
-  background: #fbfdff;
+  border-bottom:1px solid #eef3f1;
+  background: #fcfefe;
 }
 .pos-empty-clients-card{
   min-height:640px;
@@ -41,7 +41,7 @@
   margin:0 auto 18px;
   display:grid;
   place-items:center;
-  color:#9db7ef;
+  color:#9cc8c0;
   font-size:64px;
   line-height:1;
 }
@@ -75,7 +75,7 @@
   border-bottom:1px solid #f1f5f9;
 }
 .pos-client-row:hover{ background:#f8fafc; }
-.pos-client-row.active{ background:#eef2ff; }
+.pos-client-row.active{ background:#f0fdfb; }
 .pos-cart-table{
   max-height: 340px;
   overflow:auto;
@@ -87,7 +87,7 @@
 }
 .pos-tile{
   width:100%;
-  border:1px solid #e5e7eb;
+  border:1px solid #e5ebea;
   border-radius:14px;
   background:#fff;
   padding:10px 12px;
@@ -117,7 +117,7 @@
 .pos-bottom-bar .pos-bottom-btn{
   flex:1;
   min-width:130px;
-  border:1px solid #e5e7eb;
+  border:1px solid #e5ebea;
 }
 .pos-bottom-bar .pos-bottom-btn:hover{
   border-color:#cbd5e1;
@@ -128,7 +128,7 @@
   color: var(--bs-primary);
 }
 .pos-payment-type-card{
-  border:1px solid #dfe6ef;
+  border:1px solid #dfefed;
   border-radius:14px;
   background:#f8fafc;
   padding:10px 12px 10px;
@@ -149,10 +149,10 @@
   width:100%;
   margin:0;
   padding:7px 10px;
-  border:1px solid #d6dde8;
+  border:1px solid #d6e8e6;
   border-radius:10px;
-  background:linear-gradient(180deg, #ffffff 0%, #f7f9fc 100%);
-  color:#66758f;
+  background:linear-gradient(180deg, #ffffff 0%, #f7fcfb 100%);
+  color:#668f8a;
   font-size:12px;
   font-weight:600;
   line-height:1.15;
@@ -162,7 +162,7 @@
   cursor:pointer;
 }
 .pos-payment-type-label:hover{
-  border-color:#c8d2df;
+  border-color:#c8dfdc;
   background:#fff;
 }
 .btn-check:checked + .pos-payment-type-label{
@@ -174,15 +174,15 @@
 .pos-payment-type-card.is-disabled .pos-payment-type-label,
 .btn-check:disabled + .pos-payment-type-label{
   cursor:not-allowed;
-  background:#f3f5f9;
-  color:#a1afc5;
-  border-color:#e1e7ef;
+  background:#f3f9f8;
+  color:#a1c5c0;
+  border-color:#e1efed;
   box-shadow:none;
 }
 .pos-payment-type-card.is-disabled .btn-check:checked + .pos-payment-type-label{
-  background:#eef2f7;
-  color:#a1afc5;
-  border-color:#e1e7ef;
+  background:#eef3f1;
+  color:#a1c5c0;
+  border-color:#e1efed;
 }
 .pos-payment-type-card .form-text{
   margin-bottom:0;
@@ -190,7 +190,7 @@
   line-height:1.35;
 }
 .pos-installment-card{
-  border:1px solid #dfe6ef;
+  border:1px solid #dfefed;
   border-radius:14px;
   background:#f8fafc;
   padding:12px;
@@ -213,17 +213,17 @@
   justify-content:center;
   min-height:42px;
   border-radius:10px;
-  border:1px solid #d6dde8;
-  background:linear-gradient(180deg, #ffffff 0%, #f7f9fc 100%);
-  color:#66758f;
+  border:1px solid #d6e8e6;
+  background:linear-gradient(180deg, #ffffff 0%, #f7fcfb 100%);
+  color:#668f8a;
   font-weight:600;
   box-shadow:inset 0 1px 0 rgba(255,255,255,.9);
   transition:border-color .15s ease, background-color .15s ease, color .15s ease, box-shadow .15s ease, transform .15s ease;
 }
 .pos-installment-choice-btn:hover:not(:disabled){
-  border-color:#c8d2df;
+  border-color:#c8dfdc;
   background:#fff;
-  color:#53627d;
+  color:#537d77;
 }
 .pos-installment-choice-btn.is-selected{
   border-color:var(--bs-primary);
@@ -232,15 +232,15 @@
   box-shadow:0 8px 18px rgba(var(--bs-primary-rgb), .18);
 }
 .pos-installment-choice-btn.is-pending{
-  border-color:#9ec5fe;
+  border-color:#a7d8d1;
   background:rgba(var(--bs-primary-rgb), .08);
   color:var(--bs-primary);
 }
 .pos-installment-choice-btn:disabled{
   cursor:not-allowed;
-  background:#f3f5f9;
-  color:#a1afc5;
-  border-color:#e1e7ef;
+  background:#f3f9f8;
+  color:#a1c5c0;
+  border-color:#e1efed;
   box-shadow:none;
 }
 .pos-installment-required-badge{
@@ -252,7 +252,7 @@
 }
 .pos-installment-summary{
   margin-top:10px;
-  border:1px solid #dbe4f0;
+  border:1px solid #dbf0ed;
   border-radius:12px;
   background:#fff;
   padding:10px;
@@ -263,7 +263,7 @@
   vertical-align:middle;
 }
 .pos-installment-preview-card{
-  border:1px solid #e5e7eb;
+  border:1px solid #e5ebea;
   border-radius:14px;
   background:#f8fafc;
   padding:12px;

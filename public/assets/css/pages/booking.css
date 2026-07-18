@@ -14,7 +14,7 @@
   align-items:flex-start;
   justify-content:center;
   padding:30px 18px 96px;
-  background:#f3f4f6;
+  background:#f3f6f6;
   overflow:auto;
 }
 .confirm-modal{
@@ -22,7 +22,7 @@
   max-height:none;
   background:#fff;
   border-radius:18px;
-  border:1px solid #e5e7eb;
+  border:1px solid #e5ebea;
   box-shadow:0 18px 50px rgba(15,23,42,.10);
   overflow:auto;
   position:relative;
@@ -38,13 +38,13 @@
   place-items:center;
   text-decoration:none;
   color:#0f172a;
-  border:1px solid #e5e7eb;
+  border:1px solid #e5ebea;
   background:#fff;
 }
 .confirm-top{
   padding:22px 22px 14px;
   text-align:center;
-  border-bottom:1px solid #eef2f7;
+  border-bottom:1px solid #eef3f1;
 }
 .confirm-check{
   width:72px;
@@ -81,7 +81,7 @@
   width:58px;
   border-radius:12px;
   overflow:hidden;
-  border:1px solid #e5e7eb;
+  border:1px solid #e5ebea;
   background:#fff;
 }
 .date-box .day{
@@ -102,7 +102,7 @@
   margin-top:12px;
 }
 .btn-soft{
-  border:1px solid #e5e7eb;
+  border:1px solid #e5ebea;
   border-radius:12px;
   padding:8px 12px;
   background:#fff;
@@ -142,7 +142,7 @@
   align-items:center;
   justify-content:center;
   gap:min(16vw,120px);
-  border-top:1px solid #e5e7eb;
+  border-top:1px solid #e5ebea;
   background:#fff;
 }
 .booking-bottom-nav__item{
@@ -279,7 +279,7 @@
   color:#991b1b;
 }
 .booking-profile__verify{
-  border:1px solid #bfdbfe;
+  border:1px solid #c4e5df;
   background:#edf6f4;
   border-radius:10px;
   padding:16px;
@@ -430,7 +430,7 @@
   justify-content:center;
   padding:28px 16px;
   background:radial-gradient(1200px 700px at 20% 10%, rgba(16,185,129,.18), transparent 55%),
-             radial-gradient(900px 600px at 80% 25%, rgba(59,130,246,.14), transparent 60%),
+             radial-gradient(900px 600px at 80% 25%, rgba(15,118,110,.14), transparent 60%),
              #f8fafc;
 }
 .gate-wrap ~ footer:not(.marketplace-footer){
@@ -439,7 +439,7 @@
 .gate-card{
   width:min(860px,96vw);
   padding:26px;
-  border:1px solid #e5e7eb;
+  border:1px solid #e5ebea;
   border-radius:26px;
   background:#fff;
   box-shadow:0 26px 70px rgba(15,23,42,.16);
@@ -473,7 +473,7 @@
   align-items:flex-start;
   gap:14px;
   padding:18px 16px;
-  border:1px solid #e5e7eb;
+  border:1px solid #e5ebea;
   border-radius:20px;
   background:#f8fafc;
   text-align:left;
@@ -523,7 +523,7 @@
   color:#64748b;
   font-size:13px;
   padding-top:16px;
-  border-top:1px solid #eef2f7;
+  border-top:1px solid #eef3f1;
   margin-top:18px;
 }
 .gate-biz strong{
@@ -545,7 +545,7 @@
 .booking-unavailable-card{
   width:min(560px,94vw);
   padding:34px;
-  border:1px solid #d9e2f1;
+  border:1px solid #d9f1ee;
   border-radius:18px;
   background:#fff;
   box-shadow:0 18px 45px rgba(15,23,42,.08);
@@ -559,19 +559,19 @@
   justify-content:center;
   border-radius:18px;
   background:#e7f3f1;
-  color:#4f70ad;
+  color:#4fada0;
   font-size:28px;
   margin-bottom:18px;
 }
 .booking-unavailable-card h1{
-  color:#061531;
+  color:#082f2a;
   font-size:30px;
   font-weight:600;
   margin:0 0 10px;
 }
 .booking-unavailable-card p{
   max-width:420px;
-  color:#52617a;
+  color:#527a75;
   font-size:16px;
   line-height:1.55;
   margin:0 auto;
@@ -596,10 +596,10 @@
 .appt-note{
   padding:12px 14px;
   margin-bottom:14px;
-  border:1px solid #bfdbfe;
+  border:1px solid #c4e5df;
   border-radius:10px;
   background:#edf6f4;
-  color:#1e3a8a;
+  color:#1e8a7c;
   font-size:13px;
   font-weight:600;
 }
@@ -692,7 +692,7 @@
   display:flex;
   align-items:center;
   gap:6px;
-  color:#4f6faa;
+  color:#4faa9e;
   font-size:12px;
   font-weight:600;
   margin-top:8px;
@@ -788,7 +788,7 @@
   gap:14px;
 }
 .prod-item{
-  border:1px solid #e5e7eb;
+  border:1px solid #e5ebea;
   border-radius:18px;
   background:#fff;
   box-shadow:0 12px 26px rgba(15,23,42,.06);
@@ -861,7 +861,7 @@
   gap:18px;
 }
 .pd-box{
-  border:1px solid #e5e7eb;
+  border:1px solid #e5ebea;
   border-radius:18px;
   background:#fff;
   padding:14px;
@@ -897,7 +897,7 @@
   height:68px;
   border-radius:12px;
   overflow:hidden;
-  border:1px solid #e5e7eb;
+  border:1px solid #e5ebea;
   padding:0;
   background:#fff;
 }
@@ -995,10 +995,10 @@
   justify-content:center;
   gap:8px;
   padding:0 12px;
-  border:1px solid #cbd8ee;
+  border:1px solid #cbeee9;
   border-radius:4px;
   background:#fff;
-  color:#4f6faa;
+  color:#4faa9e;
   font-size:13px;
   font-weight:600;
   line-height:1;
@@ -1007,9 +1007,9 @@
 }
 .appt-sort-button:hover,
 .appt-sort-button:focus{
-  border-color:#4f6faa;
-  color:#3f5f9a;
-  background:#f8fbff;
+  border-color:#4faa9e;
+  color:#3f9a8e;
+  background:#f7faf9;
   outline:0;
 }
 .appt-sort-button i{
@@ -1024,7 +1024,7 @@
   z-index:30;
   min-width:190px;
   padding:6px;
-  border:1px solid #dbe4f0;
+  border:1px solid #dbf0ed;
   border-radius:10px;
   background:#fff;
   box-shadow:0 14px 34px rgba(15,23,42,.14);
@@ -1053,8 +1053,8 @@
   outline:0;
 }
 .appt-sort-option.is-active{
-  background:#eef3fb;
-  color:#4f6faa;
+  background:#eefbf9;
+  color:#4faa9e;
 }
 .appt-sort-option.is-active::after{
   content:"\F26E";
@@ -1168,7 +1168,7 @@
 }
 .pkg-book:hover{
   color:#fff;
-  background:#3f5f98;
+  background:#3f988c;
 }
 @media (max-width:760px){
   .pack-controls{
@@ -1453,10 +1453,10 @@
 }
 .quote-empty{
   padding:22px;
-  border:1px dashed #cbd8ee;
+  border:1px dashed #cbeee9;
   border-radius:10px;
   background:#fff;
-  color:#5d6f90;
+  color:#5d9089;
   font-weight:600;
   text-align:center;
 }
@@ -1654,7 +1654,7 @@
   gap:12px;
   align-items:center;
   padding:14px 18px;
-  border-top:1px solid #eef2f7;
+  border-top:1px solid #eef3f1;
 }
 .credit-row:first-child{
   border-top:0;
@@ -1846,7 +1846,7 @@
   font-weight:600;
 }
 .benefit-owned-action:hover{
-  background:#3f5f98;
+  background:#3f988c;
   color:#fff;
 }
 .benefit-owned-action.is-soft{
@@ -1856,7 +1856,7 @@
 }
 .benefit-owned-action.is-soft:hover{
   background:#f8fafc;
-  color:#3f5f98;
+  color:#3f988c;
 }
 .benefit-owned--giftcards .benefit-owned-items{
   display:flex;
@@ -1910,7 +1910,7 @@
   justify-content:space-between;
   gap:10px;
   padding:8px 10px;
-  border:1px solid #edf2f7;
+  border:1px solid #edf2f0;
   border-radius:9px;
   background:#f8fafc;
 }
@@ -1952,7 +1952,7 @@
   white-space:nowrap;
 }
 .benefit-owned-line__book:hover{
-  background:#3f5f98;
+  background:#3f988c;
   color:#fff;
 }
 .benefit-owned--giftboxes .benefit-owned-list{
@@ -2017,7 +2017,7 @@
   color:#0f172a;
   font-size:12px;
   padding:8px 10px;
-  border:1px solid #e5e7eb;
+  border:1px solid #e5ebea;
   border-radius:9px;
   background:#f8fafc;
   margin-top:8px;
@@ -2033,7 +2033,7 @@
   justify-content:space-between;
   gap:10px;
   padding:9px 10px;
-  border:1px solid #edf2f7;
+  border:1px solid #edf2f0;
   border-radius:9px;
   background:#f8fafc;
 }
@@ -2143,13 +2143,13 @@
   font-weight:600;
 }
 .gift-card__appt{
-  color:#4f6386;
+  color:#4f867f;
   font-size:12px;
   line-height:1.45;
   font-weight:500;
 }
 .gift-card__appt strong{
-  color:#4f6386;
+  color:#4f867f;
   font-weight:600;
 }
 .gift-card__actions{
@@ -2164,9 +2164,9 @@
   justify-content:center;
   gap:6px;
   padding:9px 13px;
-  border:1px solid #4f6fae;
+  border:1px solid #4faea1;
   border-radius:999px;
-  background:#4f6fae;
+  background:#4faea1;
   color:#fff;
   font-size:12px;
   line-height:1;
@@ -2175,8 +2175,8 @@
   box-shadow:0 8px 18px rgba(79,111,174,.16);
 }
 .gift-book:hover{
-  border-color:#4563a0;
-  background:#4563a0;
+  border-color:#45a094;
+  background:#45a094;
   color:#fff;
   text-decoration:none;
 }
@@ -2310,7 +2310,7 @@
   gap:12px;
   align-items:center;
   padding:14px 18px;
-  border-top:1px solid #eef2f7;
+  border-top:1px solid #eef3f1;
 }
 .fid-row:first-child{
   border-top:0;
@@ -2504,7 +2504,7 @@
 }
 .fid-cta{
   overflow:hidden;
-  border:1px solid #e5e7eb;
+  border:1px solid #e5ebea;
   border-radius:10px;
   background:#fff;
   box-shadow:none;
@@ -2547,7 +2547,7 @@
 }
 .fid-cta-body{
   padding:16px 18px 18px;
-  border-top:1px solid #eef2f7;
+  border-top:1px solid #eef3f1;
   background:#fff;
 }
 .fid-cta-steps{
@@ -2557,7 +2557,7 @@
 }
 .fid-step{
   padding:14px;
-  border:1px solid #e5e7eb;
+  border:1px solid #e5ebea;
   border-radius:18px;
   background:#f8fafc;
 }
@@ -2594,7 +2594,7 @@
   align-items:flex-start;
   gap:10px;
   padding:10px 12px;
-  border:1px solid #eef2f7;
+  border:1px solid #eef3f1;
   border-radius:16px;
   background:#fff;
 }
@@ -2632,7 +2632,7 @@
   background:#edf6f4;
 }
 .fid-request-alert__body{
-  color:#1e3a8a;
+  color:#1e8a7c;
   font-weight:500;
 }
 .fid-level-progress{

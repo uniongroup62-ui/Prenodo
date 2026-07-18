@@ -7,7 +7,7 @@
 
 .quotes-empty-card{min-height:640px;display:flex;align-items:center;justify-content:center;border-radius:8px}
 .quotes-empty-state{width:min(580px,100%);margin:0 auto;padding:48px 24px;text-align:center}
-.quotes-empty-icon{width:96px;height:88px;margin:0 auto 18px;display:grid;place-items:center;color:#9db7ef;font-size:64px;line-height:1}
+.quotes-empty-icon{width:96px;height:88px;margin:0 auto 18px;display:grid;place-items:center;color:#9cc8c0;font-size:64px;line-height:1}
 .quotes-empty-state h2{font-size:24px;line-height:1.2;font-weight:600;margin:0 0 12px}
 .quotes-empty-state p{color:#475569;line-height:1.55;max-width:540px;margin:0 auto 22px}
 @media (max-width: 767.98px){

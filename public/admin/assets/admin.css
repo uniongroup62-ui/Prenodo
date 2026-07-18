@@ -1,10 +1,10 @@
 :root {
-  --admin-bg: #f5f7fb;
+  --admin-bg: #f5fbfa;
   --admin-card: #ffffff;
-  --admin-border: #dce4ef;
+  --admin-border: #dcefec;
   --admin-text: #0f172a;
-  --admin-muted: #667085;
-  --admin-blue: #1769ff;
+  --admin-muted: #68746f;
+  --admin-blue: #37dfc8;
   --admin-green: #07863f;
   --admin-red: #d92d20;
   --admin-yellow: #b7791f;
@@ -229,19 +229,19 @@ body {
   color: #0f766e !important;
 }
 .app-filter-submit:hover {
-  background: #eef5ff !important;
-  color: #174bb8 !important;
+  background: #e9f4f1 !important;
+  color: #0c645c !important;
 }
 .app-filter-reset {
   min-width: 112px;
-  border-color: #d2dbea !important;
+  border-color: #d6e3df !important;
   background: #fff !important;
-  color: #31518f !important;
+  color: #2c6b63 !important;
 }
 .app-filter-reset:hover {
-  border-color: #b9c9e2 !important;
-  background: #eef5ff !important;
-  color: #183b7a !important;
+  border-color: #c0d5d0 !important;
+  background: #e9f4f1 !important;
+  color: #14524a !important;
 }
 .app-filter-actions > .app-filter-submit,
 .d-flex > .app-filter-submit {
@@ -282,7 +282,7 @@ body {
 }
 
 .table td {
-  border-color: #edf2f7;
+  border-color: #edf2f0;
   vertical-align: middle;
 }
 
@@ -306,9 +306,9 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid #cfe0ff;
+  border: 1px solid #d6f8f4;
   border-radius: 8px;
-  background: #eef5ff;
+  background: #e9f4f1;
   color: var(--admin-blue);
   font-size: 13px;
   font-weight: 800;
@@ -329,7 +329,7 @@ body {
   width: 28px;
   height: 28px;
   padding: 0;
-  border: 1px solid #c8d4e4;
+  border: 1px solid #c8e4e0;
   border-radius: 9px;
   background: #fff;
   color: #344054;
@@ -344,7 +344,7 @@ body {
 
 .plan-order-button:hover:not(:disabled) {
   border-color: var(--admin-blue);
-  background: #eef5ff;
+  background: #e9f4f1;
   color: var(--admin-blue);
   transform: translateY(-1px);
 }
@@ -352,7 +352,7 @@ body {
 .plan-order-button:disabled {
   opacity: .35;
   cursor: not-allowed;
-  background: #f2f5f9;
+  background: #f2f9f8;
 }
 
 .status-badge {
@@ -367,8 +367,8 @@ body {
 .badge-ok { color: #067647; background: #dcfae6; }
 .badge-warn { color: #93370d; background: #fef0c7; }
 .badge-danger { color: #b42318; background: #fee4e2; }
-.badge-info { color: #175cd3; background: #d1e9ff; }
-.badge-muted { color: #475467; background: #eef2f6; }
+.badge-info { color: #21c9b3; background: #d7f9f4; }
+.badge-muted { color: #475467; background: #eef6f5; }
 
 .tenant-tabs {
   display: flex;
@@ -390,7 +390,7 @@ body {
   justify-content: space-between;
   gap: 14px;
   padding: 11px 0;
-  border-bottom: 1px solid #edf2f7;
+  border-bottom: 1px solid #edf2f0;
 }
 
 .detail-row:last-child,
@@ -433,7 +433,7 @@ body {
   padding: 18px;
   border: 1px dashed var(--admin-border);
   border-radius: 12px;
-  background: #fbfdff;
+  background: #fcfefe;
 }
 
 .danger-panel {

@@ -1,23 +1,23 @@
-.installments-summary-card{border:1px solid #e5e7eb;border-radius:14px;background:#fff;padding:14px 16px;}
+.installments-summary-card{border:1px solid #e5ebea;border-radius:14px;background:#fff;padding:14px 16px;}
 .installments-summary-value{font-size:1.45rem;font-weight:600;line-height:1.1;}
-.installments-filter-card{border:1px solid #d5dfed;border-radius:8px;background:#fff;}
-.installments-plan-card{border:1px solid #e5e7eb;border-radius:16px;background:#fff;}
+.installments-filter-card{border:1px solid #d8e5e1;border-radius:8px;background:#fff;}
+.installments-plan-card{border:1px solid #e5ebea;border-radius:16px;background:#fff;}
 .installments-filter-actions{align-items:center;justify-content:flex-end;gap:10px;}
 .installments-filter-submit,.installments-filter-reset{min-height:36px;border-radius:7px;padding:.38rem .9rem;font-size:13px;font-weight:500;}
-.installments-filter-submit{min-width:78px;border-color:#2f63d8;background:#fff;color:#1d5ee6;}
-.installments-filter-submit:hover{background:#eef5ff;color:#174bb8;}
-.installments-filter-reset{border-color:#d2dbea;background:#fff;color:#31518f;}
-.installments-filter-reset:hover{border-color:#b9c9e2;background:#eef5ff;color:#183b7a;}
+.installments-filter-submit{min-width:78px;border-color:#0f766e;background:#fff;color:#27dcc4;}
+.installments-filter-submit:hover{background:#e9f4f1;color:#0c645c;}
+.installments-filter-reset{border-color:#d6e3df;background:#fff;color:#2c6b63;}
+.installments-filter-reset:hover{border-color:#c0d5d0;background:#e9f4f1;color:#14524a;}
 .installments-plan-card .table td,.installments-plan-card .table th{vertical-align:middle;}
 .installments-plan-card .schedule-table td,.installments-plan-card .schedule-table th{font-size:.92rem;}
 .installments-inline-form .form-control,.installments-inline-form .form-select{min-width:0;}
 .installments-kpi{display:flex;flex-wrap:wrap;gap:12px;}
-.installments-kpi .item{background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:10px 12px;min-width:180px;}
+.installments-kpi .item{background:#f8fafc;border:1px solid #e5ebea;border-radius:12px;padding:10px 12px;min-width:180px;}
 .installments-empty{border:1px dashed #d1d5db;border-radius:16px;background:#f8fafc;padding:22px;text-align:center;color:#6b7280;}
 .installments-empty-card{min-height:640px;display:flex;align-items:center;justify-content:center;border-radius:8px;}
 .installments-empty-state{width:min(560px,100%);margin:0 auto;padding:48px 24px;text-align:center;}
 .installments-empty-state img{width:min(260px,66vw);height:auto;display:block;margin:0 auto 24px;}
-.installments-empty-icon{width:96px;height:88px;margin:0 auto 18px;display:grid;place-items:center;color:#9db7ef;font-size:64px;line-height:1;}
+.installments-empty-icon{width:96px;height:88px;margin:0 auto 18px;display:grid;place-items:center;color:#9cc8c0;font-size:64px;line-height:1;}
 .installments-empty-state h2{font-size:24px;line-height:1.2;font-weight:600;margin:0 0 12px;}
 .installments-empty-state p{color:#475569;line-height:1.55;max-width:520px;margin:0 auto 22px;}
 .installments-plan-row{cursor:pointer;}

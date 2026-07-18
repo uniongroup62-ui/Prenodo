@@ -3,11 +3,11 @@
   align-items:flex-start;
   gap:12px;
   padding:16px 18px;
-  border:1px solid #bfd5f4;
-  border-left:4px solid #2f63d8;
+  border:1px solid #bff4ed;
+  border-left:4px solid #0f766e;
   border-radius:10px;
-  background:#f3f8ff;
-  color:#183b7a;
+  background:#f5fdfc;
+  color:#14524a;
   box-shadow:none;
 }
 .pos-settings-info-box__icon{
@@ -18,7 +18,7 @@
   place-items:center;
   border-radius:9px;
   background:#dcefeb;
-  color:#2f63d8;
+  color:#0f766e;
   font-size:16px;
 }
 .pos-settings-info-box__body{
@@ -26,14 +26,14 @@
 }
 .pos-settings-info-box__title{
   margin-bottom:6px;
-  color:#06183f;
+  color:#0e211e;
   font-size:14px;
   font-weight:600;
   line-height:1.25;
 }
 .pos-settings-info-box__list{
   padding-left:18px;
-  color:#31518f;
+  color:#2c6b63;
   font-size:13px;
   line-height:1.45;
 }

@@ -1,6 +1,6 @@
 .branding-position-preview {
   background: #f8fafc;
-  border: 1px solid #d7dee8;
+  border: 1px solid #d7e8e6;
   overflow: hidden;
   position: relative;
   cursor: grab;
@@ -40,7 +40,7 @@
 .branding-dropzone {
   width: min(744px, 100%);
   min-height: 72px;
-  border: 1px dashed #c7d2e1;
+  border: 1px dashed #c7e1de;
   border-radius: 10px;
   background: #fff;
   display: grid;
@@ -53,7 +53,7 @@
 .branding-dropzone:hover,
 .branding-dropzone.is-dragover {
   border-color: #0f766e;
-  background: #f8fbff;
+  background: #f7faf9;
   box-shadow: 0 0 0 3px rgba(15, 118, 110, .08);
 }
 .branding-dropzone.is-disabled {
@@ -64,7 +64,7 @@
   width: min(744px, 100%);
 }
 .branding-upload-row {
-  border: 1px solid #d7dee8;
+  border: 1px solid #d7e8e6;
   border-radius: 10px;
   background: #fff;
   padding: 9px 10px;
@@ -87,8 +87,8 @@
   width: min(744px, 100%);
 }
 .branding-upload-row--pending {
-  border-color: #9ec5fe;
-  background: #f8fbff;
+  border-color: #a7d8d1;
+  background: #f7faf9;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -100,7 +100,7 @@
   flex: 0 0 auto;
   border-radius: 8px;
   overflow: hidden;
-  background: #eef2f7;
+  background: #eef3f1;
 }
 .branding-upload-row__thumb--logo {
   width: 72px;

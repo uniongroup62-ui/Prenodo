@@ -1,6 +1,6 @@
 .costs-tabs{
   gap:22px;
-  border-bottom:1px solid #cfd9ea;
+  border-bottom:1px solid #cfeae6;
   margin-bottom:16px!important;
 }
 .costs-tabs .nav-item{margin-bottom:-1px;}
@@ -13,7 +13,7 @@
   border-bottom:2px solid transparent;
   border-radius:0;
   background:transparent;
-  color:#526b95;
+  color:#52958c;
 }
 .costs-tabs .nav-link i{
   margin-right:0!important;
@@ -23,7 +23,7 @@
 }
 .costs-tabs .nav-link:hover,
 .costs-tabs .nav-link:focus{
-  color:#526b95;
+  color:#52958c;
   background:transparent;
   border-color:transparent;
   text-decoration:none;
@@ -31,12 +31,12 @@
 .costs-tabs .nav-link.active{
   color:#0f766e;
   background:transparent;
-  border-color:transparent transparent #2f6cff;
+  border-color:transparent transparent #4ce2ce;
 }
 .costs-tabs .nav-link.active:hover,
 .costs-tabs .nav-link.active:focus{
   color:#0f766e;
-  border-color:transparent transparent #2f6cff;
+  border-color:transparent transparent #4ce2ce;
 }
 
 .costs-categories-page{
@@ -44,7 +44,7 @@
   gap:14px;
 }
 .costs-categories-filter-card{
-  border:1px solid #d5dfed;
+  border:1px solid #d8e5e1;
   border-radius:8px;
   background:#fff;
   box-shadow:none;
@@ -58,7 +58,7 @@
 }
 .costs-categories-filter-field .form-label{
   margin-bottom:6px;
-  color:#31518f;
+  color:#2c6b63;
   font-size:12px;
   font-weight:500;
 }
@@ -66,18 +66,18 @@
 .costs-categories-filter-field .form-select,
 .costs-categories-filter-field .app-combobox-toggle{
   min-height:36px;
-  border-color:#cfd9e8;
+  border-color:#cfe8e5;
   border-radius:7px;
   background-color:#fff;
-  color:#071733;
+  color:#0e211e;
   font-size:14px;
   box-shadow:none;
 }
 .costs-categories-filter-field .form-control:focus,
 .costs-categories-filter-field .form-select:focus,
 .costs-categories-filter-field .app-combobox-toggle:focus{
-  border-color:#2f63d8;
-  box-shadow:0 0 0 3px rgba(47,99,216,.12);
+  border-color:#0f766e;
+  box-shadow:0 0 0 3px rgba(15,118,110,.12);
 }
 .costs-categories-filter-actions{
   display:flex;
@@ -96,22 +96,22 @@
 }
 .costs-categories-filter-submit{
   min-width:78px;
-  border-color:#2f63d8!important;
+  border-color:#0f766e!important;
   background:#fff!important;
-  color:#1d5ee6!important;
+  color:#27dcc4!important;
 }
 .costs-categories-filter-submit:hover{
-  background:#eef5ff!important;
-  color:#174bb8!important;
+  background:#e9f4f1!important;
+  color:#0c645c!important;
 }
 .costs-categories-reset{
-  border-color:#d2dbea;
+  border-color:#d6e3df;
   background:#fff;
-  color:#31518f;
+  color:#2c6b63;
 }
 .costs-categories-list-card{
   overflow:hidden;
-  border:1px solid #d5dfed;
+  border:1px solid #d8e5e1;
   border-radius:8px;
   background:#fff;
   box-shadow:none;
@@ -123,11 +123,11 @@
   justify-content:space-between;
   gap:12px;
   padding:0 16px;
-  border-bottom:1px solid #d5dfed;
-  background:#f9fbfe;
+  border-bottom:1px solid #d8e5e1;
+  background:#f9fefd;
 }
 .costs-categories-selection-info{
-  color:#31518f;
+  color:#2c6b63;
   font-size:13px;
   font-weight:500;
 }
@@ -148,21 +148,21 @@
 }
 .costs-categories-empty-text{
   padding:18px 16px;
-  color:#405693;
+  color:#5c6f6b;
   font-size:13px;
 }
 .costs-categories-table{
   --bs-table-bg:#fff;
   --bs-table-striped-bg:#f8fafc;
-  color:#061433;
+  color:#0e211e;
   font-size:13px;
 }
 .costs-categories-table thead th{
   height:34px;
   padding:9px 16px;
-  border-bottom:1px solid #d5dfed;
-  background:#f5f7fb;
-  color:#334b8f;
+  border-bottom:1px solid #d8e5e1;
+  background:#f5fbfa;
+  color:#338f83;
   font-size:10px;
   font-weight:600;
   letter-spacing:.07em;
@@ -171,22 +171,22 @@
 }
 .costs-categories-table tbody td{
   padding:11px 16px;
-  border-top:1px solid #e9eef6;
-  color:#405693;
+  border-top:1px solid #e9f6f4;
+  color:#5c6f6b;
   vertical-align:middle;
 }
 .costs-categories-table tbody tr:hover td{
-  background:#f8fbff;
+  background:#f7faf9;
 }
 .costs-categories-table tbody td:nth-child(2){
-  color:#061433;
+  color:#0e211e;
   font-weight:600;
 }
 .costs-categories-table .form-check-input{
   width:14px;
   height:14px;
   margin-top:0;
-  border-color:#c7d3e5;
+  border-color:#c7e5e1;
   border-radius:3px;
 }
 .costs-categories-table .btn-sm{
@@ -198,14 +198,14 @@
   line-height:1.2;
 }
 .costs-categories-table .btn-outline-secondary{
-  border-color:#d2dbea;
+  border-color:#d6e3df;
   background:#fff;
-  color:#31518f;
+  color:#2c6b63;
 }
 .costs-categories-table .btn-outline-secondary:hover{
-  border-color:#b9c9e2;
-  background:#eef5ff;
-  color:#183b7a;
+  border-color:#c0d5d0;
+  background:#e9f4f1;
+  color:#14524a;
 }
 .costs-categories-table .btn-outline-danger{
   border-color:#dc3545;
@@ -251,7 +251,7 @@
 .costs-empty-card{min-height:640px;display:flex;align-items:center;justify-content:center;border-radius:8px;}
 .costs-empty-state{width:min(560px,100%);margin:0 auto;padding:48px 24px;text-align:center;}
 .costs-empty-state img{width:min(260px,66vw);height:auto;display:block;margin:0 auto 24px;}
-.costs-empty-icon{width:96px;height:88px;margin:0 auto 18px;display:grid;place-items:center;color:#9db7ef;font-size:64px;line-height:1;}
+.costs-empty-icon{width:96px;height:88px;margin:0 auto 18px;display:grid;place-items:center;color:#9cc8c0;font-size:64px;line-height:1;}
 .costs-empty-state h2{font-size:24px;line-height:1.2;font-weight:600;margin:0 0 12px;}
 .costs-empty-state p{color:#475569;line-height:1.55;max-width:520px;margin:0 auto 22px;}
 .costs-category-color-picker{width:72px;min-height:40px;padding:4px;}
