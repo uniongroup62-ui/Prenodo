@@ -15782,3 +15782,32 @@ fidelity = tabelle 'transactions'/'point_lots' (MAI fidelity_*).
 
 Regressione post-recovery: test-pacchetti 26/26, e2e-packages-catalog
 27/27, e2e-package-settings 6/6, e2e-packages 48/48, mutations 13/13.
+
+## 2026-07-18 — Pacchetti giro 4: 2 fix nella lista clienti (spelling annullato + confini CURRENT_DATE)
+
+FIX 1 — SPELLING SPLIT-BRAIN 'canceled'/'cancelled': il path compat
+cancelDbSaleResidues (cancelDbSale, oggi senza caller vivi) scriveva
+client_packages.status='cancelled' (doppia L) mentre la convenzione viva
+(cancelManageSale + filtri lista) è 'canceled' — un pacchetto annullato
+da quel path restava INVISIBILE al bucket Annullati e 'attivo' per i
+filtri. Allineato lo writer + filtri della lista resi TOLLERANTI su
+entrambe le varianti (NOT IN/IN — difesa per eventuali dati migrati dal
+MySQL; oggi client_packages è VUOTA su tutti i tenant, zero drift).
+Prepagati/rate restano 'cancelled' (convenzione dei loro moduli).
+Nel path compat anche 2 Date-al-driver -> businessNowDateTime.
+
+FIX 2 — CONFINI CURRENT_DATE (variante in-SQL della classe TZ): i bucket
+attivo/scaduto della lista paginata confrontavano expires_at con
+CURRENT_DATE del DB (= data UTC su Supabase): nella finestra 00:00-02:00
+il bucket sbagliava giorno, in disaccordo col badge ricalcolato a
+lettura (todayIso Roma). Ora parametro OGGI-di-ROMA.
+
+INCIDENTE HARNESS bis: il temp-cleaner ha mangiato ANCHE
+test-pagamenti/test-pagamenti2 — recuperate col replay Write+Edit; 2
+lookup risultati stantii nel ricostruito (colonne down_payment_amount e
+client_prepaid_service_id, entrambe TRAPPOLE già a memoria) -> sanati,
+13/13 + 15/15 come gli storici.
+
+Batteria: test-pacchetti 26/26, mutations 13/13, improvements 7/7,
+e2e-packages 48/48, catalogo 27/27, settings 6/6, pass4 2/2,
+test-pagamenti 13/13, test-pagamenti2 15/15. Bonifica 50 voci log.

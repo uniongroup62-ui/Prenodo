@@ -10377,10 +10377,15 @@ export async function listManageClientPackagesPaged(
   if (opts.clientId && opts.clientId > 0) { clauses.push("client_id = ?"); params.push(opts.clientId); }
   if (opts.packageName && opts.packageName.trim() !== "") { clauses.push("package_name = ?"); params.push(opts.packageName.trim()); }
   const sf = String(opts.status ?? "active").trim().toLowerCase();
-  if (sf === "active") clauses.push("status <> 'canceled' AND sessions_remaining > 0 AND (expires_at IS NULL OR expires_at >= CURRENT_DATE)");
-  else if (sf === "completed") clauses.push("status <> 'canceled' AND sessions_remaining <= 0");
-  else if (sf === "expired") clauses.push("status <> 'canceled' AND sessions_remaining > 0 AND expires_at IS NOT NULL AND expires_at < CURRENT_DATE");
-  else if (sf === "canceled") clauses.push("status = 'canceled'");
+  // Confini attivo/scaduto sull'OGGI di ROMA (CURRENT_DATE del DB è la data
+  // UTC su Supabase: nella finestra 00:00-02:00 il bucket sbagliava giorno,
+  // in disaccordo col badge ricalcolato a lettura su todayIso). Spelling
+  // annullato TOLLERANTE su entrambe le varianti (dati migrati dal MySQL).
+  const romeToday = todayIso();
+  if (sf === "active") { clauses.push("status NOT IN ('canceled','cancelled') AND sessions_remaining > 0 AND (expires_at IS NULL OR expires_at >= ?)"); params.push(romeToday); }
+  else if (sf === "completed") clauses.push("status NOT IN ('canceled','cancelled') AND sessions_remaining <= 0");
+  else if (sf === "expired") { clauses.push("status NOT IN ('canceled','cancelled') AND sessions_remaining > 0 AND expires_at IS NOT NULL AND expires_at < ?"); params.push(romeToday); }
+  else if (sf === "canceled") clauses.push("status IN ('canceled','cancelled')");
 
   const rows = await tenantSelect<RowDataPacket>({
     slug,
@@ -23425,9 +23430,14 @@ async function createDbInstallmentPlanFromSale({ slug, saleId, clientId, total, 
 }
 
 async function cancelDbSaleResidues(slug: string, saleId: number): Promise<void> {
-  await tenantUpdateBySaleId(slug, "client_prepaid_services", saleId, { status: "cancelled", canceled_at: new Date() });
-  await tenantUpdateBySaleId(slug, "client_packages", saleId, { status: "cancelled" });
-  await tenantUpdateBySaleId(slug, "sale_installment_plans", saleId, { status: "cancelled", cancelled_at: new Date(), cancelled_reason: "Vendita annullata" });
+  // Ora di ROMA esplicita (classe TZ) + spelling ALLINEATO alla convenzione
+  // viva: client_packages usa 'canceled' (singola L, come cancelManageSale e i
+  // filtri della lista) — 'cancelled' qui rendeva il pacchetto INVISIBILE al
+  // bucket Annullati e ancora 'attivo' per i filtri. Prepagati/rate restano
+  // 'cancelled' (doppia L, convenzione dei loro moduli).
+  await tenantUpdateBySaleId(slug, "client_prepaid_services", saleId, { status: "cancelled", canceled_at: businessNowDateTime() });
+  await tenantUpdateBySaleId(slug, "client_packages", saleId, { status: "canceled" });
+  await tenantUpdateBySaleId(slug, "sale_installment_plans", saleId, { status: "cancelled", cancelled_at: businessNowDateTime(), cancelled_reason: "Vendita annullata" });
   await tenantUpdateBySaleId(slug, "sale_installments", saleId, { status: "cancelled", note: "Vendita annullata" });
 }
 
