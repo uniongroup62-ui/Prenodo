@@ -16186,3 +16186,43 @@ invalidazione anche del codice giusto, richiesta cambio email
 annullata al cap); pass4 21/21; e2e-booking-marketplace 26/26; curl
 SSR: title reali + LD BeautySalon con Altino su entrambe le pagine;
 tsc pulito.
+
+## 2026-07-18 — SaaS ADMIN Fase 1: BLINDATURA ACCESSI (piano approvato,
+## 'procedi')
+
+Nuovo lib/saas-admin-security.ts (TOTP RFC-6238 su node:crypto, senza
+dipendenze; origin-check; audit) + rework saas-admin-auth:
+1. SEGRETO DEDICATO ADMIN_SESSION_SECRET — fail-hard in produzione se
+   assente; MAI più il fallback hardcoded né il segreto condiviso col
+   gestionale (chi compromette i tenant non forgia sessioni admin).
+2. SESSIONI SERVER-SIDE (saas_admin_sessions, DDL POSTGRES — trappola:
+   toPostgresSql traduce solo backtick/placeholder, il DDL MySQL-style
+   esplode con 'syntax error near ('): cookie = token OPACO 64hex,
+   logout = revoca vera (il cookie rubato muore), lista sessioni
+   attive + revoca remota in UI (owner vede tutte).
+3. 2FA TOTP: setup con secret base32 + otpauth uri + conferma codice,
+   8 BACKUP CODES one-time (sha256, mostrati una volta); login in due
+   passi (password -> challenge firmata 5min -> codice/backup);
+   disattivazione con password+codice; suggerimento setup per owner.
+4. Cookie sameSite STRICT (+__Host- in produzione) e ORIGIN-CHECK su
+   tutte le POST admin (login/tenants/admins/operations/security).
+5. GATE nel PROXY (trappola Next 16: middleware.ts + proxy.ts insieme
+   = fatal 'use proxy.ts only' — integrato nel proxy esistente degli
+   shim legacy): ADMIN_HOST (host-gate 404 fuori dal sottodominio),
+   ADMIN_IP_ALLOWLIST, header DENY/noindex/no-referrer/no-store.
+6. Bootstrap primo owner protetto da ADMIN_BOOTSTRAP_TOKEN in prod.
+7. AUDIT saas_admin_audit su OGNI mutazione (tenant_*, admin_*, ops_*,
+   login, login_2fa, totp_enable/disable, session_revoke; wall Roma).
+8. FIX SICUREZZA: credenziali REALI hardcoded come default del form
+   login (saas-admin-app) RIMOSSE dal sorgente.
+
+ENV nuove (documentare al deploy): ADMIN_SESSION_SECRET (OBBLIGATORIA
+in prod), ADMIN_BOOTSTRAP_TOKEN, ADMIN_HOST, ADMIN_IP_ALLOWLIST.
+
+Verifica: test-saas-admin-hardening 19/19 CLEAN (TOTP CALCOLATO
+in-test, backup one-time, revoca remota istantanea, origin ostile 403,
+header proxy, audit completo; admin temporanei rimossi per id); shim
+legacy index.php REGREDITO OK (307 -> route pulita); screenshot
+pannello con sezione Sicurezza. RILIEVO per Fase 3: la SPA ricca
+(SaasAdminApp, 8 sezioni) è EXPORT MORTO — la UI attiva è
+admin-dashboard-faithful minimale coi link ?page= legacy.

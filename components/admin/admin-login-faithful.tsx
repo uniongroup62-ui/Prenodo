@@ -14,20 +14,33 @@ export function AdminLoginFaithful() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // Step 2FA (Fase 1 blindatura): password valida + TOTP attivo -> challenge
+  // firmata e richiesta del codice authenticator (o di backup).
+  const [totpChallenge, setTotpChallenge] = useState("");
+  const [totpCode, setTotpCode] = useState("");
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
     setLoading(true);
     setError("");
     try {
+      const payload = totpChallenge
+        ? { mode: "totp", challenge: totpChallenge, code: totpCode }
+        : { email, password };
       const res = await fetch("/api/admin/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
         setError(data.error || "Credenziali non valide.");
+        setLoading(false);
+        return;
+      }
+      if (data.needsTotp && data.challenge) {
+        setTotpChallenge(String(data.challenge));
+        setTotpCode("");
         setLoading(false);
         return;
       }
@@ -72,31 +85,49 @@ export function AdminLoginFaithful() {
               </div>
             ) : null}
             <form method="post" className="form-grid" onSubmit={onSubmit}>
-              <div className="span-6">
-                <label className="form-label">Email</label>
-                <input
-                  className="form-control"
-                  name="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                />
-              </div>
-              <div className="span-6">
-                <label className="form-label">Password</label>
-                <input
-                  className="form-control"
-                  name="password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                />
-              </div>
+              {totpChallenge ? (
+                <div className="span-12">
+                  <label className="form-label">Codice a 6 cifre (app authenticator) o codice di backup</label>
+                  <input
+                    className="form-control"
+                    name="totp_code"
+                    type="text"
+                    autoComplete="one-time-code"
+                    autoFocus
+                    value={totpCode}
+                    onChange={(e) => setTotpCode(e.target.value)}
+                    required
+                  />
+                </div>
+              ) : (
+                <>
+                  <div className="span-6">
+                    <label className="form-label">Email</label>
+                    <input
+                      className="form-control"
+                      name="email"
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="span-6">
+                    <label className="form-label">Password</label>
+                    <input
+                      className="form-control"
+                      name="password"
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required
+                    />
+                  </div>
+                </>
+              )}
               <div className="span-12">
                 <button className="btn btn-primary" type="submit" disabled={loading}>
-                  {loading ? "Accesso…" : "Entra"}
+                  {loading ? "Accesso…" : totpChallenge ? "Verifica codice" : "Entra"}
                 </button>
               </div>
             </form>

@@ -247,8 +247,9 @@ const emptyOverview: OverviewPayload = {
 export function SaasAdminLoginPage({ initialBootstrapped = true }: { initialBootstrapped?: boolean }) {
   const [bootstrapped, setBootstrapped] = useState(initialBootstrapped);
   const [name, setName] = useState("Admin");
-  const [email, setEmail] = useState("info@artebrand.it");
-  const [password, setPassword] = useState("iosono98");
+  // MAI credenziali di default nel sorgente (fix sicurezza 2026-07-18).
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
 

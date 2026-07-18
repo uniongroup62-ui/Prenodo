@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { assertSameOrigin, logSaasAdminAction } from "@/lib/saas-admin-security";
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
 import { canManageSaasTenants, requireSaasAdminSession } from "@/lib/saas-admin-auth";
 import {
@@ -108,11 +109,13 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    assertSameOrigin(request);
     const session = await requireSaasAdminSession();
     if (!canManageSaasTenants(session.user)) return jsonError("Permessi insufficienti per operazioni SaaS.", 403);
 
     const body = await parseRequestBody(request);
     const action = body.action || "";
+    void logSaasAdminAction({ adminId: session.user.id, adminEmail: session.user.email, action: `ops_${action}`, target: String(body.tenant_slug ?? body.slug ?? body.plan_id ?? "") || undefined, request });
 
     if (action === "sms_save_settings") {
       await saveSmsPricingSettings(body);

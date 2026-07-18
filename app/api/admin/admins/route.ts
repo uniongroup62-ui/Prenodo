@@ -1,3 +1,4 @@
+import { assertSameOrigin, logSaasAdminAction } from "@/lib/saas-admin-security";
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import { canManageSaasAdmins, requireSaasAdminSession } from "@/lib/saas-admin-auth";
 import {
@@ -25,10 +26,12 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    assertSameOrigin(request);
     const session = await requireSaasAdminSession();
     if (!canManageSaasAdmins(session.user)) return jsonError("Solo un owner SaaS puo gestire gli admin.", 403);
     const body = await parseRequestBody(request);
     const action = body.action || "";
+    void logSaasAdminAction({ adminId: session.user.id, adminEmail: session.user.email, action: `admin_${action}`, target: String(body.email ?? body.id ?? "") || undefined, request });
     if (action === "create") await createSaasAdmin(body);
     else if (action === "update") await updateSaasAdmin(parseInteger(body.id, 0), body, session.user);
     else if (action === "password") await resetSaasAdminPassword(parseInteger(body.id, 0), body.password || "");

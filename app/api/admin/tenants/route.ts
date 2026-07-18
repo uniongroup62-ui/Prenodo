@@ -1,3 +1,4 @@
+import { assertSameOrigin, logSaasAdminAction } from "@/lib/saas-admin-security";
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import { canManageSaasTenants, requireSaasAdminSession } from "@/lib/saas-admin-auth";
 import {
@@ -61,6 +62,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    assertSameOrigin(request);
     const session = await requireSaasAdminSession();
     if (!canManageSaasTenants(session.user)) return jsonError("Permessi insufficienti per modificare i tenant.", 403);
 
@@ -68,6 +70,8 @@ export async function POST(request: Request) {
     const action = body.action || "";
     const slug = body.slug || "";
     const origin = new URL(request.url).origin;
+    // Audit di OGNI azione mutativa (Fase 1 blindatura): chi/cosa/quando/IP.
+    void logSaasAdminAction({ adminId: session.user.id, adminEmail: session.user.email, action: `tenant_${action}`, target: slug || undefined, request });
 
     if (action === "create") {
       const createdSlug = await createSaasTenant(body);
