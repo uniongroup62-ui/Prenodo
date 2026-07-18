@@ -1,3 +1,4 @@
+import { businessNowDateTime } from "@/lib/business-datetime";
 import "server-only";
 
 // AREA CLIENTE — Prenotazioni. Port of the legacy booking.php customer-area
@@ -622,7 +623,7 @@ export async function decidePublicCustomerQuote({
     `UPDATE ${quoteIdentifier(quotesTable.name)}
         SET status = ?, customer_decision_at = ?, customer_decision_source = 'booking', customer_decision_seen_at = NULL
       WHERE tenant_id = ? AND id = ? AND status = 'sent' AND customer_decision_at IS NULL`,
-    [newStatus, sqlLocal(new Date()), quotesTable.tenantId ?? 0, quoteId],
+    [newStatus, businessNowDateTime(), quotesTable.tenantId ?? 0, quoteId],
   );
 }
 

@@ -30,6 +30,7 @@ async function quoteLocationCtx(slug: string): Promise<QuoteLocationCtx> {
     currentLocationId: context.currentLocationId,
     locationIds: context.locations.map((l) => l.id),
     locations: context.locations.map((l) => ({ id: l.id, name: l.name })),
+    tenantHasLocations: context.allLocations.length > 0,
   };
 }
 

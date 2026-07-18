@@ -15811,3 +15811,38 @@ client_prepaid_service_id, entrambe TRAPPOLE già a memoria) -> sanati,
 Batteria: test-pacchetti 26/26, mutations 13/13, improvements 7/7,
 e2e-packages 48/48, catalogo 27/27, settings 6/6, pass4 2/2,
 test-pagamenti 13/13, test-pagamenti2 15/15. Bonifica 50 voci log.
+
+## 2026-07-18 — Preventivi pass 3: 3 fix (TZ 8 punti, save/delete ATOMICI, fail-closed sedi revocate sul save)
+
+FIX 1 — CLASSE TZ SERVER-SAFE (8 punti): created_at di testata/righe/
+cliente auto-creato, updated_at dell'edit E dello snapshot sede
+post-save (l'ULTIMO updater senza assegnamento faceva ri-clobberare
+il trigger in UTC — trappola: con più updater in catena l'assegnamento
+esplicito serve su TUTTI), sent_at+updated_at di ENTRAMBI i sender
+email, customer_decision_at della decisione pubblica (sqlLocal(new
+Date()) in public-customer-appointments) -> businessNowDateTime.
+
+FIX 2 — ATOMICITÀ (parità coi beginTransaction legacy quotes.php
+273/1097): EDIT = update testata + delete/reinsert quote_items in una
+withTenantTransaction (prima un errore a metà lasciava righe parziali
+col delete già partito); CREATE = righe in tx separata con ROLLBACK
+COMPENSATIVO della testata (il retry-numero 30× non convive con
+l'abort in-tx di PG); DELETE bozza = righe+testata in tx.
+
+FIX 3 — FAIL-CLOSED SEDI REVOCATE sul SAVE: la guardia 'Seleziona una
+sede valida per il preventivo.' usava ctx.locations (lista autorizzata
+FILTRATA, vuota per il revocato -> preventivi creati a sede NULL
+globali); ora flag tenantHasLocations (allLocations) nel
+QuoteLocationCtx. Le LETTURE erano già fail-closed (quoteUserCanAccess
+con lista vuota nega le locate). Chiusa l'osservazione cross-modulo
+del ricontrollo Calendario.
+
+Verifica live test-preventivi-pass3 4/4 CLEAN (create Roma su
+testata+riga+cliente-auto, edit atomico con updated_at Roma, revocato
+respinto col verbatim, delete atomico). Batteria: improvements 11/11,
+mutations 11/11, quote-decision 10/10. HARNESS: temp-cleaner ha mangiato
+ANCHE test-pos-checkout — recuperata (replay Write+Edit) e sanata da 2
+drift d'epoca (installment_choice obbligatorio + motivazione annullo)
+-> 8/8. Falsi FAIL da LAG DI RICOMPILAZIONE del dev server osservati
+(P2 rosso su codice giusto): riverificare con probe chirurgico prima
+di diagnosticare.

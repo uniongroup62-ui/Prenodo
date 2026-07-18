@@ -6561,6 +6561,8 @@ export type QuoteLocationCtx = {
   currentLocationId: number;
   locationIds: number[];
   locations: Array<{ id: number; name: string }>;
+  // Tenant CON sedi ma lista autorizzata vuota = sessione revocata (fail-closed 18/07).
+  tenantHasLocations?: boolean;
 };
 
 // quote_status_badge(): colore badge per stato effettivo.
@@ -6800,6 +6802,10 @@ async function quoteSaveLocationSnapshotDb(slug: string, quoteId: number, locati
   const values: Record<string, unknown> = {
     location_id: locId,
     location_name: String(locRows[0]?.name ?? "").trim() || null,
+    // Assegnamento ESPLICITO: questo update POST-save è l'ultimo a toccare la
+    // riga — senza, il trigger app_touch ri-clobbererebbe updated_at in UTC
+    // vanificando l'ora di Roma scritta dal save (classe TZ).
+    updated_at: businessNowDateTime(),
   };
   for (const [qCol, pKey] of QUOTE_LOCATION_SNAPSHOT_MAP) {
     const v = String(profile[pKey] ?? "").trim();
@@ -7701,7 +7707,10 @@ export async function saveManageQuote(
   } else if (rawLoc === "") {
     locationId = ctx.currentLocationId;
   }
-  if (!locationId && ctx.locations.length > 0) err = "Seleziona una sede valida per il preventivo.";
+  // FAIL-CLOSED sedi revocate (classe 18/07): con lista autorizzata VUOTA in un
+  // tenant con sedi il vecchio check saltava e il save creava preventivi a sede
+  // NULL (globali, leggibili da chiunque).
+  if (!locationId && (ctx.locations.length > 0 || ctx.tenantHasLocations)) err = "Seleziona una sede valida per il preventivo.";
 
   let clientId = Math.trunc(Number(body.client_id ?? 0)) || 0;
   if (clientId <= 0) clientId = 0;
@@ -8023,7 +8032,7 @@ export async function saveManageQuote(
             registration_date: todayIso(),
             notes: "Creato automaticamente dal salvataggio di un preventivo.",
             location_id: locationId > 0 ? locationId : null,
-            created_at: new Date(),
+            created_at: businessNowDateTime(),
           });
           clientId = await tenantInsert(clientsTable, newClientValues);
           if (clientName === "") {
@@ -8037,7 +8046,8 @@ export async function saveManageQuote(
         const values = await filterColumns(quotesTable.name, {
           ...quoteValues(num),
           created_by: userId > 0 ? userId : null,
-          created_at: new Date(),
+          // Ora di ROMA esplicita (classe TZ server-safe).
+          created_at: businessNowDateTime(),
         });
         return tenantInsert(quotesTable, values);
       };
@@ -8069,23 +8079,46 @@ export async function saveManageQuote(
       }
     } else {
       if (id <= 0) throw new Error("ID preventivo non valido.");
-      const values = await filterColumns((await tenantTable(slug, "quotes")).name, {
+      // EDIT ATOMICO (parità col beginTransaction del save legacy, quotes.php
+      // 1097): update riga + delete/reinsert quote_items in UNA tx — un errore
+      // a metà non lascia mai il preventivo con righe parziali (il delete era
+      // già partito). Ora di ROMA sui timestamp (classe TZ).
+      const quotesT = await tenantTable(slug, "quotes");
+      const itemT = await tenantTable(slug, "quote_items");
+      const values = await filterColumns(quotesT.name, {
         ...quoteValues(numberToSave),
-        updated_at: new Date(),
+        updated_at: businessNowDateTime(),
       });
-      await tenantUpdate({ slug, table: "quotes", id, values });
-
-      const itemTable = await tenantTable(slug, "quote_items");
-      const scoped = itemTable.mode === "shared" && (await columnExists(itemTable.name, "tenant_id"));
-      await dbExecute(
-        `DELETE FROM \`${itemTable.name}\` WHERE quote_id = ?${scoped ? " AND tenant_id = ?" : ""}`,
-        scoped ? [id, itemTable.tenantId ?? 0] : [id],
-      );
+      await withTenantTransaction(slug, async (txq) => {
+        const cols = Object.keys(values);
+        const upParams: unknown[] = [...cols.map((c) => (values as Record<string, unknown>)[c]), id];
+        if (quotesT.tenantId) upParams.push(quotesT.tenantId);
+        await txq(
+          `UPDATE ${quoteIdentifier(quotesT.name)} SET ${cols.map((c) => `${quoteIdentifier(c)} = ?`).join(", ")} WHERE id = ?${quotesT.tenantId ? " AND tenant_id = ?" : ""}`,
+          upParams,
+        );
+        await txq(`DELETE FROM ${quoteIdentifier(itemT.name)} WHERE quote_id = ?${itemT.tenantId ? " AND tenant_id = ?" : ""}`, itemT.tenantId ? [id, itemT.tenantId] : [id]);
+        for (const ci of cleanItems) {
+          await tenantInsertTx(txq, itemT, { quote_id: id, ...ci, created_at: businessNowDateTime() });
+        }
+      });
+      await quoteSaveLocationSnapshotDb(slug, id, locationId > 0 ? locationId : null);
+      return { ok: true, id };
     }
 
+    // CREATE: il retry-numero (30×) non convive con l'abort in-tx di PG —
+    // righe in tx separata con ROLLBACK COMPENSATIVO della testata su errore
+    // (all-or-nothing come il tx legacy, stessa tecnica del documento magazzino).
     const itemTable = await tenantTable(slug, "quote_items");
-    for (const ci of cleanItems) {
-      await tenantInsert(itemTable, { quote_id: id, ...ci, created_at: new Date() });
+    try {
+      await withTenantTransaction(slug, async (txq) => {
+        for (const ci of cleanItems) {
+          await tenantInsertTx(txq, itemTable, { quote_id: id, ...ci, created_at: businessNowDateTime() });
+        }
+      });
+    } catch (itemsError) {
+      await tenantDelete({ slug, table: "quotes", id }).catch(() => 0);
+      throw itemsError;
     }
 
     await quoteSaveLocationSnapshotDb(slug, id, locationId > 0 ? locationId : null);
@@ -8114,13 +8147,14 @@ export async function deleteManageQuoteLegacy(slug: string, id: number, ctx: Quo
     if (!quoteCanDeleteEffective(effective)) {
       return { redirect: "view", id, err: "Puoi eliminare solo preventivi in bozza. Per preventivi inviati o storicizzati usa lo stato Annullato/Rifiutato." };
     }
+    // DELETE ATOMICO (parità col beginTransaction del delete legacy, quotes.php
+    // 273): righe + testata in UNA tx.
     const itemTable = await tenantTable(slug, "quote_items");
-    const scoped = itemTable.mode === "shared" && (await columnExists(itemTable.name, "tenant_id"));
-    await dbExecute(
-      `DELETE FROM \`${itemTable.name}\` WHERE quote_id = ?${scoped ? " AND tenant_id = ?" : ""}`,
-      scoped ? [id, itemTable.tenantId ?? 0] : [id],
-    );
-    await tenantDelete({ slug, table: "quotes", id });
+    const quotesT = await tenantTable(slug, "quotes");
+    await withTenantTransaction(slug, async (txq) => {
+      await txq(`DELETE FROM ${quoteIdentifier(itemTable.name)} WHERE quote_id = ?${itemTable.tenantId ? " AND tenant_id = ?" : ""}`, itemTable.tenantId ? [id, itemTable.tenantId] : [id]);
+      await txq(`DELETE FROM ${quoteIdentifier(quotesT.name)} WHERE id = ?${quotesT.tenantId ? " AND tenant_id = ?" : ""}`, quotesT.tenantId ? [id, quotesT.tenantId] : [id]);
+    });
     return { redirect: "list", msg: "Preventivo eliminato" };
   } catch (e) {
     return { redirect: "list", err: `Errore eliminazione: ${e instanceof Error ? e.message : String(e)}` };
@@ -8230,7 +8264,7 @@ export async function sendManageQuoteEmailLegacy(
       const scopedQ = t.mode === "shared" && (await columnExists(t.name, "tenant_id"));
       await dbExecute(
         `UPDATE \`${t.name}\` SET status = CASE WHEN status='draft' THEN 'sent' ELSE status END, sent_at = ?, sent_to_email = ?, updated_at = ? WHERE id = ?${scopedQ ? " AND tenant_id = ?" : ""}`,
-        scopedQ ? [new Date(), to, new Date(), id, t.tenantId ?? 0] : [new Date(), to, new Date(), id],
+        scopedQ ? [businessNowDateTime(), to, businessNowDateTime(), id, t.tenantId ?? 0] : [businessNowDateTime(), to, businessNowDateTime(), id],
       );
     } catch { /* best-effort */ }
     return { redirect: "view", id, msg: `Email inviata a ${to}` };
