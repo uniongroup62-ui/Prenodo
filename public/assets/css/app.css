@@ -514,7 +514,7 @@ a{color:inherit}
 
 /* Backend visual refresh: simpler, flatter, consistent */
 body:not(.booking-public-body):not(.onboarding-body):not(.auth-body){
-  --app-bg:#eef3fb;
+  --app-bg:#f1f4f3;
   --panel:#ffffff;
   --border:#dfe7f0;
   --radius:12px;
@@ -3300,7 +3300,7 @@ html.sidebar-js-pending .app-sidebar{
 
 /* Dashboard visual refresh */
 body:has(.dashboard-page) .app-main{
-  background:#eef3fb;
+  background:#f1f4f3;
 }
 body:has(.dashboard-page) .app-content{
   padding:24px 22px 18px;
@@ -3627,7 +3627,7 @@ body:has(.dashboard-page) .app-content{
 }
 
 body:not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.dashboard-page) .app-main{
-  background:#eef3fb;
+  background:#f1f4f3;
 }
 body:not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.dashboard-page) .app-content{
   padding:24px 22px 18px;
@@ -3703,35 +3703,35 @@ body:not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.dashbo
 
 /* Nexus-like compact CRM skin */
 body:has(.app-shell):not(.booking-public-body):not(.onboarding-body):not(.auth-body){
-  --app-bg:#eef3fb;
+  --app-bg:#f1f4f3;
   --panel:#ffffff;
   --border:#e7ebf0;
   --radius:7px;
   --shadow:none;
   --shadow-sm:none;
-  --crm-sidebar:#191b32;
-  --crm-sidebar-strong:#14162a;
-  --crm-sidebar-line:#2b2e46;
-  --crm-sidebar-muted:#9aa3bd;
+  --crm-sidebar:#152220;
+  --crm-sidebar-strong:#101b19;
+  --crm-sidebar-line:#263632;
+  --crm-sidebar-muted:#9db3ad;
   --crm-sidebar-text:#f7f9ff;
-  --crm-sidebar-active:#314563;
-  --crm-accent:#22c55e;
-  --crm-accent-dark:#16a34a;
+  --crm-sidebar-active:#1f4a43;
+  --crm-accent:#0f766e;
+  --crm-accent-dark:#0a5b54;
   --crm-text:#111827;
   --crm-muted:#6b7280;
-  background:#eef3fb;
+  background:#f1f4f3;
   color:var(--crm-text);
   font-size:13px;
 }
 
 body:has(.app-shell) .app-shell{
-  background:#eef3fb;
+  background:#f1f4f3;
 }
 
 body:has(.app-shell) .app-main,
 body:has(.app-shell):not(.booking-public-body):not(.onboarding-body):not(.auth-body) .app-main,
 body:has(.app-shell):not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.dashboard-page) .app-main{
-  background:#eef3fb;
+  background:#f1f4f3;
 }
 
 body:has(.app-shell) .app-content,

@@ -585,7 +585,7 @@ function renderMoveGhostBand(g: MoveGhost) {
     ? { bg: "rgba(220,38,38,.12)", border: "#dc2626", text: "#b91c1c" }
     : g.state === "warn"
       ? { bg: "rgba(245,158,11,.16)", border: "#d97706", text: "#92400e" }
-      : { bg: "rgba(47,99,244,.14)", border: "#2f63f4", text: "#1d4ed8" };
+      : { bg: "rgba(15,118,110,.14)", border: "#0f766e", text: "#0a5b54" };
   return (
     <div
       className={`cal-move-ghost is-${g.state}`}
@@ -3137,7 +3137,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                     // GHOST mese: cella di destinazione evidenziata durante il drag
                     // (il chip conserva l'ORARIO, cambia solo la data).
                     ...(moveGhost && moveGhost.col === `month-${iso}`
-                      ? { background: "rgba(47,99,244,.10)", boxShadow: "inset 0 0 0 2px #2f63f4", borderRadius: 4 }
+                      ? { background: "rgba(15,118,110,.10)", boxShadow: "inset 0 0 0 2px #0f766e", borderRadius: 4 }
                       : {}),
                   }}
                   // Drop target del drag chip (cambio DATA, orario conservato).

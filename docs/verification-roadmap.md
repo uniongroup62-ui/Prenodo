@@ -15995,3 +15995,23 @@ CHART_COLORS dei report, palette staffColorHex.
 
 Verifica: tsc pulito; screenshot dashboard + calendario con sessione
 forgiata sede 21 (sidebar P teal, griglia giorno fedele, KPI ok).
+
+## 2026-07-18 — Skin CRM del gestionale unificata (fix del "blu vs verde")
+
+L'osservazione dell'utente era giusta: oltre all'accent Bootstrap già
+retintato, la SHELL del gestionale ha una skin propria con token
+--crm-* in app.css che restava fuori: accent VERDE BRILLANTE #22c55e
+con !important (il '+ Prenotazione' e i primari in-shell), sidebar
+NAVY #191b32/#314563 e sfondo GRIGIO-AZZURRO #eef3fb. Era questo il
+mix blu/verde percepito.
+
+Unificazione: --crm-accent → teal #0f766e (+dark #0a5b54), sidebar →
+teal-ink scuro #152220/#101b19 (active #1f4a43, muted #9db3ad),
+sfondo app → neutro a bias teal #f1f4f3; grafico ricavi dashboard
+#2f63f4 → teal (assi su grigio-verde); colore evento DEFAULT del
+calendario #2f63f4 → teal (la palette staffColorHex per-operatore e i
+colori-dato di report/stati restano intatti).
+
+Verifica: tsc pulito; screenshot dashboard forgiata — '+ Prenotazione'
+teal, linea ricavi teal, sidebar teal-ink, P mark. Un solo accent da
+email a gestionale.
