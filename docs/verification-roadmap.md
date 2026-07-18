@@ -15305,3 +15305,35 @@ verificato: TUTTE le entità citate = fixture morte, baseline sales 9 /
 appts 10 intatte). test-calendario e test-calendario-pass2 ora ripuliscono
 a watermark. RICETTA per le prossime batterie: dopo i re-run delle suite
 storiche, purge del range con verifica entità-morte prima del delete.
+
+## 2026-07-18 — Quick Booking pass 4: 1 fix (classe TZ nella catena save, 6 punti) + riverifica motore
+
+Dominio già COMPLETO (3 pass + attestazioni): riverifica mirata alle
+classi ricorrenti. Gate per-azione, guardie sede via resolveManageLocationId
+(+ 'Sede non valida o non disponibile.' su esplicita invalida), hold
+delegati al motore pubblico (TZ Roma dal pass Booking), risoluzione nomi
+LOWER+deterministica, pre-gate residui, fail-closed list già chiuso nel
+ricontrollo Calendario: tutto confermato. La divergenza warnings-rollback
+del legacy resta ATTESTATA (pre-gate la rende irraggiungibile per
+selezioni coerenti).
+
+FIX — CLASSE TZ SERVER-SAFE (Date-al-driver = wall del server, UTC su
+Amplify), 6 punti nella catena save/apply: promotion_redemptions
+.redeemed_at (create 3162 + edit 3590), giftbox_redemptions.redeemed_at,
+giftbox_instances.redeemed_at (chiusura a residuo 0),
+gift_transactions.created_at (pending omaggio), used_at registrazione
+utilizzo pacchetto (pgDateTimeLocal(new Date()) -> businessNowDateTime).
+Nessun effetto su logiche (promotionUsageCount conta senza finestre
+temporali): timestamp di visualizzazione/audit.
+
+Verifica live test-quickbooking-pass4 5/5 CLEAN: promo auto applicata al
+save (redemption con sconto 1.20 su 12, snapshot 10.80/12.00),
+redeemed_at in ora di ROMA su create E edit (rinfrescata). Trappola
+suite: l'attivazione promo è action=toggle SEPARATO dal save.
+
+Regressione: test-quickbooking 35+21+16, test-qb-findings-verify 3,
+test-qbresidui-verify 6, e2e-qb-redeem-edit 28, test-qb-public-comm 19,
+test-promo-pass2 8, e2e-promo-engine 10, test-appuntamenti 41+8+12,
+e2e-appointments-list 13. HARNESS: purgate 51 voci di rumore log della
+batteria (entità verificate morte). NOTA cross-modulo: manage-pos.ts:933
+stessa classe redeemed_at (riscatto giftbox POS) — al pass Pagamenti 2.

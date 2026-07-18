@@ -2,7 +2,7 @@ import "server-only";
 
 import { createHash, randomBytes } from "crypto";
 import type { RowDataPacket } from "@/lib/tenant-db";
-import { businessTodayIso } from "@/lib/business-datetime";
+import { businessNowDateTime, businessTodayIso } from "@/lib/business-datetime";
 import type { Location } from "@/lib/demo-data";
 import type { AppointmentStatus, AppointmentWithMeta } from "@/lib/appointment-engine";
 import type {
@@ -3159,7 +3159,9 @@ export async function createDbAppointment({
         appointment_id: id,
         discount_amount: roundMoney(promoCtx.discount),
         location_id: locationId,
-        redeemed_at: new Date(),
+        // Ora di ROMA esplicita (classe TZ server-safe: un Date al driver
+        // serializza col fuso del SERVER — UTC su Amplify = wall -2h).
+        redeemed_at: businessNowDateTime(),
       }).catch(() => 0);
     }
   }
@@ -3587,7 +3589,8 @@ export async function updateDbAppointment({
           appointment_id: id,
           discount_amount: roundMoney(promoCtx.discount),
           location_id: locationId,
-          redeemed_at: new Date(),
+          // Ora di ROMA esplicita (stessa classe TZ del create).
+          redeemed_at: businessNowDateTime(),
         }).catch(() => 0);
       }
     }
@@ -10049,9 +10052,10 @@ export async function addManageClientPackageUsage(
   }
   let serviceIdPost = usageItemType === "service" && usageItemId > 0 ? usageItemId : serviceId;
 
-  // used_at: input datetime-local o adesso (wall-clock locale).
+  // used_at: input datetime-local o adesso in ORA DI ROMA (classe TZ
+  // server-safe: i componenti locali del server sarebbero UTC su Amplify).
   const usedAtRaw = String(options.usedAt ?? "").trim().replace("T", " ");
-  const nowLocal = pgDateTimeLocal(new Date());
+  const nowLocal = businessNowDateTime();
   let usedAt = nowLocal;
   if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(usedAtRaw)) usedAt = usedAtRaw.length === 16 ? `${usedAtRaw}:00` : usedAtRaw;
 
@@ -11160,7 +11164,8 @@ export async function applyAppointmentGiftboxRedeems({
       //    This is the consume — it makes giftBoxItemRedeemedUnits reflect the unit.
       const redemptionId = await tenantInsert(await tenantTable(slug, "giftbox_redemptions"), {
         instance_id: instanceId,
-        redeemed_at: new Date(),
+        // Ora di ROMA esplicita (classe TZ server-safe, come promotion_redemptions).
+        redeemed_at: businessNowDateTime(),
         source_type: "appointment",
         source_id: appointmentId,
       });
@@ -11199,7 +11204,7 @@ export async function applyAppointmentGiftboxRedeems({
             slug,
             table: "giftbox_instances",
             id: instanceId,
-            values: { status: "redeemed", redeemed_at: new Date(), redeemed_source_type: "appointment", redeemed_source_id: appointmentId },
+            values: { status: "redeemed", redeemed_at: businessNowDateTime(), redeemed_source_type: "appointment", redeemed_source_id: appointmentId },
           });
         }
       } catch {
@@ -11435,7 +11440,8 @@ export async function applyAppointmentGiftRedeems({
         type: "pending",
         qty: 1,
         note: `In sospeso su prenotazione #${appointmentId}`,
-        created_at: new Date(),
+        // Ora di ROMA esplicita (classe TZ server-safe).
+        created_at: businessNowDateTime(),
       }).catch(() => 0);
 
       // 7) NIENTE chiusura istanza qui: nel legacy l'istanza passa a 'riscattato'
