@@ -929,7 +929,7 @@ export async function sendGiftVoucherEmailManage(slug: string, instanceId: numbe
 
   const bizRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "name, email, phone", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
   const biz = bizRows[0] ?? null;
-  const bizName = clean(biz?.name) || "BeautySuite";
+  const bizName = clean(biz?.name) || "Prenodo";
 
   const base = String(process.env.PRENODO_PUBLIC_BASE_URL ?? "").replace(/\/+$/, "");
   const voucherUrl = `${base}/${slug}/gift_voucher?public=1&embed=1&token=${encodeURIComponent(detail.voucherToken)}`;
@@ -1173,7 +1173,7 @@ export async function getGiftVoucherByToken(slug: string, tokenRaw: string): Pro
   return {
     detail,
     business: {
-      name: clean(biz?.name) || "BeautySuite",
+      name: clean(biz?.name) || "Prenodo",
       phone: clean(biz?.phone),
       email: clean(biz?.email),
       addrLine1: siteAddress,

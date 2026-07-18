@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { ManageResetPasswordFaithful } from "@/components/manage-reset-password-faithful";
 
 export const metadata: Metadata = {
-  title: "Reimposta password - BeautySuite",
+  title: "Reimposta password - Prenodo",
 };
 
 export default async function ManageResetPasswordPage({

@@ -16,17 +16,17 @@ const STYLE = `
 .login-choice-back{position:fixed;left:24px;top:24px;z-index:20;width:42px;height:42px;border:1px solid #dbe3ef;border-radius:50%;background:#fff;color:#0f172a;display:grid;place-items:center;text-decoration:none;font-size:22px;font-weight:600;line-height:1;box-shadow:0 10px 28px rgba(15,23,42,.08);transition:background .18s ease,border-color .18s ease,transform .18s ease}
 .login-choice-back:hover{background:#f8fafc;border-color:#cbd5e1;transform:translateX(-2px)}
 .login-choice-brand{position:fixed;top:26px;left:88px;z-index:5;display:flex;align-items:center;gap:12px;font-size:20px;font-weight:600;color:#0f172a;text-decoration:none}
-.login-choice-brand__mark{width:34px;height:34px;border-radius:10px;background:#4e6da6;color:#fff;display:grid;place-items:center;font-weight:600;font-size:16px}
+.login-choice-brand__mark{width:34px;height:34px;border-radius:10px;background:#0f766e;color:#fff;display:grid;place-items:center;font-weight:600;font-size:16px}
 .login-choice-title{font-size:30px;font-weight:700;margin:0 0 10px;text-align:center}
 .login-choice-subtitle{font-size:13.5px;color:#64748b;margin:0 0 30px;text-align:center;line-height:1.5}
 .login-choice-cards{display:flex;flex-direction:column;gap:14px;width:min(520px,100%)}
 .login-choice-card{display:flex;align-items:center;justify-content:space-between;gap:16px;background:#fff;border:1px solid #dbe3ef;border-radius:16px;padding:22px 24px;text-decoration:none;color:inherit;transition:box-shadow .15s ease,border-color .15s ease,transform .15s ease}
-.login-choice-card:hover{border-color:#4e6da6;box-shadow:0 6px 24px rgba(78,109,166,.14);transform:translateY(-1px)}
+.login-choice-card:hover{border-color:#0f766e;box-shadow:0 6px 24px rgba(15,118,110,.14);transform:translateY(-1px)}
 .login-choice-card__text{min-width:0}
 .login-choice-card__title{display:block;font-size:17px;font-weight:700;color:#0f172a;margin-bottom:2px}
 .login-choice-card__desc{display:block;font-size:14px;color:#64748b}
 .login-choice-card__arrow{flex:none;width:38px;height:38px;border-radius:999px;border:1px solid #dbe3ef;display:grid;place-items:center;color:#0f172a;font-size:18px;transition:background .15s ease,color .15s ease,border-color .15s ease}
-.login-choice-card:hover .login-choice-card__arrow{background:#4e6da6;border-color:#4e6da6;color:#fff}
+.login-choice-card:hover .login-choice-card__arrow{background:#0f766e;border-color:#0f766e;color:#fff}
 `;
 
 export default async function LoginChoicePage({

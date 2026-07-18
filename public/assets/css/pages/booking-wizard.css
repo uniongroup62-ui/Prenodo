@@ -87,7 +87,7 @@ body.embed-body .booking-modal{ box-shadow:none; }
 }
 .booking-progress__item.is-active,
 .booking-progress__item.is-done{
-  color:#4e6da6;
+  color:#0f766e;
 }
 .booking-progress__item.is-active{
   font-weight:600;
@@ -199,11 +199,11 @@ body.embed-body .booking-modal{ box-shadow:none; }
   border:none;
   border-radius:999px;
   min-height:54px;
-  background:#4e6da6;
+  background:#0f766e;
   color:#fff;
   font-size:18px;
   font-weight:600;
-  box-shadow:0 18px 30px rgba(78,109,166,.20);
+  box-shadow:0 18px 30px rgba(15,118,110,.20);
 }
 .booking-summary__cta:disabled{
   background:#b6b6b6;
@@ -316,8 +316,8 @@ body.embed-body .booking-modal{ box-shadow:none; }
   box-shadow:0 12px 28px rgba(15,23,42,.08);
 }
 .list-card.active{
-  border-color:#4e6da6;
-  box-shadow:0 14px 28px rgba(78,109,166,.12);
+  border-color:#0f766e;
+  box-shadow:0 14px 28px rgba(15,118,110,.12);
 }
 .cat-left{
   display:flex;
@@ -379,8 +379,8 @@ body.embed-body .booking-modal{ box-shadow:none; }
   flex:0 0 20px;
 }
 .list-card.active .checkbox{
-  border-color:#4e6da6;
-  background:#4e6da6;
+  border-color:#0f766e;
+  background:#0f766e;
 }
 .list-card.active .checkbox:after{
   content:"";
@@ -422,11 +422,11 @@ body.embed-body .booking-modal{ box-shadow:none; }
   white-space:nowrap;
 }
 .discount-badge--promo{
-  background:#eef4ff;
-  color:#4e6da6;
+  background:#e7f3f1;
+  color:#0f766e;
 }
 .service-promo-detail{
-  color:#4e6da6;
+  color:#0f766e;
   font-size:11px;
   font-weight:600;
   line-height:1.25;
@@ -438,7 +438,7 @@ body.embed-body .booking-modal{ box-shadow:none; }
   justify-items:end;
   gap:2px;
   margin-top:5px;
-  color:#4e6da6;
+  color:#0f766e;
   font-size:11px;
   font-weight:600;
   line-height:1.25;
@@ -448,13 +448,13 @@ body.embed-body .booking-modal{ box-shadow:none; }
   display:inline-flex;
   align-items:center;
   border-radius:999px;
-  background:#eef4ff;
+  background:#e7f3f1;
   padding:2px 8px;
-  color:#4e6da6;
+  color:#0f766e;
 }
 .service-promo-note__detail{
   text-align:right;
-  color:#4e6da6;
+  color:#0f766e;
 }
 .service-card__action{
   width:34px;
@@ -472,8 +472,8 @@ body.embed-body .booking-modal{ box-shadow:none; }
   flex:0 0 34px;
 }
 .list-card.active .service-card__action{
-  background:#4e6da6;
-  border-color:#4e6da6;
+  background:#0f766e;
+  border-color:#0f766e;
   color:#fff;
   font-size:0;
   box-shadow:none;
@@ -583,8 +583,8 @@ body.embed-body .booking-modal{ box-shadow:none; }
   border-color:#dcd7d1;
 }
 .slot-btn.selected{
-  background:#4e6da6;
-  border-color:#4e6da6;
+  background:#0f766e;
+  border-color:#0f766e;
   color:#fff;
 }
 .slot-btn.disabled{
@@ -678,10 +678,10 @@ body.embed-body .booking-modal{ box-shadow:none; }
   transform:translateY(-1px);
 }
 .booking-day-pill.is-selected .booking-day-pill__num{
-  background:#4e6da6;
-  border-color:#4e6da6;
+  background:#0f766e;
+  border-color:#0f766e;
   color:#fff;
-  box-shadow:0 10px 20px rgba(78,109,166,.22);
+  box-shadow:0 10px 20px rgba(15,118,110,.22);
 }
 .booking-day-pill.is-selected .booking-day-pill__weekday{
   font-weight:600;
@@ -731,11 +731,11 @@ body.embed-body .booking-modal{ box-shadow:none; }
 #inlineCalendar .flatpickr-day.selected:hover,
 #inlineCalendar .flatpickr-day.startRange:hover,
 #inlineCalendar .flatpickr-day.endRange:hover{
-  background:#4e6da6;
-  border-color:#4e6da6;
+  background:#0f766e;
+  border-color:#0f766e;
 }
 #slotDateLabel{
-  color:#4e6da6 !important;
+  color:#0f766e !important;
 }
 .wizard-step[data-step="3"] .list-card{
   padding:18px 20px;
@@ -755,8 +755,8 @@ body.embed-body .booking-modal{ box-shadow:none; }
 .wizard-step[data-step="5"] .form-control:focus,
 .wizard-step[data-step="5"] .form-select:focus,
 .wizard-step[data-step="7"] .form-control:focus{
-  border-color:#4e6da6;
-  box-shadow:0 0 0 4px rgba(78,109,166,.12);
+  border-color:#0f766e;
+  box-shadow:0 0 0 4px rgba(15,118,110,.12);
 }
 @media (max-width: 1240px){
   .booking-modal{
@@ -910,7 +910,7 @@ body.embed-body .booking-overlay{ background:#f3f4f6; }
 }
 .booking-progress__item.is-active,
 .booking-progress__item.is-done{
-  background:#4e6da6;
+  background:#0f766e;
 }
 .booking-progress__label{
   color:#475569;
@@ -983,8 +983,8 @@ body.embed-body .booking-overlay{ background:#f3f4f6; }
 #btnNext{
   min-height:42px;
   margin-left:auto;
-  background:#4e6da6;
-  border-color:#4e6da6;
+  background:#0f766e;
+  border-color:#0f766e;
   color:#fff;
   font-weight:600;
   min-width:150px;
@@ -1009,12 +1009,12 @@ body.embed-body .booking-overlay{ background:#f3f4f6; }
   color:#64748b;
 }
 .booking-location-card.active{
-  border-color:#4e6da6;
-  box-shadow:0 0 0 2px rgba(78,109,166,.12);
+  border-color:#0f766e;
+  box-shadow:0 0 0 2px rgba(15,118,110,.12);
 }
 .booking-location-card.active .service-card__action{
-  background:#4e6da6;
-  border-color:#4e6da6;
+  background:#0f766e;
+  border-color:#0f766e;
   color:#fff;
 }
 .booking-benefit-panel{
@@ -1064,8 +1064,8 @@ body.embed-body .booking-overlay{ background:#f3f4f6; }
   text-align:right;
 }
 .giftcard-choice.is-active{
-  border-color:#4e6da6;
-  box-shadow:0 0 0 2px rgba(78,109,166,.12);
+  border-color:#0f766e;
+  box-shadow:0 0 0 2px rgba(15,118,110,.12);
 }
 .giftcard-choice__name{
   font-weight:600;
@@ -1162,7 +1162,7 @@ body.embed-body .booking-overlay{ background:#f3f4f6; }
   line-height:1;
 }
 .booking-bottom-nav__item.is-active{
-  color:#4e6da6;
+  color:#0f766e;
 }
 @media (max-width: 767px){
   .booking-overlay{

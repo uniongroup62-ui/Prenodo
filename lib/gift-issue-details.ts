@@ -1431,7 +1431,7 @@ export async function sendGiftBoxInstanceEmail(slug: string, id: number, toRaw: 
   const ev = GIFTBOX_EVENT_MAP.find((e) => e.key === detail.eventKey) ?? GIFTBOX_EVENT_MAP[0];
   const bizRows = await tenantSelect<RowDataPacket>({ slug, table: "businesses", columns: "name, email, giftbox_terms", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
   const biz = bizRows[0] ?? null;
-  const bizName = clean(biz?.name) || "BeautySuite";
+  const bizName = clean(biz?.name) || "Prenodo";
 
   let subject = detail.code !== "" ? `${ev.subject} ${detail.code}` : ev.subject;
   if (subject.length > 160) subject = subject.slice(0, 160);

@@ -231,7 +231,7 @@ export async function publicBookingContext(slug: string): Promise<PublicBookingC
 
   return {
     business: {
-      name: String(business.name ?? "BeautySuite"),
+      name: String(business.name ?? "Prenodo"),
       about: String(business.booking_about_text ?? ""),
       email: String(business.email ?? ""),
       phone: String(business.phone ?? ""),

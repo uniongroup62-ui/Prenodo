@@ -254,7 +254,7 @@ export async function GET(request: Request) {
         items,
       },
       business: {
-        name: String(biz?.name ?? "BeautySuite"),
+        name: String(biz?.name ?? "Prenodo"),
         address: String(biz?.address ?? "").trim(),
         phone: String(biz?.phone ?? "").trim(),
         email: String(biz?.email ?? "").trim(),

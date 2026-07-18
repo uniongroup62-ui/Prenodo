@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { ManageLoginFaithful } from "@/components/manage-login-faithful";
 
 export const metadata: Metadata = {
-  title: "Accedi al gestionale - BeautySuite",
+  title: "Accedi al gestionale - Prenodo",
 };
 
 export default async function ManageLoginPage({

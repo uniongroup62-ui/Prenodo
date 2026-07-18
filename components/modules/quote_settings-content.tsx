@@ -250,7 +250,7 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
                       maxLength={255}
                       value={companyName}
                       onChange={(e) => setCompanyName(e.target.value)}
-                      placeholder="Es. BeautySuite S.r.l."
+                      placeholder="Es. La Mia Attivita S.r.l."
                     />
                   </div>
                   <div className="col-lg-4">

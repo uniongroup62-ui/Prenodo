@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { TOPBAR_STYLE, TOPBAR_CATEGORIES, FOOTER_STYLE, TOKEN_STYLE } from "@/components/public/marketplace-detail-faithful";
-import { useMarketplacePageEffects } from "@/components/public/marketplace-shared";
+import { TOPBAR_CATEGORIES } from "@/components/public/marketplace-detail-faithful";
+import { MarketplaceFooter, useMarketplacePageEffects } from "@/components/public/marketplace-shared";
 import {
   AppointmentsView,
   PackagesView,
@@ -119,21 +119,21 @@ const HUB_SHELL_STYLE = `
 .booking-public-account__nav{padding:0 12px 24px 24px;border-bottom:0;display:flex;flex-direction:column;gap:6px;align-items:stretch;background:transparent;}
 .booking-public-account__nav a{display:flex;align-items:center;gap:9px;min-height:40px;padding:0 12px;border-radius:10px;border:1px solid transparent;background:transparent;text-decoration:none;color:#0f172a;font-size:13px;font-weight:600;}
 .booking-public-account__nav a:hover{background:#f1f5f9;border-color:#e2e8f0;}
-.booking-public-account__nav a.is-active{background:#4e6da6;border-color:#4e6da6;color:#fff;}
+.booking-public-account__nav a.is-active{background:#0f766e;border-color:#0f766e;color:#fff;}
 .booking-public-account__content{grid-column:2;grid-row:1 / 3;min-height:0;padding:20px 28px 28px;display:grid;gap:18px;align-content:start;min-width:0;background:#fff;}
 .booking-bottom-nav{position:fixed;left:0;right:0;bottom:0;z-index:1000;height:70px;display:none;align-items:center;justify-content:center;gap:min(16vw,120px);border-top:1px solid #e5e7eb;background:#fff;}
 .booking-bottom-nav__item{min-width:82px;border:0;background:transparent;color:#94a3b8;text-decoration:none;font-size:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-weight:600;}
 .booking-bottom-nav__item i{font-size:22px;line-height:1;}
-.booking-bottom-nav__item.is-active{color:#4e6da6;}
+.booking-bottom-nav__item.is-active{color:#0f766e;}
 .booking-dashboard-home{display:grid;gap:18px;min-width:0;}
 .booking-dashboard-home__hero{border:1px solid #e2e8f0;border-radius:10px;padding:22px;background:#fff;}
 .booking-dashboard-home__kicker{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#6b7280;}
 .booking-dashboard-home__title{font-size:clamp(30px,5vw,48px);line-height:1;font-weight:600;letter-spacing:0;margin-top:8px;word-break:break-word;}
 .booking-dashboard-home__muted{color:#4b5563;font-size:16px;line-height:1.6;max-width:60ch;margin-top:12px;}
 .booking-dashboard-home__actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:18px;}
-.booking-dashboard-home__cta{display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:999px;padding:12px 18px;text-decoration:none;font-weight:600;border:1px solid #4e6da6;background:#4e6da6;color:#fff;margin-top:18px;}
+.booking-dashboard-home__cta{display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:999px;padding:12px 18px;text-decoration:none;font-weight:600;border:1px solid #0f766e;background:#0f766e;color:#fff;margin-top:18px;}
 .booking-dashboard-home__actions .booking-dashboard-home__cta{margin-top:0;}
-.booking-dashboard-home__cta--secondary{background:#fff;color:#4e6da6;}
+.booking-dashboard-home__cta--secondary{background:#fff;color:#0f766e;}
 .booking-public-account__section-head{display:grid;gap:4px;}
 .booking-public-account__eyebrow{font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#64748b;}
 .booking-public-account__title{font-size:clamp(24px,3.4vw,34px);line-height:1.04;font-weight:600;letter-spacing:0;margin:2px 0 0;}
@@ -303,7 +303,7 @@ export function PerTenantHub({
 
   const customerName = (user?.fullName || `${user?.firstName ?? ""} ${user?.lastName ?? ""}`.trim() || user?.email || "Cliente").trim();
   const customerInitial = customerName.charAt(0).toUpperCase() || "C";
-  const brandMark = (tenantName || "BeautySuite").trim().charAt(0).toUpperCase() || "B";
+  const brandMark = (tenantName || "Prenodo").trim().charAt(0).toUpperCase() || "B";
 
   async function logout() {
     try {
@@ -384,9 +384,10 @@ export function PerTenantHub({
           centrale. app.css/TOPBAR_STYLE non li definiscono. */}
       {/* eslint-disable-next-line @next/next/no-css-tags */}
       <link rel="stylesheet" href="/assets/css/pages/public_account.css" />
-      <style dangerouslySetInnerHTML={{ __html: TOKEN_STYLE }} />
-      <style dangerouslySetInnerHTML={{ __html: TOPBAR_STYLE }} />
-      <style dangerouslySetInnerHTML={{ __html: FOOTER_STYLE }} />
+      {/* Design system marketplace (redesign 2026-07): token/topbar/footer dal
+          CSS linkato, come le pagine marketplace. */}
+      {/* eslint-disable-next-line @next/next/no-css-tags */}
+      <link rel="stylesheet" href="/assets/css/pages/public_marketplace.css" />
       <style dangerouslySetInnerHTML={{ __html: HUB_SHELL_STYLE }} />
 
       {/* ===================== TOPBAR marketplace (con ricerca) ===================== */}
@@ -403,8 +404,8 @@ export function PerTenantHub({
       >
         <div className="marketplace-topbar__inner">
           <a className="marketplace-topbar__brand" href={marketplaceRootUrl}>
-            <span className="marketplace-topbar__brand-mark">B</span>
-            <span>BeautySuite</span>
+            <span className="marketplace-topbar__brand-mark">P</span>
+            <span>Prenodo</span>
           </a>
           <form
             className="marketplace-topbar-search"
@@ -570,7 +571,7 @@ export function PerTenantHub({
               <a className="booking-public-account__brand" href={dashboardUrl} style={{ textDecoration: "none", color: "inherit" }}>
                 <div className="booking-public-account__brandmark">{brandMark}</div>
                 <div>
-                  <div className="booking-public-account__brandname">{tenantName || "BeautySuite"}</div>
+                  <div className="booking-public-account__brandname">{tenantName || "Prenodo"}</div>
                   <div className="booking-public-account__brandmeta">Area cliente</div>
                 </div>
               </a>
@@ -646,72 +647,7 @@ export function PerTenantHub({
       </div>
 
       {/* ===================== FOOTER marketplace ===================== */}
-      <footer className="marketplace-footer">
-        <div className="marketplace-footer__inner">
-          <div className="marketplace-footer__grid">
-            <section aria-labelledby="hubFooterInfoTitle">
-              <h2 id="hubFooterInfoTitle">Informazioni</h2>
-              <nav className="marketplace-footer__links" aria-label="Informazioni">
-                <a href="/attivita">Cerca attivit&agrave;</a>
-                <a href="/account/login">Accedi</a>
-                <a href="/#promuovi-attivita">Iscrizione aziende</a>
-                <a href="#">Chi siamo</a>
-                <a href="#">Contatta</a>
-                <a href="#">Note legali</a>
-                <a href="#">Informativa sulla privacy</a>
-                <a href="#">Informativa sui cookie</a>
-                <a href="#">Gestisci preferenze</a>
-              </nav>
-            </section>
-            <section aria-labelledby="hubFooterAppTitle">
-              <h2 id="hubFooterAppTitle">Scarica l&apos;app</h2>
-              <div className="marketplace-footer__app">
-                <span className="marketplace-footer__app-icon" aria-hidden="true">
-                  B
-                </span>
-                <p>Prenota il tuo prossimo trattamento di bellezza quando e dove vuoi.</p>
-              </div>
-              <div className="marketplace-footer__stores" aria-label="Link app">
-                <a className="marketplace-footer__store" href="/account/login">
-                  <small>Scarica su</small>
-                  <strong>App Store</strong>
-                </a>
-                <a className="marketplace-footer__store" href="/account/login">
-                  <small>Disponibile su</small>
-                  <strong>Google Play</strong>
-                </a>
-              </div>
-            </section>
-            <section aria-labelledby="hubFooterSocialTitle">
-              <h2 id="hubFooterSocialTitle">Seguici su</h2>
-              <div className="marketplace-footer__social">
-                <a className="marketplace-footer__social-link" href="#" aria-label="Facebook">f</a>
-                <a className="marketplace-footer__social-link" href="#" aria-label="X">X</a>
-                <a className="marketplace-footer__social-link" href="#" aria-label="Pinterest">P</a>
-                <a className="marketplace-footer__social-link" href="#" aria-label="Instagram">IG</a>
-                <a className="marketplace-footer__social-link" href="#" aria-label="YouTube">YT</a>
-                <a className="marketplace-footer__social-link" href="#" aria-label="TikTok">TK</a>
-              </div>
-            </section>
-            <section aria-labelledby="hubFooterCountryTitle">
-              <h2 id="hubFooterCountryTitle">Seleziona un paese</h2>
-              <button className="marketplace-footer__country" type="button">
-                <span>
-                  <i className="marketplace-footer__flag" aria-hidden="true"></i>Italia
-                </span>
-                <i className="marketplace-footer__chevron" aria-hidden="true"></i>
-              </button>
-            </section>
-          </div>
-          <div className="marketplace-footer__bottom">
-            <div className="marketplace-footer__brand">
-              <span className="marketplace-footer__brand-mark">BeautySuite</span>
-              <span>&copy; 2026 BeautySuite</span>
-            </div>
-            <span>Cerca attivit&agrave;, scegli il centro e prenota online.</span>
-          </div>
-        </div>
-      </footer>
+      <MarketplaceFooter />
     </>
   );
 }

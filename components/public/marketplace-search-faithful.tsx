@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { TOKEN_STYLE, TOPBAR_STYLE, FOOTER_STYLE, TOPBAR_CATEGORIES } from "@/components/public/marketplace-detail-faithful";
-import { MarketplaceAccountNav, useMarketplacePageEffects } from "@/components/public/marketplace-shared";
+import { TOPBAR_CATEGORIES } from "@/components/public/marketplace-detail-faithful";
+import { MarketplaceAccountNav, MarketplaceFooter, useMarketplacePageEffects } from "@/components/public/marketplace-shared";
 
 // Port fedele della pagina RISULTATI RICERCA del marketplace legacy
 // (public_marketplace.php $isSearchResults, righe 1720-1892: route
@@ -28,6 +28,7 @@ type MarketplaceProfile = {
   name: string;
   category: string;
   area: string;
+  image?: string;
   services: string[];
   locations: MarketplaceLocation[];
 };
@@ -176,11 +177,52 @@ export function MarketplaceSearchFaithful({
   // città, preferiti sulle result-card.
   useMarketplacePageEffects([profiles]);
 
+  // Form filtri unico, renderizzato DUE volte: sidebar sticky su desktop,
+  // modal su mobile (redesign 2026-07 — prima era solo-modal anche desktop).
+  // Il datalist città è condiviso e vive una volta sola nel layout.
+  const filterForm = (
+    <form className="filter-card" method="get" action="/attivita/ricerca">
+      <h2>Filtri</h2>
+      <input type="hidden" name="service" value={service} readOnly />
+      <label className="filter-field">
+        <span>Attivit&agrave; o servizio</span>
+        <input type="search" name="q" defaultValue={q} placeholder="Es. massaggio, manicure, Reviva" />
+      </label>
+      <label className="filter-field">
+        <span>Citt&agrave;</span>
+        <input
+          type="search"
+          name="city"
+          defaultValue={city}
+          placeholder="La tua citt&agrave;"
+          list="marketplace-city-suggestions"
+          autoComplete="off"
+        />
+      </label>
+      <label className="filter-field">
+        <span>Categoria attivita</span>
+        <select name="category" defaultValue={category}>
+          <option value="">Tutte le categorie</option>
+          {categories.map((cat) => (
+            <option key={cat} value={cat}>
+              {cat}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="filter-actions">
+        <button className="btn btn-primary" type="submit">
+          Cerca
+        </button>
+        <a className="btn" href="/attivita/ricerca">
+          Reset
+        </a>
+      </div>
+    </form>
+  );
+
   return (
     <>
-      <style dangerouslySetInnerHTML={{ __html: TOKEN_STYLE }} />
-      <style dangerouslySetInnerHTML={{ __html: TOPBAR_STYLE }} />
-      <style dangerouslySetInnerHTML={{ __html: FOOTER_STYLE }} />
       {/* eslint-disable-next-line @next/next/no-css-tags */}
       <link rel="stylesheet" href="/assets/css/pages/public_marketplace.css" />
 
@@ -198,8 +240,8 @@ export function MarketplaceSearchFaithful({
       >
         <div className="marketplace-topbar__inner">
           <a className="marketplace-topbar__brand" href="/">
-            <span className="marketplace-topbar__brand-mark">B</span>
-            <span>BeautySuite</span>
+            <span className="marketplace-topbar__brand-mark">P</span>
+            <span>Prenodo</span>
           </a>
           <form
             className="marketplace-topbar-search"
@@ -322,6 +364,16 @@ export function MarketplaceSearchFaithful({
         </section>
 
         <div className="results-layout">
+          {citySuggestions.length ? (
+            <datalist id="marketplace-city-suggestions">
+              {citySuggestions.map((suggestion) => (
+                <option key={suggestion} value={suggestion}></option>
+              ))}
+            </datalist>
+          ) : null}
+          <aside className="results-side" aria-label="Filtri di ricerca">
+            {filterForm}
+          </aside>
           <section className="results-main">
             <div className="results-toolbar">
               <div className="results-count">
@@ -368,53 +420,23 @@ export function MarketplaceSearchFaithful({
                     &times;
                   </button>
                 </div>
-                <form className="filter-card" method="get" action="/attivita/ricerca">
-                  <input type="hidden" name="service" value={service} readOnly />
-                  <label className="filter-field">
-                    <span>Attivit&agrave; o servizio</span>
-                    <input type="search" name="q" defaultValue={q} placeholder="Es. massaggio, manicure, Reviva" />
-                  </label>
-                  <label className="filter-field">
-                    <span>Citt&agrave;</span>
-                    <input
-                      type="search"
-                      name="city"
-                      defaultValue={city}
-                      placeholder="La tua citt&agrave;"
-                      list="marketplace-city-suggestions"
-                      autoComplete="off"
-                    />
-                  </label>
-                  {citySuggestions.length ? (
-                    <datalist id="marketplace-city-suggestions">
-                      {citySuggestions.map((suggestion) => (
-                        <option key={suggestion} value={suggestion}></option>
-                      ))}
-                    </datalist>
-                  ) : null}
-                  <label className="filter-field">
-                    <span>Categoria attivita</span>
-                    <select name="category" defaultValue={category}>
-                      <option value="">Tutte le categorie</option>
-                      {categories.map((cat) => (
-                        <option key={cat} value={cat}>
-                          {cat}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <div className="filter-actions">
-                    <button className="btn btn-primary" type="submit">
-                      Cerca
-                    </button>
-                    <a className="btn" href="/attivita/ricerca">
-                      Reset
-                    </a>
-                  </div>
-                </form>
+                {filterForm}
               </div>
             </div>
 
+            {!loaded ? (
+              <div className="results-grid" aria-hidden="true">
+                {Array.from({ length: 4 }, (_, i) => (
+                  <div className="mk-skeleton" key={i}>
+                    <div className="mk-skeleton__media"></div>
+                    <div className="mk-skeleton__body">
+                      <div className="mk-skeleton__line"></div>
+                      <div className="mk-skeleton__line is-short"></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             {loaded && cards.length === 0 ? (
               <div className="empty">
                 <h3>Nessuna attivit&agrave; trovata</h3>
@@ -452,8 +474,15 @@ export function MarketplaceSearchFaithful({
                           <path d="M20.8 4.6c-1.7-1.8-4.5-1.8-6.2 0L12 7.2 9.4 4.6c-1.7-1.8-4.5-1.8-6.2 0-1.8 1.9-1.7 4.9.1 6.7L12 20l8.7-8.7c1.8-1.8 1.9-4.8.1-6.7z"></path>
                         </svg>
                       </button>
-                      <a className="result-media" href={cardUrl}>
-                        {title}
+                      <a className="result-media" href={cardUrl} aria-label={title}>
+                        {profile.image ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={profile.image} alt="" />
+                        ) : (
+                          <span className="result-media__mark" aria-hidden="true">
+                            {initialOf(title)}
+                          </span>
+                        )}
                       </a>
                       <div className="result-body">
                         <div className="result-title">
@@ -494,88 +523,7 @@ export function MarketplaceSearchFaithful({
       </main>
 
       {/* ===================== FOOTER ===================== */}
-      <footer className="marketplace-footer">
-        <div className="marketplace-footer__inner">
-          <div className="marketplace-footer__grid">
-            <section aria-labelledby="marketplaceFooterInfoTitle">
-              <h2 id="marketplaceFooterInfoTitle">Informazioni</h2>
-              <nav className="marketplace-footer__links" aria-label="Informazioni">
-                <a href="/attivita">Cerca attivita</a>
-                <a href="/account/login">Accedi</a>
-                <a href="/#promuovi-attivita">Iscrizione aziende</a>
-                <a href="#">Chi siamo</a>
-                <a href="#">Contatta</a>
-                <a href="#">Note legali</a>
-                <a href="#">Informativa sulla privacy</a>
-                <a href="#">Informativa sui cookie</a>
-                <a href="#">Gestisci preferenze</a>
-              </nav>
-            </section>
-
-            <section aria-labelledby="marketplaceFooterAppTitle">
-              <h2 id="marketplaceFooterAppTitle">Scarica l&apos;app</h2>
-              <div className="marketplace-footer__app">
-                <span className="marketplace-footer__app-icon" aria-hidden="true">
-                  B
-                </span>
-                <p>Prenota il tuo prossimo trattamento di bellezza quando e dove vuoi.</p>
-              </div>
-              <div className="marketplace-footer__stores" aria-label="Link app">
-                <a className="marketplace-footer__store" href="/account/login?return=%2Fattivita">
-                  <small>Scarica su</small>
-                  <strong>App Store</strong>
-                </a>
-                <a className="marketplace-footer__store" href="/account/login?return=%2Fattivita">
-                  <small>Disponibile su</small>
-                  <strong>Google Play</strong>
-                </a>
-              </div>
-            </section>
-
-            <section aria-labelledby="marketplaceFooterSocialTitle">
-              <h2 id="marketplaceFooterSocialTitle">Seguici su</h2>
-              <div className="marketplace-footer__social">
-                <a className="marketplace-footer__social-link" href="#" aria-label="Facebook">
-                  f
-                </a>
-                <a className="marketplace-footer__social-link" href="#" aria-label="X">
-                  X
-                </a>
-                <a className="marketplace-footer__social-link" href="#" aria-label="Pinterest">
-                  P
-                </a>
-                <a className="marketplace-footer__social-link" href="#" aria-label="Instagram">
-                  IG
-                </a>
-                <a className="marketplace-footer__social-link" href="#" aria-label="YouTube">
-                  YT
-                </a>
-                <a className="marketplace-footer__social-link" href="#" aria-label="TikTok">
-                  TK
-                </a>
-              </div>
-            </section>
-
-            <section aria-labelledby="marketplaceFooterCountryTitle">
-              <h2 id="marketplaceFooterCountryTitle">Seleziona un paese</h2>
-              <button className="marketplace-footer__country" type="button">
-                <span>
-                  <i className="marketplace-footer__flag" aria-hidden="true"></i>Italia
-                </span>
-                <i className="marketplace-footer__chevron" aria-hidden="true"></i>
-              </button>
-            </section>
-          </div>
-
-          <div className="marketplace-footer__bottom">
-            <div className="marketplace-footer__brand">
-              <span className="marketplace-footer__brand-mark">BeautySuite</span>
-              <span>&copy; 2026 BeautySuite</span>
-            </div>
-            <span>Cerca attivita, scegli il centro e prenota online.</span>
-          </div>
-        </div>
-      </footer>
+      <MarketplaceFooter />
     </>
   );
 }

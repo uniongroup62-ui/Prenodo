@@ -218,7 +218,7 @@ export function AccountFaithful({ mode }: { mode: AccountMode }) {
           <div className="marketplace-topbar__inner">
             <a className="marketplace-topbar__brand" href="/attivita">
               <span className="marketplace-topbar__brand-mark">B</span>
-              <span>BeautySuite</span>
+              <span>Prenodo</span>
             </a>
             <form
               className="marketplace-topbar-search"

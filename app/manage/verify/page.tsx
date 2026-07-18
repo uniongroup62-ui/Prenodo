@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { ManageRegisterFaithful } from "@/components/manage-register-faithful";
 
 export const metadata: Metadata = {
-  title: "Verifica la tua email - BeautySuite",
+  title: "Verifica la tua email - Prenodo",
 };
 
 export default async function ManageVerifyPage({

@@ -120,7 +120,7 @@ export function ManageOnboardingApp({ tenantSlug }: { tenantSlug: string }) {
     <main className="min-h-screen bg-[#eef3fb] text-[#09111f]">
       <div className="mx-auto grid min-h-screen max-w-7xl gap-4 px-4 py-5 lg:grid-cols-[280px_minmax(0,1fr)]">
         <aside className="rounded-md border border-zinc-200 bg-white p-4 shadow-sm">
-          <Link className="text-lg font-semibold" href={`/${tenantSlug}/dashboard`}>BeautySuite</Link>
+          <Link className="text-lg font-semibold" href={`/${tenantSlug}/dashboard`}>Prenodo</Link>
           <p className="mt-1 text-sm text-zinc-600">{tenantSlug}</p>
           <div className="mt-5">
             <div className="flex items-center justify-between text-sm font-semibold">

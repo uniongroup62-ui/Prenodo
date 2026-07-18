@@ -169,7 +169,7 @@ export async function GET(request: Request) {
         items,
       },
       business: {
-        name: String(biz?.name ?? "BeautySuite"),
+        name: String(biz?.name ?? "Prenodo"),
         addrLine1: siteAddress,
         addrLine2: cityLine,
         addrLine3: siteRegion,

@@ -689,7 +689,7 @@ export async function publicCustomerAppointmentIcs(
     const lines = [
       "BEGIN:VCALENDAR",
       "VERSION:2.0",
-      "PRODID:-//BeautySuite//Booking//IT",
+      "PRODID:-//Prenodo//Booking//IT",
       "CALSCALE:GREGORIAN",
       "METHOD:PUBLISH",
       "X-WR-TIMEZONE:Europe/Rome",

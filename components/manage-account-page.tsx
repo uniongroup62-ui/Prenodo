@@ -318,7 +318,7 @@ export function ManageAccountPage({
                 <span className="flex h-10 w-10 items-center justify-center rounded-md bg-[#191816] text-white">
                   <Store size={18} aria-hidden />
                 </span>
-                <span className="text-lg font-semibold">BeautySuite</span>
+                <span className="text-lg font-semibold">Prenodo</span>
               </Link>
 
               {message ? (

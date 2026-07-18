@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { AccountVerifyFaithful } from "@/components/public/account-verify-faithful";
 
 export const metadata: Metadata = {
-  title: "Area cliente - BeautySuite",
+  title: "Area cliente - Prenodo",
 };
 
 export default function AccountVerifyPage() {

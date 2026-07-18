@@ -13,6 +13,76 @@ import { useEffect, useState } from "react";
 //   condivisione (copy link), object-position e sfondi city-card.
 
 // ---------------------------------------------------------------------------
+// Footer marketplace condiviso (redesign 2026-07: brand unico Prenodo, social
+// con icone SVG reali, niente badge App Store finti). Sostituisce i 4 footer
+// duplicati di list/search/detail/hub.
+// ---------------------------------------------------------------------------
+export function MarketplaceFooter() {
+  const year = new Date().getFullYear();
+  return (
+    <footer className="marketplace-footer">
+      <div className="marketplace-footer__inner">
+        <div className="marketplace-footer__grid">
+          <section aria-labelledby="marketplaceFooterBrandTitle">
+            <h2 id="marketplaceFooterBrandTitle">Prenodo</h2>
+            <div className="marketplace-footer__blurb">
+              <span className="marketplace-footer__blurb-mark" aria-hidden="true">P</span>
+              <p>Trova il tuo centro di bellezza, scegli il trattamento e prenota online in pochi passaggi.</p>
+            </div>
+          </section>
+
+          <section aria-labelledby="marketplaceFooterInfoTitle">
+            <h2 id="marketplaceFooterInfoTitle">Informazioni</h2>
+            <nav className="marketplace-footer__links" aria-label="Informazioni">
+              <a href="/attivita">Cerca attivit&agrave;</a>
+              <a href="/account/login">Accedi</a>
+              <a href="#">Note legali</a>
+              <a href="#">Informativa sulla privacy</a>
+              <a href="#">Informativa sui cookie</a>
+              <a href="#">Gestisci preferenze</a>
+            </nav>
+          </section>
+
+          <section aria-labelledby="marketplaceFooterProTitle">
+            <h2 id="marketplaceFooterProTitle">Per i professionisti</h2>
+            <nav className="marketplace-footer__links" aria-label="Per i professionisti">
+              <a href="/#promuovi-attivita">Promuovi la tua attivit&agrave;</a>
+              <a href="/login">Accedi al gestionale</a>
+            </nav>
+          </section>
+
+          <section aria-labelledby="marketplaceFooterSocialTitle">
+            <h2 id="marketplaceFooterSocialTitle">Seguici su</h2>
+            <div className="marketplace-footer__social">
+              <a className="marketplace-footer__social-link" href="#" aria-label="Instagram">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.2c3.2 0 3.6 0 4.9.1 1.2.1 1.8.2 2.2.4.6.2 1 .5 1.4.9.4.4.7.8.9 1.4.2.4.4 1 .4 2.2.1 1.3.1 1.7.1 4.9s0 3.6-.1 4.9c-.1 1.2-.2 1.8-.4 2.2-.2.6-.5 1-.9 1.4-.4.4-.8.7-1.4.9-.4.2-1 .4-2.2.4-1.3.1-1.7.1-4.9.1s-3.6 0-4.9-.1c-1.2-.1-1.8-.2-2.2-.4-.6-.2-1-.5-1.4-.9-.4-.4-.7-.8-.9-1.4-.2-.4-.4-1-.4-2.2-.1-1.3-.1-1.7-.1-4.9s0-3.6.1-4.9c.1-1.2.2-1.8.4-2.2.2-.6.5-1 .9-1.4.4-.4.8-.7 1.4-.9.4-.2 1-.4 2.2-.4 1.3-.1 1.7-.1 4.9-.1Zm0 1.8c-3.1 0-3.5 0-4.8.1-1.1.1-1.5.2-1.7.3-.4.2-.7.4-.9.6-.3.3-.5.5-.6.9-.1.3-.3.7-.3 1.8-.1 1.2-.1 1.6-.1 4.7s0 3.5.1 4.7c.1 1.1.2 1.5.3 1.8.2.4.4.7.6.9.3.3.5.5.9.6.3.1.7.3 1.7.3 1.2.1 1.6.1 4.8.1s3.5 0 4.8-.1c1.1-.1 1.5-.2 1.7-.3.4-.2.7-.4.9-.6.3-.3.5-.5.6-.9.1-.3.3-.7.3-1.8.1-1.2.1-1.6.1-4.7s0-3.5-.1-4.7c-.1-1.1-.2-1.5-.3-1.8-.2-.4-.4-.7-.6-.9-.3-.3-.5-.5-.9-.6-.3-.1-.7-.3-1.7-.3-1.2-.1-1.6-.1-4.8-.1Zm0 3.1a4.9 4.9 0 1 1 0 9.8 4.9 4.9 0 0 1 0-9.8Zm0 1.8a3.1 3.1 0 1 0 0 6.2 3.1 3.1 0 0 0 0-6.2Zm5.1-3.1a1.15 1.15 0 1 1 0 2.3 1.15 1.15 0 0 1 0-2.3Z"/></svg>
+              </a>
+              <a className="marketplace-footer__social-link" href="#" aria-label="Facebook">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 21v-7h2.4l.4-2.9h-2.8V9.2c0-.8.3-1.4 1.5-1.4h1.4V5.2c-.3 0-1.2-.1-2.2-.1-2.2 0-3.7 1.3-3.7 3.8v2.2H8v2.9h2.5v7h3Z"/></svg>
+              </a>
+              <a className="marketplace-footer__social-link" href="#" aria-label="TikTok">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.6 3c.3 1.7 1.5 3 3.4 3.3v2.6c-1.3 0-2.5-.4-3.4-1v6.4c0 3.3-2.2 5.7-5.4 5.7A5.3 5.3 0 0 1 5.9 14.7c0-3 2.4-5.3 5.5-5.2v2.7c-1.5-.2-2.8.9-2.8 2.5 0 1.5 1.1 2.6 2.5 2.6 1.6 0 2.7-1.2 2.7-3V3h2.8Z"/></svg>
+              </a>
+              <a className="marketplace-footer__social-link" href="#" aria-label="YouTube">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.6 7.2a2.5 2.5 0 0 0-1.8-1.8C18.2 5 12 5 12 5s-6.2 0-7.8.4A2.5 2.5 0 0 0 2.4 7.2 26.5 26.5 0 0 0 2 12c0 1.6.1 3.2.4 4.8a2.5 2.5 0 0 0 1.8 1.8c1.6.4 7.8.4 7.8.4s6.2 0 7.8-.4a2.5 2.5 0 0 0 1.8-1.8c.3-1.6.4-3.2.4-4.8 0-1.6-.1-3.2-.4-4.8ZM10 15.2V8.8L15.4 12 10 15.2Z"/></svg>
+              </a>
+            </div>
+          </section>
+        </div>
+
+        <div className="marketplace-footer__bottom">
+          <div className="marketplace-footer__brand">
+            <span className="marketplace-footer__brand-mark">Prenodo</span>
+            <span>&copy; {year} Prenodo</span>
+          </div>
+          <span>Cerca attivit&agrave;, scegli il centro e prenota online.</span>
+        </div>
+      </div>
+    </footer>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Menu account topbar (public_marketplace.php 1005-1066).
 // ---------------------------------------------------------------------------
 type AccountUser = { email: string; fullName: string; firstName: string; lastName: string };

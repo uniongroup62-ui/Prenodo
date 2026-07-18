@@ -385,7 +385,7 @@ export async function GET(request: Request) {
         [tenantId],
       );
       const biz = bizRows[0];
-      const bizName = String(biz?.name ?? "").trim() || "BeautySuite";
+      const bizName = String(biz?.name ?? "").trim() || "Prenodo";
       const bizEmail = String(biz?.email ?? "").trim();
       const termsRaw = String(biz?.giftbox_terms ?? "");
       // Logo: businesses.logo_path is a relative path; only usable as an email

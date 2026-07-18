@@ -850,7 +850,7 @@ export function ManageShell({
           <div className="d-flex align-items-center justify-content-between">
             <a className="brand" href={pageHref(slug, emailVerificationGate ? "accessibility" : "dashboard")}>
               <span className="mark">B</span>
-              <span className="name">BeautySuite</span>
+              <span className="name">Prenodo</span>
             </a>
             <button className="sidebar-toggle sidebar-collapse-toggle d-none d-lg-inline-flex" id="sidebarDesktopToggle" type="button" aria-label="Comprimi sidebar" aria-expanded="true">
               <i className="bi bi-chevron-left" />

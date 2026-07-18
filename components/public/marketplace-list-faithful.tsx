@@ -46,7 +46,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { MarketplaceAccountNav, useMarketplacePageEffects } from "@/components/public/marketplace-shared";
+import { MarketplaceAccountNav, MarketplaceFooter, useMarketplacePageEffects } from "@/components/public/marketplace-shared";
 
 type MarketplaceLocation = {
   id: number;
@@ -90,11 +90,11 @@ type CardItem = {
 
 // Captured verbatim from the FIRST inline <head><style> block of http://localhost/attivita.
 const TOPBAR_STYLE = `
-.marketplace-topbar{--marketplace-topbar-brand:#4e6da6;--marketplace-topbar-brand-dark:#365287;--marketplace-topbar-ink:#0f172a;--marketplace-topbar-muted:#64748b;--marketplace-topbar-line:#dbe3ef;--marketplace-topbar-soft:#eef4ff;--marketplace-topbar-pad:clamp(18px,5vw,72px);--marketplace-topbar-max:none;--marketplace-topbar-search-width:900px;--marketplace-topbar-search-reserve:560px;height:68px;background:#fff;border-bottom:1px solid var(--marketplace-topbar-line);padding:0 var(--marketplace-topbar-pad);position:sticky;top:0;z-index:30;color:var(--marketplace-topbar-ink)}
+.marketplace-topbar{--marketplace-topbar-brand:#0f766e;--marketplace-topbar-brand-dark:#0a5b54;--marketplace-topbar-ink:#0f172a;--marketplace-topbar-muted:#64748b;--marketplace-topbar-line:#dbe3ef;--marketplace-topbar-soft:#e7f3f1;--marketplace-topbar-pad:clamp(18px,5vw,72px);--marketplace-topbar-max:none;--marketplace-topbar-search-width:900px;--marketplace-topbar-search-reserve:560px;height:68px;background:#fff;border-bottom:1px solid var(--marketplace-topbar-line);padding:0 var(--marketplace-topbar-pad);position:sticky;top:0;z-index:30;color:var(--marketplace-topbar-ink)}
 .marketplace-topbar__inner{position:relative;width:100%;max-width:var(--marketplace-topbar-max);height:100%;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:18px}
 .marketplace-topbar__brand{height:68px;display:flex;gap:12px;align-items:center;justify-self:start;padding:0;background:transparent;color:inherit;text-decoration:none;font-size:18px;line-height:1;font-weight:600;min-width:0}
 .marketplace-topbar__brand:hover,.marketplace-topbar__brand:focus,.marketplace-topbar__brand:active,.marketplace-topbar__brand:visited{background:transparent;color:inherit;text-decoration:none;box-shadow:none}
-.marketplace-topbar__brand:focus-visible{outline:2px solid rgba(78,109,166,.34);outline-offset:4px;border-radius:12px}
+.marketplace-topbar__brand:focus-visible{outline:2px solid rgba(15,118,110,.34);outline-offset:4px;border-radius:12px}
 .marketplace-topbar__brand:hover .marketplace-topbar__brand-mark,.marketplace-topbar__brand:focus .marketplace-topbar__brand-mark,.marketplace-topbar__brand:active .marketplace-topbar__brand-mark{background:var(--marketplace-topbar-brand);color:#fff}
 .marketplace-topbar__brand-mark{width:34px;height:34px;border-radius:10px;background:var(--marketplace-topbar-brand);color:#fff;display:grid;place-items:center;font-weight:600}
 .marketplace-topbar-search{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);justify-self:center;align-self:center;width:min(var(--marketplace-topbar-search-width),calc(100% - var(--marketplace-topbar-search-reserve)));height:52px;border:1px solid var(--marketplace-topbar-line);border-radius:999px;background:#fff;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 56px;align-items:center;overflow:visible;box-shadow:none}
@@ -106,7 +106,7 @@ const TOPBAR_STYLE = `
 .marketplace-topbar-treatment-field{position:relative}
 .marketplace-topbar-treatment-field input[type="hidden"]{display:none}
 .marketplace-topbar-treatment-trigger{width:100%;min-width:0;border:0;border-radius:0;background:transparent;color:#94a3b8;padding:0;text-align:left;font:inherit;font-size:14px;font-weight:600;line-height:1.2;display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer}
-.marketplace-topbar-treatment-trigger:focus-visible{outline:2px solid rgba(78,109,166,.35);outline-offset:4px;border-radius:8px}
+.marketplace-topbar-treatment-trigger:focus-visible{outline:2px solid rgba(15,118,110,.35);outline-offset:4px;border-radius:8px}
 .marketplace-topbar-treatment-label{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:none!important;letter-spacing:0!important;color:#94a3b8!important;font-size:14px!important;font-weight:600!important;line-height:1.2!important}
 .marketplace-topbar-treatment-chevron{width:16px;height:16px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .marketplace-topbar-treatment-panel{position:absolute;left:0;top:calc(100% + 8px);z-index:90;width:min(430px,calc(100vw - 32px));max-height:460px;overflow:hidden;border:1px solid var(--marketplace-topbar-line,#dbe3ef);border-radius:18px;background:#fff;padding:10px;box-shadow:0 22px 54px rgba(15,23,42,.16);display:flex;flex-direction:column;gap:8px}
@@ -117,14 +117,14 @@ const TOPBAR_STYLE = `
 .marketplace-topbar-treatment-field .marketplace-topbar-treatment-search{display:block;width:100%;min-width:0;height:40px;border:0;border-radius:14px;background:#f6f8fb;color:var(--marketplace-topbar-ink,#0f172a);padding:0 14px;font:inherit;font-size:14px;font-weight:600;line-height:40px;outline:0;box-shadow:none;appearance:none}
 .marketplace-topbar-treatment-field .marketplace-topbar-treatment-search[hidden]{display:none}
 .marketplace-topbar-treatment-field .marketplace-topbar-treatment-search::placeholder{color:var(--marketplace-topbar-muted,#64748b);opacity:1;font-weight:600}
-.marketplace-topbar-treatment-field .marketplace-topbar-treatment-search:focus{background:#f6f8fb;box-shadow:0 0 0 3px rgba(78,109,166,.12)}
+.marketplace-topbar-treatment-field .marketplace-topbar-treatment-search:focus{background:#f6f8fb;box-shadow:0 0 0 3px rgba(15,118,110,.12)}
 .marketplace-topbar-treatment-lists{min-height:0;overflow:hidden}
 .marketplace-topbar-treatment-list{display:grid;gap:4px;max-height:320px;overflow:auto;padding-right:2px}
 .marketplace-topbar-treatment-list[hidden]{display:none}
 .marketplace-topbar-treatment-option{width:100%;min-height:52px;border:0;border-radius:14px;background:#fff;color:var(--marketplace-topbar-ink,#0f172a);padding:8px 10px;text-align:left;font:inherit;font-size:14px;font-weight:600;display:flex;align-items:center;gap:12px;cursor:pointer}
-.marketplace-topbar-treatment-option:hover,.marketplace-topbar-treatment-option.is-active,.marketplace-topbar-treatment-option.is-highlighted{background:var(--marketplace-topbar-soft,#eef4ff);color:var(--marketplace-topbar-brand,#4e6da6)}
+.marketplace-topbar-treatment-option:hover,.marketplace-topbar-treatment-option.is-active,.marketplace-topbar-treatment-option.is-highlighted{background:var(--marketplace-topbar-soft,#e7f3f1);color:var(--marketplace-topbar-brand,#0f766e)}
 .marketplace-topbar-treatment-icon,.marketplace-topbar-treatment-avatar{width:34px;height:34px;border-radius:50%;background:#f1efff;color:#6d5dfc;display:grid;place-items:center;flex:0 0 auto;font-size:14px;font-weight:800}
-.marketplace-topbar-treatment-option.is-active .marketplace-topbar-treatment-icon,.marketplace-topbar-treatment-option.is-active .marketplace-topbar-treatment-avatar{background:#e6efff;color:var(--marketplace-topbar-brand,#4e6da6)}
+.marketplace-topbar-treatment-option.is-active .marketplace-topbar-treatment-icon,.marketplace-topbar-treatment-option.is-active .marketplace-topbar-treatment-avatar{background:#dcefeb;color:var(--marketplace-topbar-brand,#0f766e)}
 .marketplace-topbar-treatment-icon svg{width:18px;height:18px;display:block;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
 .marketplace-topbar-treatment-icon .bi{display:block;font-size:18px;line-height:1}
 .marketplace-topbar-treatment-copy{min-width:0;display:grid;gap:2px}
@@ -132,7 +132,7 @@ const TOPBAR_STYLE = `
 .marketplace-topbar-treatment-meta{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:none!important;letter-spacing:0!important;color:var(--marketplace-topbar-muted,#64748b)!important;font-size:12px!important;font-weight:600!important;line-height:1.2!important}
 .marketplace-topbar-treatment-empty{display:none;padding:14px 10px;color:var(--marketplace-topbar-muted,#64748b);font-size:13px;font-weight:600}
 .marketplace-topbar-treatment-empty.is-visible{display:block}
-.marketplace-topbar-search > button[type="submit"]{justify-self:end;align-self:center;width:40px;height:40px;margin-right:6px;border:0;border-radius:50%;background:#4e6da6;color:#fff;display:grid;place-items:center;cursor:pointer}
+.marketplace-topbar-search > button[type="submit"]{justify-self:end;align-self:center;width:40px;height:40px;margin-right:6px;border:0;border-radius:50%;background:#0f766e;color:#fff;display:grid;place-items:center;cursor:pointer}
 .marketplace-topbar-search > button[type="submit"] svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .marketplace-topbar-city-suggestions{position:absolute;left:calc((100% - 56px) / 2 + 8px);right:64px;top:calc(100% + 8px);z-index:80;display:grid;gap:2px;max-height:248px;overflow-y:auto;overflow-x:hidden;border:1px solid var(--marketplace-topbar-line);border-radius:14px;background:#fff;padding:6px;box-shadow:0 18px 42px rgba(15,23,42,.16)}
 .marketplace-topbar-city-suggestions[hidden]{display:none}
@@ -152,7 +152,7 @@ body.embed-body footer.marketplace-footer,footer.marketplace-footer{display:bloc
 .marketplace-footer h2{font-size:18px;line-height:1.2;margin:0 0 20px;color:var(--ink,#0f172a);font-weight:600;letter-spacing:0}
 .marketplace-footer__links{display:grid;gap:12px}
 .marketplace-footer__links a{color:#64748b;font-size:15px;line-height:1.25;text-decoration:none}
-.marketplace-footer__links a:hover{color:var(--brand,#4e6da6)}
+.marketplace-footer__links a:hover{color:var(--brand,#0f766e)}
 .marketplace-footer__app{display:grid;grid-template-columns:52px minmax(0,1fr);gap:16px;align-items:start;margin-bottom:16px}
 .marketplace-footer__app-icon{width:52px;height:52px;border-radius:8px;background:#fb7185;color:#fff;display:grid;place-items:center;font-size:28px;font-weight:600}
 .marketplace-footer__app p{margin:0;color:#0f172a;font-size:16px;line-height:1.45}
@@ -162,7 +162,7 @@ body.embed-body footer.marketplace-footer,footer.marketplace-footer{display:bloc
 .marketplace-footer__store strong{font-size:16px;font-weight:600}
 .marketplace-footer__social{display:flex;gap:10px;flex-wrap:wrap}
 .marketplace-footer__social-link{width:40px;height:40px;border-radius:50%;border:1px solid #d4dce8;background:#fff;color:#64748b;display:grid;place-items:center;font-size:15px;font-weight:600;text-decoration:none}
-.marketplace-footer__social-link:hover{border-color:var(--brand,#4e6da6);color:var(--brand,#4e6da6)}
+.marketplace-footer__social-link:hover{border-color:var(--brand,#0f766e);color:var(--brand,#0f766e)}
 .marketplace-footer__country{height:54px;border:1px solid #d4dce8;border-radius:8px;background:#fff;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:0 16px;min-width:260px;color:#0f172a;font-weight:600}
 .marketplace-footer__country span{display:flex;align-items:center;gap:10px}
 .marketplace-footer__flag{width:21px;height:15px;border-radius:2px;box-shadow:0 0 0 1px rgba(15,23,42,.08);background:linear-gradient(90deg,#22c55e 0 33.33%,#fff 33.33% 66.66%,#ef4444 66.66%)}
@@ -196,18 +196,12 @@ const TREATMENT_CATEGORIES: Array<{ label: string; icon: string; search: string 
   { label: "Toelettatura animali", icon: "bi-gem", search: "Toelettatura animali toelettatura-animali" },
 ];
 
-// City-discovery cards captured verbatim from the legacy markup.
-const DISCOVERY_CITIES: Array<{ name: string; image: string }> = [
-  { name: "Roma", image: "https://images.unsplash.com/photo-1552832230-c0197dd311b5?auto=format&fit=crop&w=900&q=80" },
-  { name: "Milano", image: "https://images.unsplash.com/photo-1516483638261-f4dbaf036963?auto=format&fit=crop&w=900&q=80" },
-  { name: "Napoli", image: "https://images.unsplash.com/photo-1533105079780-92b9be482077?auto=format&fit=crop&w=900&q=80" },
-  { name: "Torino", image: "https://images.unsplash.com/photo-1608749676846-4d2d8c7c622d?auto=format&fit=crop&w=900&q=80" },
-  { name: "Palermo", image: "https://images.unsplash.com/photo-1601397922721-4326ae07bbc5?auto=format&fit=crop&w=900&q=80" },
-  { name: "Genova", image: "https://images.unsplash.com/photo-1599689019338-50deb475f380?auto=format&fit=crop&w=900&q=80" },
-  { name: "Bologna", image: "https://images.unsplash.com/photo-1555949963-aa79dcee981c?auto=format&fit=crop&w=900&q=80" },
-  { name: "Firenze", image: "https://images.unsplash.com/photo-1543429257-3eb0b65d9c58?auto=format&fit=crop&w=900&q=80" },
-  { name: "Bari", image: "https://images.unsplash.com/photo-1566221322140-dfcaa0c9fe52?auto=format&fit=crop&w=900&q=80" },
-  { name: "Catania", image: "https://images.unsplash.com/photo-1605130284535-11dd9eedc58a?auto=format&fit=crop&w=900&q=80" },
+// Città in evidenza (redesign 2026-07): card DISEGNATE a gradiente — le foto
+// Unsplash del legacy erano placeholder mai curati (Bologna mostrava una
+// schermata di codice, Catania la Statua della Libertà).
+const DISCOVERY_CITIES: string[] = [
+  "Roma", "Milano", "Napoli", "Torino", "Palermo",
+  "Genova", "Bologna", "Firenze", "Bari", "Catania",
 ];
 
 function initial(value: string): string {
@@ -318,10 +312,8 @@ export function MarketplaceListFaithful() {
 
   return (
     <>
-      {/* Page CSS (verbatim from the original <link>). Inline <style> blocks captured verbatim. */}
+      {/* Design system marketplace (redesign 2026-07): tutto vive nel CSS linkato. */}
       <link rel="stylesheet" href="/assets/css/pages/public_marketplace.css" />
-      <style dangerouslySetInnerHTML={{ __html: TOPBAR_STYLE }} />
-      <style dangerouslySetInnerHTML={{ __html: FOOTER_STYLE }} />
 
       {/* ===================== TOPBAR ===================== */}
       <header
@@ -337,8 +329,8 @@ export function MarketplaceListFaithful() {
       >
         <div className="marketplace-topbar__inner">
           <a className="marketplace-topbar__brand" href="/">
-            <span className="marketplace-topbar__brand-mark">B</span>
-            <span>BeautySuite</span>
+            <span className="marketplace-topbar__brand-mark">P</span>
+            <span>Prenodo</span>
           </a>
           {/* Menu account cablato (toggle + variante loggata, initAccountMenus legacy). */}
           <MarketplaceAccountNav />
@@ -348,8 +340,10 @@ export function MarketplaceListFaithful() {
       {/* ===================== HERO + SEARCH ===================== */}
       <section className="hero">
         <div className="hero-inner">
-          <h1>Prenota nelle attivit&agrave; disponibili</h1>
-          <p>Cerca un centro per citt&agrave; o trattamento e apri subito la pagina di prenotazione online.</p>
+          <h1>
+            Il tuo momento di bellezza, <em>prenotato</em> in un attimo
+          </h1>
+          <p>Centri estetici, parrucchieri e spa nella tua citt&agrave;: scegli il trattamento e prenota online in pochi passaggi.</p>
           <form
             className="search-box"
             method="get"
@@ -588,6 +582,19 @@ export function MarketplaceListFaithful() {
           <p>{allCards.length} risultato/i disponibili.</p>
         </div>
 
+        {!loaded ? (
+          <div className="grid" aria-hidden="true">
+            {Array.from({ length: 4 }, (_, i) => (
+              <div className="mk-skeleton" key={i}>
+                <div className="mk-skeleton__media"></div>
+                <div className="mk-skeleton__body">
+                  <div className="mk-skeleton__line"></div>
+                  <div className="mk-skeleton__line is-short"></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
         <div className="grid">
           {allCards.map((card) => {
             const { profile, location, favoriteKey, locationSlug } = card;
@@ -614,8 +621,15 @@ export function MarketplaceListFaithful() {
                     <path d="M20.8 4.6c-1.7-1.8-4.5-1.8-6.2 0L12 7.2 9.4 4.6c-1.7-1.8-4.5-1.8-6.2 0-1.8 1.9-1.7 4.9.1 6.7L12 20l8.7-8.7c1.8-1.8 1.9-4.8.1-6.7z"></path>
                   </svg>
                 </button>
-                <a className="tenant-media" href={schedaHref}>
-                  {location.name}
+                <a className="tenant-media" href={schedaHref} aria-label={location.name}>
+                  {profile.image ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={profile.image} alt="" />
+                  ) : (
+                    <span className="tenant-media__mark" aria-hidden="true">
+                      {initial(location.name || profile.name)}
+                    </span>
+                  )}
                 </a>
                 <div className="tenant-body">
                   <div className="tenant-title">
@@ -661,189 +675,85 @@ export function MarketplaceListFaithful() {
             <p>Parti dalle principali citt&agrave; italiane e trova subito i centri pubblicati.</p>
           </div>
           <div className="city-grid">
-            {DISCOVERY_CITIES.map((cityItem) => (
+            {DISCOVERY_CITIES.map((cityName) => (
               <a
-                key={cityItem.name}
+                key={cityName}
                 className="city-card"
-                href={`/attivita/ricerca?city=${encodeURIComponent(cityItem.name)}`}
-                data-city-image={cityItem.image}
+                href={`/attivita/ricerca?city=${encodeURIComponent(cityName)}`}
               >
-                <span>{cityItem.name}</span>
+                <span>{cityName}</span>
               </a>
             ))}
           </div>
         </section>
 
-        {/* App + Partner CTAs: faithful-but-static (decorative). */}
+        {/* CTA partner (redesign 2026-07: via la CTA "app" con badge store
+            finti e la CSS-art; resta UNA sezione partner con illustrazione
+            SVG controllata, ancorata da /#promuovi-attivita). */}
         <div className="marketplace-cta-stack">
-          <section className="app-cta" aria-labelledby="marketplaceAppTitle">
-            <div className="app-cta__copy">
-              <h2 id="marketplaceAppTitle">Scarica la nostra app</h2>
-              <p>Prenota il tuo prossimo trattamento di bellezza in pochi clic.</p>
-              <a className="btn app-cta__button" href="/account/login?return=%2Fattivita">
-                Scarica subito
-              </a>
-            </div>
-            <div className="app-cta__visual" aria-hidden="true">
-              <span className="app-wave"></span>
-              <span className="map-pin pin-1"></span>
-              <span className="map-pin pin-2 is-green"></span>
-              <span className="map-pin pin-3"></span>
-              <span className="map-pin pin-4 is-green"></span>
-              <span className="map-pin pin-5"></span>
-              <span className="map-pin pin-6 is-green"></span>
-              <span className="map-pin pin-7"></span>
-              <span className="map-pin pin-8"></span>
-              <span className="app-phone"></span>
-              <span className="app-hand"></span>
-            </div>
-          </section>
-
           <section className="partner-cta" id="promuovi-attivita" aria-labelledby="partnerCtaTitle">
-            <span className="partner-curve" aria-hidden="true"></span>
             <div className="partner-cta__copy">
-              <h2 id="partnerCtaTitle">
-                Hai un&apos;attivit&agrave; di bellezza?
-                <br />
-                Portala online.
-              </h2>
+              <p className="partner-cta__kicker">Per i professionisti</p>
+              <h2 id="partnerCtaTitle">Hai un&apos;attivit&agrave; di bellezza? Portala online.</h2>
               <p>
-                Ti aiutiamo a gestire agenda, clienti e prenotazioni online con strumenti semplici per far
-                crescere il tuo centro.
+                Agenda, clienti, promozioni e prenotazioni online in un unico gestionale — e la tua
+                vetrina su Prenodo per farti trovare da nuovi clienti.
               </p>
-              <a className="btn partner-cta__button" href="/account/login?return=%2Fattivita">
-                Diventa nostro Partner
+              <ul className="partner-cta__points">
+                <li>Prenotazioni online 24/7 con conferme automatiche</li>
+                <li>Agenda, cassa e schede clienti in un unico posto</li>
+                <li>Promemoria via email e SMS per ridurre i no-show</li>
+              </ul>
+              <a className="btn partner-cta__button" href="/login">
+                Inizia da qui
               </a>
             </div>
             <div className="partner-cta__visual" aria-hidden="true">
-              <div className="calendar-board">
-                <div className="calendar-board__top">
-                  <span>Sarah&apos;s Day Spa</span>
-                  <span className="calendar-dots">
-                    <span>Febbraio 2026</span>
-                    <span>30%</span>
-                  </span>
-                </div>
-                <div className="calendar-grid">
-                  <span className="calendar-cell">
-                    <span className="calendar-avatar"></span>
-                    <span className="calendar-event"></span>
-                  </span>
-                  <span className="calendar-cell">
-                    <span className="calendar-avatar"></span>
-                    <span className="calendar-event is-muted"></span>
-                  </span>
-                  <span className="calendar-cell">
-                    <span className="calendar-avatar"></span>
-                    <span className="calendar-event"></span>
-                  </span>
-                  <span className="calendar-cell">
-                    <span className="calendar-avatar"></span>
-                    <span className="calendar-event is-muted"></span>
-                  </span>
-                  <span className="calendar-cell">
-                    <span className="calendar-avatar"></span>
-                    <span className="calendar-event"></span>
-                  </span>
-                </div>
-              </div>
-              <div className="phone-board">
-                <div className="phone-board__top"></div>
-                <div className="phone-event"></div>
-                <div className="phone-event"></div>
-              </div>
-              <div className="notify-card">
-                <strong>Nuova prenotazione</strong>
-                Hai ricevuto una richiesta per domani alle 17:00.
-              </div>
+              <svg viewBox="0 0 440 300" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="30" y="18" width="380" height="250" rx="18" fill="#f6f3ec" />
+                <rect x="30" y="18" width="380" height="46" rx="18" fill="#ffffff" />
+                <rect x="30" y="46" width="380" height="18" fill="#ffffff" />
+                <circle cx="58" cy="41" r="10" fill="#0f766e" />
+                <rect x="78" y="34" width="92" height="7" rx="3.5" fill="#221f1a" opacity=".8" />
+                <rect x="78" y="46" width="56" height="5" rx="2.5" fill="#6f6a60" opacity=".55" />
+                <rect x="318" y="32" width="72" height="18" rx="9" fill="#0f766e" />
+                <g opacity=".55">
+                  <rect x="52" y="84" width="64" height="6" rx="3" fill="#6f6a60" />
+                  <rect x="52" y="132" width="64" height="6" rx="3" fill="#6f6a60" />
+                  <rect x="52" y="180" width="64" height="6" rx="3" fill="#6f6a60" />
+                  <rect x="52" y="228" width="64" height="6" rx="3" fill="#6f6a60" />
+                </g>
+                <rect x="140" y="76" width="118" height="40" rx="8" fill="#0f766e" opacity=".14" />
+                <rect x="140" y="76" width="4" height="40" rx="2" fill="#0f766e" />
+                <rect x="152" y="86" width="70" height="6" rx="3" fill="#0a5b54" />
+                <rect x="152" y="98" width="46" height="5" rx="2.5" fill="#0a5b54" opacity=".6" />
+                <rect x="270" y="100" width="118" height="40" rx="8" fill="#8a6a3b" opacity=".16" />
+                <rect x="270" y="100" width="4" height="40" rx="2" fill="#8a6a3b" />
+                <rect x="282" y="110" width="70" height="6" rx="3" fill="#5d4626" />
+                <rect x="282" y="122" width="42" height="5" rx="2.5" fill="#5d4626" opacity=".6" />
+                <rect x="140" y="124" width="118" height="40" rx="8" fill="#3e6a80" opacity=".16" />
+                <rect x="140" y="124" width="4" height="40" rx="2" fill="#3e6a80" />
+                <rect x="152" y="134" width="62" height="6" rx="3" fill="#28495a" />
+                <rect x="152" y="146" width="40" height="5" rx="2.5" fill="#28495a" opacity=".6" />
+                <rect x="270" y="172" width="118" height="40" rx="8" fill="#0f766e" opacity=".14" />
+                <rect x="270" y="172" width="4" height="40" rx="2" fill="#0f766e" />
+                <rect x="282" y="182" width="66" height="6" rx="3" fill="#0a5b54" />
+                <rect x="282" y="194" width="44" height="5" rx="2.5" fill="#0a5b54" opacity=".6" />
+                <g>
+                  <rect x="204" y="216" width="206" height="62" rx="14" fill="#ffffff" />
+                  <circle cx="232" cy="247" r="13" fill="#0f766e" />
+                  <path d="M226.5 247.5 230 251l9-9" stroke="#fff" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+                  <rect x="254" y="234" width="118" height="7" rx="3.5" fill="#221f1a" opacity=".85" />
+                  <rect x="254" y="248" width="88" height="6" rx="3" fill="#6f6a60" opacity=".6" />
+                </g>
+              </svg>
             </div>
           </section>
         </div>
       </main>
 
       {/* ===================== FOOTER ===================== */}
-      <footer className="marketplace-footer">
-        <div className="marketplace-footer__inner">
-          <div className="marketplace-footer__grid">
-            <section aria-labelledby="marketplaceFooterInfoTitle">
-              <h2 id="marketplaceFooterInfoTitle">Informazioni</h2>
-              <nav className="marketplace-footer__links" aria-label="Informazioni">
-                <a href="/attivita">Cerca attivit&agrave;</a>
-                <a href="/account/login">Accedi</a>
-                <a href="/#promuovi-attivita">Iscrizione aziende</a>
-                <a href="#">Chi siamo</a>
-                <a href="#">Contatta</a>
-                <a href="#">Note legali</a>
-                <a href="#">Informativa sulla privacy</a>
-                <a href="#">Informativa sui cookie</a>
-                <a href="#">Gestisci preferenze</a>
-              </nav>
-            </section>
-
-            <section aria-labelledby="marketplaceFooterAppTitle">
-              <h2 id="marketplaceFooterAppTitle">Scarica l&apos;app</h2>
-              <div className="marketplace-footer__app">
-                <span className="marketplace-footer__app-icon" aria-hidden="true">
-                  B
-                </span>
-                <p>Prenota il tuo prossimo trattamento di bellezza quando e dove vuoi.</p>
-              </div>
-              <div className="marketplace-footer__stores" aria-label="Link app">
-                <a className="marketplace-footer__store" href="/account/login?return=%2Fattivita">
-                  <small>Scarica su</small>
-                  <strong>App Store</strong>
-                </a>
-                <a className="marketplace-footer__store" href="/account/login?return=%2Fattivita">
-                  <small>Disponibile su</small>
-                  <strong>Google Play</strong>
-                </a>
-              </div>
-            </section>
-
-            <section aria-labelledby="marketplaceFooterSocialTitle">
-              <h2 id="marketplaceFooterSocialTitle">Seguici su</h2>
-              <div className="marketplace-footer__social">
-                <a className="marketplace-footer__social-link" href="#" aria-label="Facebook">
-                  f
-                </a>
-                <a className="marketplace-footer__social-link" href="#" aria-label="X">
-                  X
-                </a>
-                <a className="marketplace-footer__social-link" href="#" aria-label="Pinterest">
-                  P
-                </a>
-                <a className="marketplace-footer__social-link" href="#" aria-label="Instagram">
-                  IG
-                </a>
-                <a className="marketplace-footer__social-link" href="#" aria-label="YouTube">
-                  YT
-                </a>
-                <a className="marketplace-footer__social-link" href="#" aria-label="TikTok">
-                  TK
-                </a>
-              </div>
-            </section>
-
-            <section aria-labelledby="marketplaceFooterCountryTitle">
-              <h2 id="marketplaceFooterCountryTitle">Seleziona un paese</h2>
-              <button className="marketplace-footer__country" type="button">
-                <span>
-                  <i className="marketplace-footer__flag" aria-hidden="true"></i>Italia
-                </span>
-                <i className="marketplace-footer__chevron" aria-hidden="true"></i>
-              </button>
-            </section>
-          </div>
-
-          <div className="marketplace-footer__bottom">
-            <div className="marketplace-footer__brand">
-              <span className="marketplace-footer__brand-mark">BeautySuite</span>
-              <span>&copy; 2026 BeautySuite</span>
-            </div>
-            <span>Cerca attivit&agrave;, scegli il centro e prenota online.</span>
-          </div>
-        </div>
-      </footer>
+      <MarketplaceFooter />
     </>
   );
 }

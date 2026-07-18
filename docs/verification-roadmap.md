@@ -15934,3 +15934,49 @@ Verifica: render-test 10/10 (S1 = brandedSubject assente dall'API),
 tsc pulito, grep zero residui; batterie preventivi-mutations 11/11,
 accessibilita-pass2 17/17, moduli-consenso-pass2 14/14. Galleria
 anteprime rigenerata sullo stesso artifact.
+
+## 2026-07-18 — REDESIGN MARKETPLACE (divergenza deliberata approvata:
+## "prova a farlo al massimo dopo se non va bene ripristiniamo")
+
+Prima divergenza estetica volontaria dal legacy: nuova identità della
+superficie PUBBLICA (marketplace, booking, account cliente, auth).
+Rollback = revert di questo commit.
+
+IDENTITÀ: brand unico Prenodo (eliminato il doppio brand BeautySuite
+che sopravviveva in topbar/footer/titoli/fallback — 29 file);
+palette teal #0f766e (la stessa delle email) su neutri CALDI
+sabbia/avorio; tipografia Fraunces (display, next/font) + Inter;
+dark mode completo a token (prefers-color-scheme) su
+public_marketplace.css RISCRITTO da zero (token, ombre a 2 livelli,
+radius system, motion con prefers-reduced-motion).
+
+LAYOUT: home = hero gradiente con search pill protagonista, card
+attività con immagine reale (profile.image, PRIMA mai renderizzata)
+o monogramma disegnato (fix doppio-nome), città come card DISEGNATE
+(le foto Unsplash sbagliate — Bologna=codice, Catania=Statua della
+Libertà — eliminate), CTA app FINTA rimossa (badge store inesistenti),
+partner-cta ridisegnata con SVG autoriale e bullet;
+ricerca = filtri in SIDEBAR sticky su desktop (modal solo mobile,
+form unico renderizzato 2 volte), skeleton shimmer, card con media;
+dettaglio = cover gradiente disegnata (via l'empty grigio 'Copertina
+attività'/'ATTIVITA'), logo ad anello, sidebar gerarchizzata;
+footer UNICO componente condiviso (MarketplaceFooter in
+marketplace-shared) al posto di 4 copie — social con icone SVG reali.
+
+ARCHITETTURA CSS: i 3 blocchi inline verbatim (TOKEN/TOPBAR/FOOTER
+_STYLE) non vengono più renderizzati — tutte le superfici (incl.
+per-tenant-hub) linkano public_marketplace.css; retint teal di
+public_account/booking/booking-wizard.css + stili inline dei
+componenti account/hub + modern-auth-style.ts (auth gestionale
+inclusa: era il blu #1f7fb7/#4e6da6).
+
+NON TOCCATO: motori e API (slot/hold/confirm, preferiti, ricerca,
+account) — redesign SOLO presentazionale. SSR/SEO del dettaglio =
+fase successiva proposta, non inclusa.
+
+VERIFICA: tsc pulito; screenshot Playwright desktop+mobile su
+home/ricerca/dettaglio/login (Fraunces carica, teal ovunque,
+computed-style bottone auth rgb(15,118,110)); e2e-booking-marketplace
+26/26 CLEAN. RILIEVO PREESISTENTE (non del redesign, provato con
+stash sul codice vecchio): hydration mismatch dev-only sulla pagina
+dettaglio attività.

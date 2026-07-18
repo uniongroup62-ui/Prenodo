@@ -36,7 +36,7 @@ const HUB_SECTIONS = new Set<HubSection>([
 ]);
 
 export const metadata: Metadata = {
-  title: "Prenotazione online - BeautySuite",
+  title: "Prenotazione online - Prenodo",
 };
 
 export default async function TenantBookingPage({

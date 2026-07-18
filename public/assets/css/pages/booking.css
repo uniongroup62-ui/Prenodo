@@ -164,7 +164,7 @@
   line-height:1;
 }
 .booking-bottom-nav__item.is-active{
-  color:#4e6da6;
+  color:#0f766e;
 }
 .confirm-service-copy{
   flex:1;
@@ -558,7 +558,7 @@
   align-items:center;
   justify-content:center;
   border-radius:18px;
-  background:#eef4ff;
+  background:#e7f3f1;
   color:#4f70ad;
   font-size:28px;
   margin-bottom:18px;
@@ -837,7 +837,7 @@
 }
 .price-pill{
   background:#eff6ff;
-  color:#4e6da5;
+  color:#0f766e;
   border-radius:999px;
   padding:6px 10px;
   font-weight:600;
@@ -847,7 +847,7 @@
   display:inline-flex;
   align-items:center;
   gap:6px;
-  color:#4e6da5;
+  color:#0f766e;
   font-weight:600;
   font-size:13px;
   text-decoration:none;
@@ -1159,7 +1159,7 @@
   min-height:30px;
   padding:0 11px;
   border-radius:999px;
-  background:#4e6da6;
+  background:#0f766e;
   color:#fff;
   text-decoration:none;
   font-size:11px;
@@ -1542,9 +1542,9 @@
 .credit-hero{
   padding:26px;
   border-radius:12px;
-  background:#4e6da6;
+  background:#0f766e;
   color:#fff;
-  box-shadow:0 18px 42px rgba(78,109,166,.24);
+  box-shadow:0 18px 42px rgba(15,118,110,.24);
 }
 .credit-hero__label{
   display:flex;
@@ -1839,7 +1839,7 @@
   gap:6px;
   padding:0 12px;
   border-radius:999px;
-  background:#4e6da6;
+  background:#0f766e;
   color:#fff;
   text-decoration:none;
   font-size:12px;
@@ -1852,7 +1852,7 @@
 .benefit-owned-action.is-soft{
   border:1px solid #cbd5e1;
   background:#fff;
-  color:#4e6da6;
+  color:#0f766e;
 }
 .benefit-owned-action.is-soft:hover{
   background:#f8fafc;
@@ -1944,7 +1944,7 @@
   gap:6px;
   padding:0 11px;
   border-radius:999px;
-  background:#4e6da6;
+  background:#0f766e;
   color:#fff;
   text-decoration:none;
   font-size:11px;
@@ -2208,9 +2208,9 @@
   padding:26px;
   border:0;
   border-radius:12px;
-  background:#4e6da6;
+  background:#0f766e;
   color:#fff;
-  box-shadow:0 18px 42px rgba(78,109,166,.24);
+  box-shadow:0 18px 42px rgba(15,118,110,.24);
 }
 .fid-hero__label{
   display:flex;

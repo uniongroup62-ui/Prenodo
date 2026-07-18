@@ -29,11 +29,11 @@ import { accountAuthDestination } from "@/components/public/account-auth-destina
 // Inline <head><style> block captured verbatim from the PHP page. Scopes the
 // marketplace topbar (search picker chrome) used at the top of the page.
 const TOPBAR_STYLE = `
-.marketplace-topbar{--marketplace-topbar-brand:#4e6da6;--marketplace-topbar-brand-dark:#365287;--marketplace-topbar-ink:#0f172a;--marketplace-topbar-muted:#64748b;--marketplace-topbar-line:#dbe3ef;--marketplace-topbar-soft:#eef4ff;--marketplace-topbar-pad:clamp(18px,5vw,72px);--marketplace-topbar-max:none;--marketplace-topbar-search-width:900px;--marketplace-topbar-search-reserve:560px;height:68px;background:#fff;border-bottom:1px solid var(--marketplace-topbar-line);padding:0 var(--marketplace-topbar-pad);position:sticky;top:0;z-index:30;color:var(--marketplace-topbar-ink)}
+.marketplace-topbar{--marketplace-topbar-brand:#0f766e;--marketplace-topbar-brand-dark:#0a5b54;--marketplace-topbar-ink:#0f172a;--marketplace-topbar-muted:#64748b;--marketplace-topbar-line:#dbe3ef;--marketplace-topbar-soft:#e7f3f1;--marketplace-topbar-pad:clamp(18px,5vw,72px);--marketplace-topbar-max:none;--marketplace-topbar-search-width:900px;--marketplace-topbar-search-reserve:560px;height:68px;background:#fff;border-bottom:1px solid var(--marketplace-topbar-line);padding:0 var(--marketplace-topbar-pad);position:sticky;top:0;z-index:30;color:var(--marketplace-topbar-ink)}
 .marketplace-topbar__inner{position:relative;width:100%;max-width:var(--marketplace-topbar-max);height:100%;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:18px}
 .marketplace-topbar__brand{height:68px;display:flex;gap:12px;align-items:center;justify-self:start;padding:0;background:transparent;color:inherit;text-decoration:none;font-size:18px;line-height:1;font-weight:600;min-width:0}
 .marketplace-topbar__brand:hover,.marketplace-topbar__brand:focus,.marketplace-topbar__brand:active,.marketplace-topbar__brand:visited{background:transparent;color:inherit;text-decoration:none;box-shadow:none}
-.marketplace-topbar__brand:focus-visible{outline:2px solid rgba(78,109,166,.34);outline-offset:4px;border-radius:12px}
+.marketplace-topbar__brand:focus-visible{outline:2px solid rgba(15,118,110,.34);outline-offset:4px;border-radius:12px}
 .marketplace-topbar__brand:hover .marketplace-topbar__brand-mark,.marketplace-topbar__brand:focus .marketplace-topbar__brand-mark,.marketplace-topbar__brand:active .marketplace-topbar__brand-mark{background:var(--marketplace-topbar-brand);color:#fff}
 .marketplace-topbar__brand-mark{width:34px;height:34px;border-radius:10px;background:var(--marketplace-topbar-brand);color:#fff;display:grid;place-items:center;font-weight:600}
 .marketplace-topbar-search{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);justify-self:center;align-self:center;width:min(var(--marketplace-topbar-search-width),calc(100% - var(--marketplace-topbar-search-reserve)));height:52px;border:1px solid var(--marketplace-topbar-line);border-radius:999px;background:#fff;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 56px;align-items:center;overflow:visible;box-shadow:none}
@@ -45,7 +45,7 @@ const TOPBAR_STYLE = `
 .marketplace-topbar-treatment-field{position:relative}
 .marketplace-topbar-treatment-field input[type="hidden"]{display:none}
 .marketplace-topbar-treatment-trigger{width:100%;min-width:0;border:0;border-radius:0;background:transparent;color:#94a3b8;padding:0;text-align:left;font:inherit;font-size:14px;font-weight:600;line-height:1.2;display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer}
-.marketplace-topbar-treatment-trigger:focus-visible{outline:2px solid rgba(78,109,166,.35);outline-offset:4px;border-radius:8px}
+.marketplace-topbar-treatment-trigger:focus-visible{outline:2px solid rgba(15,118,110,.35);outline-offset:4px;border-radius:8px}
 .marketplace-topbar-treatment-label{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:none!important;letter-spacing:0!important;color:#94a3b8!important;font-size:14px!important;font-weight:600!important;line-height:1.2!important}
 .marketplace-topbar-treatment-chevron{width:16px;height:16px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .marketplace-topbar-treatment-panel{position:absolute;left:0;top:calc(100% + 8px);z-index:90;width:min(430px,calc(100vw - 32px));max-height:460px;overflow:hidden;border:1px solid var(--marketplace-topbar-line,#dbe3ef);border-radius:18px;background:#fff;padding:10px;box-shadow:0 22px 54px rgba(15,23,42,.16);display:flex;flex-direction:column;gap:8px}
@@ -56,14 +56,14 @@ const TOPBAR_STYLE = `
 .marketplace-topbar-treatment-field .marketplace-topbar-treatment-search{display:block;width:100%;min-width:0;height:40px;border:0;border-radius:14px;background:#f6f8fb;color:var(--marketplace-topbar-ink,#0f172a);padding:0 14px;font:inherit;font-size:14px;font-weight:600;line-height:40px;outline:0;box-shadow:none;appearance:none}
 .marketplace-topbar-treatment-field .marketplace-topbar-treatment-search[hidden]{display:none}
 .marketplace-topbar-treatment-field .marketplace-topbar-treatment-search::placeholder{color:var(--marketplace-topbar-muted,#64748b);opacity:1;font-weight:600}
-.marketplace-topbar-treatment-field .marketplace-topbar-treatment-search:focus{background:#f6f8fb;box-shadow:0 0 0 3px rgba(78,109,166,.12)}
+.marketplace-topbar-treatment-field .marketplace-topbar-treatment-search:focus{background:#f6f8fb;box-shadow:0 0 0 3px rgba(15,118,110,.12)}
 .marketplace-topbar-treatment-lists{min-height:0;overflow:hidden}
 .marketplace-topbar-treatment-list{display:grid;gap:4px;max-height:320px;overflow:auto;padding-right:2px}
 .marketplace-topbar-treatment-list[hidden]{display:none}
 .marketplace-topbar-treatment-option{width:100%;min-height:52px;border:0;border-radius:14px;background:#fff;color:var(--marketplace-topbar-ink,#0f172a);padding:8px 10px;text-align:left;font:inherit;font-size:14px;font-weight:600;display:flex;align-items:center;gap:12px;cursor:pointer}
-.marketplace-topbar-treatment-option:hover,.marketplace-topbar-treatment-option.is-active,.marketplace-topbar-treatment-option.is-highlighted{background:var(--marketplace-topbar-soft,#eef4ff);color:var(--marketplace-topbar-brand,#4e6da6)}
+.marketplace-topbar-treatment-option:hover,.marketplace-topbar-treatment-option.is-active,.marketplace-topbar-treatment-option.is-highlighted{background:var(--marketplace-topbar-soft,#e7f3f1);color:var(--marketplace-topbar-brand,#0f766e)}
 .marketplace-topbar-treatment-icon,.marketplace-topbar-treatment-avatar{width:34px;height:34px;border-radius:50%;background:#f1efff;color:#6d5dfc;display:grid;place-items:center;flex:0 0 auto;font-size:14px;font-weight:800}
-.marketplace-topbar-treatment-option.is-active .marketplace-topbar-treatment-icon,.marketplace-topbar-treatment-option.is-active .marketplace-topbar-treatment-avatar{background:#e6efff;color:var(--marketplace-topbar-brand,#4e6da6)}
+.marketplace-topbar-treatment-option.is-active .marketplace-topbar-treatment-icon,.marketplace-topbar-treatment-option.is-active .marketplace-topbar-treatment-avatar{background:#dcefeb;color:var(--marketplace-topbar-brand,#0f766e)}
 .marketplace-topbar-treatment-icon svg{width:18px;height:18px;display:block;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
 .marketplace-topbar-treatment-icon .bi{display:block;font-size:18px;line-height:1}
 .marketplace-topbar-treatment-copy{min-width:0;display:grid;gap:2px}
@@ -71,7 +71,7 @@ const TOPBAR_STYLE = `
 .marketplace-topbar-treatment-meta{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:none!important;letter-spacing:0!important;color:var(--marketplace-topbar-muted,#64748b)!important;font-size:12px!important;font-weight:600!important;line-height:1.2!important}
 .marketplace-topbar-treatment-empty{display:none;padding:14px 10px;color:var(--marketplace-topbar-muted,#64748b);font-size:13px;font-weight:600}
 .marketplace-topbar-treatment-empty.is-visible{display:block}
-.marketplace-topbar-search > button[type="submit"]{justify-self:end;align-self:center;width:40px;height:40px;margin-right:6px;border:0;border-radius:50%;background:#4e6da6;color:#fff;display:grid;place-items:center;cursor:pointer}
+.marketplace-topbar-search > button[type="submit"]{justify-self:end;align-self:center;width:40px;height:40px;margin-right:6px;border:0;border-radius:50%;background:#0f766e;color:#fff;display:grid;place-items:center;cursor:pointer}
 .marketplace-topbar-search > button[type="submit"] svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .marketplace-topbar-city-suggestions{position:absolute;left:calc((100% - 56px) / 2 + 8px);right:64px;top:calc(100% + 8px);z-index:80;display:grid;gap:2px;max-height:248px;overflow-y:auto;overflow-x:hidden;border:1px solid var(--marketplace-topbar-line);border-radius:14px;background:#fff;padding:6px;box-shadow:0 18px 42px rgba(15,23,42,.16)}
 .marketplace-topbar-city-suggestions[hidden]{display:none}
@@ -208,7 +208,7 @@ export function AccountVerifyFaithful() {
           <div className="marketplace-topbar__inner">
             <a className="marketplace-topbar__brand" href="/attivita">
               <span className="marketplace-topbar__brand-mark">B</span>
-              <span>BeautySuite</span>
+              <span>Prenodo</span>
             </a>
             <form
               className="marketplace-topbar-search"
@@ -368,7 +368,7 @@ export function AccountVerifyFaithful() {
           <div className="auth-stack">
             <a className="auth-brand" href="/attivita">
               <span className="brand-mark">B</span>
-              <span>BeautySuite</span>
+              <span>Prenodo</span>
             </a>
             <section className="auth-card">
               <p className="eyebrow">Verifica email</p>

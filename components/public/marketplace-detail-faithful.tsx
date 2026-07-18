@@ -42,7 +42,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { MarketplaceAccountNav, useMarketplacePageEffects } from "@/components/public/marketplace-shared";
+import { MarketplaceAccountNav, MarketplaceFooter, useMarketplacePageEffects } from "@/components/public/marketplace-shared";
 
 type BookingService = {
   id: number;
@@ -100,11 +100,11 @@ type MarketplaceProfile = {
 
 // Reproduced VERBATIM from the captured <head> inline <style> blocks of
 // http://localhost/attivita/centroesteticoelite (topbar block + footer block).
-export const TOPBAR_STYLE = `.marketplace-topbar{--marketplace-topbar-brand:#4e6da6;--marketplace-topbar-brand-dark:#365287;--marketplace-topbar-ink:#0f172a;--marketplace-topbar-muted:#64748b;--marketplace-topbar-line:#dbe3ef;--marketplace-topbar-soft:#eef4ff;--marketplace-topbar-pad:clamp(18px,5vw,72px);--marketplace-topbar-max:none;--marketplace-topbar-search-width:900px;--marketplace-topbar-search-reserve:560px;height:68px;background:#fff;border-bottom:1px solid var(--marketplace-topbar-line);padding:0 var(--marketplace-topbar-pad);position:sticky;top:0;z-index:30;color:var(--marketplace-topbar-ink)}
+export const TOPBAR_STYLE = `.marketplace-topbar{--marketplace-topbar-brand:#0f766e;--marketplace-topbar-brand-dark:#0a5b54;--marketplace-topbar-ink:#0f172a;--marketplace-topbar-muted:#64748b;--marketplace-topbar-line:#dbe3ef;--marketplace-topbar-soft:#e7f3f1;--marketplace-topbar-pad:clamp(18px,5vw,72px);--marketplace-topbar-max:none;--marketplace-topbar-search-width:900px;--marketplace-topbar-search-reserve:560px;height:68px;background:#fff;border-bottom:1px solid var(--marketplace-topbar-line);padding:0 var(--marketplace-topbar-pad);position:sticky;top:0;z-index:30;color:var(--marketplace-topbar-ink)}
 .marketplace-topbar__inner{position:relative;width:100%;max-width:var(--marketplace-topbar-max);height:100%;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:18px}
 .marketplace-topbar__brand{height:68px;display:flex;gap:12px;align-items:center;justify-self:start;padding:0;background:transparent;color:inherit;text-decoration:none;font-size:18px;line-height:1;font-weight:600;min-width:0}
 .marketplace-topbar__brand:hover,.marketplace-topbar__brand:focus,.marketplace-topbar__brand:active,.marketplace-topbar__brand:visited{background:transparent;color:inherit;text-decoration:none;box-shadow:none}
-.marketplace-topbar__brand:focus-visible{outline:2px solid rgba(78,109,166,.34);outline-offset:4px;border-radius:12px}
+.marketplace-topbar__brand:focus-visible{outline:2px solid rgba(15,118,110,.34);outline-offset:4px;border-radius:12px}
 .marketplace-topbar__brand:hover .marketplace-topbar__brand-mark,.marketplace-topbar__brand:focus .marketplace-topbar__brand-mark,.marketplace-topbar__brand:active .marketplace-topbar__brand-mark{background:var(--marketplace-topbar-brand);color:#fff}
 .marketplace-topbar__brand-mark{width:34px;height:34px;border-radius:10px;background:var(--marketplace-topbar-brand);color:#fff;display:grid;place-items:center;font-weight:600}
 .marketplace-topbar-search{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);justify-self:center;align-self:center;width:min(var(--marketplace-topbar-search-width),calc(100% - var(--marketplace-topbar-search-reserve)));height:52px;border:1px solid var(--marketplace-topbar-line);border-radius:999px;background:#fff;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 56px;align-items:center;overflow:visible;box-shadow:none}
@@ -116,7 +116,7 @@ export const TOPBAR_STYLE = `.marketplace-topbar{--marketplace-topbar-brand:#4e6
 .marketplace-topbar-treatment-field{position:relative}
 .marketplace-topbar-treatment-field input[type="hidden"]{display:none}
 .marketplace-topbar-treatment-trigger{width:100%;min-width:0;border:0;border-radius:0;background:transparent;color:#94a3b8;padding:0;text-align:left;font:inherit;font-size:14px;font-weight:600;line-height:1.2;display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer}
-.marketplace-topbar-treatment-trigger:focus-visible{outline:2px solid rgba(78,109,166,.35);outline-offset:4px;border-radius:8px}
+.marketplace-topbar-treatment-trigger:focus-visible{outline:2px solid rgba(15,118,110,.35);outline-offset:4px;border-radius:8px}
 .marketplace-topbar-treatment-label{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:none!important;letter-spacing:0!important;color:#94a3b8!important;font-size:14px!important;font-weight:600!important;line-height:1.2!important}
 .marketplace-topbar-treatment-chevron{width:16px;height:16px;flex:0 0 auto;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .marketplace-topbar-treatment-panel{position:absolute;left:0;top:calc(100% + 8px);z-index:90;width:min(430px,calc(100vw - 32px));max-height:460px;overflow:hidden;border:1px solid var(--marketplace-topbar-line,#dbe3ef);border-radius:18px;background:#fff;padding:10px;box-shadow:0 22px 54px rgba(15,23,42,.16);display:flex;flex-direction:column;gap:8px}
@@ -127,14 +127,14 @@ export const TOPBAR_STYLE = `.marketplace-topbar{--marketplace-topbar-brand:#4e6
 .marketplace-topbar-treatment-field .marketplace-topbar-treatment-search{display:block;width:100%;min-width:0;height:40px;border:0;border-radius:14px;background:#f6f8fb;color:var(--marketplace-topbar-ink,#0f172a);padding:0 14px;font:inherit;font-size:14px;font-weight:600;line-height:40px;outline:0;box-shadow:none;appearance:none}
 .marketplace-topbar-treatment-field .marketplace-topbar-treatment-search[hidden]{display:none}
 .marketplace-topbar-treatment-field .marketplace-topbar-treatment-search::placeholder{color:var(--marketplace-topbar-muted,#64748b);opacity:1;font-weight:600}
-.marketplace-topbar-treatment-field .marketplace-topbar-treatment-search:focus{background:#f6f8fb;box-shadow:0 0 0 3px rgba(78,109,166,.12)}
+.marketplace-topbar-treatment-field .marketplace-topbar-treatment-search:focus{background:#f6f8fb;box-shadow:0 0 0 3px rgba(15,118,110,.12)}
 .marketplace-topbar-treatment-lists{min-height:0;overflow:hidden}
 .marketplace-topbar-treatment-list{display:grid;gap:4px;max-height:320px;overflow:auto;padding-right:2px}
 .marketplace-topbar-treatment-list[hidden]{display:none}
 .marketplace-topbar-treatment-option{width:100%;min-height:52px;border:0;border-radius:14px;background:#fff;color:var(--marketplace-topbar-ink,#0f172a);padding:8px 10px;text-align:left;font:inherit;font-size:14px;font-weight:600;display:flex;align-items:center;gap:12px;cursor:pointer}
-.marketplace-topbar-treatment-option:hover,.marketplace-topbar-treatment-option.is-active,.marketplace-topbar-treatment-option.is-highlighted{background:var(--marketplace-topbar-soft,#eef4ff);color:var(--marketplace-topbar-brand,#4e6da6)}
+.marketplace-topbar-treatment-option:hover,.marketplace-topbar-treatment-option.is-active,.marketplace-topbar-treatment-option.is-highlighted{background:var(--marketplace-topbar-soft,#e7f3f1);color:var(--marketplace-topbar-brand,#0f766e)}
 .marketplace-topbar-treatment-icon,.marketplace-topbar-treatment-avatar{width:34px;height:34px;border-radius:50%;background:#f1efff;color:#6d5dfc;display:grid;place-items:center;flex:0 0 auto;font-size:14px;font-weight:800}
-.marketplace-topbar-treatment-option.is-active .marketplace-topbar-treatment-icon,.marketplace-topbar-treatment-option.is-active .marketplace-topbar-treatment-avatar{background:#e6efff;color:var(--marketplace-topbar-brand,#4e6da6)}
+.marketplace-topbar-treatment-option.is-active .marketplace-topbar-treatment-icon,.marketplace-topbar-treatment-option.is-active .marketplace-topbar-treatment-avatar{background:#dcefeb;color:var(--marketplace-topbar-brand,#0f766e)}
 .marketplace-topbar-treatment-icon svg{width:18px;height:18px;display:block;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
 .marketplace-topbar-treatment-icon .bi{display:block;font-size:18px;line-height:1}
 .marketplace-topbar-treatment-copy{min-width:0;display:grid;gap:2px}
@@ -142,7 +142,7 @@ export const TOPBAR_STYLE = `.marketplace-topbar{--marketplace-topbar-brand:#4e6
 .marketplace-topbar-treatment-meta{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:none!important;letter-spacing:0!important;color:var(--marketplace-topbar-muted,#64748b)!important;font-size:12px!important;font-weight:600!important;line-height:1.2!important}
 .marketplace-topbar-treatment-empty{display:none;padding:14px 10px;color:var(--marketplace-topbar-muted,#64748b);font-size:13px;font-weight:600}
 .marketplace-topbar-treatment-empty.is-visible{display:block}
-.marketplace-topbar-search > button[type="submit"]{justify-self:end;align-self:center;width:40px;height:40px;margin-right:6px;border:0;border-radius:50%;background:#4e6da6;color:#fff;display:grid;place-items:center;cursor:pointer}
+.marketplace-topbar-search > button[type="submit"]{justify-self:end;align-self:center;width:40px;height:40px;margin-right:6px;border:0;border-radius:50%;background:#0f766e;color:#fff;display:grid;place-items:center;cursor:pointer}
 .marketplace-topbar-search > button[type="submit"] svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .marketplace-topbar-city-suggestions{position:absolute;left:calc((100% - 56px) / 2 + 8px);right:64px;top:calc(100% + 8px);z-index:80;display:grid;gap:2px;max-height:248px;overflow-y:auto;overflow-x:hidden;border:1px solid var(--marketplace-topbar-line);border-radius:14px;background:#fff;padding:6px;box-shadow:0 18px 42px rgba(15,23,42,.16)}
 .marketplace-topbar-city-suggestions[hidden]{display:none}
@@ -159,7 +159,7 @@ body.embed-body footer.marketplace-footer,footer.marketplace-footer{display:bloc
 .marketplace-footer h2{font-size:18px;line-height:1.2;margin:0 0 20px;color:var(--ink,#0f172a);font-weight:600;letter-spacing:0}
 .marketplace-footer__links{display:grid;gap:12px}
 .marketplace-footer__links a{color:#64748b;font-size:15px;line-height:1.25;text-decoration:none}
-.marketplace-footer__links a:hover{color:var(--brand,#4e6da6)}
+.marketplace-footer__links a:hover{color:var(--brand,#0f766e)}
 .marketplace-footer__app{display:grid;grid-template-columns:52px minmax(0,1fr);gap:16px;align-items:start;margin-bottom:16px}
 .marketplace-footer__app-icon{width:52px;height:52px;border-radius:8px;background:#fb7185;color:#fff;display:grid;place-items:center;font-size:28px;font-weight:600}
 .marketplace-footer__app p{margin:0;color:#0f172a;font-size:16px;line-height:1.45}
@@ -169,7 +169,7 @@ body.embed-body footer.marketplace-footer,footer.marketplace-footer{display:bloc
 .marketplace-footer__store strong{font-size:16px;font-weight:600}
 .marketplace-footer__social{display:flex;gap:10px;flex-wrap:wrap}
 .marketplace-footer__social-link{width:40px;height:40px;border-radius:50%;border:1px solid #d4dce8;background:#fff;color:#64748b;display:grid;place-items:center;font-size:15px;font-weight:600;text-decoration:none}
-.marketplace-footer__social-link:hover{border-color:var(--brand,#4e6da6);color:var(--brand,#4e6da6)}
+.marketplace-footer__social-link:hover{border-color:var(--brand,#0f766e);color:var(--brand,#0f766e)}
 .marketplace-footer__country{height:54px;border:1px solid #d4dce8;border-radius:8px;background:#fff;display:flex;align-items:center;justify-content:space-between;gap:14px;padding:0 16px;min-width:260px;color:#0f172a;font-weight:600}
 .marketplace-footer__country span{display:flex;align-items:center;gap:10px}
 .marketplace-footer__flag{width:21px;height:15px;border-radius:2px;box-shadow:0 0 0 1px rgba(15,23,42,.08);background:linear-gradient(90deg,#22c55e 0 33.33%,#fff 33.33% 66.66%,#ef4444 66.66%)}
@@ -183,7 +183,7 @@ body.embed-body footer.marketplace-footer,footer.marketplace-footer{display:bloc
 // :root tokens normally live in the linked public_marketplace.css. We re-declare
 // the handful the topbar/footer markup depends on so the component renders
 // faithfully even before/without that file (it is also loaded via <link>).
-export const TOKEN_STYLE = `:root{--brand:#4e6da6;--brand-dark:#365287;--ink:#0f172a;--muted:#64748b;--line:#dbe3ef;--bg:#f4f7fb;--card:#fff;--soft:#eef4ff;--marketplace-page-max:1440px;--marketplace-page-pad:clamp(18px,2.8vw,40px);--marketplace-shell-max:calc(var(--marketplace-page-max) + var(--marketplace-page-pad) + var(--marketplace-page-pad))}`;
+export const TOKEN_STYLE = `:root{--brand:#0f766e;--brand-dark:#0a5b54;--ink:#0f172a;--muted:#64748b;--line:#dbe3ef;--bg:#f4f7fb;--card:#fff;--soft:#e7f3f1;--marketplace-page-max:1440px;--marketplace-page-pad:clamp(18px,2.8vw,40px);--marketplace-shell-max:calc(var(--marketplace-page-max) + var(--marketplace-page-pad) + var(--marketplace-page-pad))}`;
 
 // The legacy topbar category dropdown (verbatim category list + Bootstrap-icon
 // names, exactly as emitted by the PHP page).
@@ -354,11 +354,7 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
 
   return (
     <>
-      {/* Inline styles reproduced verbatim from the PHP <head> + design tokens. */}
-      <style dangerouslySetInnerHTML={{ __html: TOKEN_STYLE }} />
-      <style dangerouslySetInnerHTML={{ __html: TOPBAR_STYLE }} />
-      <style dangerouslySetInnerHTML={{ __html: FOOTER_STYLE }} />
-      {/* The activity-profile (.salon-*) styles + body/:root come from this file. */}
+      {/* Design system marketplace (redesign 2026-07): tutto vive nel CSS linkato. */}
       {/* eslint-disable-next-line @next/next/no-css-tags */}
       <link rel="stylesheet" href="/assets/css/pages/public_marketplace.css" />
 
@@ -376,8 +372,8 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
       >
         <div className="marketplace-topbar__inner">
           <a className="marketplace-topbar__brand" href="/">
-            <span className="marketplace-topbar__brand-mark">B</span>
-            <span>BeautySuite</span>
+            <span className="marketplace-topbar__brand-mark">P</span>
+            <span>Prenodo</span>
           </a>
           {/* Static-but-faithful: the topbar treatment dropdown / city suggestions
               behaviours from public_marketplace.js are not wired. */}
@@ -552,7 +548,7 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
                   data-share-button
                   data-share-url={shareUrl}
                   data-share-title={businessName}
-                  data-share-text={`Scopri la scheda di ${businessName} su BeautySuite.`}
+                  data-share-text={`Scopri la scheda di ${businessName} su Prenodo.`}
                   aria-label="Condividi scheda"
                   title="Condividi scheda"
                 >
@@ -577,7 +573,10 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
                   </svg>
                 </button>
               </div>
-              <div className="salon-cover">Copertina attività</div>
+              {/* Cover: gradiente disegnato dal CSS quando manca l'immagine
+                  (l'empty-state "Copertina attività" su grigio è stato
+                  eliminato col redesign 2026-07). */}
+              <div className="salon-cover" aria-hidden="true"></div>
               <div className="salon-logo">{initialOf(businessName)}</div>
               <h1 className="salon-name">{businessName}</h1>
             </section>
@@ -761,88 +760,7 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
       )}
 
       {/* ===================== FOOTER ===================== */}
-      <footer className="marketplace-footer">
-        <div className="marketplace-footer__inner">
-          <div className="marketplace-footer__grid">
-            <section aria-labelledby="marketplaceFooterInfoTitle">
-              <h2 id="marketplaceFooterInfoTitle">Informazioni</h2>
-              <nav className="marketplace-footer__links" aria-label="Informazioni">
-                <a href="/attivita">Cerca attivita</a>
-                <a href="/account/login">Accedi</a>
-                <a href="/#promuovi-attivita">Iscrizione aziende</a>
-                <a href="#">Chi siamo</a>
-                <a href="#">Contatta</a>
-                <a href="#">Note legali</a>
-                <a href="#">Informativa sulla privacy</a>
-                <a href="#">Informativa sui cookie</a>
-                <a href="#">Gestisci preferenze</a>
-              </nav>
-            </section>
-
-            <section aria-labelledby="marketplaceFooterAppTitle">
-              <h2 id="marketplaceFooterAppTitle">Scarica l&apos;app</h2>
-              <div className="marketplace-footer__app">
-                <span className="marketplace-footer__app-icon" aria-hidden="true">
-                  B
-                </span>
-                <p>Prenota il tuo prossimo trattamento di bellezza quando e dove vuoi.</p>
-              </div>
-              <div className="marketplace-footer__stores" aria-label="Link app">
-                <a className="marketplace-footer__store" href="/account/login?return=%2Fattivita">
-                  <small>Scarica su</small>
-                  <strong>App Store</strong>
-                </a>
-                <a className="marketplace-footer__store" href="/account/login?return=%2Fattivita">
-                  <small>Disponibile su</small>
-                  <strong>Google Play</strong>
-                </a>
-              </div>
-            </section>
-
-            <section aria-labelledby="marketplaceFooterSocialTitle">
-              <h2 id="marketplaceFooterSocialTitle">Seguici su</h2>
-              <div className="marketplace-footer__social">
-                <a className="marketplace-footer__social-link" href="#" aria-label="Facebook">
-                  f
-                </a>
-                <a className="marketplace-footer__social-link" href="#" aria-label="X">
-                  X
-                </a>
-                <a className="marketplace-footer__social-link" href="#" aria-label="Pinterest">
-                  P
-                </a>
-                <a className="marketplace-footer__social-link" href="#" aria-label="Instagram">
-                  IG
-                </a>
-                <a className="marketplace-footer__social-link" href="#" aria-label="YouTube">
-                  YT
-                </a>
-                <a className="marketplace-footer__social-link" href="#" aria-label="TikTok">
-                  TK
-                </a>
-              </div>
-            </section>
-
-            <section aria-labelledby="marketplaceFooterCountryTitle">
-              <h2 id="marketplaceFooterCountryTitle">Seleziona un paese</h2>
-              <button className="marketplace-footer__country" type="button">
-                <span>
-                  <i className="marketplace-footer__flag" aria-hidden="true"></i>Italia
-                </span>
-                <i className="marketplace-footer__chevron" aria-hidden="true"></i>
-              </button>
-            </section>
-          </div>
-
-          <div className="marketplace-footer__bottom">
-            <div className="marketplace-footer__brand">
-              <span className="marketplace-footer__brand-mark">BeautySuite</span>
-              <span>&copy; 2026 BeautySuite</span>
-            </div>
-            <span>Cerca attivita, scegli il centro e prenota online.</span>
-          </div>
-        </div>
-      </footer>
+      <MarketplaceFooter />
     </>
   );
 }
