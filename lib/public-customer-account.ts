@@ -14,7 +14,7 @@ import {
   tenantTable,
   tenantUpdate,
 } from "@/lib/tenant-db";
-import { brandedSubject, buildModernEmailTemplate, emailButton, emailCodeBox, emailConfigured, sendEmail } from "@/lib/email";
+import { buildModernEmailTemplate, emailButton, emailCodeBox, emailConfigured, sendEmail } from "@/lib/email";
 
 // public_customer_accounts is a GLOBAL marketplace account (unique by email, not
 // tenant-scoped). These emails therefore come from the PLATFORM, not a tenant
@@ -48,9 +48,8 @@ async function sendPublicAccountEmail(to: string, subject: string, bodyHtml: str
   if (!recipient) return;
   try {
     const brand = publicBrandName();
-    const fullSubject = brandedSubject(brand, subject);
-    const { html, text } = buildModernEmailTemplate(fullSubject, bodyHtml, { business_name: brand });
-    const res = await sendEmail({ to: recipient, subject: fullSubject, html, text });
+    const { html, text } = buildModernEmailTemplate(subject, bodyHtml, { business_name: brand });
+    const res = await sendEmail({ to: recipient, subject, html, text });
     if (!res.ok) {
       console.error(`[public-customer-account] email send failed for ${recipient}: ${res.error}`);
     }

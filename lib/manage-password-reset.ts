@@ -5,7 +5,7 @@ import bcrypt from "bcryptjs";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { dbExecute, dbQuery, tenantSelect, tenantTable, columnExists, tableExists, tenantIdForSlug } from "@/lib/tenant-db";
 import { normalizeTenantSlug } from "@/lib/tenant-runtime";
-import { brandedSubject, buildModernEmailTemplate, emailButton, emailConfigured, sendEmail } from "@/lib/email";
+import { buildModernEmailTemplate, emailButton, emailConfigured, sendEmail } from "@/lib/email";
 
 const TOKEN_TTL_MINUTES = 60;
 const MIN_PASSWORD_ADMIN = 8;
@@ -109,7 +109,7 @@ async function sendManageResetEmail(slug: string, recipient: string, resetUrl: s
   try {
     const branding = await manageResetBranding(slug);
     const bizName = branding.name.trim();
-    const subject = brandedSubject(bizName, "Reimposta la password (Gestionale)");
+    const subject = "Reimposta la password (Gestionale)";
     const { html, text } = buildModernEmailTemplate(subject, buildManageResetEmailBody(resetUrl), {
       business_name: bizName,
       business_email: branding.email,

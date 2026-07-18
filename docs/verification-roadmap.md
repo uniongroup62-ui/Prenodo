@@ -15915,3 +15915,22 @@ sulle superfici toccate: preventivi-mutations 11/11, accessibilita-
 pass2 17/17, moduli-consenso-pass2 14/14, gift-instance 21/21,
 giftcard 94/94. tsc pulito; audit grep: zero bottoni inline e zero
 fromEmail residui fuori dal compat morto.
+
+## 2026-07-18 — Email: oggetti puliti (feedback utente sul giro coerenza)
+
+Osservazione dell'utente sul prefisso brand negli oggetti: il template
+usa l'oggetto ANCHE come titolo H1 dentro la card, quindi 'Elite —
+Conferma email' triplicava il brand (header, titolo, footer) e lo
+raddoppiava pure nell'inbox (fromName = attività dal fix SES).
+
+Scelta approvata: NIENTE brand nell'oggetto, mai. brandedSubject()
+RIMOSSA da lib/email.ts (commento in loco spiega la regola); i 10
+call-site tornano all'oggetto asciutto ('Conferma email', 'Preventivo
+N/YYYY', 'Buon Compleanno!', eventi gift senza suffisso '- attività',
+che era il formato legacy). Il brand vive in: fromName (inbox), header
+con logo e footer del template.
+
+Verifica: render-test 10/10 (S1 = brandedSubject assente dall'API),
+tsc pulito, grep zero residui; batterie preventivi-mutations 11/11,
+accessibilita-pass2 17/17, moduli-consenso-pass2 14/14. Galleria
+anteprime rigenerata sullo stesso artifact.

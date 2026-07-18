@@ -6,7 +6,7 @@ import type { RowDataPacket } from "@/lib/tenant-db";
 import { allAssignablePermissions, permissionDefinitions } from "@/lib/role-permissions";
 import { dbExecute, dbQuery, quoteIdentifier, tableExists } from "@/lib/tenant-db";
 import { tenantPrefix } from "@/lib/tenant-runtime";
-import { brandedSubject, buildModernEmailTemplate, emailButton, emailCodeBox, emailConfigured, sendEmail } from "@/lib/email";
+import { buildModernEmailTemplate, emailButton, emailCodeBox, emailConfigured, sendEmail } from "@/lib/email";
 
 const SIGNUPS_TABLE = "saas_professional_signups";
 const CODE_TTL_MINUTES = 15;
@@ -982,7 +982,7 @@ async function sendSignupVerificationEmail(email: string, name: string, business
   if (!to) return;
   try {
     const brand = signupBrandName();
-    const subject = brandedSubject(brand, "Conferma email");
+    const subject = "Conferma email";
     const body = buildSignupVerificationBody(name, businessName, code, signupVerifyLink(to));
     const { html, text } = buildModernEmailTemplate(subject, body, { business_name: brand });
     const res = await sendEmail({ to, subject, html, text });

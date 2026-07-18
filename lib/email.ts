@@ -73,16 +73,11 @@ export function emailCodeBox(code: string): string {
   return `<div style="display:inline-block;background:#f0fdfa;border:2px dashed ${EMAIL_ACCENT};border-radius:12px;padding:14px 26px;font-size:26px;font-weight:800;letter-spacing:4px;color:#0f172a">${h(code)}</div>`;
 }
 
-// Oggetto brandizzato "{Brand} — {Oggetto}": brand = nome attività per le email
-// tenant→cliente, brand di piattaforma per quelle di sistema. Non raddoppia il
-// brand se l'oggetto lo contiene già in testa.
-export function brandedSubject(brand: string, subject: string): string {
-  const b = brand.trim();
-  const s = subject.trim();
-  if (!b) return s;
-  if (s.toLowerCase().startsWith(b.toLowerCase())) return s;
-  return `${b} — ${s}`;
-}
+// NB oggetti: NIENTE brand nell'oggetto (scelta 2026-07-18). Il brand arriva
+// già da 3 canali — fromName nell'inbox, header con logo e footer del template
+// (e l'oggetto è anche il TITOLO H1 dentro la card: un prefisso lo
+// triplicherebbe). Gli oggetti restano asciutti: "Conferma email",
+// "Preventivo 3/2026", "Buon Compleanno!".
 
 // Port of email_build_modern_template() — returns the branded { html, text }.
 export function buildModernEmailTemplate(

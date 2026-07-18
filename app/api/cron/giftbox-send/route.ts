@@ -1,7 +1,7 @@
 import { activeTenantSlugs, assertCronAuth } from "@/lib/cron";
 import { businessNowDateTime, businessTodayIso } from "@/lib/business-datetime";
 import { dbExecute, dbQuery, tenantIdForSlug } from "@/lib/tenant-db";
-import { brandedSubject, buildModernEmailTemplate, emailButton, emailConfigured, sendEmail } from "@/lib/email";
+import { buildModernEmailTemplate, emailButton, emailConfigured, sendEmail } from "@/lib/email";
 import type { RowDataPacket } from "@/lib/tenant-db";
 
 export const dynamic = "force-dynamic";
@@ -153,7 +153,7 @@ function buildGiftBoxEmail(params: {
   const evEmoji = ev.emoji || "🎁";
 
   // Subject: "<eventSubject> [<code>] - <bizName>" (clamped to 160).
-  let subject = brandedSubject(bizName, code !== "" ? `${evSubjectBase} ${code}` : evSubjectBase);
+  let subject = code !== "" ? `${evSubjectBase} ${code}` : evSubjectBase;
   if (subject.length > 160) subject = subject.slice(0, 160);
 
   const validFrom = fmtDate(issuedAt);

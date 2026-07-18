@@ -11,7 +11,7 @@ import "server-only";
 // Con SES il From resta il dominio verificato: l'email del business va in
 // Reply-To (il legacy la usava come From diretto — non possibile via SES).
 
-import { brandedSubject, buildModernEmailTemplate, emailButton, emailConfigured, sendEmail } from "@/lib/email";
+import { buildModernEmailTemplate, emailButton, emailConfigured, sendEmail } from "@/lib/email";
 import {
   privacyClientDisplayName,
   privacyClientFilename,
@@ -300,12 +300,11 @@ async function safeSendHtmlMail(to: string, subject: string, bodyHtml: string, b
   let replyTo = clean(biz.quote_email) || clean(biz.email) || undefined;
   if (replyTo && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(replyTo)) replyTo = undefined;
   try {
-    const fullSubject = brandedSubject(fromName ?? "", subject);
-    const { html, text } = buildModernEmailTemplate(fullSubject, bodyHtml, {
+    const { html, text } = buildModernEmailTemplate(subject, bodyHtml, {
       business_name: fromName ?? "",
       business_email: replyTo ?? "",
     });
-    const res = await sendEmail({ to, subject: fullSubject, html, text, fromName, replyTo });
+    const res = await sendEmail({ to, subject, html, text, fromName, replyTo });
     return res.ok;
   } catch {
     return false;

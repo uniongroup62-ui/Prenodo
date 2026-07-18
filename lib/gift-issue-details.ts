@@ -19,7 +19,7 @@ import "server-only";
 import { randomBytes } from "crypto";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { dbExecute, dbQuery, tenantInsert, tenantSelect, tenantTable, tenantUpdate, columnExists } from "@/lib/tenant-db";
-import { brandedSubject, buildModernEmailTemplate, EMAIL_ACCENT, emailButton, emailConfigured, sendEmail } from "@/lib/email";
+import { buildModernEmailTemplate, EMAIL_ACCENT, emailButton, emailConfigured, sendEmail } from "@/lib/email";
 
 const clean = (v: unknown): string => String(v ?? "").trim();
 const todayIso = (): string => {
@@ -1433,7 +1433,7 @@ export async function sendGiftBoxInstanceEmail(slug: string, id: number, toRaw: 
   const biz = bizRows[0] ?? null;
   const bizName = clean(biz?.name) || "BeautySuite";
 
-  let subject = brandedSubject(bizName, detail.code !== "" ? `${ev.subject} ${detail.code}` : ev.subject);
+  let subject = detail.code !== "" ? `${ev.subject} ${detail.code}` : ev.subject;
   if (subject.length > 160) subject = subject.slice(0, 160);
 
   const h = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
@@ -2558,9 +2558,9 @@ export async function sendGiftCardEmailManage(slug: string, id: number, toRaw: s
     festa_mamma: "/assets/img/giftcard-events/mothers_day.png",
     festa_papa: "/assets/img/giftcard-events/fathers_day.png",
   };
-  const subject = brandedSubject(bizName, eventKey === "giftcard"
+  const subject = eventKey === "giftcard"
     ? "Hai ricevuto una GiftCard"
-    : (subjectByEvent[eventKey] ?? "Hai ricevuto una GiftCard"));
+    : (subjectByEvent[eventKey] ?? "Hai ricevuto una GiftCard");
 
   let msg = clean(giftMessageRaw) !== "" ? clean(giftMessageRaw) : clean(card.gift_message);
   if (msg.length > 2000) msg = msg.slice(0, 2000);

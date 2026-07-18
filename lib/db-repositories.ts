@@ -61,7 +61,7 @@ import {
   reconcilePointLots,
   type PointLotScheduleRow,
 } from "@/lib/fidelity-lots";
-import { brandedSubject, buildModernEmailTemplate, emailButton, emailConfigured, sendEmail } from "@/lib/email";
+import { buildModernEmailTemplate, emailButton, emailConfigured, sendEmail } from "@/lib/email";
 import { giftPersistGlobalResetMarker, giftRecalcClient, giftRollbackAppointmentSelection } from "@/lib/gifts-engine";
 import { assertAppointmentSlotAvailable, busyCabinRangesForDate, busyRangesForDate, sharedResourcesContext, staffTimeoffReasonForRange, uniqueStaffForService, type CabinBusyRange } from "@/lib/public-booking-db";
 
@@ -8219,7 +8219,7 @@ export async function sendManageQuoteEmailLegacy(
   const clientName = String(qq.client_display ?? qq.client_name ?? "").trim();
   const number = String(qq.number ?? "");
 
-  const subject = brandedSubject(bizName, `Preventivo ${number}`);
+  const subject = `Preventivo ${number}`;
 
   let body = clientName !== "" ? `Ciao ${escapeQuoteHtml(clientName)},<br><br>` : "Ciao,<br><br>";
   body += `ti inviamo il tuo preventivo <strong>#${escapeQuoteHtml(number)}</strong>.`;

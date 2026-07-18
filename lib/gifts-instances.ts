@@ -27,7 +27,7 @@ import { randomBytes } from "crypto";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { columnExists, dbExecute, dbQuery, quoteIdentifier, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
 import { giftClientLevelKey, giftExpireInstance, giftRecalcClient, parseGiftEligibleLevels } from "@/lib/gifts-engine";
-import { brandedSubject, buildModernEmailTemplate, EMAIL_ACCENT, emailButton, emailCodeBox, emailConfigured, sendEmail } from "@/lib/email";
+import { buildModernEmailTemplate, EMAIL_ACCENT, emailButton, emailCodeBox, emailConfigured, sendEmail } from "@/lib/email";
 import { deleteDbAppointment } from "@/lib/db-repositories";
 
 const clean = (v: unknown) => String(v ?? "").trim();
@@ -960,7 +960,7 @@ export async function sendGiftVoucherEmailManage(slug: string, instanceId: numbe
   }
   html += `</div>`;
 
-  const subject = brandedSubject(bizName, `Il tuo voucher omaggio è disponibile - ${detail.giftName}`);
+  const subject = `Il tuo voucher omaggio è disponibile - ${detail.giftName}`;
   const tpl = buildModernEmailTemplate(subject, html, { business_name: bizName, business_email: clean(biz?.email) });
   const sent = await sendEmail({ to, subject, html: tpl.html, text: tpl.text, fromName: bizName || undefined, replyTo: clean(biz?.email) || undefined });
   if (!sent.ok) throw new Error("Invio email fallito");

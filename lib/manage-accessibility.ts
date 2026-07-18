@@ -6,7 +6,7 @@ import type { RowDataPacket } from "@/lib/tenant-db";
 import { columnExists, dbExecute, dbQuery, tableExists, tenantIdForSlug, tenantSelect, tenantTable, withTenantTransaction } from "@/lib/tenant-db";
 import { invalidateManagePasswordResets } from "@/lib/manage-password-reset";
 import { normalizeTenantSlug } from "@/lib/tenant-runtime";
-import { brandedSubject, buildModernEmailTemplate, emailCodeBox, emailConfigured, sendEmail } from "@/lib/email";
+import { buildModernEmailTemplate, emailCodeBox, emailConfigured, sendEmail } from "@/lib/email";
 
 const EMAIL_CODE_TTL_SECONDS = 15 * 60;
 const EMAIL_CODE_RESEND_SECONDS = 60;
@@ -300,8 +300,7 @@ async function storeAndReturnCode({
       "Ciao,<br><br>" + intro + "<br><br>"
       + emailCodeBox(code)
       + "<br><br>Il codice scade tra 15 minuti.<br><br>Se non sei stato tu, ignora questa email.";
-    const fullSubject = brandedSubject(bizName, subject);
-    const { html, text } = buildModernEmailTemplate(fullSubject, body, {
+    const { html, text } = buildModernEmailTemplate(subject, body, {
       business_name: bizName,
       business_email: branding.email,
       business_logo_url: branding.logoUrl,
@@ -311,7 +310,7 @@ async function storeAndReturnCode({
     // (un fromEmail tenant non verificato viene RIFIUTATO da SES).
     const sent = await sendEmail({
       to: email,
-      subject: fullSubject,
+      subject,
       html,
       text,
       fromName: bizName || undefined,
@@ -475,7 +474,7 @@ export async function sendStaffInviteEmailCode(args: {
 
     const branding = await staffInviteBranding(tenantSlug);
     const bizName = branding.name.trim();
-    const subject = brandedSubject(bizName, "Conferma email account");
+    const subject = "Conferma email account";
     const { html, text } = buildModernEmailTemplate(subject, buildStaffInviteEmailBody(code, args.updated, args.plain === true), {
       business_name: bizName,
       business_email: branding.email,
