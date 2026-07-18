@@ -1,3 +1,4 @@
+import { businessTodayIso } from "@/lib/business-datetime";
 import "server-only";
 
 import type { RowDataPacket } from "@/lib/tenant-db";
@@ -441,10 +442,10 @@ function durationLabel(value: number, unit: ExpiryUnit): string {
   return `${value} ${value === 1 ? "giorno" : "giorni"}`;
 }
 
-// Data locale Y-m-d (legacy app_date_sql, Europe/Rome sul server).
+// Data locale Y-m-d in ORA DI ROMA (legacy app_date_sql girava su un server
+// Rome; i componenti locali qui sarebbero UTC su Amplify — classe TZ).
 function localTodayYmd(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return businessTodayIso();
 }
 
 // Config effettiva del promemoria scadenza tessera per la pagina Automazione

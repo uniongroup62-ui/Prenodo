@@ -15752,3 +15752,33 @@ improvements 7/7, e2e-packages 48/48, catalogo 27/27, settings 6/6,
 pass4 2/2 + CONSUMER di tenantInsertTx: test-pagamenti 13/13,
 e2e-pos-logic 16/16, test-quickbooking 35/35, e2e-qb-redeem-edit 28/28.
 Bonifica 81 voci log batteria.
+
+## 2026-07-18 — Pacchetti giro 3: 1 fix (classe TZ in feature-settings) + riverifica angoli residui + INCIDENTE HARNESS
+
+Terzo giro richiesto. Riverificati gli angoli non ancora riletti:
+guardie sede PRESENTI su tutte le azioni-clienti (assertLocationAccessById
+su use/expiry/usage/client_save), validazioni expiry/usage complete (date
+regex + non-retro + pacchetto annullato/scaduto/usato), PATH PRODOTTI del
+usage_add (ritiro con stock + stock_docs) già in ora di Roma (fix QB4),
+catalog_delete sequenziale con swallow = FEDELE (il legacy 1577 NON ha
+transazione lì — attestato).
+
+FIX — CLASSE TZ: localTodayYmd in manage-feature-settings (usato dal
+ramo scadenze tessere Fidelity della pagina impostazioni, il commento
+ammetteva la premessa 'Europe/Rome sul server') -> businessTodayIso.
+
+INCIDENTE HARNESS (successo di recovery): il TEMP-CLEANER di Windows ha
+MANGIATO 4 suite dallo scratchpad a sessione viva (test-pacchetti,
+e2e-packages-catalog, e2e-package-settings, adhesion-tests) — Cannot
+find module su file esistiti 20 minuti prima. RECOVERY dal transcript
+.jsonl: replay Write+TUTTI gli Edit in ordine (il solo Write è la base
+PRE-sanature: 21/1 e 23/3 stantii; col replay Edit → 26/26, 27/27, 6/6
+identici alle versioni sanate). adhesion-tests archiviata .superseded
+(design d'epoca: cookie reale da file scaduto + contratto checkout
+pre-refresh; copertura in e2e-pos-logic/fidelity); i suoi residui
+(client 'AdhTest Temp' 1636 + card 333, NON-ZZ!) identificati per
+email+timestamp e rimossi, baseline 5 clienti ripristinata; ledger
+fidelity = tabelle 'transactions'/'point_lots' (MAI fidelity_*).
+
+Regressione post-recovery: test-pacchetti 26/26, e2e-packages-catalog
+27/27, e2e-package-settings 6/6, e2e-packages 48/48, mutations 13/13.
