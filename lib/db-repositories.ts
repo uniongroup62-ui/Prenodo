@@ -17236,7 +17236,7 @@ export async function commissionDbSummary(slug: string): Promise<{ open: number;
 }
 
 export async function markDbCommissionPaid(id: number, slug: string): Promise<CommissionEntry> {
-  await tenantUpdate({ slug, table: "staff_commission_payments", id, values: { is_paid: 1, paid_at: new Date() } });
+  await tenantUpdate({ slug, table: "staff_commission_payments", id, values: { is_paid: 1, paid_at: businessNowDateTime() } });
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "staff_commission_payments", where: "id = ?", params: [id], limit: 1 });
   if (!rows[0]) throw new Error("Commissione non trovata.");
   return mapCommission(rows[0]);

@@ -1,4 +1,5 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
+import { businessTodayIso } from "@/lib/business-datetime";
 import { commissionDbSummary, listDbCommissions, markDbCommissionPaid } from "@/lib/db-repositories";
 import {
   buildCommissionDashboard,
@@ -13,15 +14,13 @@ import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can } from "@/lib/role-permissions";
 
 // Current-month [start, end] as 'YYYY-MM-DD' strings (default dashboard range).
+// Mese di ROMA (classe TZ server-safe: new Date() locale del server sbaglierebbe
+// mese nella finestra 00:00-02:00 di inizio mese su un server UTC).
 function currentMonthRange(): { from: string; to: string } {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = now.getMonth();
+  const [y, m] = businessTodayIso().split("-").map(Number);
   const pad = (n: number) => String(n).padStart(2, "0");
-  const first = new Date(y, m, 1);
-  const last = new Date(y, m + 1, 0);
-  const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  return { from: fmt(first), to: fmt(last) };
+  const lastDay = new Date(y, m, 0).getDate();
+  return { from: `${y}-${pad(m)}-01`, to: `${y}-${pad(m)}-${pad(lastDay)}` };
 }
 
 export const dynamic = "force-dynamic";

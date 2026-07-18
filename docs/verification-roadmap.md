@@ -15545,3 +15545,34 @@ sulle respinte. Registro a 25 moduli: nessun dominio mutativo scoperto.
 Suite test-costi-log 5/5 CLEAN; regressione test-costi-pass4 10/10,
 e2e-costs 52/52, test-costs-fixes 14/14, test-log-pass2 10/10.
 Bonifica 25 voci log batteria.
+
+## 2026-07-18 — Commissioni pass 4: 1 fix (classe TZ, 2 punti) + riverifica motore e harness
+
+I confini periodo in ORA DI ROMA erano già del pass Pagamenti 2 (premessa
+'sale_date è UTC' smentita empiricamente); questo pass chiude i residui
+della classe: (1) paid_at di action=pay (markDbCommissionPaid era Date
+al driver = wall del server); (2) currentMonthRange del default
+dashboard (mese dal server locale -> mese di ROMA: sbagliava mese nella
+finestra 00:00-02:00 di inizio mese su server UTC). Il paid_at del
+toggle_commission_paid passava già da nowDateTime (Roma dal 972a539).
+
+Riverifica: gate DOPPIO per-movimento confermato, risoluzione operatore
+per EMAIL, sconto-100% base 0, zero-rate auto-disable, guardia per-sede
+del toggle presente in lib ma chiamata con [] = Modello A ATTESTATO
+(commissioni tenant-wide); filtro location_id dashboard = display-only
+sotto lo stesso modello; bootstrap periodi AUTO-RIPARANTE a ogni lettura
+(atomicità settings a basso rischio, attestata).
+
+Verifica live test-commissioni-pass4 1/1 CLEAN (pay -> paid_at Roma).
+Batteria completa: test-commissioni-full 30/30, test-commission-periods
+4/4, e2e-commissions 32/32, markers-commissions 63/63, test-comm-fixes
+5/5, test-comm-toggles 6/6 + 2 SUITE SANATE dalla trappola probe-NOW():
+test-comm-base (seed vendita con now() SQL = UTC, 2h PRIMA del periodo
+aperto a Rome-now dall'enable API -> gate chiuso; ora sale_date Roma
+esplicita, 3/3) e test-comm-sede (data CABLATA '2026-07-15' futura al
+primo run e oggi passata -> seed Rome-now + range dinamico, 5/5).
+
+GAP noto (proposta): le 4 azioni mutative delle Commissioni (pay,
+save_module_settings, save_commission_settings, toggle_commission_paid)
+NON loggano nel registro attività — il claim '25 moduli senza scoperti'
+del pass Costi era impreciso: Commissioni è l'ultimo dominio scoperto.
