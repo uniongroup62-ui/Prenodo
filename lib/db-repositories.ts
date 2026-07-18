@@ -17170,24 +17170,37 @@ export async function cancelDbInstallmentPlan(
   }
 
   const cleanReason = String(reason ?? "").trim().slice(0, 255) || "Annullamento piano rateale";
-  const now = new Date();
-  const tsLabel = now.toISOString().slice(0, 16).replace("T", " ");
+  // Ora di ROMA esplicita (classe TZ server-safe): il vecchio toISOString
+  // scriveva il marker [ANNULLATA ts] in UTC anche in dev, e cancelled_at
+  // come Date al driver = wall del server.
+  const now = businessNowDateTime();
+  const tsLabel = now.slice(0, 16);
 
-  const planValues: Record<string, unknown> = { status: "cancelled", updated_by: userId };
-  if (await columnExists(planTable.name, "cancelled_at")) planValues.cancelled_at = now;
-  if (await columnExists(planTable.name, "cancelled_reason")) planValues.cancelled_reason = cleanReason;
-  await tenantUpdate({ slug, table: "sale_installment_plans", id: planId, values: planValues });
-
-  for (const r of installmentRows) {
-    const prevNote = String(r.note ?? "");
-    const nextNote = `${prevNote}${prevNote ? "\n" : ""}[ANNULLATA ${tsLabel}] ${cleanReason}`.slice(0, 1000);
-    await tenantUpdate({
-      slug,
-      table: "sale_installments",
-      id: Number(r.id ?? 0),
-      values: { status: "cancelled", note: nextNote, updated_by: userId },
-    }).catch(() => 0);
-  }
+  const planHasCancelledAt = await columnExists(planTable.name, "cancelled_at");
+  const planHasReason = await columnExists(planTable.name, "cancelled_reason");
+  const instTable = await tenantTable(slug, "sale_installments");
+  // CASCATA ATOMICA (classe atomicità di campagna): piano + tutte le rate in
+  // UNA transazione — mai un piano annullato con rate rimaste indietro.
+  await withTenantTransaction(slug, async (txq) => {
+    const planSets = ["status = ?", "updated_by = ?"];
+    const planParams: unknown[] = ["cancelled", userId];
+    if (planHasCancelledAt) { planSets.push("cancelled_at = ?"); planParams.push(now); }
+    if (planHasReason) { planSets.push("cancelled_reason = ?"); planParams.push(cleanReason); }
+    planParams.push(planId);
+    if (planTable.tenantId) planParams.push(planTable.tenantId);
+    await txq(
+      `UPDATE ${quoteIdentifier(planTable.name)} SET ${planSets.join(", ")} WHERE id = ?${planTable.tenantId ? " AND tenant_id = ?" : ""}`,
+      planParams,
+    );
+    for (const r of installmentRows) {
+      const prevNote = String(r.note ?? "");
+      const nextNote = `${prevNote}${prevNote ? "\n" : ""}[ANNULLATA ${tsLabel}] ${cleanReason}`.slice(0, 1000);
+      await txq(
+        `UPDATE ${quoteIdentifier(instTable.name)} SET status = ?, note = ?, updated_by = ? WHERE id = ?${instTable.tenantId ? " AND tenant_id = ?" : ""}`,
+        instTable.tenantId ? ["cancelled", nextNote, userId, Number(r.id ?? 0), instTable.tenantId] : ["cancelled", nextNote, userId, Number(r.id ?? 0)],
+      );
+    }
+  });
 
   return getSingleInstallmentPlan(slug, planId);
 }
@@ -17197,7 +17210,7 @@ export async function payDbInstallment(planId: number, installmentId: number, sl
   if (!rows[0]) throw new Error("Rata non trovata.");
   if (String(rows[0].status ?? "") === "paid") throw new Error("Rata gia pagata.");
   const amount = Number(rows[0].amount ?? 0);
-  await tenantUpdate({ slug, table: "sale_installments", id: installmentId, values: { status: "paid", paid_at: new Date(), paid_amount: amount } });
+  await tenantUpdate({ slug, table: "sale_installments", id: installmentId, values: { status: "paid", paid_at: businessNowDateTime(), paid_amount: amount } });
   const pending = await tenantSelect<RowDataPacket>({ slug, table: "sale_installments", columns: "id", where: "plan_id = ? AND status = 'pending'", params: [planId], limit: 1 });
   if (!pending[0]) await tenantUpdate({ slug, table: "sale_installment_plans", id: planId, values: { status: "completed" } });
   return getSingleInstallmentPlan(slug, planId);

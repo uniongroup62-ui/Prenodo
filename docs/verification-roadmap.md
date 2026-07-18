@@ -15468,3 +15468,39 @@ Regressione COMPLETA verde: test-pagamenti-pass2 5/5, test-pagamenti
 e2e-pos-audit 6+14, e2e-pos-detail-v4 13, e2e-pos-gift 11,
 e2e-pos-success 12, test-pos-* 2+8+5+2, test-commissioni-full 30,
 e2e-commissions 32.
+
+## 2026-07-18 — Gestione Rate pass 4: 3 fix (TZ paid_at/annullo, cascata annullo ATOMICA, fail-closed sedi revocate)
+
+FIX 1 — CLASSE TZ SERVER-SAFE: paid_at di DEFAULT del mark_paid era
+new Date() al driver (wall del server — e paid_at guida l'INCASSO dei
+Report, come sale_date); cancelled_at dell'annullo piano idem e il
+marker [ANNULLATA ts] era toISOString = UTC ANCHE IN DEV; paid_at di
+payDbInstallment. Tutto -> businessNowDateTime.
+
+FIX 2 — ANNULLO PIANO ATOMICO (cancelDbInstallmentPlan): piano + TUTTE
+le rate in una withTenantTransaction (prima: update sequenziali con
+catch-swallow per rata — un fallimento a metà lasciava il piano
+cancelled con rate vive).
+
+FIX 3 — FAIL-CLOSED SEDI REVOCATE (classe 18/07): senza all_locations e
+senza sede risolta in un tenant con sedi, la lista serviva l'UNIONE
+tenant-wide e le mutazioni giravano SENZA scope (una sessione
+stantia/revocata poteva incassare rate di qualunque sede). Ora: lista
+VUOTA + azioni 'Sede non autorizzata per questa operazione.'. Il ramo
+all_locations del ristretto era già fail-closed per costruzione (lista
+sedi assegnate).
+
+Verifica live test-rate-pass4 7/7 CLEAN: paid_at default Roma, guardia
+rate-pagate verbatim, annullo allow_paid con cancelled_at Roma + marker
+Roma su TUTTE le rate (atomico), lista revocato vuota, mutazione
+revocato bloccata (rata intatta), all_locations revocato scope-[9999].
+
+Regressione: test-rate2 20/20, test-rate-fixes 10/10, test-rate-full
+15/15 (SANATA: admin forgiato a sede 0 = ora fail-closed -> sede 21,
+seed a location NULL visibile con scope NULL-permissivo),
+e2e-installments-manage 43/43 (SANATA: login reale = sede 0 ->
+sessione forgiata sede 21, trappola nota), markers-installments 49/49,
+test-notifiche-hub 16/16. ARCHIVIATE .superseded: test-rate-audit
+(suite FORENSE pre-fix: i suoi FAIL attestano i fix in piedi),
+e2e-rate1/e2e-rate2a (import 'pg' bare rotto, classe già archiviata).
+Bonifica 38 voci log batteria (baseline 9/3/1 intatte).

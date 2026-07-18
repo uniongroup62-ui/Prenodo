@@ -1,11 +1,12 @@
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { jsonError, parseInteger, parseNumber, parseRequestBody } from "@/lib/api-utils";
+import { businessNowDateTime } from "@/lib/business-datetime";
 import { logActivity } from "@/lib/activity-log";
 import { currentManageSession } from "@/lib/manage-auth";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { cancelDbInstallmentPlan, createDbInstallmentPlan, listDbInstallmentPlans, saveDbInstallmentAlertDays, searchDbInstallmentPlans } from "@/lib/db-repositories";
 import { automationAlertDays } from "@/lib/manage-shell-context";
-import { resolveManageLocationId } from "@/lib/manage-locations";
+import { getManageLocationContext, resolveManageLocationId } from "@/lib/manage-locations";
 import { can } from "@/lib/role-permissions";
 import { columnExists, quoteIdentifier, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
 import type { InstallmentPlan } from "@/lib/tenant-store";
@@ -30,6 +31,15 @@ export async function GET(request: Request) {
   const scopeLocationId = allLocations
     ? 0
     : await resolveManageLocationId({ slug: tenantSlug, raw: url.searchParams.get("location_id"), fallbackCurrent: true });
+  // FAIL-CLOSED sedi revocate (classe 18/07, come list/context/report): senza
+  // all_locations e senza sede risolta in un tenant CON sedi, la lista non deve
+  // servire l'unione tenant-wide (sessione stantia/sede revocata).
+  if (!allLocations && scopeLocationId <= 0) {
+    const locationContext = await getManageLocationContext(tenantSlug);
+    if (locationContext.allLocations.length > 0) {
+      return Response.json({ ok: true, sourceMode: "database", plans: [], clients: [], alertDays: await automationAlertDays(tenantSlug, "installment_alert_days") });
+    }
+  }
   const filters = {
     status: url.searchParams.get("status") || undefined,
     clientId: parseInteger(url.searchParams.get("client_id"), 0) || undefined,
@@ -88,6 +98,15 @@ export async function POST(request: Request) {
     : await resolveManageLocationId({ slug: tenantSlug, raw: body.location_id, fallbackCurrent: true });
   if (!allLocations && postedLocationId > 0 && scopeLocationId !== postedLocationId) {
     return jsonError("Sede non autorizzata per questa operazione.");
+  }
+  // FAIL-CLOSED sedi revocate (classe 18/07): senza all_locations e senza sede
+  // risolta in un tenant CON sedi, nessuna mutazione senza scope (una sessione
+  // stantia/revocata poteva incassare rate di qualunque sede).
+  if (!allLocations && scopeLocationId <= 0) {
+    const locationContext = await getManageLocationContext(tenantSlug);
+    if (locationContext.allLocations.length > 0) {
+      return jsonError("Sede non autorizzata per questa operazione.");
+    }
   }
   const scopeLocationIds = allLocations ? restrictedLocationIds(session.user) : undefined;
 
@@ -324,7 +343,10 @@ async function installmentPlan(slug: string, planId: number): Promise<Installmen
 // esploderebbe dal DB invece che col messaggio legacy.
 function parsePaidAt(value: string | undefined): Date | string | null {
   const raw = clean(value, 40);
-  if (!raw) return new Date();
+  // Default "adesso" in ORA DI ROMA esplicita (classe TZ server-safe: un Date
+  // al driver scrive il wall del SERVER — UTC su Amplify — e paid_at guida
+  // l'Incasso dei Report, come sale_date).
+  if (!raw) return businessNowDateTime();
   const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?$/.exec(raw);
   if (!m) return null;
   const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
