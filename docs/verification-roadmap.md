@@ -15360,3 +15360,41 @@ test-quickbooking-pass4 5/5, e2e-qb-redeem-edit 28, quickbooking
 35+21+16, qbresidui 6, appuntamenti 41+8+12, e2e-calendar-move 33,
 e2e-appointments-list 13, test-calendario 20. Bonifica log batteria (30
 voci, entità verificate morte).
+
+## 2026-07-18 — Appuntamenti pass 2: 2 fix (cascata delete ATOMICA + classe TZ) + riverifica delete/status/cancel/plan
+
+FIX 1 — CASCATA DELETE ATOMICA (parità col beginTransaction del delete
+legacy, api_appointments.php 9688): deleteDbAppointment ora esegue figli
+(segments/services/staff/locations/gift_items) + reminders (tutti) +
+tabelle-link QB migrate (giftbox/package/prepaid items) + release della
+promotion_redemption (con guardia sale_id) + riga appuntamenti in UNA
+withTenantTransaction — un fallimento a metà non lascia più figli orfani
+(prima: child-delete best-effort swallowed + riga eliminata dopo).
+Tabelle risolte PRIMA della tx (install legacy senza tabella = skip);
+restore dei redeem PRIMA fuori tx (idempotente, no-op post-annullo).
+
+FIX 2 — CLASSE TZ SERVER-SAFE (2 punti): cancelled_at del cancel_done
+(sqlDateTimePrefix(new Date()) = componenti locali del server -> UTC su
+Amplify; letto anche dalle timeline pacchetti/pending) e created_at del
+movimento giftcard 'Storno eliminazione appuntamento' al delete -> ora
+di Roma esplicita.
+
+ATTESTAZIONE (non-fix deliberato): il motore cancelDoneAppointment resta
+NON transazionale cross-funzione (il legacy qb_cancel_done_apply è in tx
+unica) — coerente con l'attestazione warnings-rollback del pass QB; il
+flip di stato è l'ULTIMO passo e i restore sono idempotenti, quindi un
+fallimento a metà lascia l'appuntamento ancora annullabile (retry
+completa lo storno).
+
+Verifica live test-appuntamenti-pass2 7/7 CLEAN: cancel_done con
+cancelled_at Roma + reason/by, guardia delete verbatim 'La prenotazione
+deve essere in stato Annullato...', cascata completa (figli presenti
+prima, tutto a 0 dopo) + log 'Eliminato appuntamento #id', storno
+giftcard al delete (40+25=65, topup con nota verbatim, created_at Roma),
+bulk contatori (1 non-annullato + 1 non disponibile).
+
+Regressione: test-appuntamenti 41+8+12, e2e-appointments-list 13,
+e2e-qb-redeem-edit 28, e2e-gift-appt-cycle 12, quickbooking 35+21+16 +
+test-qb-log 6 + pass4 5, e2e-calendar-move 33, test-notifiche-pass2 10,
+e2e-clients 50. Pianifica riverificata: TZ-safe, rollback all-or-nothing
+già presente; GAP log (plan_create non logga) -> proposta.

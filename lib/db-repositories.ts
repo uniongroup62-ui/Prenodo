@@ -5499,7 +5499,10 @@ export async function cancelDoneAppointment(
   await releaseAppointmentPromotionReservation(slug, id);
 
   const statusValues: Record<string, unknown> = { status: target };
-  const nowSql = `${sqlDateTimePrefix(new Date())}:00`; // "YYYY-MM-DD HH:MM:SS"
+  // Ora di ROMA esplicita (classe TZ server-safe: i componenti locali del
+  // server sarebbero UTC su Amplify — cancelled_at è mostrato e letto dalle
+  // timeline pacchetti/pending).
+  const nowSql = businessNowDateTime();
   if (await columnExists("appointments", "cancelled_at")) statusValues.cancelled_at = nowSql;
   if (by !== undefined && (await columnExists("appointments", "cancelled_by"))) statusValues.cancelled_by = by;
   if (await columnExists("appointments", "cancelled_reason")) {
@@ -5629,31 +5632,49 @@ export async function deleteDbAppointment(slug: string, id: number): Promise<boo
   //    into restoreAppointmentRedeems so the cancel-on-status path can reuse it.
   await restoreAppointmentRedeems(slug, appointmentId);
 
-  // 3) Delete the child snapshot rows + redeem links (best-effort per table). The
-  //    appointment_gift_items rows are the gift redeem links; deleting them (paired
-  //    with the gift-instance reactivation above) fully rolls back the gift redeem.
-  await deleteAppointmentChildren(slug, "appointment_segments", appointmentId);
-  await deleteAppointmentChildren(slug, "appointment_services", appointmentId);
-  await deleteAppointmentChildren(slug, "appointment_staff", appointmentId);
-  await deleteAppointmentChildren(slug, "appointment_locations", appointmentId);
-  await deleteAppointmentChildren(slug, "appointment_gift_items", appointmentId);
-  // TUTTI i reminder dell'appuntamento (legacy appointments.php:259/470 fa
-  // `DELETE FROM reminders WHERE appointment_id=?` su ogni stato, non solo pending).
-  await deleteAppointmentChildren(slug, "reminders", appointmentId);
-  // Tabelle-link QB legacy (appointments.php:181-192/397-408): il modello nativo Next
-  // non le popola, ma i DATI MIGRATI sì — vanno pulite per non lasciare righe orfane
-  // che gonfiano i residui "prenotato". Best-effort (no-op se assenti/vuote).
-  await deleteAppointmentChildren(slug, "appointment_giftbox_items", appointmentId);
-  await deleteAppointmentChildren(slug, "appointment_package_items", appointmentId);
-  await deleteAppointmentChildren(slug, "appointment_prepaid_service_items", appointmentId);
-
-  // 3b) Rilascia la prenotazione promozione (per_customer_limit) come il legacy
-  //     appointments.php:256/469 — altrimenti la riga promotion_redemptions
-  //     sopravvive e continua a consumare lo slot promo del cliente.
-  await releaseAppointmentPromotionReservation(slug, appointmentId);
-
-  // 4) Finally remove the appointment row itself (tenant-scoped).
-  const removed = await tenantDelete({ slug, table: "appointments", id: appointmentId }).catch(() => 0);
+  // 3) CASCATA ATOMICA (parità col beginTransaction del delete legacy,
+  //    api_appointments.php 9688): figli/snapshot + link QB migrati + reminders +
+  //    release della promotion_redemption + riga appuntamenti in UNA transazione —
+  //    un fallimento a metà non lascia mai figli orfani né una riga mezza-pulita.
+  //    Tabelle risolte PRIMA della tx (assente in install legacy = skip, mai un
+  //    errore-abort dentro; i vecchi child-delete erano best-effort per-tabella).
+  //    appointment_gift_items = link del riscatto omaggio (con la riattivazione
+  //    dell'istanza nel restore sopra il rollback del redeem è completo);
+  //    reminders = TUTTI (legacy appointments.php:259/470, ogni stato); le
+  //    tabelle-link QB legacy le popolano solo i DATI MIGRATI.
+  const childBases = [
+    "appointment_segments",
+    "appointment_services",
+    "appointment_staff",
+    "appointment_locations",
+    "appointment_gift_items",
+    "reminders",
+    "appointment_giftbox_items",
+    "appointment_package_items",
+    "appointment_prepaid_service_items",
+  ];
+  const childTs: TenantTable[] = [];
+  for (const base of childBases) {
+    const t = await tenantTable(slug, base).catch(() => null);
+    if (t) childTs.push(t);
+  }
+  // Release promo (per_customer_limit) come il legacy appointments.php:256/469 —
+  // la riga promotion_redemptions non deve sopravvivere al delete (il NULL su
+  // appointments.promotion_id è superfluo: la riga viene eliminata qui sotto).
+  const redT = await tenantTable(slug, "promotion_redemptions").catch(() => null);
+  const redHasAppt = redT ? await columnExists(redT.name, "appointment_id").catch(() => false) : false;
+  const redSaleGuard = redT && (await columnExists(redT.name, "sale_id").catch(() => false)) ? " AND (sale_id IS NULL OR sale_id = 0)" : "";
+  const apptT = await tenantTable(slug, "appointments");
+  const removed = await withTenantTransaction(slug, async (txq) => {
+    for (const t of childTs) {
+      await txq(`DELETE FROM ${quoteIdentifier(t.name)} WHERE appointment_id = ?${t.tenantId ? " AND tenant_id = ?" : ""}`, t.tenantId ? [appointmentId, t.tenantId] : [appointmentId]);
+    }
+    if (redT && redHasAppt) {
+      await txq(`DELETE FROM ${quoteIdentifier(redT.name)} WHERE appointment_id = ?${redT.tenantId ? " AND tenant_id = ?" : ""}${redSaleGuard}`, redT.tenantId ? [appointmentId, redT.tenantId] : [appointmentId]);
+    }
+    const gone = await txq(`DELETE FROM ${quoteIdentifier(apptT.name)} WHERE id = ?${apptT.tenantId ? " AND tenant_id = ?" : ""} RETURNING id`, apptT.tenantId ? [appointmentId, apptT.tenantId] : [appointmentId]);
+    return gone.length;
+  });
   return removed > 0;
 }
 
@@ -5854,7 +5875,8 @@ async function restoreGiftcardBalance(slug: string, giftcardId: number, amount: 
       type: "topup",
       amount: refund,
       note: "Storno eliminazione appuntamento",
-      created_at: new Date(),
+      // Ora di ROMA esplicita (classe TZ server-safe).
+      created_at: businessNowDateTime(),
     }).catch(() => 0);
   } catch {
     // best-effort
