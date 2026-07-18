@@ -1,5 +1,6 @@
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { dbQuery } from "@/lib/tenant-db";
+import { storagePublicUrl } from "@/lib/storage";
 
 type MarketplaceProfile = {
   slug: string;
@@ -11,6 +12,7 @@ type MarketplaceProfile = {
   nextSlot: string;
   priceFrom: string;
   image: string;
+  logoUrl: string;
   services: string[];
   locations: Array<{
     id: number;
@@ -33,8 +35,10 @@ const DEFAULT_RATING = "5.0";
 const DEFAULT_REVIEWS = 0;
 const DEFAULT_NEXT_SLOT = "Disponibilita su richiesta";
 const DEFAULT_PRICE_FROM = "Da definire";
-const DEFAULT_IMAGE =
-  "https://images.unsplash.com/photo-1560066984-138dadb4c035?auto=format&fit=crop&w=900&q=80";
+// NB (redesign 2026-07-18): niente più foto stock di default — mostrava lo
+// STESSO salone finto per ogni attività. image/logoUrl arrivano dalla
+// cover/logo REALE del profilo attività (R2 pubblico); vuoti = la card rende
+// il monogramma disegnato.
 const DEFAULT_CATEGORY = "Centro benessere";
 const DEFAULT_SERVICES = ["Viso", "Corpo", "Benessere"];
 
@@ -59,6 +63,8 @@ async function marketplaceProfiles(): Promise<{ profiles: MarketplaceProfile[]; 
       COALESCE(NULLIF(MAX(b.name), ''), t.name) AS business_name,
       COALESCE(NULLIF(MAX(b.site_city), ''), NULLIF(MAX(b.quote_city), ''), NULLIF(MIN(l.legal_city), ''), '') AS city,
       COALESCE(NULLIF(MAX(b.site_province), ''), NULLIF(MAX(b.quote_province), ''), '') AS area,
+      COALESCE(NULLIF(MAX(b.cover_path), ''), '') AS cover_path,
+      COALESCE(NULLIF(MAX(b.logo_path), ''), '') AS logo_path,
       MIN(l.id) AS first_location_id,
       COALESCE(NULLIF(MIN(l.name), ''), 'Sede principale') AS first_location_name,
       COALESCE(NULLIF(MIN(l.address), ''), NULLIF(MAX(b.site_address), ''), NULLIF(MAX(b.address), ''), '') AS first_address,
@@ -153,6 +159,8 @@ async function profileFromRow(row: RowDataPacket, locationCategories: Map<number
   const city = String(row.city ?? "").trim();
   const area = String(row.area ?? "").trim() || city || "";
   const price = Number(row.price_from ?? 0);
+  const coverPath = String(row.cover_path ?? "").trim();
+  const logoPath = String(row.logo_path ?? "").trim();
 
   return {
     slug,
@@ -163,14 +171,16 @@ async function profileFromRow(row: RowDataPacket, locationCategories: Map<number
     reviews: DEFAULT_REVIEWS,
     nextSlot: DEFAULT_NEXT_SLOT,
     priceFrom: price > 0 ? `Da ${roundMoney(price)} euro` : DEFAULT_PRICE_FROM,
-    image: DEFAULT_IMAGE,
+    image: coverPath ? storagePublicUrl(coverPath) : "",
+    logoUrl: logoPath ? storagePublicUrl(logoPath) : "",
     services: services.length ? services : DEFAULT_SERVICES,
     locations: (locationRows.length ? locationRows : [row]).map((location) => {
       const locationId = Number(location.id ?? row.first_location_id ?? 0);
       const activityCategories = locationCategories.get(locationId) ?? [];
       return {
         id: locationId,
-        name: String(location.name ?? row.first_location_name ?? "Sede principale"),
+        // || (non ??): un name di sede '' non deve produrre una card senza titolo.
+        name: String(location.name || row.first_location_name || "Sede principale"),
         city: String(location.legal_city ?? city),
         area: String(location.legal_province ?? area),
         address: String(location.address ?? row.first_address ?? ""),

@@ -29,6 +29,7 @@ type MarketplaceProfile = {
   category: string;
   area: string;
   image?: string;
+  logoUrl?: string;
   services: string[];
   locations: MarketplaceLocation[];
 };
@@ -486,7 +487,14 @@ export function MarketplaceSearchFaithful({
                       </a>
                       <div className="result-body">
                         <div className="result-title">
-                          <span className="result-logo">{initialOf(profile.name || title)}</span>
+                          <span className="result-logo">
+                            {profile.logoUrl ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={profile.logoUrl} alt="" />
+                            ) : (
+                              initialOf(profile.name || title)
+                            )}
+                          </span>
                           <div>
                             <h2>{title}</h2>
                             {showSubtitle ? <div className="result-subtitle">{profile.name}</div> : null}

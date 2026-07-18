@@ -94,6 +94,7 @@ type MarketplaceProfile = {
   nextSlot: string;
   priceFrom: string;
   image: string;
+  logoUrl?: string;
   services: string[];
   locations: Array<{ id: number; name: string; city: string; area: string; address: string }>;
 };
@@ -234,6 +235,13 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
   // A LISTA NOTA — mai durante il primo load (placeholder fedeli).
   const [mkLoaded, setMkLoaded] = useState(false);
 
+  // Origin per il link di condivisione: risolto post-mount così SSR e prima
+  // idratazione rendono lo stesso URL relativo (niente mismatch).
+  const [shareOrigin, setShareOrigin] = useState("");
+  useEffect(() => {
+    setShareOrigin(window.location.origin);
+  }, []);
+
   useEffect(() => {
     if (slugProp) return;
     setSlug(readSlugFromPath());
@@ -317,9 +325,10 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
     const base = [primaryLocation.city, primaryLocation.name].filter(Boolean).join(" ").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
     return `${base}-${primaryLocation.id}`;
   })();
-  const shareUrl = typeof window !== "undefined"
-    ? `${window.location.origin}/attivita/${encodeURIComponent(slug)}${shareLocSlug ? `/sedi/${shareLocSlug}` : ""}`
-    : `/attivita/${encodeURIComponent(slug)}${shareLocSlug ? `/sedi/${shareLocSlug}` : ""}`;
+  // NB: origin risolto SOLO post-mount (state), mai con un ramo typeof window
+  // nel render: il markup SSR e la prima idratazione devono coincidere (il
+  // ramo diretto causava l'hydration mismatch dev su data-share-url).
+  const shareUrl = `${shareOrigin}/attivita/${encodeURIComponent(slug)}${shareLocSlug ? `/sedi/${shareLocSlug}` : ""}`;
   function bookServiceHref(serviceId: number): string {
     return `/${slug}/booking?start=1&location_id=${locationId}&service_ids=${serviceId}`;
   }
@@ -573,11 +582,24 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
                   </svg>
                 </button>
               </div>
-              {/* Cover: gradiente disegnato dal CSS quando manca l'immagine
-                  (l'empty-state "Copertina attività" su grigio è stato
-                  eliminato col redesign 2026-07). */}
-              <div className="salon-cover" aria-hidden="true"></div>
-              <div className="salon-logo">{initialOf(businessName)}</div>
+              {/* Cover: immagine REALE del profilo attività quando presente,
+                  altrimenti gradiente disegnato dal CSS (l'empty-state
+                  "Copertina attività" su grigio è stato eliminato col
+                  redesign 2026-07). */}
+              <div className="salon-cover" aria-hidden="true">
+                {profile?.image ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={profile.image} alt="" />
+                ) : null}
+              </div>
+              <div className="salon-logo">
+                {profile?.logoUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={profile.logoUrl} alt="" />
+                ) : (
+                  initialOf(businessName)
+                )}
+              </div>
               <h1 className="salon-name">{businessName}</h1>
             </section>
 

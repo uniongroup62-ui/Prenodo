@@ -70,6 +70,7 @@ type MarketplaceProfile = {
   nextSlot: string;
   priceFrom: string;
   image: string;
+  logoUrl?: string;
   services: string[];
   locations: MarketplaceLocation[];
 };
@@ -633,7 +634,14 @@ export function MarketplaceListFaithful() {
                 </a>
                 <div className="tenant-body">
                   <div className="tenant-title">
-                    <span className="tenant-logo">{initial(profile.name)}</span>
+                    <span className="tenant-logo">
+                      {profile.logoUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={profile.logoUrl} alt="" />
+                      ) : (
+                        initial(profile.name)
+                      )}
+                    </span>
                     <div>
                       <h3>{location.name}</h3>
                       <div className="meta tenant-card-subtitle">{profile.name}</div>

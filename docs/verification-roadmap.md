@@ -16017,3 +16017,44 @@ marketplace, auth e gestionale sono tutti nella stessa famiglia navy.
 Verifica: tsc pulito; screenshot home/dettaglio/login (bianco+navy);
 test-email-template 10/10 (bundle rigenerato); e2e-booking-marketplace
 26/26 CLEAN; galleria anteprime email rigenerata sull'artifact.
+
+## 2026-07-18 — Marketplace pass 2 (post-redesign v2): analisi funzioni+logiche
+
+FIX 1 — HYDRATION MISMATCH del dettaglio (il rilievo 'preesistente'
+dei giri redesign, ORA RISOLTO): shareUrl era calcolato con un ramo
+`typeof window !== "undefined"` direttamente nel render → il markup
+SSR (URL relativo) non coincideva con la prima idratazione (origin
+assoluto) su data-share-url. Ora l'origin è stato React risolto in
+useEffect: SSR e prima idratazione coincidono, l'URL diventa assoluto
+post-mount. Console del dettaglio PULITA (verificato live).
+
+FIX 2 — FOTO STOCK FINTA nelle card: /api/marketplace serviva SEMPRE
+DEFAULT_IMAGE (lo stesso salone Unsplash per OGNI attività — col
+redesign che ora renderizza profile.image, tutte le card mostravano
+la stessa foto di un salone che non è il loro). Ora image/logoUrl
+arrivano dalla cover/logo REALE del profilo attività
+(businesses.cover_path/logo_path → storagePublicUrl R2); vuoti =
+monogramma disegnato. Cablati: card home (media+logo), result-card
+ricerca (media+logo), dettaglio (salon-cover img + salon-logo img).
+
+FIX 3 — hardening: name sede '' non produce più card senza titolo
+(|| invece di ?? nella catena di fallback).
+
+LOGICHE ATTESTATE CORRETTE: la directory è un'API pubblica GLOBALE
+(cross-tenant by design) che espone SOLO dati pubblici (verificato:
+nessun email/phone/vat/tenant_id nel payload); gating marketplace =
+tenant attivo+status active+marketplace_public_allowed + sedi
+is_active+marketplace_enabled + servizi is_active+booking_enabled;
+filtri ricerca client-side q/city/category/service; preferiti
+toggle_favorite idempotente con gate 401→login; empty-state 'Attività
+non trovata' gated mkLoaded; validazione città setCustomValidity.
+Nessuna mutazione/eliminazione nel dominio (directory read-only +
+preferiti per-account) — niente altro da attestare.
+
+Suite NUOVA test-marketplace-pass2 22/22 CLEAN (API payload/scoping,
+filtri città/categoria/q + empty-state, sidebar/modal filtri
+desktop+mobile, picker trattamenti, validazione città, dettaglio
+orari+Prenota+share, console senza mismatch, slug inesistente,
+preferiti sloggato→login + toggle ON/OFF via account TEMPORANEO
+rimosso per id). MIGLIORIA RESIDUA PROPOSTA (non fatta): SSR/SEO del
+dettaglio con metadata+JSON-LD.
