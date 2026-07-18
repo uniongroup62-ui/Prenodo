@@ -33,8 +33,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { SaasAdminUser } from "@/lib/saas-admin-auth";
+import { AdminSecurityPanel } from "@/components/admin/admin-security-panel";
 
-type ViewKey = "dashboard" | "tenants" | "controls" | "sms_plans" | "send_movements" | "maintenance" | "audit" | "admins";
+type ViewKey = "dashboard" | "tenants" | "controls" | "sms_plans" | "send_movements" | "maintenance" | "audit" | "admins" | "security";
 type TenantTab = "overview" | "settings" | "visibility" | "admin" | "onboarding" | "health" | "support" | "backups" | "danger";
 type HealthLevel = "ok" | "warning" | "error";
 type TenantStatus = "provisioning" | "active" | "suspended" | "failed" | "deleted";
@@ -209,6 +210,7 @@ const navItems: Array<{ key: ViewKey; label: string; icon: LucideIcon }> = [
   { key: "maintenance", label: "Manutenzione", icon: Wrench },
   { key: "audit", label: "Audit", icon: ScrollText },
   { key: "admins", label: "Admin SaaS", icon: Users },
+  { key: "security", label: "Sicurezza", icon: ShieldCheck },
 ];
 
 const tenantTabs: Array<{ key: TenantTab; label: string; icon: LucideIcon }> = [
@@ -347,8 +349,18 @@ export function SaasAdminLoginPage({ initialBootstrapped = true }: { initialBoot
   );
 }
 
-export function SaasAdminApp({ initialUser }: { initialUser: SaasAdminUser }) {
-  const [activeView, setActiveView] = useState<ViewKey>("dashboard");
+export function SaasAdminApp({
+  initialUser,
+  initialView = "dashboard",
+  initialSlug = "",
+  initialTab = "overview",
+}: {
+  initialUser: SaasAdminUser;
+  initialView?: ViewKey;
+  initialSlug?: string;
+  initialTab?: TenantTab;
+}) {
+  const [activeView, setActiveView] = useState<ViewKey>(initialView);
   const [overview, setOverview] = useState<OverviewPayload>(emptyOverview);
   const [tenantDetail, setTenantDetail] = useState<TenantDetailPayload | null>(null);
   const [activeTenantTab, setActiveTenantTab] = useState<TenantTab>("overview");
@@ -367,6 +379,58 @@ export function SaasAdminApp({ initialUser }: { initialUser: SaasAdminUser }) {
   const canManageTenants = initialUser.role === "owner" || initialUser.role === "admin";
   const canManageAdmins = initialUser.role === "owner";
   const visibleNav = useMemo(() => navItems.filter((item) => item.key !== "admins" || canManageAdmins), [canManageAdmins]);
+
+  // URL veri per ogni sezione (Fase 3, 2026-07-19): /admin?page=<vista>
+  // [&slug=..&tab=..] — deep-link, refresh e tasto Indietro funzionanti.
+  function syncUrl(view: ViewKey, slug = "", tab: TenantTab = "overview", push = true) {
+    const params = new URLSearchParams();
+    if (view !== "dashboard") params.set("page", view);
+    if (view === "tenants" && slug) {
+      params.set("slug", slug);
+      if (tab !== "overview") params.set("tab", tab);
+    }
+    const url = `/admin${params.toString() ? `?${params}` : ""}`;
+    if (typeof window !== "undefined" && window.location.pathname + window.location.search !== url) {
+      if (push) window.history.pushState({ view, slug, tab }, "", url);
+      else window.history.replaceState({ view, slug, tab }, "", url);
+    }
+  }
+
+  // Caricamento dati per-vista (riusato da nav, deep-link iniziale e popstate).
+  const loadForView = (key: ViewKey) => {
+    if (key === "admins") void loadAdmins();
+    if (key === "controls") void loadControls();
+    if (key === "sms_plans") void loadSmsBilling();
+    if (key === "send_movements") void loadMovements();
+  };
+
+  function navigateView(key: ViewKey, push = true) {
+    setActiveView(key);
+    setTenantDetail(null);
+    loadForView(key);
+    syncUrl(key, "", "overview", push);
+  }
+
+  // Deep-link iniziale (?page/slug/tab) + tasto Indietro (popstate).
+  useEffect(() => {
+    if (initialSlug) void loadTenant(initialSlug, initialTab);
+    else loadForView(initialView);
+    const onPop = () => {
+      const params = new URLSearchParams(window.location.search);
+      const view = (params.get("page") || "dashboard") as ViewKey;
+      const slug = params.get("slug") || "";
+      const tab = (params.get("tab") || "overview") as TenantTab;
+      if (view === "tenants" && slug) void loadTenant(slug, tab, false);
+      else {
+        setActiveView(navItems.some((item) => item.key === view) || view === "dashboard" ? view : "dashboard");
+        setTenantDetail(null);
+        loadForView(view);
+      }
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -400,7 +464,7 @@ export function SaasAdminApp({ initialUser }: { initialUser: SaasAdminUser }) {
     }
   }
 
-  async function loadTenant(slug: string, tab: TenantTab = activeTenantTab) {
+  async function loadTenant(slug: string, tab: TenantTab = activeTenantTab, push = true) {
     setLoading(true);
     setSupportLink("");
     try {
@@ -408,6 +472,7 @@ export function SaasAdminApp({ initialUser }: { initialUser: SaasAdminUser }) {
       setTenantDetail(data);
       setActiveTenantTab(tab);
       setActiveView("tenants");
+      syncUrl("tenants", slug, tab, push);
       if (tab === "backups") await loadBackups(slug);
     } catch (error) {
       setMessage(errorMessage(error));
@@ -519,7 +584,7 @@ export function SaasAdminApp({ initialUser }: { initialUser: SaasAdminUser }) {
       <div className="grid min-h-screen lg:grid-cols-[260px_minmax(0,1fr)]">
         <aside className="border-r border-slate-200 bg-slate-950 p-4 text-white">
           <div className="flex items-center gap-3 border-b border-white/10 pb-4">
-            <span className="flex h-10 w-10 items-center justify-center rounded-md bg-emerald-600 font-semibold">B</span>
+            <span className="flex h-10 w-10 items-center justify-center rounded-md bg-emerald-600 font-semibold">P</span>
             <div className="min-w-0">
               <p className="truncate font-semibold">SaaS Admin</p>
               <p className="truncate text-xs text-white/60">{initialUser.email}</p>
@@ -533,13 +598,7 @@ export function SaasAdminApp({ initialUser }: { initialUser: SaasAdminUser }) {
                   className={`flex h-10 items-center gap-3 rounded-md px-3 text-left text-sm font-semibold ${activeView === item.key ? "bg-white text-slate-950" : "text-white/80 hover:bg-white/10"}`}
                   key={item.key}
                   type="button"
-                  onClick={() => {
-                    setActiveView(item.key);
-                    if (item.key === "admins") void loadAdmins();
-                    if (item.key === "controls") void loadControls();
-                    if (item.key === "sms_plans") void loadSmsBilling();
-                    if (item.key === "send_movements") void loadMovements();
-                  }}
+                  onClick={() => navigateView(item.key)}
                 >
                   <Icon size={17} aria-hidden />
                   {item.label}
@@ -599,6 +658,7 @@ export function SaasAdminApp({ initialUser }: { initialUser: SaasAdminUser }) {
             {activeView === "maintenance" ? <MaintenanceView tenants={overview.tenants} results={results} canManage={canManageTenants} onAction={tenantAction} /> : null}
             {activeView === "audit" ? <AuditList rows={overview.audit} /> : null}
             {activeView === "admins" ? <AdminsView admins={admins} currentUser={initialUser} onAction={adminAction} /> : null}
+            {activeView === "security" ? <AdminSecurityPanel /> : null}
           </div>
         </section>
       </div>
@@ -1454,6 +1514,7 @@ function viewTitle(view: ViewKey): string {
   if (view === "maintenance") return "Manutenzione";
   if (view === "audit") return "Audit";
   if (view === "admins") return "Admin SaaS";
+  if (view === "security") return "Sicurezza";
   return "Dashboard";
 }
 

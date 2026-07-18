@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-// Pannello "Sicurezza account" della dashboard SaaS Admin (Fase 1 blindatura
-// 2026-07-18): attivazione/disattivazione 2FA TOTP (con codici di backup
-// mostrati UNA volta) e lista delle sessioni attive con revoca remota.
+// Pannello "Sicurezza account" del SaaS Admin (Fase 1 blindatura 2026-07-18,
+// ristilizzato Tailwind per la SPA in Fase 3): attivazione/disattivazione 2FA
+// TOTP (con codici di backup mostrati UNA volta) e sessioni attive con revoca.
 
 type AdminSession = {
   id: number;
@@ -19,6 +19,10 @@ type SecurityState = {
   totpEnabled: boolean;
   sessions: AdminSession[];
 };
+
+const inputCls = "h-10 w-full rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-emerald-700";
+const btnPrimary = "inline-flex h-10 items-center justify-center rounded-md bg-emerald-700 px-4 text-sm font-semibold text-white disabled:opacity-60";
+const btnDanger = "inline-flex h-9 items-center justify-center rounded-md border border-red-200 px-3 text-sm font-semibold text-red-700 hover:bg-red-50";
 
 export function AdminSecurityPanel() {
   const [state, setState] = useState<SecurityState | null>(null);
@@ -37,7 +41,7 @@ export function AdminSecurityPanel() {
       const data = await res.json();
       if (data.ok) setState({ totpEnabled: Boolean(data.totpEnabled), sessions: data.sessions ?? [] });
     } catch {
-      /* pannello secondario: nessun blocco della dashboard */
+      /* pannello secondario: nessun blocco */
     }
   }, []);
 
@@ -105,97 +109,97 @@ export function AdminSecurityPanel() {
   if (!state) return null;
 
   return (
-    <div className="card-panel" style={{ marginTop: 18 }}>
-      <div className="page-head" style={{ marginBottom: 8 }}>
-        <div>
-          <div className="page-eyebrow">Sicurezza account</div>
-          <h2 style={{ margin: 0 }}>2FA e sessioni attive</h2>
-        </div>
-      </div>
-
-      {error ? <div className="alert alert-danger" role="alert">{error}</div> : null}
-      {message ? <div className="alert alert-success" role="alert">{message}</div> : null}
+    <div className="grid gap-4">
+      {error ? <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">{error}</div> : null}
+      {message ? <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-800">{message}</div> : null}
 
       {/* ---- 2FA ---- */}
-      {state.totpEnabled ? (
-        <div className="form-grid">
-          <div className="span-12"><span className="badge text-bg-success">2FA attiva</span></div>
-          <div className="span-4">
-            <label className="form-label">Password</label>
-            <input className="form-control" type="password" value={disablePassword} onChange={(e) => setDisablePassword(e.target.value)} />
+      <section className="rounded-md border border-slate-200 bg-white p-5">
+        <h2 className="text-lg font-semibold">Autenticazione a due fattori (TOTP)</h2>
+        {state.totpEnabled ? (
+          <div className="mt-4 grid gap-3">
+            <span className="w-fit rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">2FA attiva</span>
+            <div className="grid gap-3 md:grid-cols-3">
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-slate-600">Password</span>
+                <input className={inputCls} type="password" value={disablePassword} onChange={(e) => setDisablePassword(e.target.value)} />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-slate-600">Codice 2FA o backup</span>
+                <input className={inputCls} value={disableCode} onChange={(e) => setDisableCode(e.target.value)} />
+              </label>
+              <div className="self-end">
+                <button className={btnDanger} type="button" onClick={() => void disableTotp()}>Disattiva 2FA</button>
+              </div>
+            </div>
           </div>
-          <div className="span-4">
-            <label className="form-label">Codice 2FA o backup</label>
-            <input className="form-control" value={disableCode} onChange={(e) => setDisableCode(e.target.value)} />
-          </div>
-          <div className="span-4" style={{ alignSelf: "end" }}>
-            <button className="btn btn-outline-danger" type="button" onClick={() => void disableTotp()}>Disattiva 2FA</button>
-          </div>
-        </div>
-      ) : setupSecret ? (
-        <div className="form-grid">
-          <div className="span-12">
-            <p style={{ marginBottom: 6 }}>
+        ) : setupSecret ? (
+          <div className="mt-4 grid gap-3">
+            <p className="text-sm text-slate-600">
               Aggiungi la chiave alla tua app authenticator (Google Authenticator, 1Password, Aegis…):
             </p>
-            <code style={{ fontSize: 15, letterSpacing: 1 }}>{setupSecret}</code>
-            <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4, wordBreak: "break-all" }}>{setupUri}</div>
+            <code className="w-fit rounded-md bg-slate-100 px-3 py-2 text-base tracking-widest">{setupSecret}</code>
+            <p className="break-all text-xs text-slate-400">{setupUri}</p>
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-slate-600">Codice a 6 cifre per confermare</span>
+                <input className={inputCls} value={setupCode} onChange={(e) => setSetupCode(e.target.value)} />
+              </label>
+              <div className="self-end">
+                <button className={btnPrimary} type="button" onClick={() => void confirmSetup()}>Conferma e attiva</button>
+              </div>
+            </div>
           </div>
-          <div className="span-6">
-            <label className="form-label">Codice a 6 cifre per confermare</label>
-            <input className="form-control" value={setupCode} onChange={(e) => setSetupCode(e.target.value)} />
+        ) : (
+          <div className="mt-4">
+            <p className="mb-3 text-sm text-slate-600">
+              La 2FA protegge il pannello anche se la password viene compromessa. Fortemente consigliata per gli owner.
+            </p>
+            <button className={btnPrimary} type="button" onClick={() => void startSetup()}>Attiva 2FA</button>
           </div>
-          <div className="span-6" style={{ alignSelf: "end" }}>
-            <button className="btn btn-primary" type="button" onClick={() => void confirmSetup()}>Conferma e attiva</button>
-          </div>
-        </div>
-      ) : (
-        <div>
-          <p style={{ marginBottom: 10 }}>
-            La 2FA protegge il pannello anche se la password viene compromessa. Fortemente consigliata per gli owner.
-          </p>
-          <button className="btn btn-primary" type="button" onClick={() => void startSetup()}>Attiva 2FA</button>
-        </div>
-      )}
+        )}
 
-      {backupCodes.length ? (
-        <div className="alert alert-warning" style={{ marginTop: 12 }}>
-          <strong>Codici di backup (salvali ora):</strong>
-          <div style={{ fontFamily: "monospace", marginTop: 6 }}>{backupCodes.join("  ")}</div>
-        </div>
-      ) : null}
+        {backupCodes.length ? (
+          <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
+            <strong>Codici di backup (salvali ora):</strong>
+            <div className="mt-2 font-mono">{backupCodes.join("  ")}</div>
+          </div>
+        ) : null}
+      </section>
 
       {/* ---- Sessioni attive ---- */}
-      <h3 style={{ marginTop: 18, fontSize: 16 }}>Sessioni attive</h3>
-      <div className="table-responsive">
-        <table className="table table-sm align-middle">
-          <thead>
-            <tr>
-              <th>Admin</th>
-              <th>IP</th>
-              <th>Ultimo accesso</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {state.sessions.map((s) => (
-              <tr key={s.id}>
-                <td>{s.adminEmail}</td>
-                <td>{s.ip || "—"}</td>
-                <td>{s.lastSeenAt ?? s.createdAt ?? "—"}</td>
-                <td className="text-end">
-                  <button className="btn btn-sm btn-outline-danger" type="button" onClick={() => void revokeSession(s.id)}>
-                    Revoca
-                  </button>
-                </td>
+      <section className="rounded-md border border-slate-200 bg-white p-5">
+        <h2 className="text-lg font-semibold">Sessioni attive</h2>
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
+                <th className="py-2 pr-3">Admin</th>
+                <th className="py-2 pr-3">IP</th>
+                <th className="py-2 pr-3">Ultimo accesso</th>
+                <th className="py-2"></th>
               </tr>
-            ))}
-            {state.sessions.length === 0 ? (
-              <tr><td colSpan={4}>Nessuna sessione attiva.</td></tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {state.sessions.map((s) => (
+                <tr className="border-b border-slate-100" key={s.id}>
+                  <td className="py-2 pr-3">{s.adminEmail}</td>
+                  <td className="py-2 pr-3">{s.ip || "—"}</td>
+                  <td className="py-2 pr-3">{s.lastSeenAt ?? s.createdAt ?? "—"}</td>
+                  <td className="py-2 text-right">
+                    <button className={btnDanger} type="button" onClick={() => void revokeSession(s.id)}>
+                      Revoca
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {state.sessions.length === 0 ? (
+                <tr><td className="py-3 text-slate-500" colSpan={4}>Nessuna sessione attiva.</td></tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 }

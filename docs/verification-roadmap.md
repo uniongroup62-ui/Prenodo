@@ -16226,3 +16226,26 @@ legacy index.php REGREDITO OK (307 -> route pulita); screenshot
 pannello con sezione Sicurezza. RILIEVO per Fase 3: la SPA ricca
 (SaasAdminApp, 8 sezioni) è EXPORT MORTO — la UI attiva è
 admin-dashboard-faithful minimale coi link ?page= legacy.
+
+## 2026-07-19 — SaaS ADMIN Fase 2 (residuo) + Fase 3: STRUTTURA con URL VERI
+
+FASE 2 residuo: app/robots.ts con Disallow /admin e /api/ (in aggiunta
+all'header X-Robots-Tag del proxy).
+
+FASE 3: la SPA completa (SaasAdminApp — prima EXPORT MORTO mai
+montato) è ORA il pannello a /admin, al posto della dashboard
+minimale: 8 sezioni (Dashboard/Tenant/Controlli/Piani SMS/Movimenti/
+Manutenzione/Audit/Admin SaaS) + nuova vista SICUREZZA (pannello 2FA
++ sessioni, ristilizzato Tailwind) + dettaglio tenant a 9 tab.
+URL VERI: /admin?page=<vista>[&slug=..&tab=..] con pushState sulla
+nav, popstate sul tasto Indietro, deep-link e refresh che
+ripristinano vista/tenant/tab; i nomi pagina LEGACY dell'admin PHP
+(?page=tenant_detail/tenant_new/tenant_health/…) sono mappati alle
+viste con tab pre-selezionata e URL normalizzato. Logo 'P'.
+
+Verifica: test-saas-admin-fase3 9/9 (nav 9 voci, pushState, back,
+deep-link security, legacy tenant_detail normalizzato, tab->URL con
+waitForURL, refresh ripristina la tab, controls, robots) +
+regressione test-saas-admin-hardening 19/19; tsc pulito. HARNESS:
+click su tab -> la syncUrl scatta a fetch COMPLETATA (waitForURL, non
+sleep fissi); prima visita di una vista in dev = lag di compilazione.

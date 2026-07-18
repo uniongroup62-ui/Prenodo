@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AdminSecurityPanel } from "@/components/admin/admin-security-panel";
 import { AdminShell } from "@/components/admin/admin-shell";
 
 // Pixel-faithful port of the legacy PHP /admin/ dashboard body.
@@ -255,9 +254,6 @@ export function AdminDashboardFaithful({ userEmail = "" }: { userEmail?: string 
           </table>
         </div>
       </section>
-
-      {/* Sicurezza account (Fase 1 blindatura 2026-07-18): 2FA + sessioni. */}
-      <AdminSecurityPanel />
     </AdminShell>
   );
 }

@@ -1,14 +1,70 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { AdminDashboardFaithful } from "@/components/admin/admin-dashboard-faithful";
+import { SaasAdminApp } from "@/components/saas-admin-app";
 import { currentSaasAdminSession } from "@/lib/saas-admin-auth";
 
 export const metadata: Metadata = {
   title: "Dashboard - SaaS Admin",
 };
 
-export default async function AdminPage() {
+// Fase 3 (2026-07-19): il pannello è la SPA completa (8 sezioni + dettaglio
+// tenant a tab + Sicurezza) con URL VERI: /admin?page=<vista>[&slug=..&tab=..]
+// — deep-link, refresh e tasto Indietro funzionanti. I nomi pagina legacy
+// dell'admin PHP (tenant_detail/tenant_new/…) sono mappati alle viste.
+const VIEWS = new Set(["dashboard", "tenants", "controls", "sms_plans", "send_movements", "maintenance", "audit", "admins", "security"]);
+const LEGACY_PAGE_MAP: Record<string, string> = {
+  tenant_detail: "tenants",
+  tenant_new: "tenants",
+  tenant_settings: "tenants",
+  tenant_health: "tenants",
+  tenant_support: "tenants",
+  tenant_backups: "tenants",
+  tenant_danger: "tenants",
+  tenant_onboarding: "tenants",
+  tenant_visibility: "tenants",
+  tenant_admin: "tenants",
+  tenants: "tenants",
+};
+const LEGACY_TAB_MAP: Record<string, string> = {
+  tenant_settings: "settings",
+  tenant_health: "health",
+  tenant_support: "support",
+  tenant_backups: "backups",
+  tenant_danger: "danger",
+  tenant_onboarding: "onboarding",
+  tenant_visibility: "visibility",
+  tenant_admin: "admin",
+};
+const TABS = new Set(["overview", "settings", "visibility", "admin", "onboarding", "health", "support", "backups", "danger"]);
+
+export default async function AdminPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const session = await currentSaasAdminSession();
   if (!session) redirect("/admin/login");
-  return <AdminDashboardFaithful userEmail={session.user.email} />;
+
+  const query = (await searchParams) ?? {};
+  const qs = (key: string): string => {
+    const raw = query[key];
+    return String(Array.isArray(raw) ? raw[0] ?? "" : raw ?? "").trim();
+  };
+  const rawPage = qs("page");
+  const mapped = LEGACY_PAGE_MAP[rawPage] ?? rawPage;
+  const view = VIEWS.has(mapped) ? mapped : "dashboard";
+  const slug = view === "tenants" ? qs("slug") : "";
+  const rawTab = qs("tab") || LEGACY_TAB_MAP[rawPage] || "overview";
+  const tab = TABS.has(rawTab) ? rawTab : "overview";
+
+  return (
+    <SaasAdminApp
+      initialUser={session.user}
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      initialView={view as any}
+      initialSlug={slug}
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      initialTab={tab as any}
+    />
+  );
 }
