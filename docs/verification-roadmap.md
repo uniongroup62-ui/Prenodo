@@ -15504,3 +15504,32 @@ test-notifiche-hub 16/16. ARCHIVIATE .superseded: test-rate-audit
 (suite FORENSE pre-fix: i suoi FAIL attestano i fix in piedi),
 e2e-rate1/e2e-rate2a (import 'pg' bare rotto, classe già archiviata).
 Bonifica 38 voci log batteria (baseline 9/3/1 intatte).
+
+## 2026-07-18 — Scadenziario e Costi pass 4: 2 fix (classe TZ + fail-closed sedi revocate)
+
+FIX 1 — CLASSE TZ SERVER-SAFE: paid_at del save costo-pagato e del
+toggle_paid erano Date al driver (wall del server, UTC su Amplify);
+timestamp dell'export (filename scadenziario_costi_<Ymd_His> + generatedAt
+del PDF) dai componenti locali del server -> tutto businessNowDateTime.
+
+FIX 2 — FAIL-CLOSED SEDI REVOCATE (classe 18/07): in un tenant con sedi,
+senza sede risolta la route degradava a scope-0 TENANT-WIDE su lista,
+get, save/delete/bulk/toggle E allegato (upload/download); con
+all_locations la lista autorizzata VUOTA del revocato AZZERAVA la
+clausola (getCostById: allowedIds.length>0). Ora: lista vuota
+failClosed, azioni 'Sede non valida o non autorizzata', get/allegato
+'Costo non trovato.'. Le azioni CATEGORIE (tenant-wide senza sede)
+restano fuori dalla guardia.
+
+Verifica live test-costi-pass4 10/10 CLEAN: paid_at Roma su save e
+toggle, revocato fail-closed su lista/toggle/all_locations/get/allegato,
+export con stamp Roma, sanity admin (status=paid: la vista default
+'open' esclude i pagati). Regressione: e2e-costs 52/52 (SANATA: login
+reale = sede 0 -> sessione forgiata sede 21, trappola nota),
+test-costs-completions 9/9, -fixes 14/14, -minors 4/4, test-dashboard
+16/16 (widget Scadenziario). test-costs-audit ARCHIVIATA .superseded
+(forense pre-fix, come test-rate-audit).
+
+GAP noto (proposta): il modulo Costi NON logga nel registro attività
+(nessuna logActivity su save/delete/toggle/categorie — unico dominio
+mutativo rimasto scoperto).

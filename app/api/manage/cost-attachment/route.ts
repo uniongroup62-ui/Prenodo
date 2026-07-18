@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { jsonError } from "@/lib/api-utils";
 import { currentManageSession } from "@/lib/manage-auth";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
-import { resolveManageLocationId } from "@/lib/manage-locations";
+import { getManageLocationContext, resolveManageLocationId } from "@/lib/manage-locations";
 import { canAny } from "@/lib/role-permissions";
 import {
   STORAGE_NOT_CONFIGURED_ERROR,
@@ -84,6 +84,9 @@ export async function GET(request: Request) {
 
   try {
     const scopeLocationId = await resolveManageLocationId({ slug: tenantSlug, raw: url.searchParams.get("location_id"), fallbackCurrent: true });
+    // FAIL-CLOSED sedi revocate (classe 18/07): senza sede risolta in un tenant
+    // con sedi, niente scope-0 tenant-wide sull allegato.
+    if (scopeLocationId <= 0 && (await getManageLocationContext(tenantSlug)).allLocations.length > 0) return jsonError("Costo non trovato.", 404);
     const cost = await loadCost(tenantSlug, id, scopeLocationId);
     if (!cost) return jsonError("Costo non trovato.", 404);
     const path = String(cost.attachment_path ?? "").trim();
@@ -117,6 +120,8 @@ export async function POST(request: Request) {
 
   try {
     const scopeLocationId = await resolveManageLocationId({ slug: tenantSlug, raw: form.get("location_id") as string | null, fallbackCurrent: true });
+    // FAIL-CLOSED sedi revocate (classe 18/07): come il GET.
+    if (scopeLocationId <= 0 && (await getManageLocationContext(tenantSlug)).allLocations.length > 0) return jsonError("Costo non trovato.", 404);
     const cost = await loadCost(tenantSlug, costId, scopeLocationId);
     if (!cost) return jsonError("Costo non trovato.", 404);
     const oldPath = String(cost.attachment_path ?? "").trim();

@@ -1,3 +1,4 @@
+import { businessNowDateTime } from "@/lib/business-datetime";
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import { renderCostsPdf } from "@/lib/cost-pdf";
 import { currentManageSession } from "@/lib/manage-auth";
@@ -30,6 +31,17 @@ function isAllLocations(value: unknown): boolean {
 }
 async function allowedLocationIds(slug: string): Promise<number[]> {
   return (await getManageLocationContext(slug)).locations.map((l) => l.id).filter((id) => id > 0);
+}
+
+// FAIL-CLOSED sedi revocate (classe 18/07, come rate/list/report): in un tenant
+// CON sedi, nessuna sede risolta (modalità singola) o nessuna sede autorizzata
+// (modalità Tutte-le-sedi con lista vuota) = sessione stantia/revocata — la
+// route non deve mai degradare a scope-0 tenant-wide (getCostById senza
+// clausola sede: lettura E mutazione di costi di qualunque sede).
+async function costsScopeFailClosed(slug: string, locationId: number, allowedIds: number[] | null): Promise<boolean> {
+  const noScope = allowedIds !== null ? allowedIds.length === 0 : locationId <= 0;
+  if (!noScope) return false;
+  return (await getManageLocationContext(slug)).allLocations.length > 0;
 }
 
 // Parse the bulk cost-id selection. parseRequestBody flattens body values to strings, so cost_ids
@@ -66,6 +78,7 @@ export async function GET(request: Request) {
       // In "Tutte le sedi" lo scope e' l'insieme delle sedi permesse.
       const getScopeLocationId = await resolveManageLocationId({ slug: tenantSlug, raw: url.searchParams.get("location_id"), fallbackCurrent: true });
       const getAllowed = isAllLocations(url.searchParams.get("all_locations")) ? await allowedLocationIds(tenantSlug) : null;
+      if (await costsScopeFailClosed(tenantSlug, getScopeLocationId, getAllowed)) return jsonError("Costo non trovato.", 404);
       const cost = await getManageCost(tenantSlug, costId, getScopeLocationId, getAllowed);
       if (!cost) return jsonError("Costo non trovato.", 404);
       return Response.json({ ok: true, source: "costs?action=get", sourceMode: "database", cost });
@@ -76,6 +89,10 @@ export async function GET(request: Request) {
       raw: url.searchParams.get("location_id"),
       fallbackCurrent: true,
     });
+    const listAllowed = isAllLocations(url.searchParams.get("all_locations")) ? await allowedLocationIds(tenantSlug) : null;
+    if (await costsScopeFailClosed(tenantSlug, locationId, listAllowed)) {
+      return Response.json({ ok: true, sourceMode: "database", costs: [], categories: [], suppliers: [], locations: [], summary: null, filters: {}, activeLocationId: 0, failClosed: true });
+    }
     const context = await getManageCostsContext(tenantSlug, {
       from: url.searchParams.get("from") ?? undefined,
       to: url.searchParams.get("to") ?? undefined,
@@ -91,9 +108,10 @@ export async function GET(request: Request) {
     if (url.searchParams.get("action") === "export") {
       if (!canAny(session.user.perms, workPerms)) return jsonError("Permesso Scadenziario richiesto.", 403);
       const format = String(url.searchParams.get("format") ?? "csv").toLowerCase() === "pdf" ? "pdf" : "csv";
-      const now = new Date();
-      const pad = (n: number) => String(n).padStart(2, "0");
-      const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+      // Timestamp filename/PDF in ORA DI ROMA (classe TZ server-safe).
+      const nowRome = businessNowDateTime(); // "YYYY-MM-DD HH:MM:SS"
+      const now = new Date(nowRome.replace(" ", "T"));
+      const stamp = nowRome.replace(/[-:]/g, "").replace(" ", "_");
       const fileBase = "scadenziario_costi";
       const showLocation = context.locations.length > 0;
       const locationLabel = context.activeLocationId > 0
@@ -214,6 +232,12 @@ export async function POST(request: Request) {
     // permesse (non alla sola sede corrente), cosi' un costo visibile nella vista "tutte" e'
     // anche gestibile. null = modalita' singola sede.
     const allowedIds = isAllLocations(body.all_locations ?? url.searchParams.get("all_locations")) ? await allowedLocationIds(tenantSlug) : null;
+    // FAIL-CLOSED sedi revocate sulle azioni SUI COSTI (le categorie sono
+    // tenant-wide senza sede e restano fuori dalla guardia).
+    const costActions = new Set(["create", "save", "save_cost", "cost_save", "delete", "cost_delete", "bulk_delete", "bulk_delete_costs", "pay", "toggle_paid", "cost_toggle_paid"]);
+    if (costActions.has(String(action)) && await costsScopeFailClosed(tenantSlug, locationId, allowedIds)) {
+      return jsonError("Sede non valida o non autorizzata");
+    }
 
     switch (action) {
       case "create":

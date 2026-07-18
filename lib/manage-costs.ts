@@ -2,7 +2,7 @@ import "server-only";
 
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { emptyToNull, parseInteger } from "@/lib/api-utils";
-import { businessTodayIso } from "@/lib/business-datetime";
+import { businessNowDateTime, businessTodayIso } from "@/lib/business-datetime";
 import { getManageLocationContext } from "@/lib/manage-locations";
 import {
   columnExists,
@@ -198,7 +198,8 @@ export async function saveCost(slug: string, body: Record<string, string>, scope
     vat_percent: input.vatPercent,
     due_date: input.dueDate,
     is_paid: input.isPaid ? 1 : 0,
-    paid_at: input.isPaid ? (existing?.paid_at ?? new Date()) : null,
+    // Ora di ROMA esplicita (classe TZ server-safe: Date al driver = wall del server).
+    paid_at: input.isPaid ? (existing?.paid_at ?? businessNowDateTime()) : null,
     payment_method: emptyToNull(input.paymentMethod),
     doc_number: emptyToNull(input.docNumber),
     doc_date: input.docDate,
@@ -267,7 +268,7 @@ export async function toggleCostPaid(slug: string, costId: number, locationId = 
 
   const amount = roundMoney(Number(row.amount ?? 0) || 0);
   // Legacy: paid_at=COALESCE(paid_at, NOW()) — un paid_at preesistente viene conservato.
-  await tenantUpdate({ slug, table: "costs", id: costId, values: { is_paid: 1, paid_amount: amount, paid_at: row.paid_at ?? new Date() } });
+  await tenantUpdate({ slug, table: "costs", id: costId, values: { is_paid: 1, paid_amount: amount, paid_at: row.paid_at ?? businessNowDateTime() } });
   if (Number(row.is_recurring ?? 0) === 1) await createNextRecurringCost(slug, row);
 
   return getManageCostsContext(slug, { locationId: locationId || Number(row.location_id ?? 0), status: "open" });
