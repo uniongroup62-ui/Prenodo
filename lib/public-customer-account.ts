@@ -223,6 +223,17 @@ type FavoriteTarget = {
 export const PUBLIC_CUSTOMER_SESSION_COOKIE = "beautysuite_customer_session";
 
 const CUSTOMER_SESSION_DAYS = 60;
+// Hardening 2026-07-18: cap tentativi sui codici 6 cifre + cooldown fra due
+// invii email (resend/cambio email/reset) — anti brute-force e anti
+// email-bombing (il legacy non aveva né l'uno né l'altro).
+const MAX_CODE_ATTEMPTS = 5;
+const EMAIL_SEND_COOLDOWN_MS = 60_000;
+
+function withinSendCooldown(sentAt: unknown): boolean {
+  if (!sentAt) return false;
+  const t = sentAt instanceof Date ? sentAt.getTime() : new Date(String(sentAt).replace(" ", "T")).getTime();
+  return Number.isFinite(t) && Date.now() - t < EMAIL_SEND_COOLDOWN_MS;
+}
 
 export async function ensurePublicCustomerSchema(): Promise<void> {
   if (!(await tableExists("public_customer_accounts"))) {
@@ -330,6 +341,10 @@ export async function ensurePublicCustomerSchema(): Promise<void> {
     ["password_reset_expires_at", "`password_reset_expires_at` DATETIME NULL DEFAULT NULL"],
     ["password_reset_sent_at", "`password_reset_sent_at` DATETIME NULL DEFAULT NULL"],
     ["last_login_at", "`last_login_at` DATETIME NULL DEFAULT NULL"],
+    // Hardening 2026-07-18: contatori tentativi sui codici 6 cifre (cap
+    // anti brute-force; il legacy non li aveva).
+    ["email_verification_attempts", "`email_verification_attempts` INT NOT NULL DEFAULT 0"],
+    ["pending_email_verification_attempts", "`pending_email_verification_attempts` INT NOT NULL DEFAULT 0"],
   ];
 
   for (const [column, definition] of accountColumns) {
@@ -445,7 +460,7 @@ export async function issuePublicCustomerVerificationCode(
   if (accountId <= 0) return { ok: false, error: "Account non valido." };
 
   const rows = await dbQuery<PublicCustomerRow[]>(
-    "SELECT id,email,email_verification_hash,email_verification_expires_at FROM `public_customer_accounts` WHERE id=? LIMIT 1",
+    "SELECT id,email,email_verification_hash,email_verification_expires_at,email_verification_sent_at FROM `public_customer_accounts` WHERE id=? LIMIT 1",
     [accountId],
   );
   const row = rows[0];
@@ -453,6 +468,11 @@ export async function issuePublicCustomerVerificationCode(
 
   if (!forceNew && row.email_verification_hash && futureDate(row.email_verification_expires_at)) {
     return { ok: true, requiresVerification: true, email: String(row.email), alreadySent: true };
+  }
+  // Cooldown fra due invii (anche col force del resend): senza, un loop di
+  // resend bombarda la casella della vittima.
+  if (withinSendCooldown(row.email_verification_sent_at)) {
+    return { ok: false, error: "Attendi un minuto prima di richiedere un nuovo codice." };
   }
 
   const code = generateCode();
@@ -464,7 +484,8 @@ export async function issuePublicCustomerVerificationCode(
     `UPDATE \`public_customer_accounts\`
         SET email_verification_hash=?,
             email_verification_sent_at=?,
-            email_verification_expires_at=?
+            email_verification_expires_at=?,
+            email_verification_attempts=0
       WHERE id=?`,
     [codeHash(code), mysqlDate(new Date()), mysqlDate(new Date(Date.now() + 15 * 60000)), accountId],
   );
@@ -499,6 +520,22 @@ export async function verifyPublicCustomerCode(
     return { ok: false, error: "Codice scaduto. Richiedi un nuovo codice." };
   }
   if (!row.email_verification_hash || !safeEqual(String(row.email_verification_hash), codeHash(normalizedCode))) {
+    // Cap anti brute-force (hardening 2026-07-18): al 5° tentativo errato il
+    // codice viene INVALIDATO — 6 cifre in 15 minuti senza cap sarebbero
+    // enumerabili da un client automatico.
+    const attempts = Number(row.email_verification_attempts ?? 0) + 1;
+    if (attempts >= MAX_CODE_ATTEMPTS) {
+      await dbExecute(
+        `UPDATE \`public_customer_accounts\`
+            SET email_verification_hash=NULL,
+                email_verification_expires_at=NULL,
+                email_verification_attempts=0
+          WHERE id=?`,
+        [accountId],
+      );
+      return { ok: false, error: "Troppi tentativi. Richiedi un nuovo codice." };
+    }
+    await dbExecute("UPDATE `public_customer_accounts` SET email_verification_attempts=? WHERE id=?", [attempts, accountId]);
     return { ok: false, error: "Codice non valido." };
   }
 
@@ -525,8 +562,12 @@ export async function requestPublicCustomerPasswordReset(
   if (!isValidEmail(email)) return { ok: false, error: "Email non valida." };
 
   const token = crypto.randomBytes(32).toString("hex");
-  const rows = await dbQuery<PublicCustomerRow[]>("SELECT id,email FROM `public_customer_accounts` WHERE email=? LIMIT 1", [email]);
-  if (rows[0]) {
+  const rows = await dbQuery<PublicCustomerRow[]>("SELECT id,email,password_reset_sent_at FROM `public_customer_accounts` WHERE email=? LIMIT 1", [email]);
+  // Cooldown SILENZIOSO (hardening 2026-07-18): entro 60s dall'ultimo invio
+  // NON si rigenera/spedisce, ma la risposta resta la stessa frase generica —
+  // un errore dedicato solo per gli account esistenti sarebbe enumeration.
+  const canSend = Boolean(rows[0]) && !withinSendCooldown(rows[0]?.password_reset_sent_at);
+  if (canSend) {
     // JS-side expiry (see issuePublicCustomerVerificationCode): SQL NOW() is UTC
     // but naive timestamps read back as local, so a NOW()-based expiry is ~2h
     // in the past on CET/CEST.
@@ -549,7 +590,8 @@ export async function requestPublicCustomerPasswordReset(
   return {
     ok: true,
     message: "Se l'email e registrata, riceverai un link per reimpostare la password.",
-    ...(rows[0] && exposeLocalDebug() ? { devToken: token } : {}),
+    // devToken solo se il token è stato DAVVERO emesso (in cooldown non lo è).
+    ...(canSend && exposeLocalDebug() ? { devToken: token } : {}),
   };
 }
 
@@ -746,6 +788,12 @@ export async function requestPublicCustomerEmailChange(
   );
   if (duplicate[0]) return { ok: false, error: "Questa email e gia collegata a un altro account." };
 
+  // Cooldown fra due richieste (hardening 2026-07-18): senza, un loop di
+  // request bombarda la casella della nuova email.
+  if (withinSendCooldown(row.pending_email_verification_sent_at)) {
+    return { ok: false, error: "Attendi un minuto prima di richiedere un nuovo codice." };
+  }
+
   const code = generateCode();
   // JS-side expiry (see issuePublicCustomerVerificationCode): NOW() is UTC vs
   // naive-local reads — a SQL expiry lands in the past on CET/CEST.
@@ -755,6 +803,7 @@ export async function requestPublicCustomerEmailChange(
             pending_email_verification_hash=?,
             pending_email_verification_expires_at=?,
             pending_email_verification_sent_at=?,
+            pending_email_verification_attempts=0,
             updated_at=NOW()
       WHERE id=?`,
     [newEmail, codeHash(code), mysqlDate(new Date(Date.now() + 15 * 60000)), mysqlDate(new Date()), accountId],
@@ -789,7 +838,17 @@ export async function confirmPublicCustomerEmailChange(
     await cancelPublicCustomerEmailChange(accountId);
     return { ok: false, error: "Il codice e scaduto. Richiedi un nuovo codice.", account: await accountById(accountId) ?? undefined };
   }
-  if (!safeEqual(storedHash, codeHash(code))) return { ok: false, error: "Codice non valido." };
+  if (!safeEqual(storedHash, codeHash(code))) {
+    // Cap anti brute-force come la verify di registrazione: al 5° errato la
+    // richiesta di cambio email viene ANNULLATA.
+    const attempts = Number(row.pending_email_verification_attempts ?? 0) + 1;
+    if (attempts >= MAX_CODE_ATTEMPTS) {
+      await cancelPublicCustomerEmailChange(accountId);
+      return { ok: false, error: "Troppi tentativi. Richiedi un nuovo codice.", account: await accountById(accountId) ?? undefined };
+    }
+    await dbExecute("UPDATE `public_customer_accounts` SET pending_email_verification_attempts=? WHERE id=?", [attempts, accountId]);
+    return { ok: false, error: "Codice non valido." };
+  }
 
   const duplicate = await dbQuery<RowDataPacket[]>(
     "SELECT id FROM `public_customer_accounts` WHERE id<>? AND LOWER(email)=? LIMIT 1",
@@ -826,6 +885,7 @@ export async function cancelPublicCustomerEmailChange(
             pending_email_verification_hash=NULL,
             pending_email_verification_expires_at=NULL,
             pending_email_verification_sent_at=NULL,
+            pending_email_verification_attempts=0,
             updated_at=NOW()
       WHERE id=?`,
     [accountId],

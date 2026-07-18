@@ -1,7 +1,12 @@
 import type { Metadata } from "next";
 import { MarketplaceDetailFaithful } from "@/components/public/marketplace-detail-faithful";
+import { marketplaceJsonLd, marketplaceSeoProfile } from "@/lib/marketplace-seo";
 
 const SEARCH_ALIASES = ["cerca", "risultati"]; // + /attivita/ricerca (route statica)
+
+function publicBaseUrl(): string {
+  return String(process.env.PRENODO_PUBLIC_BASE_URL ?? "").replace(/\/+$/, "") || "http://localhost:3000";
+}
 
 export async function generateMetadata({
   params,
@@ -12,12 +17,21 @@ export async function generateMetadata({
   if (SEARCH_ALIASES.includes(slug)) {
     return { title: "Risultati ricerca attività" };
   }
-  // The real business name is loaded client-side by the faithful component from
-  // /api/booking?action=context. Metadata stays tenant-agnostic (slug-based) so
-  // we never depend on demo data nor default to a specific center here.
+  // SEO server-side (miglioria 2026-07-18): titolo/description dal profilo
+  // REALE dell'attività — i motori li vedono nel primo HTML anche se il corpo
+  // della scheda è client-side.
+  const profile = await marketplaceSeoProfile(slug);
+  if (!profile) {
+    return {
+      title: slug ? `${slug} | Prenodo` : "Attivita | Prenodo",
+      description: "Scheda marketplace e prenotazione online su Prenodo.",
+    };
+  }
+  const where = [profile.city, profile.province].filter(Boolean).join(" ");
   return {
-    title: slug ? `${slug} | Prenodo` : "Attivita | Prenodo",
-    description: "Scheda marketplace e prenotazione online su Prenodo.",
+    title: `${profile.name} | Prenodo`,
+    description: `Prenota online da ${profile.name}${where ? ` a ${where}` : ""}: servizi, orari e disponibilità su Prenodo.`,
+    ...(profile.imageUrl ? { openGraph: { title: profile.name, images: [profile.imageUrl] } } : { openGraph: { title: profile.name } }),
   };
 }
 
@@ -44,5 +58,18 @@ export default async function AttivitaDetailPage({
       />
     );
   }
-  return <MarketplaceDetailFaithful slug={slug} />;
+  // JSON-LD LocalBusiness nel primo HTML (server component): dati indicizzabili
+  // anche senza eseguire il client bundle.
+  const seo = await marketplaceSeoProfile(slug);
+  return (
+    <>
+      {seo ? (
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(marketplaceJsonLd(seo, publicBaseUrl())) }}
+        />
+      ) : null}
+      <MarketplaceDetailFaithful slug={slug} />
+    </>
+  );
 }

@@ -16158,3 +16158,31 @@ MIGLIORIE PROPOSTE aperte (hardening, non bug — nemmeno il legacy le
 ha): cap tentativi sui codici 6 cifre; cooldown sul resend (oggi
 illimitato = potenziale email-bombing verso la vittima); SSR/SEO
 dettaglio.
+
+## 2026-07-18 — Marketplace: 3 MIGLIORIE APPLICATE (approvate con 'procedi')
+
+1. CAP TENTATIVI sui codici 6 cifre (colonne nuove
+   email_verification_attempts / pending_email_verification_attempts
+   via addColumnIfMissing): al 5° errato il codice viene INVALIDATO
+   ('Troppi tentativi. Richiedi un nuovo codice.') — verify
+   registrazione E conferma cambio email (che ANNULLA la richiesta);
+   contatore azzerato a ogni emissione.
+2. COOLDOWN 60s fra due invii email (anti email-bombing): register
+   re-issue, resend_verification e request_email_change rispondono
+   'Attendi un minuto prima di richiedere un nuovo codice.'; il
+   FORGOT invece fa cooldown SILENZIOSO (stessa frase generica, token
+   NON emesso e devToken coerentemente assente) per non regalare
+   enumeration.
+3. SEO SERVER-SIDE del dettaglio (lib/marketplace-seo.ts): title/
+   description dal profilo REALE (stessi gate della directory) su
+   /attivita/<slug> e /sedi/<loc> ('elite | Prenodo', 'elite — Sede1 |
+   Prenodo') + JSON-LD schema.org/BeautySalon nel PRIMO HTML con
+   indirizzo (fallback prima sede se il business non ha città) e
+   telefono/cover quando presenti. Il corpo resta client-side.
+
+Verifica: test-marketplace-pass5 esteso a 26/26 (H1-H5+EC1-EC3:
+cooldown register/resend/forgot-silenzioso/cambio-email, cap con
+invalidazione anche del codice giusto, richiesta cambio email
+annullata al cap); pass4 21/21; e2e-booking-marketplace 26/26; curl
+SSR: title reali + LD BeautySalon con Altino su entrambe le pagine;
+tsc pulito.
