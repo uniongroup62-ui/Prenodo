@@ -15696,3 +15696,30 @@ delete con delete_reason + delete_confirm_text='ELIMINA'. Regressione:
 test-clienti 24/24, test-clienti-mutations 24/24, improvements 13/13,
 sede 19/19, e2e-clients 50/50, tags 8/8, history 9/9, test-log-pass2
 10/10. Bonifica 38 voci log batteria.
+
+## 2026-07-18 — Pacchetti pass 4: 1 fix (classe TZ su addDaysDate) + riverifica emissione/sedute
+
+FIX — CLASSE TZ SERVER-SAFE: addDaysDate (db-repositories) partiva da
+new Date() locale del server — è la BASE dei default di scadenza:
+client_packages expires_at = oggi+validity_days, giftcards +365,
+preventivi validUntil +30. Nella finestra serale su un server UTC le
+scadenze nascevano un giorno CORTE. Ora base = OGGI di ROMA
+(businessTodayIso). purchase_date/start_date erano già Roma (todayIso
+locale delega a businessTodayIso).
+
+Riverifica: 2 path di emissione allineati (POS satellite + compat
+issueDbClientPackage con location_id di contesto), snapshot
+client_package_items con item_type corretto (prodotti = ritiro, NON
+sedute) — il best-effort PER-RIGA del helper snapshot (catch compat) è
+ATTESTATO deliberato, non riaperto; consume con guardie
+'Pacchetto non utilizzabile.'/'Sedute pacchetto insufficienti.';
+log pacchetti completo (8 azioni: issue/use/catalogo crea-modifica-
+elimina/scadenza/usage scala-ripristina/client_save).
+
+Verifica live test-pacchetti-pass4 2/2 CLEAN: emissione senza expires ->
+purchase/start oggi-Roma + expires oggi-Roma+60gg, snapshot items+sedute
+presenti. HARNESS: probe stantio di e2e-packages sanato — attendeva il
+payload `clients` RIMOSSO deliberatamente il 16/07 (sweep client-search
+server-side, skipClients) -> 48/48. Regressione: test-pacchetti 26/26,
+mutations 13/13, improvements 7/7, e2e-packages-catalog 27/27,
+e2e-package-settings 6/6. Bonifica 85 voci log batteria.

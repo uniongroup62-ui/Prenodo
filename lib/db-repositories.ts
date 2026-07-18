@@ -24761,8 +24761,12 @@ function trimOrNull(value: unknown): string | null {
   return s === "" ? null : s;
 }
 
+// Base = OGGI di ROMA (classe TZ server-safe: new Date() locale del server
+// accorcerebbe di un giorno le scadenze di default — pacchetti/giftcard/
+// preventivi — nella finestra serale su un server UTC).
 function addDaysDate(days: number): string {
-  const date = new Date();
+  const [y, m, d] = businessTodayIso().split("-").map(Number);
+  const date = new Date(y, m - 1, d);
   date.setDate(date.getDate() + days);
   return dateIsoLocal(date);
 }
