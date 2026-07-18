@@ -235,6 +235,10 @@ export async function createDbClient(input: Partial<ManagedClient>, slug: string
   values.points = 0;
   values.credit_balance = 0;
   values.is_blocked = 0;
+  // created_at in ORA DI ROMA esplicita (classe TZ server-safe: il default
+  // CURRENT_TIMESTAMP del DB è UTC su Supabase; "Cliente dal" e ordinamenti
+  // leggono questa colonna).
+  if (await columnExists(table.name, "created_at")) values.created_at = businessNowDateTime();
   const id = await tenantInsert(table, values);
   return getSingleClient(slug, id);
 }
@@ -273,7 +277,7 @@ export async function assertClientAccessibleForSedi(slug: string, clientId: numb
 }
 
 export async function archiveDbClient(id: number, slug: string): Promise<ManagedClient> {
-  await tenantUpdate({ slug, table: "clients", id, values: { is_blocked: 1, blocked_at: new Date(), blocked_internal_note: "Archiviato da replica Next" } });
+  await tenantUpdate({ slug, table: "clients", id, values: { is_blocked: 1, blocked_at: businessNowDateTime(), blocked_internal_note: "Archiviato da replica Next" } });
   return getSingleClient(slug, id);
 }
 
@@ -781,6 +785,9 @@ async function recordClientDeletionLog(
     reason,
     summary_json: JSON.stringify({ deleted_rows: counts, restored_stock_qty: restoredStockQty }),
     deleted_by: null,
+    // Ora di ROMA esplicita (classe TZ server-safe: il default CURRENT_TIMESTAMP
+    // è UTC — la vista permanente 'Eliminazioni clienti' mostra questa data).
+    deleted_at: businessNowDateTime(),
   });
 }
 
@@ -798,7 +805,7 @@ export async function blockDbClient(id: number, slug: string, internalNote: stri
     slug,
     table: "clients",
     id,
-    values: { is_blocked: 1, blocked_at: new Date(), blocked_internal_note: note },
+    values: { is_blocked: 1, blocked_at: businessNowDateTime(), blocked_internal_note: note },
   });
   return getSingleClient(slug, id);
 }

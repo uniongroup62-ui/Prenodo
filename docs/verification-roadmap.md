@@ -15671,3 +15671,28 @@ timestamp Roma + hard delete; payload create esige coupon_location_ids
 'Seleziona almeno una sede abilitata.'). Regressione: e2e-coupons 52/52,
 test-buoni 33/33, test-buoni2 30/30, markers-coupons 72/72,
 test-coupon-edit-audit CLEAN. Bonifica 54 voci log batteria.
+
+## 2026-07-18 — Clienti pass 5: 1 fix (classe TZ, 4 punti) + riverifica mutazioni
+
+FIX — CLASSE TZ SERVER-SAFE: created_at del CREATE (era lasciato al
+default CURRENT_TIMESTAMP del DB = UTC su Supabase — 'Cliente dal' e
+ordinamenti leggono la colonna), blocked_at del block (Date al driver,
+2 punti incl. il ramo archive) e deleted_at di client_deletion_logs
+(la vista PERMANENTE 'Eliminazioni clienti' della pagina Log mostra
+questa data; era default UTC) -> businessNowDateTime.
+
+Riverifica mutazioni: cascata delete ATOMICA a doppia guardia verbatim
+con restore stock PER-SEDE, blocco pre-create duplicati (409
+needsDuplicateConfirm), block/unblock con nota obbligatoria, tag
+case-insensitive, validazioni in ordine legacy, paginazione 50 — tutto
+confermato dalle batterie. Log clienti completo
+(crea/modifica/disattiva/riattiva/elimina).
+
+Verifica live test-clienti-pass5 3/3 CLEAN: created_at Roma al create,
+blocked_at Roma al block, delete cascata con deletion-log deleted_at
+Roma (riga log del probe tracciata e rimossa). Contratto route annotato:
+action=create con first_name/last_name, block con blocked_internal_note,
+delete con delete_reason + delete_confirm_text='ELIMINA'. Regressione:
+test-clienti 24/24, test-clienti-mutations 24/24, improvements 13/13,
+sede 19/19, e2e-clients 50/50, tags 8/8, history 9/9, test-log-pass2
+10/10. Bonifica 38 voci log batteria.
