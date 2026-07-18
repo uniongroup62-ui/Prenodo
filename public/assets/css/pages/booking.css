@@ -243,7 +243,7 @@
 }
 .booking-profile input:focus{
   outline:2px solid rgba(37,99,235,.18);
-  border-color:#2563eb;
+  border-color:#0f766e;
 }
 .booking-profile__hint{
   color:#64748b;
@@ -280,7 +280,7 @@
 }
 .booking-profile__verify{
   border:1px solid #bfdbfe;
-  background:#eff6ff;
+  background:#edf6f4;
   border-radius:10px;
   padding:16px;
   display:grid;
@@ -340,7 +340,7 @@
 }
 .booking-settings select:focus{
   outline:2px solid rgba(37,99,235,.18);
-  border-color:#2563eb;
+  border-color:#0f766e;
 }
 .booking-settings__hint{
   color:#64748b;
@@ -598,7 +598,7 @@
   margin-bottom:14px;
   border:1px solid #bfdbfe;
   border-radius:10px;
-  background:#eff6ff;
+  background:#edf6f4;
   color:#1e3a8a;
   font-size:13px;
   font-weight:600;
@@ -836,7 +836,7 @@
   white-space:pre-wrap;
 }
 .price-pill{
-  background:#eff6ff;
+  background:#edf6f4;
   color:#0f766e;
   border-radius:999px;
   padding:6px 10px;
@@ -1394,8 +1394,8 @@
   display:grid;
   place-items:center;
   border-radius:10px;
-  background:#dbeafe;
-  color:#2563eb;
+  background:#d3ece7;
+  color:#0f766e;
   font-size:20px;
 }
 .quote-top{
@@ -1435,8 +1435,8 @@
   color:#b91c1c;
 }
 .quote-status.is-sent{
-  background:#dbeafe;
-  color:#1d4ed8;
+  background:#d3ece7;
+  color:#0a5b54;
 }
 .quote-status.is-expired{
   background:#fef3c7;
@@ -2130,8 +2130,8 @@
   font-weight:600;
 }
 .gift-pill.is-booked{
-  background:#dbeafe;
-  color:#1d4ed8;
+  background:#d3ece7;
+  color:#0a5b54;
 }
 .gift-pill.is-wait{
   background:#fef3c7;
@@ -2627,9 +2627,9 @@
   font-weight:500;
 }
 .fid-request-alert{
-  border:1px solid #dbeafe;
+  border:1px solid #d3ece7;
   border-radius:18px;
-  background:#eff6ff;
+  background:#edf6f4;
 }
 .fid-request-alert__body{
   color:#1e3a8a;

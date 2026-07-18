@@ -23,7 +23,7 @@
 .avail-staffname { display: flex; flex-direction: column; gap: 2px; }
 .avail-staffname .name { font-weight: 600; }
 .avail-staffname .meta { font-size: 12px; color: #6c757d; }
-.avail-focus { background: rgba(13,110,253,0.06); }
+.avail-focus { background: rgba(15,118,110,0.06); }
 .avail-legend span { display: inline-flex; align-items: center; gap: 6px; margin-right: 14px; font-size: 12px; color: #666; }
 .avail-legend i { width: 14px; height: 14px; display: inline-block; border-radius: 4px; }
 .avail-legend .i-shift { background: #d7f5d7; border: 1px solid rgba(0,0,0,0.08); }

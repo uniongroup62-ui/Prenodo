@@ -52,9 +52,9 @@
 }
 .branding-dropzone:hover,
 .branding-dropzone.is-dragover {
-  border-color: #0d6efd;
+  border-color: #0f766e;
   background: #f8fbff;
-  box-shadow: 0 0 0 3px rgba(13, 110, 253, .08);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, .08);
 }
 .branding-dropzone.is-disabled {
   opacity: .65;
@@ -92,7 +92,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  box-shadow: 0 0 0 3px rgba(13, 110, 253, .06);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, .06);
 }
 .branding-upload-row__thumb {
   width: 96px;

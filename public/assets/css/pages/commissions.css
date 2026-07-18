@@ -36,14 +36,14 @@
 }
 
 .commissions-tabs .nav-link.active {
-  color: #0d6efd;
+  color: #0f766e;
   background: transparent;
   border-color: transparent transparent #2f6cff;
 }
 
 .commissions-tabs .nav-link.active:hover,
 .commissions-tabs .nav-link.active:focus {
-  color: #0d6efd;
+  color: #0f766e;
   border-color: transparent transparent #2f6cff;
 }
 

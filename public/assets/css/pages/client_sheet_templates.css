@@ -2,10 +2,10 @@
 .sheet-tile .value{font-size:1.8rem;line-height:1;font-weight: 600;margin-top:8px}
 .sheet-surface{border:1px solid rgba(15,23,42,.08);border-radius:8px;background:#fff;box-shadow:0 14px 34px rgba(15,23,42,.05)}
 .sheet-tab-item{display:block;text-decoration:none;color:inherit;border:1px solid rgba(15,23,42,.08);border-radius:8px;padding:14px;background:#fff;transition:all .18s ease}
-.sheet-tab-item:hover{border-color:rgba(13,110,253,.28);box-shadow:0 10px 24px rgba(13,110,253,.08)}
-.sheet-tab-item.is-current{border-color:rgba(13,110,253,.45);box-shadow:0 12px 26px rgba(13,110,253,.12);background:#f7fbff}
+.sheet-tab-item:hover{border-color:rgba(15,118,110,.28);box-shadow:0 10px 24px rgba(15,118,110,.08)}
+.sheet-tab-item.is-current{border-color:rgba(15,118,110,.45);box-shadow:0 12px 26px rgba(15,118,110,.12);background:#f7fbff}
 .sheet-empty-state{border:1px dashed rgba(100,116,139,.35);border-radius:8px;padding:28px;text-align:center;background:#f8fafc}
-.sheet-empty-icon{font-size:2rem;color:rgba(13,110,253,.55)}
+.sheet-empty-icon{font-size:2rem;color:rgba(15,118,110,.55)}
 .sheet-builder-toolbar{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;border:1px solid rgba(15,23,42,.08);border-radius:8px;padding:12px;background:#fff}
 .sheet-builder-alert ul{margin:0;padding-left:1rem}
 .sheet-preset-select{min-width:220px}

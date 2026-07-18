@@ -45,13 +45,13 @@
 }
 .calendar-note-card:hover,
 .calendar-note-card:focus{
-  border-color:rgba(13,110,253,.45);
-  box-shadow:0 0 0 .18rem rgba(13,110,253,.1);
+  border-color:rgba(15,118,110,.45);
+  box-shadow:0 0 0 .18rem rgba(15,118,110,.1);
   transform:translateY(-1px);
 }
 .calendar-note-card.active{
-  border-color:rgba(13,110,253,.62);
-  box-shadow:0 0 0 .18rem rgba(13,110,253,.14);
+  border-color:rgba(15,118,110,.62);
+  box-shadow:0 0 0 .18rem rgba(15,118,110,.14);
 }
 .calendar-note-card-title{
   font-weight:600;
@@ -109,7 +109,7 @@
   background-color:#f59e0b;
 }
 .calendar-status-badge--scheduled{
-  background-color:#0d6efd;
+  background-color:#0f766e;
 }
 .calendar-status-badge--done{
   background-color:#20c997;
@@ -126,7 +126,7 @@
   flex:0 0 38px;
 }
 .calendar-client-search-name{
-  color:#0d6efd;
+  color:#0f766e;
 }
 
 body:not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.calendar-page){
@@ -220,7 +220,7 @@ body:not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.calend
   background:#fff8ed !important;
 }
 .calendar-status-badge--scheduled{
-  color:#0d6efd;
+  color:#0f766e;
   background:#eef5ff !important;
 }
 .calendar-status-badge--done{

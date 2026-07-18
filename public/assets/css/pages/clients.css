@@ -3,8 +3,8 @@
 .clients-empty-icon{width:96px;height:88px;margin:0 auto 18px;display:grid;place-items:center;color:#9db7ef;font-size:64px;line-height:1}
 .clients-empty-state h2{font-size:24px;line-height:1.2;font-weight:600;margin:0 0 12px}
 .clients-empty-state p{color:#475569;line-height:1.55;max-width:520px;margin:0 auto 22px}
-.clients-profile-avatar{width:92px;height:92px;border-radius:26px;background:rgba(13,110,253,.10);display:grid;place-items:center}
-.clients-profile-avatar-icon{font-size:2.4rem;color:#0d6efd}
+.clients-profile-avatar{width:92px;height:92px;border-radius:26px;background:rgba(15,118,110,.10);display:grid;place-items:center}
+.clients-profile-avatar-icon{font-size:2.4rem;color:#0f766e}
 .clients-fidelity-badge{font-weight:600}
 .clients-fidelity-progress{height:8px;border-radius:999px}
 .clients-fidelity-progress .progress-bar{border-radius:999px}

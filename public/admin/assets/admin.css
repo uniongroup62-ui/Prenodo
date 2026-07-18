@@ -224,9 +224,9 @@ body {
 }
 .app-filter-submit {
   min-width: 220px;
-  border-color: #0d6efd !important;
+  border-color: #0f766e !important;
   background: #fff !important;
-  color: #0d6efd !important;
+  color: #0f766e !important;
 }
 .app-filter-submit:hover {
   background: #eef5ff !important;

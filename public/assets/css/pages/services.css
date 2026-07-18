@@ -36,7 +36,7 @@
 .services-section-subtitle{margin-top:5px;color:#64748b;font-size:12px;line-height:1.4;}
 .services-editor-form .form-label{margin-bottom:6px;color:#374151;font-size:13px;font-weight:600;}
 .services-editor-form .form-control,.services-editor-form .form-select{min-height:40px;border-color:#dbe3ec;border-radius:8px;background-color:#fff;box-shadow:none;}
-.services-editor-form .form-control:focus,.services-editor-form .form-select:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.10);background:#fff;}
+.services-editor-form .form-control:focus,.services-editor-form .form-select:focus{border-color:#0f766e;box-shadow:0 0 0 3px rgba(37,99,235,.10);background:#fff;}
 .services-editor-form .form-text{margin-top:7px;color:#64748b;font-size:12px;}
 .services-switch-tile{min-height:40px;display:flex;align-items:center;gap:10px;margin:0;padding:0;border:0;border-radius:0;background:transparent;}
 .services-switch-tile .form-check-input{float:none;flex:0 0 auto;margin:0;}
@@ -69,7 +69,7 @@
 .svc-cabin-option>.services-option-card,.svc-staff-option>.services-option-card{height:100%;}
 .services-select-card{display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:10px;row-gap:2px;width:fit-content;min-width:138px;max-width:min(360px,100%);min-height:44px;padding:10px 12px!important;border:1px solid #cbd5e1!important;border-radius:8px!important;background:#fff!important;box-shadow:0 1px 2px rgba(15,23,42,.04);}
 .services-select-card:hover{border-color:#94a3b8!important;background:#f8fafc!important;}
-.services-select-card:has(.form-check-input:checked){border-color:#2563eb!important;background:#eff6ff!important;box-shadow:0 0 0 1px rgba(37,99,235,.12);}
+.services-select-card:has(.form-check-input:checked){border-color:#0f766e!important;background:#edf6f4!important;box-shadow:0 0 0 1px rgba(37,99,235,.12);}
 .services-select-card .form-check-input{grid-row:1 / span 2;align-self:start;margin:2px 0 0!important;}
 .services-select-card .form-check-label{min-width:0;padding-right:4px;overflow-wrap:anywhere;}
 .services-select-card .small{grid-column:2;min-width:0;white-space:normal;overflow-wrap:anywhere;}

@@ -15980,3 +15980,18 @@ computed-style bottone auth rgb(15,118,110)); e2e-booking-marketplace
 26/26 CLEAN. RILIEVO PREESISTENTE (non del redesign, provato con
 stash sul codice vecchio): hydration mismatch dev-only sulla pagina
 dettaglio attività.
+
+## 2026-07-18 — Retint GESTIONALE al teal (follow-up redesign, domanda utente
+## "nella dashboard rimane il blu?")
+
+L'accent del gestionale (blu Bootstrap #0d6efd + varianti #0b5ed7/
+#0a58ca, blu Tailwind #2563eb/#1d4ed8/#3b82f6, focus ring
+rgba(13,110,253,*) e tinte chiare #cfe2ff/#e7f1ff/#dbeafe/#eff6ff/
+#dceaff) è stato mappato sul teal Prenodo in app.css + tutti i CSS di
+modulo + admin.css (22 file) — ora porta d'ingresso, marketplace,
+email e gestionale condividono lo stesso accent. Logo sidebar 'B' →
+'P'. NON toccati i colori-DATO: MS_STATUS_COLORS del calendario,
+CHART_COLORS dei report, palette staffColorHex.
+
+Verifica: tsc pulito; screenshot dashboard + calendario con sessione
+forgiata sede 21 (sidebar P teal, griglia giorno fedele, KPI ok).
