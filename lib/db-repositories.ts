@@ -3548,60 +3548,120 @@ export async function updateDbAppointment({
     const merged = couponApplyMetaToNotes(currentNotes, couponResolved.code, couponResolved.discount);
     updateValues.notes = merged || null;
   }
-  await tenantUpdate({
-    slug,
-    table: "appointments",
-    id,
-    values: updateValues,
-  });
-
-  // REDEEM restore (edit): PRIMA di cancellare le righe appointment_services —
-  // il restore legge la linkage snapshot da lì. Ridà le unità ai pool
-  // (pacchetto/prepagato/GiftBox/omaggio) e rimborsa la GiftCard usata,
-  // azzerando i link; il re-apply dal payload avviene dopo gli insert.
+  // REDEEM restore (edit): PRIMA del replace strutturale — il restore legge la
+  // linkage snapshot dalle righe appointment_services correnti. Ridà le unità
+  // ai pool (pacchetto/prepagato/GiftBox/omaggio) e rimborsa la GiftCard usata,
+  // azzerando i link; il re-apply dal payload avviene dopo gli insert. Resta
+  // best-effort FUORI dalla transazione (attestazione warnings-rollback).
   if (redeemEditAllowed) {
     await restoreAppointmentRedeems(slug, id, { redeemLinksOnly: true });
   }
 
-  // Replace the snapshot child rows so the edit reflects the new
-  // service/staff/location/segment rather than stacking on the originals.
-  await deleteAppointmentChildren(slug, "appointment_services", id);
-  await deleteAppointmentChildren(slug, "appointment_staff", id);
-  await deleteAppointmentChildren(slug, "appointment_locations", id);
-  await deleteAppointmentChildren(slug, "appointment_segments", id);
-
-  // One appointment_services snapshot row per selected service (ordered), with
-  // the re-evaluated promo pricing (price/list_price/badge) when applicable.
-  for (const service of plan.services) {
-    const promoLine = promoUpdateAllowed ? promoByService.get(Number(service.id ?? 0)) : undefined;
-    await insertAppointmentService(slug, id, service, promoLine ? { price: promoLine.booked_price, listPrice: promoLine.list_price, badge: promoLine.discount_badge } : null);
-  }
-  // Refresh the promotion redemption record: the edit re-evaluated the promo, so
-  // the old appointment-linked row is replaced (or removed when no longer applied).
-  if (promoUpdateAllowed) {
-    const redTable = await tenantTable(slug, "promotion_redemptions").catch(() => null);
-    if (redTable) {
-      await dbExecute(`DELETE FROM ${quoteIdentifier(redTable.name)} WHERE tenant_id = ? AND appointment_id = ?`, [redTable.tenantId ?? 0, id]).catch(() => undefined);
-      if (promoCtx.applied && promoCtx.promotion && promoCtx.discount > 0) {
-        await tenantInsert(redTable, {
-          promotion_id: promoCtx.promotion.id,
-          client_id: Number(client.id ?? 0) > 0 ? Number(client.id) : null,
-          appointment_id: id,
-          discount_amount: roundMoney(promoCtx.discount),
-          location_id: locationId,
-          // Ora di ROMA esplicita (stessa classe TZ del create).
-          redeemed_at: businessNowDateTime(),
-        }).catch(() => 0);
+  // REPLACE STRUTTURALE ATOMICO (parità col beginTransaction dell'edit legacy,
+  // api_appointments.php 11380): riga appuntamenti + delete/reinsert dei figli
+  // (services/staff/locations/segments) + refresh della promotion_redemption in
+  // UNA transazione — un errore a metà non lascia mai la prenotazione senza
+  // righe figlie. Le tabelle sono risolte PRIMA (una tabella assente in install
+  // legacy viene saltata, come i vecchi catch di compatibilità — mai un
+  // errore-abort dentro la tx). Se la tx fallisce: figli e riga INTATTI
+  // (i pool eventualmente già ripristinati dal restore restano coerenti:
+  // link azzerati, unità ridate).
+  const appointmentsTxTable = await tenantTable(slug, "appointments");
+  const svcTxTable = await tenantTable(slug, "appointment_services").catch(() => null);
+  const staffTxTable = await tenantTable(slug, "appointment_staff").catch(() => null);
+  const locTxTable = await tenantTable(slug, "appointment_locations").catch(() => null);
+  const segTxTable = await tenantTable(slug, "appointment_segments").catch(() => null);
+  const redTxTable = promoUpdateAllowed ? await tenantTable(slug, "promotion_redemptions").catch(() => null) : null;
+  await withTenantTransaction(slug, async (txq) => {
+    const setCols = Object.keys(updateValues);
+    await txq(
+      `UPDATE ${quoteIdentifier(appointmentsTxTable.name)} SET ${setCols.map((c) => `${quoteIdentifier(c)} = ?`).join(", ")} WHERE id = ?${appointmentsTxTable.tenantId ? " AND tenant_id = ?" : ""}`,
+      [...setCols.map((c) => updateValues[c]), id, ...(appointmentsTxTable.tenantId ? [appointmentsTxTable.tenantId] : [])],
+    );
+    for (const t of [svcTxTable, staffTxTable, locTxTable, segTxTable]) {
+      if (!t) continue;
+      await txq(`DELETE FROM ${quoteIdentifier(t.name)} WHERE appointment_id = ?${t.tenantId ? " AND tenant_id = ?" : ""}`, t.tenantId ? [id, t.tenantId] : [id]);
+    }
+    // One appointment_services snapshot row per selected service (ordered), with
+    // the re-evaluated promo pricing (price/list_price/badge) when applicable.
+    if (svcTxTable) {
+      for (const service of plan.services) {
+        const promoLine = promoUpdateAllowed ? promoByService.get(Number(service.id ?? 0)) : undefined;
+        await txq(
+          `INSERT INTO ${quoteIdentifier(svcTxTable.name)} (${svcTxTable.tenantId ? "tenant_id, " : ""}appointment_id, service_id, service_name, qty, price, list_price, discount_badge, duration_min)
+            VALUES (${svcTxTable.tenantId ? "?, " : ""}?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            ...(svcTxTable.tenantId ? [svcTxTable.tenantId] : []),
+            id,
+            Number(service.id ?? 0),
+            String(service.name ?? ""),
+            1,
+            promoLine ? roundMoney(promoLine.booked_price) : Number(service.price ?? 0),
+            promoLine ? roundMoney(promoLine.list_price) : Number(service.price ?? 0),
+            promoLine && promoLine.discount_badge ? promoLine.discount_badge : null,
+            Number(service.duration_min ?? 30),
+          ],
+        );
       }
     }
-  }
-  // Distinct staff across all services (single operator + per-service staff).
-  for (const staffId of plan.staffIds) await insertAppointmentStaff(slug, id, staffId);
-  if (locationId) await insertAppointmentLocation(slug, id, locationId);
-  // Sequential segments: position 0..n, each from cursor to cursor+duration.
-  for (const [position, seg] of plan.segments.entries()) {
-    await insertAppointmentSegment(slug, id, seg.service, seg.staffId, seg.startsAt, seg.endsAt, seg.durationMinutes, position, seg.cabinId);
-  }
+    // Refresh the promotion redemption record: the edit re-evaluated the promo, so
+    // the old appointment-linked row is replaced (or removed when no longer applied).
+    if (redTxTable) {
+      await txq(`DELETE FROM ${quoteIdentifier(redTxTable.name)} WHERE appointment_id = ?${redTxTable.tenantId ? " AND tenant_id = ?" : ""}`, redTxTable.tenantId ? [id, redTxTable.tenantId] : [id]);
+      if (promoCtx.applied && promoCtx.promotion && promoCtx.discount > 0) {
+        await txq(
+          `INSERT INTO ${quoteIdentifier(redTxTable.name)} (${redTxTable.tenantId ? "tenant_id, " : ""}promotion_id, client_id, appointment_id, discount_amount, location_id, redeemed_at)
+            VALUES (${redTxTable.tenantId ? "?, " : ""}?, ?, ?, ?, ?, ?)`,
+          [
+            ...(redTxTable.tenantId ? [redTxTable.tenantId] : []),
+            promoCtx.promotion.id,
+            Number(client.id ?? 0) > 0 ? Number(client.id) : null,
+            id,
+            roundMoney(promoCtx.discount),
+            locationId,
+            // Ora di ROMA esplicita (stessa classe TZ del create).
+            businessNowDateTime(),
+          ],
+        );
+      }
+    }
+    // Distinct staff across all services (single operator + per-service staff).
+    if (staffTxTable) {
+      for (const staffId of plan.staffIds) {
+        await txq(
+          `INSERT INTO ${quoteIdentifier(staffTxTable.name)} (${staffTxTable.tenantId ? "tenant_id, " : ""}appointment_id, staff_id) VALUES (${staffTxTable.tenantId ? "?, " : ""}?, ?)`,
+          [...(staffTxTable.tenantId ? [staffTxTable.tenantId] : []), id, staffId],
+        );
+      }
+    }
+    if (locTxTable && locationId) {
+      await txq(
+        `INSERT INTO ${quoteIdentifier(locTxTable.name)} (${locTxTable.tenantId ? "tenant_id, " : ""}appointment_id, location_id) VALUES (${locTxTable.tenantId ? "?, " : ""}?, ?)`,
+        [...(locTxTable.tenantId ? [locTxTable.tenantId] : []), id, locationId],
+      );
+    }
+    // Sequential segments: position 0..n, each from cursor to cursor+duration.
+    if (segTxTable) {
+      for (const [position, seg] of plan.segments.entries()) {
+        await txq(
+          `INSERT INTO ${quoteIdentifier(segTxTable.name)} (${segTxTable.tenantId ? "tenant_id, " : ""}appointment_id, service_id, service_name, staff_id, position, starts_at, ends_at, duration_minutes, cabin_id)
+            VALUES (${segTxTable.tenantId ? "?, " : ""}?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            ...(segTxTable.tenantId ? [segTxTable.tenantId] : []),
+            id,
+            Number(seg.service.id ?? 0),
+            String(seg.service.name ?? ""),
+            seg.staffId ?? 0,
+            position,
+            seg.startsAt,
+            seg.endsAt,
+            seg.durationMinutes,
+            seg.cabinId ?? null,
+          ],
+        );
+      }
+    }
+  });
   // RE-APPLY dei redeem dal payload (edit di prenotazione viva): stessa catena e
   // stesso dedupe del create (pacchetto -> prepagato -> giftbox -> omaggio ->
   // giftcard), DOPO gli insert perché il link/azzeramento punta alle nuove righe

@@ -517,6 +517,7 @@ export async function POST(request: Request) {
           giftIdx,
           createdBy: session.user.id ?? null,
         });
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "appuntamenti", action: "modifica", entityType: "appointment", entityId: appointmentId, label: `Registrato omaggio su appuntamento #${appointmentId}` });
         return Response.json({ ok: true, points_used: result.pointsUsed, available_points: result.availablePoints });
       } catch (error) {
         return jsonError(error instanceof Error ? error.message : "Operazione non riuscita");
@@ -537,6 +538,7 @@ export async function POST(request: Request) {
       }
       try {
         await swapDbAppointmentSegment(tenantSlug, id, segmentId, direction);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "appuntamenti", action: "modifica", entityType: "appointment", entityId: id, label: `Riordinati servizi appuntamento #${id}` });
         return Response.json({ ok: true });
       } catch (error) {
         return jsonError(error instanceof Error ? error.message : "Errore durante l'aggiornamento della prenotazione.");

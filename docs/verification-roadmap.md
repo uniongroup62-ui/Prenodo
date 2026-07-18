@@ -15337,3 +15337,26 @@ test-promo-pass2 8, e2e-promo-engine 10, test-appuntamenti 41+8+12,
 e2e-appointments-list 13. HARNESS: purgate 51 voci di rumore log della
 batteria (entità verificate morte). NOTA cross-modulo: manage-pos.ts:933
 stessa classe redeemed_at (riscatto giftbox POS) — al pass Pagamenti 2.
+
+MIGLIORIE APPROVATE (post-pass QB 4):
+1) LOG ATTIVITÀ sulle ultime 2 mutazioni del drawer senza traccia:
+swap_segment -> appuntamenti/modifica "Riordinati servizi appuntamento
+#id"; fidelity_gift_redeem -> "Registrato omaggio su appuntamento #id".
+Segnali DOPO il successo (guardie respinte senza voce).
+2) REPLACE STRUTTURALE ATOMICO dell'edit (parità col beginTransaction
+legacy 11380): riga appuntamenti + 4 DELETE figli + re-INSERT
+services/staff/locations/segments + refresh promotion_redemption in UNA
+withTenantTransaction (tabelle risolte PRIMA — install legacy senza
+tabella = skip, mai abort in-tx; niente catch-swallow dentro la tx).
+Restore redeem (prima) e re-apply (dopo) restano best-effort FUORI,
+come da attestazione warnings-rollback. Su rollback: riga e figli
+INTATTI, pool coerenti (link azzerati + unità ridate).
+
+Suite test-qb-log 6/6 CLEAN (multi-servizio 9+82: edit transazionale con
+figli coerenti, swap loggato + ordine invertito, gift redeem loggato con
+istanza 'disponibile', respinte senza voce; watermark locale post-edit
+perché il save logga il suo 'Modificato'). Regressione COMPLETA verde:
+test-quickbooking-pass4 5/5, e2e-qb-redeem-edit 28, quickbooking
+35+21+16, qbresidui 6, appuntamenti 41+8+12, e2e-calendar-move 33,
+e2e-appointments-list 13, test-calendario 20. Bonifica log batteria (30
+voci, entità verificate morte).
