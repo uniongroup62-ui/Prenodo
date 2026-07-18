@@ -13931,7 +13931,8 @@ export async function saveManageCoupon(slug: string, body: Record<string, string
     const auditValues = { ...values } as Record<string, unknown>;
     if (by > 0 && await ensureCouponAuditColumns(slug)) {
       auditValues.updated_by = by;
-      auditValues.updated_at = new Date();
+      // Ora di ROMA esplicita (classe TZ server-safe).
+      auditValues.updated_at = businessNowDateTime();
     }
     await tenantUpdate({ slug, table: "coupons", id: couponId, values: auditValues });
     // Avviso non-bloccante sulle prenotazioni aperte (vedi editWarning nel type).
@@ -13949,7 +13950,7 @@ export async function saveManageCoupon(slug: string, body: Record<string, string
     // created_by like the legacy INSERT; created_at explicitly with the app's
     // LOCAL time (the Postgres CURRENT_TIMESTAMP default would store UTC while
     // the legacy MySQL stores the local wall clock).
-    couponId = await tenantInsert(await tenantTable(slug, "coupons"), { ...values, code, is_active: 1, created_by: by > 0 ? by : null, created_at: new Date() });
+    couponId = await tenantInsert(await tenantTable(slug, "coupons"), { ...values, code, is_active: 1, created_by: by > 0 ? by : null, created_at: businessNowDateTime() });
   }
 
   await syncCouponLocations(slug, couponId, couponLocationIds);
@@ -14143,10 +14144,11 @@ export async function deleteManageCoupon(
       id,
       values: {
         is_active: 0,
-        deleted_at: new Date(),
+        // Ora di ROMA esplicita (classe TZ server-safe: Date al driver = wall del server).
+        deleted_at: businessNowDateTime(),
         deleted_by: byId,
         deleted_reason: note,
-        cancelled_at: rows[0].cancelled_at ?? new Date(),
+        cancelled_at: rows[0].cancelled_at ?? businessNowDateTime(),
         cancelled_by: rows[0].cancelled_by ?? byId,
         cancelled_reason: (rows[0].cancelled_reason as string) || note,
       },
@@ -14182,7 +14184,8 @@ export async function cancelManageCoupon(
     id,
     values: {
       is_active: 0,
-      cancelled_at: rows[0].cancelled_at ?? new Date(),
+      // Ora di ROMA esplicita (classe TZ server-safe; COALESCE audit: primo valore vince).
+      cancelled_at: rows[0].cancelled_at ?? businessNowDateTime(),
       cancelled_by: rows[0].cancelled_by ?? byId,
       cancelled_reason: (rows[0].cancelled_reason as string) || (clean !== "" ? clean : null),
     },

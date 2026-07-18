@@ -15645,3 +15645,29 @@ propagato sul prodotto case-variant, delete pulito senza referenze
 17/17, test-suppliers-mutations VERDETTO ok, e2e-suppliers 21/21,
 markers-suppliers 49/49, test-magazzino 41/41, test-costs-fixes 14/14.
 Bonifica 58 voci log batteria.
+
+## 2026-07-18 — Buoni pass 4: 1 fix (classe TZ, 5 punti) + drift e2e-coupons CHIUSO
+
+FIX — CLASSE TZ SERVER-SAFE (5 scritture in db-repositories): created_at
+del new, updated_at dell'audit edit (ora VINCE sul trigger app_touch
+reso fedele a MySQL il 18/07), cancelled_at della disattivazione e il
+fallback del soft-delete, deleted_at del soft-delete -> tutte
+businessNowDateTime. Stessa classe rilevata su promotions
+(updated_at 14617/14703) -> annotata per il pass Promozioni.
+
+DRIFT e2e-coupons CHIUSO (era 49/3 dal pass Booking, attestato
+pre-esistente): i 3 falsi FAIL erano il coupon REALE di produzione
+W8R8MGXX39 (id 209, INTOCCABILE) nel baseline 'lista vuota' — suite
+sanata a BASELINE DINAMICA (offset totalCount + set codici baseline,
+mai assoluti) -> 52/52.
+
+Riverifica: core condiviso 4 superfici (preview QB/POS, save
+appuntamenti, pending notifiche), delete a TRE VIE (bloccato/soft/hard),
+usage_limit per-cliente runtime UPPER LIKE, scope fallback 'all',
+combinazione coupon+auto-promo — tutto confermato dalle batterie.
+
+Verifica live test-buoni-pass4 4/4 CLEAN (create/edit/disattiva
+timestamp Roma + hard delete; payload create esige coupon_location_ids
+'Seleziona almeno una sede abilitata.'). Regressione: e2e-coupons 52/52,
+test-buoni 33/33, test-buoni2 30/30, markers-coupons 72/72,
+test-coupon-edit-audit CLEAN. Bonifica 54 voci log batteria.
