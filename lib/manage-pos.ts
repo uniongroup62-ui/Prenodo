@@ -630,12 +630,14 @@ export async function checkoutManageSale(
   let promoApplied: PosPromoApplied | null = null;
   // Carrello promo (servizi/prodotti con prezzo) + data/ora, condivisi dal path
   // promotion_id e dal path PROMO-CON-CODICE.
-  const promoNow = new Date();
+  // Ora di ROMA (classe TZ: prima promoDate era toISOString UTC e promoTime i
+  // getHours LOCALI del server — frame misti, rotti a cavallo di mezzanotte).
+  const promoNowRome = businessNowDateTime();
   const promoCart: PromoCartLine[] = items
     .filter((it) => (it.type === "service" || it.type === "product") && it.refId > 0 && it.unitPrice > 0)
     .map((it) => ({ type: it.type === "product" ? "product" : "service", id: it.refId, qty: it.quantity, unitPrice: it.unitPrice }));
-  const promoDate = promoNow.toISOString().slice(0, 10);
-  const promoTime = `${String(promoNow.getHours()).padStart(2, "0")}:${String(promoNow.getMinutes()).padStart(2, "0")}`;
+  const promoDate = promoNowRome.slice(0, 10);
+  const promoTime = promoNowRome.slice(11, 16);
   const evalPromotionById = async (promotionId: number, code?: string): Promise<{ discount: number; applied: PosPromoApplied }> => {
     // #15 (Promotions::reserveSaleUse, Promotions.php:5145-5146): una promo con
     // per_customer_limit > 0 su una vendita SENZA cliente non e' applicabile — il filtro
@@ -885,7 +887,7 @@ export async function checkoutManageSale(
   const salesTable = await tenantTable(slug, "sales");
   const saleId = await tenantInsert(salesTable, await filterColumns(salesTable.name, {
     client_id: client.id > 0 ? client.id : null,
-    sale_date: new Date(),
+    sale_date: businessNowDateTime(),
     subtotal,
     discount,
     total,
@@ -930,7 +932,7 @@ export async function checkoutManageSale(
         sale_id: saleId,
         discount_amount: promoDiscount,
         location_id: locationId,
-        redeemed_at: new Date(),
+        redeemed_at: businessNowDateTime(),
       })).catch(() => 0);
     }
   }
@@ -1132,8 +1134,8 @@ async function markQuoteConvertedFromSale(slug: string, quoteId: number, saleId:
   if (cur === "paid" || cur === "canceled" || cur === "cancelled") return;
   const values: Record<string, unknown> = { status: "paid" };
   if (await columnExists(quoteTable.name, "converted_sale_id")) values.converted_sale_id = saleId;
-  if (await columnExists(quoteTable.name, "converted_at")) values.converted_at = new Date();
-  if (await columnExists(quoteTable.name, "updated_at")) values.updated_at = new Date();
+  if (await columnExists(quoteTable.name, "converted_at")) values.converted_at = businessNowDateTime();
+  if (await columnExists(quoteTable.name, "updated_at")) values.updated_at = businessNowDateTime();
   await tenantUpdate({ slug, table: "quotes", id: quoteId, values }).catch(() => 0);
 }
 
@@ -3268,8 +3270,8 @@ export async function markPrepaidManualExecution(
     const newStatus = prepaidStatusCalc(status, newRemaining);
     const updScope = await tenantScope(table, ["id=?"], [prepaidId]);
     await q(
-      `UPDATE ${quoteIdentifier(table.name)} SET remaining_qty=?, status=?, updated_at=NOW()${updScope.where}`,
-      [newRemaining, newStatus, ...updScope.params],
+      `UPDATE ${quoteIdentifier(table.name)} SET remaining_qty=?, status=?, updated_at=?${updScope.where}`,
+      [newRemaining, newStatus, businessNowDateTime(), ...updScope.params],
     );
 
     // Insert the manual usage row. tenant_id is prepended when the table is tenant-shared so
@@ -3342,7 +3344,7 @@ export async function undoPrepaidManualExecution(
     const newStatus = prepaidStatusCalc(status, newRemaining);
 
     const updScope = await tenantScope(table, ["id=?"], [prepaidId]);
-    await q(`UPDATE ${quoteIdentifier(table.name)} SET remaining_qty=?, status=?, updated_at=NOW()${updScope.where}`, [newRemaining, newStatus, ...updScope.params]);
+    await q(`UPDATE ${quoteIdentifier(table.name)} SET remaining_qty=?, status=?, updated_at=?${updScope.where}`, [newRemaining, newStatus, businessNowDateTime(), ...updScope.params]);
     const delScope = await tenantScope(usageTable, ["id=?"], [usageId]);
     await q(`DELETE FROM ${quoteIdentifier(usageTable.name)}${delScope.where}`, delScope.params);
   });
@@ -4721,7 +4723,7 @@ async function markSaleCancelled(slug: string, saleId: number, input: { userId: 
   const table = await tenantTable(slug, "sales");
   await tenantUpdate({ slug, table: "sales", id: saleId, values: {
     status: "cancelled",
-    cancelled_at: new Date(),
+    cancelled_at: businessNowDateTime(),
     cancelled_by: input.userId,
     cancelled_reason: input.reason,
   } });
@@ -4835,9 +4837,9 @@ async function cancelLinkedSaleResidues(
   // nudo — che il legacy passa a ClientPrepaidServices::cancelBySale (cancel_note) e a
   // SaleInstallments::cancelPlanBySaleId (cancelled_reason, troncata a 255).
   const standardNote = `Vendita #${saleId} annullata dall'operatore ${userName || "Operatore"}.\nMotivo: ${reason}.`;
-  await updateBySaleId(slug, "client_prepaid_services", saleId, { status: "cancelled", canceled_at: new Date(), cancel_note: standardNote.slice(0, 255) });
-  await updateBySaleId(slug, "client_packages", saleId, { status: "canceled", updated_at: new Date() });
-  await updateBySaleId(slug, "sale_installment_plans", saleId, { status: "cancelled", cancelled_at: new Date(), cancelled_reason: standardNote.slice(0, 255) });
+  await updateBySaleId(slug, "client_prepaid_services", saleId, { status: "cancelled", canceled_at: businessNowDateTime(), cancel_note: standardNote.slice(0, 255) });
+  await updateBySaleId(slug, "client_packages", saleId, { status: "canceled", updated_at: businessNowDateTime() });
+  await updateBySaleId(slug, "sale_installment_plans", saleId, { status: "cancelled", cancelled_at: businessNowDateTime(), cancelled_reason: standardNote.slice(0, 255) });
   // Movimenti commissione POS: l'annullo vendita li marca SUBITO 'cancelled'
   // (Commissions::cancelSaleCommissionMovements — il movimento resta nello storico
   // come Annullato; l'eliminazione avviene solo col delete definitivo). Best-effort.
@@ -4853,12 +4855,12 @@ async function cancelLinkedSaleResidues(
     await dbExecute(
       `UPDATE ${quoteIdentifier(table.name)}
           SET entry_status='cancelled',
-              cancelled_at=COALESCE(cancelled_at, NOW()),
+              cancelled_at=COALESCE(cancelled_at, ?),
               cancelled_by=COALESCE(cancelled_by, ?),
               cancellation_reason=CASE WHEN COALESCE(cancellation_reason,'')='' THEN ? ELSE cancellation_reason END,
               note=?
         WHERE ${clauses.join(" AND ")}`,
-      [voidedBy, reasonNote, reasonNote, ...params],
+      [businessNowDateTime(), voidedBy, reasonNote, reasonNote, ...params],
     );
   } catch {
     // schema commissioni assente: come il legacy paymentSchemaAvailable(false)
@@ -4867,7 +4869,7 @@ async function cancelLinkedSaleResidues(
   // Sulle rate il legacy APPENDE "[ANNULLATA <ts>] <nota standard>" alla nota esistente
   // (i dati di incasso di una rata già pagata restano nello storico).
   {
-    const ts = new Date().toISOString().slice(0, 19).replace("T", " ");
+    const ts = businessNowDateTime();
     const installmentNote = `[ANNULLATA ${ts}] ${standardNote}`;
     const rateRows = await tenantSelect<RowDataPacket>({ slug, table: "sale_installments", columns: "id, note", where: "sale_id=?", params: [saleId] }).catch(() => [] as RowDataPacket[]);
     for (const row of rateRows) {
@@ -5044,7 +5046,7 @@ async function cancelIssuedSaleGiftcards(slug: string, saleId: number, reason: s
       slug,
       table: giftcardTable.name,
       id: giftcardId,
-      values: { status: "cancelled", cancelled_at: new Date(), cancelled_reason: clean(reason, 255) || `Storno vendita #${saleId}` },
+      values: { status: "cancelled", cancelled_at: businessNowDateTime(), cancelled_reason: clean(reason, 255) || `Storno vendita #${saleId}` },
     }).catch(() => 0);
 
     await tenantInsert(txTable, await filterColumns(txTable.name, {
@@ -5054,7 +5056,7 @@ async function cancelIssuedSaleGiftcards(slug: string, saleId: number, reason: s
       amount: -balance,
       note: `Annullamento GiftCard (storno vendita #${saleId})`,
       meta_json: JSON.stringify({ source: "sale_cancel", sale_id: saleId }),
-      created_at: new Date(),
+      created_at: businessNowDateTime(),
     })).catch(() => undefined);
   }
 }
@@ -5096,7 +5098,7 @@ async function cancelIssuedSaleGiftboxes(slug: string, saleId: number, reason: s
       slug,
       table: instanceTable.name,
       id: instanceId,
-      values: { status: "cancelled", cancelled_at: new Date() },
+      values: { status: "cancelled", cancelled_at: businessNowDateTime() },
     }).catch(() => 0);
 
     if (txTable) {
@@ -5106,7 +5108,7 @@ async function cancelIssuedSaleGiftboxes(slug: string, saleId: number, reason: s
         amount: 0,
         note: clean(`Annullamento GiftBox (storno vendita #${saleId}): ${reason}`, 255),
         meta_json: JSON.stringify({ source: "sale_cancel", sale_id: saleId }),
-        created_at: new Date(),
+        created_at: businessNowDateTime(),
       })).catch(() => undefined);
     }
   }
@@ -5153,7 +5155,7 @@ async function reverseIssuedSaleRecharges(
       slug,
       table: table.name,
       id: rechargeId,
-      values: { is_void: 1, voided_at: new Date(), voided_by: voidedBy },
+      values: { is_void: 1, voided_at: businessNowDateTime(), voided_by: voidedBy },
     }).catch(() => 0);
 
     if (clientId > 0 && totalAmount > 0) {
@@ -5455,7 +5457,7 @@ async function issueRechargeFromSale(
     points_earned: pointsEarned,
     note,
     is_void: 0,
-    created_at: new Date(),
+    created_at: businessNowDateTime(),
     created_by: createdBy,
   })).catch(() => 0);
   if (!rechargeId) return 0;
@@ -5828,7 +5830,7 @@ async function issueGiftcardFromSale(slug: string, saleId: number, clientId: num
     balance: amount,
     currency: "EUR",
     status: "active",
-    issued_at: new Date(),
+    issued_at: businessNowDateTime(),
     expires_at: expiresAt,
     gift_message: clean(item.message, 2000) || null,
     // "Nota per il cliente" + marker vendita (il dettaglio ricava linkedSaleId
@@ -5861,7 +5863,7 @@ async function issueGiftcardFromSale(slug: string, saleId: number, clientId: num
       amount,
       note: `Emissione GiftCard ${GIFTCARD_SALE_MARKER}${saleId}]`,
       meta_json: JSON.stringify({ source: "sale", sale_id: saleId }),
-      created_at: new Date(),
+      created_at: businessNowDateTime(),
       location_id: locationId > 0 ? locationId : null,
     })).catch(() => undefined);
   }
@@ -5971,8 +5973,8 @@ async function saveGiftboxFromCart(slug: string, item: PosSaleItem, recipientLab
     active: 1,
     sort_order: 0,
     valid_to: validTo,
-    created_at: new Date(),
-    updated_at: new Date(),
+    created_at: businessNowDateTime(),
+    updated_at: businessNowDateTime(),
   })).catch(() => 0);
   if (!giftboxId) return 0;
 
@@ -5987,8 +5989,8 @@ async function saveGiftboxFromCart(slug: string, item: PosSaleItem, recipientLab
         product_id: isProduct ? (ci.id > 0 ? ci.id : null) : null,
         qty: Math.max(1, Number(ci.qty ?? 1) || 1),
         sort_order: index,
-        created_at: new Date(),
-        updated_at: new Date(),
+        created_at: businessNowDateTime(),
+        updated_at: businessNowDateTime(),
       })).catch(() => undefined);
     }
   }
@@ -6065,7 +6067,7 @@ async function issueGiftboxFromSale(slug: string, saleId: number, clientId: numb
     email_show_details: showDetails ? 1 : 0,
     // status 'issued' is what the residui/redeem readers treat as available (NOT 'active').
     status: "issued",
-    issued_at: new Date(),
+    issued_at: businessNowDateTime(),
     expires_at: expiresAt,
     points_cost: 0,
     gift_message: clean(item.message, 2000) || null,
@@ -6203,8 +6205,10 @@ function addMonthsIso(startYmd: string, months: number): string {
 
 // today/start-date + N days as YYYY-MM-DD (pkAddDurationYmd 'days' base case).
 function addDaysIso(startYmd: string, days: number): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(startYmd);
-  const base = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date();
+  // Fallback su OGGI in ora di ROMA (classe TZ: new Date() locale del server
+  // sbaglierebbe giorno la sera su un server UTC).
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(startYmd) ?? (/^(\d{4})-(\d{2})-(\d{2})$/.exec(businessTodayIso()) as RegExpExecArray);
+  const base = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
   base.setDate(base.getDate() + Math.max(0, Math.floor(days)));
   return `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, "0")}-${String(base.getDate()).padStart(2, "0")}`;
 }
@@ -6478,7 +6482,7 @@ function isCancelledStatus(value: unknown): boolean {
 }
 
 function cancelNote(saleId: number, userName: string, reason: string, stockMode: string, items: PosSaleItem[]): string {
-  const now = new Date().toISOString().slice(0, 19).replace("T", " ");
+  const now = businessNowDateTime();
   const lines = [`[ANNULLATA ${now}] Vendita #${saleId} annullata dall'operatore ${userName || "Operatore"}.`, `Motivo: ${reason}.`];
   if (items.length) {
     const qty = items.reduce((sum, item) => sum + item.quantity, 0);

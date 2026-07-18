@@ -2,6 +2,8 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 
+import { businessNowDateTime } from "@/lib/business-datetime";
+
 import { locationAllowedForSedi } from "@/lib/manage-locations";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { columnExists, dbQuery, quoteIdentifier, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
@@ -143,7 +145,7 @@ export async function setCommissionModuleEnabled(slug: string, enabled: boolean,
   const rows = await tenantSelect<RowDataPacket>({ slug, table: table.name, columns: "id, is_enabled", orderBy: "id ASC", limit: 1 }).catch(() => [] as RowDataPacket[]);
   const wasEnabled = Number(rows[0]?.is_enabled ?? 0) === 1;
   if (rows[0]) {
-    await tenantUpdate({ slug, table: "staff_commission_module_settings", id: Number(rows[0].id ?? 1), values: { is_enabled: enabled ? 1 : 0, updated_by: userId, updated_at: new Date() } });
+    await tenantUpdate({ slug, table: "staff_commission_module_settings", id: Number(rows[0].id ?? 1), values: { is_enabled: enabled ? 1 : 0, updated_by: userId, updated_at: businessNowDateTime() } });
   } else {
     await tenantInsert(table, { id: 1, is_enabled: enabled ? 1 : 0, created_by: userId, updated_by: userId });
   }
@@ -194,7 +196,7 @@ export async function saveCommissionSettings(
       pos_other_percent: posOtherPct,
       notes: String(cfg.notes ?? "").slice(0, 255),
       updated_by: userId,
-      updated_at: new Date(),
+      updated_at: businessNowDateTime(),
     };
     const prev = existingByStaff.get(staffId);
     if (prev && prev.id > 0) {
@@ -245,12 +247,15 @@ function commissionPeriodCovers(periods: CommissionPeriod[], datetime: string): 
   return false;
 }
 
-// "YYYY-MM-DD HH:MM:SS" nel fuso UTC (come il DB memorizza sale_date/starts_at/created_at). I
-// confini dei periodi DEVONO essere nello stesso fuso dei datetime dei movimenti, altrimenti il
-// gate sbaglia: businessNowDateTime() (Europe/Rome) e' 1-2h AVANTI rispetto a `sale_date` (UTC),
-// e un movimento creato "adesso" risulterebbe PRIMA del periodo appena aperto -> mai commissionato.
+// "YYYY-MM-DD HH:MM:SS" in ORA DI ROMA. La premessa storica "sale_date è UTC"
+// era FALSA (verifica empirica 18/07: il driver serializza il Date col fuso del
+// processo e il cast a timestamp lo tronca al wall LOCALE — sale_date è wall di
+// Roma in dev, e con la campagna TZ ora è businessNowDateTime ovunque). I
+// confini dei periodi DEVONO stare nello stesso frame dei datetime dei
+// movimenti: con i confini UTC un periodo chiuso "adesso" escludeva fino a 2h
+// di vendite Rome-wall precedenti al toggle.
 function commissionNowUtc(): string {
-  return new Date().toISOString().slice(0, 19).replace("T", " ");
+  return businessNowDateTime();
 }
 
 // Semina/normalizza il periodo MODULO (bookkeeping) — port di bootstrapModulePeriods:1005-1034.
@@ -1091,7 +1096,7 @@ async function upsertEntrySnapshot(
         cancelled_at: null,
         cancelled_by: null,
         cancellation_reason: null,
-        updated_at: new Date(),
+        updated_at: businessNowDateTime(),
       },
     });
   } else {
@@ -1177,7 +1182,7 @@ async function syncEntrySnapshots(
       slug,
       table: table.name,
       id: row.id,
-      values: { entry_status: "cancelled", cancelled_at: nowTs, updated_at: new Date() },
+      values: { entry_status: "cancelled", cancelled_at: nowTs, updated_at: businessNowDateTime() },
     });
   }
 }
@@ -1630,7 +1635,7 @@ export async function markCommissionEntryPaid(
       is_paid: isPaid ? 1 : 0,
       paid_at: isPaid ? nowDateTime() : null,
       paid_by: isPaid ? (userId && userId > 0 ? userId : null) : null,
-      updated_at: new Date(),
+      updated_at: businessNowDateTime(),
     },
   });
 }

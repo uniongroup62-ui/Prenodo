@@ -15406,3 +15406,44 @@ details; create respinta/0 senza voce. Suite test-plan-log 3/3 CLEAN
 (batch weekly da 2 con ids combacianti nei details; validazione respinta
 '"Alle ore" deve essere >= ...' senza voce). Regressione e2e-plan 14/14,
 test-appuntamenti 41/41, test-log-pass2 10/10.
+
+## 2026-07-18 — Pagamenti pass 2: 1 fix (classe TZ, ~26 punti POS + confini Commissioni) + riverifica
+
+FIX — CLASSE TZ SERVER-SAFE sull'INTERA superficie di scrittura POS
+(manage-pos.ts, ~26 punti): sale_date del checkout (guida Report e
+Commissioni!), promoDate/promoTime (erano frame MISTI: data toISOString
+UTC + ora LOCALE del server — rotti a cavallo di mezzanotte),
+issued_at emissioni GiftCard/GiftBox/ricariche, redeemed_at riscatto
+giftbox POS, cancelled_at/canceled_at/voided_at dell'annullo (vendita,
+prepagati, pacchetti, piani rate, commissioni COALESCE), created_at dei
+ledger (giftcard/credito/fidelity), marker note '[ANNULLATA ts]' (era
+toISOString = UTC anche in dev!), updated_at prepagati (NOW()),
+converted_at preventivo, fallback addDaysIso -> tutto businessNowDateTime/
+businessTodayIso.
+
+COMMISSIONI: la premessa architetturale 'sale_date è UTC' è stata
+SMENTITA empiricamente (checkout live: sale_date = wall di ROMA — il
+driver serializza il Date col fuso del processo e il cast a timestamp
+tronca al wall locale): commissionNowUtc() -> businessNowDateTime().
+Prima i confini periodo erano UTC (2h indietro): un periodo CHIUSO
+perdeva fino a 2h di vendite Rome-wall precedenti al toggle. Suite
+test-commissioni-full SANATA (7.1 asseriva l'UTC sulla premessa falsa)
+e portata a 30/30.
+
+Verifica live test-pagamenti-pass2 5/5 CLEAN: sale_date Roma al
+checkout, annullo (action=cancel) con cancelled_at Roma + reason,
+emissione GiftCard con issued_at Roma + movimento Roma, fidelity earn.
+Regressione COMPLETA: test-pagamenti 13+15+11, e2e-pos-logic 16,
+e2e-pos-audit 6+14, e2e-pos-detail-v4 13, e2e-pos-gift 11,
+e2e-pos-success 12, test-pos-* 2+8+5+2, test-commissioni-full 30,
+test-commission-periods 4, e2e-commissions 32.
+
+HARNESS: test-postmutation-scope ARCHIVIATA .superseded (id appuntamento
+420/421 CABLATI = trappola PID + attese pre-hardening 'admin vede tutte
+le sedi'; copertura già in test-calendar-location-scope 7/7 e batterie
+appuntamenti). Bonifica 59 voci log batteria (entità verificate morte).
+
+ATTESTAZIONE: il checkout resta NON transazionale cross-engine (il
+legacy pos.php 4780 è in tx unica) — stessa classe di cancelDone/apply
+QB; il core strutturale (sale+items+piano rate) in tx = miglioria
+proposta.
