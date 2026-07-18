@@ -14,7 +14,7 @@
   align-items:flex-start;
   justify-content:center;
   padding:30px 18px 96px;
-  background:#f3f6f6;
+  background:#f3f4f6;
   overflow:auto;
 }
 .confirm-modal{
@@ -22,7 +22,7 @@
   max-height:none;
   background:#fff;
   border-radius:18px;
-  border:1px solid #e5ebea;
+  border:1px solid #e5e7eb;
   box-shadow:0 18px 50px rgba(15,23,42,.10);
   overflow:auto;
   position:relative;
@@ -38,13 +38,13 @@
   place-items:center;
   text-decoration:none;
   color:#0f172a;
-  border:1px solid #e5ebea;
+  border:1px solid #e5e7eb;
   background:#fff;
 }
 .confirm-top{
   padding:22px 22px 14px;
   text-align:center;
-  border-bottom:1px solid #eef3f1;
+  border-bottom:1px solid #eef0f3;
 }
 .confirm-check{
   width:72px;
@@ -81,7 +81,7 @@
   width:58px;
   border-radius:12px;
   overflow:hidden;
-  border:1px solid #e5ebea;
+  border:1px solid #e5e7eb;
   background:#fff;
 }
 .date-box .day{
@@ -102,7 +102,7 @@
   margin-top:12px;
 }
 .btn-soft{
-  border:1px solid #e5ebea;
+  border:1px solid #e5e7eb;
   border-radius:12px;
   padding:8px 12px;
   background:#fff;
@@ -142,7 +142,7 @@
   align-items:center;
   justify-content:center;
   gap:min(16vw,120px);
-  border-top:1px solid #e5ebea;
+  border-top:1px solid #e5e7eb;
   background:#fff;
 }
 .booking-bottom-nav__item{
@@ -164,7 +164,7 @@
   line-height:1;
 }
 .booking-bottom-nav__item.is-active{
-  color:#0f766e;
+  color:#1e3b67;
 }
 .confirm-service-copy{
   flex:1;
@@ -243,7 +243,7 @@
 }
 .booking-profile input:focus{
   outline:2px solid rgba(37,99,235,.18);
-  border-color:#0f766e;
+  border-color:#1e3b67;
 }
 .booking-profile__hint{
   color:#64748b;
@@ -279,8 +279,8 @@
   color:#991b1b;
 }
 .booking-profile__verify{
-  border:1px solid #c4e5df;
-  background:#edf6f4;
+  border:1px solid #c4d1e5;
+  background:#edf1f6;
   border-radius:10px;
   padding:16px;
   display:grid;
@@ -340,7 +340,7 @@
 }
 .booking-settings select:focus{
   outline:2px solid rgba(37,99,235,.18);
-  border-color:#0f766e;
+  border-color:#1e3b67;
 }
 .booking-settings__hint{
   color:#64748b;
@@ -430,7 +430,7 @@
   justify-content:center;
   padding:28px 16px;
   background:radial-gradient(1200px 700px at 20% 10%, rgba(16,185,129,.18), transparent 55%),
-             radial-gradient(900px 600px at 80% 25%, rgba(15,118,110,.14), transparent 60%),
+             radial-gradient(900px 600px at 80% 25%, rgba(54,90,150,.14), transparent 60%),
              #f8fafc;
 }
 .gate-wrap ~ footer:not(.marketplace-footer){
@@ -439,7 +439,7 @@
 .gate-card{
   width:min(860px,96vw);
   padding:26px;
-  border:1px solid #e5ebea;
+  border:1px solid #e5e7eb;
   border-radius:26px;
   background:#fff;
   box-shadow:0 26px 70px rgba(15,23,42,.16);
@@ -459,7 +459,7 @@
   margin-bottom:10px;
 }
 .gate-icon i{
-  color:#0f766e;
+  color:#1e3b67;
   font-size:34px;
 }
 .gate-sub{
@@ -473,7 +473,7 @@
   align-items:flex-start;
   gap:14px;
   padding:18px 16px;
-  border:1px solid #e5ebea;
+  border:1px solid #e5e7eb;
   border-radius:20px;
   background:#f8fafc;
   text-align:left;
@@ -493,10 +493,10 @@
   justify-content:center;
   flex:0 0 auto;
   border-radius:14px;
-  background:rgba(15,118,110,.10);
+  background:rgba(54,90,150,.10);
 }
 .gate-opt .ico i{
-  color:#0f766e;
+  color:#1e3b67;
   font-size:20px;
 }
 .gate-opt .t{
@@ -523,14 +523,14 @@
   color:#64748b;
   font-size:13px;
   padding-top:16px;
-  border-top:1px solid #eef3f1;
+  border-top:1px solid #eef0f3;
   margin-top:18px;
 }
 .gate-biz strong{
   color:#0f172a;
 }
 .gate-phone-link{
-  color:#0f766e;
+  color:#1e3b67;
   font-weight:600;
   text-decoration:none;
 }
@@ -545,7 +545,7 @@
 .booking-unavailable-card{
   width:min(560px,94vw);
   padding:34px;
-  border:1px solid #d9f1ee;
+  border:1px solid #d9e3f1;
   border-radius:18px;
   background:#fff;
   box-shadow:0 18px 45px rgba(15,23,42,.08);
@@ -558,20 +558,20 @@
   align-items:center;
   justify-content:center;
   border-radius:18px;
-  background:#e7f3f1;
-  color:#4fada0;
+  background:#e7ecf3;
+  color:#4f75ad;
   font-size:28px;
   margin-bottom:18px;
 }
 .booking-unavailable-card h1{
-  color:#082f2a;
+  color:#0c182b;
   font-size:30px;
   font-weight:600;
   margin:0 0 10px;
 }
 .booking-unavailable-card p{
   max-width:420px;
-  color:#527a75;
+  color:#52627a;
   font-size:16px;
   line-height:1.55;
   margin:0 auto;
@@ -596,10 +596,10 @@
 .appt-note{
   padding:12px 14px;
   margin-bottom:14px;
-  border:1px solid #c4e5df;
+  border:1px solid #c4d1e5;
   border-radius:10px;
-  background:#edf6f4;
-  color:#1e8a7c;
+  background:#edf1f6;
+  color:#264b82;
   font-size:13px;
   font-weight:600;
 }
@@ -692,7 +692,7 @@
   display:flex;
   align-items:center;
   gap:6px;
-  color:#4faa9e;
+  color:#4f73aa;
   font-size:12px;
   font-weight:600;
   margin-top:8px;
@@ -788,7 +788,7 @@
   gap:14px;
 }
 .prod-item{
-  border:1px solid #e5ebea;
+  border:1px solid #e5e7eb;
   border-radius:18px;
   background:#fff;
   box-shadow:0 12px 26px rgba(15,23,42,.06);
@@ -836,8 +836,8 @@
   white-space:pre-wrap;
 }
 .price-pill{
-  background:#edf6f4;
-  color:#0f766e;
+  background:#edf1f6;
+  color:#1e3b67;
   border-radius:999px;
   padding:6px 10px;
   font-weight:600;
@@ -847,7 +847,7 @@
   display:inline-flex;
   align-items:center;
   gap:6px;
-  color:#0f766e;
+  color:#1e3b67;
   font-weight:600;
   font-size:13px;
   text-decoration:none;
@@ -861,7 +861,7 @@
   gap:18px;
 }
 .pd-box{
-  border:1px solid #e5ebea;
+  border:1px solid #e5e7eb;
   border-radius:18px;
   background:#fff;
   padding:14px;
@@ -897,7 +897,7 @@
   height:68px;
   border-radius:12px;
   overflow:hidden;
-  border:1px solid #e5ebea;
+  border:1px solid #e5e7eb;
   padding:0;
   background:#fff;
 }
@@ -995,10 +995,10 @@
   justify-content:center;
   gap:8px;
   padding:0 12px;
-  border:1px solid #cbeee9;
+  border:1px solid #cbd9ee;
   border-radius:4px;
   background:#fff;
-  color:#4faa9e;
+  color:#4f73aa;
   font-size:13px;
   font-weight:600;
   line-height:1;
@@ -1007,9 +1007,9 @@
 }
 .appt-sort-button:hover,
 .appt-sort-button:focus{
-  border-color:#4faa9e;
-  color:#3f9a8e;
-  background:#f7faf9;
+  border-color:#4f73aa;
+  color:#3f639a;
+  background:#f7f8fa;
   outline:0;
 }
 .appt-sort-button i{
@@ -1024,7 +1024,7 @@
   z-index:30;
   min-width:190px;
   padding:6px;
-  border:1px solid #dbf0ed;
+  border:1px solid #dbe3f0;
   border-radius:10px;
   background:#fff;
   box-shadow:0 14px 34px rgba(15,23,42,.14);
@@ -1053,8 +1053,8 @@
   outline:0;
 }
 .appt-sort-option.is-active{
-  background:#eefbf9;
-  color:#4faa9e;
+  background:#eff3fa;
+  color:#4f73aa;
 }
 .appt-sort-option.is-active::after{
   content:"\F26E";
@@ -1159,7 +1159,7 @@
   min-height:30px;
   padding:0 11px;
   border-radius:999px;
-  background:#0f766e;
+  background:#1e3b67;
   color:#fff;
   text-decoration:none;
   font-size:11px;
@@ -1168,7 +1168,7 @@
 }
 .pkg-book:hover{
   color:#fff;
-  background:#3f988c;
+  background:#3f6398;
 }
 @media (max-width:760px){
   .pack-controls{
@@ -1394,8 +1394,8 @@
   display:grid;
   place-items:center;
   border-radius:10px;
-  background:#d3ece7;
-  color:#0f766e;
+  background:#d3ddec;
+  color:#1e3b67;
   font-size:20px;
 }
 .quote-top{
@@ -1435,8 +1435,8 @@
   color:#b91c1c;
 }
 .quote-status.is-sent{
-  background:#d3ece7;
-  color:#0a5b54;
+  background:#d3ddec;
+  color:#172d4e;
 }
 .quote-status.is-expired{
   background:#fef3c7;
@@ -1453,10 +1453,10 @@
 }
 .quote-empty{
   padding:22px;
-  border:1px dashed #cbeee9;
+  border:1px dashed #cbd9ee;
   border-radius:10px;
   background:#fff;
-  color:#5d9089;
+  color:#5d7190;
   font-weight:600;
   text-align:center;
 }
@@ -1542,9 +1542,9 @@
 .credit-hero{
   padding:26px;
   border-radius:12px;
-  background:#0f766e;
+  background:#1e3b67;
   color:#fff;
-  box-shadow:0 18px 42px rgba(15,118,110,.24);
+  box-shadow:0 18px 42px rgba(54,90,150,.24);
 }
 .credit-hero__label{
   display:flex;
@@ -1654,7 +1654,7 @@
   gap:12px;
   align-items:center;
   padding:14px 18px;
-  border-top:1px solid #eef3f1;
+  border-top:1px solid #eef0f3;
 }
 .credit-row:first-child{
   border-top:0;
@@ -1839,24 +1839,24 @@
   gap:6px;
   padding:0 12px;
   border-radius:999px;
-  background:#0f766e;
+  background:#1e3b67;
   color:#fff;
   text-decoration:none;
   font-size:12px;
   font-weight:600;
 }
 .benefit-owned-action:hover{
-  background:#3f988c;
+  background:#3f6398;
   color:#fff;
 }
 .benefit-owned-action.is-soft{
   border:1px solid #cbd5e1;
   background:#fff;
-  color:#0f766e;
+  color:#1e3b67;
 }
 .benefit-owned-action.is-soft:hover{
   background:#f8fafc;
-  color:#3f988c;
+  color:#3f6398;
 }
 .benefit-owned--giftcards .benefit-owned-items{
   display:flex;
@@ -1910,7 +1910,7 @@
   justify-content:space-between;
   gap:10px;
   padding:8px 10px;
-  border:1px solid #edf2f0;
+  border:1px solid #edeff2;
   border-radius:9px;
   background:#f8fafc;
 }
@@ -1944,7 +1944,7 @@
   gap:6px;
   padding:0 11px;
   border-radius:999px;
-  background:#0f766e;
+  background:#1e3b67;
   color:#fff;
   text-decoration:none;
   font-size:11px;
@@ -1952,7 +1952,7 @@
   white-space:nowrap;
 }
 .benefit-owned-line__book:hover{
-  background:#3f988c;
+  background:#3f6398;
   color:#fff;
 }
 .benefit-owned--giftboxes .benefit-owned-list{
@@ -2017,7 +2017,7 @@
   color:#0f172a;
   font-size:12px;
   padding:8px 10px;
-  border:1px solid #e5ebea;
+  border:1px solid #e5e7eb;
   border-radius:9px;
   background:#f8fafc;
   margin-top:8px;
@@ -2033,7 +2033,7 @@
   justify-content:space-between;
   gap:10px;
   padding:9px 10px;
-  border:1px solid #edf2f0;
+  border:1px solid #edeff2;
   border-radius:9px;
   background:#f8fafc;
 }
@@ -2130,8 +2130,8 @@
   font-weight:600;
 }
 .gift-pill.is-booked{
-  background:#d3ece7;
-  color:#0a5b54;
+  background:#d3ddec;
+  color:#172d4e;
 }
 .gift-pill.is-wait{
   background:#fef3c7;
@@ -2143,13 +2143,13 @@
   font-weight:600;
 }
 .gift-card__appt{
-  color:#4f867f;
+  color:#4f6586;
   font-size:12px;
   line-height:1.45;
   font-weight:500;
 }
 .gift-card__appt strong{
-  color:#4f867f;
+  color:#4f6586;
   font-weight:600;
 }
 .gift-card__actions{
@@ -2164,9 +2164,9 @@
   justify-content:center;
   gap:6px;
   padding:9px 13px;
-  border:1px solid #4faea1;
+  border:1px solid #4f75ae;
   border-radius:999px;
-  background:#4faea1;
+  background:#4f75ae;
   color:#fff;
   font-size:12px;
   line-height:1;
@@ -2175,8 +2175,8 @@
   box-shadow:0 8px 18px rgba(79,111,174,.16);
 }
 .gift-book:hover{
-  border-color:#45a094;
-  background:#45a094;
+  border-color:#4569a0;
+  background:#4569a0;
   color:#fff;
   text-decoration:none;
 }
@@ -2208,9 +2208,9 @@
   padding:26px;
   border:0;
   border-radius:12px;
-  background:#0f766e;
+  background:#1e3b67;
   color:#fff;
-  box-shadow:0 18px 42px rgba(15,118,110,.24);
+  box-shadow:0 18px 42px rgba(54,90,150,.24);
 }
 .fid-hero__label{
   display:flex;
@@ -2310,7 +2310,7 @@
   gap:12px;
   align-items:center;
   padding:14px 18px;
-  border-top:1px solid #eef3f1;
+  border-top:1px solid #eef0f3;
 }
 .fid-row:first-child{
   border-top:0;
@@ -2504,7 +2504,7 @@
 }
 .fid-cta{
   overflow:hidden;
-  border:1px solid #e5ebea;
+  border:1px solid #e5e7eb;
   border-radius:10px;
   background:#fff;
   box-shadow:none;
@@ -2529,7 +2529,7 @@
   box-shadow:0 10px 30px rgba(15,23,42,.10);
 }
 .fid-cta-ico i{
-  color:#0f766e;
+  color:#1e3b67;
   font-size:30px;
 }
 .fid-cta-title{
@@ -2547,7 +2547,7 @@
 }
 .fid-cta-body{
   padding:16px 18px 18px;
-  border-top:1px solid #eef3f1;
+  border-top:1px solid #eef0f3;
   background:#fff;
 }
 .fid-cta-steps{
@@ -2557,7 +2557,7 @@
 }
 .fid-step{
   padding:14px;
-  border:1px solid #e5ebea;
+  border:1px solid #e5e7eb;
   border-radius:18px;
   background:#f8fafc;
 }
@@ -2571,8 +2571,8 @@
   align-items:center;
   justify-content:center;
   border-radius:10px;
-  background:rgba(15,118,110,.12);
-  color:#0f766e;
+  background:rgba(54,90,150,.12);
+  color:#1e3b67;
   font-weight:600;
   margin-right:8px;
 }
@@ -2594,12 +2594,12 @@
   align-items:flex-start;
   gap:10px;
   padding:10px 12px;
-  border:1px solid #eef3f1;
+  border:1px solid #eef0f3;
   border-radius:16px;
   background:#fff;
 }
 .fid-benefit i{
-  color:#0f766e;
+  color:#1e3b67;
   font-size:18px;
   margin-top:2px;
 }
@@ -2627,12 +2627,12 @@
   font-weight:500;
 }
 .fid-request-alert{
-  border:1px solid #d3ece7;
+  border:1px solid #d3ddec;
   border-radius:18px;
-  background:#edf6f4;
+  background:#edf1f6;
 }
 .fid-request-alert__body{
-  color:#1e8a7c;
+  color:#264b82;
   font-weight:500;
 }
 .fid-level-progress{

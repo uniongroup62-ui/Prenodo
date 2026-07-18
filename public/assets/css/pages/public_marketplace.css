@@ -1,27 +1,30 @@
 /* ==========================================================================
    Marketplace pubblico Prenodo — design system 2026-07 (redesign deliberato,
    sostituisce il port 1:1 del legacy BeautySuite).
-   Identità: teal #0f766e (lo stesso accent delle email), neutri caldi
+   Identità v2: indigo-navy del menu gestionale su sfondo bianco,
    sabbia/avorio, Fraunces per i titoli display (var(--font-display), caricata
    via next/font nel layout root), Inter per UI/body (var(--font-pub)).
    Doppio tema via token: la palette vive SOLO nelle custom properties.
    ========================================================================== */
 
 :root{
-  --brand:#0f766e;
-  --brand-deep:#0a5b54;
-  --brand-ink:#083f3a;
-  --brand-soft:#e7f3f1;
-  --brand-glow:rgba(15,118,110,.16);
-  --ink:#221f1a;
-  --muted:#6f6a60;
-  --line:#e7e1d6;
-  --bg:#faf8f4;
+  /* Palette v2 (2026-07-18, richiesta utente): SFONDO BIANCO e colori
+     imparentati col MENU del gestionale (sidebar #191b32, active #314563) —
+     accent = versione "azione" di quel navy, leggibile su bianco. */
+  --brand:#365a96;
+  --brand-deep:#27436f;
+  --brand-ink:#1d3153;
+  --brand-soft:#edf2fa;
+  --brand-glow:rgba(54,90,150,.16);
+  --ink:#182238;
+  --muted:#5f6a7d;
+  --line:#e3e8f1;
+  --bg:#ffffff;
   --card:#ffffff;
-  --sand:#f3efe7;
+  --sand:#f5f7fb;
   --danger:#c2413b;
-  --shadow-soft:0 1px 2px rgba(34,31,26,.05),0 10px 28px -14px rgba(34,31,26,.14);
-  --shadow-pop:0 2px 4px rgba(34,31,26,.06),0 18px 44px -16px rgba(34,31,26,.22);
+  --shadow-soft:0 1px 2px rgba(24,34,56,.05),0 10px 28px -14px rgba(24,34,56,.14);
+  --shadow-pop:0 2px 4px rgba(24,34,56,.06),0 18px 44px -16px rgba(24,34,56,.22);
   --r-lg:20px;--r-md:14px;--r-sm:10px;
   --font-d:var(--font-display,Georgia,serif);
   --font-b:var(--font-pub,Inter,system-ui,sans-serif);
@@ -33,10 +36,10 @@
 }
 @media (prefers-color-scheme:dark){
   :root{
-    --brand:#2fb3a4;--brand-deep:#7fd6cb;--brand-ink:#bfe9e3;
-    --brand-soft:#12332f;--brand-glow:rgba(47,179,164,.2);
-    --ink:#ece7df;--muted:#a49c8f;--line:#332d26;
-    --bg:#171512;--card:#201d18;--sand:#262219;
+    --brand:#7d9fd8;--brand-deep:#a9c2ea;--brand-ink:#c9d9f2;
+    --brand-soft:#1c2740;--brand-glow:rgba(125,159,216,.2);
+    --ink:#e6eaf2;--muted:#94a0b5;--line:#2a3349;
+    --bg:#111624;--card:#181f30;--sand:#1d2436;
     --shadow-soft:0 1px 2px rgba(0,0,0,.4),0 12px 30px -14px rgba(0,0,0,.5);
     --shadow-pop:0 2px 4px rgba(0,0,0,.4),0 18px 44px -16px rgba(0,0,0,.6);
   }
@@ -144,16 +147,16 @@ h1,h2,h3{text-wrap:balance}
 }
 
 /* ---------- hero home ---------- */
-.hero{position:relative;min-height:420px;padding:84px var(--marketplace-page-pad) 64px;color:#f6f3ec;display:grid;align-items:center;overflow:hidden;background:
-  radial-gradient(1100px 480px at 12% -10%,rgba(47,179,164,.35),transparent 60%),
-  radial-gradient(900px 420px at 88% 118%,rgba(15,118,110,.5),transparent 60%),
-  linear-gradient(150deg,#0e2d29 0%,#0a5b54 58%,#0f766e 100%)}
+.hero{position:relative;min-height:420px;padding:84px var(--marketplace-page-pad) 64px;color:#f4f7fd;display:grid;align-items:center;overflow:hidden;background:
+  radial-gradient(1100px 480px at 12% -10%,rgba(109,142,199,.35),transparent 60%),
+  radial-gradient(900px 420px at 88% 118%,rgba(54,90,150,.5),transparent 60%),
+  linear-gradient(150deg,#141c30 0%,#253a5e 58%,#365a96 100%)}
 .hero::after{content:"";position:absolute;inset:0;background-image:radial-gradient(rgba(246,243,236,.13) 1px,transparent 1.5px);background-size:26px 26px;mask-image:linear-gradient(115deg,transparent 45%,#000 95%);pointer-events:none}
 .hero-inner{position:relative;z-index:1;max-width:1000px;margin:0 auto;text-align:center;width:100%}
 .hero h1{font-family:var(--font-d);font-size:clamp(34px,4.6vw,58px);line-height:1.06;margin:0 0 14px;font-weight:500;letter-spacing:-.015em}
-.hero h1 em{font-style:italic;color:#9adfd6}
+.hero h1 em{font-style:italic;color:#9db9e8}
 .hero p{margin:0 auto 30px;max-width:640px;color:rgba(246,243,236,.82);font-size:17px;line-height:1.55}
-.search-box{position:relative;background:var(--card);border-radius:999px;box-shadow:0 24px 64px -18px rgba(8,40,36,.55);padding:8px;display:grid;grid-template-columns:1.35fr 1fr auto;gap:0;max-width:880px;margin:0 auto;color:var(--ink);text-align:left}
+.search-box{position:relative;background:var(--card);border-radius:999px;box-shadow:0 24px 64px -18px rgba(16,23,42,.55);padding:8px;display:grid;grid-template-columns:1.35fr 1fr auto;gap:0;max-width:880px;margin:0 auto;color:var(--ink);text-align:left}
 .search-box .field{display:flex;flex-direction:column;gap:3px;justify-content:center;padding:8px 22px;border-radius:999px}
 .search-box .field + .field{border-left:1px solid var(--line)}
 .search-box .field span,.search-box .field > label{font-size:10px;text-transform:uppercase;color:var(--muted);font-weight:600;letter-spacing:.08em}
@@ -223,8 +226,8 @@ h1,h2,h3{text-wrap:balance}
 /* ---------- città (card disegnate, niente foto sbagliate) ---------- */
 .city-discovery{margin-top:64px}
 .city-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:16px}
-.city-card{position:relative;min-height:150px;border-radius:var(--r-lg);overflow:hidden;display:flex;align-items:flex-end;padding:18px;color:#f6f3ec;isolation:isolate;background:linear-gradient(150deg,#123f3a,#0f766e);transition:transform .18s ease,box-shadow .18s ease}
-.city-card::before{content:"";position:absolute;inset:0;background:radial-gradient(300px 180px at 80% -20%,rgba(154,223,214,.4),transparent 70%);z-index:-1;transition:opacity .2s ease;opacity:.7}
+.city-card{position:relative;min-height:150px;border-radius:var(--r-lg);overflow:hidden;display:flex;align-items:flex-end;padding:18px;color:#f4f7fd;isolation:isolate;background:linear-gradient(150deg,#1d2c49,#365a96);transition:transform .18s ease,box-shadow .18s ease}
+.city-card::before{content:"";position:absolute;inset:0;background:radial-gradient(300px 180px at 80% -20%,rgba(157,185,232,.4),transparent 70%);z-index:-1;transition:opacity .2s ease;opacity:.7}
 .city-card::after{content:"";position:absolute;inset:0;background-image:radial-gradient(rgba(246,243,236,.14) 1px,transparent 1.4px);background-size:20px 20px;mask-image:linear-gradient(200deg,#000 20%,transparent 75%);z-index:-1}
 .city-card:nth-child(5n+2){background:linear-gradient(150deg,#3d2f1f,#8a6a3b)}
 .city-card:nth-child(5n+3){background:linear-gradient(150deg,#22343e,#3e6a80)}
@@ -236,19 +239,19 @@ h1,h2,h3{text-wrap:balance}
 
 /* ---------- CTA partner ---------- */
 .marketplace-cta-stack{margin-top:72px}
-.partner-cta{position:relative;display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,.9fr);align-items:center;gap:44px;min-height:360px;padding:56px clamp(24px,5vw,72px);color:#f6f3ec;border-radius:26px;overflow:hidden;background:
-  radial-gradient(900px 420px at 90% -20%,rgba(47,179,164,.3),transparent 60%),
-  linear-gradient(150deg,#101d1b,#0e2d29 55%,#0a5b54)}
+.partner-cta{position:relative;display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,.9fr);align-items:center;gap:44px;min-height:360px;padding:56px clamp(24px,5vw,72px);color:#f4f7fd;border-radius:26px;overflow:hidden;background:
+  radial-gradient(900px 420px at 90% -20%,rgba(109,142,199,.3),transparent 60%),
+  linear-gradient(150deg,#10151f,#141c30 55%,#253a5e)}
 .partner-cta::after{content:"";position:absolute;inset:0;background-image:radial-gradient(rgba(246,243,236,.1) 1px,transparent 1.4px);background-size:24px 24px;mask-image:linear-gradient(115deg,transparent 40%,#000 100%);pointer-events:none}
 .partner-cta__copy{position:relative;z-index:1}
-.partner-cta__kicker{font-size:12px;text-transform:uppercase;letter-spacing:.14em;font-weight:600;color:#9adfd6;margin:0 0 14px}
+.partner-cta__kicker{font-size:12px;text-transform:uppercase;letter-spacing:.14em;font-weight:600;color:#9db9e8;margin:0 0 14px}
 .partner-cta__copy h2{font-family:var(--font-d);font-size:clamp(28px,3.4vw,44px);line-height:1.08;margin:0 0 16px;font-weight:500;letter-spacing:-.015em}
 .partner-cta__copy p{font-size:16px;line-height:1.6;max-width:520px;margin:0 0 26px;color:rgba(246,243,236,.82)}
-.partner-cta__button{background:#f6f3ec;border-color:#f6f3ec;color:#0e2d29;padding:13px 24px;font-size:15px}
-.partner-cta__button:hover{background:#fff;border-color:#fff;color:#0a5b54}
+.partner-cta__button{background:#f4f7fd;border-color:#f4f7fd;color:#141c30;padding:13px 24px;font-size:15px}
+.partner-cta__button:hover{background:#fff;border-color:#fff;color:#253a5e}
 .partner-cta__points{display:grid;gap:10px;margin:0 0 28px;padding:0;list-style:none;font-size:15px;color:rgba(246,243,236,.9)}
 .partner-cta__points li{display:flex;gap:10px;align-items:baseline}
-.partner-cta__points li::before{content:"";width:7px;height:7px;border-radius:50%;background:#9adfd6;flex:0 0 auto;transform:translateY(-1px)}
+.partner-cta__points li::before{content:"";width:7px;height:7px;border-radius:50%;background:#9db9e8;flex:0 0 auto;transform:translateY(-1px)}
 .partner-cta__visual{position:relative;z-index:1;min-height:260px;display:grid;place-items:center}
 .partner-cta__visual svg{width:100%;max-width:440px;height:auto;display:block;filter:drop-shadow(0 24px 48px rgba(0,0,0,.35))}
 
@@ -353,9 +356,9 @@ body.marketplace-filters-open{overflow:hidden}
 .salon-contact-icon.is-tiktok{color:var(--ink)}
 .salon-hero{position:relative;background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);padding:0 0 26px;text-align:center;box-shadow:var(--shadow-soft);overflow:hidden}
 .salon-cover{position:relative;aspect-ratio:744/190;overflow:hidden;display:grid;place-items:center;color:transparent;background:
-  radial-gradient(600px 260px at 80% -40%,rgba(47,179,164,.4),transparent 65%),
-  radial-gradient(500px 240px at 10% 130%,rgba(154,223,214,.25),transparent 60%),
-  linear-gradient(150deg,#0e2d29,#0a5b54 60%,#0f766e)}
+  radial-gradient(600px 260px at 80% -40%,rgba(109,142,199,.4),transparent 65%),
+  radial-gradient(500px 240px at 10% 130%,rgba(157,185,232,.25),transparent 60%),
+  linear-gradient(150deg,#141c30,#253a5e 60%,#365a96)}
 .salon-cover::after{content:"";position:absolute;inset:0;background-image:radial-gradient(rgba(246,243,236,.12) 1px,transparent 1.4px);background-size:22px 22px;mask-image:linear-gradient(115deg,transparent 35%,#000 95%)}
 .salon-cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;z-index:1}
 .salon-logo{position:relative;z-index:2;width:96px;height:96px;margin:-48px auto 14px;border-radius:50%;background:var(--brand);color:#fff;border:4px solid var(--card);display:grid;place-items:center;font-family:var(--font-d);font-size:36px;font-weight:500;overflow:hidden}
@@ -482,7 +485,7 @@ body.salon-services-modal-open,body.salon-products-modal-open{overflow:hidden}
 .salon-location-card{flex:0 0 calc((100% - 36px)/3);background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden;box-shadow:var(--shadow-soft);display:flex;flex-direction:column;min-height:280px}
 .salon-location-carousel.is-short .salon-location-card{flex-basis:calc((100% - 18px)/2)}
 .salon-location-carousel.is-single .salon-location-card{flex-basis:min(100%,340px)}
-.salon-location-cover{height:130px;display:grid;place-items:center;color:rgba(246,243,236,.85);font-weight:600;text-align:center;padding:14px;background:linear-gradient(150deg,#123f3a,#0f766e);overflow:hidden;position:relative}
+.salon-location-cover{height:130px;display:grid;place-items:center;color:rgba(246,243,236,.85);font-weight:600;text-align:center;padding:14px;background:linear-gradient(150deg,#1d2c49,#365a96);overflow:hidden;position:relative}
 .salon-location-cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
 .salon-location-body{padding:16px;display:flex;flex:1;flex-direction:column;gap:12px}
 .salon-location-title{display:flex;align-items:center;gap:12px}

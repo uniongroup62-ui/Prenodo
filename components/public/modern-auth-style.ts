@@ -6,24 +6,24 @@
 //   topbar nascosti). Logica/markup di form invariati.
 export const MODERN_AUTH_FORM_STYLE = `
 .account-page--auth .auth-brand{display:flex;align-items:center;gap:12px;font-size:20px;font-weight:600;color:#0f172a;text-decoration:none}
-.account-page--auth .auth-brand .brand-mark{width:40px;height:40px;border-radius:12px;background:#0f766e;color:#fff;display:grid;place-items:center;font-weight:600;font-size:18px}
+.account-page--auth .auth-brand .brand-mark{width:40px;height:40px;border-radius:12px;background:#365a96;color:#fff;display:grid;place-items:center;font-weight:600;font-size:18px}
 .account-page--auth .auth-card{width:100%;background:#fff;border:1px solid #e2e8f0;border-radius:18px;box-shadow:0 10px 34px rgba(15,23,42,.06);padding:34px 32px 30px}
-.account-page--auth .auth-card .eyebrow{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#0f766e;margin:0 0 8px}
+.account-page--auth .auth-card .eyebrow{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#365a96;margin:0 0 8px}
 .account-page--auth .auth-card h1{font-size:24px;font-weight:700;color:#0f172a;margin:0 0 6px}
 .account-page--auth .auth-card .lead{font-size:14px;color:#64748b;margin:0 0 22px;line-height:1.5}
 .account-page--auth .auth-card .form label{display:flex;flex-direction:column;gap:7px;font-size:13px;font-weight:600;color:#334155;margin-bottom:16px}
 .account-page--auth .auth-card .form input[type="email"],.account-page--auth .auth-card .form input[type="password"],.account-page--auth .auth-card .form input[type="text"],.account-page--auth .auth-card .form input[type="tel"]{height:50px;border:1px solid #dbe3ef;border-radius:12px;padding:0 16px;font-size:15px;color:#0f172a;background:#fff;transition:border-color .15s ease,box-shadow .15s ease;width:100%}
-.account-page--auth .auth-card .form input:focus{outline:none;border-color:#0f766e;box-shadow:0 0 0 4px rgba(15,118,110,.14)}
+.account-page--auth .auth-card .form input:focus{outline:none;border-color:#365a96;box-shadow:0 0 0 4px rgba(54,90,150,.14)}
 .account-page--auth .auth-card .form .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .account-page--auth .auth-card .pw-field{position:relative;display:flex;align-items:center}
 .account-page--auth .auth-card .pw-field input{padding-right:48px}
 .account-page--auth .auth-card .pw-toggle{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:38px;height:38px;border:0;border-radius:10px;background:transparent;color:#64748b;display:grid;place-items:center;cursor:pointer;font-size:17px}
-.account-page--auth .auth-card .pw-toggle:hover{background:#e7f3f1;color:#0a5b54}
-.account-page--auth .auth-card .auth-submit{width:100%;height:48px;border:0;border-radius:12px;background:#0f766e;color:#fff;font-size:15px;font-weight:700;cursor:pointer;margin-top:6px;transition:background .15s ease,box-shadow .15s ease}
-.account-page--auth .auth-card .auth-submit:hover:not(:disabled){background:#0a5b54;box-shadow:0 8px 22px rgba(15,118,110,.28)}
+.account-page--auth .auth-card .pw-toggle:hover{background:#edf2fa;color:#27436f}
+.account-page--auth .auth-card .auth-submit{width:100%;height:48px;border:0;border-radius:12px;background:#365a96;color:#fff;font-size:15px;font-weight:700;cursor:pointer;margin-top:6px;transition:background .15s ease,box-shadow .15s ease}
+.account-page--auth .auth-card .auth-submit:hover:not(:disabled){background:#27436f;box-shadow:0 8px 22px rgba(54,90,150,.28)}
 .account-page--auth .auth-card .auth-submit:disabled{opacity:.65;cursor:default}
 .account-page--auth .auth-card .links{display:flex;justify-content:center;gap:12px;margin-top:20px;font-size:14px}
-.account-page--auth .auth-card .links a{color:#0f766e;font-weight:600;text-decoration:none}
+.account-page--auth .auth-card .links a{color:#365a96;font-weight:600;text-decoration:none}
 .account-page--auth .auth-card .links a:hover{text-decoration:underline}
 .account-page--auth .auth-card .links span{color:#cbd5e1}
 .account-page--auth .auth-card .alert{background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;border-radius:12px;padding:12px 14px;font-size:14px;margin-bottom:16px}
@@ -71,7 +71,7 @@ export const MODERN_CUSTOMER_PHOTO_AUTH_STYLE = MODERN_AUTH_FORM_STYLE + `
 .account-page--auth .auth-card .pw-field input{padding-right:44px}
 .account-page--auth .auth-card .pw-toggle{width:34px;height:34px;font-size:15px}
 .account-page--auth .auth-card .form-row-after{display:flex;justify-content:flex-end;margin:-6px 0 16px}
-.account-page--auth .auth-card .form-row-after a{font-size:13px;font-weight:600;color:#0f766e;text-decoration:none}
+.account-page--auth .auth-card .form-row-after a{font-size:13px;font-weight:600;color:#365a96;text-decoration:none}
 .account-page--auth .auth-card .form-row-after a:hover{text-decoration:underline}
 .account-page--auth .auth-card .auth-submit{height:44px;border-radius:10px;font-size:14.5px;margin-top:0}
 .account-page--auth .auth-card .links{margin-top:22px;font-size:13.5px;color:#64748b;gap:6px}
@@ -99,13 +99,13 @@ export const MODERN_MANAGE_AUTH_STYLE = MODERN_AUTH_FORM_STYLE + `
 .manage-page .auth-card .pw-field input{padding-right:44px}
 .manage-page .auth-card .pw-toggle{width:34px;height:34px;font-size:15px}
 .manage-page .auth-card .form-row-after{display:flex;justify-content:flex-end;margin:-6px 0 16px}
-.manage-page .auth-card .form-row-after a{font-size:13px;font-weight:600;color:#0f766e;text-decoration:none}
+.manage-page .auth-card .form-row-after a{font-size:13px;font-weight:600;color:#365a96;text-decoration:none}
 .manage-page .auth-card .form-row-after a:hover{text-decoration:underline}
 .manage-page .auth-card .auth-submit{height:44px;border-radius:10px;font-size:14.5px;margin-top:0}
 .manage-page .auth-card .links{margin-top:22px;font-size:13.5px;color:#64748b}
 .manage-page .auth-card .links span{display:none}
 .manage-page .auth-footer{position:fixed;left:0;bottom:0;width:calc(100% - min(680px,44vw));display:flex;justify-content:space-between;padding:16px 28px;font-size:12px;color:#94a3b8;pointer-events:none}
-.manage-page .visual-card.manage-visual{position:fixed;inset:0 0 0 auto;width:min(680px,44vw);min-height:0;border-radius:0;box-shadow:none;z-index:1;background:linear-gradient(160deg,#0f766e 0%,#0a5b54 55%,#243a63 100%)}
+.manage-page .visual-card.manage-visual{position:fixed;inset:0 0 0 auto;width:min(680px,44vw);min-height:0;border-radius:0;box-shadow:none;z-index:1;background:linear-gradient(160deg,#365a96 0%,#27436f 55%,#243a63 100%)}
 @media (max-width:900px){.manage-page .visual-card.manage-visual{display:none}.manage-page .account-main--auth-flow{margin-right:0}.manage-page .auth-footer{width:100%}}
 .manage-page .visual-card .tenant-badge{background:rgba(255,255,255,.16);border-radius:12px}
 .manage-page .visual-card .visual-actions a{border-radius:10px}

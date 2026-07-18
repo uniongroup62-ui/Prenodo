@@ -63,14 +63,14 @@ export type EmailTemplateOpts = {
 // usato dal template per i link del footer — e un solo stile di bottone e di
 // riquadro-codice per tutte le email dell'app.
 
-export const EMAIL_ACCENT = "#0f766e";
+export const EMAIL_ACCENT = "#365a96";
 
 export function emailButton(href: string, label: string): string {
   return `<a href="${h(href)}" style="display:inline-block;background:${EMAIL_ACCENT};color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:12px;font-weight:700;letter-spacing:.2px">${h(label)}</a>`;
 }
 
 export function emailCodeBox(code: string): string {
-  return `<div style="display:inline-block;background:#f0fdfa;border:2px dashed ${EMAIL_ACCENT};border-radius:12px;padding:14px 26px;font-size:26px;font-weight:800;letter-spacing:4px;color:#0f172a">${h(code)}</div>`;
+  return `<div style="display:inline-block;background:#f2f6fd;border:2px dashed ${EMAIL_ACCENT};border-radius:12px;padding:14px 26px;font-size:26px;font-weight:800;letter-spacing:4px;color:#0f172a">${h(code)}</div>`;
 }
 
 // NB oggetti: NIENTE brand nell'oggetto (scelta 2026-07-18). Il brand arriva
@@ -116,7 +116,7 @@ export function buildModernEmailTemplate(
     footer += `<div style="font-weight:600;color:#374151">${brand}</div>`;
     if (bizEmail !== "") {
       const em = h(bizEmail);
-      footer += `<div>Contatto: <a href="mailto:${em}" style="color:#0f766e;text-decoration:none">${em}</a></div>`;
+      footer += `<div>Contatto: <a href="mailto:${em}" style="color:#365a96;text-decoration:none">${em}</a></div>`;
     }
     footer += "</div>";
   }

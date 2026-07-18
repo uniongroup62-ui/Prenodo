@@ -218,7 +218,7 @@ function buildGiftBoxEmail(params: {
   const evHead = h((evEmoji + " " + evTitle).trim());
   const heroHtml =
     '<div style="border:1px solid #e5e7eb; border-radius:14px; overflow:hidden; margin:0 0 14px 0;">' +
-    '<div style="padding:12px 14px; background:#0f766e; color:#fff; font-weight:600; font-size:16px;">' +
+    '<div style="padding:12px 14px; background:#365a96; color:#fff; font-weight:600; font-size:16px;">' +
     evHead +
     "</div></div>";
 

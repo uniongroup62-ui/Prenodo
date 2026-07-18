@@ -15993,3 +15993,27 @@ incluse booking.css/booking-wizard.css/public_account.css tenute
 nella versione teal via checkout mirato), il brand unico Prenodo
 (nome + logo 'P' in sidebar, ri-applicato dopo il revert) e i fix
 email. tsc pulito; screenshot dashboard = look originale con P/Prenodo.
+
+## 2026-07-18 — Marketplace v2: BIANCO + palette dal MENU del gestionale
+## (richiesta utente: "sfondo bianco, colori coerenti col gestionale,
+## proviamo al massimo ripristiniamo")
+
+Il teal è DEPRECATO su tutta la superficie pubblica ed email. Nuova
+identità: accent INDIGO-NAVY #365a96 (versione 'azione' della sidebar
+gestionale #191b32/active #314563), deep #27436f, ink #182238, sfondo
+BIANCO puro (sezioni alternate #f5f7fb), hero/pannelli scuri sul navy
+della sidebar. Layout/tipografia (Fraunces+Inter) del redesign
+invariati. Gestionale NON toccato (resta il look originale del
+rollback a0c0ebe).
+
+Propagazione: token+gradienti di public_marketplace.css; mappa
+esplicita teal→navy su componenti public (account-*, marketplace-*,
+per-tenant-hub, modern-auth-style incl. auth gestionale, login);
+ROTAZIONE HUE 150-195→216 su booking.css/booking-wizard/
+public_account (keep verdi semantici/WhatsApp); EMAIL_ACCENT →
+#365a96 in lib/email.ts (bottone/codice/link footer) — ora email,
+marketplace, auth e gestionale sono tutti nella stessa famiglia navy.
+
+Verifica: tsc pulito; screenshot home/dettaglio/login (bianco+navy);
+test-email-template 10/10 (bundle rigenerato); e2e-booking-marketplace
+26/26 CLEAN; galleria anteprime email rigenerata sull'artifact.
