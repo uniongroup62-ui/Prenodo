@@ -226,8 +226,11 @@ export async function tenantInsertTx(q: TenantTxQuery, table: TenantTable, value
   const columns = entries.map(([key]) => quoteIdentifier(key)).join(",");
   const placeholders = entries.map(() => "?").join(",");
   const params = entries.map(([, value]) => value);
-  const rows = await q(`INSERT INTO ${quoteIdentifier(table.name)} (${columns}) VALUES (${placeholders}) RETURNING id`, params);
-  return Number(rows[0]?.id ?? 0);
+  // RETURNING id solo se la colonna esiste (le tabelle-ponte a PK composita,
+  // es. package_locations, non ce l'hanno: il RETURNING abortirebbe la tx).
+  const hasId = await columnExists(table.name, "id");
+  const rows = await q(`INSERT INTO ${quoteIdentifier(table.name)} (${columns}) VALUES (${placeholders})${hasId ? " RETURNING id" : ""}`, params);
+  return hasId ? Number(rows[0]?.id ?? 0) : 0;
 }
 
 export async function tenantInsert(table: TenantTable, values: Record<string, unknown>): Promise<number> {

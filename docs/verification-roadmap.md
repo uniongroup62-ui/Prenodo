@@ -15723,3 +15723,32 @@ payload `clients` RIMOSSO deliberatamente il 16/07 (sweep client-search
 server-side, skipClients) -> 48/48. Regressione: test-pacchetti 26/26,
 mutations 13/13, improvements 7/7, e2e-packages-catalog 27/27,
 e2e-package-settings 6/6. Bonifica 85 voci log batteria.
+
+## 2026-07-18 — Pacchetti RICONTROLLO: 2 fix (gate azioni-clienti + save catalogo ATOMICO)
+
+Secondo giro richiesto. TROVATI E CORRETTI:
+
+FIX 1 — GATE AZIONI-CLIENTI (parità permessi): l'ombrello POST a unione
+(clients ∪ catalog ∪ pos) lasciava EMETTERE/SCALARE pacchetti cliente
+(issue/use/update_expiry/usage_add/client_save) a un utente col SOLO
+packages.catalog — nel legacy il redirect di tab (packages.php 44-46,
+PRIMA dei blocchi azione) rende il tab clients irraggiungibile senza
+packages.clients. Ora gate per-azione 'Permesso pacchetti clienti
+mancante.' (403).
+
+FIX 2 — SAVE CATALOGO ATOMICO (parità col beginTransaction legacy
+packages.php 1935): header + rebuild package_services/items/pricing/
+locations in UNA withTenantTransaction (prima: delete/reinsert
+sequenziali con catch-swallow per riga — un errore a metà lasciava un
+catalogo senza contenuto/prezzo). Tabelle risolte pre-tx.
+TRAPPOLA TROVATA IN CORSA: tenantInsertTx faceva SEMPRE RETURNING id —
+le tabelle-ponte a PK COMPOSITA (package_locations ecc.) non hanno id e
+la tx abortiva ('column id does not exist'); ora RETURNING id solo se
+la colonna esiste. La batteria l'ha intercettata subito (26/0→5/2) e
+il fix è stato verificato con probe diretto (figli 1/1/1/1).
+
+Regressione COMPLETA verde: test-pacchetti 26/26, mutations 13/13,
+improvements 7/7, e2e-packages 48/48, catalogo 27/27, settings 6/6,
+pass4 2/2 + CONSUMER di tenantInsertTx: test-pagamenti 13/13,
+e2e-pos-logic 16/16, test-quickbooking 35/35, e2e-qb-redeem-edit 28/28.
+Bonifica 81 voci log batteria.

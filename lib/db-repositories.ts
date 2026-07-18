@@ -49,7 +49,7 @@ import type {
   WalletMovement,
   WalletMovementType,
 } from "@/lib/tenant-store";
-import { tenantDelete, tenantInsert, tenantSelect, tenantTable, tenantUpdate, columnExists, dbExecute, dbQuery, quoteIdentifier, tableExists, tenantIdForSlug, withTenantTransaction, type TenantTable } from "@/lib/tenant-db";
+import { tenantDelete, tenantInsert, tenantInsertTx, tenantSelect, tenantTable, tenantUpdate, columnExists, dbExecute, dbQuery, quoteIdentifier, tableExists, tenantIdForSlug, withTenantTransaction, type TenantTable } from "@/lib/tenant-db";
 import {
   applyExpirySettingsToOpenLots,
   applyLotsDelta,
@@ -9519,24 +9519,41 @@ export async function saveManagePackageCatalog(slug: string, body: Record<string
   if (packageId > 0) {
     const existing = await tenantSelect<RowDataPacket>({ slug, table: "packages", columns: "id", where: "id = ?", params: [packageId], limit: 1 });
     if (!existing[0]) throw new Error("Pacchetto catalogo non trovato.");
-    await tenantUpdate({ slug, table: "packages", id: packageId, values: header });
-  } else {
-    packageId = await tenantInsert(await tenantTable(slug, "packages"), header);
   }
 
-  // Rebuild package_services + package_items + package_pricing + package_locations.
-  await deletePackageChildRows(slug, "package_services", packageId).catch(() => undefined);
-  const svcTable = await tenantTable(slug, "package_services");
-  for (const s of svcItems) await tenantInsert(svcTable, { package_id: packageId, service_id: s.serviceId, sessions_total: s.sessions, sort_order: s.sortOrder }).catch(() => 0);
-
-  await deletePackageChildRows(slug, "package_items", packageId).catch(() => undefined);
-  const itemTable = await tenantTable(slug, "package_items");
-  for (const l of lines) await tenantInsert(itemTable, { package_id: packageId, item_type: l.item_type, item_id: l.item_id, qty: l.qty, unit_price: l.unit_price, discount_type: l.discount_type, discount_value: l.discount_value, line_total: l.line_total, sort_order: l.sort_order }).catch(() => 0);
-
-  await deletePackageChildRows(slug, "package_pricing", packageId).catch(() => undefined);
-  await tenantInsert(await tenantTable(slug, "package_pricing"), { package_id: packageId, subtotal, discount_type: totalDiscountType, discount_value: roundMoney(totalDiscountValue), total }).catch(() => 0);
-
-  await syncPackageLocations(slug, packageId, locationIds);
+  // SAVE ATOMICO (parità col beginTransaction del catalog_new/edit legacy,
+  // packages.php 1935): header + rebuild di package_services/items/pricing/
+  // locations in UNA withTenantTransaction — un errore a metà non lascia mai
+  // un catalogo senza contenuto/prezzo. Tabelle risolte PRIMA (assente in
+  // install legacy = skip); niente catch-swallow dentro la tx.
+  const pkgTable = await tenantTable(slug, "packages");
+  const svcTable = await tenantTable(slug, "package_services").catch(() => null);
+  const itemTable = await tenantTable(slug, "package_items").catch(() => null);
+  const pricingTable = await tenantTable(slug, "package_pricing").catch(() => null);
+  const locTable = await tenantTable(slug, "package_locations").catch(() => null);
+  packageId = await withTenantTransaction(slug, async (txq) => {
+    let pid = packageId;
+    const headerCols = Object.keys(header);
+    if (pid > 0) {
+      const params: unknown[] = [...headerCols.map((c) => (header as Record<string, unknown>)[c]), pid];
+      if (pkgTable.tenantId) params.push(pkgTable.tenantId);
+      await txq(
+        `UPDATE ${quoteIdentifier(pkgTable.name)} SET ${headerCols.map((c) => `${quoteIdentifier(c)} = ?`).join(", ")} WHERE id = ?${pkgTable.tenantId ? " AND tenant_id = ?" : ""}`,
+        params,
+      );
+    } else {
+      pid = await tenantInsertTx(txq, pkgTable, header as Record<string, unknown>);
+    }
+    for (const t of [svcTable, itemTable, pricingTable, locTable]) {
+      if (!t) continue;
+      await txq(`DELETE FROM ${quoteIdentifier(t.name)} WHERE package_id = ?${t.tenantId ? " AND tenant_id = ?" : ""}`, t.tenantId ? [pid, t.tenantId] : [pid]);
+    }
+    if (svcTable) for (const s of svcItems) await tenantInsertTx(txq, svcTable, { package_id: pid, service_id: s.serviceId, sessions_total: s.sessions, sort_order: s.sortOrder });
+    if (itemTable) for (const l of lines) await tenantInsertTx(txq, itemTable, { package_id: pid, item_type: l.item_type, item_id: l.item_id, qty: l.qty, unit_price: l.unit_price, discount_type: l.discount_type, discount_value: l.discount_value, line_total: l.line_total, sort_order: l.sort_order });
+    if (pricingTable) await tenantInsertTx(txq, pricingTable, { package_id: pid, subtotal, discount_type: totalDiscountType, discount_value: roundMoney(totalDiscountValue), total });
+    if (locTable) for (const lid of locationIds) await tenantInsertTx(txq, locTable, { package_id: pid, location_id: lid });
+    return pid;
+  });
 
   return { id: packageId };
 }

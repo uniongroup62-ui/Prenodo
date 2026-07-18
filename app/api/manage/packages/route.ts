@@ -175,6 +175,16 @@ export async function POST(request: Request) {
   const body = await parseRequestBody(request);
   const action = body.action ?? "issue";
 
+  // GATE azioni-CLIENTI (parità 18/07): nel legacy le azioni del tab clients
+  // (client_/usage_) sono raggiungibili SOLO con packages.clients — il redirect
+  // di tab (packages.php 44-46) scatta PRIMA dei blocchi azione. L'ombrello a
+  // unione qui sopra lasciava emettere/scalare pacchetti cliente a un utente
+  // con il SOLO packages.catalog.
+  const clientActions = new Set(["issue", "use", "update_expiry", "update_client_package_expiry", "usage_add", "client_save"]);
+  if (clientActions.has(String(action)) && !canAny(session.user.perms, packageWritePerms)) {
+    return jsonError("Permesso pacchetti clienti mancante.", 403);
+  }
+
   try {
     if (action === "issue") {
       const input = {
