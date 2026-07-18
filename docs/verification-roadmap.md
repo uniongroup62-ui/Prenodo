@@ -16131,3 +16131,30 @@ Resta proposta anche SSR/SEO del dettaglio.
 HARNESS: sessione interrotta (VS Code chiuso) durante la prima
 riesecuzione — 2 account orfani zz.mk4* rimossi per id verificando il
 prefisso fixture; dev server riavviato; batteria rieseguita 21/21.
+
+## 2026-07-18 — Marketplace giro 4 (quarto passaggio richiesto): ciclo di
+## vita AUTH account cliente
+
+ZERO BUG: suite nuova test-marketplace-pass5 18/18 (account temporaneo
+rimosso per id). Attestati CORRETTI:
+- register: validazioni email/password, dup su email VERIFICATA
+  respinto ('Esiste gia un account…'), re-register su email NON
+  verificata = overwrite consentito con STESSO id e codice nuovo (il
+  vecchio codice si invalida) — pattern standard pre-attivazione;
+- resend_verification: nuovo codice valido (force);
+- verify: codice errato respinto, giusto -> verifica + sessione;
+- forgot/reset: ANTI-ENUMERATION (email sconosciuta -> stessa risposta
+  generica senza token), token 64hex sha256 con scadenza 30min
+  JS-side, SINGLE-USE (riuso respinto), reset sblocca il login con la
+  nuova password e verifica l'email come side-effect (COALESCE);
+- logout: invalidazione SERVER-SIDE (il vecchio cookie non risolve più
+  la sessione), cookie manomesso -> 'Accesso cliente richiesto.';
+- gate pagine: /account/* senza sessione -> login con ?return=, con
+  sessione -> contenuto (activities con stato vuoto corretto).
+ATTESTATO: proxy.ts shimma solo gli URL legacy del GESTIONALE — il
+marketplace pubblico era già su /attivita (niente shim necessario).
+
+MIGLIORIE PROPOSTE aperte (hardening, non bug — nemmeno il legacy le
+ha): cap tentativi sui codici 6 cifre; cooldown sul resend (oggi
+illimitato = potenziale email-bombing verso la vittima); SSR/SEO
+dettaglio.
