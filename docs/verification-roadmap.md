@@ -15846,3 +15846,32 @@ drift d'epoca (installment_choice obbligatorio + motivazione annullo)
 -> 8/8. Falsi FAIL da LAG DI RICOMPILAZIONE del dev server osservati
 (P2 rosso su codice giusto): riverificare con probe chirurgico prima
 di diagnosticare.
+
+## 2026-07-18 — Preventivo giro 2 (secondo passaggio richiesto)
+
+Angoli NON coperti dal pass 3: link pubblico, seen/seen_all, duplica,
+sender compat, print/view.
+
+FIX 1 — TZ LINK PUBBLICO (app/api/public/quote/route.ts): lo stato
+'Scaduto' del token pubblico calcolava OGGI dai componenti locali del
+server (new Date().getFullYear()...) -> su un server UTC (Amplify) il
+badge si accendeva/spegneva col giorno sfasato nella finestra serale.
+Ora businessTodayIso() (frame ROMA), confronto strict < fedele. Il
+lato manage era già sano: quoteEffectiveStatusDb usa todayIso() che
+wrappa businessTodayIso.
+
+FIX 2 — TZ SEEN (app/api/manage/quotes/route.ts): action=seen/seen_all
+stampava customer_decision_seen_at = NOW() del DB (UTC su Supabase),
+sfasato di 1-2h rispetto a customer_decision_at (ora wall-time Roma
+dal fix pass 3). Ora parametro businessNowDateTime().
+
+ATTESTATO: sendQuoteEmail (8455) e convertDbQuoteToSale (8550) in
+db-repositories = compat MORTI (zero chiamanti; i loro new Date()
+residui restano — non si sanifica codice morto). Il sender vivo unico
+è sendManageQuoteEmailLegacy; la conversione vive solo via POS
+quote_cart+checkout (nessun action=convert, fedele).
+
+Verifica live test-preventivi-pass4 5/5 CLEAN (scaduto ieri-Roma,
+boundary oggi non scaduto, seen wall-Roma delta 0min — UTC sarebbe
+~120 —, idempotenza secondo seen). Batteria completa rieseguita:
+pass3 4/4, improvements 11/11, mutations 11/11, quote-decision 10/10.

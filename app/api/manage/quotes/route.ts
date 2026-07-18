@@ -1,5 +1,6 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import { logActivity } from "@/lib/activity-log";
+import { businessNowDateTime } from "@/lib/business-datetime";
 import { searchGiftRecipientClients } from "@/lib/gift-issue-details";
 import {
   deleteManageQuoteLegacy,
@@ -157,7 +158,9 @@ export async function POST(request: Request) {
         clauses.push("tenant_id = ?");
         params.push(table.tenantId);
       }
-      await dbExecute(`UPDATE \`${table.name}\` SET customer_decision_seen_at = NOW() WHERE ${clauses.join(" AND ")}`, params);
+      // Wall-time di ROMA come customer_decision_at (classe TZ: NOW() del DB
+      // è UTC su Supabase e sfaserebbe il timestamp di lettura di 1-2 ore).
+      await dbExecute(`UPDATE \`${table.name}\` SET customer_decision_seen_at = ? WHERE ${clauses.join(" AND ")}`, [businessNowDateTime(), ...params]);
       return Response.json({
         ok: true,
         sourceMode: "database",

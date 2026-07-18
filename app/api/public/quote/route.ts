@@ -1,3 +1,4 @@
+import { businessTodayIso } from "@/lib/business-datetime";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { tenantSelect } from "@/lib/tenant-db";
 
@@ -76,10 +77,10 @@ export async function GET(request: Request) {
     }
     const validUntil = q.valid_until ? String(q.valid_until).slice(0, 10) : "";
     if (statusKey === "sent" && /^\d{4}-\d{2}-\d{2}$/.test(validUntil)) {
-      const t = new Date();
-      const pad = (n: number) => String(n).padStart(2, "0");
-      const today = `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}`;
-      if (validUntil < today) statusKey = "expired";
+      // OGGI di ROMA (classe TZ server-safe: i componenti locali del server
+      // sbaglierebbero giorno nella finestra serale su un server UTC — lo
+      // stato 'Scaduto' del link pubblico si accenderebbe col giorno sfasato).
+      if (validUntil < businessTodayIso()) statusKey = "expired";
     }
 
     // Client display name: snapshot first, then the linked client row.
