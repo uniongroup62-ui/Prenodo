@@ -15398,3 +15398,11 @@ e2e-qb-redeem-edit 28, e2e-gift-appt-cycle 12, quickbooking 35+21+16 +
 test-qb-log 6 + pass4 5, e2e-calendar-move 33, test-notifiche-pass2 10,
 e2e-clients 50. Pianifica riverificata: TZ-safe, rollback all-or-nothing
 già presente; GAP log (plan_create non logga) -> proposta.
+
+MIGLIORIA APPROVATA (post-pass Appuntamenti 2): plan_create logga la voce
+riassuntiva del batch DOPO il successo — appuntamenti/crea, "Pianificati
+N appuntamenti" (singolare "Pianificato appuntamento #id"), ids nei
+details; create respinta/0 senza voce. Suite test-plan-log 3/3 CLEAN
+(batch weekly da 2 con ids combacianti nei details; validazione respinta
+'"Alle ore" deve essere >= ...' senza voce). Regressione e2e-plan 14/14,
+test-appuntamenti 41/41, test-log-pass2 10/10.

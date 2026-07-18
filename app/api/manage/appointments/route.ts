@@ -588,6 +588,12 @@ export async function POST(request: Request) {
           return Response.json({ sourceMode: "database", ...preview });
         }
         const result = await planCreate(tenantSlug, body, planLocationId);
+        // Voce riassuntiva del batch (le create singole del drawer loggano già):
+        // DOPO il successo, id pianificati nei details.
+        const plannedIds = result.details.filter((d) => d.ok && Number(d.appointmentId ?? 0) > 0).map((d) => Number(d.appointmentId));
+        if (result.created > 0) {
+          void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "appuntamenti", action: "crea", entityType: "appointment", entityId: plannedIds[0] ?? 0, label: result.created === 1 ? `Pianificato appuntamento #${plannedIds[0] ?? 0}` : `Pianificati ${result.created} appuntamenti`, details: { ids: plannedIds } });
+        }
         return Response.json({
           sourceMode: "database",
           ...result,
