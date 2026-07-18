@@ -63,7 +63,7 @@
 }
 
 .consent-record-card {
-  border: 1px solid #e8f0ef;
+  border: 1px solid #e8ebf0;
   border-radius: 1rem;
   padding: 1rem 1.05rem;
   background: #fff;
@@ -71,8 +71,8 @@
 }
 
 .consent-record-card.is-draft {
-  border-color: #defaf6;
-  background: #fcfffe;
+  border-color: #d9e7ff;
+  background: #fcfdff;
 }
 
 .consent-record-card.is-pending {
@@ -87,7 +87,7 @@
 
 .consent-divider {
   height: 1px;
-  background: #edf5f4;
+  background: #edf1f5;
   margin: 1rem 0;
 }
 
@@ -108,10 +108,10 @@
   align-items: center;
   gap: .35rem;
   padding: .38rem .65rem;
-  border: 1px solid #e8f0ef;
+  border: 1px solid #e8ebf0;
   border-radius: 999px;
-  background: #f8fbfb;
-  color: #495755;
+  background: #f8f9fb;
+  color: #495057;
   font-size: .83rem;
 }
 
@@ -123,16 +123,16 @@
 
 .consent-upload-box {
   padding: .95rem;
-  border: 1px dashed #d7e7e5;
+  border: 1px dashed #d7dde7;
   border-radius: .85rem;
-  background: #fbfefe;
+  background: #fbfcfe;
 }
 
 .consent-empty-state {
-  border: 1px dashed #d7e7e5;
+  border: 1px dashed #d7dde7;
   border-radius: 1rem;
   padding: 1.35rem;
-  background: #fbfefe;
+  background: #fbfcfe;
   text-align: center;
   color: #6c757d;
 }

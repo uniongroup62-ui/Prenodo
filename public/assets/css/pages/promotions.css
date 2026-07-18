@@ -17,7 +17,7 @@
   margin:0 auto 18px;
   display:grid;
   place-items:center;
-  color:#9cc8c0;
+  color:#9db7ef;
   font-size:64px;
   line-height:1;
 }
@@ -48,7 +48,7 @@
   width:160px;
 }
 .promo-quick-panel{
-  background:#f8fafa;
+  background:#f8f9fa;
 }
 .promo-quick-type{
   min-width:170px;

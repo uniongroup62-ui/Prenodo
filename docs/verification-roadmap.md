@@ -15981,62 +15981,15 @@ computed-style bottone auth rgb(15,118,110)); e2e-booking-marketplace
 stash sul codice vecchio): hydration mismatch dev-only sulla pagina
 dettaglio attività.
 
-## 2026-07-18 — Retint GESTIONALE al teal (follow-up redesign, domanda utente
-## "nella dashboard rimane il blu?")
+## 2026-07-18 — ROLLBACK colori gestionale (scelta utente: "non mi piace,
+## solo il gestionale com'era")
 
-L'accent del gestionale (blu Bootstrap #0d6efd + varianti #0b5ed7/
-#0a58ca, blu Tailwind #2563eb/#1d4ed8/#3b82f6, focus ring
-rgba(13,110,253,*) e tinte chiare #cfe2ff/#e7f1ff/#dbeafe/#eff6ff/
-#dceaff) è stato mappato sul teal Prenodo in app.css + tutti i CSS di
-modulo + admin.css (22 file) — ora porta d'ingresso, marketplace,
-email e gestionale condividono lo stesso accent. Logo sidebar 'B' →
-'P'. NON toccati i colori-DATO: MS_STATUS_COLORS del calendario,
-CHART_COLORS dei report, palette staffColorHex.
-
-Verifica: tsc pulito; screenshot dashboard + calendario con sessione
-forgiata sede 21 (sidebar P teal, griglia giorno fedele, KPI ok).
-
-## 2026-07-18 — Skin CRM del gestionale unificata (fix del "blu vs verde")
-
-L'osservazione dell'utente era giusta: oltre all'accent Bootstrap già
-retintato, la SHELL del gestionale ha una skin propria con token
---crm-* in app.css che restava fuori: accent VERDE BRILLANTE #22c55e
-con !important (il '+ Prenotazione' e i primari in-shell), sidebar
-NAVY #191b32/#314563 e sfondo GRIGIO-AZZURRO #eef3fb. Era questo il
-mix blu/verde percepito.
-
-Unificazione: --crm-accent → teal #0f766e (+dark #0a5b54), sidebar →
-teal-ink scuro #152220/#101b19 (active #1f4a43, muted #9db3ad),
-sfondo app → neutro a bias teal #f1f4f3; grafico ricavi dashboard
-#2f63f4 → teal (assi su grigio-verde); colore evento DEFAULT del
-calendario #2f63f4 → teal (la palette staffColorHex per-operatore e i
-colori-dato di report/stati restano intatti).
-
-Verifica: tsc pulito; screenshot dashboard forgiata — '+ Prenotazione'
-teal, linea ricavi teal, sidebar teal-ink, P mark. Un solo accent da
-email a gestionale.
-
-## 2026-07-18 — Audit colori gestionale COMPLETO (richiesta utente)
-
-Censimento programmatico di TUTTI gli hex nei CSS (app.css + admin.css
-+ 30 pages/*.css) con classificazione per tonalità. Trovati e sanati i
-resti che il retint dell'accent non copriva:
-- #4e6da5 ×15 in app.css (variante del vecchio indaco marketplace,
-  sfuggita allo sweep su #4e6da6) + #2f63d8 ×7;
-- famiglia NAVY dei moduli legacy (#31518f ×28, #183b7a, #174bb8,
-  #061433/#071733/#06183f come inchiostri titoli, bordi azzurrini
-  #b9c9e2/#d2dbea/#d5dfed) → mappata su inchiostri/bordi teal;
-- icone empty-state azzurre #9db7ef in 17 CSS di modulo → teal soft;
-- fallback #93c5fd (staff-color/appt-soft-border) e blues di
-  onboarding/manage_account/locations → tinte teal;
-- CODA LUNGA (~85 hex unici): ROTAZIONE DI TONALITÀ programmatica
-  hue 205-262 → 172 (teal) preservando S/L, con keep-list per gli
-  slate Tailwind (#64748b, #0f172a, #475569…) e il blu Facebook.
-- calendar-content: tema stato 'scheduled' (il più comune) da indaco
-  a teal brand; palette DATI intatte (staffColorHex, STAFF_FALLBACK,
-  MS_STATUS, CHART_COLORS, --ms-accent viola multi-servizio).
-
-Censimento finale: restano SOLO slate neutri + #1877f2 Facebook.
-Verifica: tsc pulito; screenshot calendario/POS/clienti/appuntamenti
-— lista appuntamenti con inchiostri e badge teal, semantici intatti
-(attesa ambra, annullato scuro, elimina rosso).
+Revert dei 3 commit di retint del gestionale (af3559a accent,
+e6167f0 skin CRM, c9eb52d audit/rotazione): il gestionale torna al
+look ORIGINALE (sidebar navy, accent verde #22c55e sul + Prenotazione,
+blu Bootstrap sui primari, grafico ricavi blu, sfondo #eef3fb).
+CONSERVATI: il redesign del MARKETPLACE/superficie pubblica (45e38c9,
+incluse booking.css/booking-wizard.css/public_account.css tenute
+nella versione teal via checkout mirato), il brand unico Prenodo
+(nome + logo 'P' in sidebar, ri-applicato dopo il revert) e i fix
+email. tsc pulito; screenshot dashboard = look originale con P/Prenodo.

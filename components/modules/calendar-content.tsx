@@ -585,7 +585,7 @@ function renderMoveGhostBand(g: MoveGhost) {
     ? { bg: "rgba(220,38,38,.12)", border: "#dc2626", text: "#b91c1c" }
     : g.state === "warn"
       ? { bg: "rgba(245,158,11,.16)", border: "#d97706", text: "#92400e" }
-      : { bg: "rgba(15,118,110,.14)", border: "#0f766e", text: "#0a5b54" };
+      : { bg: "rgba(47,99,244,.14)", border: "#2f63f4", text: "#1d4ed8" };
   return (
     <div
       className={`cal-move-ghost is-${g.state}`}
@@ -622,9 +622,7 @@ function renderMoveGhostBand(g: MoveGhost) {
 type CalendarStatusTheme = { key: string; bg: string; border: string; accent: string; text: string; muted: string };
 const CALENDAR_STATUS_THEMES: Record<string, CalendarStatusTheme> = {
   pending: { key: "pending", bg: "#fff7ed", border: "#fed7aa", accent: "#f59e0b", text: "#7c2d12", muted: "#9a3412" },
-  // 'scheduled' = stato base del calendario: usa l'accent brand teal (gli
-  // altri stati restano su tinte semantiche distinte).
-  scheduled: { key: "scheduled", bg: "#e9f4f1", border: "#b5ded7", accent: "#0f766e", text: "#0e4f49", muted: "#475569" },
+  scheduled: { key: "scheduled", bg: "#eff6ff", border: "#bfdbfe", accent: "#4e6da5", text: "#1e3a8a", muted: "#475569" },
   done: { key: "done", bg: "#ecfdf5", border: "#bbf7d0", accent: "#22c55e", text: "#14532d", muted: "#166534" },
   canceled: { key: "canceled", bg: "#f1f5f9", border: "#94a3b8", accent: "#64748b", text: "#334155", muted: "#475569" },
   no_show: { key: "no_show", bg: "#f9fafb", border: "#d1d5db", accent: "#374151", text: "#111827", muted: "#4b5563" },
@@ -3139,7 +3137,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
                     // GHOST mese: cella di destinazione evidenziata durante il drag
                     // (il chip conserva l'ORARIO, cambia solo la data).
                     ...(moveGhost && moveGhost.col === `month-${iso}`
-                      ? { background: "rgba(15,118,110,.10)", boxShadow: "inset 0 0 0 2px #0f766e", borderRadius: 4 }
+                      ? { background: "rgba(47,99,244,.10)", boxShadow: "inset 0 0 0 2px #2f63f4", borderRadius: 4 }
                       : {}),
                   }}
                   // Drop target del drag chip (cambio DATA, orario conservato).

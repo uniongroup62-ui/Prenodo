@@ -19,7 +19,7 @@
   margin:0 auto 18px;
   display:grid;
   place-items:center;
-  color:#9cc8c0;
+  color:#9db7ef;
   font-size:64px;
   line-height:1;
 }
@@ -41,13 +41,13 @@
 .appointments-select-col{width:42px;}
 
 body:not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.appointments-page){
-  --appointments-bg:#eefbf9;
-  --appointments-ink:#0e211e;
-  --appointments-muted:#5c6f6b;
-  --appointments-line:#d8e5e1;
-  --appointments-line-soft:#e9f6f4;
-  --appointments-navy:#0e211e;
-  --appointments-blue:#0f766e;
+  --appointments-bg:#eef3fb;
+  --appointments-ink:#061433;
+  --appointments-muted:#405693;
+  --appointments-line:#d5dfed;
+  --appointments-line-soft:#e9eef6;
+  --appointments-navy:#06183f;
+  --appointments-blue:#2f63d8;
 }
 body:not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.appointments-page) .app-main{
   background:var(--appointments-bg);
@@ -60,7 +60,7 @@ body:not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.appoin
   padding:0;
 }
 .appointments-page-header .bs-page-kicker{
-  color:#22d3bb !important;
+  color:#0d55e8 !important;
   font-size:12px;
   font-weight:500;
 }
@@ -71,7 +71,7 @@ body:not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.appoin
   line-height:1.12;
 }
 .appointments-page-header .bs-page-subtitle{
-  color:#516a64;
+  color:#465b98;
   font-size:14px;
 }
 .appointments-page-header .bs-page-actions{
@@ -96,22 +96,22 @@ body:not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.appoin
 }
 .appointments-filter-field .form-label{
   margin-bottom:6px;
-  color:#2c6b63 !important;
+  color:#31518f !important;
   font-size:12px;
   font-weight:500;
 }
 .appointments-filter-field .form-control{
   min-height:36px;
-  border-color:#cfe8e5;
+  border-color:#cfd9e8;
   border-radius:7px;
   background-color:#fff;
-  color:#0e211e;
+  color:#071733;
   font-size:14px;
   box-shadow:none;
 }
 .appointments-filter-field .form-control:focus{
   border-color:var(--appointments-blue);
-  box-shadow:0 0 0 3px rgba(15,118,110,.12);
+  box-shadow:0 0 0 3px rgba(47,99,216,.12);
 }
 .appointments-filter-actions{
   display:flex;
@@ -129,23 +129,23 @@ body:not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.appoin
 }
 .appointments-filter-submit{
   min-width:78px;
-  border-color:#0f766e !important;
+  border-color:#2f63d8 !important;
   background:#fff !important;
-  color:#27dcc4 !important;
+  color:#1d5ee6 !important;
 }
 .appointments-filter-submit:hover{
-  background:#e9f4f1 !important;
-  color:#0c645c !important;
+  background:#eef5ff !important;
+  color:#174bb8 !important;
 }
 .appointments-filter-reset{
-  border-color:#d6e3df;
+  border-color:#d2dbea;
   background:#fff;
-  color:#2c6b63;
+  color:#31518f;
 }
 .appointments-filter-reset:hover{
-  border-color:#c0d5d0;
-  background:#e9f4f1;
-  color:#14524a;
+  border-color:#b9c9e2;
+  background:#eef5ff;
+  color:#183b7a;
 }
 .appointments-list-card{
   overflow:hidden;
@@ -162,10 +162,10 @@ body:not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.appoin
   gap:12px;
   padding:0 16px;
   border-bottom:1px solid var(--appointments-line);
-  background:#f9fefd;
+  background:#f9fbfe;
 }
 .appointments-selection-info{
-  color:#2c6b63;
+  color:#31518f;
   font-size:13px;
   font-weight:500;
 }
@@ -189,7 +189,7 @@ body:not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.appoin
 .appointments-table{
   --bs-table-bg:#fff;
   --bs-table-striped-bg:#f8fafc;
-  color:#0e211e;
+  color:#061433;
   font-family:inherit;
   font-size:14px;
   line-height:1.35;
@@ -198,8 +198,8 @@ body:not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.appoin
   height:34px;
   padding:9px 16px;
   border-bottom:1px solid var(--appointments-line);
-  background:#f5fbfa;
-  color:#338f83;
+  background:#f5f7fb;
+  color:#334b8f;
   font-family:inherit;
   font-size:12px;
   font-weight:600;
@@ -210,7 +210,7 @@ body:not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.appoin
 .appointments-table tbody td{
   padding:11px 16px;
   border-top:1px solid var(--appointments-line-soft);
-  color:#5c6f6b;
+  color:#405693;
   font-family:inherit;
   font-size:14px;
   font-weight:400;
@@ -218,11 +218,11 @@ body:not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.appoin
   vertical-align:middle;
 }
 .appointments-table tbody tr:hover td{
-  background:#f7faf9;
+  background:#f8fbff;
 }
 .appointments-table tbody td:nth-child(2),
 .appointments-table tbody td:nth-child(3){
-  color:#0e211e;
+  color:#061433;
 }
 .appointments-table tbody td:nth-child(2){
   white-space:nowrap;
@@ -241,7 +241,7 @@ body:not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.appoin
   width:14px;
   height:14px;
   margin-top:0;
-  border-color:#c7e5e1;
+  border-color:#c7d3e5;
   border-radius:3px;
 }
 .appointments-table .form-check-input:disabled{
@@ -256,14 +256,14 @@ body:not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.appoin
   line-height:1.2;
 }
 .appointments-table .btn-outline-secondary{
-  border-color:#d6e3df;
+  border-color:#d2dbea;
   background:#fff;
-  color:#2c6b63;
+  color:#31518f;
 }
 .appointments-table .btn-outline-secondary:hover{
-  border-color:#c0d5d0;
-  background:#e9f4f1;
-  color:#14524a;
+  border-color:#b9c9e2;
+  background:#eef5ff;
+  color:#183b7a;
 }
 .appointments-table .btn-outline-danger{
   border-color:#dc3545;
@@ -293,7 +293,7 @@ body:not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.appoin
   background:#f59e0b;
 }
 .appointments-status-badge--scheduled{
-  background:#0f766e;
+  background:#2f63d8;
 }
 .appointments-status-badge--done{
   background:#11a45f;
@@ -301,23 +301,23 @@ body:not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.appoin
 .appointments-status-badge--canceled,
 .appointments-status-badge--no-show,
 .appointments-status-badge--other{
-  background:#264f4a;
+  background:#26364f;
 }
 #appointmentsTable .ms-toggle{
-  color:#2c6b63;
+  color:#31518f;
 }
 #appointmentsTable .ms-toggle:hover{
-  color:#14524a;
+  color:#183b7a;
 }
 #appointmentsTable tr.ms-parent{
   background:#fff;
 }
 #appointmentsTable tr.ms-child td{
-  background:#f7faf9;
-  color:#529b91;
+  background:#f8fbff;
+  color:#52679b;
 }
 #appointmentsTable .ms-indent{
-  color:#8ad6cc;
+  color:#8aa3d6;
 }
 .op-color-dot{
   width:9px;

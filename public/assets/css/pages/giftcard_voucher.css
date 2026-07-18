@@ -18,7 +18,7 @@
 .voucher-meta .value{ font-weight:600; }
 #barcode{ width:100%; max-width:340px; height:80px; }
 .giftcard-voucher-logo{ max-height:64px; max-width:180px; object-fit:contain; }
-.giftcard-voucher-event-image{ width:100%; max-width:560px; height:auto; border-radius:14px; border:1px solid #e5ebea; display:block; }
+.giftcard-voucher-event-image{ width:100%; max-width:560px; height:auto; border-radius:14px; border:1px solid #e5e7eb; display:block; }
 .giftcard-voucher-note{ white-space:pre-wrap; }
 
 @media print{

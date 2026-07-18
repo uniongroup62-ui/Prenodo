@@ -18,16 +18,16 @@
 .manage-page .manage-url-status.is-neutral .manage-url-message{color:#64748b!important}
 .manage-url-suggestions-label{color:#64748b;font-size:10.5px;font-weight:600;margin-top:1px}
 .manage-url-suggestions{display:flex;flex-wrap:wrap;gap:6px}
-.manage-page button.manage-url-suggestion{appearance:none;-webkit-appearance:none;display:inline-flex;align-items:center;justify-content:center;min-height:26px;border:1px solid #c4e5df;background:#edf6f4;border-radius:999px;color:#0c645c;cursor:pointer;font-family:inherit;font-size:11px;font-weight:600;line-height:1;padding:6px 10px;box-shadow:none;text-decoration:none}
-.manage-page button.manage-url-suggestion:hover{border-color:#0f766e;background:#d3ece7;color:#1aa390}
-.manage-page button.manage-url-suggestion:focus-visible{outline:2px solid #0f766e;outline-offset:2px}
+.manage-page button.manage-url-suggestion{appearance:none;-webkit-appearance:none;display:inline-flex;align-items:center;justify-content:center;min-height:26px;border:1px solid #bfdbfe;background:#eff6ff;border-radius:999px;color:#0f57d4;cursor:pointer;font-family:inherit;font-size:11px;font-weight:600;line-height:1;padding:6px 10px;box-shadow:none;text-decoration:none}
+.manage-page button.manage-url-suggestion:hover{border-color:#2563eb;background:#dbeafe;color:#0b4ab2}
+.manage-page button.manage-url-suggestion:focus-visible{outline:2px solid #2563eb;outline-offset:2px}
 .manage-empty{border:1px dashed #cbd5e1;border-radius:12px;background:#f8fafc;padding:16px;display:grid;gap:6px;color:#334155}
 .manage-empty strong{font-size:15px}
 .manage-empty p{margin:0;font-size:13px;line-height:1.5}
 .manage-empty .muted{color:#64748b}
 .manage-code-input{text-align:center;font-size:24px;font-weight:600;letter-spacing:8px}
 .manage-resend{margin-top:12px}
-.manage-link-button{appearance:none;border:0;background:transparent;color:#1ba895;font-weight:600;font-size:13px;padding:0;cursor:pointer}
+.manage-link-button{appearance:none;border:0;background:transparent;color:#0f6db4;font-weight:600;font-size:13px;padding:0;cursor:pointer}
 .manage-link-button:hover{text-decoration:underline}
 .manage-visual .product-device{right:-176px;bottom:-88px;opacity:.9}
 @media (max-width:900px){

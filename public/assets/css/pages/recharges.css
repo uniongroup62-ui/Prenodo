@@ -7,11 +7,11 @@
   align-items: flex-start;
   gap: 12px;
   padding: 16px 18px;
-  border: 1px solid #bff4ed;
-  border-left: 4px solid #0f766e;
+  border: 1px solid #bfd5f4;
+  border-left: 4px solid #2f63d8;
   border-radius: 10px;
-  background: #f5fdfc;
-  color: #14524a;
+  background: #f3f8ff;
+  color: #183b7a;
   box-shadow: none;
 }
 
@@ -22,8 +22,8 @@
   display: grid;
   place-items: center;
   border-radius: 9px;
-  background: #dcefeb;
-  color: #0f766e;
+  background: #dceaff;
+  color: #2f63d8;
   font-size: 16px;
 }
 
@@ -33,7 +33,7 @@
 
 .recharges-info-box__title {
   margin-bottom: 6px;
-  color: #0e211e;
+  color: #06183f;
   font-size: 14px;
   font-weight: 600;
   line-height: 1.25;
@@ -41,7 +41,7 @@
 
 .recharges-info-box__text,
 .recharges-info-box__list {
-  color: #2c6b63;
+  color: #31518f;
   font-size: 13px;
   line-height: 1.45;
 }

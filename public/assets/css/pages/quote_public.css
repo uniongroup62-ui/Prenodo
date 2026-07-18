@@ -1,5 +1,5 @@
-body.embed-body{ background:#f3f6f6; }
-body.embed-body main{ background:#f3f6f6; min-height:100vh; }
+body.embed-body{ background:#f3f4f6; }
+body.embed-body main{ background:#f3f4f6; min-height:100vh; }
 .quote-parties{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:28px;align-items:start;}
 .quote-party{min-width:0;}
 .quote-party + .quote-party{border-left:1px solid #e2e8f0;padding-left:28px;}
@@ -8,7 +8,7 @@ body.embed-body main{ background:#f3f6f6; min-height:100vh; }
 .quote-party__rows{display:grid;gap:7px;}
 .quote-party__row{display:grid;grid-template-columns:88px minmax(0,1fr);gap:6px;align-items:baseline;}
 .quote-party__label{font-size:12px;font-weight:600;color:#64748b;}
-.quote-party__value{font-size:13px;line-height:1.35;color:#1f3734;word-break:break-word;}
+.quote-party__value{font-size:13px;line-height:1.35;color:#1f2937;word-break:break-word;}
 .quote-party__empty{font-size:13px;color:#64748b;}
 .quote-party > .fw-semibold,
 .quote-party > .quote-prewrap,
