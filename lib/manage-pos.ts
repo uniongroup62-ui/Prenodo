@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomBytes } from "node:crypto";
-import type { RowDataPacket } from "@/lib/tenant-db";
+import type { RowDataPacket, TenantTable, TenantTxQuery } from "@/lib/tenant-db";
 import { businessTodayIso, businessNowDateTime } from "@/lib/business-datetime";
 import type {
   ManagedProduct,
@@ -44,6 +44,7 @@ import {
   quoteIdentifier,
   tenantDelete,
   tenantInsert,
+  tenantInsertTx,
   tenantSelect,
   tenantTable,
   tenantUpdate,
@@ -885,7 +886,7 @@ export async function checkoutManageSale(
   if (planNetTotal > 0.00001) legacyNoteLines.push(`Tipo pagamento: ${LEGACY_PAYMENT_TYPE_LABELS[baseMethod] ?? ""}`.trimEnd());
 
   const salesTable = await tenantTable(slug, "sales");
-  const saleId = await tenantInsert(salesTable, await filterColumns(salesTable.name, {
+  const saleValues = await filterColumns(salesTable.name, {
     client_id: client.id > 0 ? client.id : null,
     sale_date: businessNowDateTime(),
     subtotal,
@@ -918,24 +919,57 @@ export async function checkoutManageSale(
     // Persist the faithful base payment method. Schema-guarded: a no-op on installs
     // without the column (the notes marker keeps derivePayments correct regardless).
     payment_methods: JSON.stringify({ base: baseMethod }),
-  }));
+  });
 
-  // RECORD the promotion redemption (port of Promotions::reserveSaleUse): one
-  // promotion_redemptions row linked to the sale, reversed on void (deleted in
-  // cancelLinkedSaleResidues). Schema-guarded via filterColumns.
-  if (promoApplied && promoDiscount > 0) {
-    const redTable = await tenantTable(slug, "promotion_redemptions").catch(() => null);
-    if (redTable) {
-      await tenantInsert(redTable, await filterColumns(redTable.name, {
+  // CORE STRUTTURALE ATOMICO (parità col beginTransaction del checkout legacy,
+  // pos.php 4780): riga sales + promotion_redemption + TUTTE le righe
+  // sale_items + piano rate/rate in UNA withTenantTransaction — un errore a
+  // metà non lascia mai una vendita senza righe o senza piano in
+  // Movimenti/Report. I SATELLITI (stock, consumi residui, emissioni
+  // GiftCard/GiftBox/pacchetti/ricariche, omaggi, preventivo) restano
+  // sequenziali DOPO, come attestato (catena cross-engine non transazionale).
+  const redTableTx = promoApplied && promoDiscount > 0 ? await tenantTable(slug, "promotion_redemptions").catch(() => null) : null;
+  const saleItemIds: number[] = [];
+  const saleId = await withTenantTransaction(slug, async (txq) => {
+    const newSaleId = await tenantInsertTx(txq, salesTable, saleValues);
+    // RECORD the promotion redemption (port of Promotions::reserveSaleUse): one
+    // promotion_redemptions row linked to the sale, reversed on void (deleted in
+    // cancelLinkedSaleResidues). Schema-guarded via filterColumns.
+    if (redTableTx && promoApplied) {
+      await tenantInsertTx(txq, redTableTx, await filterColumns(redTableTx.name, {
         promotion_id: promoApplied.id,
         client_id: client.id > 0 ? client.id : null,
-        sale_id: saleId,
+        sale_id: newSaleId,
         discount_amount: promoDiscount,
         location_id: locationId,
         redeemed_at: businessNowDateTime(),
-      })).catch(() => 0);
+      }));
     }
-  }
+    for (const item of items) {
+      saleItemIds.push(await insertSaleItem(slug, newSaleId, item, txq));
+    }
+    // RATEIZZAZIONE dentro il core (pos.php: SaleInstallments::createPlan nella
+    // stessa tx della vendita). Guardie invariate; con txq gli errori risalgono
+    // (rollback dell'intero core) invece del vecchio swallow best-effort.
+    const planTx = activePlan;
+    if (planTx && client.id > 0 && total > 0.00001 && Math.max(1, Math.round(planTx.count)) >= 2) {
+      await createManageInstallmentPlan(slug, {
+        saleId: newSaleId,
+        clientId: client.id,
+        // Totale NETTO dei residui (semantica legacy: il finanziato è netTotal - acconto).
+        total: planNetTotal,
+        downPayment: planTx.downPayment ?? 0,
+        count: planTx.count,
+        intervalValue: planTx.intervalValue ?? 1,
+        intervalUnit: planTx.intervalUnit ?? "month",
+        firstDueDate: planTx.firstDueDate ?? "",
+        note: planTx.note ?? "",
+        paymentType: baseMethod,
+        createdBy: operator.id,
+      }, txq);
+    }
+    return newSaleId;
+  });
 
   // CONSUME the residui, linking each consumption to the sale id so a later void can
   // restore it (cancelLinkedSaleResidues reverses both). GiftCard first, then credit.
@@ -996,8 +1030,9 @@ export async function checkoutManageSale(
   const createdClientPackages: number[] = [];
   const createdRecharges: number[] = [];
 
-  for (const item of items) {
-    const saleItemId = await insertSaleItem(slug, saleId, item);
+  for (const [itemIdx, item] of items.entries()) {
+    // Riga già inserita nel core transazionale: qui SOLO i satelliti per-riga.
+    const saleItemId = saleItemIds[itemIdx] ?? 0;
     if ((item.type === "service" || item.type === "product") && item.refId > 0) {
       giftLines.push({ type: item.type, refId: item.refId, qty: item.quantity, lineTotal: item.total, saleItemId });
     }
@@ -1073,30 +1108,8 @@ export async function checkoutManageSale(
     await giftRecordSale(slug, saleId, client.id, giftLines, subtotal, discount, locationId).catch(() => undefined);
   }
 
-  // RATEIZZAZIONE: when a rate plan was configured (count >= 2) AND the sale has a real
-  // client + a positive total, write the sale_installment_plans row + N sale_installments
-  // rows scheduling the financed remainder (total - downPayment). Faithful to pos.php's
-  // `SaleInstallments::createPlan` call after the sale insert. The sale total + payments are
-  // unchanged: the plan only schedules the financing (the down payment is collected at the
-  // sale, the remainder over the installments). A bench sale (no client) or a single payment
-  // skips this — mirroring the legacy `client_id <= 0` guard in createPlan.
-  const plan = activePlan;
-  if (plan && client.id > 0 && total > 0.00001 && Math.max(1, Math.round(plan.count)) >= 2) {
-    await createManageInstallmentPlan(slug, {
-      saleId,
-      clientId: client.id,
-      // Totale NETTO dei residui (semantica legacy: il finanziato è netTotal - acconto).
-      total: planNetTotal,
-      downPayment: plan.downPayment ?? 0,
-      count: plan.count,
-      intervalValue: plan.intervalValue ?? 1,
-      intervalUnit: plan.intervalUnit ?? "month",
-      firstDueDate: plan.firstDueDate ?? "",
-      note: plan.note ?? "",
-      paymentType: baseMethod,
-      createdBy: operator.id,
-    });
-  }
+  // RATEIZZAZIONE: spostata nel CORE transazionale sopra (pos.php la scrive
+  // nella stessa tx della vendita).
 
   // IN-POS quote import: flip the source quote to 'converted' now the sale exists (faithful to
   // QuoteSale::mark_quote_paid — the Next quote lifecycle uses 'converted'/converted_sale_id, not
@@ -1164,6 +1177,7 @@ async function createManageInstallmentPlan(
     paymentType: PosPaymentMethod;
     createdBy: number | null;
   },
+  txq?: TenantTxQuery,
 ): Promise<void> {
   try {
     const saleTotal = roundMoney(Math.max(0, input.total));
@@ -1202,7 +1216,8 @@ async function createManageInstallmentPlan(
     const lastDue = schedule.length ? schedule[schedule.length - 1].dueDate : firstDue;
 
     const plansTable = await tenantTable(slug, "sale_installment_plans");
-    const planId = await tenantInsert(plansTable, await filterColumns(plansTable.name, {
+    const insertRow = (t: TenantTable, v: Record<string, unknown>) => (txq ? tenantInsertTx(txq, t, v) : tenantInsert(t, v));
+    const planId = await insertRow(plansTable, await filterColumns(plansTable.name, {
       sale_id: input.saleId,
       client_id: input.clientId,
       payment_type: paymentType,
@@ -1249,8 +1264,11 @@ async function createManageInstallmentPlan(
         updated_by: input.createdBy,
       }));
     }
-  } catch {
-    // Optional module/table can be absent in older installs.
+  } catch (error) {
+    // Optional module/table can be absent in older installs. DENTRO una tx gli
+    // errori devono risalire (lo swallow lascerebbe la tx abortita e il core
+    // proseguirebbe su statement morti): rollback dell'intero checkout.
+    if (txq) throw error;
   }
 }
 
@@ -4523,7 +4541,7 @@ async function packageItemTypeAllowed(): Promise<boolean> {
   return packageItemTypeAllowedCache;
 }
 
-async function insertSaleItem(slug: string, saleId: number, item: PosSaleItem): Promise<number> {
+async function insertSaleItem(slug: string, saleId: number, item: PosSaleItem, txq?: TenantTxQuery): Promise<number> {
   const table = await tenantTable(slug, "sale_items");
   // item_type/item_id fedeli agli INSERT legacy (pos.php 5145/5451/5511/5632):
   // giftcard/giftbox -> 'product' item_id NULL; ricarica -> 'product' item_id 0;
@@ -4550,7 +4568,7 @@ async function insertSaleItem(slug: string, saleId: number, item: PosSaleItem): 
   if (item.type === "product" && String(item.status ?? "").toLowerCase() === "ordered") {
     preorderExpiresAt = await preorderExpiryForPurchaseDate(slug, todayIso()).catch(() => null);
   }
-  return tenantInsert(table, await filterColumns(table.name, {
+  const values = await filterColumns(table.name, {
     sale_id: saleId,
     item_type: storedType,
     item_id: itemId,
@@ -4560,7 +4578,8 @@ async function insertSaleItem(slug: string, saleId: number, item: PosSaleItem): 
     line_total: item.total,
     item_status: item.status,
     preorder_expires_at: preorderExpiresAt,
-  }));
+  });
+  return txq ? tenantInsertTx(txq, table, values) : tenantInsert(table, values);
 }
 
 async function resolveSaleClient(slug: string, clientId: number, clientName?: string): Promise<{ id: number; name: string }> {

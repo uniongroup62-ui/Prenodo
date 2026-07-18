@@ -15447,3 +15447,24 @@ ATTESTAZIONE: il checkout resta NON transazionale cross-engine (il
 legacy pos.php 4780 è in tx unica) — stessa classe di cancelDone/apply
 QB; il core strutturale (sale+items+piano rate) in tx = miglioria
 proposta.
+
+MIGLIORIA APPROVATA (post-pass Pagamenti 2): CORE CHECKOUT ATOMICO —
+riga sales + promotion_redemption + TUTTE le righe sale_items + piano
+rate/rate in UNA withTenantTransaction (parità col beginTransaction di
+pos.php 4780). Satelliti (consumi residui, stock, emissioni
+GiftCard/GiftBox/pacchetti/ricariche, omaggi, preventivo) sequenziali
+DOPO come attestato. Implementazione: tenantInsertTx (variante tx-aware
+di tenantInsert con RETURNING id, tenant_id schema-guarded) in
+tenant-db; insertSaleItem/createManageInstallmentPlan con executor
+opzionale — dentro la tx gli errori RISALGONO (lo swallow storico del
+piano lascerebbe la tx abortita); loop items SPEZZATO: insert nel core,
+satelliti nel secondo giro sugli id raccolti. Nota probe: un item con
+status invalido viene NORMALIZZATO/scartato a monte (non è un modo per
+forzare il rollback); l'atomicità poggia sul motore withTenantTransaction
+condiviso (già provato dai delete transazionali).
+
+Regressione COMPLETA verde: test-pagamenti-pass2 5/5, test-pagamenti
+13+15+11, e2e-pos-logic 16 (piani rate 3 esercitano il nuovo core),
+e2e-pos-audit 6+14, e2e-pos-detail-v4 13, e2e-pos-gift 11,
+e2e-pos-success 12, test-pos-* 2+8+5+2, test-commissioni-full 30,
+e2e-commissions 32.

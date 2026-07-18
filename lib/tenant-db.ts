@@ -215,6 +215,21 @@ export async function tenantSelect<T extends RowDataPacket = RowDataPacket>({
   return dbQuery<T[]>(sql, queryParams);
 }
 
+// Variante tx-aware di tenantInsert: stesso schema-guard/tenant_id, ma esegue
+// sull'executor della withTenantTransaction e ritorna l'id via RETURNING (gli
+// errori NON vanno mai inghiottiti dentro una tx PG: abortirebbero il resto).
+export async function tenantInsertTx(q: TenantTxQuery, table: TenantTable, values: Record<string, unknown>): Promise<number> {
+  const entries = Object.entries(values).filter(([, value]) => value !== undefined);
+  if (table.mode === "shared" && table.tenantId && !entries.some(([key]) => key === "tenant_id") && await columnExists(table.name, "tenant_id")) {
+    entries.unshift(["tenant_id", table.tenantId]);
+  }
+  const columns = entries.map(([key]) => quoteIdentifier(key)).join(",");
+  const placeholders = entries.map(() => "?").join(",");
+  const params = entries.map(([, value]) => value);
+  const rows = await q(`INSERT INTO ${quoteIdentifier(table.name)} (${columns}) VALUES (${placeholders}) RETURNING id`, params);
+  return Number(rows[0]?.id ?? 0);
+}
+
 export async function tenantInsert(table: TenantTable, values: Record<string, unknown>): Promise<number> {
   const entries = Object.entries(values).filter(([, value]) => value !== undefined);
   if (table.mode === "shared" && table.tenantId && !entries.some(([key]) => key === "tenant_id") && await columnExists(table.name, "tenant_id")) {
