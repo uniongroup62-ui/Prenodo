@@ -15533,3 +15533,15 @@ test-costs-completions 9/9, -fixes 14/14, -minors 4/4, test-dashboard
 GAP noto (proposta): il modulo Costi NON logga nel registro attività
 (nessuna logActivity su save/delete/toggle/categorie — unico dominio
 mutativo rimasto scoperto).
+
+MIGLIORIA APPROVATA (post-pass Costi 4): LOG ATTIVITÀ del modulo NUOVO
+'costi' (label in mappa pagina Log) — copertura completa DOPO il
+successo: save 'Creato/Modificato costo "titolo"', delete/bulk
+'Eliminato costo #id'/'Eliminati N costi' (ids nei details), toggle
+'Costo #id segnato pagato/da pagare' (azione paga/modifica, stato letto
+POST-toggle), categorie crea/modifica/elimina + toggle
+attivata/disattivata + bulk. Le lib THROWANO su errore -> nessuna voce
+sulle respinte. Registro a 25 moduli: nessun dominio mutativo scoperto.
+Suite test-costi-log 5/5 CLEAN; regressione test-costi-pass4 10/10,
+e2e-costs 52/52, test-costs-fixes 14/14, test-log-pass2 10/10.
+Bonifica 25 voci log batteria.

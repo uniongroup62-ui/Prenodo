@@ -84,6 +84,7 @@ const MODULE_LABELS: Record<string, string> = {
   cabine: "Cabine",
   automazioni: "Automazioni",
   calendario: "Calendario",
+  costi: "Costi",
   servizi: "Servizi",
   impostazioni: "Impostazioni",
 };

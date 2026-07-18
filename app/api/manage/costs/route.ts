@@ -1,3 +1,4 @@
+import { logActivity } from "@/lib/activity-log";
 import { businessNowDateTime } from "@/lib/business-datetime";
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import { renderCostsPdf } from "@/lib/cost-pdf";
@@ -18,6 +19,8 @@ import {
 import { getManageLocationContext, resolveManageLocationId } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can, canAny } from "@/lib/role-permissions";
+import type { RowDataPacket } from "@/lib/tenant-db";
+import { tenantSelect } from "@/lib/tenant-db";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -245,48 +248,103 @@ export async function POST(request: Request) {
       case "save_cost":
       case "cost_save":
         if (!canAny(session.user.perms, workPerms)) return jsonError("Permesso Scadenziario richiesto.", 403);
-        return Response.json(await saveCost(tenantSlug, { ...body, location_id: body.location_id || String(locationId) }, locationId, allowedIds));
+      {
+        // Log DOPO il successo (le lib THROWANO su errore → il catch sotto
+        // risponde senza voce). Titolo nella label; id 0 sulle create (il save
+        // non espone l'id creato).
+        const saveEditId = parseInteger(body.id ?? body.cost_id, 0);
+        const result = await saveCost(tenantSlug, { ...body, location_id: body.location_id || String(locationId) }, locationId, allowedIds);
+        const costTitle = String(body.title ?? "").trim().slice(0, 120);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "costi", action: saveEditId > 0 ? "modifica" : "crea", entityType: "cost", entityId: saveEditId, label: `${saveEditId > 0 ? "Modificato" : "Creato"} costo "${costTitle}"` });
+        return Response.json(result);
+      }
 
       case "delete":
       case "cost_delete":
         if (!canAny(session.user.perms, workPerms)) return jsonError("Permesso Scadenziario richiesto.", 403);
-        return Response.json(await deleteCost(tenantSlug, parseInteger(body.id ?? body.cost_id, 0), locationId, allowedIds));
+      {
+        const delId = parseInteger(body.id ?? body.cost_id, 0);
+        const result = await deleteCost(tenantSlug, delId, locationId, allowedIds);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "costi", action: "elimina", entityType: "cost", entityId: delId, label: `Eliminato costo #${delId}` });
+        return Response.json(result);
+      }
 
       case "bulk_delete":
       case "bulk_delete_costs":
         if (!canAny(session.user.perms, workPerms)) return jsonError("Permesso Scadenziario richiesto.", 403);
-        return Response.json(await deleteCostsBulk(tenantSlug, parseCostIds(body.cost_ids ?? body.ids), locationId, allowedIds));
+      {
+        const bulkIds = parseCostIds(body.cost_ids ?? body.ids);
+        const result = await deleteCostsBulk(tenantSlug, bulkIds, locationId, allowedIds);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "costi", action: "elimina", entityType: "cost", entityId: bulkIds[0] ?? 0, label: bulkIds.length === 1 ? `Eliminato costo #${bulkIds[0]}` : `Eliminati ${bulkIds.length} costi`, details: { ids: bulkIds } });
+        return Response.json(result);
+      }
 
       case "pay":
       case "toggle_paid":
       case "cost_toggle_paid":
         if (!canAny(session.user.perms, workPerms)) return jsonError("Permesso Scadenziario richiesto.", 403);
-        return Response.json(await toggleCostPaid(tenantSlug, parseInteger(body.id ?? body.cost_id, 0), locationId, allowedIds));
+      {
+        const toggleId = parseInteger(body.id ?? body.cost_id, 0);
+        const result = await toggleCostPaid(tenantSlug, toggleId, locationId, allowedIds);
+        // Stato POST-toggle per la label (query minima dopo il successo).
+        const paidRow = await tenantSelect<RowDataPacket>({ slug: tenantSlug, table: "costs", columns: "is_paid", where: "id = ?", params: [toggleId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+        const nowPaid = Number(paidRow[0]?.is_paid ?? 0) === 1;
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "costi", action: nowPaid ? "paga" : "modifica", entityType: "cost", entityId: toggleId, label: `Costo #${toggleId} segnato ${nowPaid ? "pagato" : "da pagare"}` });
+        return Response.json(result);
+      }
 
       case "save_category":
       case "category_save":
       case "cost_category_save":
         if (!can(session.user.perms, "costs.categories")) return jsonError("Permesso Categorie costi richiesto.", 403);
-        return Response.json(await saveCostCategory(tenantSlug, body));
+      {
+        const catEditId = parseInteger(body.id ?? body.category_id, 0);
+        const result = await saveCostCategory(tenantSlug, body);
+        const catName = String(body.name ?? "").trim().slice(0, 120);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "costi", action: catEditId > 0 ? "modifica" : "crea", entityType: "cost_category", entityId: catEditId, label: `${catEditId > 0 ? "Modificata" : "Creata"} categoria costi "${catName}"` });
+        return Response.json(result);
+      }
 
       case "delete_category":
       case "category_delete":
       case "cost_category_delete":
         if (!can(session.user.perms, "costs.categories")) return jsonError("Permesso Categorie costi richiesto.", 403);
-        return Response.json(await deleteCostCategory(tenantSlug, parseInteger(body.id ?? body.category_id, 0)));
+      {
+        const catDelId = parseInteger(body.id ?? body.category_id, 0);
+        const result = await deleteCostCategory(tenantSlug, catDelId);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "costi", action: "elimina", entityType: "cost_category", entityId: catDelId, label: `Eliminata categoria costi #${catDelId}` });
+        return Response.json(result);
+      }
 
       case "toggle_category":
       case "category_toggle":
         if (!can(session.user.perms, "costs.categories")) return jsonError("Permesso Categorie costi richiesto.", 403);
-        return Response.json(await toggleCostCategory(tenantSlug, parseInteger(body.id ?? body.category_id, 0)));
+      {
+        const catToggleId = parseInteger(body.id ?? body.category_id, 0);
+        const result = await toggleCostCategory(tenantSlug, catToggleId);
+        const catRow = await tenantSelect<RowDataPacket>({ slug: tenantSlug, table: "cost_categories", columns: "is_active", where: "id = ?", params: [catToggleId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+        const nowActive = Number(catRow[0]?.is_active ?? 0) === 1;
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "costi", action: nowActive ? "riattiva" : "disattiva", entityType: "cost_category", entityId: catToggleId, label: `Categoria costi #${catToggleId} ${nowActive ? "attivata" : "disattivata"}` });
+        return Response.json(result);
+      }
 
       case "bulk_deactivate_categories":
         if (!can(session.user.perms, "costs.categories")) return jsonError("Permesso Categorie costi richiesto.", 403);
-        return Response.json(await deactivateCostCategoriesBulk(tenantSlug, parseCostIds(body.category_ids ?? body.ids)));
+      {
+        const catIds = parseCostIds(body.category_ids ?? body.ids);
+        const result = await deactivateCostCategoriesBulk(tenantSlug, catIds);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "costi", action: "disattiva", entityType: "cost_category", entityId: catIds[0] ?? 0, label: `Disattivate ${catIds.length} categorie costi`, details: { ids: catIds } });
+        return Response.json(result);
+      }
 
       case "bulk_delete_categories":
         if (!can(session.user.perms, "costs.categories")) return jsonError("Permesso Categorie costi richiesto.", 403);
-        return Response.json(await deleteCostCategoriesBulk(tenantSlug, parseCostIds(body.category_ids ?? body.ids)));
+      {
+        const catDelIds = parseCostIds(body.category_ids ?? body.ids);
+        const result = await deleteCostCategoriesBulk(tenantSlug, catDelIds);
+        void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "costi", action: "elimina", entityType: "cost_category", entityId: catDelIds[0] ?? 0, label: `Eliminate ${catDelIds.length} categorie costi`, details: { ids: catDelIds } });
+        return Response.json(result);
+      }
 
       default:
         return jsonError("Azione costi non supportata.", 400);
