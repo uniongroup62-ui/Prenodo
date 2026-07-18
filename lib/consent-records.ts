@@ -11,7 +11,7 @@ import "server-only";
 // Con SES il From resta il dominio verificato: l'email del business va in
 // Reply-To (il legacy la usava come From diretto — non possibile via SES).
 
-import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
+import { brandedSubject, buildModernEmailTemplate, emailButton, emailConfigured, sendEmail } from "@/lib/email";
 import {
   privacyClientDisplayName,
   privacyClientFilename,
@@ -300,11 +300,12 @@ async function safeSendHtmlMail(to: string, subject: string, bodyHtml: string, b
   let replyTo = clean(biz.quote_email) || clean(biz.email) || undefined;
   if (replyTo && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(replyTo)) replyTo = undefined;
   try {
-    const { html, text } = buildModernEmailTemplate(subject, bodyHtml, {
+    const fullSubject = brandedSubject(fromName ?? "", subject);
+    const { html, text } = buildModernEmailTemplate(fullSubject, bodyHtml, {
       business_name: fromName ?? "",
       business_email: replyTo ?? "",
     });
-    const res = await sendEmail({ to, subject, html, text, fromName, replyTo });
+    const res = await sendEmail({ to, subject: fullSubject, html, text, fromName, replyTo });
     return res.ok;
   } catch {
     return false;
@@ -312,7 +313,7 @@ async function safeSendHtmlMail(to: string, subject: string, bodyHtml: string, b
 }
 
 function buttonHtml(url: string, label: string): string {
-  return `<p style="margin:20px 0"><a href="${escapeHtml(url)}" style="display:inline-block;padding:12px 18px;border-radius:8px;background:#8a1d52;color:#fff;text-decoration:none;font-weight:600">${label}</a></p>`;
+  return `<p style="margin:20px 0">${emailButton(url, label)}</p>`;
 }
 
 function linkFallbackHtml(url: string): string {
@@ -343,8 +344,7 @@ export async function privacySendOfficialPdfEmail(client: RowDataPacket, biz: Ro
     `<p>Ciao ${escapeHtml(name)},</p>` +
     "<p>Puoi visualizzare o scaricare il tuo documento privacy firmato dal link qui sotto.</p>" +
     buttonHtml(url, "Apri il PDF privacy firmato") +
-    linkFallbackHtml(url) +
-    `<p>Grazie,<br>${escapeHtml(businessName)}</p>`;
+    linkFallbackHtml(url);
   return safeSendHtmlMail(to, "Il tuo documento privacy firmato", body, biz);
 }
 
@@ -374,7 +374,6 @@ export async function consentSendOfficialPdfEmail(client: RowDataPacket, biz: Ro
     `<p>Ciao ${escapeHtml(name)},</p>` +
     `<p>Puoi visualizzare o scaricare il modulo firmato <strong>${escapeHtml(moduleName)}</strong> dal link qui sotto.</p>` +
     buttonHtml(url, "Apri il PDF firmato") +
-    linkFallbackHtml(url) +
-    `<p>Grazie,<br>${escapeHtml(businessName)}</p>`;
+    linkFallbackHtml(url);
   return safeSendHtmlMail(to, `Il tuo modulo firmato: ${moduleName}`, body, biz);
 }

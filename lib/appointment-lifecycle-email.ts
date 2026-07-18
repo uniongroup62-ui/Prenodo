@@ -288,13 +288,15 @@ export async function sendAppointmentLifecycleEmail(args: {
     if (to === "") return false;
 
     const msg = buildLifecycleEmail(kind, row, biz);
+    // Pattern SES: From verificato + fromName attività + replyTo attività
+    // (un fromEmail tenant non verificato viene RIFIUTATO da SES).
     const res = await sendEmail({
       to,
       subject: msg.subject,
       html: msg.html,
       text: msg.text,
-      fromEmail: String(biz?.email ?? "") || undefined,
       fromName: String(biz?.name ?? "") || undefined,
+      replyTo: String(biz?.email ?? "").trim() || undefined,
     });
     if (!res.ok) {
       console.error(`[appointment-lifecycle-email] send failed (${kind}, appt ${appointmentId}): ${res.error ?? "unknown"}`);

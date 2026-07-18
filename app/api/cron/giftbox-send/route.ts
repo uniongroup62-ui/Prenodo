@@ -1,7 +1,7 @@
 import { activeTenantSlugs, assertCronAuth } from "@/lib/cron";
 import { businessNowDateTime, businessTodayIso } from "@/lib/business-datetime";
 import { dbExecute, dbQuery, tenantIdForSlug } from "@/lib/tenant-db";
-import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
+import { brandedSubject, buildModernEmailTemplate, emailButton, emailConfigured, sendEmail } from "@/lib/email";
 import type { RowDataPacket } from "@/lib/tenant-db";
 
 export const dynamic = "force-dynamic";
@@ -153,9 +153,7 @@ function buildGiftBoxEmail(params: {
   const evEmoji = ev.emoji || "🎁";
 
   // Subject: "<eventSubject> [<code>] - <bizName>" (clamped to 160).
-  let subject = evSubjectBase;
-  if (code !== "") subject += " " + code;
-  subject += " - " + bizName;
+  let subject = brandedSubject(bizName, code !== "" ? `${evSubjectBase} ${code}` : evSubjectBase);
   if (subject.length > 160) subject = subject.slice(0, 160);
 
   const validFrom = fmtDate(issuedAt);
@@ -276,12 +274,9 @@ function buildGiftBoxEmail(params: {
 
   // Voucher / claim button (only if we could build a claim URL).
   if (voucherUrl !== "") {
-    const safeVoucher = h(voucherUrl);
     html +=
       '<div style="text-align:center;margin:0 0 18px 0;">' +
-      '<a href="' +
-      safeVoucher +
-      '" style="display:inline-block;background:#0f766e;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:12px;font-weight:600;letter-spacing:.2px">Vedi Voucher</a>' +
+      emailButton(voucherUrl, "Vedi Voucher") +
       "</div>";
   }
 

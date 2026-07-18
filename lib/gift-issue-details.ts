@@ -19,7 +19,7 @@ import "server-only";
 import { randomBytes } from "crypto";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { dbExecute, dbQuery, tenantInsert, tenantSelect, tenantTable, tenantUpdate, columnExists } from "@/lib/tenant-db";
-import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
+import { brandedSubject, buildModernEmailTemplate, EMAIL_ACCENT, emailButton, emailConfigured, sendEmail } from "@/lib/email";
 
 const clean = (v: unknown): string => String(v ?? "").trim();
 const todayIso = (): string => {
@@ -1433,9 +1433,7 @@ export async function sendGiftBoxInstanceEmail(slug: string, id: number, toRaw: 
   const biz = bizRows[0] ?? null;
   const bizName = clean(biz?.name) || "BeautySuite";
 
-  let subject = ev.subject;
-  if (detail.code !== "") subject += ` ${detail.code}`;
-  subject += ` - ${bizName}`;
+  let subject = brandedSubject(bizName, detail.code !== "" ? `${ev.subject} ${detail.code}` : ev.subject);
   if (subject.length > 160) subject = subject.slice(0, 160);
 
   const h = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
@@ -1504,7 +1502,7 @@ export async function sendGiftBoxInstanceEmail(slug: string, id: number, toRaw: 
   let html = "";
   html += `<p style="margin:0 0 10px 0">${h(greet)}</p>`;
   html += '<div style="border:1px solid #e5e7eb; border-radius:14px; overflow:hidden; margin:0 0 14px 0;">'
-    + `<div style="padding:12px 14px; background:#0f766e; color:#fff; font-weight:600; font-size:16px;">${h(evHead)}</div>`
+    + `<div style="padding:12px 14px; background:${EMAIL_ACCENT}; color:#fff; font-weight:600; font-size:16px;">${h(evHead)}</div>`
     + (evImgAbs !== "" ? `<img src="${h(evImgAbs)}" alt="${h(ev.label)}" style="width:100%; height:auto; display:block;">` : "")
     + "</div>";
   html += `<p style="margin:0 0 12px 0">${fromLine}</p>`;
@@ -1538,7 +1536,7 @@ export async function sendGiftBoxInstanceEmail(slug: string, id: number, toRaw: 
   html += "</div>";
   if (voucherUrl !== "") {
     html += '<div style="text-align:center;margin:0 0 18px 0;">'
-      + `<a href="${h(voucherUrl)}" style="display:inline-block;background:#0f766e;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:12px;font-weight:600;letter-spacing:.2px">Vedi Voucher</a>`
+      + emailButton(voucherUrl, "Vedi Voucher")
       + "</div>";
   }
   html += termsHtml;
@@ -2560,9 +2558,9 @@ export async function sendGiftCardEmailManage(slug: string, id: number, toRaw: s
     festa_mamma: "/assets/img/giftcard-events/mothers_day.png",
     festa_papa: "/assets/img/giftcard-events/fathers_day.png",
   };
-  const subject = eventKey === "giftcard"
-    ? `Hai ricevuto una GiftCard - ${bizName}`
-    : `${subjectByEvent[eventKey] ?? "Hai ricevuto una GiftCard"} - ${bizName}`;
+  const subject = brandedSubject(bizName, eventKey === "giftcard"
+    ? "Hai ricevuto una GiftCard"
+    : (subjectByEvent[eventKey] ?? "Hai ricevuto una GiftCard"));
 
   let msg = clean(giftMessageRaw) !== "" ? clean(giftMessageRaw) : clean(card.gift_message);
   if (msg.length > 2000) msg = msg.slice(0, 2000);
@@ -2596,7 +2594,7 @@ export async function sendGiftCardEmailManage(slug: string, id: number, toRaw: s
   const imgAlt = ev.label !== "" ? ev.label : "GiftCard";
 
   html += '<div style="border:1px solid #e5e7eb;border-radius:16px;overflow:hidden;margin:14px 0 18px 0">';
-  html += '  <div style="background:#0f766e;color:#ffffff;padding:12px 14px">';
+  html += `  <div style="background:${EMAIL_ACCENT};color:#ffffff;padding:12px 14px">`;
   html += '    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse"><tr>';
   html += '      <td style="font-size:18px;font-weight:800">Hai ricevuto una GiftCard!</td>';
   if (amountBadge !== "") {
@@ -2672,7 +2670,7 @@ export async function sendGiftCardEmailManage(slug: string, id: number, toRaw: s
   html += "</div>";
   if (voucherUrl !== "") {
     html += '<div style="text-align:center;margin:0 0 18px 0">';
-    html += `<a href="${h(voucherUrl)}" style="display:inline-block;background:#0f766e;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:12px;font-weight:600;letter-spacing:.2px">Vedi Voucher</a>`;
+    html += emailButton(voucherUrl, "Vedi Voucher");
     html += "</div>";
   }
 

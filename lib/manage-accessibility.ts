@@ -6,7 +6,7 @@ import type { RowDataPacket } from "@/lib/tenant-db";
 import { columnExists, dbExecute, dbQuery, tableExists, tenantIdForSlug, tenantSelect, tenantTable, withTenantTransaction } from "@/lib/tenant-db";
 import { invalidateManagePasswordResets } from "@/lib/manage-password-reset";
 import { normalizeTenantSlug } from "@/lib/tenant-runtime";
-import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
+import { brandedSubject, buildModernEmailTemplate, emailCodeBox, emailConfigured, sendEmail } from "@/lib/email";
 
 const EMAIL_CODE_TTL_SECONDS = 15 * 60;
 const EMAIL_CODE_RESEND_SECONDS = 60;
@@ -298,20 +298,24 @@ async function storeAndReturnCode({
     const bizName = branding.name.trim() || "La mia attivita";
     const body =
       "Ciao,<br><br>" + intro + "<br><br>"
-      + `<div style="font-size:28px;font-weight:800;letter-spacing:2px">${escapeInviteHtml(code)}</div>`
-      + "<br>Il codice scade tra 15 minuti.<br><br>Se non sei stato tu, ignora questa email.";
-    const { html, text } = buildModernEmailTemplate(subject, body, {
+      + emailCodeBox(code)
+      + "<br><br>Il codice scade tra 15 minuti.<br><br>Se non sei stato tu, ignora questa email.";
+    const fullSubject = brandedSubject(bizName, subject);
+    const { html, text } = buildModernEmailTemplate(fullSubject, body, {
       business_name: bizName,
       business_email: branding.email,
       business_logo_url: branding.logoUrl,
     });
+    // Pattern SES: From = identità verificata della piattaforma; il mittente
+    // "visivo" è il fromName dell'attività e le risposte vanno alla sua email
+    // (un fromEmail tenant non verificato viene RIFIUTATO da SES).
     const sent = await sendEmail({
       to: email,
-      subject,
+      subject: fullSubject,
       html,
       text,
-      fromEmail: branding.email.trim() || undefined,
       fromName: bizName || undefined,
+      replyTo: branding.email.trim() || undefined,
     }).catch(() => ({ ok: false as const, error: "send" }));
     if (!sent.ok) {
       await deletePendingEmailVerification(tenantSlug, userId);
@@ -404,8 +408,8 @@ function buildStaffInviteEmailBody(code: string, updated: boolean, plain: boolea
       : "il tuo account è stato creato. Per completare l'attivazione inserisci questo codice:");
   return (
     "Ciao,<br><br>" + escapeInviteHtml(intro) + "<br><br>"
-    + `<div style="font-size:28px;font-weight:800;letter-spacing:2px">${escapeInviteHtml(code)}</div>`
-    + "<br>Il codice scade tra 15 minuti.<br><br>Se non sei stato tu, ignora questa email."
+    + emailCodeBox(code)
+    + "<br><br>Il codice scade tra 15 minuti.<br><br>Se non sei stato tu, ignora questa email."
   );
 }
 
@@ -471,19 +475,20 @@ export async function sendStaffInviteEmailCode(args: {
 
     const branding = await staffInviteBranding(tenantSlug);
     const bizName = branding.name.trim();
-    const subject = "Conferma email account";
+    const subject = brandedSubject(bizName, "Conferma email account");
     const { html, text } = buildModernEmailTemplate(subject, buildStaffInviteEmailBody(code, args.updated, args.plain === true), {
       business_name: bizName,
       business_email: branding.email,
       business_logo_url: branding.logoUrl,
     });
+    // Pattern SES: From verificato + fromName attività + replyTo attività.
     const res = await sendEmail({
       to,
       subject,
       html,
       text,
-      fromEmail: branding.email.trim() || undefined,
       fromName: bizName || undefined,
+      replyTo: branding.email.trim() || undefined,
     });
     if (!res.ok) {
       console.error(`[manage-accessibility] staff invite email send failed for ${to}: ${res.error}`);

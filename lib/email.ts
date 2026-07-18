@@ -57,6 +57,33 @@ export type EmailTemplateOpts = {
   business_logo_url?: string;
 };
 
+// --- Primitive condivise per i CORPI email (coerenza cross-modulo) ----------
+// Unificazione 2026-07-18 (divergenza deliberata dal legacy, che aveva 6 stili
+// di CTA diversi ereditati dai vari moduli PHP): un solo accent — il teal già
+// usato dal template per i link del footer — e un solo stile di bottone e di
+// riquadro-codice per tutte le email dell'app.
+
+export const EMAIL_ACCENT = "#0f766e";
+
+export function emailButton(href: string, label: string): string {
+  return `<a href="${h(href)}" style="display:inline-block;background:${EMAIL_ACCENT};color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:12px;font-weight:700;letter-spacing:.2px">${h(label)}</a>`;
+}
+
+export function emailCodeBox(code: string): string {
+  return `<div style="display:inline-block;background:#f0fdfa;border:2px dashed ${EMAIL_ACCENT};border-radius:12px;padding:14px 26px;font-size:26px;font-weight:800;letter-spacing:4px;color:#0f172a">${h(code)}</div>`;
+}
+
+// Oggetto brandizzato "{Brand} — {Oggetto}": brand = nome attività per le email
+// tenant→cliente, brand di piattaforma per quelle di sistema. Non raddoppia il
+// brand se l'oggetto lo contiene già in testa.
+export function brandedSubject(brand: string, subject: string): string {
+  const b = brand.trim();
+  const s = subject.trim();
+  if (!b) return s;
+  if (s.toLowerCase().startsWith(b.toLowerCase())) return s;
+  return `${b} — ${s}`;
+}
+
 // Port of email_build_modern_template() — returns the branded { html, text }.
 export function buildModernEmailTemplate(
   subject: string,
@@ -112,10 +139,12 @@ export function buildModernEmailTemplate(
   html += '<tr><td style="padding:0 0 12px 0">';
   if (logoUrl !== "") {
     const lu = h(logoUrl);
-    html += '<div style="display:flex;align-items:center;gap:10px">';
-    html += `<img src="${lu}" alt="${brand}" style="max-height:40px;max-width:180px;border-radius:10px;display:block">`;
-    html += `<div style="font-weight:800;font-size:16px;color:#0f172a">${brand}</div>`;
-    html += "</div>";
+    // Tabella al posto di display:flex: Outlook desktop non supporta flex e
+    // impilava logo e nome in verticale.
+    html += '<table role="presentation" cellpadding="0" cellspacing="0"><tr>';
+    html += `<td style="padding-right:10px"><img src="${lu}" alt="${brand}" style="max-height:40px;max-width:180px;border-radius:10px;display:block"></td>`;
+    html += `<td style="font-weight:800;font-size:16px;color:#0f172a;vertical-align:middle">${brand}</td>`;
+    html += "</tr></table>";
   } else {
     html += `<div style="font-weight:800;font-size:16px;color:#0f172a">${brand}</div>`;
   }

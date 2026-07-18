@@ -6,7 +6,7 @@ import type { RowDataPacket } from "@/lib/tenant-db";
 import { allAssignablePermissions, permissionDefinitions } from "@/lib/role-permissions";
 import { dbExecute, dbQuery, quoteIdentifier, tableExists } from "@/lib/tenant-db";
 import { tenantPrefix } from "@/lib/tenant-runtime";
-import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
+import { brandedSubject, buildModernEmailTemplate, emailButton, emailCodeBox, emailConfigured, sendEmail } from "@/lib/email";
 
 const SIGNUPS_TABLE = "saas_professional_signups";
 const CODE_TTL_MINUTES = 15;
@@ -961,9 +961,9 @@ function signupVerifyLink(email: string): string {
 function buildSignupVerificationBody(name: string, businessName: string, code: string, verifyUrl: string): string {
   let body = `<p>Ciao ${escapeHtml(name)},</p>`;
   body += `<p>usa questo codice per verificare la tua email e creare il gestionale di <strong>${escapeHtml(businessName)}</strong>.</p>`;
-  body += `<p style="font-size:28px;letter-spacing:6px;font-weight:800;margin:18px 0;color:#0f172a">${escapeHtml(code)}</p>`;
+  body += `<p style="margin:18px 0">${emailCodeBox(code)}</p>`;
   if (verifyUrl) {
-    body += `<p><a href="${escapeHtml(verifyUrl)}" style="display:inline-block;background:#1f7fb7;color:#fff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:600">Inserisci codice</a></p>`;
+    body += `<p>${emailButton(verifyUrl, "Inserisci codice")}</p>`;
   }
   body += `<p>Il codice scade tra ${CODE_TTL_MINUTES} minuti. Se non hai richiesto tu questa registrazione, ignora questa email.</p>`;
   return body;
@@ -982,7 +982,7 @@ async function sendSignupVerificationEmail(email: string, name: string, business
   if (!to) return;
   try {
     const brand = signupBrandName();
-    const subject = `Conferma email - ${brand}`;
+    const subject = brandedSubject(brand, "Conferma email");
     const body = buildSignupVerificationBody(name, businessName, code, signupVerifyLink(to));
     const { html, text } = buildModernEmailTemplate(subject, body, { business_name: brand });
     const res = await sendEmail({ to, subject, html, text });

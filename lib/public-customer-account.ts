@@ -14,7 +14,7 @@ import {
   tenantTable,
   tenantUpdate,
 } from "@/lib/tenant-db";
-import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
+import { brandedSubject, buildModernEmailTemplate, emailButton, emailCodeBox, emailConfigured, sendEmail } from "@/lib/email";
 
 // public_customer_accounts is a GLOBAL marketplace account (unique by email, not
 // tenant-scoped). These emails therefore come from the PLATFORM, not a tenant
@@ -48,7 +48,7 @@ async function sendPublicAccountEmail(to: string, subject: string, bodyHtml: str
   if (!recipient) return;
   try {
     const brand = publicBrandName();
-    const fullSubject = `${brand} — ${subject}`;
+    const fullSubject = brandedSubject(brand, subject);
     const { html, text } = buildModernEmailTemplate(fullSubject, bodyHtml, { business_name: brand });
     const res = await sendEmail({ to: recipient, subject: fullSubject, html, text });
     if (!res.ok) {
@@ -64,7 +64,7 @@ function buildVerificationEmailBody(code: string): string {
   return (
     '<h3 style="margin:0 0 12px 0">Verifica il tuo indirizzo email</h3>'
     + `<p style="margin:0 0 10px 0">Inserisci questo codice per completare il tuo account cliente ${escapeHtml(publicBrandName())}:</p>`
-    + `<div style="font-size:28px;font-weight:600;letter-spacing:6px;padding:12px 16px;background:#f1f5f9;border-radius:12px;display:inline-block">${escapeHtml(code)}</div>`
+    + emailCodeBox(code)
     + '<p style="margin:12px 0 0 0">Il codice scade tra 15 minuti.</p>'
   );
 }
@@ -74,7 +74,7 @@ function buildEmailChangeVerificationBody(code: string): string {
   return (
     '<h3 style="margin:0 0 12px 0">Conferma la nuova email</h3>'
     + `<p style="margin:0 0 10px 0">Inserisci questo codice per confermare il nuovo indirizzo email del tuo account cliente ${escapeHtml(publicBrandName())}:</p>`
-    + `<div style="font-size:28px;font-weight:600;letter-spacing:6px;padding:12px 16px;background:#f1f5f9;border-radius:12px;display:inline-block">${escapeHtml(code)}</div>`
+    + emailCodeBox(code)
     + '<p style="margin:12px 0 0 0">Il codice scade tra 15 minuti.</p>'
   );
 }
@@ -84,7 +84,7 @@ function buildPasswordResetEmailBody(url: string): string {
   return (
     '<h3 style="margin:0 0 12px 0">Reimposta la password</h3>'
     + `<p style="margin:0 0 14px 0">Abbiamo ricevuto una richiesta di reset password per il tuo account cliente ${escapeHtml(publicBrandName())}.</p>`
-    + `<p style="margin:0 0 14px 0"><a href="${escapeHtml(url)}" style="display:inline-block;background:#4e6da6;color:#fff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:800">Reimposta password</a></p>`
+    + `<p style="margin:0 0 14px 0">${emailButton(url, "Reimposta password")}</p>`
     + '<p style="margin:0;color:#64748b">Il link scade tra 30 minuti. Se non hai richiesto tu il reset, puoi ignorare questa email.</p>'
   );
 }

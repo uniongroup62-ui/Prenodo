@@ -61,7 +61,7 @@ import {
   reconcilePointLots,
   type PointLotScheduleRow,
 } from "@/lib/fidelity-lots";
-import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
+import { brandedSubject, buildModernEmailTemplate, emailButton, emailConfigured, sendEmail } from "@/lib/email";
 import { giftPersistGlobalResetMarker, giftRecalcClient, giftRollbackAppointmentSelection } from "@/lib/gifts-engine";
 import { assertAppointmentSlotAvailable, busyCabinRangesForDate, busyRangesForDate, sharedResourcesContext, staffTimeoffReasonForRange, uniqueStaffForService, type CabinBusyRange } from "@/lib/public-booking-db";
 
@@ -8219,10 +8219,9 @@ export async function sendManageQuoteEmailLegacy(
   const clientName = String(qq.client_display ?? qq.client_name ?? "").trim();
   const number = String(qq.number ?? "");
 
-  let subject = `Preventivo ${number}`;
-  if (bizName !== "") subject += ` - ${bizName}`;
+  const subject = brandedSubject(bizName, `Preventivo ${number}`);
 
-  let body = clientName !== "" ? `Ciao <strong>${escapeQuoteHtml(clientName)}</strong>,<br><br>` : "Ciao,<br><br>";
+  let body = clientName !== "" ? `Ciao ${escapeQuoteHtml(clientName)},<br><br>` : "Ciao,<br><br>";
   body += `ti inviamo il tuo preventivo <strong>#${escapeQuoteHtml(number)}</strong>.`;
   const validUntilFmt = formatQuoteValidUntil(qq.valid_until ? pgDateOnly(qq.valid_until) : "");
   if (validUntilFmt !== "") body += `<br>Valido fino al: <strong>${escapeQuoteHtml(validUntilFmt)}</strong>.`;
@@ -8232,7 +8231,7 @@ export async function sendManageQuoteEmailLegacy(
     body += `<div style="padding:10px 12px;border:1px solid #e5e7eb;border-radius:12px;background:#f9fafb;margin:10px 0;white-space:pre-wrap;">${safeMsg}</div>`;
   }
   if (publicUrl !== "") {
-    body += `<a href="${escapeQuoteHtml(publicUrl)}" style="display:inline-block;background:#4e6da5;color:#fff;text-decoration:none;padding:10px 14px;border-radius:10px;font-weight:600">Apri preventivo</a><br><br>`;
+    body += `${emailButton(publicUrl, "Apri preventivo")}<br><br>`;
   }
   if (pdfUrl !== "") {
     body += `Scarica PDF: <a href="${escapeQuoteHtml(pdfUrl)}">${escapeQuoteHtml(pdfUrl)}</a><br>`;
@@ -8246,13 +8245,15 @@ export async function sendManageQuoteEmailLegacy(
       business_email: String(sendBiz.email ?? "").trim(),
       business_logo_url: branding.logoUrl,
     });
+    // Pattern SES: From verificato + fromName attività + replyTo attività
+    // (un fromEmail tenant non verificato viene RIFIUTATO da SES).
     const res = await sendEmail({
       to,
       subject,
       html,
       text,
-      fromEmail: String(sendBiz.email ?? "").trim() || undefined,
       fromName: bizName || undefined,
+      replyTo: String(sendBiz.email ?? "").trim() || undefined,
     }).catch(() => ({ ok: false as const, error: "send failed" }));
     ok = res.ok === true;
   }

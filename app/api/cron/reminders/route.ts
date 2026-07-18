@@ -704,13 +704,15 @@ export async function GET(request: Request) {
           // Port of automation_send_email('reminder', appointmentId): build the
           // subject/body, send via SES. Mark 'sent' ONLY on a successful send.
           const msg = buildReminderEmail(r, bizSettings);
+          // Pattern SES: From verificato + fromName attività + replyTo attività
+          // (un fromEmail tenant non verificato viene RIFIUTATO da SES).
           const sendRes = await sendEmail({
             to,
             subject: msg.subject,
             html: msg.html,
             text: msg.text,
-            fromEmail: String(bizSettings?.email ?? "") || undefined,
             fromName: String(bizSettings?.name ?? "") || undefined,
+            replyTo: String(bizSettings?.email ?? "").trim() || undefined,
           });
 
           if (sendRes.ok) {
@@ -981,13 +983,14 @@ export async function GET(request: Request) {
         // Port of automation_send_fidelity_expiry_email(): build + send. Mark
         // 'sent' ONLY on a successful send.
         const msg = buildFidelityEmail(row, bizSettings);
+        // Pattern SES: From verificato + fromName attività + replyTo attività.
         const sendRes = await sendEmail({
           to,
           subject: msg.subject,
           html: msg.html,
           text: msg.text,
-          fromEmail: String(bizSettings?.email ?? "") || undefined,
           fromName: String(bizSettings?.name ?? "") || undefined,
+          replyTo: String(bizSettings?.email ?? "").trim() || undefined,
         });
 
         if (sendRes.ok) {

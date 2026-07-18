@@ -5,7 +5,7 @@ import bcrypt from "bcryptjs";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { dbExecute, dbQuery, tenantSelect, tenantTable, columnExists, tableExists, tenantIdForSlug } from "@/lib/tenant-db";
 import { normalizeTenantSlug } from "@/lib/tenant-runtime";
-import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
+import { brandedSubject, buildModernEmailTemplate, emailButton, emailConfigured, sendEmail } from "@/lib/email";
 
 const TOKEN_TTL_MINUTES = 60;
 const MIN_PASSWORD_ADMIN = 8;
@@ -81,7 +81,7 @@ function buildManageResetEmailBody(resetUrl: string): string {
   return (
     `<h3 style="margin:0 0 12px 0">${escapeHtml(title)}</h3>`
     + '<p style="margin:0 0 12px 0">Hai richiesto la reimpostazione della password. Premi il pulsante qui sotto:</p>'
-    + `<p style="margin:16px 0"><a href="${escapeHtml(resetUrl)}" style="display:inline-block;background:#0d6efd;color:#fff;text-decoration:none;padding:12px 18px;border-radius:12px;font-weight:800">Reimposta password</a></p>`
+    + `<p style="margin:16px 0">${emailButton(resetUrl, "Reimposta password")}</p>`
     + `<p style="margin:0 0 10px 0;color:#6b7280">Il link scade tra ${TOKEN_TTL_MINUTES} minuti.</p>`
     + '<p style="margin:12px 0 0 0;color:#6b7280">Se non sei stato tu, ignora questa email.</p>'
   );
@@ -109,7 +109,7 @@ async function sendManageResetEmail(slug: string, recipient: string, resetUrl: s
   try {
     const branding = await manageResetBranding(slug);
     const bizName = branding.name.trim();
-    const subject = `${bizName ? `${bizName} — ` : ""}Reimposta la password (Gestionale)`;
+    const subject = brandedSubject(bizName, "Reimposta la password (Gestionale)");
     const { html, text } = buildModernEmailTemplate(subject, buildManageResetEmailBody(resetUrl), {
       business_name: bizName,
       business_email: branding.email,
@@ -120,8 +120,10 @@ async function sendManageResetEmail(slug: string, recipient: string, resetUrl: s
       subject,
       html,
       text,
-      fromEmail: branding.email.trim() || undefined,
+      // Pattern SES: From verificato + fromName attività + replyTo attività
+      // (un fromEmail tenant non verificato viene RIFIUTATO da SES).
       fromName: bizName || undefined,
+      replyTo: branding.email.trim() || undefined,
     });
     if (!res.ok) {
       console.error(`[manage-password-reset] email send failed for ${to}: ${res.error}`);

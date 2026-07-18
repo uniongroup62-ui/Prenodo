@@ -27,7 +27,7 @@ import { randomBytes } from "crypto";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { columnExists, dbExecute, dbQuery, quoteIdentifier, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
 import { giftClientLevelKey, giftExpireInstance, giftRecalcClient, parseGiftEligibleLevels } from "@/lib/gifts-engine";
-import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
+import { brandedSubject, buildModernEmailTemplate, EMAIL_ACCENT, emailButton, emailCodeBox, emailConfigured, sendEmail } from "@/lib/email";
 import { deleteDbAppointment } from "@/lib/db-repositories";
 
 const clean = (v: unknown) => String(v ?? "").trim();
@@ -936,12 +936,12 @@ export async function sendGiftVoucherEmailManage(slug: string, instanceId: numbe
   const h = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
   const fmtIt = (iso: string) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : "—");
-  let html = `<div style="background:#0f766e;color:#ffffff;padding:16px 20px;border-radius:12px 12px 0 0;font-size:18px;font-weight:700">Voucher omaggio</div>`;
+  let html = `<div style="background:${EMAIL_ACCENT};color:#ffffff;padding:16px 20px;border-radius:12px 12px 0 0;font-size:18px;font-weight:700">Voucher omaggio</div>`;
   html += `<div style="border:1px solid #e5e7eb;border-top:0;padding:20px;border-radius:0 0 12px 12px">`;
   html += `<p style="margin:0 0 6px">Ciao ${h(detail.client.name)},</p>`;
   html += `<p style="margin:0 0 14px">il tuo omaggio <strong>${h(detail.giftName)}</strong> è disponibile!</p>`;
-  html += `<div style="text-align:center;margin:14px 0"><div style="display:inline-block;background:#f0fdfa;border:2px dashed #0f766e;border-radius:12px;padding:14px 26px;font-size:24px;font-weight:800;letter-spacing:2px">${h(detail.code)}</div><div style="font-size:12px;color:#6b7280;margin-top:6px">MOSTRA QUESTO CODICE IN CASSA</div></div>`;
-  html += `<div style="text-align:center;margin:14px 0"><a href="${h(voucherUrl)}" style="display:inline-block;background:#0f766e;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:12px;font-weight:600;letter-spacing:.2px">Vedi Voucher</a></div>`;
+  html += `<div style="text-align:center;margin:14px 0">${emailCodeBox(detail.code)}<div style="font-size:12px;color:#6b7280;margin-top:6px">MOSTRA QUESTO CODICE IN CASSA</div></div>`;
+  html += `<div style="text-align:center;margin:14px 0">${emailButton(voucherUrl, "Vedi Voucher")}</div>`;
   html += `<table style="width:100%;border-collapse:collapse;font-size:14px;margin:10px 0">`;
   const row = (k: string, v: string) => `<tr><td style="padding:6px 0;color:#6b7280">${h(k)}</td><td style="padding:6px 0;text-align:right;font-weight:600">${h(v)}</td></tr>`;
   html += row("Cliente", detail.client.name);
@@ -960,9 +960,9 @@ export async function sendGiftVoucherEmailManage(slug: string, instanceId: numbe
   }
   html += `</div>`;
 
-  const subject = `Il tuo voucher omaggio è disponibile - ${detail.giftName} - ${bizName}`;
+  const subject = brandedSubject(bizName, `Il tuo voucher omaggio è disponibile - ${detail.giftName}`);
   const tpl = buildModernEmailTemplate(subject, html, { business_name: bizName, business_email: clean(biz?.email) });
-  const sent = await sendEmail({ to, subject, html: tpl.html, text: tpl.text });
+  const sent = await sendEmail({ to, subject, html: tpl.html, text: tpl.text, fromName: bizName || undefined, replyTo: clean(biz?.email) || undefined });
   if (!sent.ok) throw new Error("Invio email fallito");
 
   await tenantUpdate({ slug, table: "gift_instances", id: instanceId, values: { last_email_sent_at: new Date(), last_email_sent_to: to, updated_at: new Date() } }).catch(() => 0);

@@ -15875,3 +15875,43 @@ Verifica live test-preventivi-pass4 5/5 CLEAN (scaduto ieri-Roma,
 boundary oggi non scaduto, seen wall-Roma delta 0min — UTC sarebbe
 ~120 —, idempotenza secondo seen). Batteria completa rieseguita:
 pass3 4/4, improvements 11/11, mutations 11/11, quote-decision 10/10.
+
+## 2026-07-18 — Coerenza modelli email (miglioria approvata, cross-modulo)
+
+Censimento: 12 famiglie di email, tutte già sul template centrale
+buildModernEmailTemplate (port fedele di email_build_modern_template).
+L'incoerenza era nei CORPI, ereditata 1:1 dal legacy (6 stili di CTA
+verificati identici ai file PHP sorgente).
+
+UNIFICAZIONE (divergenza deliberata dal legacy, approvata):
+- lib/email.ts: primitive condivise EMAIL_ACCENT (#0f766e, il teal già
+  usato dai link del footer), emailButton(), emailCodeBox(),
+  brandedSubject() ('{Brand} — {Oggetto}', no doppio prefisso).
+- 9 stili bottone inline sostituiti con emailButton (signup, reset
+  gestionale, account marketplace, preventivi, consensi, omaggi,
+  giftbox manuale+cron, giftcard); 4 riquadri-codice → emailCodeBox.
+- Oggetti brandizzati ovunque l'oggetto è dell'app; ESCLUSI i testi
+  delle automazioni appuntamenti/promemoria (dominio utente, intatti).
+- Chiusure nel corpo rimosse (consensi 'Grazie, {biz}'): la firma la
+  fa il footer brandizzato del template. Saluto 'Ciao {nome},' senza
+  grassetto (preventivi).
+
+FIX REALI (non estetici):
+- Pattern mittente SES: 8 call-site passavano fromEmail = email
+  dell'attività del TENANT — su SES è un'identità non verificata e
+  l'invio viene RIFIUTATO (MessageRejected; con mail() PHP passava).
+  Ora ovunque: From = SES_FROM_EMAIL verificato, fromName = attività,
+  replyTo = email attività (pattern che consensi/gift già usavano).
+  Corretti: accessibility ×2, password reset, preventivi live,
+  lifecycle appuntamenti, reminders ×2, + replyTo aggiunto a omaggi.
+- Header logo del template: display:flex → tabella (Outlook desktop
+  non supporta flex e impilava logo e brand).
+Il compat MORTO sendQuoteEmail (zero chiamanti) resta NON toccato.
+
+Verifica: render-test standalone test-email-template 13/13 (bundle
+esbuild con shim server-only/SES: brandedSubject 4 casi, escaping
+bottone, header a tabella, preheader/footer, alt-text). Batterie live
+sulle superfici toccate: preventivi-mutations 11/11, accessibilita-
+pass2 17/17, moduli-consenso-pass2 14/14, gift-instance 21/21,
+giftcard 94/94. tsc pulito; audit grep: zero bottoni inline e zero
+fromEmail residui fuori dal compat morto.
