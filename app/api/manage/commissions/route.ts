@@ -1,3 +1,4 @@
+import { logActivity } from "@/lib/activity-log";
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import { businessTodayIso } from "@/lib/business-datetime";
 import { commissionDbSummary, listDbCommissions, markDbCommissionPaid } from "@/lib/db-repositories";
@@ -91,6 +92,8 @@ export async function POST(request: Request) {
     if (action === "pay") {
       const id = parseInteger(body.id);
       const commission = await markDbCommissionPaid(id, tenantSlug);
+      // Log DOPO il successo (la lib THROWA su errore -> catch senza voce).
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "commissioni", action: "paga", entityType: "commission", entityId: id, label: `Commissione #${id} segnata pagata` });
       return Response.json({
         ok: true,
         source: "commissions?action=pay",
@@ -104,11 +107,16 @@ export async function POST(request: Request) {
     // Settings tab writes: the global module toggle + per-operator rate config.
     if (action === "save_module_settings" || action === "save_module") {
       const enabled = ["1", "true", "yes", "on"].includes(String(body.module_enabled ?? body.enabled ?? "").toLowerCase());
-      return Response.json({ ok: true, sourceMode: "database", settings: await setCommissionModuleEnabled(tenantSlug, enabled, session.user.id) });
+      const settings = await setCommissionModuleEnabled(tenantSlug, enabled, session.user.id);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "commissioni", action: enabled ? "riattiva" : "disattiva", entityType: "commission_module", entityId: 0, label: `Modulo commissioni ${enabled ? "attivato" : "disattivato"}` });
+      return Response.json({ ok: true, sourceMode: "database", settings });
     }
 
     if (action === "save_commission_settings" || action === "save_settings") {
-      const settings = await saveCommissionSettings(tenantSlug, parseCommissionRows(body.rows ?? body.rows_json), session.user.id);
+      const rows = parseCommissionRows(body.rows ?? body.rows_json);
+      const settings = await saveCommissionSettings(tenantSlug, rows, session.user.id);
+      const staffIds = Object.keys(rows).map((k) => Number(k)).filter((n) => n > 0);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "commissioni", action: "modifica", entityType: "commission_settings", entityId: staffIds[0] ?? 0, label: `Salvate impostazioni commissioni operatori (${staffIds.length})`, details: { staff_ids: staffIds } });
       return Response.json({ ok: true, sourceMode: "database", settings });
     }
 
@@ -119,6 +127,7 @@ export async function POST(request: Request) {
       const markPaid = ["1", "true", "yes", "on"].includes(String(body.mark_paid ?? "").toLowerCase());
       // Modello A: commissioni tenant-wide (nessun filtro-sede) -> [] = tutte le sedi.
       await markCommissionEntryPaid(tenantSlug, entryKey, markPaid, session.user.id, []);
+      void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "commissioni", action: markPaid ? "paga" : "modifica", entityType: "commission", entityId: 0, label: `Commissione segnata ${markPaid ? "pagata" : "da pagare"}`, details: { entry_key: entryKey } });
       const range = currentMonthRange();
       const from = String(body.from ?? "").trim() || range.from;
       const to = String(body.to ?? "").trim() || range.to;

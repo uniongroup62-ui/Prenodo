@@ -15576,3 +15576,16 @@ GAP noto (proposta): le 4 azioni mutative delle Commissioni (pay,
 save_module_settings, save_commission_settings, toggle_commission_paid)
 NON loggano nel registro attività — il claim '25 moduli senza scoperti'
 del pass Costi era impreciso: Commissioni è l'ultimo dominio scoperto.
+
+MIGLIORIA APPROVATA (post-pass Commissioni 4): LOG ATTIVITÀ del modulo
+NUOVO 'commissioni' (label in mappa) sulle 4 azioni mutative — pay
+'Commissione #id segnata pagata' (paga), toggle_commission_paid
+'Commissione segnata pagata/da pagare' (paga/modifica, entry_key nei
+details), save_module_settings 'Modulo commissioni attivato/disattivato'
+(riattiva/disattiva), save_commission_settings 'Salvate impostazioni
+commissioni operatori (N)' (staff_ids nei details). DOPO il successo
+(lib throwano = respinte senza voce). Registro ora davvero senza domini
+mutativi scoperti (26 moduli). Suite test-commissioni-log 5/5 CLEAN
+(disciplina trappola-5: snapshot periodi + restore is_enabled);
+regressione pass4 1/1, full 30/30, e2e 32/32, toggles 6/6,
+test-log-pass2 10/10. Bonifica 21 voci batteria.
