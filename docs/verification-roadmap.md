@@ -16099,3 +16099,35 @@ tab Attività, topbar ricerca). test-marketplace-pass2 rieseguita
 22/22. HARNESS: contare le card SOLO dopo waitForTimeout post-
 navigazione (fetch client) — il falso FAIL P3 era lag di
 ricompilazione + conteggio precoce.
+
+## 2026-07-18 — Marketplace giro 3 (terzo passaggio richiesto): MUTAZIONI
+## area account cliente
+
+ZERO BUG nel codice: tutte le mutazioni del dominio attestate CORRETTE
+con suite nuova test-marketplace-pass4 21/21 (2 account temporanei,
+rimossi per id):
+- update_profile: persistenza + full_name sincronizzato, guardia
+  'Inserisci nome e cognome.';
+- change_password: guardie attuale-errata/min-6/non-coincidono,
+  cambio OK con vecchia password NEGATA e nuova ACCETTATA, reset
+  token puliti, sync hash ai tenant users;
+- cambio EMAIL: guardie password/stessa-email/'gia collegata a un
+  altro account' (dup check LOWER su email E pending), codice 6 cifre
+  con scadenza 15min JS-side, 'Codice non valido.', conferma con
+  email cambiata + pending pulita + sync record tenant, login con la
+  NUOVA email, cancel_email_change;
+- preferiti: toggle + remove_favorite dedicato + rimozione dalla
+  PAGINA /account/favorites (UI live);
+- update_reference_location: guardia FAIL-CLOSED corretta per account
+  non collegato al tenant ('Sessione cliente non valida.') — scrive su
+  clients del tenant, quindi esige il legame.
+
+MIGLIORIA PROPOSTA (non applicata — anche il legacy non ce l'ha):
+i codici a 6 cifre (verify registrazione + conferma cambio email)
+NON hanno limite tentativi nella finestra dei 15 minuti — cap a ~5
+tentativi con invalidazione del codice sarebbe hardening sensato.
+Resta proposta anche SSR/SEO del dettaglio.
+
+HARNESS: sessione interrotta (VS Code chiuso) durante la prima
+riesecuzione — 2 account orfani zz.mk4* rimossi per id verificando il
+prefisso fixture; dev server riavviato; batteria rieseguita 21/21.
