@@ -15589,3 +15589,33 @@ mutativi scoperti (26 moduli). Suite test-commissioni-log 5/5 CLEAN
 (disciplina trappola-5: snapshot periodi + restore is_enabled);
 regressione pass4 1/1, full 30/30, e2e 32/32, toggles 6/6,
 test-log-pass2 10/10. Bonifica 21 voci batteria.
+
+## 2026-07-18 — Magazzino pass 2: 2 fix (classe TZ + fail-closed ristretti) + riverifica
+
+FIX 1 — CLASSE TZ SERVER-SAFE (3 punti): move_date di DEFAULT dei
+documenti (todayIso dai componenti locali del server), canceled_at
+dell'annullo documento (Date al driver), stamp filename export
+movimenti_magazzino_<...> -> businessTodayIso/businessNowDateTime.
+
+FIX 2 — FAIL-CLOSED RISTRETTI SENZA SEDE (classe 18/07, variante):
+la lista documenti a scope-0 non filtra (UNIONE) e il doc save con
+sede 0/assente muterebbe lo stock FALLBACK globale: per un utente
+RISTRETTO (sedi assegnate, anche revocate) GET contesto e move_stock
+senza sede risolta ora rispondono 'Sede non disponibile per le tue
+sedi.' (403). ADMIN/unrestricted a sede 0 = unione FEDELE al legacy
+(app_current_location_id()==0), invariata.
+
+Riverifica: stock atomico anti-oversell, rollback compensativo del
+documento multi-item, rettifica delta, guardie sede su save/annullo
+(assertLocationAccessById), MIME magic-bytes allegati, log magazzino/
+fornitori completi — tutto confermato.
+
+Verifica live test-magazzino-pass2 7/7 CLEAN: move_date oggi-Roma,
+canceled_at Roma (post-fix reale: il primo run mostrava i ms del
+Date-al-driver), ristretto senza sede bloccato, revocato GET 403,
+admin sede 0 ok, sanity carico sede 21, export stamp Roma. Regressione:
+test-magazzino 41/41, test-stock-atomic 4/4, test-stock-doc-atomic
+ATOMICO, e2e-magazzino 39/39, markers-magazzino 84/84. Bonifica 107
+voci log batteria. NOTA HARNESS: le replace multi-riga via node -e in
+bash falliscono SILENZIOSE (escaping template literal) — verificare
+sempre il file dopo il patch; i 3 punti TZ ri-applicati col tool Edit.

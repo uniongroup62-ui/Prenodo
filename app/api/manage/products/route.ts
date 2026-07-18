@@ -1,5 +1,6 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import { logActivity } from "@/lib/activity-log";
+import { businessNowDateTime } from "@/lib/business-datetime";
 import { currentManageSession } from "@/lib/manage-auth";
 import { assertLocationAccessById, locationAllowedForSedi, resolveManageLocationId, sessionAllowedLocationIds } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -60,6 +61,13 @@ export async function GET(request: Request) {
       raw: url.searchParams.get("location_id"),
       fallbackCurrent: true,
     });
+    // FAIL-CLOSED sedi revocate (classe 18/07): un utente RISTRETTO senza sede
+    // risolta (sessione stantia/sede revocata) non deve leggere l'UNIONE dei
+    // documenti magazzino (la lista a scope-0 non filtra). L'admin/unrestricted
+    // a sede 0 = unione FEDELE al legacy (app_current_location_id()==0).
+    if (locationId <= 0 && sessionAllowedLocationIds(session).length > 0) {
+      return jsonError("Sede non disponibile per le tue sedi.", 403);
+    }
     const context = await getManageProductsContext(tenantSlug, {
       query: url.searchParams.get("q") ?? "",
       locationId,
@@ -123,9 +131,9 @@ export async function GET(request: Request) {
           ].map(escCsv).join(";"));
         }
       }
-      const now = new Date();
-      const pad = (n: number) => String(n).padStart(2, "0");
-      const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}`;
+      // Timestamp filename in ORA DI ROMA (classe TZ server-safe).
+      const nowRome = businessNowDateTime();
+      const stamp = `${nowRome.slice(0, 10)}_${nowRome.slice(11, 13)}-${nowRome.slice(14, 16)}`;
       return new Response(lines.join("\n") + "\n", {
         headers: {
           "Content-Type": "text/csv; charset=utf-8",
@@ -200,8 +208,14 @@ export async function POST(request: Request) {
       case "stock_doc_save": {
         if (!can(session.user.perms, "stock_moves.manage")) return jsonError("Permesso Carico / Scarico richiesto.", 403);
         // Guardia per-sede: un operatore ristretto non puo' registrare un movimento in una sede non sua.
+        // FAIL-CLOSED (18/07): per il RISTRETTO anche sede 0/assente è bloccata
+        // (un movimento "globale" muterebbe lo stock fallback fuori dalle sue sedi).
         const wantLoc = parseInteger(body.location_id, 0);
-        if (wantLoc > 0 && !locationAllowedForSedi(wantLoc, sessionAllowedLocationIds(session))) {
+        const allowedSedi = sessionAllowedLocationIds(session);
+        if (allowedSedi.length > 0 && (wantLoc <= 0 || !locationAllowedForSedi(wantLoc, allowedSedi))) {
+          return jsonError("Sede non disponibile per le tue sedi.", 403);
+        }
+        if (wantLoc > 0 && !locationAllowedForSedi(wantLoc, allowedSedi)) {
           return jsonError("Sede non disponibile per le tue sedi.", 403);
         }
         const out = await saveStockMovement(tenantSlug, body, session.user.name, session.user.id);

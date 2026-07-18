@@ -1,5 +1,7 @@
 import "server-only";
 
+import { businessNowDateTime, businessTodayIso } from "@/lib/business-datetime";
+
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { emptyToNull, parseInteger, parseNumber } from "@/lib/api-utils";
 import {
@@ -537,7 +539,8 @@ export async function cancelStockDocument(slug: string, documentId: number, user
     id: documentId,
     values: {
       is_canceled: 1,
-      canceled_at: new Date(),
+      // Ora di ROMA esplicita (classe TZ server-safe: Date al driver = wall del server).
+      canceled_at: businessNowDateTime(),
       canceled_by_user_id: userId,
       canceled_by_name: clean(userName, 190) || "Operatore",
     },
@@ -1376,7 +1379,8 @@ function dateString(value: unknown): string {
   return normalizeDate(value) ?? "";
 }
 
+// Giorno di ROMA (classe TZ server-safe: i componenti locali del server
+// sbaglierebbero giorno la sera su un server UTC — move_date di default).
 function todayIso(): string {
-  const date = new Date();
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  return businessTodayIso();
 }
