@@ -31,6 +31,7 @@ type MarketplaceProfile = {
   image?: string;
   logoUrl?: string;
   services: string[];
+  serviceNames?: string[];
   locations: MarketplaceLocation[];
 };
 
@@ -110,7 +111,8 @@ export function MarketplaceSearchFaithful({
   const cards = useMemo<CardItem[]>(() => {
     const items: CardItem[] = [];
     for (const profile of profiles) {
-      for (const location of profile.locations ?? []) {
+      // Sedi "fantasma" (id<=0) escluse: card non prenotabili.
+      for (const location of (profile.locations ?? []).filter((l) => Number(l.id) > 0)) {
         items.push({
           profile,
           location,
@@ -134,12 +136,15 @@ export function MarketplaceSearchFaithful({
         profile.area,
         ...activityCats,
         ...profile.services,
+        ...(profile.serviceNames ?? []),
       ]
         .join(" ")
         .toLowerCase();
       const cityText = [location.city, location.area, profile.area].join(" ").toLowerCase();
       const catText = activityCats.join(" ").toLowerCase();
-      const svcText = profile.services.join(" ").toLowerCase();
+      // service matcha sui NOMI servizio reali + le etichette categoria (le
+      // sole categorie non matchavano mai i suggerimenti della tab Servizi).
+      const svcText = [...profile.services, ...(profile.serviceNames ?? [])].join(" ").toLowerCase();
       if (qNeedle && !haystack.includes(qNeedle)) return false;
       if (cityNeedle && !cityText.includes(cityNeedle)) return false;
       if (catNeedle && !catText.includes(catNeedle)) return false;

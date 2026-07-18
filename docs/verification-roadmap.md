@@ -16058,3 +16058,44 @@ orari+Prenota+share, console senza mismatch, slug inesistente,
 preferiti sloggato→login + toggle ON/OFF via account TEMPORANEO
 rimosso per id). MIGLIORIA RESIDUA PROPOSTA (non fatta): SSR/SEO del
 dettaglio con metadata+JSON-LD.
+
+## 2026-07-18 — Marketplace giro 2 (secondo passaggio richiesto): angoli
+## non coperti dal pass 2
+
+FIX 1 — 'SEDE NON TROVATA' (public_marketplace.php 1107, mai portato
+ma RAGGIUNGIBILE via URL): /attivita/<slug>/sedi/<x>-99999 faceva
+fallback SILENZIOSO alla prima sede — dati di un'ALTRA sede sotto
+l'URL sbagliato. Ora empty-state fedele (testo verbatim + 'Torna
+all'attività'), gated su directory+context caricati.
+
+FIX 2 — CAROSELLO 'ALTRE SEDI' (legacy 1579-1651, MAI PORTATO: i CSS
+c'erano, il markup no): su un'attività multi-sede non si potevano
+sfogliare le sedi. Portato fedele: conteggio 'N sedi disponibili',
+controlli prev/next SOLO con >3 sedi, card con cover-nome, logo/
+iniziale, indirizzo, Prenota (location_id) + Scheda (/sedi/<slug>).
+
+FIX 3 — TAB 'SERVIZI' DEL PICKER HOME SEMPRE VUOTA: il div era
+statico e l'effetto legacy salta i picker già cablati React che però
+non la popolavano. Ora popolata dai serviceSuggestions della stessa
+/api/marketplace, con selectService (hidden service + label, reset
+incrociato con categoria/attività).
+
+FIX 4 — FILTRO ?service= MAI MATCHANTE: il payload profili aggregava
+solo le ETICHETTE CATEGORIA (service_labels) — cercare 'test'
+(suggerito proprio dalla tab Servizi) dava 0 risultati. Aggiunto
+serviceNames (nomi servizio reali distinti) al payload e al filtro
+(svcText + haystack q).
+
+FIX 5 — sedi 'fantasma' id<=0 (tenant con servizi ma senza sedi
+marketplace) escluse dalle card di home e ricerca (schede non
+prenotabili).
+
+Suite NUOVA test-marketplace-pass3 19/19 (sede inesistente + link
+torna, slug senza id, modale Servizi apre/2 card/book href/chiude,
+Prodotti nascosto senza prodotti, share con clipboard reale +
+is-copied, carosello 2 sedi con link coerenti, suggerimenti città
+digitando+click+submit, tab Servizi popolata+selezione+risultati,
+tab Attività, topbar ricerca). test-marketplace-pass2 rieseguita
+22/22. HARNESS: contare le card SOLO dopo waitForTimeout post-
+navigazione (fetch client) — il falso FAIL P3 era lag di
+ricompilazione + conteggio precoce.

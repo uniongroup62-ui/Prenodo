@@ -79,6 +79,7 @@ type MarketplaceResponse = {
   ok?: boolean;
   profiles?: MarketplaceProfile[];
   categories?: string[];
+  serviceSuggestions?: Array<{ name: string; subtitle: string; service: string }>;
 };
 
 // One rendered card === one location of a profile (matches the legacy per-location grid).
@@ -242,6 +243,11 @@ export function MarketplaceListFaithful() {
   // Treatment dropdown UI state.
   const [panelOpen, setPanelOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"categories" | "salons" | "services">("categories");
+  // Tab "Servizi" del picker (fix 2026-07-18): i suggerimenti arrivano dalla
+  // stessa /api/marketplace — il div era rimasto VUOTO perché l'effetto legacy
+  // salta i picker già cablati in React e React non lo popolava mai.
+  const [serviceSuggestions, setServiceSuggestions] = useState<Array<{ name: string; subtitle: string; service: string }>>([]);
+  const [service, setService] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -252,6 +258,7 @@ export function MarketplaceListFaithful() {
         if (!active) return;
         setProfiles(Array.isArray(data.profiles) ? data.profiles : []);
         setCategories(Array.isArray(data.categories) ? data.categories : []);
+        setServiceSuggestions(Array.isArray(data.serviceSuggestions) ? data.serviceSuggestions : []);
       } catch {
         if (active) {
           setProfiles([]);
@@ -267,11 +274,13 @@ export function MarketplaceListFaithful() {
     };
   }, []);
 
-  // Flatten profiles -> one card per location (legacy behaviour).
+  // Flatten profiles -> one card per location (legacy behaviour). Le sedi
+  // "fantasma" (id<=0, tenant senza sedi marketplace ma con servizi) non
+  // producono card: sarebbero schede non prenotabili.
   const allCards = useMemo<CardItem[]>(() => {
     const items: CardItem[] = [];
     for (const profile of profiles) {
-      const locs = profile.locations?.length ? profile.locations : [];
+      const locs = (profile.locations ?? []).filter((location) => Number(location.id) > 0);
       for (const location of locs) {
         items.push({
           profile,
@@ -294,13 +303,23 @@ export function MarketplaceListFaithful() {
       setQuery("");
       setTreatmentLabel(label);
     }
+    setService("");
     setPanelOpen(false);
   }
 
   function selectSalon(salonQuery: string, label: string) {
     setQuery(salonQuery);
     setCategory("");
+    setService("");
     setTreatmentLabel(label);
+    setPanelOpen(false);
+  }
+
+  function selectService(name: string) {
+    setService(name);
+    setQuery("");
+    setCategory("");
+    setTreatmentLabel(name);
     setPanelOpen(false);
   }
 
@@ -364,7 +383,7 @@ export function MarketplaceListFaithful() {
               <span className="marketplace-topbar-treatment-kicker">Attivit&agrave; o servizio</span>
               <input type="hidden" name="q" value={query} readOnly data-marketplace-treatment-query />
               <input type="hidden" name="category" value={category} readOnly data-marketplace-treatment-category />
-              <input type="hidden" name="service" value="" readOnly data-marketplace-treatment-service />
+              <input type="hidden" name="service" value={service} readOnly data-marketplace-treatment-service />
               <button
                 className="marketplace-topbar-treatment-trigger"
                 type="button"
@@ -523,7 +542,30 @@ export function MarketplaceListFaithful() {
                     aria-label="Servizi"
                     data-marketplace-treatment-list="services"
                     hidden={activeTab !== "services"}
-                  ></div>
+                  >
+                    {serviceSuggestions.map((sugg) => (
+                      <button
+                        key={sugg.name}
+                        className={`marketplace-topbar-treatment-option${service === sugg.service ? " is-active" : ""}`}
+                        type="button"
+                        role="option"
+                        aria-selected={service === sugg.service}
+                        data-marketplace-treatment-option
+                        data-treatment-category=""
+                        data-treatment-query=""
+                        data-treatment-service={sugg.service}
+                        data-treatment-label={sugg.name}
+                        data-treatment-search={`${sugg.name} ${sugg.subtitle}`}
+                        onClick={() => selectService(sugg.service)}
+                      >
+                        <span className="marketplace-topbar-treatment-avatar">{initial(sugg.name)}</span>
+                        <span className="marketplace-topbar-treatment-copy">
+                          <span className="marketplace-topbar-treatment-name">{sugg.name}</span>
+                          {sugg.subtitle ? <span className="marketplace-topbar-treatment-meta">{sugg.subtitle}</span> : null}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <div className="marketplace-topbar-treatment-empty" data-marketplace-treatment-empty>
                   Nessun risultato.

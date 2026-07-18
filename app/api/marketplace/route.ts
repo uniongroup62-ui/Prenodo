@@ -14,6 +14,10 @@ type MarketplaceProfile = {
   image: string;
   logoUrl: string;
   services: string[];
+  // Nomi SERVIZIO reali (distinti dalle etichette categoria di `services`):
+  // servono al filtro ?service= della ricerca — le sole etichette categoria
+  // non matchavano mai i suggerimenti della tab Servizi (fix 2026-07-18).
+  serviceNames: string[];
   locations: Array<{
     id: number;
     name: string;
@@ -70,6 +74,7 @@ async function marketplaceProfiles(): Promise<{ profiles: MarketplaceProfile[]; 
       COALESCE(NULLIF(MIN(l.address), ''), NULLIF(MAX(b.site_address), ''), NULLIF(MAX(b.address), ''), '') AS first_address,
       MIN(s.price) AS price_from,
       string_agg(DISTINCT COALESCE(NULLIF(sc.name, ''), NULLIF(s.name, ''))::text, '||' ORDER BY COALESCE(NULLIF(sc.name, ''), NULLIF(s.name, ''))::text ASC) AS service_labels,
+      string_agg(DISTINCT NULLIF(TRIM(s.name), '')::text, '||') AS service_names,
       COUNT(DISTINCT l.id) AS location_count,
       COUNT(DISTINCT s.id) AS service_count
     FROM saas_tenants t
@@ -174,6 +179,7 @@ async function profileFromRow(row: RowDataPacket, locationCategories: Map<number
     image: coverPath ? storagePublicUrl(coverPath) : "",
     logoUrl: logoPath ? storagePublicUrl(logoPath) : "",
     services: services.length ? services : DEFAULT_SERVICES,
+    serviceNames: splitLabels(row.service_names),
     locations: (locationRows.length ? locationRows : [row]).map((location) => {
       const locationId = Number(location.id ?? row.first_location_id ?? 0);
       const activityCategories = locationCategories.get(locationId) ?? [];

@@ -218,6 +218,13 @@ function initialOf(value: string): string {
   return trimmed ? trimmed.charAt(0).toUpperCase() : "?";
 }
 
+// Slug sede per il carosello 'Altre sedi' (stesso pattern 'citta-nome-id'
+// delle card lista/ricerca).
+function locationSlugForCarousel(location: { id: number; name: string; city?: string }): string {
+  const base = [location.city, location.name].filter(Boolean).join(" ").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return `${base || "sede"}-${location.id}`;
+}
+
 function readSlugFromPath(): string {
   if (typeof window === "undefined") return "";
   const parts = window.location.pathname.split("/");
@@ -234,6 +241,8 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
   // (public_marketplace.php 1099: `elseif (!$detailProfile)`), che scatta solo
   // A LISTA NOTA — mai durante il primo load (placeholder fedeli).
   const [mkLoaded, setMkLoaded] = useState(false);
+  // Indice del carosello 'Altre sedi' (prev/next attivi solo con >3 sedi).
+  const [carouselIndex, setCarouselIndex] = useState(0);
 
   // Origin per il link di condivisione: risolto post-mount così SSR e prima
   // idratazione rendono lo stesso URL relativo (niente mismatch).
@@ -283,6 +292,19 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
   // Scheda SEDE (/attivita/<slug>/sedi/<loc-slug>): la sede richiesta guida
   // booking link/indirizzo/preferiti; fallback alla prima come il legacy.
   const primaryLocation = (locationIdProp ? locations.find((loc) => loc.id === locationIdProp) : undefined) ?? locations[0];
+  // 'Sede non trovata' (public_marketplace.php 1107, fix 2026-07-18): con un
+  // id sede esplicito nell'URL che NON esiste tra le sedi note (context +
+  // directory caricati) il legacy mostrava l'empty-state — il fallback
+  // silenzioso alla prima sede mostrava i dati di un'ALTRA sede sotto l'URL
+  // sbagliato. Gated su entrambe le sorgenti caricate, mai durante il load.
+  const locationNotFound = Boolean(
+    locationIdProp &&
+    mkLoaded && profile && context &&
+    !locations.some((loc) => loc.id === locationIdProp) &&
+    !(profile.locations ?? []).some((loc) => loc.id === locationIdProp),
+  );
+  // Carosello 'Altre sedi': sedi della directory marketplace (id reali).
+  const carouselLocations = (profile?.locations ?? []).filter((loc) => Number(loc.id) > 0);
 
   const businessName = business?.name || profile?.name || "Attivita";
   const aboutText = (business?.about ?? "").trim();
@@ -544,6 +566,16 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
             <p><Link className="btn btn-primary" href="/attivita">Torna alla ricerca</Link></p>
           </div>
         </main>
+      ) : locationNotFound ? (
+        // Empty-state legacy 'Sede non trovata' (public_marketplace.php 1107):
+        // id sede esplicito non tra le sedi note dell'attività.
+        <main className="wrap">
+          <div className="empty">
+            <h1>Sede non trovata</h1>
+            <p>La sede richiesta non è pubblicata o non è più disponibile.</p>
+            <p><Link className="btn btn-primary" href={`/attivita/${encodeURIComponent(slug)}`}>Torna all&apos;attivit&agrave;</Link></p>
+          </div>
+        </main>
       ) : (
       <main className="wrap">
         <div className="salon-detail-layout">
@@ -699,6 +731,66 @@ export function MarketplaceDetailFaithful({ slug: slugProp, locationId: location
                       {i < arr.length - 1 ? <br /> : null}
                     </span>
                   ))}
+                </div>
+              </section>
+            ) : null}
+
+            {/* Carosello 'Altre sedi' (public_marketplace.php 1579-1651, PORTATO
+                2026-07-18: mancava del tutto — su un'attività multi-sede non si
+                potevano sfogliare le sedi). Controlli prev/next solo con >3
+                sedi come il legacy; card = cover col nome, logo/iniziale,
+                indirizzo, Prenota (gate-driven) + Scheda. */}
+            {carouselLocations.length > 0 ? (
+              <section
+                className={`salon-section salon-location-carousel${carouselLocations.length === 1 ? " is-single" : carouselLocations.length === 2 ? " is-short" : ""}`}
+                data-location-carousel
+              >
+                <div className="salon-location-head">
+                  <div>
+                    <h2>Altre sedi</h2>
+                    <p>{carouselLocations.length === 1 ? "1 sede disponibile" : `${carouselLocations.length} sedi disponibili`}</p>
+                  </div>
+                  {carouselLocations.length > 3 ? (
+                    <div className="salon-location-controls" aria-label="Sfoglia sedi">
+                      <button className="salon-location-nav" type="button" aria-label="Sedi precedenti" disabled={carouselIndex <= 0} onClick={() => setCarouselIndex((i) => Math.max(0, i - 1))}>&lsaquo;</button>
+                      <button className="salon-location-nav" type="button" aria-label="Sedi successive" disabled={carouselIndex >= carouselLocations.length - 3} onClick={() => setCarouselIndex((i) => Math.min(carouselLocations.length - 3, i + 1))}>&rsaquo;</button>
+                    </div>
+                  ) : null}
+                </div>
+                <div className="salon-location-viewport">
+                  <div className="salon-location-track" data-location-track style={{ transform: `translateX(calc(-${carouselIndex} * ((100% - 36px) / 3 + 18px)))` }}>
+                    {carouselLocations.map((loc) => {
+                      const locName = (loc.name || "Sede").trim() || "Sede";
+                      const locAddressLine = [loc.address, loc.city].map((v) => String(v ?? "").trim()).filter(Boolean).join(" ");
+                      const locSlug = locationSlugForCarousel(loc);
+                      return (
+                        <article className="salon-location-card" key={loc.id}>
+                          <div className="salon-location-cover">{locName}</div>
+                          <div className="salon-location-body">
+                            <div className="salon-location-title">
+                              <span className="salon-location-avatar" aria-hidden="true">
+                                {profile?.logoUrl ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img src={profile.logoUrl} alt="" />
+                                ) : (
+                                  initialOf(businessName)
+                                )}
+                              </span>
+                              <div>
+                                <h3>{locName}</h3>
+                                <span className="salon-location-subtitle">{businessName}</span>
+                              </div>
+                            </div>
+                            <div className="salon-location-meta">{locAddressLine || " "}</div>
+                            <div className="salon-location-actions">
+                              <a className="btn btn-primary" href={`/${encodeURIComponent(slug)}/booking?start=1&location_id=${loc.id}`}>Prenota</a>
+                              <a className="btn" href={`/attivita/${encodeURIComponent(slug)}/sedi/${encodeURIComponent(locSlug)}`}>Scheda</a>
+                            </div>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
                 </div>
               </section>
             ) : null}
