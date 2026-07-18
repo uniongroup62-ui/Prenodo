@@ -369,7 +369,7 @@ export async function saveSupplier(slug: string, body: Record<string, string>): 
     const old = await getSupplierById(slug, supplierId);
     await tenantUpdate({ slug, table: "suppliers", id: supplierId, values });
     const oldName = String(old.name ?? "");
-    if (oldName && oldName !== name) await updateRowsByColumn(slug, "products", "supplier_name", oldName, { supplier_name: name }).catch(() => undefined);
+    if (oldName && oldName !== name) await updateRowsByColumn(slug, "products", "supplier_name", oldName, { supplier_name: name }, true).catch(() => undefined);
   } else {
     supplierId = await tenantInsert(table, values);
   }
@@ -379,7 +379,7 @@ export async function saveSupplier(slug: string, body: Record<string, string>): 
 
 export async function deleteSupplier(slug: string, supplierId: number): Promise<ManageProductsContext> {
   const supplier = await getSupplierById(slug, supplierId);
-  const productCount = await countRowsByColumn(slug, "products", "supplier_name", String(supplier.name ?? "")).catch(() => 0);
+  const productCount = await countRowsByColumn(slug, "products", "supplier_name", String(supplier.name ?? ""), true).catch(() => 0);
   const costCount = await countRowsByColumn(slug, "costs", "supplier_id", supplierId).catch(() => 0);
   if (productCount + costCount > 0) throw new Error("Fornitore usato in prodotti o costi: non puo essere eliminato, disattivalo dai moduli.");
   await deleteByOwner(slug, "supplier_locations", "supplier_id", supplierId);
@@ -651,8 +651,10 @@ async function listSuppliers(slug: string): Promise<SupplierRow[]> {
     tenantSelect<RowDataPacket>({ slug, table: "products", columns: "supplier_name" }).catch(() => [] as RowDataPacket[]),
     tenantSelect<RowDataPacket>({ slug, table: "costs", columns: "supplier_id" }).catch(() => [] as RowDataPacket[]),
   ]);
+  // Match per nome CASE-INSENSITIVE come il legacy (MySQL utf8mb4_general_ci:
+  // 'ACME' conta per il fornitore 'Acme') — classe PG case-sensitivity.
   const productCountByName = new Map<string, number>();
-  for (const r of prodRows) { const n = String(r.supplier_name ?? "").trim(); if (n) productCountByName.set(n, (productCountByName.get(n) ?? 0) + 1); }
+  for (const r of prodRows) { const n = String(r.supplier_name ?? "").trim().toLowerCase(); if (n) productCountByName.set(n, (productCountByName.get(n) ?? 0) + 1); }
   const costCountBySupplierId = new Map<number, number>();
   for (const r of costRows) { const sid = Number(r.supplier_id ?? 0) || 0; if (sid > 0) costCountBySupplierId.set(sid, (costCountBySupplierId.get(sid) ?? 0) + 1); }
   return rows.map((row) => {
@@ -674,7 +676,7 @@ async function listSuppliers(slug: string): Promise<SupplierRow[]> {
       warehouseLocationIds: maps.warehouse,
       hasLocationRows: maps.hasRows,
       costLocationIds: maps.costs,
-      productCount: productCountByName.get(name.trim()) ?? 0,
+      productCount: productCountByName.get(name.trim().toLowerCase()) ?? 0,
       costCount: costCountBySupplierId.get(id) ?? 0,
     };
   });
@@ -1235,12 +1237,13 @@ async function ensureSupplierNameAvailable(slug: string, name: string, id: numbe
   if (rows[0]) throw new Error("Esiste gia un fornitore con questo nome.");
 }
 
-async function updateRowsByColumn(slug: string, tableName: string, column: string, value: unknown, values: Record<string, unknown>): Promise<void> {
+async function updateRowsByColumn(slug: string, tableName: string, column: string, value: unknown, values: Record<string, unknown>, caseInsensitiveMatch = false): Promise<void> {
   const table = await tenantTable(slug, tableName);
   const filtered = await filterColumns(table.name, values);
   const entries = Object.entries(filtered).filter(([, entryValue]) => entryValue !== undefined);
   if (!entries.length || !await columnExists(table.name, column)) return;
-  const clauses = [`${quoteIdentifier(column)}=?`];
+  // caseInsensitiveMatch: parità col match _ci di MySQL (classe PG case-sensitivity).
+  const clauses = [caseInsensitiveMatch ? `LOWER(${quoteIdentifier(column)})=LOWER(?)` : `${quoteIdentifier(column)}=?`];
   const params = [...entries.map(([, entryValue]) => entryValue), value];
   if (table.mode === "shared" && await columnExists(table.name, "tenant_id")) {
     clauses.push("tenant_id=?");
@@ -1249,11 +1252,12 @@ async function updateRowsByColumn(slug: string, tableName: string, column: strin
   await dbExecute(`UPDATE ${quoteIdentifier(table.name)} SET ${entries.map(([key]) => `${quoteIdentifier(key)}=?`).join(",")} WHERE ${clauses.join(" AND ")}`, params);
 }
 
-async function countRowsByColumn(slug: string, tableName: string, column: string, value: unknown): Promise<number> {
+async function countRowsByColumn(slug: string, tableName: string, column: string, value: unknown, caseInsensitiveMatch = false): Promise<number> {
   if (!await tableExistsForTenant(slug, tableName)) return 0;
   const table = await tenantTable(slug, tableName);
   if (!await columnExists(table.name, column)) return 0;
-  const clauses = [`${quoteIdentifier(column)}=?`];
+  // caseInsensitiveMatch: parità col match _ci di MySQL (classe PG case-sensitivity).
+  const clauses = [caseInsensitiveMatch ? `LOWER(${quoteIdentifier(column)})=LOWER(?)` : `${quoteIdentifier(column)}=?`];
   const params: unknown[] = [value];
   if (table.mode === "shared" && await columnExists(table.name, "tenant_id")) {
     clauses.unshift("tenant_id=?");

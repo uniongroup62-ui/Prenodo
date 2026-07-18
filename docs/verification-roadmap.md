@@ -15619,3 +15619,29 @@ ATOMICO, e2e-magazzino 39/39, markers-magazzino 84/84. Bonifica 107
 voci log batteria. NOTA HARNESS: le replace multi-riga via node -e in
 bash falliscono SILENZIOSE (escaping template literal) — verificare
 sempre il file dopo il patch; i 3 punti TZ ri-applicati col tool Edit.
+
+## 2026-07-18 — Fornitori pass 2: 1 fix (classe PG case-sensitivity sul match supplier_name, 3 punti)
+
+FIX — products.supplier_name è uno SNAPSHOT testuale e il legacy lo
+matcha con l'_ci di MySQL: il Next confrontava case-SENSITIVE in 3
+punti — (1) BLOCKER del delete (un prodotto 'ZZ FORN X' non bloccava
+il fornitore 'ZZ Forn X': eliminabile mentre il legacy blocca), (2)
+propagazione del RENAME sui prodotti (varianti di case restavano col
+nome vecchio = link rotto), (3) conteggio 'Uso' della lista. Ora
+LOWER(col)=LOWER(?) via flag caseInsensitiveMatch su
+countRowsByColumn/updateRowsByColumn + mappa conteggi in lowercase.
+Il blocker costi resta per supplier_id (numerico, immune).
+
+Riverifica: univocità nome già _ci (guardia indurita in un pass
+precedente), guardia sedi obbligatorie per contesto attivo ('Seleziona
+almeno una sede per...'), delete mappings+riga SENZA transazione =
+FEDELE (suppliers.php non ha beginTransaction), log fornitori
+save/delete completi.
+
+Verifica live test-fornitori-pass2 6/6 CLEAN: delete bloccato dal
+prodotto MAIUSCOLO col verbatim, productCount=1 sulla variante, rename
+propagato sul prodotto case-variant, delete pulito senza referenze
+(mapping rimossi), dup case-insensitive. Regressione: test-fornitori
+17/17, test-suppliers-mutations VERDETTO ok, e2e-suppliers 21/21,
+markers-suppliers 49/49, test-magazzino 41/41, test-costs-fixes 14/14.
+Bonifica 58 voci log batteria.
