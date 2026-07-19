@@ -17,13 +17,24 @@ export type CronRunRow = {
   message?: string | null;
 };
 
-export type TenantTab = "overview" | "timeline" | "settings" | "visibility" | "admin" | "onboarding" | "health" | "support" | "backups" | "danger";
+export type TenantTab = "overview" | "timeline" | "settings" | "admin" | "onboarding" | "health" | "support" | "backups" | "danger";
 
 export type HealthLevel = "ok" | "warning" | "error";
 
 export type TenantStatus = "provisioning" | "active" | "suspended" | "failed" | "deleted";
 
 export type PlanOption = { id: number; name: string; price_month: number };
+
+// Stati onboarding tradotti: mai enum grezzi in inglese verso l'utente.
+export function onboardingLabel(status: string | null | undefined): string {
+  const map: Record<string, string> = {
+    not_started: "Non iniziato",
+    in_progress: "In corso",
+    completed: "Completato",
+    dismissed: "Nascosto",
+  };
+  return map[String(status ?? "not_started")] ?? String(status ?? "Non iniziato");
+}
 
 export type Tenant = {
   id: number;
@@ -397,7 +408,7 @@ export function TenantTable({ tenants, onOpenTenant }: { tenants: Tenant[]; onOp
                 <td className="px-4 py-3"><Badge tone={statusTone(status)}>{statusLabel[status]}</Badge></td>
                 <td className="px-4 py-3">
                   <div className="h-2 w-32 overflow-hidden rounded-full bg-slate-100"><div className="h-full bg-[#365a96]" style={{ width: `${tenant.onboarding_percent ?? 0}%` }} /></div>
-                  <div className="mt-1 text-xs text-slate-500">{tenant.onboarding_percent ?? 0}% - {tenant.onboarding_status || "not_started"}</div>
+                  <div className="mt-1 text-xs text-slate-500">{tenant.onboarding_percent ?? 0}% · {onboardingLabel(tenant.onboarding_status)}</div>
                 </td>
                 <td className="px-4 py-3">
                   <Badge tone={tenant.health_checked_at ? healthTone(health) : "muted"}>{tenant.health_checked_at ? healthLabel[health] : "Non verificato"}</Badge>

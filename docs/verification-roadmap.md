@@ -16614,3 +16614,37 @@ operations/controls —, faseD 4, faseE 8 — nav 8 —, ux 7, restore 8,
 hardening 19, fase3 9 — nav 8, D8 legacy->Operazioni). BUG del giro:
 il prune non selezionava tenant_slug -> audit prune senza slug (filtro
 tenant a vuoto); FIX in pruneSaasTenantBackups.
+
+## 2026-07-19 — PANNELLO ADMIN: BONIFICA TESTI + ORDINE DELLE PAGINE
+
+Dal rilievo dell'utente ("alcuni testi parlano anche di PHP").
+
+TESTI: (1) rimosso il riferimento al "pannello PHP" (Impostazioni
+prezzo); (2) accenti corretti ovunque nei testi visibili (gravità,
+attività, visibilità, marginalità, operatività — il port evitava i
+caratteri accentati); (3) stati onboarding TRADOTTI (onboardingLabel:
+not_started->Non iniziato, in_progress->In corso, completed->
+Completato, dismissed->Nascosto) in tabella tenant e Panoramica —
+mai enum grezzi verso l'utente; (4) gergo tecnico eliminato dalle
+frasi: "registro saas_tenants"->"tutti i tenant registrati",
+"Aggiorna plan_id"->"Collega un piano al tenant", wallet->crediti
+SMS, "movimento purchase"->frase piana, "ultimo health salvato"->
+"ultima verifica di salute".
+
+ORDINE: (5) form "Nuovo tenant" COLLASSATO di default (occupava mezza
+colonna sempre aperto): card slim con "Apri il modulo"; il bottone
+header lo apre direttamente; si chiude da solo a creazione riuscita;
+(6) tab "Visibilita" FUSA dentro "Dati" (10->9 tab): due form
+impilati (anagrafica+piano / visibilità pubblica), deep-link
+?tab=visibility e ?page=tenant_visibility normalizzati a settings
+(LEGACY_TAB_ALIASES); (7) sottotab "Pacchetti SMS" RIORDINATA per
+frequenza d'uso: metriche -> Piani -> Ordini recenti -> Ricarica
+manuale -> Impostazioni prezzo (i parametri fini per ultimi).
+
+Verifica: screenshot della vista Tenant riorganizzata (form chiuso,
+9 tab, Dati con select Piano + Visibilità pubblica, onboarding
+tradotto in tabella); TUTTE le 11 suite verdi — ux 7/7 (M4 a 9 tab),
+consolida 12/12 (P11 aggiornata all'accento "Registro attività" — i
+text= di Playwright NON matchano attraverso gli accenti), giro5 17,
+fase4 11, faseAB 11, faseC 7, faseD 4, faseE 8, restore 8, hardening
+19, fase3 9; tsc pulito.

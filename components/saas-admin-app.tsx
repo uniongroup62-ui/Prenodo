@@ -196,6 +196,9 @@ export function SaasAdminApp({
   const [statusFilter, setStatusFilter] = useState("");
   const [page, setPage] = useState(1);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // Form "Nuovo tenant" collassato di default (analisi organizzazione 19/07):
+  // 8 campi sempre aperti occupavano mezza pagina; si apre dal bottone header.
+  const [createOpen, setCreateOpen] = useState(false);
   const [admins, setAdmins] = useState<AdminRecord[]>([]);
   const [results, setResults] = useState<Array<{ slug: string; ok: boolean; message: string }>>([]);
   const [supportLink, setSupportLink] = useState("");
@@ -368,6 +371,7 @@ export function SaasAdminApp({
       if (data.token?.link) setSupportLink(data.token.link);
       if (data.results) setResults(data.results);
       setMessage("Operazione completata.");
+      if (action === "create") setCreateOpen(false);
       await loadOverview();
       if (slug && action !== "delete") await loadTenant(slug);
       if (action === "delete") setTenantDetail(null);
@@ -559,7 +563,7 @@ export function SaasAdminApp({
                 Cerca
                 <kbd className="rounded border border-slate-300 bg-slate-100 px-1.5 text-[11px] font-semibold text-slate-500">Ctrl K</kbd>
               </button>
-              <button className="inline-flex h-10 items-center gap-2 rounded-md bg-[#365a96] px-4 text-sm font-semibold text-white disabled:opacity-50" disabled={!canManageTenants} type="button" onClick={() => navigateView("tenants")}>
+              <button className="inline-flex h-10 items-center gap-2 rounded-md bg-[#365a96] px-4 text-sm font-semibold text-white disabled:opacity-50" disabled={!canManageTenants} type="button" onClick={() => { navigateView("tenants"); setCreateOpen(true); }}>
                 <Plus size={17} aria-hidden />
                 Nuovo tenant
               </button>
@@ -594,6 +598,8 @@ export function SaasAdminApp({
                 activeTab={activeTenantTab}
                 supportLink={supportLink}
                 backups={tenantDetail ? backups[tenantDetail.tenant.slug] ?? [] : []}
+                createOpen={createOpen}
+                onToggleCreate={setCreateOpen}
                 onQueryChange={setQuery}
                 onStatusChange={setStatusFilter}
                 onFilter={() => loadOverview(query, statusFilter, 1)}
@@ -757,10 +763,10 @@ function DashboardView({ overview, canManage, onOpenTenant, onNavigate, onQuickA
   onQuickAction: (action: string, slug: string) => void;
 }) {
   const metrics = [
-    ["Tenant totali", overview.summary.total, "registro saas_tenants"],
+    ["Tenant totali", overview.summary.total, "tutti i tenant registrati"],
     ["Attivi", overview.summary.active, "operativi"],
     ["Sospesi", overview.summary.suspended, "accesso bloccato"],
-    ["Da verificare", overview.summary.needs_attention, "health o storico mancante"],
+    ["Da verificare", overview.summary.needs_attention, "salute non OK o mai verificata"],
     ["Errori diagnostica", overview.operational.health_errors, "ultimo controllo"],
     ["Onboarding aperti", overview.operational.onboarding_open, "non completati"],
   ];
@@ -773,7 +779,7 @@ function DashboardView({ overview, canManage, onOpenTenant, onNavigate, onQuickA
       {/* CODA DI LAVORO (Fase B): cosa richiede un'azione, in ordine di
           gravita', con azione one-click quando possibile. */}
       <section className="rounded-md border border-slate-200 bg-white shadow-sm">
-        <SectionHead title="Da fare adesso" subtitle="Segnalazioni operative in ordine di gravita'." />
+        <SectionHead title="Da fare adesso" subtitle="Segnalazioni operative in ordine di gravità." />
         {overview.workQueue.length === 0 ? (
           <p className="flex items-center gap-2 p-4 text-sm font-semibold text-emerald-700">
             <CheckCircle2 size={17} aria-hidden />
@@ -807,7 +813,7 @@ function DashboardView({ overview, canManage, onOpenTenant, onNavigate, onQuickA
       </section>
 
       <section className="rounded-md border border-slate-200 bg-white shadow-sm">
-        <SectionHead title="Tenant recenti" subtitle="Stato generale e ultimo health salvato." />
+        <SectionHead title="Tenant recenti" subtitle="Stato generale e ultima verifica di salute." />
         <TenantTable tenants={overview.tenants.slice(0, 8)} onOpenTenant={(slug) => onOpenTenant(slug)} />
       </section>
     </div>
@@ -823,6 +829,8 @@ function TenantsView(props: {
   activeTab: TenantTab;
   supportLink: string;
   backups: BackupRow[];
+  createOpen: boolean;
+  onToggleCreate: (open: boolean) => void;
   onQueryChange: (value: string) => void;
   onStatusChange: (value: string) => void;
   onFilter: () => void;
@@ -874,7 +882,7 @@ function TenantsView(props: {
             </div>
           ) : null}
         </section>
-        <CreateTenantPanel canManage={props.canManage} plans={props.overview.plans} onCreate={(payload) => props.onAction("create", payload)} />
+        <CreateTenantPanel canManage={props.canManage} open={props.createOpen} plans={props.overview.plans} onCreate={(payload) => props.onAction("create", payload)} onToggle={props.onToggleCreate} />
       </div>
       <TenantDetailPanel
         detail={props.tenantDetail}
@@ -891,16 +899,35 @@ function TenantsView(props: {
   );
 }
 
-function CreateTenantPanel({ plans, canManage, onCreate }: { plans: PlanOption[]; canManage: boolean; onCreate: (payload: Record<string, string>) => void }) {
+function CreateTenantPanel({ plans, open, canManage, onCreate, onToggle }: { plans: PlanOption[]; open: boolean; canManage: boolean; onCreate: (payload: Record<string, string>) => void; onToggle: (open: boolean) => void }) {
+  if (!open) {
+    return (
+      <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
+        <div className="flex items-center justify-between p-4">
+          <div>
+            <p className="font-semibold">Nuovo tenant</p>
+            <p className="text-sm text-slate-500">Crea tenant, admin iniziale, sede principale e onboarding.</p>
+          </div>
+          <button className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50" disabled={!canManage} type="button" onClick={() => onToggle(true)}>
+            <Plus size={16} aria-hidden />
+            Apri il modulo
+          </button>
+        </div>
+      </section>
+    );
+  }
   return (
     <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
-      <SectionHead title="Nuovo tenant" subtitle="Crea tenant, admin iniziale, sede principale e onboarding." />
+      <div className="flex items-start justify-between pr-4">
+        <SectionHead title="Nuovo tenant" subtitle="Crea tenant, admin iniziale, sede principale e onboarding." />
+        <button className="mt-4 text-sm font-semibold text-slate-500 hover:text-slate-700" type="button" onClick={() => onToggle(false)}>Chiudi</button>
+      </div>
       <form className="grid gap-3 p-4 md:grid-cols-2" onSubmit={(event) => {
         event.preventDefault();
         onCreate(formPayload(event.currentTarget));
         event.currentTarget.reset();
       }}>
-        <Input name="tenant_name" label="Nome attivita" placeholder="Centro Estetico Elite" />
+        <Input name="tenant_name" label="Nome attività" placeholder="Centro Estetico Elite" />
         <Input name="slug" label="Slug URL" placeholder="centroesteticoelite" required />
         <Input name="admin_name" label="Nome admin" defaultValue="Admin" />
         <Input name="admin_email" label="Email admin" type="email" required />
@@ -944,7 +971,7 @@ function BillingView({ data, canManage, onAction, onRefresh }: { data: BillingPa
         <Metric label="MRR" value={formatEuro(data.revenue.mrr_total)} detail="tenant attivi x piano" />
         <Metric label="Senza piano" value={String(data.revenue.unassigned_active)} detail="tenant attivi da assegnare" />
         <Metric label="Ricavo SMS (mese corrente)" value={formatEuro(data.revenue.sms_monthly[0]?.revenue ?? 0)} detail={data.revenue.sms_monthly[0]?.month ?? "-"} />
-        <Metric label="Crediti wallet totali" value={String(data.revenue.wallet_credits_total)} detail="somma su tutti i tenant" />
+        <Metric label="Crediti SMS residui" value={String(data.revenue.wallet_credits_total)} detail="somma su tutti i tenant" />
       </div>
 
       <section className="rounded-md border border-slate-200 bg-white shadow-sm">
@@ -983,7 +1010,7 @@ function BillingView({ data, canManage, onAction, onRefresh }: { data: BillingPa
       />
 
       <section className="rounded-md border border-slate-200 bg-white shadow-sm">
-        <SectionHead title="Assegna piano a tenant" subtitle="Aggiorna plan_id e l'etichetta del tenant; 'Nessun piano' = illimitato." />
+        <SectionHead title="Assegna piano a tenant" subtitle="Collega un piano al tenant; 'Nessun piano' = nessun limite." />
         <form className="grid gap-3 p-4 md:grid-cols-3" onSubmit={(event) => submitOperation(event, "plan_assign", onAction)}>
           <label>
             <span className="mb-1 block text-sm font-medium text-slate-600">Tenant</span>
@@ -1072,7 +1099,7 @@ function ControlsView({ data, onRefresh }: { data: ControlsPayload | null; onRef
 
 function SmsPlansView({ data, canManage, onAction, onRefresh }: { data: SmsBillingPayload | null; canManage: boolean; onAction: (payload: Record<string, string>) => void; onRefresh: () => void }) {
   if (!data) {
-    return <EmptyOperation icon={CreditCard} title="Piani SMS" detail="Carica prezzi, piani, ordini e wallet tenant." onRefresh={onRefresh} />;
+    return <EmptyOperation icon={CreditCard} title="Piani SMS" detail="Carica prezzi, piani, ordini e crediti dei tenant." onRefresh={onRefresh} />;
   }
   return (
     <div className="grid gap-5">
@@ -1090,43 +1117,12 @@ function SmsPlansView({ data, canManage, onAction, onRefresh }: { data: SmsBilli
         <Metric label="Piani attivi" value={String(data.activePlans.length)} detail="visibili tenant" />
       </div>
 
-      <section className="rounded-md border border-slate-200 bg-white shadow-sm">
-        <SectionHead title="Impostazioni prezzo" subtitle="Replica i parametri economici SaaS SMS del pannello PHP." />
-        <form className="grid gap-3 p-4 md:grid-cols-5" onSubmit={(event) => submitOperation(event, "sms_save_settings", onAction)}>
-          <Input name="provider_cost_per_segment" label="Costo provider" defaultValue={String(data.settings.provider_cost_per_segment ?? "0.0490")} />
-          <Input name="target_margin_percent" label="Margine target %" defaultValue={String(data.settings.target_margin_percent ?? "25")} />
-          <Input name="payment_fee_percent" label="Fee pagamento %" defaultValue={String(data.settings.payment_fee_percent ?? "2")} />
-          <Input name="payment_fee_fixed" label="Fee fissa" defaultValue={String(data.settings.payment_fee_fixed ?? "0.30")} />
-          <Input name="suggested_credit_price" label="Prezzo suggerito" defaultValue={String(data.settings.suggested_credit_price ?? "0.0700")} />
-          <Button disabled={!canManage} icon={Settings}>Salva prezzi</Button>
-        </form>
-      </section>
+      
+
+      
 
       <section className="rounded-md border border-slate-200 bg-white shadow-sm">
-        <SectionHead title="Ricarica manuale tenant" subtitle="Crea ordine manuale, accredita wallet e registra movimento purchase." />
-        <form className="grid gap-3 p-4 md:grid-cols-5" onSubmit={(event) => submitOperation(event, "sms_manual_topup", onAction)}>
-          <label>
-            <span className="mb-1 block text-sm font-medium text-slate-600">Tenant</span>
-            <select className="h-10 w-full rounded-md border border-slate-200 px-3 outline-none focus:border-[#365a96]" name="tenant_slug" required>
-              {data.tenants.map((tenant) => <option key={tenant.slug} value={tenant.slug}>{tenant.name} ({tenant.wallet_balance})</option>)}
-            </select>
-          </label>
-          <label>
-            <span className="mb-1 block text-sm font-medium text-slate-600">Piano</span>
-            <select className="h-10 w-full rounded-md border border-slate-200 px-3 outline-none focus:border-[#365a96]" name="plan_id" defaultValue="">
-              <option value="">Manuale</option>
-              {data.plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} - {plan.credits}</option>)}
-            </select>
-          </label>
-          <Input name="credits" label="Crediti" type="number" min="0" placeholder="Da piano" />
-          <Input name="amount_gross" label="Importo lordo" placeholder="Da piano" />
-          <Input name="note" label="Nota" placeholder="Ricarica manuale SaaS" />
-          <Button disabled={!canManage} icon={CreditCard}>Accredita</Button>
-        </form>
-      </section>
-
-      <section className="rounded-md border border-slate-200 bg-white shadow-sm">
-        <SectionHead title="Piani" subtitle="Ordine, attivazione, evidenza e marginalita per pacchetto." />
+        <SectionHead title="Piani" subtitle="Ordine, attivazione, evidenza e marginalità per pacchetto." />
         <div className="grid gap-3 p-4">
           {data.plans.map((plan) => (
             <form className="grid gap-3 rounded-md border border-slate-200 p-3 md:grid-cols-[1.2fr_120px_120px_1.4fr_90px_90px_auto]" key={plan.id} onSubmit={(event) => submitOperation(event, "sms_save_plan", onAction)}>
@@ -1165,6 +1161,41 @@ function SmsPlansView({ data, canManage, onAction, onRefresh }: { data: SmsBilli
         headers={["ID", "Tenant", "Piano", "Stato", "Crediti", "Importo", "Data"]}
         rows={data.orders.map((order) => [String(order.id), order.tenant_slug, order.plan_name || "-", order.status, String(order.credits), formatEuro(order.amount_gross), order.created_at || "-"])}
       />
+
+      <section className="rounded-md border border-slate-200 bg-white shadow-sm">
+        <SectionHead title="Ricarica manuale tenant" subtitle="Crea un ordine manuale e accredita subito i crediti al tenant." />
+        <form className="grid gap-3 p-4 md:grid-cols-5" onSubmit={(event) => submitOperation(event, "sms_manual_topup", onAction)}>
+          <label>
+            <span className="mb-1 block text-sm font-medium text-slate-600">Tenant</span>
+            <select className="h-10 w-full rounded-md border border-slate-200 px-3 outline-none focus:border-[#365a96]" name="tenant_slug" required>
+              {data.tenants.map((tenant) => <option key={tenant.slug} value={tenant.slug}>{tenant.name} ({tenant.wallet_balance})</option>)}
+            </select>
+          </label>
+          <label>
+            <span className="mb-1 block text-sm font-medium text-slate-600">Piano</span>
+            <select className="h-10 w-full rounded-md border border-slate-200 px-3 outline-none focus:border-[#365a96]" name="plan_id" defaultValue="">
+              <option value="">Manuale</option>
+              {data.plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} - {plan.credits}</option>)}
+            </select>
+          </label>
+          <Input name="credits" label="Crediti" type="number" min="0" placeholder="Da piano" />
+          <Input name="amount_gross" label="Importo lordo" placeholder="Da piano" />
+          <Input name="note" label="Nota" placeholder="Ricarica manuale SaaS" />
+          <Button disabled={!canManage} icon={CreditCard}>Accredita</Button>
+        </form>
+      </section>
+
+      <section className="rounded-md border border-slate-200 bg-white shadow-sm">
+        <SectionHead title="Impostazioni prezzo" subtitle="Parametri economici dei pacchetti: costo provider, margine e prezzo suggerito." />
+        <form className="grid gap-3 p-4 md:grid-cols-5" onSubmit={(event) => submitOperation(event, "sms_save_settings", onAction)}>
+          <Input name="provider_cost_per_segment" label="Costo provider" defaultValue={String(data.settings.provider_cost_per_segment ?? "0.0490")} />
+          <Input name="target_margin_percent" label="Margine target %" defaultValue={String(data.settings.target_margin_percent ?? "25")} />
+          <Input name="payment_fee_percent" label="Fee pagamento %" defaultValue={String(data.settings.payment_fee_percent ?? "2")} />
+          <Input name="payment_fee_fixed" label="Fee fissa" defaultValue={String(data.settings.payment_fee_fixed ?? "0.30")} />
+          <Input name="suggested_credit_price" label="Prezzo suggerito" defaultValue={String(data.settings.suggested_credit_price ?? "0.0700")} />
+          <Button disabled={!canManage} icon={Settings}>Salva prezzi</Button>
+        </form>
+      </section>
     </div>
   );
 }
@@ -1288,7 +1319,7 @@ function AuditView({ data, filters, onSearch, onPageChange }: { data: AuditSearc
         </form>
       </section>
       <Table
-        title={`Registro attivita${data ? ` (${data.total})` : ""}`}
+        title={`Registro attività${data ? ` (${data.total})` : ""}`}
         headers={["Data", "Azione", "Tenant", "Attore", "Messaggio"]}
         rows={(data?.rows ?? []).map((row) => [
           String(row.created_at ?? "-"),
@@ -1333,7 +1364,7 @@ function SignupsView({ signups, canManage, onOpenTenant, onAction, onRefresh }: 
       </div>
       <Table
         title="Richieste di registrazione"
-        headers={["Attivita", "Titolare", "Stato", "Richiesta il", "Esito", "Azioni"]}
+        headers={["Attività", "Titolare", "Stato", "Richiesta il", "Esito", "Azioni"]}
         rows={signups.map((signup) => [
           <span key={`b-${signup.id}`}><strong>{signup.business_name}</strong><span className="ml-2 text-slate-500">{signup.slug}</span></span>,
           <span key={`o-${signup.id}`}>{signup.owner_name}<span className="ml-2 text-slate-500">{signup.owner_email}</span></span>,
@@ -1368,7 +1399,7 @@ function AdminsView({ admins, currentUser, onAction }: { admins: AdminRecord[]; 
   return (
     <div className="grid gap-5">
       <section className="rounded-md border border-slate-200 bg-white shadow-sm">
-        <SectionHead title="Nuovo admin" subtitle="Owner: controllo completo, Admin: operativita, Viewer: consultazione." />
+        <SectionHead title="Nuovo admin" subtitle="Owner: controllo completo, Admin: operatività, Viewer: consultazione." />
         <form className="grid gap-3 p-4 md:grid-cols-4" onSubmit={(event) => submitAdmin(event, "create", onAction)}>
           <Input name="name" label="Nome" required />
           <Input name="email" label="Email" type="email" required />

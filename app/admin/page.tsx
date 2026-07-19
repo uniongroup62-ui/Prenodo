@@ -37,10 +37,12 @@ const LEGACY_TAB_MAP: Record<string, string> = {
   tenant_backups: "backups",
   tenant_danger: "danger",
   tenant_onboarding: "onboarding",
-  tenant_visibility: "visibility",
+  // Visibilità fusa in Dati (19/07): il vecchio deep-link resta valido.
+  tenant_visibility: "settings",
   tenant_admin: "admin",
 };
-const TABS = new Set(["overview", "timeline", "settings", "visibility", "admin", "onboarding", "health", "support", "backups", "danger"]);
+const TABS = new Set(["overview", "timeline", "settings", "admin", "onboarding", "health", "support", "backups", "danger"]);
+const LEGACY_TAB_ALIASES: Record<string, string> = { visibility: "settings" };
 // Sottosezione delle viste consolidate: dalle pagine legacy o da ?sec=.
 const LEGACY_SEC_MAP: Record<string, string> = {
   controls: "controls",
@@ -67,7 +69,8 @@ export default async function AdminPage({
   const mapped = LEGACY_PAGE_MAP[rawPage] ?? rawPage;
   const view = VIEWS.has(mapped) ? mapped : "dashboard";
   const slug = view === "tenants" ? qs("slug") : "";
-  const rawTab = qs("tab") || LEGACY_TAB_MAP[rawPage] || "overview";
+  const rawTabInput = qs("tab") || LEGACY_TAB_MAP[rawPage] || "overview";
+  const rawTab = LEGACY_TAB_ALIASES[rawTabInput] ?? rawTabInput;
   const tab = TABS.has(rawTab) ? rawTab : "overview";
   const rawSec = qs("sec") || LEGACY_SEC_MAP[rawPage] || "";
   const section = SECS.has(rawSec) ? rawSec : "";

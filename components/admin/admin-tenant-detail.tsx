@@ -38,6 +38,7 @@ import {
   formatEuro,
   formatKb,
   healthLabel,
+  onboardingLabel,
   statusLabel,
   statusTone,
   submitAction,
@@ -56,7 +57,6 @@ export const tenantTabs: Array<{ key: TenantTab; label: string; icon: LucideIcon
   { key: "overview", label: "Panoramica", icon: LayoutDashboard },
   { key: "timeline", label: "Timeline", icon: History },
   { key: "settings", label: "Dati", icon: Settings },
-  { key: "visibility", label: "Visibilita", icon: Eye },
   { key: "admin", label: "Admin", icon: UserCog },
   { key: "onboarding", label: "Onboarding", icon: ClipboardCheck },
   { key: "health", label: "Diagnostica", icon: Activity },
@@ -118,8 +118,17 @@ export function TenantDetailPanel(props: {
       <div className="p-4">
         {props.activeTab === "overview" ? <TenantOverview detail={props.detail} /> : null}
         {props.activeTab === "timeline" ? <TenantTimeline events={props.detail.timeline ?? []} /> : null}
-        {props.activeTab === "settings" ? <TenantSettings plans={props.plans} tenant={tenant} canManage={props.canManage} onAction={props.onAction} /> : null}
-        {props.activeTab === "visibility" ? <TenantVisibility tenant={tenant} canManage={props.canManage} onAction={props.onAction} /> : null}
+        {/* Visibilità fusa dentro Dati (analisi organizzazione 19/07): due
+            form impilati — dati anagrafici + visibilità pubblica. */}
+        {props.activeTab === "settings" ? (
+          <div className="grid gap-6">
+            <TenantSettings plans={props.plans} tenant={tenant} canManage={props.canManage} onAction={props.onAction} />
+            <div>
+              <p className="mb-2 text-sm font-semibold text-slate-700">Visibilità pubblica</p>
+              <TenantVisibility tenant={tenant} canManage={props.canManage} onAction={props.onAction} />
+            </div>
+          </div>
+        ) : null}
         {props.activeTab === "admin" ? <TenantAdmin tenant={tenant} canManage={props.canManage} onAction={props.onAction} /> : null}
         {props.activeTab === "onboarding" ? <TenantOnboarding tenant={tenant} canManage={props.canManage} onAction={props.onAction} /> : null}
         {props.activeTab === "health" ? <TenantHealth detail={props.detail} canManage={props.canManage} onAction={props.onAction} /> : null}
@@ -150,7 +159,7 @@ function TenantOverview({ detail }: { detail: TenantDetailPayload }) {
       <div className="grid gap-3 md:grid-cols-3">
         <Metric label="Stato" value={statusLabel[tenantStatus(tenant)]} detail="tenant" />
         <Metric label="Salute" value={healthLabel[health]} detail={tenant.health_checked_at || "mai salvata"} />
-        <Metric label="Onboarding" value={`${tenant.onboarding_percent ?? 0}%`} detail={tenant.onboarding_status || "not_started"} />
+        <Metric label="Onboarding" value={`${tenant.onboarding_percent ?? 0}%`} detail={onboardingLabel(tenant.onboarding_status)} />
       </div>
       <div className="grid gap-2 text-sm">
         <Detail label="URL" value={`/${tenant.slug}/`} />
@@ -218,9 +227,9 @@ function TenantVisibility({ tenant, canManage, onAction }: { tenant: Tenant; can
   return (
     <form className="grid gap-4" onSubmit={(event) => submitAction(event, "visibility", onAction)}>
       <input name="slug" type="hidden" value={tenant.slug} />
-      <Toggle name="booking_public_allowed" label="Consenti visibilita booking" detail="Abilita prenotazioni online pubbliche e pulsanti Prenota." defaultChecked={Number(tenant.booking_public_allowed ?? 1) === 1} />
-      <Toggle name="marketplace_public_allowed" label="Consenti visibilita marketplace" detail="Abilita scheda pubblica, sedi, ricerca e preferiti marketplace." defaultChecked={Number(tenant.marketplace_public_allowed ?? 1) === 1} />
-      <Button disabled={!canManage} icon={Eye}>Salva visibilita</Button>
+      <Toggle name="booking_public_allowed" label="Consenti visibilità booking" detail="Abilita prenotazioni online pubbliche e pulsanti Prenota." defaultChecked={Number(tenant.booking_public_allowed ?? 1) === 1} />
+      <Toggle name="marketplace_public_allowed" label="Consenti visibilità marketplace" detail="Abilita scheda pubblica, sedi, ricerca e preferiti marketplace." defaultChecked={Number(tenant.marketplace_public_allowed ?? 1) === 1} />
+      <Button disabled={!canManage} icon={Eye}>Salva visibilità</Button>
     </form>
   );
 }
