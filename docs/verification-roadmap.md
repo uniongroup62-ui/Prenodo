@@ -16419,3 +16419,40 @@ badge di ogni fonte, click tab -> URL) + regressioni giro5 17/17,
 fase4 11/11, faseAB 11/11, faseC 7/7, hardening 19/19, fase3 9/9;
 tsc pulito. Fixture zz-fased* (tenant finto, backup R2, token, ordine
 SMS) rimosse per id/chiave.
+
+## 2026-07-19 — PANNELLO ADMIN Fase E: PIANI VERI + VISTA RICAVI
+
+Asse E del piano "rivoluzione pannello": 'plan' era una stringa
+libera senza conseguenze — ora e' un'entita' che governa i gate.
+
+(1) lib/saas-plans.ts: tabella saas_plans (DDL POSTGRES; ALTER
+saas_tenants ADD plan_id via IF NOT EXISTS — gli addColumnIfMissing
+MySQL-style falliscono in silenzio su PG); saveSaasPlan (limiti vuoti
+= NULL = illimitato), assignSaasPlan (plan_id + etichetta legacy
+sincronizzata + audit), tenantPlanMaxLocations (FAIL-OPEN: nessun
+piano/limite/blip = illimitato), saasRevenueSummary (MRR = tenant
+attivi x prezzo piano, ordini SMS paid per mese, wallet crediti
+aggregato, tenant attivi senza piano).
+
+(2) GATE SEDI nel gestionale (saveBusinessLocation): SOLO in
+CREAZIONE, se il piano attivo del tenant ha max_locations e le sedi
+attive sono >= limite -> "Limite sedi del piano raggiunto: contatta
+l'assistenza per un upgrade" (messaggio NUDO, aggiunto alla lista
+validazioni della route). Edit sempre permesso. Zero impatti sui
+tenant senza piano.
+
+(3) VISTA "Piani & Ricavi" (nav a 10 voci, ?page=billing): metriche
+MRR/senza-piano/ricavo SMS mese/wallet, form piano, tabella piani con
+MRR per piano, assegnazione tenant->piano, ricavo SMS per mese.
+
+Verifica: test-saas-admin-faseE 8/8 — gate provato sul tenant REALE
+(2 sedi attive, piano limite 2): creazione respinta NUDA senza righe
+scritte; edit sede 21 IDEMPOTENTE (tutti i campi riletti dal DB e
+ripassati: i campi assenti verrebbero azzerati dal normalize legacy);
+limite rimosso -> gate passa e ferma la validazione nome vuoto (mai
+una sede creata); MRR 1x49.90; UI renderizzata; unassign; plan/plan_id
+del tenant reale RIPRISTINATI esatti nel cleanup. Regressioni giro5
+17/17, fase4 11/11, faseAB 11/11, faseC 7/7, faseD 4/4, hardening
+19/19, fase3 9/9 (nav atteso aggiornato a 10); tsc pulito. HARNESS:
+l'ensure di saas_plans e' lazy — leggere plan_id solo DOPO la prima
+chiamata billing.

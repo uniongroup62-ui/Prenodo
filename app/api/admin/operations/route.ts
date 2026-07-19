@@ -95,6 +95,30 @@ export async function GET(request: Request) {
       return Response.json({ ok: true, sms, emails });
     }
 
+    // Piani & Ricavi (Fase E, 2026-07-19): piani con limiti, MRR, SMS/mese.
+    if (section === "billing") {
+      const { listSaasPlans, saasRevenueSummary } = await import("@/lib/saas-plans");
+      const [plans, revenue, tenants] = await Promise.all([
+        listSaasPlans(true),
+        saasRevenueSummary(),
+        listSaasTenants(),
+      ]);
+      return Response.json({
+        ok: true,
+        plans,
+        revenue,
+        tenants: tenants
+          .filter((tenant) => tenantStatus(tenant) === "active")
+          .map((tenant) => ({
+            id: Number(tenant.id),
+            slug: String(tenant.slug),
+            name: String(tenant.name ?? tenant.slug),
+            plan_id: tenant.plan_id === null || tenant.plan_id === undefined ? null : Number(tenant.plan_id),
+            plan: String(tenant.plan ?? ""),
+          })),
+      });
+    }
+
     // Export CSV (Fase 4, 2026-07-19): download diretto dal browser.
     if (section === "export_tenants") {
       const tenants = await listSaasTenants();
@@ -210,6 +234,18 @@ export async function POST(request: Request) {
     if (action === "backup_create") {
       const result = await createSaasTenantBackup(body.slug || "", body.reason || "");
       return Response.json({ ok: true, backup: result });
+    }
+
+    if (action === "plan_save") {
+      const { saveSaasPlan } = await import("@/lib/saas-plans");
+      const id = await saveSaasPlan(body);
+      return Response.json({ ok: true, id });
+    }
+
+    if (action === "plan_assign") {
+      const { assignSaasPlan } = await import("@/lib/saas-plans");
+      await assignSaasPlan(body.tenant_slug || body.slug || "", parseInteger(body.plan_id, 0));
+      return Response.json({ ok: true });
     }
 
     return jsonError("Azione operativa non valida.", 400);

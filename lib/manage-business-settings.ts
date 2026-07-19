@@ -495,6 +495,26 @@ export async function saveBusinessLocation(slug: string, input: Record<string, s
     data.booking_enabled = id > 0 ? await currentLocationBookingEnabled(slug, id) : 0;
   }
 
+  // GATE PIANO (Fase E SaaS Admin, 2026-07-19): se il tenant ha un piano con
+  // limite sedi, la CREAZIONE oltre il limite viene bloccata. Nessun piano o
+  // limite NULL = illimitato (comportamento invariato per i tenant esistenti).
+  if (id <= 0) {
+    const { tenantPlanMaxLocations } = await import("@/lib/saas-plans");
+    const maxLocations = await tenantPlanMaxLocations(slug);
+    if (maxLocations !== null) {
+      const activeRows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "locations",
+        columns: "COUNT(*) AS count",
+        where: "COALESCE(is_active,1) = 1",
+        params: [],
+      });
+      if (Number(activeRows[0]?.count ?? 0) >= maxLocations) {
+        throw new Error("Limite sedi del piano raggiunto: contatta l'assistenza per un upgrade");
+      }
+    }
+  }
+
   await validateLocationPayload(slug, data, id);
 
   if (id > 0) {

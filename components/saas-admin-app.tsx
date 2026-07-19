@@ -31,13 +31,14 @@ import {
   Trash2,
   UserCog,
   Users,
+  Wallet,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
 import type { SaasAdminUser } from "@/lib/saas-admin-auth";
 import { AdminSecurityPanel } from "@/components/admin/admin-security-panel";
 
-type ViewKey = "dashboard" | "tenants" | "controls" | "sms_plans" | "send_movements" | "maintenance" | "audit" | "admins" | "security";
+type ViewKey = "dashboard" | "tenants" | "controls" | "sms_plans" | "billing" | "send_movements" | "maintenance" | "audit" | "admins" | "security";
 type TenantTab = "overview" | "timeline" | "settings" | "visibility" | "admin" | "onboarding" | "health" | "support" | "backups" | "danger";
 type HealthLevel = "ok" | "warning" | "error";
 type TenantStatus = "provisioning" | "active" | "suspended" | "failed" | "deleted";
@@ -217,6 +218,18 @@ type SmsBillingPayload = {
   tenants: Array<{ id: number; slug: string; name: string; status: TenantStatus; wallet_balance: number }>;
 };
 
+type BillingPayload = {
+  plans: Array<{ id: number; name: string; price_month: number | string; max_locations: number | null; max_staff: number | null; sms_included_month: number; is_active: number; notes?: string | null }>;
+  revenue: {
+    mrr_total: number;
+    by_plan: Array<{ id: number; name: string; price_month: number; tenants: number; mrr: number }>;
+    unassigned_active: number;
+    sms_monthly: Array<{ month: string; orders: number; credits: number; revenue: number }>;
+    wallet_credits_total: number;
+  };
+  tenants: Array<{ id: number; slug: string; name: string; plan_id: number | null; plan: string }>;
+};
+
 type MovementRow = {
   tenant_slug: string;
   tenant_name: string;
@@ -243,6 +256,7 @@ const navItems: Array<{ key: ViewKey; label: string; icon: LucideIcon }> = [
   { key: "tenants", label: "Tenant", icon: Building2 },
   { key: "controls", label: "Controlli", icon: Activity },
   { key: "sms_plans", label: "Piani SMS", icon: CreditCard },
+  { key: "billing", label: "Piani & Ricavi", icon: Wallet },
   { key: "send_movements", label: "Movimenti invii", icon: Send },
   { key: "maintenance", label: "Manutenzione", icon: Wrench },
   { key: "audit", label: "Audit", icon: ScrollText },
@@ -409,6 +423,7 @@ export function SaasAdminApp({
   const [activeTenantTab, setActiveTenantTab] = useState<TenantTab>("overview");
   const [controls, setControls] = useState<ControlsPayload | null>(null);
   const [smsBilling, setSmsBilling] = useState<SmsBillingPayload | null>(null);
+  const [billing, setBilling] = useState<BillingPayload | null>(null);
   const [movements, setMovements] = useState<MovementsPayload | null>(null);
   const [backups, setBackups] = useState<Record<string, BackupRow[]>>({});
   const [query, setQuery] = useState("");
@@ -446,6 +461,7 @@ export function SaasAdminApp({
     if (key === "admins") void loadAdmins();
     if (key === "controls") void loadControls();
     if (key === "sms_plans") void loadSmsBilling();
+    if (key === "billing") void loadBilling();
     if (key === "send_movements") void loadMovements();
   };
 
@@ -614,6 +630,18 @@ export function SaasAdminApp({
     }
   }
 
+  async function loadBilling() {
+    setLoading(true);
+    try {
+      const data = await apiGet<BillingPayload>("/api/admin/operations?section=billing");
+      setBilling(data);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function loadMovements() {
     setLoading(true);
     try {
@@ -640,6 +668,7 @@ export function SaasAdminApp({
       await apiPost<{ ok: boolean }>("/api/admin/operations", payload);
       setMessage("Operazione completata.");
       if (payload.action?.startsWith("sms_")) await loadSmsBilling();
+      if (payload.action?.startsWith("plan_")) await loadBilling();
       if (payload.action === "backup_create" && payload.slug) await loadBackups(payload.slug);
     } catch (error) {
       setMessage(errorMessage(error));
@@ -742,6 +771,7 @@ export function SaasAdminApp({
             ) : null}
             {activeView === "controls" ? <ControlsView data={controls} onRefresh={loadControls} /> : null}
             {activeView === "sms_plans" ? <SmsPlansView data={smsBilling} canManage={canManageTenants} onAction={operationAction} onRefresh={loadSmsBilling} /> : null}
+            {activeView === "billing" ? <BillingView data={billing} canManage={canManageTenants} onAction={operationAction} onRefresh={loadBilling} /> : null}
             {activeView === "send_movements" ? <MovementsView data={movements} onRefresh={loadMovements} /> : null}
             {activeView === "maintenance" ? <MaintenanceView tenants={overview.tenants} results={results} canManage={canManageTenants} onAction={tenantAction} /> : null}
             {activeView === "audit" ? <AuditList rows={overview.audit} /> : null}
@@ -1021,6 +1051,85 @@ function CreateTenantPanel({ canManage, onCreate }: { canManage: boolean; onCrea
         </button>
       </form>
     </section>
+  );
+}
+
+// PIANI & RICAVI (Fase E): piani veri con limiti che governano i gate del
+// gestionale + MRR, ricavo SMS per mese e wallet aggregato.
+function BillingView({ data, canManage, onAction, onRefresh }: { data: BillingPayload | null; canManage: boolean; onAction: (payload: Record<string, string>) => void; onRefresh: () => void }) {
+  if (!data) {
+    return <EmptyOperation icon={Wallet} title="Piani & Ricavi" detail="Carica piani, MRR e ricavi SMS." onRefresh={onRefresh} />;
+  }
+  return (
+    <div className="grid gap-5">
+      <div className="flex justify-end">
+        <Button variant="outline" icon={RotateCcw} onClick={onRefresh}>Aggiorna</Button>
+      </div>
+      <div className="grid gap-3 md:grid-cols-4">
+        <Metric label="MRR" value={formatEuro(data.revenue.mrr_total)} detail="tenant attivi x piano" />
+        <Metric label="Senza piano" value={String(data.revenue.unassigned_active)} detail="tenant attivi da assegnare" />
+        <Metric label="Ricavo SMS (mese corrente)" value={formatEuro(data.revenue.sms_monthly[0]?.revenue ?? 0)} detail={data.revenue.sms_monthly[0]?.month ?? "-"} />
+        <Metric label="Crediti wallet totali" value={String(data.revenue.wallet_credits_total)} detail="somma su tutti i tenant" />
+      </div>
+
+      <section className="rounded-md border border-slate-200 bg-white shadow-sm">
+        <SectionHead title="Nuovo piano / modifica" subtitle="Prezzo mensile e LIMITI: vuoto = illimitato. I limiti governano i gate del gestionale (es. creazione sedi)." />
+        <form className="grid gap-3 p-4 md:grid-cols-6" onSubmit={(event) => submitOperation(event, "plan_save", onAction)}>
+          <Input name="plan_id" label="ID (vuoto = nuovo)" placeholder="" />
+          <Input name="name" label="Nome piano" placeholder="Pro" required />
+          <Input name="price_month" label="Prezzo/mese EUR" placeholder="49.90" />
+          <Input name="max_locations" label="Max sedi" placeholder="illimitato" />
+          <Input name="max_staff" label="Max staff" placeholder="illimitato" />
+          <Input name="sms_included_month" label="SMS inclusi/mese" placeholder="0" />
+          <Button disabled={!canManage} icon={Plus}>Salva piano</Button>
+        </form>
+      </section>
+
+      <Table
+        title="Piani e MRR"
+        headers={["ID", "Piano", "Prezzo/mese", "Max sedi", "Max staff", "Tenant", "MRR"]}
+        rows={data.plans.length === 0 ? [["-", "Nessun piano definito", "-", "-", "-", "-", "-"]] : data.plans.map((plan) => {
+          const rev = data.revenue.by_plan.find((row) => row.id === plan.id);
+          return [
+            String(plan.id),
+            <span key={plan.id}><strong>{plan.name}</strong>{plan.is_active === 1 ? null : <span className="ml-2 text-xs text-slate-500">(disattivo)</span>}</span>,
+            formatEuro(Number(plan.price_month)),
+            plan.max_locations === null ? "illimitato" : String(plan.max_locations),
+            plan.max_staff === null ? "illimitato" : String(plan.max_staff),
+            String(rev?.tenants ?? 0),
+            formatEuro(rev?.mrr ?? 0),
+          ];
+        })}
+      />
+
+      <section className="rounded-md border border-slate-200 bg-white shadow-sm">
+        <SectionHead title="Assegna piano a tenant" subtitle="Aggiorna plan_id e l'etichetta del tenant; 'Nessun piano' = illimitato." />
+        <form className="grid gap-3 p-4 md:grid-cols-3" onSubmit={(event) => submitOperation(event, "plan_assign", onAction)}>
+          <label>
+            <span className="mb-1 block text-sm font-medium text-slate-600">Tenant</span>
+            <select className="h-10 w-full rounded-md border border-slate-200 px-3 outline-none focus:border-emerald-700" name="tenant_slug" required>
+              {data.tenants.map((tenant) => <option key={tenant.slug} value={tenant.slug}>{tenant.name} ({tenant.slug}){tenant.plan ? ` — ${tenant.plan}` : ""}</option>)}
+            </select>
+          </label>
+          <label>
+            <span className="mb-1 block text-sm font-medium text-slate-600">Piano</span>
+            <select className="h-10 w-full rounded-md border border-slate-200 px-3 outline-none focus:border-emerald-700" name="plan_id">
+              <option value="0">Nessun piano (illimitato)</option>
+              {data.plans.filter((plan) => plan.is_active === 1).map((plan) => <option key={plan.id} value={String(plan.id)}>{plan.name} — {formatEuro(Number(plan.price_month))}/mese</option>)}
+            </select>
+          </label>
+          <div className="flex items-end">
+            <Button disabled={!canManage} icon={UserCog}>Assegna</Button>
+          </div>
+        </form>
+      </section>
+
+      <Table
+        title="Ricavo SMS per mese (ordini pagati)"
+        headers={["Mese", "Ordini", "Crediti", "Ricavo"]}
+        rows={data.revenue.sms_monthly.length === 0 ? [["-", "-", "-", "-"]] : data.revenue.sms_monthly.map((row) => [row.month, String(row.orders), String(row.credits), formatEuro(row.revenue)])}
+      />
+    </div>
   );
 }
 
@@ -1819,6 +1928,7 @@ function viewTitle(view: ViewKey): string {
   if (view === "tenants") return "Tenant";
   if (view === "controls") return "Controlli";
   if (view === "sms_plans") return "Piani SMS";
+  if (view === "billing") return "Piani & Ricavi";
   if (view === "send_movements") return "Movimenti invii";
   if (view === "maintenance") return "Manutenzione";
   if (view === "audit") return "Audit";

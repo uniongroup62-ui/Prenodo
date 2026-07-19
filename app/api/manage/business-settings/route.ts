@@ -187,7 +187,8 @@ export async function POST(request: Request) {
             || inner === "Email non valida."
             || inner.endsWith(" non valido.")
             || inner === "Esiste gia una sede con questo nome."
-            || inner === "Funzione non disponibile per il tuo account";
+            || inner === "Funzione non disponibile per il tuo account"
+            || inner.startsWith("Limite sedi del piano raggiunto");
           return jsonError(isValidation ? inner : `Errore salvataggio sede: ${inner}`);
         }
 
