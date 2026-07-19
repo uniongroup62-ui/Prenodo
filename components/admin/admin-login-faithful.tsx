@@ -1,21 +1,18 @@
 "use client";
 
 import { useState } from "react";
+import { KeyRound, Loader2, ShieldCheck } from "lucide-react";
 
-// Pixel-faithful port of the legacy PHP /admin/login page.
-// Markup mirrors the captured admin login HTML verbatim (admin-shell > admin-header
-// + admin-main > page-head + card-panel > form.form-grid) using the original
-// Bootstrap 5.3.3 + assets/admin.css classes.
-//
-// The legacy `_csrf` / `_form` hidden inputs are dropped: the form is wired to the
-// JSON admin login API (POST /api/admin/auth/login) instead of the PHP form post.
+// Login del pannello SaaS Admin — redesign identita' Prenodo (2026-07-19, su
+// richiesta): split-screen con card bianca + pannello ink navy #141c30 e
+// accenti #365a96, come il resto del pannello. La LOGICA e' invariata:
+// POST /api/admin/auth/login; con 2FA attiva il server risponde
+// needsTotp+challenge e si chiede il codice authenticator (o di backup).
 export function AdminLoginFaithful() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  // Step 2FA (Fase 1 blindatura): password valida + TOTP attivo -> challenge
-  // firmata e richiesta del codice authenticator (o di backup).
   const [totpChallenge, setTotpChallenge] = useState("");
   const [totpCode, setTotpCode] = useState("");
 
@@ -51,89 +48,100 @@ export function AdminLoginFaithful() {
     }
   }
 
+  const inputCls = "h-11 w-full rounded-md border border-slate-200 px-3 outline-none transition-colors focus:border-[#365a96]";
+
   return (
-    <>
-      {/* Legacy admin pages load Bootstrap 5.3.3 + assets/admin.css. */}
-      <link
-        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
-        rel="stylesheet"
-      />
-      <link href="/admin/assets/admin.css" rel="stylesheet" />
-
-      <div className="admin-shell">
-        <header className="admin-header">
-          <div>
-            <a className="admin-brand" href="./">
-              SaaS Admin
-            </a>
-            <div className="admin-subtitle">Gestione tenant, accessi e diagnostica.</div>
-          </div>
-        </header>
-
-        <main className="admin-main">
-          <div className="page-head">
-            <div>
-              <div className="page-eyebrow">Accesso</div>
-              <h1>SaaS Admin</h1>
-              <p>Entra nel pannello di gestione dei tenant.</p>
+    <main className="min-h-screen bg-[#eef2f6] text-slate-950">
+      <div className="grid min-h-screen lg:grid-cols-[minmax(0,1fr)_420px]">
+        <section className="flex items-center justify-center px-5 py-8">
+          <div className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-7 shadow-sm">
+            <div className="flex items-center gap-3">
+              <span className="flex h-11 w-11 items-center justify-center rounded-md bg-[#365a96] font-semibold text-white">P</span>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#365a96]">SaaS Admin</p>
+                <h1 className="text-2xl font-semibold">{totpChallenge ? "Verifica in due passaggi" : "Accesso"}</h1>
+              </div>
             </div>
-          </div>
-          <div className="card-panel" style={{ maxWidth: 620 }}>
+            <p className="mt-2 text-sm text-slate-500">
+              {totpChallenge
+                ? "Inserisci il codice a 6 cifre dell'app authenticator, oppure un codice di backup."
+                : "Entra nel pannello di gestione dei tenant Prenodo."}
+            </p>
+
             {error ? (
-              <div className="alert alert-danger" role="alert">
+              <div className="mt-5 rounded-md border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700" role="alert">
                 {error}
               </div>
             ) : null}
-            <form method="post" className="form-grid" onSubmit={onSubmit}>
+
+            <form className="mt-6 space-y-4" onSubmit={onSubmit}>
               {totpChallenge ? (
-                <div className="span-12">
-                  <label className="form-label">Codice a 6 cifre (app authenticator) o codice di backup</label>
+                <label className="block">
+                  <span className="mb-1 block text-sm font-medium text-slate-600">Codice authenticator o di backup</span>
                   <input
-                    className="form-control"
-                    name="totp_code"
-                    type="text"
-                    autoComplete="one-time-code"
                     autoFocus
+                    autoComplete="one-time-code"
+                    className={`${inputCls} text-center text-lg tracking-[0.35em]`}
+                    inputMode="numeric"
+                    name="totp_code"
+                    required
+                    type="text"
                     value={totpCode}
                     onChange={(e) => setTotpCode(e.target.value)}
-                    required
                   />
-                </div>
+                </label>
               ) : (
                 <>
-                  <div className="span-6">
-                    <label className="form-label">Email</label>
-                    <input
-                      className="form-control"
-                      name="email"
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className="span-6">
-                    <label className="form-label">Password</label>
-                    <input
-                      className="form-control"
-                      name="password"
-                      type="password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      required
-                    />
-                  </div>
+                  <label className="block">
+                    <span className="mb-1 block text-sm font-medium text-slate-600">Email</span>
+                    <input className={inputCls} name="email" required type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-sm font-medium text-slate-600">Password</span>
+                    <input className={inputCls} name="password" required type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+                  </label>
                 </>
               )}
-              <div className="span-12">
-                <button className="btn btn-primary" type="submit" disabled={loading}>
-                  {loading ? "Accesso…" : totpChallenge ? "Verifica codice" : "Entra"}
+
+              <button
+                className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-md bg-[#365a96] px-4 text-sm font-semibold text-white transition-colors hover:bg-[#27436f] disabled:opacity-60"
+                disabled={loading}
+                type="submit"
+              >
+                {loading ? <Loader2 className="animate-spin" size={17} aria-hidden /> : <KeyRound size={17} aria-hidden />}
+                {loading ? "Accesso…" : totpChallenge ? "Verifica codice" : "Entra"}
+              </button>
+
+              {totpChallenge ? (
+                <button
+                  className="w-full text-center text-sm font-semibold text-slate-500 hover:text-slate-700"
+                  type="button"
+                  onClick={() => { setTotpChallenge(""); setTotpCode(""); setError(""); }}
+                >
+                  Torna al login
                 </button>
-              </div>
+              ) : null}
             </form>
           </div>
-        </main>
+        </section>
+
+        <aside className="hidden bg-[#141c30] p-8 text-white lg:block">
+          <div className="flex h-full flex-col justify-between">
+            <div>
+              <div className="flex h-12 w-12 items-center justify-center rounded-md bg-[#365a96] font-semibold">P</div>
+              <h2 className="mt-8 text-4xl font-semibold">Console tenant</h2>
+              <p className="mt-4 leading-7 text-white/70">
+                Gestione tenant, diagnostica, piani, backup e accessi di supporto della piattaforma Prenodo.
+              </p>
+            </div>
+            <div className="grid gap-3 text-sm text-white/70">
+              <span className="flex items-center gap-2"><ShieldCheck size={16} aria-hidden /> Sessioni revocabili e 2FA</span>
+              <span className="flex items-center gap-2"><ShieldCheck size={16} aria-hidden /> Audit su ogni azione</span>
+              <span className="flex items-center gap-2"><ShieldCheck size={16} aria-hidden /> Backup su storage durabile</span>
+            </div>
+          </div>
+        </aside>
       </div>
-    </>
+    </main>
   );
 }

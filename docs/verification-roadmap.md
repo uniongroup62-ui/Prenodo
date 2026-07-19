@@ -16553,3 +16553,19 @@ fase4 11/11, faseAB 11/11, faseC 7/7, faseD 4/4, faseE 8/8, ux 7/7,
 hardening 19/19, fase3 9/9 (nav atteso 11). HARNESS: attendere la
 RIGA della vista nuova, non il titolo — l'empty-state matcha il
 titolo case-insensitive e la prima visita in dev compila.
+
+## 2026-07-19 — PANNELLO ADMIN: REDESIGN LOGIN
+
+Su richiesta: /admin/login era rimasto il port fedele del PHP legacy
+(Bootstrap CDN + admin.css, testo doppio "SaaS Admin"). Ora e' in
+identita' Prenodo come il resto del pannello: split-screen con card
+bianca (logo P navy, kicker, focus #365a96, bottone navy con hover
+#27436f e loader), pannello destro ink #141c30 "Console tenant" con
+i tratti di sicurezza; step 2FA ridisegnato (input codice centrato
+con tracking + link "Torna al login"); niente piu' Bootstrap CDN.
+LOGICA INVARIATA (password -> needsTotp -> verifica codice/backup).
+
+Verifica: screenshot renderizzato (form, errore 'Credenziali non
+valide' nel box rosso, pannello brand); regressioni hardening 19/19
+(tutto il flusso login/2FA via API) e fase3 9/9; tsc pulito; riga di
+login_attempts del probe rimossa.
