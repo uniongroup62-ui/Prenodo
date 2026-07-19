@@ -156,6 +156,18 @@ export async function GET(request: Request) {
       return csvResponse("ordini-sms.csv", rows);
     }
 
+    // Ripristino: ultimi backup di slug NON piu' esistenti (post-delete).
+    if (section === "restore_candidates") {
+      const { restorableSaasBackups } = await import("@/lib/saas-operations");
+      return Response.json({ ok: true, candidates: await restorableSaasBackups(20) });
+    }
+
+    // Registrazioni self-service (lettura censurata, mai hash).
+    if (section === "signups") {
+      const { listSaasSignups } = await import("@/lib/saas-operations");
+      return Response.json({ ok: true, signups: await listSaasSignups(50) });
+    }
+
     if (section === "backups") {
       const tenant = await requireSaasTenant(url.searchParams.get("slug") ?? "");
       return Response.json({ ok: true, backups: await listSaasTenantBackups(Number(tenant.id), 50) });
@@ -245,6 +257,18 @@ export async function POST(request: Request) {
     if (action === "plan_assign") {
       const { assignSaasPlan } = await import("@/lib/saas-plans");
       await assignSaasPlan(body.tenant_slug || body.slug || "", parseInteger(body.plan_id, 0));
+      return Response.json({ ok: true });
+    }
+
+    if (action === "backup_restore") {
+      const { restoreSaasTenantBackup } = await import("@/lib/saas-operations");
+      const result = await restoreSaasTenantBackup(parseInteger(body.backup_id, 0), body.confirm_slug || "");
+      return Response.json({ ok: true, result });
+    }
+
+    if (action === "signup_delete") {
+      const { deleteSaasSignup } = await import("@/lib/saas-operations");
+      await deleteSaasSignup(parseInteger(body.id, 0));
       return Response.json({ ok: true });
     }
 

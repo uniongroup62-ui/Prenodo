@@ -151,6 +151,18 @@ export async function deletePrivateObject(key: string): Promise<void> {
     .catch(() => undefined);
 }
 
+// GET diretto server-side dal bucket PRIVATO (Fase restore 2026-07-19): usato
+// dal ripristino backup, dove il payload va LETTO dal server, non scaricato
+// dal browser. Il chiamante DEVE aver già verificato sessione admin.
+export async function getPrivateObject(key: string): Promise<Buffer> {
+  if (!storagePrivateConfigured()) throw new Error(STORAGE_NOT_CONFIGURED_ERROR);
+  const env = storageEnv();
+  const result = await r2Client().send(new GetObjectCommand({ Bucket: env.privateBucket, Key: key }));
+  const bytes = await result.Body?.transformToByteArray();
+  if (!bytes) throw new Error("Oggetto backup vuoto o non leggibile.");
+  return Buffer.from(bytes);
+}
+
 // Presigned GET sul bucket PRIVATO (default 5 minuti). Il chiamante DEVE aver
 // già verificato sessione + tenant + ownership dell'oggetto.
 export async function presignedPrivateGetUrl(key: string, ttlSeconds = 300): Promise<string> {

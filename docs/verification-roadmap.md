@@ -16517,3 +16517,39 @@ boundingBox nel viewport, controlli renderizzati, Modifica precompila,
 confirm su Sospendi con dismiss->nessun effetto) + screenshot; le 8
 regressioni verdi — faseD aggiornata (il fixture ora semina un audit
 NON-duplicato via update, i suoi audit erano tutti doppioni filtrati).
+
+## 2026-07-19 — PANNELLO ADMIN: RESTORE GUIDATO + VISTA REGISTRAZIONI
+
+Le due feature mancanti per la completezza (dal walkthrough UX).
+
+(1) RESTORE GUIDATO DA BACKUP: restorableSaasBackups = ultimo backup
+di ogni slug NON piu' esistente (le righe backup sopravvivono alla
+delete); restoreSaasTenantBackup ricrea il tenant con gli ID ORIGINALI
+(le righe condivise del payload si referenziano tra loro; gli id
+liberati non vengono riusati dalle sequence -> reinserimento verbatim
+sicuro), colonne filtrate su quelle ESISTENTI (schema evoluto),
+replica role per l'ordine FK, warnings raccolti, stato riportato ad
+active con deleted_* azzerati, audit tenant.restore_from_backup.
+GUARDIE: conferma slug esatto; MAI su slug esistente (niente
+sovrascritture di tenant vivi). Payload letto da R2 (getPrivateObject
+nuovo in storage.ts) o disco (stesse guardie del download). UI:
+sezione "Ripristino da backup" in Manutenzione col bottone abilitato
+SOLO a slug digitato esatto.
+
+(2) VISTA REGISTRAZIONI (saas_professional_signups, prima invisibile):
+lista CENSURATA (mai password_hash/verification_hash verso il client)
+con stato/esito provisioning/verifica email; "Apri tenant" quando il
+tenant esiste, "Elimina richiesta" (con confirm) per le richieste
+morte — guardia: MAI eliminare la richiesta di un tenant VIVO. Nav a
+11 voci (?page=signups).
+
+Verifica: test-saas-admin-restore 8/8 — ciclo COMPLETO su tenant
+usa-e-getta: crea -> delete (pre-backup) -> candidato in lista ->
+conferma errata respinta -> RESTORE con stesso id/attivo/righe
+users-staff-locations-businesses identiche a prima -> secondo restore
+rifiutato ("esiste gia"); signups censurata, guardia tenant-vivo,
+delete richiesta morta, UI renderizzata. Regressioni: giro5 17/17,
+fase4 11/11, faseAB 11/11, faseC 7/7, faseD 4/4, faseE 8/8, ux 7/7,
+hardening 19/19, fase3 9/9 (nav atteso 11). HARNESS: attendere la
+RIGA della vista nuova, non il titolo — l'empty-state matcha il
+titolo case-insensitive e la prima visita in dev compila.

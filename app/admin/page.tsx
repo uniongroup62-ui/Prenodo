@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 // tenant a tab + Sicurezza) con URL VERI: /admin?page=<vista>[&slug=..&tab=..]
 // — deep-link, refresh e tasto Indietro funzionanti. I nomi pagina legacy
 // dell'admin PHP (tenant_detail/tenant_new/…) sono mappati alle viste.
-const VIEWS = new Set(["dashboard", "tenants", "controls", "sms_plans", "billing", "send_movements", "maintenance", "audit", "admins", "security"]);
+const VIEWS = new Set(["dashboard", "tenants", "controls", "sms_plans", "billing", "send_movements", "maintenance", "signups", "audit", "admins", "security"]);
 const LEGACY_PAGE_MAP: Record<string, string> = {
   tenant_detail: "tenants",
   tenant_new: "tenants",

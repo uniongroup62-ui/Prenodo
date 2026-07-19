@@ -30,6 +30,7 @@ import {
   SlidersHorizontal,
   Trash2,
   UserCog,
+  UserPlus,
   Users,
   Wallet,
   Wrench,
@@ -82,7 +83,22 @@ import {
   type WorkItem,
 } from "@/components/admin/admin-shared";
 
-type ViewKey = "dashboard" | "tenants" | "controls" | "sms_plans" | "billing" | "send_movements" | "maintenance" | "audit" | "admins" | "security";
+type ViewKey = "dashboard" | "tenants" | "controls" | "sms_plans" | "billing" | "send_movements" | "maintenance" | "signups" | "audit" | "admins" | "security";
+
+type SignupRow = {
+  id: number;
+  business_name: string;
+  slug: string;
+  owner_name: string;
+  owner_email: string;
+  owner_phone: string | null;
+  status: string;
+  verified_at: string | null;
+  provisioning_error: string | null;
+  tenant_id: number | null;
+  tenant_exists: boolean;
+  created_at: string | null;
+};
 
 type OverviewPayload = {
   tenants: Tenant[];
@@ -104,6 +120,7 @@ const navItems: Array<{ key: ViewKey; label: string; icon: LucideIcon }> = [
   { key: "billing", label: "Piani & Ricavi", icon: Wallet },
   { key: "send_movements", label: "Movimenti invii", icon: Send },
   { key: "maintenance", label: "Manutenzione", icon: Wrench },
+  { key: "signups", label: "Registrazioni", icon: UserPlus },
   { key: "audit", label: "Audit", icon: ScrollText },
   { key: "admins", label: "Admin SaaS", icon: Users },
   { key: "security", label: "Sicurezza", icon: ShieldCheck },
@@ -242,6 +259,8 @@ export function SaasAdminApp({
   const [controls, setControls] = useState<ControlsPayload | null>(null);
   const [smsBilling, setSmsBilling] = useState<SmsBillingPayload | null>(null);
   const [billing, setBilling] = useState<BillingPayload | null>(null);
+  const [restoreCandidates, setRestoreCandidates] = useState<BackupRow[]>([]);
+  const [signups, setSignups] = useState<SignupRow[] | null>(null);
   const [movements, setMovements] = useState<MovementsPayload | null>(null);
   const [backups, setBackups] = useState<Record<string, BackupRow[]>>({});
   const [query, setQuery] = useState("");
@@ -281,6 +300,8 @@ export function SaasAdminApp({
     if (key === "sms_plans") void loadSmsBilling();
     if (key === "billing") void loadBilling();
     if (key === "send_movements") void loadMovements();
+    if (key === "maintenance") void loadRestoreCandidates();
+    if (key === "signups") void loadSignups();
   };
 
   function navigateView(key: ViewKey, push = true) {
@@ -460,6 +481,27 @@ export function SaasAdminApp({
     }
   }
 
+  async function loadRestoreCandidates() {
+    try {
+      const data = await apiGet<{ candidates: BackupRow[] }>("/api/admin/operations?section=restore_candidates");
+      setRestoreCandidates(data.candidates ?? []);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }
+
+  async function loadSignups() {
+    setLoading(true);
+    try {
+      const data = await apiGet<{ signups: SignupRow[] }>("/api/admin/operations?section=signups");
+      setSignups(data.signups ?? []);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function loadMovements() {
     setLoading(true);
     try {
@@ -488,6 +530,8 @@ export function SaasAdminApp({
       if (payload.action?.startsWith("sms_")) await loadSmsBilling();
       if (payload.action?.startsWith("plan_")) await loadBilling();
       if (payload.action === "backup_create" && payload.slug) await loadBackups(payload.slug);
+      if (payload.action === "backup_restore") { await loadRestoreCandidates(); await loadOverview(); }
+      if (payload.action === "signup_delete") await loadSignups();
     } catch (error) {
       setMessage(errorMessage(error));
     }
@@ -591,7 +635,8 @@ export function SaasAdminApp({
             {activeView === "sms_plans" ? <SmsPlansView data={smsBilling} canManage={canManageTenants} onAction={operationAction} onRefresh={loadSmsBilling} /> : null}
             {activeView === "billing" ? <BillingView data={billing} canManage={canManageTenants} onAction={operationAction} onRefresh={loadBilling} /> : null}
             {activeView === "send_movements" ? <MovementsView data={movements} onRefresh={loadMovements} /> : null}
-            {activeView === "maintenance" ? <MaintenanceView tenants={overview.tenants} results={results} canManage={canManageTenants} onAction={tenantAction} /> : null}
+            {activeView === "maintenance" ? <MaintenanceView tenants={overview.tenants} results={results} restoreCandidates={restoreCandidates} canManage={canManageTenants} onAction={tenantAction} onOperationAction={operationAction} /> : null}
+            {activeView === "signups" ? <SignupsView signups={signups} canManage={canManageTenants} onOpenTenant={(slug) => loadTenant(slug)} onAction={operationAction} onRefresh={loadSignups} /> : null}
             {activeView === "audit" ? <AuditList rows={overview.audit} /> : null}
             {activeView === "admins" ? <AdminsView admins={admins} currentUser={initialUser} onAction={adminAction} /> : null}
             {activeView === "security" ? <AdminSecurityPanel /> : null}
@@ -1137,8 +1182,9 @@ function MovementsView({ data, onRefresh }: { data: MovementsPayload | null; onR
   );
 }
 
-function MaintenanceView({ tenants, results, canManage, onAction }: { tenants: Tenant[]; results: Array<{ slug: string; ok: boolean; message: string }>; canManage: boolean; onAction: (action: string, payload?: Record<string, string>) => void }) {
+function MaintenanceView({ tenants, results, restoreCandidates, canManage, onAction, onOperationAction }: { tenants: Tenant[]; results: Array<{ slug: string; ok: boolean; message: string }>; restoreCandidates: BackupRow[]; canManage: boolean; onAction: (action: string, payload?: Record<string, string>) => void; onOperationAction: (payload: Record<string, string>) => void }) {
   const [selected, setSelected] = useState<string[]>([]);
+  const [restoreConfirm, setRestoreConfirm] = useState<Record<number, string>>({});
   return (
     <div className="grid gap-5">
       <div className="grid gap-3 md:grid-cols-3">
@@ -1147,6 +1193,42 @@ function MaintenanceView({ tenants, results, canManage, onAction }: { tenants: T
         <ActionPanel icon={RotateCcw} title="Reset onboarding" detail="Riporta i tenant selezionati al primo step." disabled={!canManage || selected.length === 0} onClick={() => onAction("reset_selected_onboarding", { slugs: selected.join(",") })} />
       </div>
       {results.length ? <Table title="Risultati" headers={["Tenant", "Esito", "Messaggio"]} rows={results.map((row) => [row.slug, row.ok ? "OK" : "Errore", row.message])} /> : null}
+
+      {/* RIPRISTINO GUIDATO (feature restore 2026-07-19): ultimi backup dei
+          tenant ELIMINATI — digitando lo slug esatto si ricrea il tenant con
+          gli id originali. */}
+      <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
+        <SectionHead title="Ripristino da backup" subtitle="Tenant eliminati con un backup disponibile: digita lo slug esatto per ricrearli." />
+        {restoreCandidates.length === 0 ? (
+          <p className="p-4 text-sm text-slate-500">Nessun tenant eliminato con backup disponibile.</p>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {restoreCandidates.map((backup) => (
+              <div className="flex flex-wrap items-center gap-3 p-3 text-sm" key={backup.id}>
+                <div className="min-w-0 flex-1">
+                  <p><strong>{backup.tenant_slug}</strong><span className="ml-2 text-slate-500">{backup.created_at ? String(backup.created_at) : ""}</span></p>
+                  <p className="text-xs text-slate-500">{backup.reason || "backup"} · {Math.round(Number(backup.backup_size ?? 0) / 1024)} KB</p>
+                </div>
+                <input
+                  className="h-9 w-56 rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-[#365a96]"
+                  placeholder={String(backup.tenant_slug)}
+                  value={restoreConfirm[backup.id] ?? ""}
+                  onChange={(event) => setRestoreConfirm((current) => ({ ...current, [backup.id]: event.target.value }))}
+                />
+                <button
+                  className="inline-flex h-9 items-center gap-2 rounded-md bg-[#365a96] px-3 text-xs font-semibold text-white disabled:opacity-40"
+                  disabled={!canManage || (restoreConfirm[backup.id] ?? "") !== String(backup.tenant_slug)}
+                  type="button"
+                  onClick={() => onOperationAction({ action: "backup_restore", backup_id: String(backup.id), confirm_slug: restoreConfirm[backup.id] ?? "" })}
+                >
+                  <RotateCcw size={14} aria-hidden />
+                  Ripristina
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
       <section className="rounded-md border border-slate-200 bg-white shadow-sm">
         <SectionHead title="Tenant" subtitle="Seleziona tenant per operazioni massive." />
         <div className="divide-y divide-slate-100">
@@ -1160,6 +1242,59 @@ function MaintenanceView({ tenants, results, canManage, onAction }: { tenants: T
           ))}
         </div>
       </section>
+    </div>
+  );
+}
+
+const signupStatusLabel: Record<string, { label: string; tone: "ok" | "warn" | "danger" | "info" | "muted" }> = {
+  pending_verification: { label: "Da verificare", tone: "warn" },
+  verified: { label: "Verificata", tone: "info" },
+  provisioning: { label: "Provisioning", tone: "info" },
+  active: { label: "Attiva", tone: "ok" },
+  failed: { label: "Fallita", tone: "danger" },
+  rejected: { label: "Rifiutata", tone: "muted" },
+};
+
+// REGISTRAZIONI SELF-SERVICE (feature signups 2026-07-19): le richieste dal
+// marketplace con stato, esito provisioning e link al tenant creato.
+function SignupsView({ signups, canManage, onOpenTenant, onAction, onRefresh }: { signups: SignupRow[] | null; canManage: boolean; onOpenTenant: (slug: string) => void; onAction: (payload: Record<string, string>) => void; onRefresh: () => void }) {
+  if (!signups) {
+    return <EmptyOperation icon={UserPlus} title="Registrazioni self-service" detail="Carica le richieste di registrazione dal marketplace." onRefresh={onRefresh} />;
+  }
+  return (
+    <div className="grid gap-5">
+      <div className="flex justify-end">
+        <Button variant="outline" icon={RotateCcw} onClick={onRefresh}>Aggiorna</Button>
+      </div>
+      <Table
+        title="Richieste di registrazione"
+        headers={["Attivita", "Titolare", "Stato", "Richiesta il", "Esito", "Azioni"]}
+        rows={signups.map((signup) => [
+          <span key={`b-${signup.id}`}><strong>{signup.business_name}</strong><span className="ml-2 text-slate-500">{signup.slug}</span></span>,
+          <span key={`o-${signup.id}`}>{signup.owner_name}<span className="ml-2 text-slate-500">{signup.owner_email}</span></span>,
+          <Badge key={`s-${signup.id}`} tone={(signupStatusLabel[signup.status] ?? { tone: "muted" as const }).tone}>{signupStatusLabel[signup.status]?.label ?? signup.status}</Badge>,
+          signup.created_at ?? "-",
+          signup.provisioning_error
+            ? <span className="block max-w-xs truncate text-red-700" key={`e-${signup.id}`} title={signup.provisioning_error}>{signup.provisioning_error}</span>
+            : (signup.verified_at ? `Email verificata ${signup.verified_at}` : "-"),
+          <div className="flex gap-2" key={`a-${signup.id}`}>
+            {signup.tenant_exists ? (
+              <button className="inline-flex h-8 items-center rounded-md bg-[#182238] px-3 text-xs font-semibold text-white" type="button" onClick={() => onOpenTenant(signup.slug)}>
+                Apri tenant
+              </button>
+            ) : (
+              <button
+                className="inline-flex h-8 items-center rounded-md border border-red-200 px-3 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-40"
+                disabled={!canManage}
+                type="button"
+                onClick={() => { if (window.confirm(`Eliminare la richiesta di "${signup.business_name}" (${signup.slug})?`)) onAction({ action: "signup_delete", id: String(signup.id) }); }}
+              >
+                Elimina richiesta
+              </button>
+            )}
+          </div>,
+        ])}
+      />
     </div>
   );
 }
@@ -1211,6 +1346,7 @@ function viewTitle(view: ViewKey): string {
   if (view === "billing") return "Piani & Ricavi";
   if (view === "send_movements") return "Movimenti invii";
   if (view === "maintenance") return "Manutenzione";
+  if (view === "signups") return "Registrazioni";
   if (view === "audit") return "Audit";
   if (view === "admins") return "Admin SaaS";
   if (view === "security") return "Sicurezza";

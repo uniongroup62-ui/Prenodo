@@ -119,6 +119,7 @@ export type TenantDetailPayload = {
 
 export type BackupRow = {
   id: number;
+  tenant_slug?: string;
   reason?: string | null;
   backup_path: string;
   backup_size: number;

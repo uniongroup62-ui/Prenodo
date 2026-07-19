@@ -6,7 +6,7 @@ import type { RowDataPacket } from "@/lib/tenant-db";
 import { currentSaasAdminSession } from "@/lib/saas-admin-auth";
 import { dbExecute, dbQuery, quoteIdentifier, tableExists, tenantTable, usesSharedTenantTables } from "@/lib/tenant-db";
 import { logSaasTenantAudit, listSaasTenants, requireSaasTenant, tenantStatus, type SaasTenantRow } from "@/lib/saas-tenant-manager";
-import { putPrivateObject, storagePrivateConfigured } from "@/lib/storage";
+import { getPrivateObject, putPrivateObject, storagePrivateConfigured } from "@/lib/storage";
 import { tenantPrefix } from "@/lib/tenant-runtime";
 
 // Prefisso dei backup_path su R2 (Fase C pannello, 2026-07-19): il filesystem
@@ -257,6 +257,149 @@ export async function saasBackupById(id: number, tenantId: number): Promise<Saas
   if (id <= 0 || tenantId <= 0) return null;
   const rows = await dbQuery<SaasBackupRow[]>(`SELECT * FROM \`${BACKUP_TABLE}\` WHERE id=? AND tenant_id=? LIMIT 1`, [id, tenantId]);
   return rows[0] ?? null;
+}
+
+// Candidati al RIPRISTINO (feature restore, 2026-07-19): l'ultimo backup di
+// ogni slug che NON esiste piu' in saas_tenants — il caso disaster-recovery
+// post-eliminazione. La riga backup sopravvive alla delete (registro KEEP).
+export async function restorableSaasBackups(limit = 20): Promise<SaasBackupRow[]> {
+  await ensureSaasBackupSchema();
+  const capped = Math.max(1, Math.min(50, limit));
+  return dbQuery<SaasBackupRow[]>(
+    `SELECT b.* FROM \`${BACKUP_TABLE}\` b
+      WHERE b.status='completed'
+        AND b.id = (SELECT MAX(b2.id) FROM \`${BACKUP_TABLE}\` b2 WHERE b2.tenant_slug = b.tenant_slug AND b2.status='completed')
+        AND NOT EXISTS (SELECT 1 FROM \`saas_tenants\` t WHERE t.slug = b.tenant_slug)
+      ORDER BY b.id DESC LIMIT ${capped}`,
+  );
+}
+
+// RIPRISTINO GUIDATO da backup: ricrea il tenant eliminato con gli ID
+// ORIGINALI (le righe condivise del payload li referenziano tra loro; gli id
+// liberati dalla delete non vengono riusati dalle sequence, quindi il
+// reinserimento verbatim e' sicuro). Solo per slug NON esistenti: mai
+// sovrascrivere un tenant vivo.
+export async function restoreSaasTenantBackup(backupId: number, confirmSlug: string): Promise<{ slug: string; tables_restored: number; rows_restored: number; warnings: string[] }> {
+  await ensureSaasBackupSchema();
+  const rows = await dbQuery<SaasBackupRow[]>(`SELECT * FROM \`${BACKUP_TABLE}\` WHERE id=? LIMIT 1`, [backupId]);
+  const backup = rows[0];
+  if (!backup) throw new Error("Backup non trovato.");
+  const slug = String(backup.tenant_slug);
+  if (confirmSlug.trim() !== slug) throw new Error("Conferma ripristino non valida: digita lo slug esatto.");
+
+  const { saasTenantBySlug } = await import("@/lib/saas-tenant-manager");
+  if (await saasTenantBySlug(slug)) throw new Error("Esiste gia un tenant con questo slug: il ripristino sovrascriverebbe dati vivi.");
+
+  // Payload da R2 o dal disco (fallback dev), con le stesse guardie del download.
+  const storedPath = String(backup.backup_path ?? "");
+  let payloadRaw: string;
+  if (isR2BackupPath(storedPath)) {
+    payloadRaw = (await getPrivateObject(r2BackupKey(storedPath))).toString("utf8");
+  } else {
+    payloadRaw = await fs.promises.readFile(await absoluteSaasBackupPath(backup), "utf8");
+  }
+  const payload = JSON.parse(payloadRaw) as { tenant?: Record<string, unknown>; tables?: Record<string, { mode: string; rows: Record<string, unknown>[] }> };
+  const tenantRow = payload.tenant;
+  if (!tenantRow || Number(tenantRow.id) !== Number(backup.tenant_id)) throw new Error("Payload backup non valido o non coerente col registro.");
+
+  const warnings: string[] = [];
+  let tablesRestored = 0;
+  let rowsRestored = 0;
+
+  try {
+    await dbExecute("SET session_replication_role = 'replica'").catch(() => undefined);
+
+    // 1) riga saas_tenants con id ORIGINALE; stato riportato ad active e
+    //    campi di eliminazione azzerati.
+    const tenantValues = await filterColumns("saas_tenants", {
+      ...tenantRow,
+      is_active: 1,
+      status: "active",
+      deleted_at: null,
+      deleted_reason: null,
+      notes: `${String(tenantRow.notes ?? "")}`.trim() || null,
+    });
+    const columns = Object.keys(tenantValues);
+    await dbExecute(
+      `INSERT INTO \`saas_tenants\`(${columns.map((c) => quoteIdentifier(c)).join(",")}) VALUES(${columns.map(() => "?").join(",")})`,
+      columns.map((c) => tenantValues[c] as unknown),
+    );
+
+    // 2) tabelle condivise: reinserimento verbatim filtrato sulle colonne
+    //    ESISTENTI (lo schema puo' essere evoluto dopo il backup).
+    for (const [table, data] of Object.entries(payload.tables ?? {})) {
+      if (data.mode !== "shared" || !Array.isArray(data.rows) || data.rows.length === 0) continue;
+      if (!await freshTableExists(table)) { warnings.push(`${table}: tabella assente, ${data.rows.length} righe saltate`); continue; }
+      let restored = 0;
+      for (const row of data.rows) {
+        const values = await filterColumns(table, row);
+        const keys = Object.keys(values);
+        if (!keys.length) continue;
+        const ok = await dbExecute(
+          `INSERT INTO ${quoteIdentifier(table)}(${keys.map((k) => quoteIdentifier(k)).join(",")}) VALUES(${keys.map(() => "?").join(",")})`,
+          keys.map((k) => values[k] as unknown),
+        ).then(() => true).catch((error) => {
+          if (warnings.length < 30) warnings.push(`${table}: ${error instanceof Error ? error.message.slice(0, 120) : "insert fallita"}`);
+          return false;
+        });
+        if (ok) restored += 1;
+      }
+      if (restored > 0) tablesRestored += 1;
+      rowsRestored += restored;
+    }
+  } finally {
+    await dbExecute("SET session_replication_role = 'origin'").catch(() => undefined);
+  }
+
+  await logSaasTenantAudit("tenant.restore_from_backup", { id: Number(backup.tenant_id), slug }, "Tenant ripristinato da backup", {
+    backup_id: backupId,
+    tables_restored: tablesRestored,
+    rows_restored: rowsRestored,
+    warnings: warnings.slice(0, 10),
+  });
+  return { slug, tables_restored: tablesRestored, rows_restored: rowsRestored, warnings };
+}
+
+// REGISTRAZIONI SELF-SERVICE (feature signups, 2026-07-19): lettura CENSURATA
+// (mai hash password/verifica verso il client) + eliminazione delle richieste
+// morte, con guardia sui tenant vivi.
+export async function listSaasSignups(limit = 50): Promise<Array<Record<string, unknown>>> {
+  if (!await tableExists("saas_professional_signups")) return [];
+  const capped = Math.max(1, Math.min(100, limit));
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT s.id, s.business_name, s.slug, s.owner_name, s.owner_email, s.owner_phone, s.status,
+            s.verified_at, s.provisioning_error, s.tenant_id, s.created_at,
+            (SELECT COUNT(*) FROM \`saas_tenants\` t WHERE t.slug = s.slug) AS tenant_exists
+       FROM \`saas_professional_signups\` s
+      ORDER BY s.id DESC LIMIT ${capped}`,
+  );
+  return rows.map((row) => ({
+    id: Number(row.id),
+    business_name: String(row.business_name ?? ""),
+    slug: String(row.slug ?? ""),
+    owner_name: String(row.owner_name ?? ""),
+    owner_email: String(row.owner_email ?? ""),
+    owner_phone: String(row.owner_phone ?? "") || null,
+    status: String(row.status ?? ""),
+    verified_at: dateString(row.verified_at) ?? null,
+    provisioning_error: String(row.provisioning_error ?? "") || null,
+    tenant_id: row.tenant_id === null || row.tenant_id === undefined ? null : Number(row.tenant_id),
+    tenant_exists: Number(row.tenant_exists ?? 0) > 0,
+    created_at: dateString(row.created_at) ?? null,
+  }));
+}
+
+export async function deleteSaasSignup(id: number): Promise<void> {
+  if (id <= 0) throw new Error("Registrazione non trovata.");
+  const rows = await dbQuery<RowDataPacket[]>("SELECT id, slug, status, owner_email FROM `saas_professional_signups` WHERE id=? LIMIT 1", [id]);
+  const row = rows[0];
+  if (!row) throw new Error("Registrazione non trovata.");
+  // Guardia: mai cancellare la richiesta di un tenant VIVO (storico del
+  // provisioning); prima si elimina il tenant, poi la richiesta.
+  const alive = await dbQuery<RowDataPacket[]>("SELECT 1 FROM `saas_tenants` WHERE slug=? LIMIT 1", [String(row.slug)]);
+  if (alive.length) throw new Error("Il tenant di questa registrazione esiste ancora: elimina prima il tenant.");
+  await dbExecute("DELETE FROM `saas_professional_signups` WHERE id=?", [id]);
+  await logSaasTenantAudit("signup.delete", null, "Registrazione self-service eliminata", { signup_id: id, slug: String(row.slug), owner_email: String(row.owner_email ?? ""), status: String(row.status ?? "") });
 }
 
 export async function absoluteSaasBackupPath(backup: SaasBackupRow): Promise<string> {
