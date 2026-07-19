@@ -798,8 +798,10 @@ async function addCreditsToTenantWallet(tenant: Pick<SaasTenantRow, "id" | "slug
   if (id <= 0) throw new Error("Wallet crediti SMS non disponibile.");
   const walletTable = await tenantPhysicalTable(tenant, "sms_credit_wallet");
   const scope = await tenantScopeClause(walletTable, "w", Number(tenant.id));
+  // SET senza alias: Postgres rifiuta la colonna qualificata (w.balance_...)
+  // nella SET list — "column w of relation ... does not exist".
   await dbExecute(
-    `UPDATE ${quoteIdentifier(walletTable.name)} w SET w.balance_credits=w.balance_credits+? WHERE w.id=?${scope ? ` AND ${scope}` : ""}`,
+    `UPDATE ${quoteIdentifier(walletTable.name)} w SET balance_credits=balance_credits+? WHERE w.id=?${scope ? ` AND ${scope}` : ""}`,
     [credits, id],
   );
   const movementsTable = await tenantPhysicalTable(tenant, "sms_credit_movements");

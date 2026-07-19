@@ -1,0 +1,1383 @@
+{
+  "created_at": "2026-07-19T08:41:47.534Z",
+  "reason": "pre-delete automatico",
+  "tenant": {
+    "id": 28,
+    "slug": "zz-giro5337884",
+    "name": "ZZ Giro5 Rinominato",
+    "db_prefix": "zz-giro5337884__",
+    "is_active": 1,
+    "status": "active",
+    "admin_email": null,
+    "plan": "Pro",
+    "notes": null,
+    "provisioning_error": null,
+    "provisioned_at": "2026-07-19 10:39:18",
+    "suspended_at": null,
+    "suspended_reason": null,
+    "deleted_at": null,
+    "deleted_reason": null,
+    "created_by_admin_id": 27,
+    "updated_by_admin_id": 27,
+    "health_level": "ok",
+    "health_errors": 0,
+    "health_warnings": 0,
+    "health_checked_at": "2026-07-19 10:40:00",
+    "health_source": "manual",
+    "created_at": "2026-07-19 08:39:17.964487",
+    "updated_at": "2026-07-19 08:41:38.846643",
+    "source": "admin",
+    "signup_id": null,
+    "owner_email_verified_at": null,
+    "booking_public_allowed": 0,
+    "marketplace_public_allowed": 0,
+    "health_live": {
+      "level": "ok",
+      "warnings": 0,
+      "errors": 0,
+      "checks": [
+        {
+          "key": "status",
+          "label": "Stato tenant",
+          "level": "ok",
+          "message": "active"
+        },
+        {
+          "key": "onboarding_state",
+          "label": "Onboarding",
+          "level": "ok",
+          "message": "not_started / business"
+        },
+        {
+          "key": "schema",
+          "label": "Schema tenant",
+          "level": "ok",
+          "message": "OK"
+        }
+      ],
+      "missing_schema": []
+    },
+    "health": {
+      "level": "ok",
+      "warnings": 0,
+      "errors": 0,
+      "checked_at": "2026-07-19 10:40:00",
+      "source": "manual",
+      "checks": [],
+      "missing_schema": []
+    },
+    "onboarding_percent": 0,
+    "onboarding_started_at": null,
+    "onboarding_completed_at": null,
+    "onboarding_dismissed_at": null
+  },
+  "tables": {
+    "activity_logs": {
+      "mode": "shared",
+      "rows": []
+    },
+    "appointment_gift_items": {
+      "mode": "shared",
+      "rows": []
+    },
+    "appointment_giftbox_items": {
+      "mode": "shared",
+      "rows": []
+    },
+    "appointment_holds": {
+      "mode": "shared",
+      "rows": []
+    },
+    "appointment_locations": {
+      "mode": "shared",
+      "rows": []
+    },
+    "appointment_package_items": {
+      "mode": "shared",
+      "rows": []
+    },
+    "appointment_prepaid_service_items": {
+      "mode": "shared",
+      "rows": []
+    },
+    "appointment_segments": {
+      "mode": "shared",
+      "rows": []
+    },
+    "appointment_services": {
+      "mode": "shared",
+      "rows": []
+    },
+    "appointment_staff": {
+      "mode": "shared",
+      "rows": []
+    },
+    "appointments": {
+      "mode": "shared",
+      "rows": []
+    },
+    "automation_settings": {
+      "mode": "shared",
+      "rows": [
+        {
+          "tenant_id": 28,
+          "id": 23,
+          "reminder_enabled": 1,
+          "reminder_hours": 24,
+          "approved_enabled": 1,
+          "approved_subject": "Appuntamento confermato",
+          "approved_body": "Il tuo appuntamento e stato confermato.",
+          "modified_enabled": 1,
+          "modified_subject": "Appuntamento modificato",
+          "modified_body": "Il tuo appuntamento e stato modificato.",
+          "rejected_enabled": 1,
+          "rejected_subject": "Appuntamento rifiutato",
+          "rejected_body": "La tua richiesta di appuntamento non e stata accettata.",
+          "reminder_subject": "Promemoria appuntamento",
+          "reminder_body": "Ti ricordiamo il tuo appuntamento.",
+          "sms_reminder_enabled": 0,
+          "sms_reminder_hours": 24,
+          "sms_reminder_sender": "Prenodo",
+          "sms_reminder_body": null,
+          "created_at": "2026-07-19 08:39:44.088869",
+          "updated_at": "2026-07-19 08:39:44.088869",
+          "fidelity_expiry_reminder_enabled": 0,
+          "fidelity_expiry_reminder_subject": "La tua tessera Fidelity sta per scadere",
+          "fidelity_expiry_reminder_body": null,
+          "installment_alert_days": 7,
+          "client_birthday_alert_days": 7
+        }
+      ]
+    },
+    "booking_users": {
+      "mode": "shared",
+      "rows": []
+    },
+    "business_gallery_images": {
+      "mode": "shared",
+      "rows": []
+    },
+    "business_hours": {
+      "mode": "shared",
+      "rows": [
+        {
+          "tenant_id": 28,
+          "id": 459,
+          "location_id": 96,
+          "dow": 0,
+          "opens": null,
+          "closes": null,
+          "opens2": null,
+          "closes2": null,
+          "is_closed": 1
+        },
+        {
+          "tenant_id": 28,
+          "id": 460,
+          "location_id": 96,
+          "dow": 1,
+          "opens": "09:00:00",
+          "closes": "19:00:00",
+          "opens2": null,
+          "closes2": null,
+          "is_closed": 0
+        },
+        {
+          "tenant_id": 28,
+          "id": 461,
+          "location_id": 96,
+          "dow": 2,
+          "opens": "09:00:00",
+          "closes": "19:00:00",
+          "opens2": null,
+          "closes2": null,
+          "is_closed": 0
+        },
+        {
+          "tenant_id": 28,
+          "id": 462,
+          "location_id": 96,
+          "dow": 3,
+          "opens": "09:00:00",
+          "closes": "19:00:00",
+          "opens2": null,
+          "closes2": null,
+          "is_closed": 0
+        },
+        {
+          "tenant_id": 28,
+          "id": 463,
+          "location_id": 96,
+          "dow": 4,
+          "opens": "09:00:00",
+          "closes": "19:00:00",
+          "opens2": null,
+          "closes2": null,
+          "is_closed": 0
+        },
+        {
+          "tenant_id": 28,
+          "id": 464,
+          "location_id": 96,
+          "dow": 5,
+          "opens": "09:00:00",
+          "closes": "19:00:00",
+          "opens2": null,
+          "closes2": null,
+          "is_closed": 0
+        },
+        {
+          "tenant_id": 28,
+          "id": 465,
+          "location_id": 96,
+          "dow": 6,
+          "opens": "09:00:00",
+          "closes": "19:00:00",
+          "opens2": null,
+          "closes2": null,
+          "is_closed": 0
+        }
+      ]
+    },
+    "business_hours_exceptions": {
+      "mode": "shared",
+      "rows": []
+    },
+    "businesses": {
+      "mode": "shared",
+      "rows": [
+        {
+          "tenant_id": 28,
+          "id": 12,
+          "name": "ZZ Giro5",
+          "booking_about_text": null,
+          "address": null,
+          "phone": null,
+          "email": "zz.giro5admin337884@example.test",
+          "website": null,
+          "created_at": "2026-07-19 08:39:42.946018",
+          "booking_choose_staff_enabled": 0,
+          "quote_company_name": null,
+          "quote_vat_number": null,
+          "quote_tax_code": null,
+          "quote_sdi": null,
+          "quote_pec": null,
+          "quote_address": null,
+          "quote_cap": null,
+          "quote_city": null,
+          "quote_province": null,
+          "quote_region": null,
+          "quote_phone": null,
+          "quote_email": null,
+          "quote_website": null,
+          "quote_footer": null,
+          "quote_terms": null,
+          "logo_path": null,
+          "cover_path": null,
+          "payment_methods": null,
+          "booking_products_enabled": 0,
+          "logo_blob": null,
+          "logo_mime": null,
+          "logo_updated_at": null,
+          "booking_customer_cancel_enabled": 0,
+          "booking_customer_cancel_before_value": 0,
+          "booking_customer_cancel_before_unit": "hours",
+          "fidelity_enabled": 0,
+          "fidelity_points_enabled": 1,
+          "fidelity_points_label": "Punti",
+          "fidelity_earn_mode": "amount",
+          "fidelity_earn_step_euro": "10.00",
+          "fidelity_earn_points_per_appointment": "0.00",
+          "fidelity_redeem_enabled": 0,
+          "fidelity_redeem_euro_per_point": "0.10",
+          "fidelity_redeem_min_points": "0.00",
+          "fidelity_gifts_json": null,
+          "fidelity_earn_on_appointment_done": 1,
+          "fidelity_expire_enabled": 0,
+          "fidelity_expire_days": 365,
+          "fidelity_levels_enabled": 0,
+          "fidelity_card_levels_json": null,
+          "fidelity_silver_threshold": 200,
+          "fidelity_gold_threshold": 500,
+          "fidelity_level_period_days": 365,
+          "fidelity_expire_warn_days": 30,
+          "fidelity_redeem_auto_discount_enabled": 1,
+          "fidelity_adhesion_json": null,
+          "giftcard_default_validity_value": 0,
+          "giftcard_default_validity_unit": "days",
+          "giftbox_default_validity_value": 0,
+          "giftbox_default_validity_unit": "days",
+          "giftbox_terms": null,
+          "gdpr_template_body": null,
+          "fidelity_gift_terms": null,
+          "site_region": null,
+          "site_province": null,
+          "site_city": null,
+          "site_cap": null,
+          "site_address": null,
+          "giftcard_terms": null,
+          "logo_position_x": 50,
+          "logo_position_y": 50,
+          "cover_position_x": 50,
+          "cover_position_y": 50,
+          "package_default_validity_value": 0,
+          "package_default_validity_unit": "days"
+        }
+      ]
+    },
+    "cabins": {
+      "mode": "shared",
+      "rows": []
+    },
+    "calendar_notes": {
+      "mode": "shared",
+      "rows": []
+    },
+    "card_code_registry": {
+      "mode": "shared",
+      "rows": []
+    },
+    "card_reminders": {
+      "mode": "shared",
+      "rows": []
+    },
+    "cards": {
+      "mode": "shared",
+      "rows": []
+    },
+    "client_consent_records": {
+      "mode": "shared",
+      "rows": []
+    },
+    "client_deletion_logs": {
+      "mode": "shared",
+      "rows": []
+    },
+    "client_package_items": {
+      "mode": "shared",
+      "rows": []
+    },
+    "client_package_services": {
+      "mode": "shared",
+      "rows": []
+    },
+    "client_package_transactions": {
+      "mode": "shared",
+      "rows": []
+    },
+    "client_package_usages": {
+      "mode": "shared",
+      "rows": []
+    },
+    "client_packages": {
+      "mode": "shared",
+      "rows": []
+    },
+    "client_prepaid_service_usages": {
+      "mode": "shared",
+      "rows": []
+    },
+    "client_prepaid_services": {
+      "mode": "shared",
+      "rows": []
+    },
+    "client_sheet_presets": {
+      "mode": "shared",
+      "rows": []
+    },
+    "client_sheet_records": {
+      "mode": "shared",
+      "rows": []
+    },
+    "client_sheet_template_locations": {
+      "mode": "shared",
+      "rows": []
+    },
+    "client_sheet_templates": {
+      "mode": "shared",
+      "rows": []
+    },
+    "clients": {
+      "mode": "shared",
+      "rows": []
+    },
+    "closures": {
+      "mode": "shared",
+      "rows": []
+    },
+    "communication_logs": {
+      "mode": "shared",
+      "rows": []
+    },
+    "consent_modules": {
+      "mode": "shared",
+      "rows": []
+    },
+    "cost_categories": {
+      "mode": "shared",
+      "rows": []
+    },
+    "costs": {
+      "mode": "shared",
+      "rows": []
+    },
+    "coupon_locations": {
+      "mode": "shared",
+      "rows": []
+    },
+    "coupons": {
+      "mode": "shared",
+      "rows": []
+    },
+    "credit_adjustments": {
+      "mode": "shared",
+      "rows": []
+    },
+    "customer_documents": {
+      "mode": "shared",
+      "rows": []
+    },
+    "customer_tag_map": {
+      "mode": "shared",
+      "rows": []
+    },
+    "customer_tags": {
+      "mode": "shared",
+      "rows": []
+    },
+    "events": {
+      "mode": "shared",
+      "rows": []
+    },
+    "fidelity_campaigns": {
+      "mode": "shared",
+      "rows": []
+    },
+    "gift_instances": {
+      "mode": "shared",
+      "rows": []
+    },
+    "gift_locations": {
+      "mode": "shared",
+      "rows": []
+    },
+    "gift_progress_resets": {
+      "mode": "shared",
+      "rows": []
+    },
+    "gift_rule_sets": {
+      "mode": "shared",
+      "rows": []
+    },
+    "gift_rules": {
+      "mode": "shared",
+      "rows": []
+    },
+    "gift_transactions": {
+      "mode": "shared",
+      "rows": []
+    },
+    "giftbox_instance_items": {
+      "mode": "shared",
+      "rows": []
+    },
+    "giftbox_instances": {
+      "mode": "shared",
+      "rows": []
+    },
+    "giftbox_items": {
+      "mode": "shared",
+      "rows": []
+    },
+    "giftbox_redemption_items": {
+      "mode": "shared",
+      "rows": []
+    },
+    "giftbox_redemptions": {
+      "mode": "shared",
+      "rows": []
+    },
+    "giftbox_transactions": {
+      "mode": "shared",
+      "rows": []
+    },
+    "giftboxes": {
+      "mode": "shared",
+      "rows": []
+    },
+    "giftcard_items": {
+      "mode": "shared",
+      "rows": []
+    },
+    "giftcard_transactions": {
+      "mode": "shared",
+      "rows": []
+    },
+    "giftcards": {
+      "mode": "shared",
+      "rows": []
+    },
+    "gifts": {
+      "mode": "shared",
+      "rows": []
+    },
+    "item_rules": {
+      "mode": "shared",
+      "rows": []
+    },
+    "location_deletion_log_items": {
+      "mode": "shared",
+      "rows": []
+    },
+    "location_deletion_logs": {
+      "mode": "shared",
+      "rows": []
+    },
+    "location_gallery_images": {
+      "mode": "shared",
+      "rows": []
+    },
+    "locations": {
+      "mode": "shared",
+      "rows": [
+        {
+          "tenant_id": 28,
+          "id": 96,
+          "name": "Sede principale",
+          "address": null,
+          "is_active": 1,
+          "created_at": "2026-07-19 08:39:43.091759",
+          "phone": null,
+          "whatsapp": null,
+          "facebook_url": null,
+          "instagram_url": null,
+          "tiktok_url": null,
+          "email": "zz.giro5admin337884@example.test",
+          "booking_enabled": 0,
+          "marketplace_enabled": 0,
+          "sort_order": 0,
+          "updated_at": "2026-07-19 08:40:21.940347",
+          "legal_company_name": null,
+          "legal_vat_number": null,
+          "legal_tax_code": null,
+          "legal_sdi": null,
+          "legal_pec": null,
+          "legal_address": null,
+          "legal_cap": null,
+          "legal_city": null,
+          "legal_province": null,
+          "legal_region": null,
+          "legal_phone": null,
+          "legal_email": null,
+          "legal_website": null
+        }
+      ]
+    },
+    "login_attempts": {
+      "mode": "shared",
+      "rows": []
+    },
+    "marketplace_location_activity_categories": {
+      "mode": "shared",
+      "rows": []
+    },
+    "marketplace_service_category_mappings": {
+      "mode": "shared",
+      "rows": []
+    },
+    "package_items": {
+      "mode": "shared",
+      "rows": []
+    },
+    "package_locations": {
+      "mode": "shared",
+      "rows": []
+    },
+    "package_pricing": {
+      "mode": "shared",
+      "rows": []
+    },
+    "package_services": {
+      "mode": "shared",
+      "rows": []
+    },
+    "packages": {
+      "mode": "shared",
+      "rows": []
+    },
+    "password_resets": {
+      "mode": "shared",
+      "rows": []
+    },
+    "permissions": {
+      "mode": "shared",
+      "rows": [
+        {
+          "tenant_id": 28,
+          "perm": "accessibility.manage",
+          "label": "Accessibilità",
+          "group_name": "Impostazioni",
+          "sort_order": 50
+        },
+        {
+          "tenant_id": 28,
+          "perm": "appointments.manage",
+          "label": "Appuntamenti",
+          "group_name": "Appuntamenti",
+          "sort_order": 10
+        },
+        {
+          "tenant_id": 28,
+          "perm": "appointments.plan",
+          "label": "Pianifica",
+          "group_name": "Appuntamenti",
+          "sort_order": 20
+        },
+        {
+          "tenant_id": 28,
+          "perm": "appointments.quick_booking",
+          "label": "Prenotazione rapida",
+          "group_name": "Appuntamenti",
+          "sort_order": 30
+        },
+        {
+          "tenant_id": 28,
+          "perm": "automation.manage",
+          "label": "Automazione",
+          "group_name": "Impostazioni",
+          "sort_order": 60
+        },
+        {
+          "tenant_id": 28,
+          "perm": "booking.manage",
+          "label": "Booking",
+          "group_name": "Impostazioni",
+          "sort_order": 80
+        },
+        {
+          "tenant_id": 28,
+          "perm": "cabins.manage",
+          "label": "Cabine",
+          "group_name": "Risorse",
+          "sort_order": 50
+        },
+        {
+          "tenant_id": 28,
+          "perm": "calendar.view",
+          "label": "Calendario",
+          "group_name": "Generale",
+          "sort_order": 20
+        },
+        {
+          "tenant_id": 28,
+          "perm": "client_consents.manage",
+          "label": "Consensi cliente",
+          "group_name": "Clienti",
+          "sort_order": 30
+        },
+        {
+          "tenant_id": 28,
+          "perm": "client_sheets.manage",
+          "label": "Schede cliente",
+          "group_name": "Clienti",
+          "sort_order": 20
+        },
+        {
+          "tenant_id": 28,
+          "perm": "clients.manage",
+          "label": "Clienti",
+          "group_name": "Clienti",
+          "sort_order": 10
+        },
+        {
+          "tenant_id": 28,
+          "perm": "commissions.manage",
+          "label": "Commissioni",
+          "group_name": "Amministrazione",
+          "sort_order": 10
+        },
+        {
+          "tenant_id": 28,
+          "perm": "consent_modules.manage",
+          "label": "Moduli consenso",
+          "group_name": "Impostazioni",
+          "sort_order": 40
+        },
+        {
+          "tenant_id": 28,
+          "perm": "costs.categories",
+          "label": "Categorie",
+          "group_name": "Scadenziario e Costi",
+          "sort_order": 30
+        },
+        {
+          "tenant_id": 28,
+          "perm": "costs.items",
+          "label": "Costi",
+          "group_name": "Scadenziario e Costi",
+          "sort_order": 20
+        },
+        {
+          "tenant_id": 28,
+          "perm": "costs.manage",
+          "label": "Scadenziario e Costi",
+          "group_name": "Scadenziario e Costi",
+          "sort_order": 10
+        },
+        {
+          "tenant_id": 28,
+          "perm": "coupons.manage",
+          "label": "Buoni",
+          "group_name": "Magazzino",
+          "sort_order": 50
+        },
+        {
+          "tenant_id": 28,
+          "perm": "credit_movements.manage",
+          "label": "Movimenti credito",
+          "group_name": "Fidelizzazione",
+          "sort_order": 60
+        },
+        {
+          "tenant_id": 28,
+          "perm": "dashboard.view",
+          "label": "Dashboard",
+          "group_name": "Generale",
+          "sort_order": 10
+        },
+        {
+          "tenant_id": 28,
+          "perm": "fidelity.levels",
+          "label": "Livelli Card",
+          "group_name": "Fidelizzazione",
+          "sort_order": 90
+        },
+        {
+          "tenant_id": 28,
+          "perm": "fidelity.manage",
+          "label": "Fidelity",
+          "group_name": "Fidelizzazione",
+          "sort_order": 10
+        },
+        {
+          "tenant_id": 28,
+          "perm": "fidelity.membership",
+          "label": "Adesione",
+          "group_name": "Fidelizzazione",
+          "sort_order": 20
+        },
+        {
+          "tenant_id": 28,
+          "perm": "fidelity.points",
+          "label": "Punti",
+          "group_name": "Fidelizzazione",
+          "sort_order": 80
+        },
+        {
+          "tenant_id": 28,
+          "perm": "fidelity.recharges",
+          "label": "Ricariche",
+          "group_name": "Fidelizzazione",
+          "sort_order": 40
+        },
+        {
+          "tenant_id": 28,
+          "perm": "fidelity.wallet",
+          "label": "Portafoglio",
+          "group_name": "Fidelizzazione",
+          "sort_order": 50
+        },
+        {
+          "tenant_id": 28,
+          "perm": "giftbox.manage",
+          "label": "GiftBox",
+          "group_name": "Fidelizzazione",
+          "sort_order": 110
+        },
+        {
+          "tenant_id": 28,
+          "perm": "giftbox.settings",
+          "label": "Impostazioni",
+          "group_name": "Fidelizzazione",
+          "sort_order": 120
+        },
+        {
+          "tenant_id": 28,
+          "perm": "giftcard.manage",
+          "label": "GiftCard",
+          "group_name": "Fidelizzazione",
+          "sort_order": 130
+        },
+        {
+          "tenant_id": 28,
+          "perm": "giftcard.settings",
+          "label": "Impostazioni",
+          "group_name": "Fidelizzazione",
+          "sort_order": 140
+        },
+        {
+          "tenant_id": 28,
+          "perm": "gifts.manage",
+          "label": "Omaggi",
+          "group_name": "Fidelizzazione",
+          "sort_order": 100
+        },
+        {
+          "tenant_id": 28,
+          "perm": "hours.manage",
+          "label": "Orari",
+          "group_name": "Risorse",
+          "sort_order": 80
+        },
+        {
+          "tenant_id": 28,
+          "perm": "installments.manage",
+          "label": "Gestione Rate",
+          "group_name": "Pagamenti",
+          "sort_order": 50
+        },
+        {
+          "tenant_id": 28,
+          "perm": "logs.deletions",
+          "label": "Eliminazioni clienti",
+          "group_name": "Impostazioni",
+          "sort_order": 85
+        },
+        {
+          "tenant_id": 28,
+          "perm": "logs.view",
+          "label": "Log attività",
+          "group_name": "Impostazioni",
+          "sort_order": 84
+        },
+        {
+          "tenant_id": 28,
+          "perm": "notifications.view",
+          "label": "Notifiche",
+          "group_name": "Generale",
+          "sort_order": 30
+        },
+        {
+          "tenant_id": 28,
+          "perm": "packages.access",
+          "label": "Pacchetti",
+          "group_name": "Pacchetti",
+          "sort_order": 10
+        },
+        {
+          "tenant_id": 28,
+          "perm": "packages.catalog",
+          "label": "Catalogo",
+          "group_name": "Pacchetti",
+          "sort_order": 30
+        },
+        {
+          "tenant_id": 28,
+          "perm": "packages.clients",
+          "label": "Clienti",
+          "group_name": "Pacchetti",
+          "sort_order": 20
+        },
+        {
+          "tenant_id": 28,
+          "perm": "packages.manage",
+          "label": "Pacchetti completo legacy",
+          "group_name": "Pacchetti",
+          "sort_order": 11
+        },
+        {
+          "tenant_id": 28,
+          "perm": "packages.settings",
+          "label": "Impostazioni",
+          "group_name": "Pacchetti",
+          "sort_order": 40
+        },
+        {
+          "tenant_id": 28,
+          "perm": "pos.manage",
+          "label": "Pagamenti",
+          "group_name": "Pagamenti",
+          "sort_order": 10
+        },
+        {
+          "tenant_id": 28,
+          "perm": "pos.movements",
+          "label": "Movimenti",
+          "group_name": "Pagamenti",
+          "sort_order": 20
+        },
+        {
+          "tenant_id": 28,
+          "perm": "pos.preorders",
+          "label": "Preordini",
+          "group_name": "Pagamenti",
+          "sort_order": 40
+        },
+        {
+          "tenant_id": 28,
+          "perm": "pos.prepaids",
+          "label": "Prepagati",
+          "group_name": "Pagamenti",
+          "sort_order": 30
+        },
+        {
+          "tenant_id": 28,
+          "perm": "pos.settings",
+          "label": "Impostazioni",
+          "group_name": "Pagamenti",
+          "sort_order": 60
+        },
+        {
+          "tenant_id": 28,
+          "perm": "product_categories.manage",
+          "label": "Categorie prodotti",
+          "group_name": "Magazzino",
+          "sort_order": 20
+        },
+        {
+          "tenant_id": 28,
+          "perm": "products.manage",
+          "label": "Magazzino",
+          "group_name": "Magazzino",
+          "sort_order": 10
+        },
+        {
+          "tenant_id": 28,
+          "perm": "promotions.manage",
+          "label": "Promozioni",
+          "group_name": "Fidelizzazione",
+          "sort_order": 70
+        },
+        {
+          "tenant_id": 28,
+          "perm": "quotes.manage",
+          "label": "Preventivi",
+          "group_name": "Preventivi",
+          "sort_order": 10
+        },
+        {
+          "tenant_id": 28,
+          "perm": "quotes.settings",
+          "label": "Impostazioni",
+          "group_name": "Preventivi",
+          "sort_order": 20
+        },
+        {
+          "tenant_id": 28,
+          "perm": "reports.view",
+          "label": "Report",
+          "group_name": "Impostazioni",
+          "sort_order": 70
+        },
+        {
+          "tenant_id": 28,
+          "perm": "resources.manage",
+          "label": "Risorse",
+          "group_name": "Risorse",
+          "sort_order": 10
+        },
+        {
+          "tenant_id": 28,
+          "perm": "roles.manage",
+          "label": "Ruoli",
+          "group_name": "Impostazioni",
+          "sort_order": 90
+        },
+        {
+          "tenant_id": 28,
+          "perm": "service_categories.manage",
+          "label": "Categorie",
+          "group_name": "Risorse",
+          "sort_order": 30
+        },
+        {
+          "tenant_id": 28,
+          "perm": "service_recommendations.manage",
+          "label": "Consigliati",
+          "group_name": "Risorse",
+          "sort_order": 40
+        },
+        {
+          "tenant_id": 28,
+          "perm": "services.manage",
+          "label": "Servizi",
+          "group_name": "Risorse",
+          "sort_order": 20
+        },
+        {
+          "tenant_id": 28,
+          "perm": "settings.general",
+          "label": "Profilo attività",
+          "group_name": "Impostazioni",
+          "sort_order": 20
+        },
+        {
+          "tenant_id": 28,
+          "perm": "settings.location",
+          "label": "Sede",
+          "group_name": "Impostazioni",
+          "sort_order": 30
+        },
+        {
+          "tenant_id": 28,
+          "perm": "settings.manage",
+          "label": "Impostazioni",
+          "group_name": "Impostazioni",
+          "sort_order": 10
+        },
+        {
+          "tenant_id": 28,
+          "perm": "staff_availability.manage",
+          "label": "Disponibilità",
+          "group_name": "Risorse",
+          "sort_order": 70
+        },
+        {
+          "tenant_id": 28,
+          "perm": "staff.manage",
+          "label": "Operatori",
+          "group_name": "Risorse",
+          "sort_order": 60
+        },
+        {
+          "tenant_id": 28,
+          "perm": "stock_moves.manage",
+          "label": "Carico / Scarico",
+          "group_name": "Magazzino",
+          "sort_order": 30
+        },
+        {
+          "tenant_id": 28,
+          "perm": "suppliers.manage",
+          "label": "Fornitori",
+          "group_name": "Anagrafiche",
+          "sort_order": 10
+        }
+      ]
+    },
+    "point_lots": {
+      "mode": "shared",
+      "rows": []
+    },
+    "pos_sale_stock_cancel_actions": {
+      "mode": "shared",
+      "rows": []
+    },
+    "pos_settings": {
+      "mode": "shared",
+      "rows": [
+        {
+          "tenant_id": 28,
+          "id": 1,
+          "preorders_expiry_enabled": 0,
+          "preorders_expiry_value": 0,
+          "preorders_expiry_unit": "days",
+          "prepaids_expiry_enabled": 0,
+          "prepaids_expiry_value": 0,
+          "prepaids_expiry_unit": "days",
+          "updated_by": null,
+          "updated_at": "2026-07-19 08:39:44.216865"
+        }
+      ]
+    },
+    "product_categories": {
+      "mode": "shared",
+      "rows": []
+    },
+    "product_images": {
+      "mode": "shared",
+      "rows": []
+    },
+    "product_stocks": {
+      "mode": "shared",
+      "rows": []
+    },
+    "products": {
+      "mode": "shared",
+      "rows": []
+    },
+    "promotion_blackout_dates": {
+      "mode": "shared",
+      "rows": []
+    },
+    "promotion_locations": {
+      "mode": "shared",
+      "rows": []
+    },
+    "promotion_products": {
+      "mode": "shared",
+      "rows": []
+    },
+    "promotion_redemptions": {
+      "mode": "shared",
+      "rows": []
+    },
+    "promotion_services": {
+      "mode": "shared",
+      "rows": []
+    },
+    "promotion_time_windows": {
+      "mode": "shared",
+      "rows": []
+    },
+    "promotions": {
+      "mode": "shared",
+      "rows": []
+    },
+    "public_customer_favorites": {
+      "mode": "shared",
+      "rows": []
+    },
+    "public_customer_tenant_links": {
+      "mode": "shared",
+      "rows": []
+    },
+    "quote_items": {
+      "mode": "shared",
+      "rows": []
+    },
+    "quotes": {
+      "mode": "shared",
+      "rows": []
+    },
+    "recharge_templates": {
+      "mode": "shared",
+      "rows": []
+    },
+    "recharges": {
+      "mode": "shared",
+      "rows": []
+    },
+    "reminders": {
+      "mode": "shared",
+      "rows": []
+    },
+    "resource_locations": {
+      "mode": "shared",
+      "rows": []
+    },
+    "resources": {
+      "mode": "shared",
+      "rows": []
+    },
+    "role_permission_audit_log": {
+      "mode": "shared",
+      "rows": []
+    },
+    "role_permissions": {
+      "mode": "shared",
+      "rows": []
+    },
+    "sale_installment_plans": {
+      "mode": "shared",
+      "rows": []
+    },
+    "sale_installments": {
+      "mode": "shared",
+      "rows": []
+    },
+    "sale_items": {
+      "mode": "shared",
+      "rows": []
+    },
+    "sales": {
+      "mode": "shared",
+      "rows": []
+    },
+    "service_cabins": {
+      "mode": "shared",
+      "rows": []
+    },
+    "service_categories": {
+      "mode": "shared",
+      "rows": []
+    },
+    "service_locations": {
+      "mode": "shared",
+      "rows": []
+    },
+    "service_recommendations": {
+      "mode": "shared",
+      "rows": []
+    },
+    "service_resources": {
+      "mode": "shared",
+      "rows": []
+    },
+    "services": {
+      "mode": "shared",
+      "rows": []
+    },
+    "sms_credit_movements": {
+      "mode": "shared",
+      "rows": []
+    },
+    "sms_credit_wallet": {
+      "mode": "shared",
+      "rows": [
+        {
+          "id": 4,
+          "tenant_id": 28,
+          "balance_credits": 0,
+          "created_at": "2026-07-19 08:41:21.828863",
+          "updated_at": "2026-07-19 08:41:21.828863"
+        }
+      ]
+    },
+    "staff": {
+      "mode": "shared",
+      "rows": [
+        {
+          "tenant_id": 28,
+          "id": 244,
+          "full_name": "ZZ Admin",
+          "phone": null,
+          "email": "zz.giro5admin337884@example.test",
+          "is_active": 1,
+          "created_at": "2026-07-19 08:39:42.810038",
+          "calendar_color": null,
+          "photo_path": null
+        }
+      ]
+    },
+    "staff_availability": {
+      "mode": "shared",
+      "rows": []
+    },
+    "staff_commission_module_periods": {
+      "mode": "shared",
+      "rows": []
+    },
+    "staff_commission_module_settings": {
+      "mode": "shared",
+      "rows": []
+    },
+    "staff_commission_payments": {
+      "mode": "shared",
+      "rows": []
+    },
+    "staff_commission_periods": {
+      "mode": "shared",
+      "rows": []
+    },
+    "staff_commission_settings": {
+      "mode": "shared",
+      "rows": []
+    },
+    "staff_locations": {
+      "mode": "shared",
+      "rows": [
+        {
+          "tenant_id": 28,
+          "staff_id": 244,
+          "location_id": 96,
+          "created_at": "2026-07-19 08:39:45.039144"
+        }
+      ]
+    },
+    "staff_services": {
+      "mode": "shared",
+      "rows": []
+    },
+    "staff_timeoff": {
+      "mode": "shared",
+      "rows": []
+    },
+    "stock_doc_items": {
+      "mode": "shared",
+      "rows": []
+    },
+    "stock_docs": {
+      "mode": "shared",
+      "rows": []
+    },
+    "stock_moves": {
+      "mode": "shared",
+      "rows": []
+    },
+    "supplier_locations": {
+      "mode": "shared",
+      "rows": []
+    },
+    "suppliers": {
+      "mode": "shared",
+      "rows": []
+    },
+    "tenant_directory_location_categories": {
+      "mode": "shared",
+      "rows": []
+    },
+    "tenant_directory_locations": {
+      "mode": "shared",
+      "rows": []
+    },
+    "tenant_directory_profiles": {
+      "mode": "shared",
+      "rows": []
+    },
+    "tenant_directory_services": {
+      "mode": "shared",
+      "rows": []
+    },
+    "tenant_onboarding_progress": {
+      "mode": "shared",
+      "rows": [
+        {
+          "id": 21702,
+          "tenant_id": 28,
+          "status": "not_started",
+          "current_step": "business",
+          "completed_steps_json": "[]",
+          "skipped_steps_json": "[]",
+          "meta_json": null,
+          "started_at": null,
+          "completed_at": null,
+          "dismissed_at": null,
+          "created_at": "2026-07-19 08:39:45.086166",
+          "updated_at": "2026-07-19 08:39:45.086166"
+        }
+      ]
+    },
+    "transactions": {
+      "mode": "shared",
+      "rows": []
+    },
+    "user_email_verifications": {
+      "mode": "shared",
+      "rows": []
+    },
+    "user_locations": {
+      "mode": "shared",
+      "rows": [
+        {
+          "tenant_id": 28,
+          "user_id": 165,
+          "location_id": 96,
+          "created_at": "2026-07-19 08:39:44.636879"
+        }
+      ]
+    },
+    "users": {
+      "mode": "shared",
+      "rows": [
+        {
+          "tenant_id": 28,
+          "id": 165,
+          "name": "ZZ Admin",
+          "email": "zz.giro5admin337884@example.test",
+          "password_hash": "$2b$10$43RbnmHQopV/U2zAJGM71ehmsQ9QNPlYNvzHWhbHIylkvfOkdZpLG",
+          "role": "admin",
+          "calendar_day_staff_order": null,
+          "email_verified_at": "2026-07-19 10:39:42",
+          "browser_notification_preferences": null,
+          "created_at": "2026-07-19 08:39:42.681335",
+          "session_epoch": 0,
+          "browser_notification_seen": null
+        }
+      ]
+    }
+  },
+  "uploads": {
+    "files": []
+  }
+}

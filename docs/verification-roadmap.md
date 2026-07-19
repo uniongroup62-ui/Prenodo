@@ -16284,3 +16284,40 @@ SES, attest pre-backup PRIMA del delete) + regressioni hardening
 19/19 e fase3 9/9 + smoke sessione manage normale (dashboard 200);
 tsc pulito. HARNESS: expires_at dei token = wall-time ROMA (probe con
 NOW() UTC del DB = "token scaduto" fasullo).
+
+## 2026-07-19 — SaaS ADMIN giro verifica COMPLETO (giro 5): 3 BUG REALI
+
+Giro "analizza e testa" sull'intero dominio (auth/ruoli, ciclo vita
+tenant su tenant USA-E-GETTA zz-giro5*, operativita', supporto,
+cron). BUG trovati e corretti:
+
+(1) DELETE TENANT INCOMPLETA (grave): la lista fissa
+TENANT_DELETE_TABLES copriva 34 tabelle su ~148 con tenant_id —
+vendite, carte, pacchetti, promozioni, transazioni, directory
+marketplace, consensi ecc. restavano ORFANI dopo l'eliminazione
+"definitiva". Ora l'enumerazione e' DINAMICA da INFORMATION_SCHEMA
+(tutte le tabelle con colonna tenant_id) con KEEP esplicito dei soli
+registri di piattaforma: saas_tenant_audit_logs, saas_tenant_backups,
+saas_sms_orders (storico fatturazione).
+
+(2) RICARICA SMS MANUALE ROTTA su Postgres: l'UPDATE del wallet usava
+la SET list qualificata dall'alias (SET w.balance_credits=...) —
+sintassi MySQL che Postgres rifiuta ("column w of relation ... does
+not exist"): ordine marcato failed, crediti mai accreditati. SET ora
+senza alias (valido in entrambi i dialetti). Unica occorrenza nel
+repo (grep).
+
+(3) TOKEN SUPPORTO "ATTIVI" NEL FRAME SBAGLIATO: activeSupportTokens
+confrontava expires_at (wall-time locale/Roma) con NOW() del DB (UTC)
+— i token scaduti restavano visibili come attivi ~2h nel pannello.
+Confronto ora nello stesso frame del writer (parametro mysqlNow()).
+
+Verifica: test-saas-admin-giro5 17/17 (viewer fail-closed su POST e
+admins; slug riservato/duplicato; provisioning seed completo; health;
+visibility sync sulle locations; suspend/activate/archive/restore;
+consumo supporto respinto su tenant sospeso; activeTokens frame Roma;
+topup wallet 10 crediti; backup 142 tabelle con admin incluso; delete
+conferma-esatta + pre-backup; SWEEP zero orfani su tutte le tabelle
+tenant_id; registri piattaforma conservati; rate-limit a 10 falliti)
++ regressioni fase4 11/11, hardening 19/19, fase3 9/9; tsc pulito.
+Tenant usa-e-getta e admin temporanei rimossi per ID (CLEAN).

@@ -112,43 +112,6 @@ const TENANT_BASE_TABLES = [
   "users",
 ];
 
-const TENANT_DELETE_TABLES = [
-  "appointment_services",
-  "appointment_status_logs",
-  "appointments",
-  "automation_settings",
-  "booking_users",
-  "business_hours",
-  "businesses",
-  "cabins",
-  "clients",
-  "cost_categories",
-  "costs",
-  "gift_cards",
-  "gift_boxes",
-  "installment_plans",
-  "installments",
-  "locations",
-  "package_catalog",
-  "permissions",
-  "pos_sales",
-  "pos_sale_items",
-  "pos_settings",
-  "products",
-  "quotes",
-  "role_permissions",
-  "services",
-  "service_categories",
-  "service_locations",
-  "staff",
-  "staff_locations",
-  "stock_moves",
-  "suppliers",
-  "user_locations",
-  "users",
-  ONBOARDING_TABLE,
-];
-
 export async function ensureSaasTenantSchema(): Promise<void> {
   await ensureSaasAuthSchema();
 
@@ -472,10 +435,28 @@ export async function deleteSaasTenant(slug: string, confirmation: string): Prom
   let sharedRowsDeleted = 0;
   const tenantId = Number(tenant.id);
 
+  // Tabelle da CANCELLARE: enumerazione DINAMICA di tutte quelle con colonna
+  // tenant_id (giro verifica 2026-07-19: la lista fissa copriva 34 tabelle su
+  // ~148 — vendite, carte, pacchetti, promozioni, directory ecc. restavano
+  // orfane). Si CONSERVANO solo i registri di piattaforma: audit, backup e
+  // ordini SMS (storico fatturazione).
+  const KEEP_ON_DELETE = new Set(["saas_tenants", AUDIT_TABLE, "saas_tenant_backups", "saas_sms_orders"]);
+  const tableRows = await dbQuery<RowDataPacket[]>(
+    `SELECT DISTINCT c.TABLE_NAME AS table_name
+       FROM INFORMATION_SCHEMA.COLUMNS c
+       JOIN INFORMATION_SCHEMA.TABLES t ON t.TABLE_SCHEMA=c.TABLE_SCHEMA AND t.TABLE_NAME=c.TABLE_NAME
+      WHERE c.TABLE_SCHEMA=DATABASE()
+        AND c.COLUMN_NAME='tenant_id'
+        AND t.TABLE_TYPE='BASE TABLE'
+      ORDER BY c.TABLE_NAME`,
+  );
+  const tablesToPurge = tableRows
+    .map((row) => String(row.table_name ?? ""))
+    .filter((table) => table && !KEEP_ON_DELETE.has(table));
+
   try {
     await dbExecute("SET session_replication_role = 'replica'").catch(() => undefined);
-    for (const table of TENANT_DELETE_TABLES) {
-      if (!await freshTableExists(table) || !await freshColumnExists(table, "tenant_id")) continue;
+    for (const table of tablesToPurge) {
       const result = await dbExecute(`DELETE FROM ${quoteIdentifier(table)} WHERE tenant_id=?`, [tenantId]).catch((error) => {
         warnings.push(`${table}: ${error instanceof Error ? error.message : "delete fallita"}`);
         return null;
@@ -742,9 +723,9 @@ export async function activeSupportTokens(tenantId: number): Promise<RowDataPack
       WHERE tenant_id=?
         AND used_at IS NULL
         AND revoked_at IS NULL
-        AND expires_at > NOW()
+        AND expires_at > ?
       ORDER BY id DESC`,
-    [tenantId],
+    [tenantId, mysqlNow()],
   );
 }
 
