@@ -88,6 +88,11 @@ export async function POST(request: Request) {
     else if (action === "record_health") await recordSaasTenantHealthForSlug(slug, "manual", true);
     else if (action === "repair_admin") await repairSaasTenantAdmin(slug, body);
     else if (action === "delete") {
+      // Conferma PRIMA del backup: senza slug esatto niente lavoro (e niente
+      // file di backup accumulati dai tentativi respinti).
+      if ((body.confirm_slug || "").trim() !== slug) {
+        return jsonError("Conferma eliminazione non valida: digita lo slug esatto.", 400);
+      }
       // Backup AUTOMATICO pre-delete (Fase 4, 2026-07-19): prima di
       // distruggere il tenant si scatta un backup di sicurezza. Best-effort
       // ma TRACCIATO: l'esito finisce nell'audit insieme al delete.
