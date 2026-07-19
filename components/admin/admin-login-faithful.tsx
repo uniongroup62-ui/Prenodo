@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { KeyRound, Loader2, ShieldCheck } from "lucide-react";
+import { KeyRound, Loader2 } from "lucide-react";
 
 // Login del pannello SaaS Admin — redesign identita' Prenodo (2026-07-19, su
 // richiesta): split-screen con card bianca + pannello ink navy #141c30 e
@@ -52,8 +52,8 @@ export function AdminLoginFaithful() {
 
   return (
     <main className="min-h-screen bg-[#eef2f6] text-slate-950">
-      <div className="grid min-h-screen lg:grid-cols-[minmax(0,1fr)_420px]">
-        <section className="flex items-center justify-center px-5 py-8">
+      <div className="flex min-h-screen">
+        <section className="flex flex-1 items-center justify-center px-5 py-8">
           <div className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-7 shadow-sm">
             <div className="flex items-center gap-3">
               <span className="flex h-11 w-11 items-center justify-center rounded-md bg-[#365a96] font-semibold text-white">P</span>
@@ -124,23 +124,6 @@ export function AdminLoginFaithful() {
             </form>
           </div>
         </section>
-
-        <aside className="hidden bg-[#141c30] p-8 text-white lg:block">
-          <div className="flex h-full flex-col justify-between">
-            <div>
-              <div className="flex h-12 w-12 items-center justify-center rounded-md bg-[#365a96] font-semibold">P</div>
-              <h2 className="mt-8 text-4xl font-semibold">Console tenant</h2>
-              <p className="mt-4 leading-7 text-white/70">
-                Gestione tenant, diagnostica, piani, backup e accessi di supporto della piattaforma Prenodo.
-              </p>
-            </div>
-            <div className="grid gap-3 text-sm text-white/70">
-              <span className="flex items-center gap-2"><ShieldCheck size={16} aria-hidden /> Sessioni revocabili e 2FA</span>
-              <span className="flex items-center gap-2"><ShieldCheck size={16} aria-hidden /> Audit su ogni azione</span>
-              <span className="flex items-center gap-2"><ShieldCheck size={16} aria-hidden /> Backup su storage durabile</span>
-            </div>
-          </div>
-        </aside>
       </div>
     </main>
   );
