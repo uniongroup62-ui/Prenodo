@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   ClipboardCheck,
   CreditCard,
+  Download,
   Eye,
   KeyRound,
   LayoutDashboard,
@@ -723,6 +724,12 @@ function TenantsView(props: {
               Filtra
             </button>
           </div>
+          <div className="flex justify-end border-b border-slate-100 px-4 py-2">
+            <a className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50" href="/api/admin/operations?section=export_tenants" download>
+              <Download size={14} aria-hidden />
+              Esporta CSV
+            </a>
+          </div>
           <TenantTable tenants={props.overview.tenants} onOpenTenant={(slug) => props.onOpenTenant(slug)} />
         </section>
         <CreateTenantPanel canManage={props.canManage} onCreate={(payload) => props.onAction("create", payload)} />
@@ -1034,7 +1041,11 @@ function SmsPlansView({ data, canManage, onAction, onRefresh }: { data: SmsBilli
   }
   return (
     <div className="grid gap-5">
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        <a className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 px-4 text-sm font-semibold text-slate-600 hover:bg-slate-50" href="/api/admin/operations?section=export_sms_orders" download>
+          <Download size={16} aria-hidden />
+          Esporta ordini CSV
+        </a>
         <Button variant="outline" icon={RotateCcw} onClick={onRefresh}>Aggiorna</Button>
       </div>
       <div className="grid gap-3 md:grid-cols-4">

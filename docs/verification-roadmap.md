@@ -16249,3 +16249,38 @@ waitForURL, refresh ripristina la tab, controls, robots) +
 regressione test-saas-admin-hardening 19/19; tsc pulito. HARNESS:
 click su tab -> la syncUrl scatta a fetch COMPLETATA (waitForURL, non
 sleep fissi); prima visita di una vista in dev = lag di compilazione.
+
+## 2026-07-19 — SaaS ADMIN Fase 4: SUPPORTO TRASPARENTE, EXPORT, CRON HEALTH
+
+Fase 4 (banner supporto + operativita'): (1) BANNER SUPPORTO reale —
+la sessione manage creata da un support token porta il marker
+session.support.tokenId; getSupportAccess (shell-context) rilegge il
+token e il gestionale mostra l'alert sticky "Accesso supporto attivo"
+con generato-da/motivo/scadenza. (2) SESSIONE VINCOLATA AL TOKEN: la
+sessione supporto muore SUBITO alla revoca o alla scadenza del token
+(supportTokenStillValid in currentManageSession — le sessioni normali
+non pagano la query); revokeSupportToken ora revoca anche i token GIA'
+USATI. (3) BACKUP AUTOMATICO pre-delete nella danger zone (audit
+tenant_delete_prebackup + esito nel payload). (4) EXPORT CSV
+tenants/ordini SMS (GET operations?section=export_* con BOM, audit
+ops_export_*, bottoni nella SPA). (5) CRON /api/cron/admin-health:
+assertCronAuth, healthAll con source 'cron', alert email agli admin
+SaaS attivi solo se errori>0 e SES configurato (email piattaforma
+brand Prenodo).
+
+BUG REALI trovati dal giro: (a) consumo token = 500 sul path di
+successo — cookies().set e' VIETATO nel render dei Server Component:
+il consumo e' stato spostato nel Route Handler
+/api/manage/support-access, e il cookie va settato SULLA RISPOSTA di
+redirect (NextResponse.cookies.set — il cookie store async non si
+propaga); (b) la sessione supporto non portava epoch: con
+users.session_epoch>0 (logout precedenti) veniva rifiutata al primo
+hit — ora copia session_epoch dell'admin tenant.
+
+Verifica: test-saas-admin-fase4 11/11 (login, CSV con/senza sessione,
+audit export, token->banner Playwright, riuso respinto, revoca
+post-uso termina la sessione, cron con conteggi e alerted=0 senza
+SES, attest pre-backup PRIMA del delete) + regressioni hardening
+19/19 e fase3 9/9 + smoke sessione manage normale (dashboard 200);
+tsc pulito. HARNESS: expires_at dei token = wall-time ROMA (probe con
+NOW() UTC del DB = "token scaduto" fasullo).

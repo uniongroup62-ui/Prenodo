@@ -764,12 +764,13 @@ export async function recentSupportTokens(tenantId: number, limit = 20): Promise
 export async function revokeSupportToken(tokenId: number, slug: string): Promise<void> {
   const tenant = await requireSaasTenant(slug);
   if (tokenId <= 0) throw new Error("Token supporto non valido.");
+  // Revocabile anche DOPO l'uso (Fase 4): la sessione supporto attiva e'
+  // vincolata al token — revocarlo la termina immediatamente.
   await dbExecute(
     `UPDATE \`${SUPPORT_TABLE}\`
         SET revoked_at=NOW()
       WHERE id=?
         AND tenant_id=?
-        AND used_at IS NULL
         AND revoked_at IS NULL`,
     [tokenId, Number(tenant.id)],
   );
@@ -828,6 +829,11 @@ export async function consumeSupportAccessToken({
       locationIds: [],
     },
     issuedAt: Date.now(),
+    // Epoca di revoca corrente dell'utente: senza, la sessione viene
+    // rifiutata appena users.session_epoch > 0 (logout precedenti).
+    epoch: Number((user as { session_epoch?: number }).session_epoch ?? 0) || 0,
+    // Marker per il banner di trasparenza nel gestionale (Fase 4).
+    support: { tokenId: Number(row.id) },
   };
 
   await dbExecute(

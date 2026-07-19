@@ -27,6 +27,10 @@ export type ManageSession = {
   // Epoca di revoca: il logout incrementa users.session_epoch e invalida
   // tutte le sessioni firmate emesse prima (parita' con session_destroy legacy).
   epoch?: number;
+  // Marker accesso SUPPORTO (Fase 4 SaaS Admin, 2026-07-19): la sessione
+  // creata da un support token porta l'id del token — la shell mostra il
+  // banner di trasparenza al tenant finché il token non scade/viene revocato.
+  support?: { tokenId: number };
 };
 
 type LoginResult =
@@ -115,6 +119,17 @@ export async function setManageSessionCookie(session: ManageSession): Promise<vo
   });
 }
 
+// Variante per i Route Handler che devono settare il cookie DIRETTAMENTE
+// sulla risposta di redirect (Fase 4: consumo support token) — il cookie
+// store asincrono non viene propagato su una Response costruita a mano.
+export function manageSessionCookiePayload(session: ManageSession): { name: string; value: string; maxAge: number } {
+  return {
+    name: sessionCookieName(session.tenantSlug),
+    value: signSession(session),
+    maxAge: SESSION_TTL_SECONDS,
+  };
+}
+
 export async function clearManageSessionCookie(slug: string): Promise<void> {
   const cookieStore = await cookies();
   cookieStore.delete(sessionCookieName(slug));
@@ -129,7 +144,30 @@ export async function currentManageSession(slug: string): Promise<ManageSession 
   if (session.tenantSlug !== normalizeTenantSlug(slug)) return null;
   if (Date.now() - session.issuedAt > SESSION_TTL_SECONDS * 1000) return null;
   if (!(await sessionEpochValid(session))) return null;
+  if (!(await supportTokenStillValid(session))) return null;
   return session;
+}
+
+// Le sessioni SUPPORTO (Fase 4 SaaS Admin) sono vincolate al loro token: se
+// viene revocato o scade, la sessione muore SUBITO — non sopravvive per le
+// 12 ore del cookie. Le sessioni normali (senza marker) non pagano la query.
+async function supportTokenStillValid(session: ManageSession): Promise<boolean> {
+  const tokenId = Number(session.support?.tokenId ?? 0);
+  if (!tokenId) return true;
+  try {
+    const rows = await dbQuery<RowDataPacket[]>(
+      "SELECT revoked_at, expires_at FROM `saas_support_access_tokens` WHERE id = ? LIMIT 1",
+      [tokenId],
+    );
+    const row = rows[0];
+    if (!row || row.revoked_at) return false;
+    const expiresMs = new Date(String(row.expires_at ?? "").replace(" ", "T")).getTime();
+    if (Number.isFinite(expiresMs) && Date.now() > expiresMs) return false;
+    return true;
+  } catch {
+    // Errore DB transitorio: fail-open come sessionEpochValid.
+    return true;
+  }
 }
 
 // Confronta l'epoca della sessione con users.session_epoch: il logout

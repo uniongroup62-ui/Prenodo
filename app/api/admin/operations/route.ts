@@ -28,6 +28,17 @@ import { listSaasTenants, requireSaasTenant, tenantStatus } from "@/lib/saas-ten
 
 export const dynamic = "force-dynamic";
 
+// CSV con BOM UTF-8 (Excel-friendly) e campi quotati.
+function csvResponse(filename: string, rows: string[][]): Response {
+  const body = "﻿" + rows.map((row) => row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(";")).join("\r\n");
+  return new Response(body, {
+    headers: {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": `attachment; filename="${filename}"`,
+    },
+  });
+}
+
 export async function GET(request: Request) {
   try {
     const session = await requireSaasAdminSession();
@@ -78,6 +89,43 @@ export async function GET(request: Request) {
     if (section === "send_movements") {
       const [sms, emails] = await Promise.all([latestSmsMovements(), latestEmailMovements()]);
       return Response.json({ ok: true, sms, emails });
+    }
+
+    // Export CSV (Fase 4, 2026-07-19): download diretto dal browser.
+    if (section === "export_tenants") {
+      const tenants = await listSaasTenants();
+      const rows = [
+        ["id", "slug", "nome", "stato", "creato_il"],
+        ...tenants.map((tenant) => [
+          String(tenant.id ?? ""),
+          String(tenant.slug ?? ""),
+          String(tenant.name ?? ""),
+          tenantStatus(tenant),
+          String(tenant.created_at ?? ""),
+        ]),
+      ];
+      void logSaasAdminAction({ adminId: session.user.id, adminEmail: session.user.email, action: "ops_export_tenants", request });
+      return csvResponse("tenants.csv", rows);
+    }
+
+    if (section === "export_sms_orders") {
+      const orders = await smsOrders(500);
+      const rows = [
+        ["id", "tenant", "crediti", "importo_lordo", "stato", "creato_il"],
+        ...orders.map((order) => {
+          const r = order as Record<string, unknown>;
+          return [
+            String(r.id ?? ""),
+            String(r.tenant_slug ?? r.tenant ?? ""),
+            String(r.credits ?? ""),
+            String(r.amount_gross ?? ""),
+            String(r.status ?? ""),
+            String(r.created_at ?? ""),
+          ];
+        }),
+      ];
+      void logSaasAdminAction({ adminId: session.user.id, adminEmail: session.user.email, action: "ops_export_sms_orders", request });
+      return csvResponse("ordini-sms.csv", rows);
     }
 
     if (section === "backups") {

@@ -458,12 +458,34 @@ function addOneDay(iso: string): string {
   return d.toISOString().slice(0, 10);
 }
 
-// Support access lives in the SaaS-level saas_support_access_tokens table and
-// is normally tracked on the PHP $_SESSION['support_access']. The Next manage
-// session does not yet carry a support-access marker, so there is no reliable
-// per-request signal to surface here. Returns null (TODO: wire when the manage
-// session records an active support token; `slug` is reserved for that lookup).
+// Support access (Fase 4 SaaS Admin, 2026-07-19): la sessione creata da un
+// support token porta session.support.tokenId — da lì si rilegge il token e,
+// se ancora valido (non revocato/scaduto), il gestionale mostra il banner di
+// trasparenza al tenant (port di $_SESSION['support_access'] legacy).
 export async function getSupportAccess(slug: string): Promise<ShellSupportAccess> {
-  void slug;
-  return null;
+  try {
+    const { currentManageSession } = await import("@/lib/manage-auth");
+    const session = await currentManageSession(slug);
+    const tokenId = Number(session?.support?.tokenId ?? 0);
+    if (!tokenId) return null;
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT reason, created_by_email, expires_at, revoked_at
+         FROM \`saas_support_access_tokens\`
+        WHERE id = ?
+        LIMIT 1`,
+      [tokenId],
+    );
+    const row = rows[0];
+    if (!row || row.revoked_at) return null;
+    const expiresAt = String(row.expires_at ?? "");
+    const expiresMs = new Date(expiresAt.replace(" ", "T")).getTime();
+    if (Number.isFinite(expiresMs) && Date.now() > expiresMs) return null;
+    return {
+      created_by_email: String(row.created_by_email ?? ""),
+      reason: String(row.reason ?? ""),
+      expires_at: expiresAt,
+    };
+  } catch {
+    return null;
+  }
 }

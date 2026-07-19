@@ -88,8 +88,20 @@ export async function POST(request: Request) {
     else if (action === "record_health") await recordSaasTenantHealthForSlug(slug, "manual", true);
     else if (action === "repair_admin") await repairSaasTenantAdmin(slug, body);
     else if (action === "delete") {
+      // Backup AUTOMATICO pre-delete (Fase 4, 2026-07-19): prima di
+      // distruggere il tenant si scatta un backup di sicurezza. Best-effort
+      // ma TRACCIATO: l'esito finisce nell'audit insieme al delete.
+      let preBackup = "";
+      try {
+        const { createSaasTenantBackup } = await import("@/lib/saas-operations");
+        const backup = await createSaasTenantBackup(slug, "pre-delete automatico");
+        preBackup = backup.filename;
+      } catch (error) {
+        preBackup = `FALLITO: ${error instanceof Error ? error.message : "errore"}`;
+      }
+      void logSaasAdminAction({ adminId: session.user.id, adminEmail: session.user.email, action: "tenant_delete_prebackup", target: slug, details: preBackup, request });
       const result = await deleteSaasTenant(slug, body.confirm_slug || "");
-      return Response.json({ ok: true, result });
+      return Response.json({ ok: true, result, preBackup });
     } else if (action === "health_all") {
       return Response.json({ ok: true, results: await healthAllSaasTenants(true, true, "manual_all") });
     } else if (action === "repair_all") {
