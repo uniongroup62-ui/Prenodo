@@ -16770,3 +16770,12 @@ su una riga. Il form Nuovo tenant resta sotto la lista (collassato).
 Verifica: screenshot lista e dettaglio; suite aggiornate — faseAB H2
 (perPage 25), ux M3 (filtro sulla LISTA, dettaglio via deep-link) —
 e TUTTE le 14 suite verdi; tsc pulito.
+
+## 2026-07-20 — VISTA TENANT: VIA LA BOX "NUOVO TENANT"
+
+Richiesta utente: la card fissa sotto la lista e' stata eliminata —
+il modulo di creazione appare SOLO quando lo apre il bottone "Nuovo
+tenant" (header o azione rapida della dashboard) e sparisce con
+Chiudi o a creazione riuscita. Verifica live: box assente in lista,
+click header -> form con campi, Chiudi -> sparito; suite ux/faseAB/
+dash/consolida/stats/fase3 verdi.

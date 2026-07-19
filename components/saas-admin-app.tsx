@@ -1032,22 +1032,9 @@ function TenantsView(props: {
 }
 
 function CreateTenantPanel({ plans, open, canManage, onCreate, onToggle }: { plans: PlanOption[]; open: boolean; canManage: boolean; onCreate: (payload: Record<string, string>) => void; onToggle: (open: boolean) => void }) {
-  if (!open) {
-    return (
-      <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
-        <div className="flex items-center justify-between p-4">
-          <div>
-            <p className="font-semibold">Nuovo tenant</p>
-            <p className="text-sm text-slate-500">Crea tenant, admin iniziale, sede principale e onboarding.</p>
-          </div>
-          <button className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50" disabled={!canManage} type="button" onClick={() => onToggle(true)}>
-            <Plus size={16} aria-hidden />
-            Apri il modulo
-          </button>
-        </div>
-      </section>
-    );
-  }
+  // Nessuna box fissa in lista (richiesta utente 20/07): il modulo appare
+  // SOLO quando lo apre il bottone "Nuovo tenant" (header o dashboard).
+  if (!open) return null;
   return (
     <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
       <div className="flex items-start justify-between pr-4">
