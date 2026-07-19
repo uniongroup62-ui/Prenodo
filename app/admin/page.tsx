@@ -11,8 +11,13 @@ export const metadata: Metadata = {
 // tenant a tab + Sicurezza) con URL VERI: /admin?page=<vista>[&slug=..&tab=..]
 // — deep-link, refresh e tasto Indietro funzionanti. I nomi pagina legacy
 // dell'admin PHP (tenant_detail/tenant_new/…) sono mappati alle viste.
-const VIEWS = new Set(["dashboard", "tenants", "controls", "sms_plans", "billing", "send_movements", "maintenance", "signups", "audit", "admins", "security"]);
+const VIEWS = new Set(["dashboard", "tenants", "billing", "operations", "signups", "audit", "admins", "security"]);
 const LEGACY_PAGE_MAP: Record<string, string> = {
+  // Menu consolidato (2026-07-19): le vecchie viste restano deep-linkabili.
+  controls: "operations",
+  send_movements: "operations",
+  maintenance: "operations",
+  sms_plans: "billing",
   tenant_detail: "tenants",
   tenant_new: "tenants",
   tenant_settings: "tenants",
@@ -36,6 +41,14 @@ const LEGACY_TAB_MAP: Record<string, string> = {
   tenant_admin: "admin",
 };
 const TABS = new Set(["overview", "timeline", "settings", "visibility", "admin", "onboarding", "health", "support", "backups", "danger"]);
+// Sottosezione delle viste consolidate: dalle pagine legacy o da ?sec=.
+const LEGACY_SEC_MAP: Record<string, string> = {
+  controls: "controls",
+  send_movements: "movements",
+  maintenance: "maintenance",
+  sms_plans: "sms",
+};
+const SECS = new Set(["plans", "sms", "controls", "movements", "maintenance"]);
 
 export default async function AdminPage({
   searchParams,
@@ -56,6 +69,8 @@ export default async function AdminPage({
   const slug = view === "tenants" ? qs("slug") : "";
   const rawTab = qs("tab") || LEGACY_TAB_MAP[rawPage] || "overview";
   const tab = TABS.has(rawTab) ? rawTab : "overview";
+  const rawSec = qs("sec") || LEGACY_SEC_MAP[rawPage] || "";
+  const section = SECS.has(rawSec) ? rawSec : "";
 
   return (
     <SaasAdminApp
@@ -65,6 +80,7 @@ export default async function AdminPage({
       initialSlug={slug}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       initialTab={tab as any}
+      initialSection={section}
     />
   );
 }

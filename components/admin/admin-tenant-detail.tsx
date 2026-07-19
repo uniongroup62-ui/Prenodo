@@ -45,6 +45,7 @@ import {
   tenantStatus,
   timelineKindStyle,
   type BackupRow,
+  type PlanOption,
   type Tenant,
   type TenantDetailPayload,
   type TenantTab,
@@ -66,6 +67,7 @@ export const tenantTabs: Array<{ key: TenantTab; label: string; icon: LucideIcon
 
 export function TenantDetailPanel(props: {
   detail: TenantDetailPayload | null;
+  plans: PlanOption[];
   activeTab: TenantTab;
   supportLink: string;
   backups: BackupRow[];
@@ -116,7 +118,7 @@ export function TenantDetailPanel(props: {
       <div className="p-4">
         {props.activeTab === "overview" ? <TenantOverview detail={props.detail} /> : null}
         {props.activeTab === "timeline" ? <TenantTimeline events={props.detail.timeline ?? []} /> : null}
-        {props.activeTab === "settings" ? <TenantSettings tenant={tenant} canManage={props.canManage} onAction={props.onAction} /> : null}
+        {props.activeTab === "settings" ? <TenantSettings plans={props.plans} tenant={tenant} canManage={props.canManage} onAction={props.onAction} /> : null}
         {props.activeTab === "visibility" ? <TenantVisibility tenant={tenant} canManage={props.canManage} onAction={props.onAction} /> : null}
         {props.activeTab === "admin" ? <TenantAdmin tenant={tenant} canManage={props.canManage} onAction={props.onAction} /> : null}
         {props.activeTab === "onboarding" ? <TenantOnboarding tenant={tenant} canManage={props.canManage} onAction={props.onAction} /> : null}
@@ -187,13 +189,21 @@ function TenantTimeline({ events }: { events: TimelineEvent[] }) {
   );
 }
 
-function TenantSettings({ tenant, canManage, onAction }: { tenant: Tenant; canManage: boolean; onAction: (action: string, payload?: Record<string, string>) => void }) {
+function TenantSettings({ tenant, plans, canManage, onAction }: { tenant: Tenant; plans: PlanOption[]; canManage: boolean; onAction: (action: string, payload?: Record<string, string>) => void }) {
   return (
-    <form className="grid gap-3 md:grid-cols-2" onSubmit={(event) => submitAction(event, "update", onAction)}>
+    <form className="grid gap-3 md:grid-cols-2" key={`settings-${tenant.slug}-${tenant.plan_id ?? 0}`} onSubmit={(event) => submitAction(event, "update", onAction)}>
       <input name="slug" type="hidden" value={tenant.slug} />
       <Input name="name" label="Nome" defaultValue={tenant.name} required />
       <Input name="admin_email" label="Email admin" type="email" defaultValue={tenant.admin_email ?? ""} />
-      <Input name="plan" label="Piano" defaultValue={tenant.plan ?? ""} />
+      {/* Piano come ENTITA' (select dei piani veri): l'assegnazione governa i
+          gate del gestionale, mai testo libero. */}
+      <label>
+        <span className="mb-1 block text-sm font-medium text-slate-600">Piano</span>
+        <select className="h-10 w-full rounded-md border border-slate-200 px-3 outline-none focus:border-[#365a96]" defaultValue={String(tenant.plan_id ?? 0)} name="plan_id">
+          <option value="0">Nessun piano (illimitato)</option>
+          {plans.map((plan) => <option key={plan.id} value={String(plan.id)}>{plan.name} — {formatEuro(plan.price_month)}/mese</option>)}
+        </select>
+      </label>
       <Input name="tenant_url" label="URL tenant" defaultValue={`/${tenant.slug}/`} disabled />
       <label className="md:col-span-2">
         <span className="mb-1 block text-sm font-medium text-slate-600">Note interne</span>

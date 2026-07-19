@@ -56,8 +56,12 @@ export async function GET(request: Request) {
     const pageCount = Math.max(1, Math.ceil(tenants.length / perPage));
     const page = Math.min(pageCount, Math.max(1, parseInteger(url.searchParams.get("page"), 1)));
     const { buildSaasWorkQueue } = await import("@/lib/saas-work-queue");
+    const { listSaasPlans } = await import("@/lib/saas-plans");
     return Response.json({
       ok: true,
+      // Piani ATTIVI per le select (Nuovo tenant / tab Dati): il piano e'
+      // un'entita', mai testo libero (coerenza Fase E).
+      plans: (await listSaasPlans(false)).map((plan) => ({ id: Number(plan.id), name: String(plan.name), price_month: Number(plan.price_month ?? 0) })),
       tenants: tenants.slice((page - 1) * perPage, page * perPage),
       total: tenants.length,
       page,
@@ -88,9 +92,20 @@ export async function POST(request: Request) {
 
     if (action === "create") {
       const createdSlug = await createSaasTenant(body);
+      // Piano come ENTITA' (select plan_id), mai testo libero.
+      if (parseInteger(body.plan_id, 0) > 0) {
+        const { assignSaasPlan } = await import("@/lib/saas-plans");
+        await assignSaasPlan(createdSlug, parseInteger(body.plan_id, 0));
+      }
       return Response.json({ ok: true, slug: createdSlug, tenant: await saasTenantBySlug(createdSlug) });
     }
-    if (action === "update") await updateSaasTenant(slug, body);
+    if (action === "update") {
+      await updateSaasTenant(slug, body);
+      if (body.plan_id !== undefined) {
+        const { assignSaasPlan } = await import("@/lib/saas-plans");
+        await assignSaasPlan(slug, parseInteger(body.plan_id, 0));
+      }
+    }
     else if (action === "visibility") await updateSaasPublicVisibility(slug, body);
     else if (action === "suspend") await setSaasTenantStatus(slug, "suspended", body.reason || "");
     else if (action === "activate") await setSaasTenantStatus(slug, "active");

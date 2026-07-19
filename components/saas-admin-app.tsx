@@ -75,6 +75,7 @@ import {
   type ControlsPayload,
   type MovementRow,
   type MovementsPayload,
+  type PlanOption,
   type SmsBillingPayload,
   type Tenant,
   type TenantDetailPayload,
@@ -83,7 +84,13 @@ import {
   type WorkItem,
 } from "@/components/admin/admin-shared";
 
-type ViewKey = "dashboard" | "tenants" | "controls" | "sms_plans" | "billing" | "send_movements" | "maintenance" | "signups" | "audit" | "admins" | "security";
+// Menu consolidato (2026-07-19, da 11 a 8 voci): "Fatturazione" riunisce
+// abbonamenti e pacchetti SMS; "Operazioni" riunisce controlli, movimenti
+// invii e manutenzione. Le vecchie ?page= restano deep-linkabili (mappa in
+// app/admin/page.tsx) e la sottosezione vive in ?sec=.
+type ViewKey = "dashboard" | "tenants" | "billing" | "operations" | "signups" | "audit" | "admins" | "security";
+type BillingSection = "plans" | "sms";
+type OperationsSection = "controls" | "movements" | "maintenance";
 
 type SignupRow = {
   id: number;
@@ -100,7 +107,17 @@ type SignupRow = {
   created_at: string | null;
 };
 
+type AuditFilters = { q: string; action: string; tenant: string };
+
+type AuditSearchPayload = {
+  rows: Array<AuditRow & { meta_json?: string | null }>;
+  total: number;
+  page: number;
+  perPage: number;
+};
+
 type OverviewPayload = {
+  plans: PlanOption[];
   tenants: Tenant[];
   total: number;
   page: number;
@@ -115,18 +132,27 @@ type OverviewPayload = {
 const navItems: Array<{ key: ViewKey; label: string; icon: LucideIcon }> = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "tenants", label: "Tenant", icon: Building2 },
-  { key: "controls", label: "Controlli", icon: Activity },
-  { key: "sms_plans", label: "Piani SMS", icon: CreditCard },
-  { key: "billing", label: "Piani & Ricavi", icon: Wallet },
-  { key: "send_movements", label: "Movimenti invii", icon: Send },
-  { key: "maintenance", label: "Manutenzione", icon: Wrench },
+  { key: "billing", label: "Fatturazione", icon: Wallet },
+  { key: "operations", label: "Operazioni", icon: Activity },
   { key: "signups", label: "Registrazioni", icon: UserPlus },
   { key: "audit", label: "Audit", icon: ScrollText },
   { key: "admins", label: "Admin SaaS", icon: Users },
   { key: "security", label: "Sicurezza", icon: ShieldCheck },
 ];
 
+const billingSections: Array<{ key: BillingSection; label: string; icon: LucideIcon }> = [
+  { key: "plans", label: "Abbonamenti & Ricavi", icon: Wallet },
+  { key: "sms", label: "Pacchetti SMS", icon: CreditCard },
+];
+
+const operationsSections: Array<{ key: OperationsSection; label: string; icon: LucideIcon }> = [
+  { key: "controls", label: "Controlli", icon: Activity },
+  { key: "movements", label: "Movimenti invii", icon: Send },
+  { key: "maintenance", label: "Manutenzione", icon: Wrench },
+];
+
 const emptyOverview: OverviewPayload = {
+  plans: [],
   tenants: [],
   total: 0,
   page: 1,
@@ -138,121 +164,22 @@ const emptyOverview: OverviewPayload = {
   audit: [],
 };
 
-export function SaasAdminLoginPage({ initialBootstrapped = true }: { initialBootstrapped?: boolean }) {
-  const [bootstrapped, setBootstrapped] = useState(initialBootstrapped);
-  const [name, setName] = useState("Admin");
-  // MAI credenziali di default nel sorgente (fix sicurezza 2026-07-18).
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [message, setMessage] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/admin/auth/status")
-      .then((response) => response.json())
-      .then((data: { bootstrapped?: boolean }) => {
-        if (!cancelled) setBootstrapped(Boolean(data.bootstrapped));
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  async function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setLoading(true);
-    setMessage("");
-    try {
-      const response = await fetch("/api/admin/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: bootstrapped ? "login" : "bootstrap", name, email, password }),
-      });
-      const data = await response.json() as { ok?: boolean; redirectTo?: string; error?: string };
-      if (!response.ok || !data.ok) {
-        setMessage(data.error ?? "Accesso non riuscito.");
-        return;
-      }
-      window.location.href = data.redirectTo ?? "/admin";
-    } catch {
-      setMessage("Pannello SaaS non disponibile ora.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <main className="min-h-screen bg-[#eef2f6] text-slate-950">
-      <div className="grid min-h-screen lg:grid-cols-[minmax(0,1fr)_420px]">
-        <section className="flex items-center justify-center px-5 py-8">
-          <div className="w-full max-w-md rounded-md border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex items-center gap-3">
-              <span className="flex h-11 w-11 items-center justify-center rounded-md bg-[#182238] text-white">
-                <ShieldCheck size={20} aria-hidden />
-              </span>
-              <div>
-                <p className="text-sm font-semibold uppercase tracking-[0.18em] text-[#365a96]">SaaS Admin</p>
-                <h1 className="text-2xl font-semibold">{bootstrapped ? "Accesso" : "Prima configurazione"}</h1>
-              </div>
-            </div>
-
-            {message ? <div className="mt-5 rounded-md border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">{message}</div> : null}
-
-            <form className="mt-6 space-y-4" onSubmit={submit}>
-              {!bootstrapped ? (
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-slate-600">Nome</span>
-                  <input className="h-11 w-full rounded-md border border-slate-200 px-3 outline-none focus:border-[#365a96]" value={name} onChange={(event) => setName(event.target.value)} />
-                </label>
-              ) : null}
-              <label className="block">
-                <span className="mb-1 block text-sm font-medium text-slate-600">Email</span>
-                <input className="h-11 w-full rounded-md border border-slate-200 px-3 outline-none focus:border-[#365a96]" type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-sm font-medium text-slate-600">Password</span>
-                <input className="h-11 w-full rounded-md border border-slate-200 px-3 outline-none focus:border-[#365a96]" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
-              </label>
-              <button className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-md bg-[#365a96] px-4 text-sm font-semibold text-white disabled:opacity-60" disabled={loading}>
-                {loading ? <Loader2 className="animate-spin" size={17} aria-hidden /> : <KeyRound size={17} aria-hidden />}
-                {bootstrapped ? "Accedi" : "Crea admin SaaS"}
-              </button>
-            </form>
-          </div>
-        </section>
-        <aside className="hidden bg-[#141c30] p-8 text-white lg:block">
-          <div className="flex h-full flex-col justify-between">
-            <div>
-              <div className="flex h-12 w-12 items-center justify-center rounded-md bg-[#365a96]">B</div>
-              <h2 className="mt-8 text-4xl font-semibold tracking-normal">Console tenant</h2>
-              <p className="mt-4 leading-7 text-white/70">Gestione tenant, diagnostica, onboarding, support access e amministratori senza dipendere dal pannello PHP.</p>
-            </div>
-            <div className="grid gap-2 text-sm text-white/70">
-              <span>Schema centrale `saas_*`</span>
-              <span>Audit operativo</span>
-              <span>Token supporto monouso</span>
-            </div>
-          </div>
-        </aside>
-      </div>
-    </main>
-  );
-}
-
 export function SaasAdminApp({
   initialUser,
   initialView = "dashboard",
   initialSlug = "",
   initialTab = "overview",
+  initialSection = "",
 }: {
   initialUser: SaasAdminUser;
   initialView?: ViewKey;
   initialSlug?: string;
   initialTab?: TenantTab;
+  initialSection?: string;
 }) {
   const [activeView, setActiveView] = useState<ViewKey>(initialView);
+  const [billingTab, setBillingTab] = useState<BillingSection>(initialView === "billing" && initialSection === "sms" ? "sms" : "plans");
+  const [opsTab, setOpsTab] = useState<OperationsSection>(initialView === "operations" && (initialSection === "movements" || initialSection === "maintenance") ? (initialSection as OperationsSection) : "controls");
   const [overview, setOverview] = useState<OverviewPayload>(emptyOverview);
   const [tenantDetail, setTenantDetail] = useState<TenantDetailPayload | null>(null);
   const [activeTenantTab, setActiveTenantTab] = useState<TenantTab>("overview");
@@ -260,6 +187,8 @@ export function SaasAdminApp({
   const [smsBilling, setSmsBilling] = useState<SmsBillingPayload | null>(null);
   const [billing, setBilling] = useState<BillingPayload | null>(null);
   const [restoreCandidates, setRestoreCandidates] = useState<BackupRow[]>([]);
+  const [auditData, setAuditData] = useState<AuditSearchPayload | null>(null);
+  const [auditFilters, setAuditFilters] = useState<AuditFilters>({ q: "", action: "", tenant: "" });
   const [signups, setSignups] = useState<SignupRow[] | null>(null);
   const [movements, setMovements] = useState<MovementsPayload | null>(null);
   const [backups, setBackups] = useState<Record<string, BackupRow[]>>({});
@@ -279,52 +208,76 @@ export function SaasAdminApp({
 
   // URL veri per ogni sezione (Fase 3, 2026-07-19): /admin?page=<vista>
   // [&slug=..&tab=..] — deep-link, refresh e tasto Indietro funzionanti.
-  function syncUrl(view: ViewKey, slug = "", tab: TenantTab = "overview", push = true) {
+  function syncUrl(view: ViewKey, slug = "", tab: TenantTab = "overview", push = true, sec = "") {
     const params = new URLSearchParams();
     if (view !== "dashboard") params.set("page", view);
     if (view === "tenants" && slug) {
       params.set("slug", slug);
       if (tab !== "overview") params.set("tab", tab);
     }
+    // Sottosezione (Fatturazione/Operazioni) nell'URL solo se non-default.
+    if (view === "billing" && sec && sec !== "plans") params.set("sec", sec);
+    if (view === "operations" && sec && sec !== "controls") params.set("sec", sec);
     const url = `/admin${params.toString() ? `?${params}` : ""}`;
     if (typeof window !== "undefined" && window.location.pathname + window.location.search !== url) {
-      if (push) window.history.pushState({ view, slug, tab }, "", url);
-      else window.history.replaceState({ view, slug, tab }, "", url);
+      if (push) window.history.pushState({ view, slug, tab, sec }, "", url);
+      else window.history.replaceState({ view, slug, tab, sec }, "", url);
     }
   }
 
-  // Caricamento dati per-vista (riusato da nav, deep-link iniziale e popstate).
-  const loadForView = (key: ViewKey) => {
+  // Caricamento dati per-vista/sottosezione (nav, deep-link, popstate).
+  const loadForView = (key: ViewKey, sec = "") => {
     if (key === "admins") void loadAdmins();
-    if (key === "controls") void loadControls();
-    if (key === "sms_plans") void loadSmsBilling();
-    if (key === "billing") void loadBilling();
-    if (key === "send_movements") void loadMovements();
-    if (key === "maintenance") void loadRestoreCandidates();
     if (key === "signups") void loadSignups();
+    if (key === "audit") void loadAudit(auditFilters, 1);
+    if (key === "billing") {
+      if (sec === "sms") void loadSmsBilling();
+      else void loadBilling();
+    }
+    if (key === "operations") {
+      if (sec === "movements") void loadMovements();
+      else if (sec === "maintenance") void loadRestoreCandidates();
+      else void loadControls();
+    }
   };
 
-  function navigateView(key: ViewKey, push = true) {
+  function navigateView(key: ViewKey, push = true, sec = "") {
     setActiveView(key);
     setTenantDetail(null);
-    loadForView(key);
-    syncUrl(key, "", "overview", push);
+    if (key === "billing") setBillingTab(sec === "sms" ? "sms" : "plans");
+    if (key === "operations") setOpsTab(sec === "movements" || sec === "maintenance" ? (sec as OperationsSection) : "controls");
+    loadForView(key, sec);
+    syncUrl(key, "", "overview", push, sec);
+  }
+
+  // Cambio sottosezione: stato + load pigro + URL (replace, niente history spam).
+  function selectBillingTab(sec: BillingSection) {
+    setBillingTab(sec);
+    loadForView("billing", sec);
+    syncUrl("billing", "", "overview", false, sec);
+  }
+
+  function selectOpsTab(sec: OperationsSection) {
+    setOpsTab(sec);
+    loadForView("operations", sec);
+    syncUrl("operations", "", "overview", false, sec);
   }
 
   // Deep-link iniziale (?page/slug/tab) + tasto Indietro (popstate).
   useEffect(() => {
     if (initialSlug) void loadTenant(initialSlug, initialTab);
-    else loadForView(initialView);
+    else loadForView(initialView, initialSection);
     const onPop = () => {
       const params = new URLSearchParams(window.location.search);
       const view = (params.get("page") || "dashboard") as ViewKey;
       const slug = params.get("slug") || "";
       const tab = (params.get("tab") || "overview") as TenantTab;
+      const sec = params.get("sec") || "";
       if (view === "tenants" && slug) void loadTenant(slug, tab, false);
-      else {
-        setActiveView(navItems.some((item) => item.key === view) || view === "dashboard" ? view : "dashboard");
-        setTenantDetail(null);
-        loadForView(view);
+      else if (navItems.some((item) => item.key === view) || view === "dashboard") {
+        navigateView(view, false, sec);
+      } else {
+        navigateView("dashboard", false);
       }
     };
     window.addEventListener("popstate", onPop);
@@ -481,6 +434,25 @@ export function SaasAdminApp({
     }
   }
 
+  async function loadAudit(filters: AuditFilters, nextPage = 1) {
+    setLoading(true);
+    try {
+      const search = new URLSearchParams();
+      if (filters.q.trim()) search.set("q", filters.q.trim());
+      if (filters.action.trim()) search.set("audit_action", filters.action.trim());
+      if (filters.tenant.trim()) search.set("tenant", filters.tenant.trim());
+      if (nextPage > 1) search.set("page", String(nextPage));
+      search.set("section", "audit_search");
+      const data = await apiGet<AuditSearchPayload>(`/api/admin/operations?${search}`);
+      setAuditData(data);
+      setAuditFilters(filters);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function loadRestoreCandidates() {
     try {
       const data = await apiGet<{ candidates: BackupRow[] }>("/api/admin/operations?section=restore_candidates");
@@ -608,7 +580,7 @@ export function SaasAdminApp({
                 overview={overview}
                 canManage={canManageTenants}
                 onOpenTenant={(slug, tab) => loadTenant(slug, (tab ?? "overview") as TenantTab)}
-                onNavigate={(view) => navigateView(view as ViewKey)}
+                onNavigate={(view, sec) => navigateView(view as ViewKey, true, sec ?? "")}
                 onQuickAction={quickWorkAction}
               />
             ) : null}
@@ -631,13 +603,23 @@ export function SaasAdminApp({
                 onOperationAction={operationAction}
               />
             ) : null}
-            {activeView === "controls" ? <ControlsView data={controls} onRefresh={loadControls} /> : null}
-            {activeView === "sms_plans" ? <SmsPlansView data={smsBilling} canManage={canManageTenants} onAction={operationAction} onRefresh={loadSmsBilling} /> : null}
-            {activeView === "billing" ? <BillingView data={billing} canManage={canManageTenants} onAction={operationAction} onRefresh={loadBilling} /> : null}
-            {activeView === "send_movements" ? <MovementsView data={movements} onRefresh={loadMovements} /> : null}
-            {activeView === "maintenance" ? <MaintenanceView tenants={overview.tenants} results={results} restoreCandidates={restoreCandidates} canManage={canManageTenants} onAction={tenantAction} onOperationAction={operationAction} /> : null}
+            {activeView === "billing" ? (
+              <div className="grid gap-4">
+                <SectionTabs active={billingTab} sections={billingSections} onSelect={(key) => selectBillingTab(key as BillingSection)} />
+                {billingTab === "plans" ? <BillingView data={billing} canManage={canManageTenants} onAction={operationAction} onRefresh={loadBilling} /> : null}
+                {billingTab === "sms" ? <SmsPlansView data={smsBilling} canManage={canManageTenants} onAction={operationAction} onRefresh={loadSmsBilling} /> : null}
+              </div>
+            ) : null}
+            {activeView === "operations" ? (
+              <div className="grid gap-4">
+                <SectionTabs active={opsTab} sections={operationsSections} onSelect={(key) => selectOpsTab(key as OperationsSection)} />
+                {opsTab === "controls" ? <ControlsView data={controls} onRefresh={loadControls} /> : null}
+                {opsTab === "movements" ? <MovementsView data={movements} onRefresh={loadMovements} /> : null}
+                {opsTab === "maintenance" ? <MaintenanceView tenants={overview.tenants} results={results} restoreCandidates={restoreCandidates} canManage={canManageTenants} onAction={tenantAction} onOperationAction={operationAction} /> : null}
+              </div>
+            ) : null}
             {activeView === "signups" ? <SignupsView signups={signups} canManage={canManageTenants} onOpenTenant={(slug) => loadTenant(slug)} onAction={operationAction} onRefresh={loadSignups} /> : null}
-            {activeView === "audit" ? <AuditList rows={overview.audit} /> : null}
+            {activeView === "audit" ? <AuditView data={auditData} filters={auditFilters} onSearch={(filters) => loadAudit(filters, 1)} onPageChange={(next) => loadAudit(auditFilters, next)} /> : null}
             {activeView === "admins" ? <AdminsView admins={admins} currentUser={initialUser} onAction={adminAction} /> : null}
             {activeView === "security" ? <AdminSecurityPanel /> : null}
           </div>
@@ -652,6 +634,28 @@ export function SaasAdminApp({
         onOpenTenant={(slug) => { setPaletteOpen(false); void loadTenant(slug); }}
       />
     </main>
+  );
+}
+
+// Barra sottosezioni delle viste consolidate (Fatturazione/Operazioni).
+function SectionTabs({ active, sections, onSelect }: { active: string; sections: Array<{ key: string; label: string; icon: LucideIcon }>; onSelect: (key: string) => void }) {
+  return (
+    <div className="flex flex-wrap gap-1 rounded-md border border-slate-200 bg-white p-2 shadow-sm">
+      {sections.map((section) => {
+        const Icon = section.icon;
+        return (
+          <button
+            className={`inline-flex h-9 items-center gap-2 rounded-md px-3 text-sm font-semibold ${active === section.key ? "bg-[#182238] text-white" : "text-slate-600 hover:bg-slate-100"}`}
+            key={section.key}
+            type="button"
+            onClick={() => onSelect(section.key)}
+          >
+            <Icon size={15} aria-hidden />
+            {section.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -749,7 +753,7 @@ function DashboardView({ overview, canManage, onOpenTenant, onNavigate, onQuickA
   overview: OverviewPayload;
   canManage: boolean;
   onOpenTenant: (slug: string, tab?: string) => void;
-  onNavigate: (view: string) => void;
+  onNavigate: (view: string, sec?: string) => void;
   onQuickAction: (action: string, slug: string) => void;
 }) {
   const metrics = [
@@ -792,7 +796,7 @@ function DashboardView({ overview, canManage, onOpenTenant, onNavigate, onQuickA
                 <button
                   className="inline-flex h-8 items-center rounded-md bg-[#182238] px-3 text-xs font-semibold text-white"
                   type="button"
-                  onClick={() => (item.slug ? onOpenTenant(item.slug, item.tab) : onNavigate(item.view))}
+                  onClick={() => (item.slug ? onOpenTenant(item.slug, item.tab) : onNavigate(item.view, item.section))}
                 >
                   Apri
                 </button>
@@ -870,10 +874,11 @@ function TenantsView(props: {
             </div>
           ) : null}
         </section>
-        <CreateTenantPanel canManage={props.canManage} onCreate={(payload) => props.onAction("create", payload)} />
+        <CreateTenantPanel canManage={props.canManage} plans={props.overview.plans} onCreate={(payload) => props.onAction("create", payload)} />
       </div>
       <TenantDetailPanel
         detail={props.tenantDetail}
+        plans={props.overview.plans}
         activeTab={props.activeTab}
         supportLink={props.supportLink}
         backups={props.backups}
@@ -886,7 +891,7 @@ function TenantsView(props: {
   );
 }
 
-function CreateTenantPanel({ canManage, onCreate }: { canManage: boolean; onCreate: (payload: Record<string, string>) => void }) {
+function CreateTenantPanel({ plans, canManage, onCreate }: { plans: PlanOption[]; canManage: boolean; onCreate: (payload: Record<string, string>) => void }) {
   return (
     <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
       <SectionHead title="Nuovo tenant" subtitle="Crea tenant, admin iniziale, sede principale e onboarding." />
@@ -899,7 +904,14 @@ function CreateTenantPanel({ canManage, onCreate }: { canManage: boolean; onCrea
         <Input name="slug" label="Slug URL" placeholder="centroesteticoelite" required />
         <Input name="admin_name" label="Nome admin" defaultValue="Admin" />
         <Input name="admin_email" label="Email admin" type="email" required />
-        <Input name="plan" label="Piano" placeholder="Standard" />
+        {/* Piano come ENTITA' (select dei piani veri, coerenza Fase E). */}
+        <label>
+          <span className="mb-1 block text-sm font-medium text-slate-600">Piano</span>
+          <select className="h-10 w-full rounded-md border border-slate-200 px-3 outline-none focus:border-[#365a96]" defaultValue="0" name="plan_id">
+            <option value="0">Nessun piano (illimitato)</option>
+            {plans.map((plan) => <option key={plan.id} value={String(plan.id)}>{plan.name} — {formatEuro(plan.price_month)}/mese</option>)}
+          </select>
+        </label>
         <Input name="admin_pass" label="Password admin" type="text" required />
         <label className="md:col-span-2">
           <span className="mb-1 block text-sm font-medium text-slate-600">Note interne</span>
@@ -1246,6 +1258,59 @@ function MaintenanceView({ tenants, results, restoreCandidates, canManage, onAct
   );
 }
 
+// AUDIT potenziato (2026-07-19): filtri testo/azione/tenant, paginazione
+// server-side, export CSV coi filtri correnti (prima: ultimi 20 e basta).
+function AuditView({ data, filters, onSearch, onPageChange }: { data: AuditSearchPayload | null; filters: AuditFilters; onSearch: (filters: AuditFilters) => void; onPageChange: (page: number) => void }) {
+  const [q, setQ] = useState(filters.q);
+  const [action, setAction] = useState(filters.action);
+  const [tenant, setTenant] = useState(filters.tenant);
+  const exportParams = new URLSearchParams({ section: "export_audit" });
+  if (filters.q.trim()) exportParams.set("q", filters.q.trim());
+  if (filters.action.trim()) exportParams.set("audit_action", filters.action.trim());
+  if (filters.tenant.trim()) exportParams.set("tenant", filters.tenant.trim());
+  const pageCount = data ? Math.max(1, Math.ceil(data.total / data.perPage)) : 1;
+  return (
+    <div className="grid gap-4">
+      <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
+        <form className="grid gap-3 p-4 md:grid-cols-[1fr_200px_200px_auto_auto]" onSubmit={(event) => { event.preventDefault(); onSearch({ q, action, tenant }); }}>
+          <Input label="Cerca (messaggio, attore, azione)" placeholder="Es. backup, info@..." value={q} onChange={(event) => setQ(event.target.value)} />
+          <Input label="Azione (prefisso)" placeholder="Es. tenant.suspend" value={action} onChange={(event) => setAction(event.target.value)} />
+          <Input label="Tenant (slug)" placeholder="Es. centroestetico" value={tenant} onChange={(event) => setTenant(event.target.value)} />
+          <div className="flex items-end">
+            <Button icon={Search}>Filtra</Button>
+          </div>
+          <div className="flex items-end">
+            <a className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 px-4 text-sm font-semibold text-slate-600 hover:bg-slate-50" href={`/api/admin/operations?${exportParams}`} download>
+              <Download size={16} aria-hidden />
+              Esporta CSV
+            </a>
+          </div>
+        </form>
+      </section>
+      <Table
+        title={`Registro attivita${data ? ` (${data.total})` : ""}`}
+        headers={["Data", "Azione", "Tenant", "Attore", "Messaggio"]}
+        rows={(data?.rows ?? []).map((row) => [
+          String(row.created_at ?? "-"),
+          <code className="text-xs" key={`a-${row.id}`}>{row.action}</code>,
+          row.tenant_slug || "-",
+          row.actor_email || "-",
+          row.message || "-",
+        ])}
+      />
+      {data && pageCount > 1 ? (
+        <div className="flex items-center justify-between rounded-md border border-slate-200 bg-white px-4 py-2 text-sm shadow-sm">
+          <span className="text-slate-500">{data.total} eventi · pagina {data.page} di {pageCount}</span>
+          <div className="flex gap-2">
+            <button className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold disabled:opacity-40" disabled={data.page <= 1} type="button" onClick={() => onPageChange(data.page - 1)}>Precedente</button>
+            <button className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold disabled:opacity-40" disabled={data.page >= pageCount} type="button" onClick={() => onPageChange(data.page + 1)}>Successiva</button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 const signupStatusLabel: Record<string, { label: string; tone: "ok" | "warn" | "danger" | "info" | "muted" }> = {
   pending_verification: { label: "Da verificare", tone: "warn" },
   verified: { label: "Verificata", tone: "info" },
@@ -1341,11 +1406,8 @@ function AdminsView({ admins, currentUser, onAction }: { admins: AdminRecord[]; 
 
 function viewTitle(view: ViewKey): string {
   if (view === "tenants") return "Tenant";
-  if (view === "controls") return "Controlli";
-  if (view === "sms_plans") return "Piani SMS";
-  if (view === "billing") return "Piani & Ricavi";
-  if (view === "send_movements") return "Movimenti invii";
-  if (view === "maintenance") return "Manutenzione";
+  if (view === "billing") return "Fatturazione";
+  if (view === "operations") return "Operazioni";
   if (view === "signups") return "Registrazioni";
   if (view === "audit") return "Audit";
   if (view === "admins") return "Admin SaaS";

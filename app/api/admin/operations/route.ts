@@ -156,6 +156,42 @@ export async function GET(request: Request) {
       return csvResponse("ordini-sms.csv", rows);
     }
 
+    // Audit con filtri + paginazione (2026-07-19).
+    if (section === "audit_search") {
+      const { searchSaasAudit } = await import("@/lib/saas-tenant-manager");
+      const result = await searchSaasAudit({
+        q: url.searchParams.get("q") ?? "",
+        action: url.searchParams.get("audit_action") ?? "",
+        tenant: url.searchParams.get("tenant") ?? "",
+        page: parseInteger(url.searchParams.get("page"), 1),
+      });
+      return Response.json({ ok: true, ...result });
+    }
+
+    if (section === "export_audit") {
+      const { searchSaasAudit } = await import("@/lib/saas-tenant-manager");
+      const result = await searchSaasAudit({
+        q: url.searchParams.get("q") ?? "",
+        action: url.searchParams.get("audit_action") ?? "",
+        tenant: url.searchParams.get("tenant") ?? "",
+        page: 1,
+        perPage: 100,
+      });
+      const rows = [
+        ["id", "data", "azione", "tenant", "attore", "messaggio"],
+        ...result.rows.map((row) => [
+          String(row.id ?? ""),
+          String(row.created_at ?? ""),
+          String(row.action ?? ""),
+          String(row.tenant_slug ?? ""),
+          String(row.actor_email ?? row.actor_name ?? ""),
+          String(row.message ?? ""),
+        ]),
+      ];
+      void logSaasAdminAction({ adminId: session.user.id, adminEmail: session.user.email, action: "ops_export_audit", request });
+      return csvResponse("audit.csv", rows);
+    }
+
     // Ripristino: ultimi backup di slug NON piu' esistenti (post-delete).
     if (section === "restore_candidates") {
       const { restorableSaasBackups } = await import("@/lib/saas-operations");

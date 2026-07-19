@@ -16569,3 +16569,48 @@ Verifica: screenshot renderizzato (form, errore 'Credenziali non
 valide' nel box rosso, pannello brand); regressioni hardening 19/19
 (tutto il flusso login/2FA via API) e fase3 9/9; tsc pulito; riga di
 login_attempts del probe rimossa.
+
+## 2026-07-19 — PANNELLO ADMIN: SOTTRAZIONE + COMPLETAMENTI (dall'analisi
+## "cosa non serve / cosa manca")
+
+(1) CODICE MORTO ELIMINATO: admin-dashboard-faithful.tsx (259 righe),
+admin-shell.tsx (91, caricava Bootstrap CDN), export SaasAdminLoginPage
+(~100 righe, login vero = AdminLoginFaithful), public/admin/assets/
+admin.css legacy.
+
+(2) PIANO COME ENTITA' OVUNQUE: il campo testo libero 'Piano' nel form
+Nuovo tenant e nella tab Dati e' ora una SELECT dei piani veri
+(overview espone `plans`; create/update accettano plan_id e passano da
+assignSaasPlan: etichetta sincronizzata, 0 = stacca).
+
+(3) MENU 11 -> 8 VOCI: "Fatturazione" (sottotab Abbonamenti & Ricavi +
+Pacchetti SMS) e "Operazioni" (Controlli + Movimenti invii +
+Manutenzione). Sottosezione in ?sec= (replace, niente history spam);
+le VECCHIE ?page= (sms_plans/controls/send_movements/maintenance)
+restano deep-linkabili via LEGACY_PAGE_MAP+LEGACY_SEC_MAP con URL
+normalizzato; work queue aggiornata (view operations/billing +
+section); popstate riusa navigateView.
+
+(4) RETENTION BACKUP: pruneSaasTenantBackups dopo ogni backup
+(best-effort) — restano gli ultimi 10 + il piu' recente di ogni mese
+fra i vecchi; delete oggetto R2/file + riga; audit
+tenant.backup_prune. Il piu' recente resta sempre (alimenta il
+ripristino guidato). NB il taglio e' per ID desc.
+
+(5) AUDIT POTENZIATO: searchSaasAudit (filtri testo/azione-prefisso/
+tenant con LOWER — trappola PG — paginazione server-side con totale);
+sezioni audit_search + export_audit CSV (filtri correnti, audit
+ops_export_audit); vista Audit con form filtri, tabella paginata,
+export (prima: ultimi 20 e basta).
+
+Verifica: test-saas-admin-consolida 12/12 (plans nelle select, create
+con plan_id, unassign, retention 15->12 con audit prune, audit_search
+filtrato con totale, export CSV filtrato, menu 8 voci, legacy
+sms_plans->Fatturazione/Pacchetti SMS attiva, switch sottotab con URL
+pulito, legacy maintenance->Operazioni, vista Audit filtrata via UI,
+select Piano nella tab Dati) + TUTTE le 10 regressioni verdi (giro5
+17, fase4 11, faseAB 11, faseC 7 — I6 aggiornata a
+operations/controls —, faseD 4, faseE 8 — nav 8 —, ux 7, restore 8,
+hardening 19, fase3 9 — nav 8, D8 legacy->Operazioni). BUG del giro:
+il prune non selezionava tenant_slug -> audit prune senza slug (filtro
+tenant a vuoto); FIX in pruneSaasTenantBackups.

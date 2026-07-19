@@ -15,6 +15,7 @@ export type SaasWorkItem = {
   title: string;
   detail: string;
   view: string;
+  section?: string;
   slug?: string;
   tab?: string;
   // Azione one-click opzionale (POST /api/admin/tenants { action, slug }).
@@ -111,7 +112,8 @@ export async function buildSaasWorkQueue(tenants: SaasTenantRow[]): Promise<Saas
       severity: "warning",
       title: `${pendingCount} ordini SMS in attesa`,
       detail: "Ordini con stato pending da riconciliare o completare.",
-      view: "sms_plans",
+      view: "billing",
+      section: "sms",
     });
   }
 
@@ -165,7 +167,8 @@ export async function buildSaasWorkQueue(tenants: SaasTenantRow[]): Promise<Saas
       severity: "error",
       title: `Cron in errore: ${String(row.job ?? "")}`,
       detail: `${String(row.message ?? "").slice(0, 140) || "Ultima esecuzione fallita."} (${String(row.started_at ?? "")})`,
-      view: "controls",
+      view: "operations",
+      section: "controls",
     });
   }
 

@@ -234,7 +234,52 @@ export async function createSaasTenantBackup(slug: string, reason = ""): Promise
 
   const id = Number(result.insertId ?? 0);
   await logSaasTenantAudit("tenant.backup_create", tenant, "Backup tenant creato", { backup_id: id, path: storedPath, size: bytes.byteLength, storage });
+  // Retention best-effort dopo ogni backup: senza, R2 accumula all'infinito.
+  void pruneSaasTenantBackups(Number(tenant.id)).catch(() => undefined);
   return { id, path: storedPath, size: bytes.byteLength, filename };
+}
+
+// RETENTION backup (2026-07-19): per tenant si CONSERVANO gli ultimi 10 +
+// il piu' recente di ogni mese fra i piu' vecchi; il resto viene eliminato
+// (oggetto R2/file locale + riga). Il piu' recente resta SEMPRE (e' quello
+// che alimenta il ripristino guidato).
+const BACKUP_KEEP_LATEST = 10;
+
+export async function pruneSaasTenantBackups(tenantId: number): Promise<{ deleted: number }> {
+  await ensureSaasBackupSchema();
+  if (tenantId <= 0) return { deleted: 0 };
+  const rows = await dbQuery<SaasBackupRow[]>(
+    `SELECT id, tenant_slug, backup_path, created_at FROM \`${BACKUP_TABLE}\` WHERE tenant_id=? AND status='completed' ORDER BY id DESC`,
+    [tenantId],
+  );
+  const older = rows.slice(BACKUP_KEEP_LATEST);
+  const keptMonths = new Set<string>();
+  const toDelete: SaasBackupRow[] = [];
+  for (const row of older) {
+    const month = String(row.created_at ?? "").slice(0, 7);
+    if (month && !keptMonths.has(month)) {
+      keptMonths.add(month);
+      continue;
+    }
+    toDelete.push(row);
+  }
+
+  let deleted = 0;
+  for (const row of toDelete) {
+    const storedPath = String(row.backup_path ?? "");
+    if (isR2BackupPath(storedPath)) {
+      const { deletePrivateObject } = await import("@/lib/storage");
+      await deletePrivateObject(r2BackupKey(storedPath)).catch(() => undefined);
+    } else {
+      await absoluteSaasBackupPath(row).then((absolute) => fs.promises.unlink(absolute)).catch(() => undefined);
+    }
+    await dbExecute(`DELETE FROM \`${BACKUP_TABLE}\` WHERE id=?`, [Number(row.id)]);
+    deleted += 1;
+  }
+  if (deleted > 0) {
+    await logSaasTenantAudit("tenant.backup_prune", { id: tenantId, slug: String(rows[0]?.tenant_slug ?? "") }, "Retention backup applicata", { deleted, kept_latest: BACKUP_KEEP_LATEST });
+  }
+  return { deleted };
 }
 
 export function isR2BackupPath(backupPath: string): boolean {

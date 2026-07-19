@@ -23,10 +23,13 @@ export type HealthLevel = "ok" | "warning" | "error";
 
 export type TenantStatus = "provisioning" | "active" | "suspended" | "failed" | "deleted";
 
+export type PlanOption = { id: number; name: string; price_month: number };
+
 export type Tenant = {
   id: number;
   slug: string;
   name: string;
+  plan_id?: number | null;
   is_active?: number;
   status?: TenantStatus;
   admin_email?: string | null;
@@ -95,6 +98,7 @@ export type WorkItem = {
   title: string;
   detail: string;
   view: string;
+  section?: string;
   slug?: string;
   tab?: string;
   action?: "repair_schema" | "record_health";

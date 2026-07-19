@@ -653,6 +653,41 @@ export async function auditRows(tenantId?: number | null, limit = 80): Promise<R
   return dbQuery<RowDataPacket[]>(`SELECT * FROM \`${AUDIT_TABLE}\` ORDER BY id DESC LIMIT ${capped}`);
 }
 
+// Ricerca AUDIT con filtri e paginazione (2026-07-19: la vista mostrava solo
+// gli ultimi 20 senza filtri). Match case-insensitive via LOWER (trappola PG).
+export async function searchSaasAudit(filters: { q?: string; action?: string; tenant?: string; page?: number; perPage?: number } = {}): Promise<{ rows: RowDataPacket[]; total: number; page: number; perPage: number }> {
+  await ensureAuditTable();
+  const where: string[] = [];
+  const params: unknown[] = [];
+  const q = (filters.q ?? "").trim();
+  if (q) {
+    where.push("(LOWER(COALESCE(message,'')) LIKE LOWER(?) OR LOWER(COALESCE(actor_email,'')) LIKE LOWER(?) OR LOWER(action) LIKE LOWER(?))");
+    const needle = `%${q}%`;
+    params.push(needle, needle, needle);
+  }
+  const action = (filters.action ?? "").trim();
+  if (action) {
+    where.push("LOWER(action) LIKE LOWER(?)");
+    params.push(`${action}%`);
+  }
+  const tenant = (filters.tenant ?? "").trim();
+  if (tenant) {
+    where.push("LOWER(COALESCE(tenant_slug,'')) LIKE LOWER(?)");
+    params.push(`%${tenant}%`);
+  }
+  const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const totalRows = await dbQuery<RowDataPacket[]>(`SELECT COUNT(*) AS count FROM \`${AUDIT_TABLE}\` ${clause}`, params);
+  const total = Number(totalRows[0]?.count ?? 0);
+  const perPage = Math.min(100, Math.max(10, Number(filters.perPage ?? 30)));
+  const pageCount = Math.max(1, Math.ceil(total / perPage));
+  const page = Math.min(pageCount, Math.max(1, Number(filters.page ?? 1)));
+  const rows = await dbQuery<RowDataPacket[]>(
+    `SELECT * FROM \`${AUDIT_TABLE}\` ${clause} ORDER BY id DESC LIMIT ${perPage} OFFSET ${(page - 1) * perPage}`,
+    params,
+  );
+  return { rows, total, page, perPage };
+}
+
 export async function logSaasTenantAudit(action: string, tenant: AuditTenant | null, message = "", meta: Record<string, unknown> = {}): Promise<void> {
   try {
     await ensureAuditTable();
