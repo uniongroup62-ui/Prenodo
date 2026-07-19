@@ -664,6 +664,7 @@ async function loadStats() {
                 onFilter={() => loadOverview(query, statusFilter, 1)}
                 onPageChange={(next) => loadOverview(query, statusFilter, next)}
                 onOpenTenant={(slug, tab) => loadTenant(slug, tab)}
+                onBackToList={() => navigateView("tenants")}
                 onAction={tenantAction}
                 onOperationAction={operationAction}
               />
@@ -957,15 +958,37 @@ function TenantsView(props: {
   onFilter: () => void;
   onPageChange: (page: number) => void;
   onOpenTenant: (slug: string, tab?: TenantTab) => void;
+  onBackToList: () => void;
   onAction: (action: string, payload?: Record<string, string>) => void;
   onOperationAction: (payload: Record<string, string>) => void;
 }) {
+  // PAGINA DEDICATA (richiesta utente 19/07): con un tenant aperto la lista
+  // sparisce e il dettaglio prende tutta la larghezza, con ritorno esplicito.
+  if (props.tenantDetail) {
+    return (
+      <div className="grid gap-4">
+        <div>
+          <button className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50" type="button" onClick={props.onBackToList}>
+            ← Tutti i tenant
+          </button>
+        </div>
+        <TenantDetailPanel
+          detail={props.tenantDetail}
+          plans={props.overview.plans}
+          activeTab={props.activeTab}
+          supportLink={props.supportLink}
+          backups={props.backups}
+          canManage={props.canManage}
+          onTabChange={(tab) => props.tenantDetail && props.onOpenTenant(props.tenantDetail.tenant.slug, tab)}
+          onAction={props.onAction}
+          onOperationAction={props.onOperationAction}
+        />
+      </div>
+    );
+  }
+
   return (
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,0.95fr)_minmax(480px,1.05fr)]">
-      {/* min-w-0: senza, gli item grid non scendono sotto la larghezza del
-          contenuto (tabella min-w 760) e il pannello dettaglio COPRE la
-          lista alle larghezze medie (bug walkthrough UX 19/07). */}
-      <div className="grid min-w-0 gap-5">
+    <div className="grid min-w-0 gap-5">
         <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
           <SectionHead title="Tenant" subtitle="Cerca, filtra e apri la gestione dedicata." />
           <div className="grid gap-3 border-b border-slate-100 p-4 md:grid-cols-[1fr_190px_auto]">
@@ -1004,18 +1027,6 @@ function TenantsView(props: {
           ) : null}
         </section>
         <CreateTenantPanel canManage={props.canManage} open={props.createOpen} plans={props.overview.plans} onCreate={(payload) => props.onAction("create", payload)} onToggle={props.onToggleCreate} />
-      </div>
-      <TenantDetailPanel
-        detail={props.tenantDetail}
-        plans={props.overview.plans}
-        activeTab={props.activeTab}
-        supportLink={props.supportLink}
-        backups={props.backups}
-        canManage={props.canManage}
-        onTabChange={(tab) => props.tenantDetail && props.onOpenTenant(props.tenantDetail.tenant.slug, tab)}
-        onAction={props.onAction}
-        onOperationAction={props.onOperationAction}
-      />
     </div>
   );
 }

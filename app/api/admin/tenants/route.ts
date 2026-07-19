@@ -54,7 +54,7 @@ export async function GET(request: Request) {
     });
     // Paginazione (Fase A): summary/coda restano sull'insieme COMPLETO
     // filtrato, la tabella riceve solo la pagina richiesta.
-    const perPage = Math.min(50, Math.max(5, parseInteger(url.searchParams.get("per_page"), 20)));
+    const perPage = Math.min(50, Math.max(5, parseInteger(url.searchParams.get("per_page"), 25)));
     const pageCount = Math.max(1, Math.ceil(tenants.length / perPage));
     const page = Math.min(pageCount, Math.max(1, parseInteger(url.searchParams.get("page"), 1)));
     const { buildSaasWorkQueue } = await import("@/lib/saas-work-queue");

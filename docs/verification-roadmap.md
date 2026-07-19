@@ -16755,3 +16755,18 @@ reale fermo da settimane, overview.system, UI con Stato sistema +
 Attivita' recente e SENZA Tenant recenti, Vedi statistiche naviga,
 Esegui diagnostica registra la run) + screenshot + TUTTE le 13 suite
 verdi; tsc pulito.
+
+## 2026-07-19 — VISTA TENANT: LISTA PIENA + PAGINA DEDICATA (richiesta utente)
+
+La vista Tenant abbandona il layout a due colonne: (1) LISTA a tutta
+larghezza con filtri in testa, export CSV e paginazione a 25
+risultati per pagina (default per_page 25 nella API, clamp 5..50
+invariato); (2) aprendo un tenant (tabella, palette, coda, attivita'
+recente, deep-link ?slug=) si entra in una PAGINA DEDICATA a tutta
+larghezza col bottone "← Tutti i tenant" (torna alla lista via
+navigateView: URL pulito e dettaglio scaricato); le 9 tab ora stanno
+su una riga. Il form Nuovo tenant resta sotto la lista (collassato).
+
+Verifica: screenshot lista e dettaglio; suite aggiornate — faseAB H2
+(perPage 25), ux M3 (filtro sulla LISTA, dettaglio via deep-link) —
+e TUTTE le 14 suite verdi; tsc pulito.
