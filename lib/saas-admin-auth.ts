@@ -42,7 +42,12 @@ const SESSION_TTL_SECONDS = 60 * 60 * 12;
 const LOGIN_RATE_LIMIT_WINDOW_SECONDS = 15 * 60;
 const LOGIN_RATE_LIMIT_MAX_FAILURES = 10;
 
+// Memo per processo (Fase A pannello, 2026-07-19): stesse ragioni di
+// ensureSaasTenantSchema — l'ensure non deve ripetersi a ogni richiesta.
+let authSchemaEnsured = false;
+
 export async function ensureSaasAuthSchema(): Promise<void> {
+  if (authSchemaEnsured) return;
   if (!(await tableExists("saas_admins"))) {
     await dbExecute(
       `CREATE TABLE IF NOT EXISTS \`saas_admins\` (
@@ -140,6 +145,7 @@ export async function ensureSaasAuthSchema(): Promise<void> {
   await addColumnIfMissing("saas_admins", "totp_secret", "`totp_secret` VARCHAR(64) NULL DEFAULT NULL");
   await addColumnIfMissing("saas_admins", "totp_pending_secret", "`totp_pending_secret` VARCHAR(64) NULL DEFAULT NULL");
   await addColumnIfMissing("saas_admins", "totp_backup_codes", "`totp_backup_codes` TEXT NULL DEFAULT NULL");
+  authSchemaEnsured = true;
 }
 
 export async function isSaasBootstrapped(): Promise<boolean> {

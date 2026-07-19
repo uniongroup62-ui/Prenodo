@@ -16321,3 +16321,43 @@ conferma-esatta + pre-backup; SWEEP zero orfani su tutte le tabelle
 tenant_id; registri piattaforma conservati; rate-limit a 10 falliti)
 + regressioni fase4 11/11, hardening 19/19, fase3 9/9; tsc pulito.
 Tenant usa-e-getta e admin temporanei rimossi per ID (CLEAN).
+
+## 2026-07-19 — PANNELLO ADMIN Fase A+B: DATI VELOCI + CENTRO DI COMANDO
+
+Dal piano "rivoluzione pannello" approvato (assi 1-2 di 6).
+
+FASE A (data layer): (1) la lista tenant legge la salute dallo
+SNAPSHOT denormalizzato (health_* su saas_tenants) — decorateTenant
+NON esegue piu' la diagnostica live per riga (era N x
+schemaDiagnostics: 3-4s con 2 tenant); la live resta su
+verifica/repair/cron. (2) ensureSaasTenantSchema/ensureSaasAuthSchema
+MEMOIZZATE per processo (decine di query INFORMATION_SCHEMA a ogni
+richiesta: ~1s ciascuna su DB remoto). Lista: 3-4s -> ~400ms in dev.
+(3) Paginazione: GET tenants accetta page/per_page (clamp 5..50,
+default 20), risponde total/page/pageCount; summary e coda calcolate
+sull'insieme COMPLETO filtrato; footer paginazione nella SPA.
+
+FASE B (centro di comando): (4) lib/saas-work-queue.ts — coda "Da
+fare adesso" ordinata per gravita': tenant in errore (azione one-click
+Ripara), mai verificati (Verifica), provisioning falliti, sospesi,
+onboarding fermi >=7 giorni, ordini SMS pending, token/sessioni
+supporto attivi (frame Roma param, mai NOW() DB), anomalia login
+(>=10 falliti/24h -> vista Sicurezza). Ogni item ha Apri con
+deep-link vista/slug/tab. (5) Dashboard ridisegnata: metriche + coda
++ tenant recenti. (6) COMMAND PALETTE Ctrl/Cmd+K: sezioni + tenant
+cercati SERVER-SIDE (q + per_page=8, debounce), navigazione con
+frecce/Invio, overlay con Esc. Bottone Cerca nel header; 'Nuovo
+tenant' ora passa da navigateView (URL sincronizzato).
+
+Verifica: test-saas-admin-faseAB 11/11 (latenza <1.5s asserita su
+risposte 200 AUTENTICATE, payload paginato, 2 pagine coerenti con
+summary sull'insieme pieno, clamp page fuori range, work queue con
+azione, coda renderizzata, Verifica one-click scrive lo snapshot,
+palette -> Sicurezza e dettaglio tenant via ricerca server-side,
+filtro UI, dettaglio reale ok) + regressioni giro5 17/17, fase4
+11/11, hardening 19/19, fase3 9/9; tsc pulito; screenshot dashboard
+e palette. HARNESS: email dei fixture SEMPRE minuscole (login
+normalizza lowercase, PG case-sensitive: 401 fantasma con H1 che
+misurava il path errore); attendere l'ITEM della coda, non il titolo
+(fetch client); click della palette scopati su div[role=dialog] (il
+locator globale prende la sidebar dietro l'overlay).

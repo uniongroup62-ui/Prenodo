@@ -1,0 +1,169 @@
+import "server-only";
+
+import type { RowDataPacket } from "@/lib/tenant-db";
+import { dbQuery } from "@/lib/tenant-db";
+import { tenantStatus, type SaasTenantRow } from "@/lib/saas-tenant-manager";
+
+// CODA DI LAVORO del pannello admin (Fase B "centro di comando", 2026-07-19):
+// dalla fotografia dei tenant + poche query aggregate produce la lista di
+// cose che RICHIEDONO un'azione, ordinata per gravita'. Niente diagnostica
+// live: legge solo snapshot e contatori.
+
+export type SaasWorkItem = {
+  key: string;
+  severity: "error" | "warning" | "info";
+  title: string;
+  detail: string;
+  view: string;
+  slug?: string;
+  tab?: string;
+  // Azione one-click opzionale (POST /api/admin/tenants { action, slug }).
+  action?: "repair_schema" | "record_health";
+};
+
+const ONBOARDING_STALL_DAYS = 7;
+const LOGIN_ANOMALY_THRESHOLD = 10;
+const MAX_ITEMS = 30;
+
+export async function buildSaasWorkQueue(tenants: SaasTenantRow[]): Promise<SaasWorkItem[]> {
+  const items: SaasWorkItem[] = [];
+
+  for (const tenant of tenants) {
+    const slug = String(tenant.slug);
+    const status = tenantStatus(tenant);
+    const health = tenant.health;
+
+    if (status === "failed") {
+      items.push({
+        key: `failed:${slug}`,
+        severity: "error",
+        title: `Provisioning fallito: ${slug}`,
+        detail: String(tenant.provisioning_error ?? "").slice(0, 160) || "Creazione interrotta.",
+        view: "tenants",
+        slug,
+        tab: "danger",
+      });
+      continue;
+    }
+    if (status === "deleted") continue;
+
+    if (health?.level === "error") {
+      items.push({
+        key: `health_error:${slug}`,
+        severity: "error",
+        title: `Tenant in errore: ${slug}`,
+        detail: `${health.errors} errori, ${health.warnings} avvisi (ultima verifica: ${health.checked_at || "-"})`,
+        view: "tenants",
+        slug,
+        tab: "health",
+        action: "repair_schema",
+      });
+    } else if (!tenant.health_checked_at) {
+      items.push({
+        key: `health_missing:${slug}`,
+        severity: "warning",
+        title: `Mai verificato: ${slug}`,
+        detail: "Nessuna diagnostica registrata per questo tenant.",
+        view: "tenants",
+        slug,
+        tab: "health",
+        action: "record_health",
+      });
+    }
+
+    if (status === "suspended") {
+      items.push({
+        key: `suspended:${slug}`,
+        severity: "info",
+        title: `Tenant sospeso: ${slug}`,
+        detail: String(tenant.suspended_reason ?? "").slice(0, 120) || "Sospensione manuale.",
+        view: "tenants",
+        slug,
+        tab: "danger",
+      });
+    }
+
+    if (status === "active" && (tenant.onboarding_status ?? "") !== "completed") {
+      const startedAt = parseLocal(String(tenant.onboarding_started_at ?? tenant.created_at ?? ""));
+      const stalledDays = startedAt ? Math.floor((Date.now() - startedAt) / 86_400_000) : null;
+      if (stalledDays !== null && stalledDays >= ONBOARDING_STALL_DAYS) {
+        items.push({
+          key: `onboarding:${slug}`,
+          severity: "warning",
+          title: `Onboarding fermo da ${stalledDays} giorni: ${slug}`,
+          detail: `Passo corrente: ${String(tenant.onboarding_step ?? "-") || "-"} (${Number(tenant.onboarding_percent ?? 0)}%)`,
+          view: "tenants",
+          slug,
+          tab: "onboarding",
+        });
+      }
+    }
+  }
+
+  // Ordini SMS in attesa (aggregato).
+  const pendingOrders = await dbQuery<RowDataPacket[]>(
+    "SELECT COUNT(*) AS count FROM `saas_sms_orders` WHERE status='pending'",
+  ).catch(() => []);
+  const pendingCount = Number(pendingOrders[0]?.count ?? 0);
+  if (pendingCount > 0) {
+    items.push({
+      key: "sms_orders_pending",
+      severity: "warning",
+      title: `${pendingCount} ordini SMS in attesa`,
+      detail: "Ordini con stato pending da riconciliare o completare.",
+      view: "sms_plans",
+    });
+  }
+
+  // Token/sessioni supporto attivi: trasparenza sugli accessi in corso.
+  // Frame ROMA coerente col writer (mysqlNow param, mai NOW() del DB).
+  const supportRows = await dbQuery<RowDataPacket[]>(
+    `SELECT tenant_slug, reason, used_at FROM \`saas_support_access_tokens\`
+      WHERE revoked_at IS NULL AND expires_at > ?
+      ORDER BY id DESC LIMIT 10`,
+    [localNow()],
+  ).catch(() => []);
+  for (const row of supportRows) {
+    const slug = String(row.tenant_slug ?? "");
+    items.push({
+      key: `support:${slug}:${String(row.reason ?? "")}`,
+      severity: "info",
+      title: row.used_at ? `Sessione supporto attiva: ${slug}` : `Token supporto in attesa: ${slug}`,
+      detail: String(row.reason ?? "").slice(0, 120),
+      view: "tenants",
+      slug,
+      tab: "support",
+    });
+  }
+
+  // Anomalia login: molti tentativi falliti nelle ultime 24h (stesso frame
+  // del writer: attempted_at e' scritto con NOW() del DB).
+  const failedLogins = await dbQuery<RowDataPacket[]>(
+    "SELECT COUNT(*) AS count FROM `saas_admin_login_attempts` WHERE success=0 AND attempted_at >= (NOW() - interval '24 hours')",
+  ).catch(() => []);
+  const failedCount = Number(failedLogins[0]?.count ?? 0);
+  if (failedCount >= LOGIN_ANOMALY_THRESHOLD) {
+    items.push({
+      key: "login_anomaly",
+      severity: "warning",
+      title: `${failedCount} login falliti nelle ultime 24 ore`,
+      detail: "Possibile tentativo di forza bruta sul pannello: controlla sessioni e audit.",
+      view: "security",
+    });
+  }
+
+  const rank = { error: 0, warning: 1, info: 2 } as const;
+  return items.sort((a, b) => rank[a.severity] - rank[b.severity]).slice(0, MAX_ITEMS);
+}
+
+function parseLocal(value: string): number | null {
+  if (!value) return null;
+  const ms = new Date(value.includes("T") ? value : value.replace(" ", "T")).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function localNow(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}

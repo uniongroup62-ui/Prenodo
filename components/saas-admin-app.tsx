@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Archive,
@@ -106,10 +106,26 @@ type AdminRecord = {
   last_login_at?: string | null;
 };
 
+type WorkItem = {
+  key: string;
+  severity: "error" | "warning" | "info";
+  title: string;
+  detail: string;
+  view: string;
+  slug?: string;
+  tab?: string;
+  action?: "repair_schema" | "record_health";
+};
+
 type OverviewPayload = {
   tenants: Tenant[];
+  total: number;
+  page: number;
+  perPage: number;
+  pageCount: number;
   summary: { total: number; active: number; suspended: number; failed: number; needs_attention: number };
   operational: { health_errors: number; health_warnings: number; health_missing: number; onboarding_open: number; archived: number; suspended: number };
+  workQueue: WorkItem[];
   audit: AuditRow[];
 };
 
@@ -242,8 +258,13 @@ const healthLabel: Record<HealthLevel, string> = {
 
 const emptyOverview: OverviewPayload = {
   tenants: [],
+  total: 0,
+  page: 1,
+  perPage: 20,
+  pageCount: 1,
   summary: { total: 0, active: 0, suspended: 0, failed: 0, needs_attention: 0 },
   operational: { health_errors: 0, health_warnings: 0, health_missing: 0, onboarding_open: 0, archived: 0, suspended: 0 },
+  workQueue: [],
   audit: [],
 };
 
@@ -371,6 +392,8 @@ export function SaasAdminApp({
   const [backups, setBackups] = useState<Record<string, BackupRow[]>>({});
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [page, setPage] = useState(1);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [admins, setAdmins] = useState<AdminRecord[]>([]);
   const [results, setResults] = useState<Array<{ slug: string; ok: boolean; message: string }>>([]);
   const [supportLink, setSupportLink] = useState("");
@@ -433,6 +456,19 @@ export function SaasAdminApp({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Command palette (Fase B): Ctrl/Cmd+K apre la ricerca globale.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+      if (event.key === "Escape") setPaletteOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     apiGet<OverviewPayload>("/api/admin/tenants")
@@ -450,18 +486,32 @@ export function SaasAdminApp({
     };
   }, []);
 
-  async function loadOverview(nextQuery = query, nextStatus = statusFilter) {
+  async function loadOverview(nextQuery = query, nextStatus = statusFilter, nextPage = page) {
     setLoading(true);
     try {
       const search = new URLSearchParams();
       if (nextQuery.trim()) search.set("q", nextQuery.trim());
       if (nextStatus) search.set("status", nextStatus);
+      if (nextPage > 1) search.set("page", String(nextPage));
       const data = await apiGet<OverviewPayload>(`/api/admin/tenants${search.toString() ? `?${search}` : ""}`);
       setOverview(data);
+      setPage(data.page ?? nextPage);
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
       setLoading(false);
+    }
+  }
+
+  // Azione one-click dalla coda di lavoro (Fase B): ripara/verifica e
+  // ricarica la fotografia senza aprire il dettaglio.
+  async function quickWorkAction(action: string, slug: string) {
+    try {
+      await apiPost<{ ok: boolean }>("/api/admin/tenants", { action, slug });
+      setMessage(`${action === "repair_schema" ? "Riparazione" : "Verifica"} eseguita su ${slug}.`);
+      await loadOverview();
+    } catch (error) {
+      setMessage(errorMessage(error));
     }
   }
 
@@ -619,10 +669,17 @@ export function SaasAdminApp({
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">Pannello SaaS</p>
               <h1 className="text-2xl font-semibold">{viewTitle(activeView)}</h1>
             </div>
-            <button className="inline-flex h-10 items-center gap-2 rounded-md bg-emerald-700 px-4 text-sm font-semibold text-white disabled:opacity-50" disabled={!canManageTenants} type="button" onClick={() => setActiveView("tenants")}>
-              <Plus size={17} aria-hidden />
-              Nuovo tenant
-            </button>
+            <div className="flex items-center gap-2">
+              <button className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 px-4 text-sm font-semibold text-slate-600 hover:bg-slate-50" type="button" onClick={() => setPaletteOpen(true)}>
+                <Search size={16} aria-hidden />
+                Cerca
+                <kbd className="rounded border border-slate-300 bg-slate-100 px-1.5 text-[11px] font-semibold text-slate-500">Ctrl K</kbd>
+              </button>
+              <button className="inline-flex h-10 items-center gap-2 rounded-md bg-emerald-700 px-4 text-sm font-semibold text-white disabled:opacity-50" disabled={!canManageTenants} type="button" onClick={() => navigateView("tenants")}>
+                <Plus size={17} aria-hidden />
+                Nuovo tenant
+              </button>
+            </div>
           </header>
 
           <div className="p-5">
@@ -634,7 +691,15 @@ export function SaasAdminApp({
             ) : null}
             {loading ? <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-600"><Loader2 className="animate-spin" size={16} aria-hidden /> Caricamento</div> : null}
 
-            {activeView === "dashboard" ? <DashboardView overview={overview} onOpenTenant={(slug) => loadTenant(slug)} /> : null}
+            {activeView === "dashboard" ? (
+              <DashboardView
+                overview={overview}
+                canManage={canManageTenants}
+                onOpenTenant={(slug, tab) => loadTenant(slug, (tab ?? "overview") as TenantTab)}
+                onNavigate={(view) => navigateView(view as ViewKey)}
+                onQuickAction={quickWorkAction}
+              />
+            ) : null}
             {activeView === "tenants" ? (
               <TenantsView
                 overview={overview}
@@ -647,7 +712,8 @@ export function SaasAdminApp({
                 backups={tenantDetail ? backups[tenantDetail.tenant.slug] ?? [] : []}
                 onQueryChange={setQuery}
                 onStatusChange={setStatusFilter}
-                onFilter={() => loadOverview()}
+                onFilter={() => loadOverview(query, statusFilter, 1)}
+                onPageChange={(next) => loadOverview(query, statusFilter, next)}
                 onOpenTenant={(slug, tab) => loadTenant(slug, tab)}
                 onAction={tenantAction}
                 onOperationAction={operationAction}
@@ -663,11 +729,121 @@ export function SaasAdminApp({
           </div>
         </section>
       </div>
+
+      <CommandPalette
+        open={paletteOpen}
+        nav={visibleNav}
+        onClose={() => setPaletteOpen(false)}
+        onNavigate={(view) => { setPaletteOpen(false); navigateView(view); }}
+        onOpenTenant={(slug) => { setPaletteOpen(false); void loadTenant(slug); }}
+      />
     </main>
   );
 }
 
-function DashboardView({ overview, onOpenTenant }: { overview: OverviewPayload; onOpenTenant: (slug: string) => void }) {
+// Ricerca globale Ctrl+K (Fase B): sezioni del pannello + tenant cercati
+// SERVER-SIDE (la lista in memoria e' paginata, non basta).
+function CommandPalette({ open, nav, onClose, onNavigate, onOpenTenant }: {
+  open: boolean;
+  nav: Array<{ key: ViewKey; label: string; icon: LucideIcon }>;
+  onClose: () => void;
+  onNavigate: (view: ViewKey) => void;
+  onOpenTenant: (slug: string) => void;
+}) {
+  const [term, setTerm] = useState("");
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [index, setIndex] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setTerm("");
+    setIndex(0);
+    const t = window.setTimeout(() => inputRef.current?.focus(), 30);
+    return () => window.clearTimeout(t);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handle = window.setTimeout(() => {
+      const search = new URLSearchParams({ per_page: "8" });
+      if (term.trim()) search.set("q", term.trim());
+      apiGet<OverviewPayload>(`/api/admin/tenants?${search}`)
+        .then((data) => setTenants(data.tenants ?? []))
+        .catch(() => setTenants([]));
+    }, 200);
+    return () => window.clearTimeout(handle);
+  }, [open, term]);
+
+  const needle = term.trim().toLowerCase();
+  const navMatches = nav.filter((item) => !needle || item.label.toLowerCase().includes(needle));
+  const entries: Array<{ id: string; label: string; detail: string; run: () => void }> = [
+    ...tenants.map((tenant) => ({
+      id: `t:${tenant.slug}`,
+      label: tenant.name || tenant.slug,
+      detail: `Tenant · ${tenant.slug} · ${statusLabel[(tenant.status ?? "active") as TenantStatus] ?? tenant.status}`,
+      run: () => onOpenTenant(tenant.slug),
+    })),
+    ...navMatches.map((item) => ({
+      id: `v:${item.key}`,
+      label: item.label,
+      detail: "Vai alla sezione",
+      run: () => onNavigate(item.key),
+    })),
+  ];
+  const active = Math.min(index, Math.max(0, entries.length - 1));
+
+  if (!open) return null;
+  return (
+    <div aria-modal className="fixed inset-0 z-50 bg-slate-950/40 p-4 pt-[12vh]" role="dialog" onClick={onClose}>
+      <div className="mx-auto w-full max-w-xl overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center gap-2 border-b border-slate-100 px-4">
+          <Search className="text-slate-400" size={17} aria-hidden />
+          <input
+            className="h-12 w-full outline-none placeholder:text-slate-400"
+            placeholder="Cerca tenant o sezione..."
+            ref={inputRef}
+            value={term}
+            onChange={(event) => { setTerm(event.target.value); setIndex(0); }}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowDown") { event.preventDefault(); setIndex((i) => Math.min(i + 1, entries.length - 1)); }
+              if (event.key === "ArrowUp") { event.preventDefault(); setIndex((i) => Math.max(i - 1, 0)); }
+              if (event.key === "Enter" && entries[active]) entries[active].run();
+            }}
+          />
+        </div>
+        <div className="max-h-80 overflow-y-auto p-2">
+          {entries.length === 0 ? <p className="p-3 text-sm text-slate-500">Nessun risultato.</p> : entries.map((entry, i) => (
+            <button
+              className={`flex w-full items-baseline justify-between gap-3 rounded-md px-3 py-2 text-left ${i === active ? "bg-slate-950 text-white" : "hover:bg-slate-100"}`}
+              key={entry.id}
+              type="button"
+              onMouseEnter={() => setIndex(i)}
+              onClick={entry.run}
+            >
+              <span className="truncate text-sm font-semibold">{entry.label}</span>
+              <span className={`shrink-0 text-xs ${i === active ? "text-white/70" : "text-slate-500"}`}>{entry.detail}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const workSeverityStyle: Record<WorkItem["severity"], string> = {
+  error: "border-red-200 bg-red-50 text-red-700",
+  warning: "border-amber-200 bg-amber-50 text-amber-700",
+  info: "border-slate-200 bg-slate-50 text-slate-600",
+};
+
+function DashboardView({ overview, canManage, onOpenTenant, onNavigate, onQuickAction }: {
+  overview: OverviewPayload;
+  canManage: boolean;
+  onOpenTenant: (slug: string, tab?: string) => void;
+  onNavigate: (view: string) => void;
+  onQuickAction: (action: string, slug: string) => void;
+}) {
   const metrics = [
     ["Tenant totali", overview.summary.total, "registro saas_tenants"],
     ["Attivi", overview.summary.active, "operativi"],
@@ -681,9 +857,46 @@ function DashboardView({ overview, onOpenTenant }: { overview: OverviewPayload; 
       <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
         {metrics.map(([label, value, detail]) => <Metric key={label} label={String(label)} value={String(value)} detail={String(detail)} />)}
       </div>
+
+      {/* CODA DI LAVORO (Fase B): cosa richiede un'azione, in ordine di
+          gravita', con azione one-click quando possibile. */}
+      <section className="rounded-md border border-slate-200 bg-white shadow-sm">
+        <SectionHead title="Da fare adesso" subtitle="Segnalazioni operative in ordine di gravita'." />
+        {overview.workQueue.length === 0 ? (
+          <p className="flex items-center gap-2 p-4 text-sm font-semibold text-emerald-700">
+            <CheckCircle2 size={17} aria-hidden />
+            Nessuna azione richiesta: tutto in ordine.
+          </p>
+        ) : (
+          <div className="grid gap-2 p-4">
+            {overview.workQueue.map((item) => (
+              <div className={`flex flex-wrap items-center gap-3 rounded-md border p-3 ${workSeverityStyle[item.severity]}`} key={item.key}>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold">{item.title}</p>
+                  {item.detail ? <p className="truncate text-xs opacity-80">{item.detail}</p> : null}
+                </div>
+                {item.action && canManage ? (
+                  <button className="inline-flex h-8 items-center gap-1 rounded-md border border-current px-3 text-xs font-semibold" type="button" onClick={() => onQuickAction(item.action as string, item.slug ?? "")}>
+                    <Wrench size={13} aria-hidden />
+                    {item.action === "repair_schema" ? "Ripara" : "Verifica"}
+                  </button>
+                ) : null}
+                <button
+                  className="inline-flex h-8 items-center rounded-md bg-slate-950 px-3 text-xs font-semibold text-white"
+                  type="button"
+                  onClick={() => (item.slug ? onOpenTenant(item.slug, item.tab) : onNavigate(item.view))}
+                >
+                  Apri
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
       <section className="rounded-md border border-slate-200 bg-white shadow-sm">
         <SectionHead title="Tenant recenti" subtitle="Stato generale e ultimo health salvato." />
-        <TenantTable tenants={overview.tenants.slice(0, 8)} onOpenTenant={onOpenTenant} />
+        <TenantTable tenants={overview.tenants.slice(0, 8)} onOpenTenant={(slug) => onOpenTenant(slug)} />
       </section>
     </div>
   );
@@ -701,6 +914,7 @@ function TenantsView(props: {
   onQueryChange: (value: string) => void;
   onStatusChange: (value: string) => void;
   onFilter: () => void;
+  onPageChange: (page: number) => void;
   onOpenTenant: (slug: string, tab?: TenantTab) => void;
   onAction: (action: string, payload?: Record<string, string>) => void;
   onOperationAction: (payload: Record<string, string>) => void;
@@ -731,6 +945,19 @@ function TenantsView(props: {
             </a>
           </div>
           <TenantTable tenants={props.overview.tenants} onOpenTenant={(slug) => props.onOpenTenant(slug)} />
+          {props.overview.pageCount > 1 ? (
+            <div className="flex items-center justify-between border-t border-slate-100 px-4 py-2 text-sm">
+              <span className="text-slate-500">{props.overview.total} tenant · pagina {props.overview.page} di {props.overview.pageCount}</span>
+              <div className="flex gap-2">
+                <button className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold disabled:opacity-40" disabled={props.overview.page <= 1} type="button" onClick={() => props.onPageChange(props.overview.page - 1)}>
+                  Precedente
+                </button>
+                <button className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold disabled:opacity-40" disabled={props.overview.page >= props.overview.pageCount} type="button" onClick={() => props.onPageChange(props.overview.page + 1)}>
+                  Successiva
+                </button>
+              </div>
+            </div>
+          ) : null}
         </section>
         <CreateTenantPanel canManage={props.canManage} onCreate={(payload) => props.onAction("create", payload)} />
       </div>

@@ -48,11 +48,22 @@ export async function GET(request: Request) {
       q: url.searchParams.get("q") ?? "",
       status: url.searchParams.get("status") ?? "",
     });
+    // Paginazione (Fase A): summary/coda restano sull'insieme COMPLETO
+    // filtrato, la tabella riceve solo la pagina richiesta.
+    const perPage = Math.min(50, Math.max(5, parseInteger(url.searchParams.get("per_page"), 20)));
+    const pageCount = Math.max(1, Math.ceil(tenants.length / perPage));
+    const page = Math.min(pageCount, Math.max(1, parseInteger(url.searchParams.get("page"), 1)));
+    const { buildSaasWorkQueue } = await import("@/lib/saas-work-queue");
     return Response.json({
       ok: true,
-      tenants,
+      tenants: tenants.slice((page - 1) * perPage, page * perPage),
+      total: tenants.length,
+      page,
+      perPage,
+      pageCount,
       summary: saasTenantSummary(tenants),
       operational: saasOperationalSummary(tenants),
+      workQueue: await buildSaasWorkQueue(tenants),
       audit: await auditRows(null, 20),
     });
   } catch (error) {

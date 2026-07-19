@@ -62,7 +62,6 @@ export type SaasTenantRow = RowDataPacket & {
   onboarding_completed_at?: string | Date | null;
   onboarding_dismissed_at?: string | Date | null;
   health?: SaasTenantHealth;
-  health_live?: SaasTenantHealth;
   onboarding_percent?: number;
 };
 
@@ -112,7 +111,13 @@ const TENANT_BASE_TABLES = [
   "users",
 ];
 
+// Memo per processo (Fase A pannello, 2026-07-19): l'ensure fa decine di
+// query INFORMATION_SCHEMA — ripeterlo a OGNI lista costava ~1s a chiamata
+// su DB remoto. Prima riuscita = basta, fino al prossimo deploy/riavvio.
+let tenantSchemaEnsured = false;
+
 export async function ensureSaasTenantSchema(): Promise<void> {
+  if (tenantSchemaEnsured) return;
   await ensureSaasAuthSchema();
 
   const columns: Array<[string, string]> = [
@@ -155,6 +160,7 @@ export async function ensureSaasTenantSchema(): Promise<void> {
 
   await dbExecute("UPDATE `saas_tenants` SET status='suspended', suspended_at=COALESCE(suspended_at, updated_at) WHERE is_active=0 AND COALESCE(status,'active')='active'").catch(() => undefined);
   await dbExecute("UPDATE `saas_tenants` SET status='active', provisioned_at=COALESCE(provisioned_at, created_at) WHERE is_active=1 AND COALESCE(status,'active')='active'").catch(() => undefined);
+  tenantSchemaEnsured = true;
 }
 
 export async function listSaasTenants(filters: { q?: string; status?: string } = {}): Promise<SaasTenantRow[]> {
@@ -910,18 +916,21 @@ export async function ensureCanManageAdmins(user: SaasAdminUser): Promise<void> 
 }
 
 async function decorateTenant(row: SaasTenantRow): Promise<SaasTenantRow> {
-  const healthLive = await saasTenantHealth(row, false).catch(() => ({
-    level: "warning" as SaasHealthLevel,
-    warnings: 1,
-    errors: 0,
-    checks: [],
-    missing_schema: [],
-  }));
+  // Fase A pannello (2026-07-19): la salute in lista viene dallo SNAPSHOT
+  // denormalizzato (health_* su saas_tenants, aggiornato da cron/verifica
+  // manuale/repair) — MAI diagnostica live per riga: con N tenant erano
+  // N x schemaDiagnostics a ogni lista (3-4s gia' con 2 tenant).
   const stored = storedHealth(row);
   return {
     ...row,
-    health_live: healthLive,
-    health: stored ?? healthLive,
+    health: stored ?? {
+      level: "warning" as SaasHealthLevel,
+      warnings: 1,
+      errors: 0,
+      checks: [],
+      missing_schema: [],
+      source: "mai_verificata",
+    },
     onboarding_percent: onboardingPercent(row),
     health_checked_at: dateString(row.health_checked_at),
     onboarding_started_at: dateString(row.onboarding_started_at),
