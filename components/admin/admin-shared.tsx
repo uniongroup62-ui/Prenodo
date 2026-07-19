@@ -76,6 +76,7 @@ export type HealthCheckRow = {
   source?: string | null;
   errors_count?: number;
   warnings_count?: number;
+  checks_json?: string | null;
   created_at?: string | null;
 };
 

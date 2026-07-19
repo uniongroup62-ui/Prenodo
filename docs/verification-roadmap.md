@@ -16484,3 +16484,36 @@ faseD 4/4, faseE 8/8, hardening 19/19, fase3 9/9 (selettore tab
 attiva aggiornato a bg-[#182238]). HARNESS: i selettori Playwright
 per classe con valori arbitrari Tailwind = attribute-contains
 ('button[class*="bg-[#182238]"]').
+
+## 2026-07-19 — PANNELLO ADMIN: FIX del WALKTHROUGH UX (7 rilievi)
+
+Dal giro di valutazione "facile da usare / comprensibile / completo"
+(walkthrough Playwright su tutte le 14 superfici): 2 BUG e 5 difetti.
+
+(1) BUG LAYOUT: nella vista Tenant il pannello dettaglio COPRIVA la
+lista alle larghezze medie (colonne e filtri tagliati; era anche la
+causa dei click intercettati nelle suite). Causa: item grid con
+min-width auto — la catena INTERA (colonna E section) serve min-w-0
+perche' l'overflow-x-auto delle tabelle possa lavorare. (2) BUG DATI:
+il dettaglio mostrava onboarding 0%/not_started mentre la lista
+diceva 100% — saasTenantBySlug ora usa la STESSA join di
+tenant_onboarding_progress della lista. (3) Panoramica: "Salute OK"
++ "Nessun controllo disponibile" era fuorviante — i controlli ora
+arrivano dall'ultima diagnostica registrata (checks_json gia' nel
+payload). (4) Le 10 tab del dettaglio andavano in scroll nascosto
+(Supporto/Backup/Azioni critiche non scopribili): ora flex-wrap, tutte
+visibili. (5) Timeline: gli audit support./tenant.backup_create/
+sms_credit. duplicavano gli eventi delle fonti dedicate — filtrati;
+gli slug tecnici restanti tradotti in etichette leggibili
+(AUDIT_LABELS). (6) Billing: "ID (vuoto = nuovo)" sostituito da
+bottone Modifica per riga che PREFILLA il form (remount con key).
+(7) Sospendi/Archivia ora chiedono CONFERMA (l'eliminazione era gia'
+protetta dallo slug); hint di schedulazione nel registro cron vuoto;
+nota sul backup automatico nel box eliminazione.
+
+Verifica: test-saas-admin-ux 7/7 (onboarding coerente, timeline senza
+doppioni e leggibile, Filtra cliccabile SENZA force, 10 tab con
+boundingBox nel viewport, controlli renderizzati, Modifica precompila,
+confirm su Sospendi con dismiss->nessun effetto) + screenshot; le 8
+regressioni verdi — faseD aggiornata (il fixture ora semina un audit
+NON-duplicato via update, i suoi audit erano tutti doppioni filtrati).

@@ -784,8 +784,11 @@ function TenantsView(props: {
 }) {
   return (
     <div className="grid gap-5 xl:grid-cols-[minmax(0,0.95fr)_minmax(480px,1.05fr)]">
-      <div className="grid gap-5">
-        <section className="rounded-md border border-slate-200 bg-white shadow-sm">
+      {/* min-w-0: senza, gli item grid non scendono sotto la larghezza del
+          contenuto (tabella min-w 760) e il pannello dettaglio COPRE la
+          lista alle larghezze medie (bug walkthrough UX 19/07). */}
+      <div className="grid min-w-0 gap-5">
+        <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
           <SectionHead title="Tenant" subtitle="Cerca, filtra e apri la gestione dedicata." />
           <div className="grid gap-3 border-b border-slate-100 p-4 md:grid-cols-[1fr_190px_auto]">
             <label className="relative">
@@ -840,7 +843,7 @@ function TenantsView(props: {
 
 function CreateTenantPanel({ canManage, onCreate }: { canManage: boolean; onCreate: (payload: Record<string, string>) => void }) {
   return (
-    <section className="rounded-md border border-slate-200 bg-white shadow-sm">
+    <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
       <SectionHead title="Nuovo tenant" subtitle="Crea tenant, admin iniziale, sede principale e onboarding." />
       <form className="grid gap-3 p-4 md:grid-cols-2" onSubmit={(event) => {
         event.preventDefault();
@@ -869,6 +872,9 @@ function CreateTenantPanel({ canManage, onCreate }: { canManage: boolean; onCrea
 // PIANI & RICAVI (Fase E): piani veri con limiti che governano i gate del
 // gestionale + MRR, ricavo SMS per mese e wallet aggregato.
 function BillingView({ data, canManage, onAction, onRefresh }: { data: BillingPayload | null; canManage: boolean; onAction: (payload: Record<string, string>) => void; onRefresh: () => void }) {
+  // Modifica per riga (walkthrough UX 19/07): il bottone precompila il form
+  // (key = remount con i defaultValue del piano scelto) — niente ID a mano.
+  const [editing, setEditing] = useState<BillingPayload["plans"][number] | null>(null);
   if (!data) {
     return <EmptyOperation icon={Wallet} title="Piani & Ricavi" detail="Carica piani, MRR e ricavi SMS." onRefresh={onRefresh} />;
   }
@@ -885,31 +891,36 @@ function BillingView({ data, canManage, onAction, onRefresh }: { data: BillingPa
       </div>
 
       <section className="rounded-md border border-slate-200 bg-white shadow-sm">
-        <SectionHead title="Nuovo piano / modifica" subtitle="Prezzo mensile e LIMITI: vuoto = illimitato. I limiti governano i gate del gestionale (es. creazione sedi)." />
-        <form className="grid gap-3 p-4 md:grid-cols-6" onSubmit={(event) => submitOperation(event, "plan_save", onAction)}>
-          <Input name="plan_id" label="ID (vuoto = nuovo)" placeholder="" />
-          <Input name="name" label="Nome piano" placeholder="Pro" required />
-          <Input name="price_month" label="Prezzo/mese EUR" placeholder="49.90" />
-          <Input name="max_locations" label="Max sedi" placeholder="illimitato" />
-          <Input name="max_staff" label="Max staff" placeholder="illimitato" />
-          <Input name="sms_included_month" label="SMS inclusi/mese" placeholder="0" />
-          <Button disabled={!canManage} icon={Plus}>Salva piano</Button>
+        <SectionHead title={editing ? `Modifica piano: ${editing.name}` : "Nuovo piano"} subtitle="Prezzo mensile e LIMITI: vuoto = illimitato. I limiti governano i gate del gestionale (es. creazione sedi)." />
+        <form className="grid gap-3 p-4 md:grid-cols-5" key={editing ? `plan-${editing.id}` : "plan-new"} onSubmit={(event) => { submitOperation(event, "plan_save", onAction); setEditing(null); }}>
+          <input name="plan_id" type="hidden" value={editing ? String(editing.id) : ""} readOnly />
+          <Input name="name" label="Nome piano" placeholder="Pro" defaultValue={editing?.name ?? ""} required />
+          <Input name="price_month" label="Prezzo/mese EUR" placeholder="49.90" defaultValue={editing ? String(editing.price_month) : ""} />
+          <Input name="max_locations" label="Max sedi" placeholder="illimitato" defaultValue={editing?.max_locations === null || editing === null ? "" : String(editing.max_locations)} />
+          <Input name="max_staff" label="Max staff" placeholder="illimitato" defaultValue={editing?.max_staff === null || editing === null ? "" : String(editing.max_staff)} />
+          <Input name="sms_included_month" label="SMS inclusi/mese" placeholder="0" defaultValue={editing ? String(editing.sms_included_month) : ""} />
+          <div className="flex gap-2 md:col-span-5">
+            <Button disabled={!canManage} icon={Plus}>{editing ? "Salva modifiche" : "Crea piano"}</Button>
+            {editing ? <Button icon={RotateCcw} type="button" variant="outline" onClick={() => setEditing(null)}>Annulla modifica</Button> : null}
+          </div>
         </form>
       </section>
 
       <Table
         title="Piani e MRR"
-        headers={["ID", "Piano", "Prezzo/mese", "Max sedi", "Max staff", "Tenant", "MRR"]}
-        rows={data.plans.length === 0 ? [["-", "Nessun piano definito", "-", "-", "-", "-", "-"]] : data.plans.map((plan) => {
+        headers={["Piano", "Prezzo/mese", "Max sedi", "Max staff", "Tenant", "MRR", "Azioni"]}
+        rows={data.plans.length === 0 ? [["Nessun piano definito", "-", "-", "-", "-", "-", "-"]] : data.plans.map((plan) => {
           const rev = data.revenue.by_plan.find((row) => row.id === plan.id);
           return [
-            String(plan.id),
             <span key={plan.id}><strong>{plan.name}</strong>{plan.is_active === 1 ? null : <span className="ml-2 text-xs text-slate-500">(disattivo)</span>}</span>,
             formatEuro(Number(plan.price_month)),
             plan.max_locations === null ? "illimitato" : String(plan.max_locations),
             plan.max_staff === null ? "illimitato" : String(plan.max_staff),
             String(rev?.tenants ?? 0),
             formatEuro(rev?.mrr ?? 0),
+            <button className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold hover:bg-slate-50 disabled:opacity-40" disabled={!canManage} key={`edit-${plan.id}`} type="button" onClick={() => setEditing(plan)}>
+              Modifica
+            </button>,
           ];
         })}
       />
@@ -977,7 +988,7 @@ function ControlsView({ data, onRefresh }: { data: ControlsPayload | null; onRef
         title="Cron: ultima esecuzione per job"
         headers={["Job", "Esito", "Avviato", "Durata", "Sintesi"]}
         rows={(data.cron?.jobs ?? []).length === 0
-          ? [["Nessuna esecuzione registrata", "-", "-", "-", "-"]]
+          ? [["Nessuna esecuzione registrata: schedula /api/cron/* (EventBridge o scheduler esterno con CRON_SECRET)", "-", "-", "-", "-"]]
           : (data.cron?.jobs ?? []).map((run) => [
             <strong key={run.job}>{run.job}</strong>,
             <Badge tone={run.status === "ok" ? "ok" : "danger"} key={`s-${run.job}`}>{run.status === "ok" ? "OK" : "Errore"}</Badge>,

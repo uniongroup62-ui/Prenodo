@@ -201,7 +201,17 @@ export async function listSaasTenants(filters: { q?: string; status?: string } =
 export async function saasTenantBySlug(slugInput: string): Promise<SaasTenantRow | null> {
   await ensureSaasTenantSchema();
   const slug = validateTenantSlug(slugInput);
-  const rows = await dbQuery<SaasTenantRow[]>("SELECT * FROM `saas_tenants` WHERE slug=? LIMIT 1", [slug]);
+  // STESSA join onboarding della lista (walkthrough UX 19/07: il dettaglio
+  // mostrava 0%/not_started mentre la lista diceva 100% completed).
+  const hasProgress = await freshTableExists(ONBOARDING_TABLE);
+  const progressSelect = hasProgress
+    ? "p.status AS onboarding_status, p.current_step AS onboarding_step, p.completed_steps_json, p.skipped_steps_json, p.started_at AS onboarding_started_at, p.completed_at AS onboarding_completed_at, p.dismissed_at AS onboarding_dismissed_at"
+    : "NULL AS onboarding_status, NULL AS onboarding_step, NULL AS completed_steps_json, NULL AS skipped_steps_json, NULL AS onboarding_started_at, NULL AS onboarding_completed_at, NULL AS onboarding_dismissed_at";
+  const join = hasProgress ? `LEFT JOIN \`${ONBOARDING_TABLE}\` p ON p.tenant_id=t.id` : "";
+  const rows = await dbQuery<SaasTenantRow[]>(
+    `SELECT t.*, ${progressSelect} FROM \`saas_tenants\` t ${join} WHERE t.slug=? LIMIT 1`,
+    [slug],
+  );
   return rows[0] ? decorateTenant(rows[0]) : null;
 }
 

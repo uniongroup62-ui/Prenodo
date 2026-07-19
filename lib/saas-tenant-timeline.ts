@@ -19,6 +19,29 @@ export type TenantTimelineEvent = {
 
 const PER_SOURCE_LIMIT = 40;
 
+// Azioni audit GIA' rappresentate dalle fonti dedicate (supporto/backup/SMS):
+// mostrarle anche come audit duplicava ogni evento (walkthrough UX 19/07).
+const AUDIT_SKIP_PREFIXES = ["support.", "tenant.backup_create", "sms_credit."];
+
+// Slug tecnici -> etichette leggibili per l'admin.
+const AUDIT_LABELS: Record<string, string> = {
+  "tenant.create": "Tenant creato",
+  "tenant.create_failed": "Creazione tenant fallita",
+  "tenant.update": "Dati tenant aggiornati",
+  "tenant.public_visibility_update": "Visibilita pubblica aggiornata",
+  "tenant.suspend": "Tenant sospeso",
+  "tenant.activate": "Tenant riattivato",
+  "tenant.archive": "Tenant archiviato",
+  "tenant.restore_archive": "Tenant ripristinato",
+  "tenant.onboarding_reset": "Onboarding resettato",
+  "tenant.schema_repair": "Schema verificato/riparato",
+  "tenant.admin_repair": "Admin tenant riparato",
+  "tenant.delete_start": "Eliminazione avviata",
+  "tenant.delete_complete": "Tenant eliminato",
+  "saas_plan.assign": "Piano assegnato",
+  "saas_plan.unassign": "Piano rimosso",
+};
+
 export async function buildTenantTimeline(tenantId: number, limit = 60): Promise<TenantTimelineEvent[]> {
   if (tenantId <= 0) return [];
   const events: TenantTimelineEvent[] = [];
@@ -53,10 +76,12 @@ export async function buildTenantTimeline(tenantId: number, limit = 60): Promise
   ]);
 
   for (const row of audit) {
+    const action = String(row.action ?? "");
+    if (AUDIT_SKIP_PREFIXES.some((prefix) => action.startsWith(prefix))) continue;
     events.push({
       at: at(row.created_at),
       kind: "audit",
-      title: String(row.action ?? ""),
+      title: AUDIT_LABELS[action] ?? action,
       detail: String(row.message ?? ""),
       actor: String(row.actor_email ?? row.actor_name ?? ""),
     });

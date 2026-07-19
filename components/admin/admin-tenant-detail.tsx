@@ -76,7 +76,7 @@ export function TenantDetailPanel(props: {
 }) {
   if (!props.detail) {
     return (
-      <section className="rounded-md border border-slate-200 bg-white p-6 shadow-sm">
+      <section className="min-w-0 rounded-md border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex items-center gap-3 text-slate-500">
           <Building2 size={20} aria-hidden />
           Seleziona un tenant per aprire la gestione completa.
@@ -88,7 +88,7 @@ export function TenantDetailPanel(props: {
   const tenant = props.detail.tenant;
   const status = tenantStatus(tenant);
   return (
-    <section className="rounded-md border border-slate-200 bg-white shadow-sm">
+    <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
       <div className="flex items-start justify-between gap-3 border-b border-slate-100 p-4">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#365a96]">Tenant</p>
@@ -100,7 +100,9 @@ export function TenantDetailPanel(props: {
         </div>
         <Badge tone={statusTone(status)}>{statusLabel[status]}</Badge>
       </div>
-      <div className="flex gap-1 overflow-x-auto border-b border-slate-100 p-2">
+      {/* flex-wrap: con 10 tab lo scroll orizzontale nascondeva Supporto/
+          Backup/Azioni critiche senza alcun indizio (walkthrough UX 19/07). */}
+      <div className="flex flex-wrap gap-1 border-b border-slate-100 p-2">
         {tenantTabs.map((tab) => {
           const Icon = tab.icon;
           return (
@@ -112,7 +114,7 @@ export function TenantDetailPanel(props: {
         })}
       </div>
       <div className="p-4">
-        {props.activeTab === "overview" ? <TenantOverview tenant={tenant} /> : null}
+        {props.activeTab === "overview" ? <TenantOverview detail={props.detail} /> : null}
         {props.activeTab === "timeline" ? <TenantTimeline events={props.detail.timeline ?? []} /> : null}
         {props.activeTab === "settings" ? <TenantSettings tenant={tenant} canManage={props.canManage} onAction={props.onAction} /> : null}
         {props.activeTab === "visibility" ? <TenantVisibility tenant={tenant} canManage={props.canManage} onAction={props.onAction} /> : null}
@@ -127,8 +129,20 @@ export function TenantDetailPanel(props: {
   );
 }
 
-function TenantOverview({ tenant }: { tenant: Tenant }) {
+function TenantOverview({ detail }: { detail: TenantDetailPayload }) {
+  const tenant = detail.tenant;
   const health = tenant.health?.level ?? "warning";
+  // I controlli di dettaglio vivono nell'ULTIMA diagnostica registrata: lo
+  // snapshot sul tenant porta solo il livello (walkthrough UX 19/07 —
+  // "Salute OK" con "Nessun controllo disponibile" era fuorviante).
+  let checks = tenant.health?.checks ?? [];
+  if (!checks.length && detail.healthChecks[0]?.checks_json) {
+    try {
+      checks = JSON.parse(String(detail.healthChecks[0].checks_json));
+    } catch {
+      checks = [];
+    }
+  }
   return (
     <div className="grid gap-4">
       <div className="grid gap-3 md:grid-cols-3">
@@ -143,7 +157,7 @@ function TenantOverview({ tenant }: { tenant: Tenant }) {
         <Detail label="Origine" value={tenant.source === "self_signup" ? "Registrazione autonoma" : "Creazione admin"} />
         <Detail label="Creato il" value={tenant.created_at || "-"} />
       </div>
-      <HealthChecks checks={tenant.health?.checks ?? []} />
+      <HealthChecks checks={checks} />
     </div>
   );
 }
@@ -313,9 +327,12 @@ function TenantDanger({ tenant, canManage, onAction }: { tenant: Tenant; canMana
   const status = tenantStatus(tenant);
   return (
     <div className="grid gap-4">
+      {/* Conferma esplicita su sospensione/archiviazione (walkthrough UX
+          19/07): bloccano l'accesso del tenant, non devono partire per sbaglio. */}
       <form className="grid gap-3 md:grid-cols-[1fr_auto]" onSubmit={(event) => {
         event.preventDefault();
         const payload = formPayload(event.currentTarget);
+        if (status === "active" && !window.confirm(`Sospendere "${tenant.slug}"? Il tenant non potra' piu' accedere.`)) return;
         onAction(status === "active" ? "suspend" : "activate", { ...payload, slug: tenant.slug });
       }}>
         <Input name="reason" label={status === "active" ? "Motivo sospensione" : "Riattivazione"} placeholder="Es. pagamento scaduto" disabled={status !== "active"} />
@@ -324,6 +341,7 @@ function TenantDanger({ tenant, canManage, onAction }: { tenant: Tenant; canMana
       <form className="grid gap-3 md:grid-cols-[1fr_auto]" onSubmit={(event) => {
         event.preventDefault();
         const payload = formPayload(event.currentTarget);
+        if (status !== "deleted" && !window.confirm(`Archiviare "${tenant.slug}"? Restera' recuperabile da questa pagina.`)) return;
         onAction(status === "deleted" ? "restore" : "archive", { ...payload, slug: tenant.slug });
       }}>
         <Input name="reason" label={status === "deleted" ? "Archivio" : "Motivo archiviazione"} placeholder="Es. cliente cessato" disabled={status === "deleted"} />
@@ -332,7 +350,7 @@ function TenantDanger({ tenant, canManage, onAction }: { tenant: Tenant; canMana
       <form className="rounded-md border border-red-200 bg-red-50 p-4" onSubmit={(event) => submitAction(event, "delete", onAction)}>
         <input name="slug" type="hidden" value={tenant.slug} />
         <p className="font-semibold text-red-800">Eliminazione definitiva</p>
-        <p className="mt-1 text-sm text-red-700">Rimuove registro tenant e dati condivisi collegati. Digita lo slug esatto.</p>
+        <p className="mt-1 text-sm text-red-700">Rimuove registro tenant e dati condivisi collegati; prima viene creato un backup automatico. Digita lo slug esatto.</p>
         <div className="mt-3 flex gap-2">
           <input className="h-10 min-w-0 flex-1 rounded-md border border-red-200 bg-white px-3 outline-none" name="confirm_slug" placeholder={tenant.slug} />
           <button className="inline-flex h-10 items-center gap-2 rounded-md border border-red-300 px-4 text-sm font-semibold text-red-800 disabled:opacity-50" disabled={!canManage}>
