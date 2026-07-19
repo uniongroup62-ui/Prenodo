@@ -126,8 +126,17 @@ type ExecSummary = {
   marketplace_prev: number | null;
 };
 
+type SystemStatus = {
+  cron_ok: number;
+  cron_error: number;
+  last_backup_slug: string | null;
+  last_backup_at: string | null;
+  totp_policy: boolean;
+};
+
 type OverviewPayload = {
   exec: ExecSummary;
+  system: SystemStatus;
   plans: PlanOption[];
   tenants: Tenant[];
   total: number;
@@ -165,6 +174,7 @@ const operationsSections: Array<{ key: OperationsSection; label: string; icon: L
 
 const emptyOverview: OverviewPayload = {
   exec: { mrr: 0, marketplace_accounts: 0, sms_month_revenue: 0, mrr_prev: null, marketplace_prev: null },
+  system: { cron_ok: 0, cron_error: 0, last_backup_slug: null, last_backup_at: null, totp_policy: false },
   plans: [],
   tenants: [],
   total: 0,
@@ -633,6 +643,8 @@ async function loadStats() {
                 onOpenTenant={(slug, tab) => loadTenant(slug, (tab ?? "overview") as TenantTab)}
                 onNavigate={(view, sec) => navigateView(view as ViewKey, true, sec ?? "")}
                 onQuickAction={quickWorkAction}
+                onOpenCreate={() => { navigateView("tenants"); setCreateOpen(true); }}
+                onRunDiagnostics={async () => { await operationAction({ action: "cron_run", job: "admin-health" }); await loadOverview(); }}
               />
             ) : null}
             {activeView === "tenants" ? (
@@ -805,12 +817,14 @@ function CommandPalette({ open, nav, onClose, onNavigate, onOpenTenant }: {
   );
 }
 
-function DashboardView({ overview, canManage, onOpenTenant, onNavigate, onQuickAction }: {
+function DashboardView({ overview, canManage, onOpenTenant, onNavigate, onQuickAction, onOpenCreate, onRunDiagnostics }: {
   overview: OverviewPayload;
   canManage: boolean;
   onOpenTenant: (slug: string, tab?: string) => void;
   onNavigate: (view: string, sec?: string) => void;
   onQuickAction: (action: string, slug: string) => void;
+  onOpenCreate: () => void;
+  onRunDiagnostics: () => void;
 }) {
   // Riga EXECUTIVE (vista Statistiche 19/07): business prima, operativo
   // sotto. Delta calcolato SOLO se lo snapshot di ~30 giorni fa esiste
@@ -834,46 +848,95 @@ function DashboardView({ overview, canManage, onOpenTenant, onNavigate, onQuickA
         {execMetrics.map(([label, value, detail]) => <Metric key={label} label={String(label)} value={String(value)} detail={String(detail)} />)}
       </div>
 
-      {/* CODA DI LAVORO (Fase B): cosa richiede un'azione, in ordine di
-          gravita', con azione one-click quando possibile. */}
-      <section className="rounded-md border border-slate-200 bg-white shadow-sm">
-        <SectionHead title="Da fare adesso" subtitle="Segnalazioni operative in ordine di gravità." />
-        {overview.workQueue.length === 0 ? (
-          <p className="flex items-center gap-2 p-4 text-sm font-semibold text-emerald-700">
-            <CheckCircle2 size={17} aria-hidden />
-            Nessuna azione richiesta: tutto in ordine.
-          </p>
-        ) : (
-          <div className="grid gap-2 p-4">
-            {overview.workQueue.map((item) => (
-              <div className={`flex flex-wrap items-center gap-3 rounded-md border p-3 ${workSeverityStyle[item.severity]}`} key={item.key}>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold">{item.title}</p>
-                  {item.detail ? <p className="truncate text-xs opacity-80">{item.detail}</p> : null}
-                </div>
-                {item.action && canManage ? (
-                  <button className="inline-flex h-8 items-center gap-1 rounded-md border border-current px-3 text-xs font-semibold" type="button" onClick={() => onQuickAction(item.action as string, item.slug ?? "")}>
-                    <Wrench size={13} aria-hidden />
-                    {item.action === "repair_schema" ? "Ripara" : "Verifica"}
+      {/* Fascia centrale (redesign 19/07): coda a 2/3 + stato sistema e
+          azioni rapide a 1/3. */}
+      <div className="grid gap-5 xl:grid-cols-[2fr_1fr]">
+        <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
+          <SectionHead title="Da fare adesso" subtitle="Segnalazioni operative in ordine di gravità." />
+          {overview.workQueue.length === 0 ? (
+            <p className="flex items-center gap-2 p-4 text-sm font-semibold text-emerald-700">
+              <CheckCircle2 size={17} aria-hidden />
+              Nessuna azione richiesta: tutto in ordine.
+            </p>
+          ) : (
+            <div className="grid gap-2 p-4">
+              {overview.workQueue.map((item) => (
+                <div className={`flex flex-wrap items-center gap-3 rounded-md border p-3 ${workSeverityStyle[item.severity]}`} key={item.key}>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold">{item.title}</p>
+                    {item.detail ? <p className="truncate text-xs opacity-80">{item.detail}</p> : null}
+                  </div>
+                  {item.action && canManage ? (
+                    <button className="inline-flex h-8 items-center gap-1 rounded-md border border-current px-3 text-xs font-semibold" type="button" onClick={() => onQuickAction(item.action as string, item.slug ?? "")}>
+                      <Wrench size={13} aria-hidden />
+                      {item.action === "repair_schema" ? "Ripara" : "Verifica"}
+                    </button>
+                  ) : null}
+                  <button
+                    className="inline-flex h-8 items-center rounded-md bg-[#182238] px-3 text-xs font-semibold text-white"
+                    type="button"
+                    onClick={() => (item.slug ? onOpenTenant(item.slug, item.tab) : onNavigate(item.view, item.section))}
+                  >
+                    Apri
                   </button>
-                ) : null}
-                <button
-                  className="inline-flex h-8 items-center rounded-md bg-[#182238] px-3 text-xs font-semibold text-white"
-                  type="button"
-                  onClick={() => (item.slug ? onOpenTenant(item.slug, item.tab) : onNavigate(item.view, item.section))}
-                >
-                  Apri
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
 
-      <section className="rounded-md border border-slate-200 bg-white shadow-sm">
-        <SectionHead title="Tenant recenti" subtitle="Stato generale e ultima verifica di salute." />
-        <TenantTable tenants={overview.tenants.slice(0, 8)} onOpenTenant={(slug) => onOpenTenant(slug)} />
-      </section>
+        <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
+          <SectionHead title="Stato sistema" subtitle="Cron, backup e sicurezza a colpo d'occhio." />
+          <div className="grid gap-2 p-4 text-sm">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+              <span className="font-medium text-slate-600">Cron</span>
+              {overview.system.cron_error > 0
+                ? <Badge tone="danger">{overview.system.cron_error} in errore</Badge>
+                : overview.system.cron_ok > 0
+                  ? <Badge tone="ok">{overview.system.cron_ok} job OK</Badge>
+                  : <Badge tone="muted">nessuna esecuzione</Badge>}
+            </div>
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+              <span className="font-medium text-slate-600">Ultimo backup</span>
+              <span className="text-right text-slate-600">{overview.system.last_backup_at ? `${overview.system.last_backup_slug} · ${overview.system.last_backup_at}` : "nessuno"}</span>
+            </div>
+            <div className="flex items-center justify-between pb-1">
+              <span className="font-medium text-slate-600">Policy 2FA</span>
+              {overview.system.totp_policy ? <Badge tone="ok">obbligatoria</Badge> : <Badge tone="muted">non attiva</Badge>}
+            </div>
+            <div className="mt-2 grid gap-2 border-t border-slate-100 pt-3">
+              <button className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-[#365a96] px-3 text-sm font-semibold text-white disabled:opacity-50" disabled={!canManage} type="button" onClick={onOpenCreate}>
+                <Plus size={15} aria-hidden />
+                Nuovo tenant
+              </button>
+              <button className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-200 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50" disabled={!canManage} type="button" onClick={onRunDiagnostics}>
+                <Activity size={15} aria-hidden />
+                Esegui diagnostica
+              </button>
+              <button className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-200 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50" type="button" onClick={() => onNavigate("stats")}>
+                <BarChart3 size={15} aria-hidden />
+                Vedi statistiche
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      {/* Attivita' recente al posto di "Tenant recenti" (redesign 19/07): il
+          feed audit dice COSA sta succedendo; ai tenant si arriva da nav,
+          palette e coda. I messaggi audit sono gia' in italiano. */}
+      <Table
+        title="Attività recente"
+        headers={["Quando", "Cosa", "Tenant", "Chi"]}
+        rows={overview.audit.slice(0, 10).map((row) => [
+          String(row.created_at ?? "-").slice(0, 19),
+          row.message || row.action,
+          row.tenant_slug
+            ? <button className="text-sm font-semibold text-[#365a96] hover:underline" key={`t-${row.id}`} type="button" onClick={() => onOpenTenant(String(row.tenant_slug))}>{row.tenant_slug}</button>
+            : "-",
+          row.actor_email || "sistema",
+        ])}
+      />
     </div>
   );
 }

@@ -59,9 +59,10 @@ export async function GET(request: Request) {
     const page = Math.min(pageCount, Math.max(1, parseInteger(url.searchParams.get("page"), 1)));
     const { buildSaasWorkQueue } = await import("@/lib/saas-work-queue");
     const { listSaasPlans } = await import("@/lib/saas-plans");
-    const { saasExecSummary } = await import("@/lib/saas-stats");
+    const { saasExecSummary, saasSystemStatus } = await import("@/lib/saas-stats");
     return Response.json({
       exec: await saasExecSummary(),
+      system: await saasSystemStatus(),
       ok: true,
       // Piani ATTIVI per le select (Nuovo tenant / tab Dati): il piano e'
       // un'entita', mai testo libero (coerenza Fase E).

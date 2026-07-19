@@ -254,6 +254,27 @@ export async function saasExecSummary() {
   };
 }
 
+// STATO SISTEMA per la card della dashboard (redesign 2026-07-19): cron
+// (ultimo esito per job), ultimo backup, policy 2FA — tre query leggere.
+export async function saasSystemStatus() {
+  const cron = await dbQuery<RowDataPacket[]>(
+    `SELECT r.status, COUNT(*) AS count FROM \`saas_cron_runs\` r
+      WHERE r.id = (SELECT MAX(r2.id) FROM \`saas_cron_runs\` r2 WHERE r2.job = r.job)
+      GROUP BY r.status`,
+  ).catch(() => []);
+  const lastBackup = await dbQuery<RowDataPacket[]>(
+    "SELECT tenant_slug, created_at FROM `saas_tenant_backups` WHERE status='completed' ORDER BY id DESC LIMIT 1",
+  ).catch(() => []);
+  const { getAdminSetting } = await import("@/lib/saas-admin-security");
+  return {
+    cron_ok: Number(cron.find((row) => String(row.status) === "ok")?.count ?? 0),
+    cron_error: Number(cron.find((row) => String(row.status) === "error")?.count ?? 0),
+    last_backup_slug: lastBackup[0] ? String(lastBackup[0].tenant_slug) : null,
+    last_backup_at: lastBackup[0] ? String(lastBackup[0].created_at ?? "") : null,
+    totp_policy: (await getAdminSetting("require_totp").catch(() => "")) === "1",
+  };
+}
+
 function localDay(offsetDays = 0): string {
   const d = new Date(Date.now() + offsetDays * 86_400_000);
   const p = (n: number) => String(n).padStart(2, "0");

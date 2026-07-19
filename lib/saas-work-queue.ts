@@ -22,7 +22,6 @@ export type SaasWorkItem = {
   action?: "repair_schema" | "record_health";
 };
 
-const ONBOARDING_STALL_DAYS = 7;
 const LOGIN_ANOMALY_THRESHOLD = 10;
 const MAX_ITEMS = 30;
 
@@ -84,21 +83,9 @@ export async function buildSaasWorkQueue(tenants: SaasTenantRow[]): Promise<Saas
       });
     }
 
-    if (status === "active" && (tenant.onboarding_status ?? "") !== "completed") {
-      const startedAt = parseLocal(String(tenant.onboarding_started_at ?? tenant.created_at ?? ""));
-      const stalledDays = startedAt ? Math.floor((Date.now() - startedAt) / 86_400_000) : null;
-      if (stalledDays !== null && stalledDays >= ONBOARDING_STALL_DAYS) {
-        items.push({
-          key: `onboarding:${slug}`,
-          severity: "warning",
-          title: `Onboarding fermo da ${stalledDays} giorni: ${slug}`,
-          detail: `Passo corrente: ${String(tenant.onboarding_step ?? "-") || "-"} (${Number(tenant.onboarding_percent ?? 0)}%)`,
-          view: "tenants",
-          slug,
-          tab: "onboarding",
-        });
-      }
-    }
+    // NB: l'onboarding fermo NON e' piu' in coda (richiesta utente 19/07):
+    // non richiede un'azione dell'admin di piattaforma — resta visibile
+    // nella colonna Onboarding della lista tenant e nel dettaglio.
   }
 
   // Ordini SMS in attesa (aggregato).
@@ -174,12 +161,6 @@ export async function buildSaasWorkQueue(tenants: SaasTenantRow[]): Promise<Saas
 
   const rank = { error: 0, warning: 1, info: 2 } as const;
   return items.sort((a, b) => rank[a.severity] - rank[b.severity]).slice(0, MAX_ITEMS);
-}
-
-function parseLocal(value: string): number | null {
-  if (!value) return null;
-  const ms = new Date(value.includes("T") ? value : value.replace(" ", "T")).getTime();
-  return Number.isFinite(ms) ? ms : null;
 }
 
 function localNow(): string {

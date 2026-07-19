@@ -16734,3 +16734,24 @@ attivi — non ancora incassato"; "ARPU" -> "Ricavo medio per tenant
 (ARPU)" con dettaglio "MRR diviso N tenant attivi"; in dashboard
 "Ricavo abbonamenti (MRR)". Suite stats aggiornata alle nuove
 etichette: 8/8.
+
+## 2026-07-19 — DASHBOARD RISTRUTTURATA (richiesta utente)
+
+(1) ONBOARDING FUORI DALLA CODA "Da fare adesso": non richiede
+un'azione dell'admin di piattaforma — resta nella colonna della
+lista tenant e nel dettaglio. (2) STRUTTURA a tre fasce: riga KPI
+executive (invariata) -> fascia centrale a 2 colonne: coda a 2/3 +
+card "STATO SISTEMA" a 1/3 (cron ultimo esito per job, ultimo
+backup, policy 2FA; saasSystemStatus in saas-stats, esposto come
+`system` nella overview) con AZIONI RAPIDE (Nuovo tenant che apre il
+modulo, Esegui diagnostica via cron_run, Vedi statistiche) ->
+"ATTIVITA' RECENTE" full-width al posto di "Tenant recenti": il feed
+audit (gia' nel payload, messaggi in italiano) dice cosa sta
+succedendo, coi tenant cliccabili; ai tenant si arriva da nav,
+palette e coda. Timestamp troncati ai secondi.
+
+Verifica: test-saas-admin-dash 5/5 (zero item onboarding col tenant
+reale fermo da settimane, overview.system, UI con Stato sistema +
+Attivita' recente e SENZA Tenant recenti, Vedi statistiche naviga,
+Esegui diagnostica registra la run) + screenshot + TUTTE le 13 suite
+verdi; tsc pulito.
