@@ -12,6 +12,7 @@ import {
   CreditCard,
   Download,
   Eye,
+  History,
   KeyRound,
   LayoutDashboard,
   LifeBuoy,
@@ -37,7 +38,7 @@ import type { SaasAdminUser } from "@/lib/saas-admin-auth";
 import { AdminSecurityPanel } from "@/components/admin/admin-security-panel";
 
 type ViewKey = "dashboard" | "tenants" | "controls" | "sms_plans" | "send_movements" | "maintenance" | "audit" | "admins" | "security";
-type TenantTab = "overview" | "settings" | "visibility" | "admin" | "onboarding" | "health" | "support" | "backups" | "danger";
+type TenantTab = "overview" | "timeline" | "settings" | "visibility" | "admin" | "onboarding" | "health" | "support" | "backups" | "danger";
 type HealthLevel = "ok" | "warning" | "error";
 type TenantStatus = "provisioning" | "active" | "suspended" | "failed" | "deleted";
 
@@ -129,12 +130,21 @@ type OverviewPayload = {
   audit: AuditRow[];
 };
 
+type TimelineEvent = {
+  at: string;
+  kind: "audit" | "health" | "backup" | "support" | "sms";
+  title: string;
+  detail: string;
+  actor: string;
+};
+
 type TenantDetailPayload = {
   tenant: Tenant;
   healthChecks: HealthCheckRow[];
   activeTokens: SupportToken[];
   recentTokens: SupportToken[];
   audit: AuditRow[];
+  timeline: TimelineEvent[];
 };
 
 type BackupRow = {
@@ -242,6 +252,7 @@ const navItems: Array<{ key: ViewKey; label: string; icon: LucideIcon }> = [
 
 const tenantTabs: Array<{ key: TenantTab; label: string; icon: LucideIcon }> = [
   { key: "overview", label: "Panoramica", icon: LayoutDashboard },
+  { key: "timeline", label: "Timeline", icon: History },
   { key: "settings", label: "Dati", icon: Settings },
   { key: "visibility", label: "Visibilita", icon: Eye },
   { key: "admin", label: "Admin", icon: UserCog },
@@ -1062,6 +1073,7 @@ function TenantDetailPanel(props: {
       </div>
       <div className="p-4">
         {props.activeTab === "overview" ? <TenantOverview tenant={tenant} /> : null}
+        {props.activeTab === "timeline" ? <TenantTimeline events={props.detail.timeline ?? []} /> : null}
         {props.activeTab === "settings" ? <TenantSettings tenant={tenant} canManage={props.canManage} onAction={props.onAction} /> : null}
         {props.activeTab === "visibility" ? <TenantVisibility tenant={tenant} canManage={props.canManage} onAction={props.onAction} /> : null}
         {props.activeTab === "admin" ? <TenantAdmin tenant={tenant} canManage={props.canManage} onAction={props.onAction} /> : null}
@@ -1093,6 +1105,41 @@ function TenantOverview({ tenant }: { tenant: Tenant }) {
       </div>
       <HealthChecks checks={tenant.health?.checks ?? []} />
     </div>
+  );
+}
+
+const timelineKindStyle: Record<TimelineEvent["kind"], { label: string; tone: "ok" | "warn" | "danger" | "info" | "muted" }> = {
+  audit: { label: "Audit", tone: "muted" },
+  health: { label: "Diagnostica", tone: "info" },
+  backup: { label: "Backup", tone: "ok" },
+  support: { label: "Supporto", tone: "warn" },
+  sms: { label: "SMS", tone: "info" },
+};
+
+// TIMELINE unificata (Fase D): la storia del tenant in un solo feed —
+// audit + diagnostiche + backup + supporto + ordini SMS in ordine cronologico.
+function TenantTimeline({ events }: { events: TimelineEvent[] }) {
+  if (!events.length) {
+    return <p className="p-2 text-sm text-slate-500">Nessun evento registrato per questo tenant.</p>;
+  }
+  return (
+    <ol className="relative grid gap-0 border-l border-slate-200 pl-4">
+      {events.map((event, index) => {
+        const kind = timelineKindStyle[event.kind] ?? timelineKindStyle.audit;
+        return (
+          <li className="relative pb-4" key={`${event.at}-${event.kind}-${index}`}>
+            <span aria-hidden className="absolute -left-[21px] top-1.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-slate-400" />
+            <div className="flex flex-wrap items-baseline gap-2">
+              <Badge tone={kind.tone}>{kind.label}</Badge>
+              <span className="text-sm font-semibold">{event.title}</span>
+              <span className="text-xs text-slate-500">{event.at}</span>
+              {event.actor ? <span className="text-xs text-slate-500">· {event.actor}</span> : null}
+            </div>
+            {event.detail ? <p className="mt-0.5 text-sm text-slate-600">{event.detail}</p> : null}
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 

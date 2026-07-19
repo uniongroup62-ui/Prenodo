@@ -35,13 +35,15 @@ export async function GET(request: Request) {
     if (slug) {
       const tenant = await saasTenantBySlug(slug);
       if (!tenant) return jsonError("Tenant non trovato.", 404);
-      const [healthChecks, activeTokens, recentTokens, tenantAudit] = await Promise.all([
+      const { buildTenantTimeline } = await import("@/lib/saas-tenant-timeline");
+      const [healthChecks, activeTokens, recentTokens, tenantAudit, timeline] = await Promise.all([
         latestSaasHealthChecks(Number(tenant.id), 10),
         activeSupportTokens(Number(tenant.id)),
         recentSupportTokens(Number(tenant.id), 20),
         auditRows(Number(tenant.id), 40),
+        buildTenantTimeline(Number(tenant.id), 60),
       ]);
-      return Response.json({ ok: true, tenant, healthChecks, activeTokens, recentTokens, audit: tenantAudit });
+      return Response.json({ ok: true, tenant, healthChecks, activeTokens, recentTokens, audit: tenantAudit, timeline });
     }
 
     const tenants = await listSaasTenants({

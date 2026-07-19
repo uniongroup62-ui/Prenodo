@@ -16397,3 +16397,25 @@ giro5 17/17 (G11 riscritta: contenuto letto via presigned; cleanup
 oggetti R2 per chiave tracciata), fase4 11/11 (watermark registro),
 faseAB 11/11, hardening 19/19, fase3 9/9; tsc pulito. NOTA deploy:
 niente env nuove (R2_* gia' richieste dallo storage documenti).
+
+## 2026-07-19 — PANNELLO ADMIN Fase D: TIMELINE UNIFICATA DEL TENANT
+
+Asse D del piano "rivoluzione pannello": la storia di un tenant non
+si leggeva da nessuna parte — era spezzata fra 5 tabelle.
+
+lib/saas-tenant-timeline.ts: buildTenantTimeline fonde in un unico
+feed cronologico DESC audit (saas_tenant_audit_logs), diagnostiche
+(health_checks), backup, supporto (una riga token -> fino a 3 eventi:
+creato/usato/revocato) e ordini SMS; tutte le created_at sono
+CURRENT_TIMESTAMP del DB (stesso frame) quindi il sort per stringa e'
+coerente; limit 60 (40 per fonte). GET tenants?slug= risponde anche
+`timeline`. Nuova TAB "Timeline" nel dettaglio tenant (badge colorati
+per fonte, attore, dettaglio) con deep-link ?tab=timeline (TABS
+aggiornata in app/admin/page.tsx) e pushState sul click.
+
+Verifica: test-saas-admin-faseD 4/4 (5 fonti fuse e ordinate, eventi
+supporto espansi creato+revocato, deep-link col feed renderizzato e
+badge di ogni fonte, click tab -> URL) + regressioni giro5 17/17,
+fase4 11/11, faseAB 11/11, faseC 7/7, hardening 19/19, fase3 9/9;
+tsc pulito. Fixture zz-fased* (tenant finto, backup R2, token, ordine
+SMS) rimosse per id/chiave.

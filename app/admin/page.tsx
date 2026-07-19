@@ -35,7 +35,7 @@ const LEGACY_TAB_MAP: Record<string, string> = {
   tenant_visibility: "visibility",
   tenant_admin: "admin",
 };
-const TABS = new Set(["overview", "settings", "visibility", "admin", "onboarding", "health", "support", "backups", "danger"]);
+const TABS = new Set(["overview", "timeline", "settings", "visibility", "admin", "onboarding", "health", "support", "backups", "danger"]);
 
 export default async function AdminPage({
   searchParams,
