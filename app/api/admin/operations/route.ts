@@ -156,6 +156,12 @@ export async function GET(request: Request) {
       return csvResponse("ordini-sms.csv", rows);
     }
 
+    // Statistiche piattaforma (vista Statistiche, 2026-07-19).
+    if (section === "stats") {
+      const { saasStatistics } = await import("@/lib/saas-stats");
+      return Response.json({ ok: true, stats: await saasStatistics() });
+    }
+
     // Audit con filtri + paginazione (2026-07-19).
     if (section === "audit_search") {
       const { searchSaasAudit } = await import("@/lib/saas-tenant-manager");

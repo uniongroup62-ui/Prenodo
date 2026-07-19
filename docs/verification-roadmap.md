@@ -16682,3 +16682,41 @@ recente e conserva le altre, viewer respinto sulla policy, blocco
 soft con dashboard nascosta, Sicurezza usabile col toggle owner,
 policy off -> pannello pieno; policy SEMPRE disattivata nel cleanup)
 + TUTTE le 11 regressioni verdi; tsc pulito.
+
+## 2026-07-19 — PANNELLO ADMIN: VISTA STATISTICHE + DASHBOARD EXECUTIVE
+
+Su richiesta ("statistiche di utenti registrati, entrate dagli
+abbonamenti, piano piu' venduto"): il pannello guadagna il livello
+"come sta andando il business", separato dall'operativo.
+
+(1) lib/saas-stats.ts: aggregati di CRESCITA (nuovi tenant/mese per
+origine admin|self_signup, funnel signups richieste->verificate->
+attive, utenti marketplace totali/verificati/attivi-30gg/nuovi-mese),
+ENTRATE (MRR contrattualizzato = tenant attivi x prezzo piano — MAI
+spacciato per cassa, ARPU, ricavo SMS/mese, trend MRR dagli
+snapshot), PIANI (distribuzione, top per tenant E top per MRR — 
+possono divergere —, assegnazioni/mese dall'audit), UTILIZZO (utenti
+gestionale, clienti, appuntamenti/mese, vendite/mese, top tenant
+attivi 30gg con Apri). (2) SNAPSHOT GIORNALIERO saas_metrics_daily
+(DDL Postgres, upsert per giorno) scritto dal cron admin-health: i
+trend di MRR/tenant/account non sono ricostruibili a posteriori — da
+oggi si accumulano. (3) GRAFICI SVG senza dipendenze
+(admin-charts.tsx) secondo la guida dataviz: palette VALIDATA
+(#365a96+#d97706, dE CVD>=25 via validate_palette.js), colonne con
+data-end arrotondato ancorate alla baseline, gap fra barre, griglia
+recessiva (etichetta di meta' scala omessa se coincide col massimo),
+etichette dirette SELETTIVE (max+ultimo, resto in <title>), legenda
+solo a 2 serie, testi nei toni testo. (4) VISTA "Statistiche" (9a
+voce, ?page=stats) a 4 sottotab su un payload unico (section=stats).
+(5) DASHBOARD EXECUTIVE: riga MRR / Tenant attivi / Utenti
+marketplace / Ricavo SMS mese, con delta vs ~30gg fa SOLO se lo
+snapshot esiste (mai delta inventati; overview espone `exec`).
+
+Verifica: test-saas-admin-stats 8/8 (aggregati coerenti col DB,
+top venduto col piano fixture, snapshot del giorno scritto dal cron
+con valori giusti, exec nella overview, grafici SVG renderizzati
+nelle 3 sottotab, dashboard executive con nav a 9) + screenshot; le
+12 regressioni verdi (nav atteso aggiornato a 9 in fase3/faseE/
+consolida; un flake di concorrenza in rifiniture rientrato al rerun);
+tsc pulito. Cleanup: fixture per id + snapshot RICALCOLATO pulito a
+fine test (upsert stesso giorno).

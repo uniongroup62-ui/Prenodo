@@ -25,6 +25,11 @@ async function handler(request: Request) {
     const errors = results.filter((r) => r.level === "error");
     const warnings = results.filter((r) => r.level === "warning");
 
+    // SNAPSHOT metriche del giorno (vista Statistiche): MRR/tenant/account
+    // marketplace non sono ricostruibili a posteriori — si fotografano qui.
+    const { snapshotDailyMetrics } = await import("@/lib/saas-stats");
+    const snapshot = await snapshotDailyMetrics().catch(() => null);
+
     // ALERT MULTIPLI (rifiniture 2026-07-19): oltre agli errori di salute,
     // il cron segnala provisioning falliti, cron in errore e anomalie login.
     // Anti-spam: ogni chiave notifica al massimo una volta ogni 24 ore.
@@ -110,6 +115,7 @@ async function handler(request: Request) {
       warnings: warnings.length,
       alerts: alerts.map((a) => a.key),
       alerted,
+      snapshot: snapshot?.day ?? null,
     });
   } catch (error) {
     return Response.json(

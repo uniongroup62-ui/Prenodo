@@ -6,6 +6,7 @@ import {
   Archive,
   ArrowDown,
   ArrowUp,
+  BarChart3,
   Building2,
   CheckCircle2,
   ClipboardCheck,
@@ -38,6 +39,7 @@ import {
 } from "lucide-react";
 import type { SaasAdminUser } from "@/lib/saas-admin-auth";
 import { AdminSecurityPanel } from "@/components/admin/admin-security-panel";
+import { StatsView, type StatsPayload } from "@/components/admin/admin-stats-view";
 import { TenantDetailPanel } from "@/components/admin/admin-tenant-detail";
 import {
   ActionPanel,
@@ -88,7 +90,7 @@ import {
 // abbonamenti e pacchetti SMS; "Operazioni" riunisce controlli, movimenti
 // invii e manutenzione. Le vecchie ?page= restano deep-linkabili (mappa in
 // app/admin/page.tsx) e la sottosezione vive in ?sec=.
-type ViewKey = "dashboard" | "tenants" | "billing" | "operations" | "signups" | "audit" | "admins" | "security";
+type ViewKey = "dashboard" | "tenants" | "stats" | "billing" | "operations" | "signups" | "audit" | "admins" | "security";
 type BillingSection = "plans" | "sms";
 type OperationsSection = "controls" | "movements" | "maintenance";
 
@@ -116,7 +118,16 @@ type AuditSearchPayload = {
   perPage: number;
 };
 
+type ExecSummary = {
+  mrr: number;
+  marketplace_accounts: number;
+  sms_month_revenue: number;
+  mrr_prev: number | null;
+  marketplace_prev: number | null;
+};
+
 type OverviewPayload = {
+  exec: ExecSummary;
   plans: PlanOption[];
   tenants: Tenant[];
   total: number;
@@ -132,6 +143,7 @@ type OverviewPayload = {
 const navItems: Array<{ key: ViewKey; label: string; icon: LucideIcon }> = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "tenants", label: "Tenant", icon: Building2 },
+  { key: "stats", label: "Statistiche", icon: BarChart3 },
   { key: "billing", label: "Fatturazione", icon: Wallet },
   { key: "operations", label: "Operazioni", icon: Activity },
   { key: "signups", label: "Registrazioni", icon: UserPlus },
@@ -152,6 +164,7 @@ const operationsSections: Array<{ key: OperationsSection; label: string; icon: L
 ];
 
 const emptyOverview: OverviewPayload = {
+  exec: { mrr: 0, marketplace_accounts: 0, sms_month_revenue: 0, mrr_prev: null, marketplace_prev: null },
   plans: [],
   tenants: [],
   total: 0,
@@ -192,6 +205,7 @@ export function SaasAdminApp({
   const [auditData, setAuditData] = useState<AuditSearchPayload | null>(null);
   const [auditFilters, setAuditFilters] = useState<AuditFilters>({ q: "", action: "", tenant: "" });
   const [signups, setSignups] = useState<SignupRow[] | null>(null);
+  const [statsData, setStatsData] = useState<StatsPayload | null>(null);
   const [movements, setMovements] = useState<MovementsPayload | null>(null);
   const [backups, setBackups] = useState<Record<string, BackupRow[]>>({});
   const [query, setQuery] = useState("");
@@ -235,6 +249,7 @@ export function SaasAdminApp({
     if (key === "admins") void loadAdmins();
     if (key === "signups") void loadSignups();
     if (key === "audit") void loadAudit(auditFilters, 1);
+    if (key === "stats") void loadStats();
     if (key === "billing") {
       if (sec === "sms") void loadSmsBilling();
       else void loadBilling();
@@ -433,6 +448,18 @@ export function SaasAdminApp({
     try {
       const data = await apiGet<BillingPayload>("/api/admin/operations?section=billing");
       setBilling(data);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+async function loadStats() {
+    setLoading(true);
+    try {
+      const data = await apiGet<{ stats: StatsPayload }>("/api/admin/operations?section=stats");
+      setStatsData(data.stats);
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
@@ -644,6 +671,7 @@ export function SaasAdminApp({
                 {opsTab === "maintenance" ? <MaintenanceView tenants={overview.tenants} results={results} restoreCandidates={restoreCandidates} canManage={canManageTenants} onAction={tenantAction} onOperationAction={operationAction} /> : null}
               </div>
             ) : null}
+            {activeView === "stats" ? <StatsView data={statsData} onOpenTenant={(slug) => loadTenant(slug)} onRefresh={loadStats} /> : null}
             {activeView === "signups" ? <SignupsView signups={signups} canManage={canManageTenants} onOpenTenant={(slug) => loadTenant(slug)} onAction={operationAction} onRefresh={loadSignups} /> : null}
             {activeView === "audit" ? <AuditView data={auditData} filters={auditFilters} onSearch={(filters) => loadAudit(filters, 1)} onPageChange={(next) => loadAudit(auditFilters, next)} /> : null}
             {activeView === "admins" ? <AdminsView admins={admins} currentUser={initialUser} onAction={adminAction} /> : null}
@@ -784,18 +812,26 @@ function DashboardView({ overview, canManage, onOpenTenant, onNavigate, onQuickA
   onNavigate: (view: string, sec?: string) => void;
   onQuickAction: (action: string, slug: string) => void;
 }) {
-  const metrics = [
-    ["Tenant totali", overview.summary.total, "tutti i tenant registrati"],
-    ["Attivi", overview.summary.active, "operativi"],
-    ["Sospesi", overview.summary.suspended, "accesso bloccato"],
-    ["Da verificare", overview.summary.needs_attention, "salute non OK o mai verificata"],
-    ["Errori diagnostica", overview.operational.health_errors, "ultimo controllo"],
-    ["Onboarding aperti", overview.operational.onboarding_open, "non completati"],
+  // Riga EXECUTIVE (vista Statistiche 19/07): business prima, operativo
+  // sotto. Delta calcolato SOLO se lo snapshot di ~30 giorni fa esiste
+  // (mai delta inventati: senza storico si mostra il valore e basta).
+  const delta = (current: number, prev: number | null, euro = false) => {
+    if (prev === null) return "";
+    const diff = Math.round((current - prev) * 100) / 100;
+    if (diff === 0) return " · stabile vs 30gg fa";
+    const value = euro ? formatEuro(Math.abs(diff)) : String(Math.abs(diff));
+    return ` · ${diff > 0 ? "+" : "-"}${value} vs 30gg fa`;
+  };
+  const execMetrics = [
+    ["MRR contrattualizzato", formatEuro(overview.exec.mrr), `tenant attivi x piano${delta(overview.exec.mrr, overview.exec.mrr_prev, true)}`],
+    ["Tenant attivi", String(overview.summary.active), `su ${overview.summary.total} totali`],
+    ["Utenti marketplace", String(overview.exec.marketplace_accounts), `account clienti${delta(overview.exec.marketplace_accounts, overview.exec.marketplace_prev)}`],
+    ["Ricavo SMS (mese)", formatEuro(overview.exec.sms_month_revenue), "ordini pagati nel mese"],
   ];
   return (
     <div className="grid gap-5">
-      <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-        {metrics.map(([label, value, detail]) => <Metric key={label} label={String(label)} value={String(value)} detail={String(detail)} />)}
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        {execMetrics.map(([label, value, detail]) => <Metric key={label} label={String(label)} value={String(value)} detail={String(detail)} />)}
       </div>
 
       {/* CODA DI LAVORO (Fase B): cosa richiede un'azione, in ordine di
@@ -1463,6 +1499,7 @@ function AdminsView({ admins, currentUser, onAction }: { admins: AdminRecord[]; 
 
 function viewTitle(view: ViewKey): string {
   if (view === "tenants") return "Tenant";
+  if (view === "stats") return "Statistiche";
   if (view === "billing") return "Fatturazione";
   if (view === "operations") return "Operazioni";
   if (view === "signups") return "Registrazioni";
