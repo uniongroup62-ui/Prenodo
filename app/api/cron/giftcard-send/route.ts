@@ -1,4 +1,4 @@
-import { activeTenantSlugs, assertCronAuth } from "@/lib/cron";
+import { activeTenantSlugs, assertCronAuth, trackCronResponse } from "@/lib/cron";
 import { businessTodayIso } from "@/lib/business-datetime";
 import { emailConfigured } from "@/lib/email";
 import { sendGiftCardEmailManage } from "@/lib/gift-issue-details";
@@ -39,7 +39,7 @@ type DueGiftcard = RowDataPacket & {
   email_show_amount: number | null;
 };
 
-export async function GET(request: Request) {
+async function handler(request: Request) {
   try {
     assertCronAuth(request);
   } catch {
@@ -153,3 +153,14 @@ export async function GET(request: Request) {
 }
 
 export const POST = GET;
+
+// Registro cron (Fase C pannello, 2026-07-19): auth PRIMA del tracking, poi
+// l'esecuzione viene registrata in saas_cron_runs (esito, durata, sintesi).
+export async function GET(request: Request) {
+  try {
+    assertCronAuth(request);
+  } catch {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  return trackCronResponse("giftcard-send", () => handler(request));
+}

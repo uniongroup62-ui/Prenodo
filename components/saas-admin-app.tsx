@@ -157,7 +157,17 @@ type SmsDiagnosticsRow = {
   errors: string[];
 };
 
+type CronRunRow = {
+  id: number;
+  job: string;
+  status: "ok" | "error";
+  started_at?: string | null;
+  duration_ms?: number;
+  message?: string | null;
+};
+
 type ControlsPayload = {
+  cron?: { runs: CronRunRow[]; jobs: CronRunRow[] };
   provider: {
     level: HealthLevel;
     configured: boolean;
@@ -1246,6 +1256,20 @@ function ControlsView({ data, onRefresh }: { data: ControlsPayload | null; onRef
           <Detail label="Avvisi" value={[...provider.errors, ...provider.warnings].join(" | ") || "-"} />
         </div>
       </section>
+      {/* Registro cron (Fase C): stato corrente per job + esecuzioni recenti. */}
+      <Table
+        title="Cron: ultima esecuzione per job"
+        headers={["Job", "Esito", "Avviato", "Durata", "Sintesi"]}
+        rows={(data.cron?.jobs ?? []).length === 0
+          ? [["Nessuna esecuzione registrata", "-", "-", "-", "-"]]
+          : (data.cron?.jobs ?? []).map((run) => [
+            <strong key={run.job}>{run.job}</strong>,
+            <Badge tone={run.status === "ok" ? "ok" : "danger"} key={`s-${run.job}`}>{run.status === "ok" ? "OK" : "Errore"}</Badge>,
+            run.started_at || "-",
+            `${Math.round(Number(run.duration_ms ?? 0))} ms`,
+            <span className="block max-w-xs truncate" key={`m-${run.job}`} title={run.message ?? ""}>{run.message || "-"}</span>,
+          ])}
+      />
       <Table
         title="Diagnostica SMS tenant"
         headers={["Tenant", "Esito", "Messaggio", "Inviati", "Falliti", "Ultimo invio"]}

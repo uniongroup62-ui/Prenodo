@@ -16361,3 +16361,39 @@ normalizza lowercase, PG case-sensitive: 401 fantasma con H1 che
 misurava il path errore); attendere l'ITEM della coda, non il titolo
 (fetch client); click della palette scopati su div[role=dialog] (il
 locator globale prende la sidebar dietro l'overlay).
+
+## 2026-07-19 — PANNELLO ADMIN Fase C: BACKUP SU R2 + REGISTRO CRON
+
+Asse C del piano "rivoluzione pannello" (il piu' urgente per la
+produzione: il filesystem di Amplify e' EFFIMERO — i backup su disco
+sparivano al primo redeploy).
+
+(1) BACKUP SU R2: createSaasTenantBackup carica il JSON nel bucket
+PRIVATO R2 (chiave saas-backups/<slug>/<file>, backup_path con
+prefisso 'r2:', meta storage=r2); il disco resta solo fallback
+dev/errore R2. Download: redirect 302 a URL PRESIGNED a vita breve
+(5 min) — il file non passa dal server e il bucket resta privato;
+absoluteSaasBackupPath rifiuta i path r2 (guardia). Vale anche per il
+pre-backup automatico della delete.
+
+(2) REGISTRO CRON saas_cron_runs (DDL POSTGRES): ogni route cron
+(TUTTI gli 8: admin-health, fidelity-expire, fidelity-reconcile-lots,
+giftbox-send, giftcard-send, quotes, reminders, saas-tenant-health)
+delega a trackCronResponse — l'handler originale e' invariato, la GET
+nuova fa auth PRIMA del tracking (i 401 non sporcano il registro) e
+registra esito (status HTTP + campo ok del payload), durata e sintesi.
+Il POST=GET esistente aggancia il wrapper per hoisting.
+
+(3) PANNELLO: vista Controlli con tabella "Cron: ultima esecuzione
+per job" (esito/durata/sintesi); work queue con item ERROR "Cron in
+errore" quando l'ULTIMA esecuzione di un job e' fallita -> vista
+controls.
+
+Verifica: test-saas-admin-faseC 7/7 (path r2:+meta, lista, download
+302 presigned con JSON completo 142 tabelle, run admin-health
+registrata con durata, controls espone cron.jobs, run fallita forgiata
+-> item in coda, UI con badge Errore renderizzato) + regressioni
+giro5 17/17 (G11 riscritta: contenuto letto via presigned; cleanup
+oggetti R2 per chiave tracciata), fase4 11/11 (watermark registro),
+faseAB 11/11, hardening 19/19, fase3 9/9; tsc pulito. NOTA deploy:
+niente env nuove (R2_* gia' richieste dallo storage documenti).

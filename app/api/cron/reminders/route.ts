@@ -1,4 +1,4 @@
-import { activeTenantSlugs, assertCronAuth } from "@/lib/cron";
+import { activeTenantSlugs, assertCronAuth, trackCronResponse } from "@/lib/cron";
 import { businessNowDateTime } from "@/lib/business-datetime";
 import { dbExecute, dbQuery, tenantIdForSlug } from "@/lib/tenant-db";
 import { buildModernEmailTemplate, emailConfigured, sendEmail } from "@/lib/email";
@@ -574,7 +574,7 @@ function appointmentReminderSelect(channel: "email" | "sms"): string {
   // i promemoria partivano con 2 ore di RITARDO).
 }
 
-export async function GET(request: Request) {
+async function handler(request: Request) {
   try {
     assertCronAuth(request);
   } catch {
@@ -1096,4 +1096,15 @@ function normalizeYmd(raw: string | null): string | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
   if (m) return `${m[1]}-${m[2]}-${m[3]}`;
   return null;
+}
+
+// Registro cron (Fase C pannello, 2026-07-19): auth PRIMA del tracking, poi
+// l'esecuzione viene registrata in saas_cron_runs (esito, durata, sintesi).
+export async function GET(request: Request) {
+  try {
+    assertCronAuth(request);
+  } catch {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  return trackCronResponse("reminders", () => handler(request));
 }

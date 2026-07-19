@@ -8,6 +8,8 @@ import {
   allTenantSmsDiagnostics,
   createManualSmsTopUp,
   createSaasTenantBackup,
+  isR2BackupPath,
+  r2BackupKey,
   latestEmailMovements,
   latestSmsMovements,
   listSaasTenantBackups,
@@ -47,11 +49,13 @@ export async function GET(request: Request) {
 
     if (section === "controls") {
       const checkEndpoint = url.searchParams.get("check_endpoint") !== "0";
-      const [provider, tenants] = await Promise.all([
+      const { listCronRuns } = await import("@/lib/cron");
+      const [provider, tenants, cron] = await Promise.all([
         smsProviderDiagnostics(checkEndpoint),
         allTenantSmsDiagnostics(false),
+        listCronRuns(30),
       ]);
-      return Response.json({ ok: true, provider, tenants });
+      return Response.json({ ok: true, provider, tenants, cron });
     }
 
     if (section === "sms_plans") {
@@ -138,6 +142,13 @@ export async function GET(request: Request) {
       const tenant = await requireSaasTenant(url.searchParams.get("slug") ?? "");
       const backup = await saasBackupById(parseInteger(url.searchParams.get("id"), 0), Number(tenant.id));
       if (!backup) return jsonError("Backup non trovato.", 404);
+      // Backup su R2 (Fase C): redirect a URL presigned a vita breve — il
+      // file non passa dal server e il bucket resta privato.
+      if (isR2BackupPath(String(backup.backup_path ?? ""))) {
+        const { presignedPrivateGetUrl } = await import("@/lib/storage");
+        const presigned = await presignedPrivateGetUrl(r2BackupKey(String(backup.backup_path)), 300);
+        return Response.redirect(presigned, 302);
+      }
       const absolute = await absoluteSaasBackupPath(backup);
       const bytes = await fs.promises.readFile(absolute);
       return new Response(new Uint8Array(bytes), {

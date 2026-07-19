@@ -1,4 +1,4 @@
-import { activeTenantSlugs, assertCronAuth } from "@/lib/cron";
+import { activeTenantSlugs, assertCronAuth, trackCronResponse } from "@/lib/cron";
 import { dbExecute, tenantIdForSlug } from "@/lib/tenant-db";
 
 export const dynamic = "force-dynamic";
@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 
 // Next port of cron/quotes.php — auto-expire sent quotes past their valid_until,
 // per active tenant. CURDATE() -> CURRENT_DATE.
-export async function GET(request: Request) {
+async function handler(request: Request) {
   try {
     assertCronAuth(request);
   } catch {
@@ -37,3 +37,14 @@ export async function GET(request: Request) {
 }
 
 export const POST = GET;
+
+// Registro cron (Fase C pannello, 2026-07-19): auth PRIMA del tracking, poi
+// l'esecuzione viene registrata in saas_cron_runs (esito, durata, sintesi).
+export async function GET(request: Request) {
+  try {
+    assertCronAuth(request);
+  } catch {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  return trackCronResponse("quotes", () => handler(request));
+}

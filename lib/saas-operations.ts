@@ -6,7 +6,18 @@ import type { RowDataPacket } from "@/lib/tenant-db";
 import { currentSaasAdminSession } from "@/lib/saas-admin-auth";
 import { dbExecute, dbQuery, quoteIdentifier, tableExists, tenantTable, usesSharedTenantTables } from "@/lib/tenant-db";
 import { logSaasTenantAudit, listSaasTenants, requireSaasTenant, tenantStatus, type SaasTenantRow } from "@/lib/saas-tenant-manager";
+import { putPrivateObject, storagePrivateConfigured } from "@/lib/storage";
 import { tenantPrefix } from "@/lib/tenant-runtime";
+
+// Prefisso dei backup_path su R2 (Fase C pannello, 2026-07-19): il filesystem
+// di Amplify e' EFFIMERO — un backup su disco sparisce al primo redeploy. Con
+// R2 configurato il JSON va nel bucket PRIVATO; il disco resta solo come
+// fallback dev/emergenza. Il prefisso 'r2:' nel path distingue i due mondi.
+export const BACKUP_R2_PREFIX = "r2:";
+
+export function saasBackupR2Key(slug: string, filename: string): string {
+  return `saas-backups/${slug}/${filename}`;
+}
 
 type TenantTableMode = "prefixed" | "shared" | "base";
 
@@ -174,19 +185,36 @@ export async function ensureSaasBackupSchema(): Promise<void> {
 export async function createSaasTenantBackup(slug: string, reason = ""): Promise<{ id: number; path: string; size: number; filename: string }> {
   await ensureSaasBackupSchema();
   const tenant = await requireSaasTenant(slug);
-  const dir = path.join(/*turbopackIgnore: true*/ backupRoot(), String(tenant.slug));
-  await fs.promises.mkdir(dir, { recursive: true });
 
   const stamp = timestampForFilename();
   const baseName = `${stamp}_${String(tenant.slug).replace(/[^a-z0-9_-]/gi, "_")}`;
-  const jsonPath = path.join(/*turbopackIgnore: true*/ dir, `${baseName}.json`);
+  const filename = `${baseName}.json`;
   const payload = await buildBackupPayload(tenant, reason.trim());
-  await fs.promises.writeFile(jsonPath, JSON.stringify(payload, null, 2), "utf8");
+  const bytes = Buffer.from(JSON.stringify(payload, null, 2), "utf8");
 
-  const stat = await fs.promises.stat(jsonPath);
-  const relativePath = relativeToProjectRoot(jsonPath);
+  // R2 PRIMARIO quando configurato (durabile), disco solo come fallback.
+  let storedPath = "";
+  let storage: "r2" | "local" | "local_fallback" = "local";
+  if (storagePrivateConfigured()) {
+    const key = saasBackupR2Key(String(tenant.slug), filename);
+    try {
+      await putPrivateObject(key, new Uint8Array(bytes), "application/json");
+      storedPath = `${BACKUP_R2_PREFIX}${key}`;
+      storage = "r2";
+    } catch {
+      storage = "local_fallback";
+    }
+  }
+  if (!storedPath) {
+    const dir = path.join(/*turbopackIgnore: true*/ backupRoot(), String(tenant.slug));
+    await fs.promises.mkdir(dir, { recursive: true });
+    const jsonPath = path.join(/*turbopackIgnore: true*/ dir, filename);
+    await fs.promises.writeFile(jsonPath, bytes);
+    storedPath = relativeToProjectRoot(jsonPath);
+  }
+
   const actor = await currentSaasAdminSession().catch(() => null);
-  const meta = { tables: Object.keys(payload.tables).length, upload_files: payload.uploads.files.length };
+  const meta = { tables: Object.keys(payload.tables).length, upload_files: payload.uploads.files.length, storage };
   const result = await dbExecute(
     `INSERT INTO \`${BACKUP_TABLE}\`(tenant_id,tenant_slug,created_by_admin_id,created_by_name,created_by_email,reason,backup_path,backup_size,status,meta_json)
      VALUES(?,?,?,?,?,?,?,?,?,?)`,
@@ -197,16 +225,24 @@ export async function createSaasTenantBackup(slug: string, reason = ""): Promise
       actor?.user.name || null,
       actor?.user.email || null,
       reason.trim() || null,
-      relativePath,
-      stat.size,
+      storedPath,
+      bytes.byteLength,
       "completed",
       JSON.stringify(meta),
     ],
   );
 
   const id = Number(result.insertId ?? 0);
-  await logSaasTenantAudit("tenant.backup_create", tenant, "Backup tenant creato", { backup_id: id, path: relativePath, size: stat.size });
-  return { id, path: relativePath, size: stat.size, filename: path.basename(jsonPath) };
+  await logSaasTenantAudit("tenant.backup_create", tenant, "Backup tenant creato", { backup_id: id, path: storedPath, size: bytes.byteLength, storage });
+  return { id, path: storedPath, size: bytes.byteLength, filename };
+}
+
+export function isR2BackupPath(backupPath: string): boolean {
+  return backupPath.startsWith(BACKUP_R2_PREFIX);
+}
+
+export function r2BackupKey(backupPath: string): string {
+  return backupPath.slice(BACKUP_R2_PREFIX.length);
 }
 
 export async function listSaasTenantBackups(tenantId: number, limit = 30): Promise<SaasBackupRow[]> {
@@ -224,6 +260,7 @@ export async function saasBackupById(id: number, tenantId: number): Promise<Saas
 }
 
 export async function absoluteSaasBackupPath(backup: SaasBackupRow): Promise<string> {
+  if (isR2BackupPath(String(backup.backup_path ?? ""))) throw new Error("Backup su R2: usa il download presigned.");
   const rawPath = String(backup.backup_path ?? "").replace(/[\\/]+/g, path.sep);
   const absolute = path.isAbsolute(rawPath) ? rawPath : path.join(/*turbopackIgnore: true*/ projectRootForBackups(), rawPath);
   const real = await fs.promises.realpath(absolute);

@@ -1,4 +1,4 @@
-import { assertCronAuth } from "@/lib/cron";
+import { assertCronAuth, trackCronResponse } from "@/lib/cron";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { dbQuery } from "@/lib/tenant-db";
 import { healthAllSaasTenants } from "@/lib/saas-tenant-manager";
@@ -13,7 +13,7 @@ export const runtime = "nodejs";
 // admin SaaS attivi (owner+admin). Email di PIATTAFORMA: brand Prenodo,
 // nessun replyTo tenant. Con SES non configurato la diagnostica gira comunque
 // e l'esito resta nel payload/DB.
-export async function GET(request: Request) {
+async function handler(request: Request) {
   try {
     assertCronAuth(request);
   } catch {
@@ -65,4 +65,15 @@ export async function GET(request: Request) {
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// Registro cron (Fase C pannello, 2026-07-19): auth PRIMA del tracking, poi
+// l'esecuzione viene registrata in saas_cron_runs (esito, durata, sintesi).
+export async function GET(request: Request) {
+  try {
+    assertCronAuth(request);
+  } catch {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+  return trackCronResponse("admin-health", () => handler(request));
 }

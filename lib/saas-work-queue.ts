@@ -152,6 +152,23 @@ export async function buildSaasWorkQueue(tenants: SaasTenantRow[]): Promise<Saas
     });
   }
 
+  // Cron in errore: l'ULTIMA esecuzione di un job e' fallita (registro Fase C).
+  const failedCrons = await dbQuery<RowDataPacket[]>(
+    `SELECT r.job, r.message, r.started_at FROM \`saas_cron_runs\` r
+      WHERE r.id = (SELECT MAX(r2.id) FROM \`saas_cron_runs\` r2 WHERE r2.job = r.job)
+        AND r.status = 'error'
+      ORDER BY r.job ASC`,
+  ).catch(() => []);
+  for (const row of failedCrons) {
+    items.push({
+      key: `cron_error:${String(row.job ?? "")}`,
+      severity: "error",
+      title: `Cron in errore: ${String(row.job ?? "")}`,
+      detail: `${String(row.message ?? "").slice(0, 140) || "Ultima esecuzione fallita."} (${String(row.started_at ?? "")})`,
+      view: "controls",
+    });
+  }
+
   const rank = { error: 0, warning: 1, info: 2 } as const;
   return items.sort((a, b) => rank[a.severity] - rank[b.severity]).slice(0, MAX_ITEMS);
 }
