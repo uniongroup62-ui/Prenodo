@@ -16720,3 +16720,17 @@ nelle 3 sottotab, dashboard executive con nav a 9) + screenshot; le
 consolida; un flake di concorrenza in rifiniture rientrato al rerun);
 tsc pulito. Cleanup: fixture per id + snapshot RICALCOLATO pulito a
 fine test (upsert stesso giorno).
+
+## 2026-07-19 — STATISTICHE: ETICHETTE IN ITALIANO PIANO
+
+Dai rilievi dell'utente: (1) con la verifica email OBBLIGATORIA,
+"Email verificate" era fuorviante — un account non verificato e' una
+registrazione ABBANDONATA al passaggio del codice: la card ora si
+chiama "Registrazioni completate" (dettaglio: "chi ha confermato
+l'email; il resto si e' fermato al codice") e misura il drop-off.
+(2) Sigle SaaS spiegate: "MRR contrattualizzato" -> "Ricavo mensile
+da abbonamenti (MRR)" con dettaglio "somma dei piani dei tenant
+attivi — non ancora incassato"; "ARPU" -> "Ricavo medio per tenant
+(ARPU)" con dettaglio "MRR diviso N tenant attivi"; in dashboard
+"Ricavo abbonamenti (MRR)". Suite stats aggiornata alle nuove
+etichette: 8/8.

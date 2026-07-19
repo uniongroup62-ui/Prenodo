@@ -823,7 +823,7 @@ function DashboardView({ overview, canManage, onOpenTenant, onNavigate, onQuickA
     return ` · ${diff > 0 ? "+" : "-"}${value} vs 30gg fa`;
   };
   const execMetrics = [
-    ["MRR contrattualizzato", formatEuro(overview.exec.mrr), `tenant attivi x piano${delta(overview.exec.mrr, overview.exec.mrr_prev, true)}`],
+    ["Ricavo abbonamenti (MRR)", formatEuro(overview.exec.mrr), `somma piani dei tenant attivi${delta(overview.exec.mrr, overview.exec.mrr_prev, true)}`],
     ["Tenant attivi", String(overview.summary.active), `su ${overview.summary.total} totali`],
     ["Utenti marketplace", String(overview.exec.marketplace_accounts), `account clienti${delta(overview.exec.marketplace_accounts, overview.exec.marketplace_prev)}`],
     ["Ricavo SMS (mese)", formatEuro(overview.exec.sms_month_revenue), "ordini pagati nel mese"],

@@ -82,7 +82,7 @@ export function StatsView({ data, onRefresh, onOpenTenant }: { data: StatsPayloa
         <div className="grid gap-4">
           <div className="grid gap-3 md:grid-cols-4">
             <Metric label="Utenti marketplace" value={String(data.growth.marketplace.total)} detail="account clienti registrati" />
-            <Metric label="Email verificate" value={percent(data.growth.marketplace.verified, data.growth.marketplace.total)} detail={`${data.growth.marketplace.verified} account`} />
+            <Metric label="Registrazioni completate" value={percent(data.growth.marketplace.verified, data.growth.marketplace.total)} detail="chi ha confermato l'email; il resto si e' fermato al codice" />
             <Metric label="Attivi 30 giorni" value={String(data.growth.marketplace.active_30d)} detail="accesso nell'ultimo mese" />
             <Metric label="Registrazioni self-service" value={String(data.growth.signup_funnel.requests)} detail={`${percent(data.growth.signup_funnel.active, data.growth.signup_funnel.requests)} diventate tenant`} />
           </div>
@@ -113,8 +113,8 @@ export function StatsView({ data, onRefresh, onOpenTenant }: { data: StatsPayloa
       {section === "revenue" ? (
         <div className="grid gap-4">
           <div className="grid gap-3 md:grid-cols-3">
-            <Metric label="MRR contrattualizzato" value={formatEuro(data.revenue.mrr_total)} detail="tenant attivi x prezzo piano" />
-            <Metric label="ARPU" value={formatEuro(data.revenue.arpu)} detail={`su ${data.revenue.tenants_active} tenant attivi`} />
+            <Metric label="Ricavo mensile da abbonamenti (MRR)" value={formatEuro(data.revenue.mrr_total)} detail="somma dei piani dei tenant attivi — non ancora incassato" />
+            <Metric label="Ricavo medio per tenant (ARPU)" value={formatEuro(data.revenue.arpu)} detail={`MRR diviso ${data.revenue.tenants_active} tenant attivi`} />
             <Metric label="Ricavo SMS (12 mesi)" value={formatEuro(data.revenue.sms_by_month.reduce((sum, row) => sum + row.revenue, 0))} detail="ordini pagati" />
           </div>
           <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
