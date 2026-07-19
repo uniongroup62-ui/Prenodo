@@ -42,3 +42,6 @@ next-env.d.ts
 
 # temp verification scripts (pg smoke tests)
 /_*.mjs
+
+# Backup tenant SaaS (possono contenere dati reali: MAI in git)
+/storage/saas_backups/
