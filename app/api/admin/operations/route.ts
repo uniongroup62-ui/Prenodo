@@ -302,6 +302,19 @@ export async function POST(request: Request) {
       return Response.json({ ok: true, result });
     }
 
+    // Esegue ORA un cron sicuro dal pannello (solo diagnostica admin-health):
+    // invoca il route handler vero, cosi' passa dal registro saas_cron_runs.
+    if (action === "cron_run") {
+      if ((body.job || "") !== "admin-health") return jsonError("Job non eseguibile dal pannello.", 400);
+      const { GET: runHealthCron } = await import("@/app/api/cron/admin-health/route");
+      const secret = process.env.CRON_SECRET ?? "";
+      const cronRequest = new Request("http://internal/api/cron/admin-health", {
+        headers: secret ? { authorization: `Bearer ${secret}` } : {},
+      });
+      const cronResponse = await runHealthCron(cronRequest);
+      return Response.json({ ok: cronResponse.status === 200, result: await cronResponse.json().catch(() => null) });
+    }
+
     if (action === "signup_delete") {
       const { deleteSaasSignup } = await import("@/lib/saas-operations");
       await deleteSaasSignup(parseInteger(body.id, 0));

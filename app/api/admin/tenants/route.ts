@@ -36,14 +36,16 @@ export async function GET(request: Request) {
       const tenant = await saasTenantBySlug(slug);
       if (!tenant) return jsonError("Tenant non trovato.", 404);
       const { buildTenantTimeline } = await import("@/lib/saas-tenant-timeline");
-      const [healthChecks, activeTokens, recentTokens, tenantAudit, timeline] = await Promise.all([
+      const { tenantWalletBalance } = await import("@/lib/saas-operations");
+      const [healthChecks, activeTokens, recentTokens, tenantAudit, timeline, smsCredits] = await Promise.all([
         latestSaasHealthChecks(Number(tenant.id), 10),
         activeSupportTokens(Number(tenant.id)),
         recentSupportTokens(Number(tenant.id), 20),
         auditRows(Number(tenant.id), 40),
         buildTenantTimeline(Number(tenant.id), 60),
+        tenantWalletBalance({ id: Number(tenant.id), slug: String(tenant.slug) }).catch(() => 0),
       ]);
-      return Response.json({ ok: true, tenant, healthChecks, activeTokens, recentTokens, audit: tenantAudit, timeline });
+      return Response.json({ ok: true, tenant, healthChecks, activeTokens, recentTokens, audit: tenantAudit, timeline, smsCredits });
     }
 
     const tenants = await listSaasTenants({

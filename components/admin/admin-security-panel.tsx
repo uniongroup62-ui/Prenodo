@@ -17,6 +17,8 @@ type AdminSession = {
 
 type SecurityState = {
   totpEnabled: boolean;
+  totpPolicyRequired: boolean;
+  isOwner: boolean;
   sessions: AdminSession[];
 };
 
@@ -39,7 +41,7 @@ export function AdminSecurityPanel() {
     try {
       const res = await fetch("/api/admin/security");
       const data = await res.json();
-      if (data.ok) setState({ totpEnabled: Boolean(data.totpEnabled), sessions: data.sessions ?? [] });
+      if (data.ok) setState({ totpEnabled: Boolean(data.totpEnabled), totpPolicyRequired: Boolean(data.totpPolicyRequired), isOwner: Boolean(data.isOwner), sessions: data.sessions ?? [] });
     } catch {
       /* pannello secondario: nessun blocco */
     }
@@ -112,6 +114,30 @@ export function AdminSecurityPanel() {
     <div className="grid gap-4">
       {error ? <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-700">{error}</div> : null}
       {message ? <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-800">{message}</div> : null}
+
+      {/* Policy piattaforma (solo owner): 2FA obbligatoria per tutti gli
+          admin — chi non la ha viene bloccato sul pannello finche' non la
+          configura (rifiniture 19/07). */}
+      {state.isOwner ? (
+        <section className="rounded-md border border-slate-200 bg-white p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold">Policy: 2FA obbligatoria</h2>
+              <p className="mt-1 text-sm text-slate-500">Con la policy attiva, ogni admin senza 2FA deve configurarla prima di usare il pannello.</p>
+            </div>
+            <button
+              className={state.totpPolicyRequired ? btnDanger : btnPrimary}
+              type="button"
+              onClick={async () => {
+                const data = await post({ action: "totp_policy_set", value: state.totpPolicyRequired ? "0" : "1" });
+                if (data) { setMessage(state.totpPolicyRequired ? "Policy 2FA disattivata." : "Policy 2FA attivata."); void load(); }
+              }}
+            >
+              {state.totpPolicyRequired ? "Disattiva policy" : "Attiva policy"}
+            </button>
+          </div>
+        </section>
+      ) : null}
 
       {/* ---- 2FA ---- */}
       <section className="rounded-md border border-slate-200 bg-white p-5">

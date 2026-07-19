@@ -16648,3 +16648,37 @@ consolida 12/12 (P11 aggiornata all'accento "Registro attività" — i
 text= di Playwright NON matchano attraverso gli accenti), giro5 17,
 fase4 11, faseAB 11, faseC 7, faseD 4, faseE 8, restore 8, hardening
 19, fase3 9; tsc pulito.
+
+## 2026-07-19 — PANNELLO ADMIN: RIFINITURE FINALI (alert, crediti, 2FA
+## policy, esegui-ora)
+
+Le quattro rifiniture facoltative rimaste.
+
+(1) ALERT MULTIPLI con ANTI-SPAM: il cron admin-health ora segnala —
+oltre agli errori di salute — provisioning falliti, cron in errore
+(esclude se stesso) e anomalia login (>=10 falliti/24h); ogni chiave
+notifica al massimo una volta ogni 24 ore (saas_admin_alerts, DDL
+Postgres; confronto nel frame del writer). Email unica a sezioni agli
+admin attivi; il payload espone `alerts` anche senza SES (testabile).
+
+(2) CREDITI SMS NEL DETTAGLIO: GET tenants?slug= espone smsCredits
+(tenantWalletBalance) e la Panoramica mostra la riga "Crediti SMS".
+
+(3) POLICY "2FA OBBLIGATORIA": impostazione di piattaforma
+(saas_admin_settings.require_totp) attivabile SOLO dall'owner dalla
+vista Sicurezza; con policy attiva un admin senza 2FA subisce un
+blocco SOFT — puo' usare solo la vista Sicurezza (card ambra con
+"Configura la 2FA") finche' non la attiva. Niente lockout: login e
+setup restano possibili. Audit totp_policy_set.
+
+(4) "ESEGUI ORA LA DIAGNOSTICA" nella vista Controlli: azione
+cron_run (solo job admin-health) che invoca il route handler VERO del
+cron (import del modulo route + Bearer CRON_SECRET se impostato),
+cosi' l'esecuzione passa dal registro saas_cron_runs.
+
+Verifica: test-saas-admin-rifiniture 8/8 (smsCredits, cron_run
+registrato, chiavi alert multiple, anti-spam che esclude la chiave
+recente e conserva le altre, viewer respinto sulla policy, blocco
+soft con dashboard nascosta, Sicurezza usabile col toggle owner,
+policy off -> pannello pieno; policy SEMPRE disattivata nel cleanup)
++ TUTTE le 11 regressioni verdi; tsc pulito.

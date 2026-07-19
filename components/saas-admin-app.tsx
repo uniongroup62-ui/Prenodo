@@ -170,12 +170,14 @@ export function SaasAdminApp({
   initialSlug = "",
   initialTab = "overview",
   initialSection = "",
+  totpRequired = false,
 }: {
   initialUser: SaasAdminUser;
   initialView?: ViewKey;
   initialSlug?: string;
   initialTab?: TenantTab;
   initialSection?: string;
+  totpRequired?: boolean;
 }) {
   const [activeView, setActiveView] = useState<ViewKey>(initialView);
   const [billingTab, setBillingTab] = useState<BillingSection>(initialView === "billing" && initialSection === "sms" ? "sms" : "plans");
@@ -579,6 +581,24 @@ export function SaasAdminApp({
             ) : null}
             {loading ? <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-600"><Loader2 className="animate-spin" size={16} aria-hidden /> Caricamento</div> : null}
 
+            {/* Blocco SOFT policy 2FA: senza 2FA configurata resta usabile
+                solo la vista Sicurezza (rifiniture 19/07). */}
+            {totpRequired && activeView !== "security" ? (
+              <section className="rounded-md border border-amber-200 bg-amber-50 p-6">
+                <div className="flex items-start gap-3">
+                  <ShieldAlert className="mt-0.5 shrink-0 text-amber-700" size={22} aria-hidden />
+                  <div>
+                    <h2 className="text-lg font-semibold text-amber-900">2FA obbligatoria</h2>
+                    <p className="mt-1 text-sm text-amber-800">La policy della piattaforma richiede l&apos;autenticazione a due fattori: configurala per continuare a usare il pannello.</p>
+                    <button className="mt-4 inline-flex h-10 items-center gap-2 rounded-md bg-[#365a96] px-4 text-sm font-semibold text-white" type="button" onClick={() => navigateView("security")}>
+                      <ShieldCheck size={16} aria-hidden />
+                      Configura la 2FA
+                    </button>
+                  </div>
+                </div>
+              </section>
+            ) : (
+              <>
             {activeView === "dashboard" ? (
               <DashboardView
                 overview={overview}
@@ -619,7 +639,7 @@ export function SaasAdminApp({
             {activeView === "operations" ? (
               <div className="grid gap-4">
                 <SectionTabs active={opsTab} sections={operationsSections} onSelect={(key) => selectOpsTab(key as OperationsSection)} />
-                {opsTab === "controls" ? <ControlsView data={controls} onRefresh={loadControls} /> : null}
+                {opsTab === "controls" ? <ControlsView canManage={canManageTenants} data={controls} onRefresh={loadControls} onRunHealth={async () => { await operationAction({ action: "cron_run", job: "admin-health" }); await loadControls(); }} /> : null}
                 {opsTab === "movements" ? <MovementsView data={movements} onRefresh={loadMovements} /> : null}
                 {opsTab === "maintenance" ? <MaintenanceView tenants={overview.tenants} results={results} restoreCandidates={restoreCandidates} canManage={canManageTenants} onAction={tenantAction} onOperationAction={operationAction} /> : null}
               </div>
@@ -628,6 +648,8 @@ export function SaasAdminApp({
             {activeView === "audit" ? <AuditView data={auditData} filters={auditFilters} onSearch={(filters) => loadAudit(filters, 1)} onPageChange={(next) => loadAudit(auditFilters, next)} /> : null}
             {activeView === "admins" ? <AdminsView admins={admins} currentUser={initialUser} onAction={adminAction} /> : null}
             {activeView === "security" ? <AdminSecurityPanel /> : null}
+              </>
+            )}
           </div>
         </section>
       </div>
@@ -1043,7 +1065,7 @@ function BillingView({ data, canManage, onAction, onRefresh }: { data: BillingPa
 // TIMELINE unificata (Fase D): la storia del tenant in un solo feed —
 // audit + diagnostiche + backup + supporto + ordini SMS in ordine cronologico.
 
-function ControlsView({ data, onRefresh }: { data: ControlsPayload | null; onRefresh: () => void }) {
+function ControlsView({ data, canManage, onRefresh, onRunHealth }: { data: ControlsPayload | null; canManage: boolean; onRefresh: () => void; onRunHealth: () => void }) {
   if (!data) {
     return <EmptyOperation icon={Activity} title="Controlli operativi" detail="Carica diagnostica provider SMS e tenant." onRefresh={onRefresh} />;
   }
@@ -1067,7 +1089,11 @@ function ControlsView({ data, onRefresh }: { data: ControlsPayload | null; onRef
           <Detail label="Avvisi" value={[...provider.errors, ...provider.warnings].join(" | ") || "-"} />
         </div>
       </section>
-      {/* Registro cron (Fase C): stato corrente per job + esecuzioni recenti. */}
+      {/* Registro cron (Fase C): stato corrente per job; "Esegui ora" lancia
+          la diagnostica passando dal registro (rifiniture 19/07). */}
+      <div className="flex justify-end">
+        <Button disabled={!canManage} icon={Activity} variant="outline" onClick={onRunHealth}>Esegui ora la diagnostica</Button>
+      </div>
       <Table
         title="Cron: ultima esecuzione per job"
         headers={["Job", "Esito", "Avviato", "Durata", "Sintesi"]}

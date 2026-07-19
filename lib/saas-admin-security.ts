@@ -1,8 +1,76 @@
 import "server-only";
 
 import crypto from "node:crypto";
-import { dbExecute } from "@/lib/tenant-db";
+import type { RowDataPacket } from "@/lib/tenant-db";
+import { dbExecute, dbQuery, tableExists } from "@/lib/tenant-db";
 import { businessNowDateTime } from "@/lib/business-datetime";
+
+// --- Impostazioni pannello + anti-spam alert (rifiniture 2026-07-19) --------
+// saas_admin_settings: policy del pannello (es. require_totp).
+// saas_admin_alerts: ultima notifica inviata per chiave — un alert non si
+// ripete entro il cooldown. DDL in dialetto POSTGRES (trappola toPostgresSql).
+
+let adminSettingsEnsured = false;
+
+async function ensureAdminSettingsSchema(): Promise<void> {
+  if (adminSettingsEnsured) return;
+  if (!(await tableExists("saas_admin_settings"))) {
+    await dbExecute(
+      `CREATE TABLE IF NOT EXISTS "saas_admin_settings" (
+      "key" VARCHAR(60) PRIMARY KEY,
+      "value" VARCHAR(500) NOT NULL
+    )`,
+    );
+  }
+  if (!(await tableExists("saas_admin_alerts"))) {
+    await dbExecute(
+      `CREATE TABLE IF NOT EXISTS "saas_admin_alerts" (
+      "alert_key" VARCHAR(120) PRIMARY KEY,
+      "last_sent_at" TIMESTAMP NOT NULL
+    )`,
+    );
+  }
+  adminSettingsEnsured = true;
+}
+
+export async function getAdminSetting(key: string): Promise<string> {
+  await ensureAdminSettingsSchema();
+  const rows = await dbQuery<RowDataPacket[]>("SELECT `value` FROM `saas_admin_settings` WHERE `key`=? LIMIT 1", [key]).catch(() => []);
+  return String(rows[0]?.value ?? "");
+}
+
+export async function setAdminSetting(key: string, value: string): Promise<void> {
+  await ensureAdminSettingsSchema();
+  await dbExecute(
+    "INSERT INTO `saas_admin_settings`(`key`,`value`) VALUES(?,?) ON CONFLICT (\"key\") DO UPDATE SET \"value\"=EXCLUDED.\"value\"",
+    [key, value],
+  );
+}
+
+// True se l'alert NON e' stato inviato nelle ultime `hours` ore.
+export async function alertNotRecentlySent(alertKey: string, hours = 24): Promise<boolean> {
+  await ensureAdminSettingsSchema();
+  const rows = await dbQuery<RowDataPacket[]>("SELECT last_sent_at FROM `saas_admin_alerts` WHERE alert_key=? LIMIT 1", [alertKey]).catch(() => []);
+  const raw = String(rows[0]?.last_sent_at ?? "");
+  if (!raw) return true;
+  const ms = new Date(raw.replace(" ", "T")).getTime();
+  return !Number.isFinite(ms) || Date.now() - ms > hours * 3_600_000;
+}
+
+export async function markAlertSent(alertKey: string): Promise<void> {
+  await ensureAdminSettingsSchema();
+  const now = localSqlDate();
+  await dbExecute(
+    "INSERT INTO `saas_admin_alerts`(alert_key,last_sent_at) VALUES(?,?) ON CONFLICT (\"alert_key\") DO UPDATE SET \"last_sent_at\"=EXCLUDED.\"last_sent_at\"",
+    [alertKey, now],
+  );
+}
+
+function localSqlDate(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
 
 // Sicurezza del pannello SaaS Admin (Fase 1 blindatura, 2026-07-18):
 // - origin-check per le POST (difesa CSRF oltre al sameSite strict);

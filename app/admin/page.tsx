@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { SaasAdminApp } from "@/components/saas-admin-app";
-import { currentSaasAdminSession } from "@/lib/saas-admin-auth";
+import { currentSaasAdminSession, saasAdminTotpEnabled } from "@/lib/saas-admin-auth";
+import { getAdminSetting } from "@/lib/saas-admin-security";
 
 export const metadata: Metadata = {
   title: "Dashboard - SaaS Admin",
@@ -60,6 +61,12 @@ export default async function AdminPage({
   const session = await currentSaasAdminSession();
   if (!session) redirect("/admin/login");
 
+  // Policy 2FA obbligatoria (rifiniture 19/07): blocco SOFT — l'admin senza
+  // 2FA puo' usare solo la vista Sicurezza finche' non la configura.
+  const totpRequired =
+    (await getAdminSetting("require_totp").catch(() => "")) === "1" &&
+    !(await saasAdminTotpEnabled(session.user.id).catch(() => false));
+
   const query = (await searchParams) ?? {};
   const qs = (key: string): string => {
     const raw = query[key];
@@ -84,6 +91,7 @@ export default async function AdminPage({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       initialTab={tab as any}
       initialSection={section}
+      totpRequired={totpRequired}
     />
   );
 }

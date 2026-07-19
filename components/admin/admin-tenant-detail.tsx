@@ -165,6 +165,7 @@ function TenantOverview({ detail }: { detail: TenantDetailPayload }) {
         <Detail label="URL" value={`/${tenant.slug}/`} />
         <Detail label="Email admin" value={tenant.admin_email || "-"} />
         <Detail label="Piano" value={tenant.plan || "-"} />
+        <Detail label="Crediti SMS" value={String(detail.smsCredits ?? 0)} />
         <Detail label="Origine" value={tenant.source === "self_signup" ? "Registrazione autonoma" : "Creazione admin"} />
         <Detail label="Creato il" value={tenant.created_at || "-"} />
       </div>

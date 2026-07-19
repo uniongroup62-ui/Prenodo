@@ -130,6 +130,7 @@ export type TenantDetailPayload = {
   recentTokens: SupportToken[];
   audit: AuditRow[];
   timeline: TimelineEvent[];
+  smsCredits: number;
 };
 
 export type BackupRow = {

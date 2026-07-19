@@ -16,9 +16,12 @@ import { assertSameOrigin, logSaasAdminAction, totpUri } from "@/lib/saas-admin-
 export async function GET() {
   try {
     const session = await requireSaasAdminSession();
+    const { getAdminSetting } = await import("@/lib/saas-admin-security");
     return Response.json({
       ok: true,
       totpEnabled: await saasAdminTotpEnabled(session.user.id),
+      totpPolicyRequired: (await getAdminSetting("require_totp")) === "1",
+      isOwner: session.user.role === "owner",
       sessions: await listSaasAdminSessions(session.user),
     });
   } catch (error) {
@@ -50,6 +53,18 @@ export async function POST(request: Request) {
       if (!result.ok) return jsonError(result.error, 400);
       void logSaasAdminAction({ adminId: session.user.id, adminEmail: session.user.email, action: "totp_disable", request });
       return Response.json({ ok: true });
+    }
+
+    // Policy "2FA obbligatoria" (rifiniture 2026-07-19): solo l'OWNER puo'
+    // attivarla/disattivarla; chi non ha la 2FA viene bloccato (soft) sul
+    // pannello finche' non la configura.
+    if (action === "totp_policy_set") {
+      if (session.user.role !== "owner") return jsonError("Solo un owner puo' cambiare la policy 2FA.", 403);
+      const { setAdminSetting } = await import("@/lib/saas-admin-security");
+      const value = body.value === "1" ? "1" : "0";
+      await setAdminSetting("require_totp", value);
+      void logSaasAdminAction({ adminId: session.user.id, adminEmail: session.user.email, action: "totp_policy_set", target: value, request });
+      return Response.json({ ok: true, totpPolicyRequired: value === "1" });
     }
 
     if (action === "session_revoke") {
