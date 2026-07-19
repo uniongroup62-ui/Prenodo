@@ -20,8 +20,8 @@ type SecurityState = {
   sessions: AdminSession[];
 };
 
-const inputCls = "h-10 w-full rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-emerald-700";
-const btnPrimary = "inline-flex h-10 items-center justify-center rounded-md bg-emerald-700 px-4 text-sm font-semibold text-white disabled:opacity-60";
+const inputCls = "h-10 w-full rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-[#365a96]";
+const btnPrimary = "inline-flex h-10 items-center justify-center rounded-md bg-[#365a96] px-4 text-sm font-semibold text-white disabled:opacity-60";
 const btnDanger = "inline-flex h-9 items-center justify-center rounded-md border border-red-200 px-3 text-sm font-semibold text-red-700 hover:bg-red-50";
 
 export function AdminSecurityPanel() {

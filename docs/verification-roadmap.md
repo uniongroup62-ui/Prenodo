@@ -16456,3 +16456,31 @@ del tenant reale RIPRISTINATI esatti nel cleanup. Regressioni giro5
 19/19, fase3 9/9 (nav atteso aggiornato a 10); tsc pulito. HARNESS:
 l'ensure di saas_plans e' lazy — leggere plan_id solo DOPO la prima
 chiamata billing.
+
+## 2026-07-19 — PANNELLO ADMIN Fase F: RESTYLE NAVY + SPACCHETTAMENTO SPA
+
+Ultimo asse del piano "rivoluzione pannello" — COMPLETATO (A-F).
+
+(1) RESTYLE NAVY: il pannello parlava emerald/slate scollegato
+dall'identita' Prenodo. Ora: accenti brand #365a96 (bottoni primari,
+focus, kicker, logo P, icone pannelli), superfici scure ink navy
+(sidebar e pannello login #141c30, stati attivi/tab #182238). I VERDI
+SEMANTICI restano (successo/ok badge, banner conferma, 2FA attiva):
+solo il brand cambia, non la semantica di stato. Toccati
+saas-admin-app.tsx e admin-security-panel.tsx.
+
+(2) SPACCHETTAMENTO: dal monolite (1952 righe) estratti
+components/admin/admin-shared.tsx (~500: tipi, costanti, primitive UI
+Badge/Button/Input/Metric/Table/..., helper api/format/tone/submit) e
+components/admin/admin-tenant-detail.tsx (~350: TenantDetailPanel +
+10 tab). Main a ~1210 righe (shell, login, dashboard, viste). Split
+MECCANICO con estrattore per nome (brace-matching; i type alias senza
+graffe terminano al ';' a depth 0 — il primo tentativo consumava il
+file fino a EOF).
+
+Verifica: tsc pulito; screenshot dashboard navy renderizzata; TUTTE
+le 8 suite verdi — giro5 17/17, fase4 11/11, faseAB 11/11, faseC 7/7,
+faseD 4/4, faseE 8/8, hardening 19/19, fase3 9/9 (selettore tab
+attiva aggiornato a bg-[#182238]). HARNESS: i selettori Playwright
+per classe con valori arbitrari Tailwind = attribute-contains
+('button[class*="bg-[#182238]"]').
