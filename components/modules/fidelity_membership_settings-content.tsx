@@ -294,7 +294,41 @@ export function FidelityMembershipSettingsContent({
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Programma punti</div>
-          <h1 className="bs-page-title">Impostazioni tessera Fidelity</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Impostazioni tessera Fidelity</h1>
+            <InfoBox>
+              <h6>Nuova tessera</h6>
+              <p>
+                La <strong>Data emissione</strong> è modificabile; la <strong>Data scadenza</strong> viene calcolata
+                automaticamente e non è modificabile manualmente.
+              </p>
+              <h6>Durata</h6>
+              <p>
+                Vale per le nuove tessere e per le tessere scadute che riattivi. Le tessere attive già esistenti non
+                cambiano quando modifichi la durata.
+              </p>
+              <h6>Scadenza tessera</h6>
+              <p>
+                Se la disattivi, le tessere restano senza scadenza e non sono disponibili rinnovo automatico e
+                promemoria. Se la riattivi, viene recuperata l&apos;ultima scadenza memorizzata quando disponibile.
+              </p>
+              <h6>Rinnovo automatico</h6>
+              <p>
+                Se attivo, un pagamento o una prenotazione portata in stato <strong>Eseguito</strong> rinnova la tessera
+                entro la finestra impostata prima della scadenza. La finestra deve essere inferiore alla durata tessera.
+              </p>
+              <h6>Promemoria</h6>
+              <p>
+                Se il rinnovo automatico è disattivo, puoi mostrare nel backend <strong>Notifiche</strong> le tessere in
+                scadenza nei prossimi giorni e quelle già scadute.
+              </p>
+              <h6>Tessera scaduta</h6>
+              <p>
+                I punti Fidelity maturati non vengono azzerati, ma il cliente non può usare benefici Fidelity finché la
+                tessera non torna valida. Da <strong>Modifica tessera</strong> puoi usare <strong>Riattiva tessera</strong>.
+              </p>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">Configura scadenza, rinnovo e promemoria tessere.</div>
         </div>
         <div className="bs-page-actions">
@@ -314,7 +348,7 @@ export function FidelityMembershipSettingsContent({
       {headerAlerts}
 
       <div className="row g-3 fidelity-card-settings-anchor" id="fidelity_card_settings">
-        <div className="col-lg-8">
+        <div className="col-12">
           <div className="card p-4">
             <div className="text-muted small mb-3">
               Quando crei una <strong>nuova tessera Fidelity</strong> da <strong>Fidelity → Adesione</strong>, la{" "}
@@ -538,39 +572,6 @@ export function FidelityMembershipSettingsContent({
           </div>
         </div>
 
-        <div className="col-lg-4">
-          <InfoBox>
-              <ul>
-                <li>
-                  <strong>Nuova tessera:</strong> la <strong>Data emissione</strong> è modificabile; la{" "}
-                  <strong>Data scadenza</strong> viene calcolata automaticamente e non è modificabile manualmente.
-                </li>
-                <li>
-                  <strong>Durata:</strong> vale per le nuove tessere e per le tessere scadute che riattivi. Le tessere
-                  attive già esistenti non cambiano quando modifichi la durata.
-                </li>
-                <li>
-                  <strong>Scadenza tessera:</strong> se la disattivi, le tessere restano senza scadenza e non sono
-                  disponibili rinnovo automatico e promemoria. Se la riattivi, viene recuperata l&apos;ultima scadenza
-                  memorizzata quando disponibile.
-                </li>
-                <li>
-                  <strong>Rinnovo automatico:</strong> se attivo, un pagamento o una prenotazione portata in stato{" "}
-                  <strong>Eseguito</strong> rinnova la tessera entro la finestra impostata prima della scadenza. La
-                  finestra deve essere inferiore alla durata tessera.
-                </li>
-                <li>
-                  <strong>Promemoria:</strong> se il rinnovo automatico è disattivo, puoi mostrare nel backend{" "}
-                  <strong>Notifiche</strong> le tessere in scadenza nei prossimi giorni e quelle già scadute.
-                </li>
-                <li>
-                  <strong>Tessera scaduta:</strong> punti Fidelity maturati non vengono azzerati, ma il cliente non può
-                  usare benefici Fidelity finché la tessera non torna valida. Da <strong>Modifica tessera</strong> puoi
-                  usare <strong>Riattiva tessera</strong>.
-                </li>
-              </ul>
-          </InfoBox>
-        </div>
       </div>
 
       {confirmOpen ? (

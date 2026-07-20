@@ -167,7 +167,20 @@ export function GiftcardContent({ slug: slugProp, initialQuery }: { slug?: strin
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Programma fedelta</div>
-          <h1 className="bs-page-title">Fidelity / GiftCard</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Fidelity / GiftCard</h1>
+            <InfoBox>
+              <p>Qui gestisci i <strong>modelli</strong> GiftCard e consulti le GiftCard emesse.</p>
+              <ul>
+                <li>L&apos;emissione avviene <strong>solo dalla pagina Pagamenti</strong>.</li>
+                <li>
+                  Ogni GiftCard ha un <strong>saldo</strong> che si scala a ogni utilizzo in cassa, fino a esaurimento.
+                </li>
+                <li>Gli storni riaccreditano il saldo sulla carta.</li>
+                <li>La GiftCard può essere intestata a un destinatario e inviata via email dal dettaglio.</li>
+              </ul>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">Gestisci GiftCard, voucher e stato delle card emesse.</div>
         </div>
         <div className="bs-page-actions">
@@ -383,13 +396,6 @@ export function GiftcardContent({ slug: slugProp, initialQuery }: { slug?: strin
           </div>
         </>
       )}
-      <InfoBox className="mt-3">
-        <ul>
-          <li>Qui crei i modelli GiftCard e consulti quelle emesse.</li>
-          <li>L&apos;emissione avviene solo dalla pagina <strong>Pagamenti</strong>.</li>
-          <li>Ogni GiftCard ha un saldo che si scala a ogni utilizzo in cassa, fino a esaurimento.</li>
-        </ul>
-      </InfoBox>
     </div>
   );
 }

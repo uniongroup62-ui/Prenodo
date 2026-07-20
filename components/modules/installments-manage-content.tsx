@@ -445,7 +445,23 @@ export function InstallmentsManageContent({ slug: slugProp, initialQuery }: { sl
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Pagamenti</div>
-          <h1 className="bs-page-title">Gestione Rate</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Gestione Rate</h1>
+            <InfoBox>
+              <p>Ogni vendita a rate genera un <strong>piano</strong> con acconto e scadenze.</p>
+              <ul>
+                <li>
+                  Segnando una rata come pagata, l&apos;incasso viene registrato alla data indicata (e nei Report conta
+                  in quel giorno).
+                </li>
+                <li><strong>Riapri</strong> consente di correggere una rata segnata pagata per errore.</li>
+                <li>
+                  L&apos;<strong>annullamento del piano</strong> è unico e definitivo: annulla il piano e tutte le rate
+                  residue in una volta sola.
+                </li>
+              </ul>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">
             Monitoraggio piani rateali, scadenze e incassi cliente.
             {sedeLabel ? ` Sede: ${sedeLabel}` : ""}
@@ -720,13 +736,6 @@ export function InstallmentsManageContent({ slug: slugProp, initialQuery }: { sl
           </div>
         </>
       )}
-      <InfoBox className="mt-3">
-        <ul>
-          <li>Ogni vendita a rate genera un piano con le sue scadenze.</li>
-          <li>Segnando una rata come pagata, l&apos;incasso viene registrato alla data indicata.</li>
-          <li>L&apos;annullamento del piano è definitivo e annulla tutte le rate in un colpo solo.</li>
-        </ul>
-      </InfoBox>
     </div>
   );
 }

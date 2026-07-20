@@ -138,7 +138,22 @@ export function ConsentModulesContent({
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Impostazioni</div>
-          <h1 className="bs-page-title">Moduli consenso</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Moduli consenso</h1>
+            <InfoBox>
+              <p>I moduli consenso sono i documenti che i clienti firmano (in negozio o dal portale cliente).</p>
+              <ul>
+                <li>
+                  Il modulo <strong>Privacy (GDPR)</strong> è di sistema: sempre attivo, non modificabile né eliminabile.
+                </li>
+                <li>
+                  Un modulo con consensi <strong>già firmati</strong> non può essere eliminato: lo storico delle firme va
+                  conservato.
+                </li>
+                <li>I consensi raccolti per ciascun cliente si consultano dalla sua scheda, sezione Consensi.</li>
+              </ul>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">
             Gestisci il modulo PDF privacy GDPR e i moduli aggiuntivi per consensi informati e firme cliente.
           </div>
@@ -295,12 +310,6 @@ export function ConsentModulesContent({
           </div>
         </div>
       ) : null}
-      <InfoBox className="mt-3">
-        <ul>
-          <li>Il modulo Privacy (GDPR) è di sistema: sempre attivo e non eliminabile.</li>
-          <li>Un modulo con consensi già firmati non può essere eliminato.</li>
-        </ul>
-      </InfoBox>
     </div>
   );
 }

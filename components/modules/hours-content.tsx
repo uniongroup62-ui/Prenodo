@@ -219,7 +219,27 @@ export function HoursContent({
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Impostazioni</div>
-          <h1 className="bs-page-title">Orari &amp; chiusure</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Orari &amp; chiusure</h1>
+            <InfoBox>
+              <p>Gli orari lavorano su tre livelli, dal più generale al più specifico:</p>
+              <ul>
+                <li><strong>Orari globali</strong>: valgono per tutte le sedi.</li>
+                <li>
+                  <strong>Orari della sede</strong>: se una sede ha orari propri, per quella sede vincono sui globali.
+                </li>
+                <li>
+                  <strong>Eccezioni per data</strong> (chiusure e aperture straordinarie): vincono su tutto per quel
+                  giorno.
+                </li>
+              </ul>
+              <p>
+                Ogni giorno può avere orario continuato o spezzato (mattina/pomeriggio). Questi orari guidano il
+                calendario interno e gli slot della prenotazione online. Una chiusura su un giorno con appuntamenti
+                attivi viene bloccata finché non li sposti o annulli.
+              </p>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">{subtitle}</div>
         </div>
         {canSettingsLocation ? (
@@ -289,13 +309,6 @@ export function HoursContent({
       ) : (
         <ExceptionsTab loading={loading} exceptions={exceptions} onAction={postAction} />
       )}
-      <InfoBox className="mt-3">
-        <ul>
-          <li>Gli orari globali valgono per tutte le sedi; se una sede ha orari propri, per quella sede vincono i suoi.</li>
-          <li>Le chiusure e le aperture straordinarie per data vincono su tutto.</li>
-          <li>Questi orari guidano il calendario e la prenotazione online.</li>
-        </ul>
-      </InfoBox>
     </div>
   );
 }

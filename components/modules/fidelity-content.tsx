@@ -147,7 +147,25 @@ export function FidelityContent({ slug: slugProp, initialQuery }: { slug?: strin
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Fidelizzazione</div>
-          <h1 className="bs-page-title">Fidelity</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Fidelity</h1>
+            <InfoBox>
+              <p>
+                L&apos;interruttore governa l&apos;<strong>intero programma Fidelity</strong>: adesione e tessere, punti,
+                benefici in cassa e tutte le pagine collegate.
+              </p>
+              <ul>
+                <li>
+                  Alla disattivazione ti viene chiesta una conferma se esistono appuntamenti con benefici Fidelity
+                  collegati.
+                </li>
+                <li>
+                  Spegnendolo <strong>non perdi nulla</strong>: tessere, punti e campagne restano salvati e riattivandolo
+                  ritrovi tutto com&apos;era.
+                </li>
+              </ul>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">Gestisci impostazioni generali e collegamenti del programma Fidelity.</div>
         </div>
       </div>
@@ -408,12 +426,6 @@ export function FidelityContent({ slug: slugProp, initialQuery }: { slug?: strin
           <div className="modal-backdrop fade show" />
         </>
       ) : null}
-      <InfoBox className="mt-3">
-        <ul>
-          <li>L&apos;interruttore accende o spegne l&apos;intero programma Fidelity: adesione, punti e benefici in cassa.</li>
-          <li>Spegnendolo non perdi nulla: i dati restano e riattivandolo ritrovi tutto com&apos;era.</li>
-        </ul>
-      </InfoBox>
     </div>
   );
 }

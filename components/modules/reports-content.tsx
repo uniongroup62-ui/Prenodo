@@ -654,7 +654,29 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Analisi</div>
-          <h1 className="bs-page-title">Report</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Report</h1>
+            <InfoBox>
+              <ul>
+                <li>
+                  <strong>Incasso</strong>: le somme effettivamente entrate in cassa nel periodo. Le vendite senza rate
+                  contano alla data di vendita; acconti e rate alla data del loro pagamento.
+                </li>
+                <li>
+                  <strong>Venduto</strong>: il valore netto di servizi e prodotti venduti nel periodo (sconti detratti,
+                  vendite annullate escluse).
+                </li>
+                <li>
+                  I due totali possono differire per costruzione: una vendita a rate entra nel Venduto subito e
+                  nell&apos;Incasso man mano che le rate vengono pagate.
+                </li>
+              </ul>
+              <p>
+                Il confronto usa la finestra precedente di pari durata. Il filtro sede mostra solo le sedi a cui hai
+                accesso.
+              </p>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">{subtitle}</div>
         </div>
       </div>
@@ -1340,13 +1362,6 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
           </div>
         </div>
       </div>
-      <InfoBox className="mt-3">
-        <ul>
-          <li><strong>Incasso</strong>: le somme registrate in cassa nel periodo (le rate contano alla data del pagamento).</li>
-          <li><strong>Venduto</strong>: il valore di servizi e prodotti venduti nel periodo.</li>
-          <li>I due totali possono differire: una vendita a rate entra nel Venduto subito, nell&apos;Incasso man mano che le rate vengono pagate.</li>
-        </ul>
-      </InfoBox>
     </div>
   );
 }

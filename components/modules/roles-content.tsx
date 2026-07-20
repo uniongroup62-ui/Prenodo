@@ -339,7 +339,23 @@ export function RolesContent({
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Impostazioni</div>
-          <h1 className="bs-page-title">Ruoli</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Ruoli</h1>
+            <InfoBox>
+              <p>I ruoli definiscono cosa possono vedere e fare gli operatori. Questa pagina è riservata agli Admin.</p>
+              <ul>
+                <li>
+                  Il salvataggio <strong>sostituisce l&apos;intero elenco</strong> dei permessi del ruolo e vale
+                  immediatamente per tutti gli operatori collegati.
+                </li>
+                <li>
+                  Alcune funzioni attivano automaticamente i permessi di base necessari (es. una sotto-funzione accende
+                  l&apos;accesso al suo modulo).
+                </li>
+                <li>Un modulo selezionato senza nessuna funzione interna non è salvabile: scegli almeno una voce.</li>
+              </ul>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">Configura i permessi disponibili per i ruoli operativi.</div>
         </div>
       </div>
@@ -492,12 +508,6 @@ export function RolesContent({
           </div>
         </div>
       </div>
-      <InfoBox className="mt-3">
-        <ul>
-          <li>Un ruolo definisce cosa possono vedere e fare gli operatori collegati.</li>
-          <li>Il salvataggio sostituisce l&apos;intero elenco di permessi del ruolo e vale subito per tutti gli operatori con quel ruolo.</li>
-        </ul>
-      </InfoBox>
     </div>
   );
 }

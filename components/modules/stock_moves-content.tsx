@@ -601,7 +601,19 @@ export function StockMovesContent({ slug: slugProp, initialQuery }: { slug?: str
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Magazzino</div>
-          <h1 className="bs-page-title">Carico / Scarico</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Carico / Scarico</h1>
+            <InfoBox>
+              <p>Ogni carico o scarico è un <strong>documento</strong> con le sue righe: al salvataggio lo stock si aggiorna subito.</p>
+              <ul>
+                <li>
+                  I documenti <strong>non si modificano</strong>: per correggere, annulla il documento — lo stock viene
+                  ripristinato automaticamente — e creane uno nuovo.
+                </li>
+                <li>L&apos;export CSV rispetta i filtri attivi.</li>
+              </ul>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">Registra movimenti di magazzino e rettifiche prodotto.</div>
         </div>
         <div className="bs-page-actions">
@@ -814,12 +826,6 @@ export function StockMovesContent({ slug: slugProp, initialQuery }: { slug?: str
           </div>
         ) : null}
       </div>
-      <InfoBox className="mt-3">
-        <ul>
-          <li>Ogni carico o scarico è un documento: le righe aggiornano subito lo stock.</li>
-          <li>I documenti non si modificano: per correggere annulla il documento e lo stock viene ripristinato automaticamente.</li>
-        </ul>
-      </InfoBox>
     </div>
   );
 }

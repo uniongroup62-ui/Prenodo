@@ -384,7 +384,26 @@ export function FidelityPointsContent({ slug: slugProp, initialQuery }: { slug?:
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Fidelity</div>
-          <h1 className="bs-page-title">{levelsOnlyView ? "Livelli Card" : "Punti"}</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">{levelsOnlyView ? "Livelli Card" : "Punti"}</h1>
+            <InfoBox>
+              <ul>
+                <li>
+                  I punti si maturano in cassa secondo la <strong>campagna attiva</strong>: una sola campagna alla volta
+                  per periodo.
+                </li>
+                <li>
+                  Il <strong>livello Card</strong> è calcolato automaticamente dai punti <strong>maturati nel
+                  periodo</strong> configurato — non dal saldo attuale e non si assegna a mano: usare i punti non
+                  declassa il cliente.
+                </li>
+                <li>
+                  Con la scadenza attiva, i punti non utilizzati scadono dopo i giorni impostati (con preavviso nel
+                  Portafoglio); i punti legati a prenotazioni future restano protetti fino alla loro conclusione.
+                </li>
+              </ul>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">Gestisci punti, livelli e campagne Fidelity.</div>
         </div>
       </div>
@@ -771,13 +790,6 @@ export function FidelityPointsContent({ slug: slugProp, initialQuery }: { slug?:
           <div className="modal-backdrop fade show" />
         </>
       ) : null}
-      <InfoBox className="mt-3">
-        <ul>
-          <li>I punti si maturano in cassa secondo la campagna attiva: una sola campagna alla volta per periodo.</li>
-          <li>Il livello Card è calcolato automaticamente dai punti maturati nel periodo: non si assegna a mano.</li>
-          <li>Se la scadenza punti è attiva, i punti non usati scadono dopo i giorni impostati.</li>
-        </ul>
-      </InfoBox>
     </div>
   );
 }

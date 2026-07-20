@@ -184,7 +184,27 @@ export function StaffContent({ slug: slugProp, initialQuery }: { slug?: string; 
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Impostazioni</div>
-          <h1 className="bs-page-title">Staff</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Staff</h1>
+            <InfoBox>
+              <p>
+                L&apos;operatore e il suo account di accesso sono collegati <strong>tramite l&apos;email</strong>: usa la
+                stessa email per agganciare l&apos;account. Cambiandola l&apos;account viene aggiornato; svuotandola
+                l&apos;accesso viene rimosso.
+              </p>
+              <ul>
+                <li>Il <strong>titolare</strong> è protetto: sempre attivo, ruolo Admin, non eliminabile.</li>
+                <li>
+                  L&apos;eliminazione è consentita solo senza collegamenti attivi: prenotazioni, servizi assegnati o
+                  storico commissioni la bloccano (il popup mostra il dettaglio).
+                </li>
+                <li>
+                  Le <strong>sedi assegnate</strong> stabiliscono dove l&apos;operatore lavora e cosa vede con i filtri
+                  sede.
+                </li>
+              </ul>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">Gestisci operatori, ruoli e sedi abilitate.</div>
         </div>
         <div className="bs-page-actions">
@@ -428,13 +448,6 @@ export function StaffContent({ slug: slugProp, initialQuery }: { slug?: string; 
           <div className="modal-backdrop fade show" />
         </>
       ) : null}
-      <InfoBox className="mt-3">
-        <ul>
-          <li>L&apos;operatore è collegato al suo account di accesso tramite l&apos;email: usa la stessa email per agganciare l&apos;account.</li>
-          <li>Il titolare è protetto: sempre attivo e non eliminabile.</li>
-          <li>Un operatore con prenotazioni, servizi o commissioni collegate non può essere eliminato.</li>
-        </ul>
-      </InfoBox>
     </div>
   );
 }

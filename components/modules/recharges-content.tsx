@@ -224,7 +224,28 @@ export function RechargesContent({ slug: slugProp, initialQuery }: { slug?: stri
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Programma punti</div>
-          <h1 className="bs-page-title">Ricariche</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Ricariche</h1>
+            <InfoBox>
+              <p>
+                Il modello di ricarica velocizza le ricariche credito in <strong>Pagamenti</strong> mantenendo sempre la
+                stessa struttura commerciale: <strong>Ricarica</strong> (importo pagato dal cliente) +{" "}
+                <strong>Bonus</strong> (credito extra secondo la regola del modello) = <strong>Totale</strong>{" "}
+                accreditato sul portafoglio.
+              </p>
+              <ul>
+                <li>Solo i modelli <strong>attivi</strong> compaiono in Pagamenti.</li>
+                <li>
+                  I punti Fidelity possono maturare su importo + bonus oppure sul solo importo, in base
+                  all&apos;impostazione del modello.
+                </li>
+                <li>
+                  Questa pagina gestisce solo i <strong>modelli</strong>: le ricariche si emettono esclusivamente dalla
+                  pagina Pagamenti; gli storni si gestiscono dai movimenti credito.
+                </li>
+              </ul>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">Gestisci credito prepagato, bonus e campagne punti.</div>
         </div>
         <div className="bs-page-actions">
@@ -256,7 +277,7 @@ export function RechargesContent({ slug: slugProp, initialQuery }: { slug?: stri
       ) : null}
 
       <div className="row g-3">
-        <div className="col-lg-7">
+        <div className="col-12">
           <div className="card p-3 h-100">
             <div className="d-flex justify-content-between align-items-center mb-2">
               <div className="fw-semibold">Modelli di ricarica</div>
@@ -318,39 +339,6 @@ export function RechargesContent({ slug: slugProp, initialQuery }: { slug?: stri
           </div>
         </div>
 
-        <div className="col-lg-5">
-          <InfoBox className="h-100">
-              <p>
-                Il modello serve per velocizzare le ricariche credito dalla pagina <strong>Pagamenti</strong> mantenendo
-                sempre la stessa struttura commerciale.
-              </p>
-              <ul>
-                <li>
-                  <strong>Ricarica</strong>: è l&apos;importo pagato dal cliente alla cassa.
-                </li>
-                <li>
-                  <strong>Bonus</strong>: è il credito extra aggiunto al wallet del cliente secondo la regola scelta nel
-                  modello.
-                </li>
-                <li>
-                  <strong>Totale</strong>: è il credito finale caricato sul cliente, dato da{" "}
-                  <strong>ricarica + bonus</strong>.
-                </li>
-                <li>
-                  Se il modello è attivo, sarà disponibile in <strong>Pagamenti</strong> per aggiungerlo rapidamente al
-                  carrello.
-                </li>
-                <li>
-                  Il calcolo dei <strong>{label}</strong> può avvenire su <strong>importo + bonus</strong> oppure sul{" "}
-                  <strong>solo importo ricarica</strong>, in base all&apos;impostazione del modello.
-                </li>
-                <li>
-                  Il cliente riceve il credito sul wallet al momento della vendita; eventuali storni vanno gestiti dai
-                  movimenti credito.
-                </li>
-              </ul>
-          </InfoBox>
-        </div>
       </div>
 
       {/* Modal: Crea/Modifica modello */}

@@ -148,7 +148,19 @@ export function PosSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Pagamenti</div>
-          <h1 className="bs-page-title">Impostazioni</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Impostazioni</h1>
+            <InfoBox>
+              <p>Qui imposti le scadenze predefinite di <strong>preordini</strong> e <strong>prepagati</strong>.</p>
+              <ul>
+                <li>La scadenza viene calcolata dalla data di vendita e salvata a fine giornata.</li>
+                <li>
+                  Se disattivi una funzione, le date già salvate non vengono mostrate e non bloccano utilizzi o ritiri;
+                  riattivandola tornano a valere.
+                </li>
+              </ul>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">Configura scadenze, pagamenti anticipati e impostazioni operative.</div>
         </div>
         <div className="bs-page-actions">
@@ -316,12 +328,6 @@ export function PosSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
           </div>
         </div>
 
-        <InfoBox className="mt-3">
-          <ul>
-            <li>La scadenza viene calcolata dalla data vendita e salvata a fine giornata.</li>
-            <li>Se una funzione e&apos; disattivata, le date salvate non vengono mostrate e non bloccano utilizzi o ritiri.</li>
-          </ul>
-        </InfoBox>
 
         <div className="d-flex gap-2 mt-3">
           <button className="btn btn-primary" type="submit">

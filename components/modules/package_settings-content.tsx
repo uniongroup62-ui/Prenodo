@@ -101,7 +101,20 @@ export function PackageSettingsContent({ slug: slugProp }: { slug?: string } = {
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Gestione pacchetti e sedute</div>
-          <h1 className="bs-page-title">Pacchetti / Impostazioni</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Pacchetti / Impostazioni</h1>
+            <InfoBox>
+              <p>
+                La durata predefinita vale per i pacchetti venduti o assegnati <strong>da qui in avanti</strong>:{" "}
+                <strong>Valido dal</strong> resta modificabile in vendita o assegnazione; se <strong>Valido al</strong> è
+                vuoto, viene calcolato usando questa durata.
+              </p>
+              <ul>
+                <li>Se il singolo pacchetto del catalogo ha una propria validità, quella ha priorità.</li>
+                <li>I pacchetti già venduti o assegnati non vengono mai modificati retroattivamente.</li>
+              </ul>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">Configura validita e impostazioni predefinite dei pacchetti.</div>
         </div>
         <div className="bs-page-actions">
@@ -122,7 +135,7 @@ export function PackageSettingsContent({ slug: slugProp }: { slug?: string } = {
       ) : null}
 
       <div className="row g-3">
-        <div className="col-lg-8">
+        <div className="col-12">
           <div className="card p-4">
             <div className="h5 fw-bold mb-3">Pacchetti - Scadenza predefinita</div>
             <div className="text-muted small mb-3">
@@ -182,20 +195,6 @@ export function PackageSettingsContent({ slug: slugProp }: { slug?: string } = {
           </div>
         </div>
 
-        <div className="col-lg-4">
-          <InfoBox>
-            <ul>
-              <li>
-                <strong>Valido dal</strong> resta modificabile in vendita o assegnazione.
-              </li>
-              <li>
-                Se <strong>Valido al</strong> e vuoto, viene calcolato usando questa durata.
-              </li>
-              <li>La validita del catalogo pacchetti, se presente, ha priorita.</li>
-              <li>I pacchetti gia venduti o assegnati non vengono modificati.</li>
-            </ul>
-          </InfoBox>
-        </div>
       </div>
     </div>
   );

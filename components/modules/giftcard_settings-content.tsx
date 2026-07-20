@@ -105,7 +105,28 @@ export function GiftcardSettingsContent({ slug: slugProp, initialQuery }: { slug
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Programma fedelta</div>
-          <h1 className="bs-page-title">Fidelity / GiftCard / Impostazioni</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Fidelity / GiftCard / Impostazioni</h1>
+            <InfoBox>
+              <h6>Scadenza predefinita</h6>
+              <ul>
+                <li><strong>Validità dal</strong> resta modificabile in fase di emissione.</li>
+                <li>Se <strong>Valida al</strong> è vuoto, viene calcolata usando questa durata.</li>
+                <li>Le GiftCard già emesse non vengono modificate.</li>
+              </ul>
+              <h6>Condizioni</h6>
+              <ul>
+                <li>
+                  Il testo compare nel <strong>voucher GiftCard</strong> e nella <strong>mail</strong> inviata al
+                  destinatario: scrivi una riga per ogni condizione.
+                </li>
+                <li>
+                  Se lasci vuoto viene usato il testo predefinito; <strong>Ripristina testo predefinito</strong> torna
+                  allo standard.
+                </li>
+              </ul>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">Configura scadenze e impostazioni predefinite GiftCard.</div>
         </div>
         <div className="bs-page-actions">
@@ -146,7 +167,7 @@ export function GiftcardSettingsContent({ slug: slugProp, initialQuery }: { slug
       ) : null}
 
       <div className="row g-3">
-        <div className="col-lg-8">
+        <div className="col-12">
           <div className="card p-4">
             <div className="h5 fw-bold mb-3">GiftCard — Scadenza predefinita</div>
             <div className="text-muted small mb-3">
@@ -209,23 +230,10 @@ export function GiftcardSettingsContent({ slug: slugProp, initialQuery }: { slug
           </div>
         </div>
 
-        <div className="col-lg-4">
-          <InfoBox>
-            <ul>
-              <li>
-                <strong>Validità dal</strong> resta modificabile in fase di emissione.
-              </li>
-              <li>
-                Se <strong>Valida al</strong> è vuoto, viene calcolata usando questa durata.
-              </li>
-              <li>Le GiftCard già emesse non vengono modificate.</li>
-            </ul>
-          </InfoBox>
-        </div>
       </div>
 
       <div className="row g-3 mt-3">
-        <div className="col-lg-8">
+        <div className="col-12">
           <div className="card p-4">
             <div className="h5 fw-bold mb-3">GiftCard — Condizioni</div>
             <div className="text-muted small mb-3">
@@ -281,12 +289,6 @@ export function GiftcardSettingsContent({ slug: slugProp, initialQuery }: { slug
           </div>
         </div>
 
-        <div className="col-lg-4">
-          <InfoBox>
-            Personalizza qui le condizioni mostrate nel voucher e nella mail GiftCard. Per tornare al testo standard usa{" "}
-            <strong>Ripristina testo predefinito</strong>.
-          </InfoBox>
-        </div>
       </div>
     </div>
   );

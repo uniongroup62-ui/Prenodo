@@ -158,7 +158,23 @@ export function AutomationContent({
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Impostazioni</div>
-          <h1 className="bs-page-title">Automazione</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Automazione</h1>
+            <InfoBox>
+              <p>
+                Ogni automazione (promemoria, follow-up, auguri…) <strong>programma i propri invii in anticipo</strong> e
+                li spedisce all&apos;orario configurato, in ora italiana.
+              </p>
+              <ul>
+                <li>
+                  Se disattivi un&apos;automazione, gli invii già programmati e non ancora spediti vengono{" "}
+                  <strong>cancellati</strong>; riattivandola verranno programmati solo gli invii futuri.
+                </li>
+                <li>I testi dei messaggi sono personalizzabili: se li lasci vuoti viene usato il testo predefinito.</li>
+                <li>Gli invii via SMS consumano i crediti SMS del tuo piano; quelli via email sono inclusi.</li>
+              </ul>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">Gestisci email e SMS automatici inviati ai clienti.</div>
         </div>
       </div>
@@ -527,12 +543,6 @@ export function AutomationContent({
         </div>
       </div>
 
-      <InfoBox className="mt-3">
-        <ul>
-          <li>Ogni automazione programma i propri invii in anticipo e li spedisce all&apos;orario indicato (ora italiana).</li>
-          <li>Se disattivi un&apos;automazione, gli invii già programmati e non ancora spediti vengono cancellati.</li>
-        </ul>
-      </InfoBox>
     </div>
   );
 }

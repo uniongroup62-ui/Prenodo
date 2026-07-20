@@ -4591,75 +4591,66 @@ body:has(.app-shell) :is(
    etichetta+campo. */
 .app-filter-tail{min-height:calc(1.5em + .75rem + 2px);}
 
-/* Box informativa unificata "Come funziona" (bonifica 2026-07-20): un solo
-   aspetto e un solo titolo per tutte le ex cabins/resources/package-settings/
-   recharges/pos-settings-info-box e per le card Suggerimento/Come funziona. */
-.bs-info-box{
-  display:flex;
-  align-items:flex-start;
-  gap:12px;
-  padding:18px;
-  border:1px solid #e4e9f1;
-  border-radius:12px;
-  background:#fff;
-  box-shadow:0 1px 2px rgba(15,23,42,.04);
-}
-
-.bs-info-box__icon{
-  width:34px;
-  height:34px;
-  flex:0 0 34px;
-  display:grid;
+/* Aiuto contestuale unificato "Come funziona" (2026-07-20, evoluto da box a
+   popup): icona "i" tonda accanto al titolo pagina + modale col testo
+   approfondito. Un solo aspetto e un solo titolo per tutte le pagine. */
+.bs-info-trigger{
+  width:26px;
+  height:26px;
+  flex:0 0 auto;
+  display:inline-grid;
   place-items:center;
+  padding:0;
+  border:1px solid #d3ddeb;
   border-radius:50%;
   background:#eef2f9;
   color:#365a96;
-  font-size:16px;
+  font-size:15px;
+  line-height:1;
 }
 
-.bs-info-box__body{
-  min-width:0;
+button.bs-info-trigger:hover,
+button.bs-info-trigger:focus-visible{
+  background:#365a96;
+  border-color:#365a96;
+  color:#fff;
 }
 
-.bs-info-box__title{
-  margin-bottom:6px;
-  color:#0f172a;
-  font-size:14px;
-  font-weight:600;
-  line-height:1.25;
+.bs-info-trigger--static{
+  pointer-events:none;
 }
 
-.bs-info-box__content{
-  color:#5b6b80;
-  font-size:13px;
-  line-height:1.5;
-}
-
-.bs-info-box__content strong{
+.bs-info-modal-body{
   color:#33465e;
+  font-size:13.5px;
+  line-height:1.55;
 }
 
-.bs-info-box__content p{
-  margin-bottom:6px;
+.bs-info-modal-body h6{
+  margin:14px 0 6px;
+  color:#0f172a;
+  font-size:13px;
+  font-weight:700;
 }
 
-.bs-info-box__content ul{
+.bs-info-modal-body h6:first-child{
+  margin-top:0;
+}
+
+.bs-info-modal-body p{
+  margin-bottom:8px;
+}
+
+.bs-info-modal-body ul{
   padding-left:18px;
+  margin-bottom:8px;
+}
+
+.bs-info-modal-body p:last-child,
+.bs-info-modal-body ul:last-child{
   margin-bottom:0;
 }
 
-.bs-info-box__content li + li{
-  margin-top:2px;
-}
-
-@media (max-width: 575.98px){
-  .bs-info-box{
-    padding:14px;
-  }
-
-  .bs-info-box__icon{
-    width:30px;
-    height:30px;
-    flex-basis:30px;
-  }
+.bs-info-modal-body li + li{
+  margin-top:3px;
 }

@@ -304,7 +304,30 @@ export function FidelityWalletContent({ slug: slugProp, initialQuery }: { slug?:
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Portafoglio</div>
-          <h1 className="bs-page-title">Fidelity • Portafoglio</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Fidelity • Portafoglio</h1>
+            <InfoBox>
+              <ul>
+                <li><strong>Saldo</strong>: il totale dei punti del cliente.</li>
+                <li>
+                  <strong>Riservato</strong>: punti impegnati da operazioni in attesa o programmate (prenotazioni con
+                  benefici punti non ancora concluse).
+                </li>
+                <li>
+                  <strong>Disponibile</strong>: saldo meno riservato — è il valore effettivamente utilizzabile in cassa e
+                  può risultare anche negativo dopo correzioni manuali.
+                </li>
+                <li>
+                  <strong>In scadenza</strong>: con la scadenza punti attiva, i punti che scadranno entro la finestra di
+                  preavviso; i punti vincolati a prenotazioni future restano protetti fino alla loro conclusione.
+                </li>
+              </ul>
+              <p>
+                Con <strong>Operazione manuale</strong> puoi aggiungere o rimuovere punti e correggere il credito del
+                cliente: ogni operazione resta tracciata nei movimenti.
+              </p>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">Gestione punti per cliente, movimenti manuali e scadenze.</div>
         </div>
       </div>
@@ -834,14 +857,6 @@ export function FidelityWalletContent({ slug: slugProp, initialQuery }: { slug?:
           </div>
         </div>
       </div>
-      <InfoBox className="mt-3">
-        <ul>
-          <li><strong>Saldo</strong>: tutti i punti del cliente.</li>
-          <li><strong>Riservato</strong>: punti impegnati da operazioni in attesa o programmate.</li>
-          <li><strong>Disponibile</strong>: saldo meno riservato, è quello utilizzabile in cassa.</li>
-          <li><strong>In scadenza</strong>: punti che scadranno a breve, se la scadenza punti è attiva.</li>
-        </ul>
-      </InfoBox>
     </div>
   );
 }

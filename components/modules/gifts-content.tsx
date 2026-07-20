@@ -340,7 +340,29 @@ export function GiftsContent({ slug: slugProp, initialQuery }: { slug?: string; 
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Fidelity</div>
-          <h1 className="bs-page-title">{view === "campaigns" ? "Fidelity / Campagne gift" : "Fidelity / Omaggi"}</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">{view === "campaigns" ? "Fidelity / Campagne gift" : "Fidelity / Omaggi"}</h1>
+            <InfoBox>
+              <p>
+                Il ciclo: crei una <strong>campagna</strong> (evento) con le regole di sblocco; quando un cliente le
+                soddisfa gli viene assegnato un <strong>omaggio</strong> con i premi configurati. Puoi anche assegnarlo
+                manualmente.
+              </p>
+              <ul>
+                <li>
+                  Stati: <strong>accumulo</strong> (regole non ancora soddisfatte), <strong>disponibile</strong>,{" "}
+                  <strong>riscattato</strong>, <strong>annullato</strong>, <strong>scaduto</strong>. Lo stato è derivato
+                  dai movimenti reali.
+                </li>
+                <li>
+                  Il riscatto può essere <strong>parziale</strong>: l&apos;omaggio resta disponibile e si chiude da solo
+                  quando il residuo arriva a zero; se il residuo torna disponibile, si riapre.
+                </li>
+                <li>Gli omaggi <strong>non scalano mai i punti</strong> del cliente.</li>
+                <li>L&apos;eliminazione definitiva è possibile solo per omaggi in accumulo, annullati o scaduti.</li>
+              </ul>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">
             {view === "campaigns" ? "Gestisci campagne, premi, sedi e stati." : "Omaggi avanzati con regole e tracking automatico."}
           </div>
@@ -870,13 +892,6 @@ export function GiftsContent({ slug: slugProp, initialQuery }: { slug?: string; 
           <div className="modal-backdrop fade show" />
         </>
       ) : null}
-      <InfoBox className="mt-3">
-        <ul>
-          <li>Crea un evento con le sue regole: quando un cliente le soddisfa, l&apos;omaggio gli viene assegnato.</li>
-          <li>L&apos;omaggio si chiude da solo quando il residuo arriva a zero; se il residuo torna disponibile, si riapre.</li>
-          <li>Gli omaggi non scalano mai i punti del cliente.</li>
-        </ul>
-      </InfoBox>
     </div>
   );
 }

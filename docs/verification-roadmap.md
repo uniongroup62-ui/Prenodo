@@ -17542,3 +17542,23 @@ senza box (la box vive in fidelity_wallet). Probe Playwright 17/17
 (titolo+frammento contenuto per pagina; frammenti senza apostrofi curly).
 Regressioni: orari-pass2 14, portafoglio-pass2 10, punti-pass2 5,
 report-pass2 12, ruoli-pass2 10; tsc pulito. Totale: 28 box su 27 pagine.
+
+## 2026-07-20 - InfoBox evoluta: icona "i" nell'header + popup approfondito
+Su proposta utente la box inline sparisce: InfoBox ora renderizza una icona
+"i" tonda (bs-info-trigger, chip navy) accanto al titolo pagina e un popup
+modale "Come funziona" (Esc + backdrop close, bs-info-modal-body con h6 di
+sezione). Tutte le 27 pagine migrate: trigger nell'header (h1 avvolto in
+d-flex align-items-center gap-2), testi RISCRITTI in versione approfondita
+(sezioni, casi limite, regole secondarie prima tagliate per brevita, sempre
+verificati su codice/memorie). Le sidebar informative delle pagine
+impostazioni sono rimosse e le colonne allargate a col-12 (cabins,
+resources form, package_settings, recharges, fidelity_membership_settings,
+giftbox/giftcard settings x2, quote_settings metodi pagamento);
+giftbox/giftcard settings fondono le due box in un popup a due sezioni;
+quote_settings ha un solo popup nell'header principale con le tre sezioni.
+Trappola probe: click sul trigger PRIMA dell'idratazione (~3s) apre e perde
+il modale al remount - 4 pagine flakey rientrate con l'attesa. Probe
+Playwright 27/27 (trigger, click, titolo+frammento, Esc, zero .bs-info-box
+residue) + screenshot aperto/chiuso. tsc pulito (validator.ts di .next
+corrotto dal dev server: rigenerato). Regressioni cabine-pass2 20,
+risorse-pass2 3, dom-giftcard-improvements 5.

@@ -203,7 +203,23 @@ export function QuotesContent({ slug: slugProp, initialQuery }: { slug?: string;
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Vendite</div>
-          <h1 className="bs-page-title">Preventivi</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Preventivi</h1>
+            <InfoBox>
+              <p>I preventivi sono numerati per anno (es. 3/2026) e puoi stamparli o inviarli al cliente via email.</p>
+              <ul>
+                <li>
+                  Per convertirne uno in vendita aprilo e usa <strong>Vai a Pagamenti</strong>: il carrello si precompila
+                  con le righe del preventivo (bloccate per coerenza) e all&apos;incasso il preventivo passa a{" "}
+                  <strong>Convertito</strong>.
+                </li>
+                <li>
+                  Intestazione dei documenti, condizioni e metodi di pagamento si configurano in{" "}
+                  <strong>Preventivi → Impostazioni</strong>.
+                </li>
+              </ul>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">Crea e gestisci preventivi per i tuoi clienti.</div>
         </div>
         <div className="bs-page-actions">
@@ -430,12 +446,6 @@ export function QuotesContent({ slug: slugProp, initialQuery }: { slug?: string;
           </div>
         </>
       )}
-      <InfoBox className="mt-3">
-        <ul>
-          <li>I preventivi sono numerati per anno (es. 3/2026).</li>
-          <li>Per trasformare un preventivo in vendita aprilo e usa <strong>Vai a Pagamenti</strong>: il carrello si precompila e all&apos;incasso il preventivo risulta convertito.</li>
-        </ul>
-      </InfoBox>
     </div>
   );
 }

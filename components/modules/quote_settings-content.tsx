@@ -182,7 +182,20 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Vendite</div>
-          <h1 className="bs-page-title">Preventivi / Impostazioni</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Preventivi / Impostazioni</h1>
+            <InfoBox>
+              <h6>Intestazione documenti</h6>
+              <p>I dati anagrafici compilati qui compaiono nell&apos;intestazione dei preventivi stampati e inviati.</p>
+              <h6>Condizioni</h6>
+              <p>Il testo delle condizioni viene riportato in coda al preventivo; vuoto = testo predefinito.</p>
+              <h6>Metodi di pagamento</h6>
+              <p>
+                Compila <strong>Nome</strong> e, se serve, <strong>Dettagli</strong> (IBAN, email PayPal, note
+                operative): il metodo scelto compare sul preventivo consegnato al cliente.
+              </p>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">
             Configura intestazione documenti, condizioni standard e metodi di pagamento dei preventivi.
           </div>
@@ -532,7 +545,7 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
           </div>
 
           <div className="row g-3 mt-3">
-            <div className="col-lg-8">
+            <div className="col-12">
               <div className="card p-4">
                 <div className="h5 fw-bold mb-3">Preventivi — Metodi di pagamento</div>
                 <div className="text-muted small mb-3">
@@ -616,12 +629,6 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
               </div>
             </div>
 
-            <div className="col-lg-4">
-              <InfoBox>
-                Compila <strong>Nome</strong> e, se serve, <strong>Dettagli</strong> come IBAN, email PayPal o note
-                operative.
-              </InfoBox>
-            </div>
           </div>
         </>
       )}

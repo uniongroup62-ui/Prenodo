@@ -335,7 +335,25 @@ export function CabinsContent({ slug: slugProp, initialQuery }: { slug?: string;
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Risorse</div>
-          <h1 className="bs-page-title">Cabine</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Cabine</h1>
+            <InfoBox>
+              <p>
+                Le cabine servono a rendere <strong>prenotabili i servizi</strong>: ogni servizio può essere associato a
+                una o più cabine e al momento della prenotazione ne viene occupata una.
+              </p>
+              <ul>
+                <li>
+                  Si configurano <strong>per sede</strong>: imposta il numero, assegna un nome a ciascuna (breve e
+                  riconoscibile: &quot;Cabina 1&quot;, &quot;Cabina VIP&quot;) e salva.
+                </li>
+                <li>
+                  Una cabina si può eliminare solo se non è associata a servizi e non ha prenotazioni future: in caso
+                  contrario il sistema la blocca e mostra i collegamenti da rimuovere.
+                </li>
+              </ul>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">
             Configura le cabine disponibili per la pianificazione degli appuntamenti nella sede selezionata.
           </div>
@@ -343,7 +361,7 @@ export function CabinsContent({ slug: slugProp, initialQuery }: { slug?: string;
       </div>
 
       <div className="row g-3">
-        <div className="col-lg-7">
+        <div className="col-12">
           <div className="card p-4">
             <div className="h5 fw-bold mb-3">Sede: {selectedLocationName}</div>
 
@@ -436,15 +454,6 @@ export function CabinsContent({ slug: slugProp, initialQuery }: { slug?: string;
           </div>
         </div>
 
-        <div className="col-lg-5">
-          <InfoBox>
-            <ul>
-              <li>Le cabine sono necessarie per rendere prenotabili i servizi.</li>
-              <li>Ogni servizio puo essere associato a una o piu cabine.</li>
-              <li>Usa nomi brevi e riconoscibili, ad esempio Cabina 1, Cabina 2 o Cabina VIP.</li>
-            </ul>
-          </InfoBox>
-        </div>
       </div>
 
       <div

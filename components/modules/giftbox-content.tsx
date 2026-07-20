@@ -224,7 +224,26 @@ export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string
     <div className="bs-page-header">
       <div className="bs-page-heading">
         <div className="bs-page-kicker">Programma fedelta</div>
-        <h1 className="bs-page-title">Fidelity / GiftBox</h1>
+        <div className="d-flex align-items-center gap-2">
+          <h1 className="bs-page-title">Fidelity / GiftBox</h1>
+          <InfoBox>
+            <p>
+              Qui gestisci i <strong>modelli</strong> GiftBox (contenuto, prezzo, validità) e consulti le GiftBox emesse
+              con il loro stato.
+            </p>
+            <ul>
+              <li>
+                L&apos;emissione avviene <strong>solo dalla pagina Pagamenti</strong>, aggiungendo la GiftBox al carrello.
+              </li>
+              <li>
+                Alla vendita il contenuto viene <strong>congelato</strong>: le modifiche successive al modello non toccano
+                le GiftBox già emesse.
+              </li>
+              <li>Il riscatto può essere parziale, voce per voce, dal dettaglio dell&apos;istanza.</li>
+              <li>Eliminare un modello non tocca le GiftBox già vendute: restano consultabili e riscattabili.</li>
+            </ul>
+          </InfoBox>
+        </div>
         <div className="bs-page-subtitle">Gestisci template, voucher e GiftBox emesse.</div>
       </div>
       <div className="bs-page-actions">
@@ -564,13 +583,6 @@ export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string
           </div>
         </>
       )}
-      <InfoBox className="mt-3">
-        <ul>
-          <li>Qui crei i modelli GiftBox e consulti quelle emesse.</li>
-          <li>L&apos;emissione avviene solo dalla pagina <strong>Pagamenti</strong>, aggiungendo la GiftBox al carrello.</li>
-          <li>Il contenuto di una GiftBox venduta resta congelato: le modifiche al modello non toccano le emissioni passate.</li>
-        </ul>
-      </InfoBox>
     </div>
   );
 }

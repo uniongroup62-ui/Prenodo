@@ -198,7 +198,22 @@ export function CouponsContent({ slug: slugProp, initialQuery }: { slug?: string
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Buoni</div>
-          <h1 className="bs-page-title">Coupon / Promo</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Coupon / Promo</h1>
+            <InfoBox>
+              <p>
+                I buoni si applicano in cassa: il loro valore viene <strong>sempre ricalcolato dai prezzi di listino
+                correnti</strong> al momento dell&apos;uso, non da quelli del giorno di emissione.
+              </p>
+              <ul>
+                <li>
+                  In cassa non devi scegliere tu: se più promozioni o buoni sono applicabili, il sistema usa
+                  automaticamente la <strong>combinazione più conveniente</strong> per il cliente.
+                </li>
+                <li>L&apos;anteprima del buono mostra il valore che avrebbe oggi, ricostruito dal listino.</li>
+              </ul>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">Crea e gestisci codici sconto e campagne coupon.</div>
         </div>
         {hasAnyCoupons ? (
@@ -340,12 +355,6 @@ export function CouponsContent({ slug: slugProp, initialQuery }: { slug?: string
             </div>
           </div>
       ) : null}
-      <InfoBox className="mt-3">
-        <ul>
-          <li>Il valore del buono viene sempre ricalcolato dai prezzi di listino correnti.</li>
-          <li>In cassa non devi scegliere: se più promozioni sono applicabili viene usata automaticamente la più conveniente.</li>
-        </ul>
-      </InfoBox>
     </div>
   );
 }

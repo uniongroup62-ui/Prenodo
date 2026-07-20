@@ -223,7 +223,26 @@ export function ResourcesContent({ slug: slugProp, initialQuery }: { slug?: stri
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Risorse</div>
-          <h1 className="bs-page-title">{action === "edit" ? "Modifica risorsa" : action === "new" ? "Nuova risorsa" : "Risorse"}</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">{action === "edit" ? "Modifica risorsa" : action === "new" ? "Nuova risorsa" : "Risorse"}</h1>
+            <InfoBox>
+              <p>
+                Le risorse sono macchinari, dispositivi o dotazioni condivise con disponibilità limitata (es.
+                &quot;Lettino abbronzante&quot;, &quot;Macchinario laser&quot;).
+              </p>
+              <ul>
+                <li>
+                  La <strong>quantità</strong> è la disponibilità massima <strong>contemporanea</strong> per sede: il
+                  sistema conta il picco di utilizzo negli stessi minuti, non il totale della giornata.
+                </li>
+                <li>
+                  Non puoi ridurre la quantità sotto il picco già prenotato: il salvataggio viene bloccato con il
+                  dettaglio delle prenotazioni esistenti.
+                </li>
+                <li>Una risorsa collegata a servizi non può essere eliminata finché non la scolleghi.</li>
+              </ul>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">
             Gestisci le risorse condivise con una quantita massima disponibile contemporaneamente.
           </div>
@@ -266,7 +285,7 @@ export function ResourcesContent({ slug: slugProp, initialQuery }: { slug?: stri
 
       {isFormView && form ? (
         <div className="row g-3">
-          <div className="col-lg-7">
+          <div className="col-12">
             <div className="card p-4">
               <form className="row g-3" id="resourceForm" onSubmit={saveResource}>
                 <input type="hidden" name="id" value={form.id} />
@@ -375,16 +394,6 @@ export function ResourcesContent({ slug: slugProp, initialQuery }: { slug?: stri
             </div>
           </div>
 
-          <div className="col-lg-5">
-            <InfoBox>
-              <p>Imposta la disponibilità massima contemporanea della risorsa.</p>
-              <ul>
-                <li>“Lettino abbronzante” → Quantità: 2</li>
-                <li>“Macchinario Laser” → Quantità: 1</li>
-                <li>“Sala riunioni” → Quantità: 3</li>
-              </ul>
-            </InfoBox>
-          </div>
         </div>
       ) : emptyState ? (
         <div className="card resources-empty-card">

@@ -334,7 +334,30 @@ export function CommissionsContent({ slug: slugProp, initialQuery }: { slug?: st
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Operatori</div>
-          <h1 className="bs-page-title">Commissioni</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Commissioni</h1>
+            <InfoBox>
+              <ul>
+                <li>
+                  Le commissioni su <strong>appuntamenti</strong> leggono automaticamente le prestazioni concluse da
+                  Quick Booking e Booking pubblico; quelle <strong>POS</strong> l&apos;operatore che ha registrato la
+                  vendita in Pagamenti.
+                </li>
+                <li>
+                  Pacchetti, prepagati, GiftBox, GiftCard e omaggi <strong>non generano una seconda commissione</strong>{" "}
+                  al riscatto.
+                </li>
+                <li>
+                  Se una vendita viene annullata, il movimento resta nello storico come <strong>Annullato</strong> e
+                  viene eliminato solo con l&apos;eliminazione definitiva della vendita.
+                </li>
+                <li>
+                  Le percentuali si impostano per operatore in <strong>Impostazioni operatori</strong>; il mese di
+                  competenza segue la data dell&apos;incasso.
+                </li>
+              </ul>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">
             Collegato a Pagamenti, Quick Booking e Booking. Gli appuntamenti entrano in commissione quando risultano Eseguiti.
           </div>
@@ -506,13 +529,6 @@ export function CommissionsContent({ slug: slugProp, initialQuery }: { slug?: st
                 </a>
               </div>
             </form>
-            <InfoBox className="mt-3">
-              Le commissioni su appuntamenti leggono automaticamente le prestazioni concluse da Quick Booking e Booking
-              pubblico. Le commissioni POS leggono l&rsquo;operatore che ha registrato la vendita in Pagamenti. Pacchetti,
-              prepagati, GiftBox, GiftCard e omaggi non generano una seconda commissione al riscatto. Se una vendita viene
-              annullata il movimento resta nello storico Commissioni come <strong>Annullato</strong> e viene eliminato solo
-              con l&rsquo;eliminazione definitiva della vendita annullata.
-            </InfoBox>
           </div>
 
           {moduleEnabled && configuredRates <= 0 ? (

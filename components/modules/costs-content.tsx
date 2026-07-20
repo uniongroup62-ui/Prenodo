@@ -372,7 +372,23 @@ export function CostsContent({ slug: slugProp, initialQuery }: { slug?: string; 
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Amministrazione</div>
-          <h1 className="bs-page-title">Scadenziario e Costi</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Scadenziario e Costi</h1>
+            <InfoBox>
+              <p>
+                Registra i costi dell&apos;attività con categoria, scadenza ed eventuale allegato. Ogni costo appartiene a
+                una <strong>sede</strong>.
+              </p>
+              <ul>
+                <li>
+                  I costi <strong>ricorrenti</strong> generano automaticamente le prossime scadenze; se il giorno impostato
+                  non esiste nel mese (29, 30 o 31), la scadenza cade l&apos;ultimo giorno del mese.
+                </li>
+                <li>Segnando un costo come pagato, il pagamento viene registrato alla data indicata.</li>
+                <li>Lo scadenziario evidenzia scaduto, in scadenza e pagato del periodo selezionato.</li>
+              </ul>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">Gestisci scadenze, costi e categorie operative.</div>
         </div>
         <div className="bs-page-actions">
@@ -797,13 +813,6 @@ export function CostsContent({ slug: slugProp, initialQuery }: { slug?: string; 
           <div className="modal-backdrop fade show" onClick={() => setDetailCost(null)} />
         </>
       ) : null}
-      <InfoBox className="mt-3">
-        <ul>
-          <li>I costi ricorrenti generano automaticamente le prossime scadenze.</li>
-          <li>Se il giorno impostato non esiste nel mese (29, 30 o 31), la scadenza cade l&apos;ultimo giorno del mese.</li>
-          <li>Ogni costo appartiene a una sede.</li>
-        </ul>
-      </InfoBox>
     </div>
   );
 }
