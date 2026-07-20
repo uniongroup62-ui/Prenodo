@@ -16980,3 +16980,29 @@ H7 ora attende a poll (20s) invece dei 4s fissi.
 
 Regressioni: faseAB 11, fase4 11, autorepair 5, diagnostica 4 (D2/D4
 aggiornate), giro5 17, restore 8 — verdi; tsc pulito.
+
+## 2026-07-20 — TESTI DIAGNOSTICA IN LINGUAGGIO DA TITOLARE (rilievo utente)
+
+I messaggi dei controlli parlavano da sviluppatore ("OK (condiviso, non
+dipende dal tenant)", "Catalogo completo (63 voci)", "passo business",
+"1 attivi"). Bonifica in saasTenantHealth:
+- Schema database: "Tutte le tabelle e i campi necessari sono presenti";
+  errore: "N tabelle o campi mancanti — riguarda tutta la piattaforma, si
+  risolve con le migrazioni".
+- Permessi ruoli: "Tutte le 63 voci previste sono presenti"; warning: "N
+  voci mancanti — la Verifica le aggiunge da sola".
+- Onboarding: passo del wizard TRADOTTO ("prossimo passo: Attività", mappa
+  stepIt su onboardingSteps), nascosto se completato/nascosto; stato
+  mancante: "Stato da inizializzare — la Verifica lo crea da sola".
+- Admin tenant: "1 account amministratore"; errore: "Nessun account
+  amministratore — si sistema dalla tab Admin".
+- Operatori/Sedi: singolare/plurale corretti ("1 attivo", "1 attiva",
+  "Nessun operatore attivo", "Nessuna sede attiva").
+- Profilo attività: "Compilato" / "Non ancora compilato"; "Registro
+  onboarding" al posto di "Tabella onboarding".
+Regola generale: ogni messaggio dice COSA significa e, se il problema e'
+auto-riparabile o ha una cura, DOVE si sistema.
+
+Verifica: diagnostica rigenerata via cron (testi nuovi nel checks_json di
+elite, verificati uno per uno); suite diagnostica 4, autorepair 5, ux 7 —
+verdi; tsc pulito. Le diagnostiche storiche mantengono i testi vecchi.

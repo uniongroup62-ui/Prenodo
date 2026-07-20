@@ -518,15 +518,18 @@ export async function saasTenantHealth(tenant: SaasTenantRow, deep = true): Prom
   add("status", "Stato tenant", status === "active" ? "ok" : "warning", statusIt[status] ?? status);
 
   if (!await freshTableExists(ONBOARDING_TABLE)) {
-    add("onboarding_table", "Tabella onboarding", "warning", "Tabella non disponibile");
+    add("onboarding_table", "Registro onboarding", "warning", "Registro non disponibile");
   } else {
     const progress = await dbQuery<RowDataPacket[]>("SELECT status,current_step FROM `tenant_onboarding_progress` WHERE tenant_id=? LIMIT 1", [Number(tenant.id)]).catch(() => []);
-    if (!progress[0]) add("onboarding_state", "Onboarding", "warning", "Stato onboarding mancante");
+    if (!progress[0]) add("onboarding_state", "Onboarding", "warning", "Stato da inizializzare — la Verifica lo crea da sola");
     else {
       const onboardingIt: Record<string, string> = { not_started: "Non iniziato", in_progress: "In corso", completed: "Completato", dismissed: "Nascosto" };
+      // passi del wizard col nome mostrato al titolare, mai la chiave grezza
+      const stepIt: Record<string, string> = { business: "Attività", location: "Sede", activity_categories: "Categorie attività", hours: "Orari", staff: "Operatori", cabins: "Cabine", service_categories: "Categorie servizi", services: "Servizi", booking: "Booking" };
       const state = String(progress[0].status ?? "");
       const step = String(progress[0].current_step ?? "");
-      add("onboarding_state", "Onboarding", "ok", `${onboardingIt[state] ?? state}${step ? ` · passo ${step}` : ""}`);
+      const showStep = step && state !== "completed" && state !== "dismissed";
+      add("onboarding_state", "Onboarding", "ok", `${onboardingIt[state] ?? state}${showStep ? ` · prossimo passo: ${stepIt[step] ?? step}` : ""}`);
     }
   }
 
@@ -534,8 +537,8 @@ export async function saasTenantHealth(tenant: SaasTenantRow, deep = true): Prom
   // ogni tenant) — un errore qui significa deploy/migrazione rotti, non un
   // problema del singolo cliente.
   const schema = await schemaDiagnostics(String(tenant.slug));
-  if (schema.missing.length > 0) add("schema", "Schema database", "error", `${schema.missing.length} tabelle/campi mancanti nel database condiviso`);
-  else add("schema", "Schema database", "ok", "OK (condiviso, non dipende dal tenant)");
+  if (schema.missing.length > 0) add("schema", "Schema database", "error", `${schema.missing.length} tabelle o campi mancanti — riguarda tutta la piattaforma, si risolve con le migrazioni`);
+  else add("schema", "Schema database", "ok", "Tutte le tabelle e i campi necessari sono presenti");
 
   if (deep) {
     try {
@@ -544,10 +547,10 @@ export async function saasTenantHealth(tenant: SaasTenantRow, deep = true): Prom
       const staffCount = await countQuery("SELECT COUNT(*) FROM `staff` WHERE tenant_id=? AND COALESCE(is_active,1)=1", [tenantId]);
       const locationCount = await countQuery("SELECT COUNT(*) FROM `locations` WHERE tenant_id=? AND COALESCE(is_active,1)=1", [tenantId]);
       const businessCount = await countQuery("SELECT COUNT(*) FROM `businesses` WHERE tenant_id=?", [tenantId]);
-      add("admin_user", "Admin tenant", adminCount > 0 ? "ok" : "error", adminCount > 0 ? `${adminCount} admin` : "Admin mancante");
-      add("staff", "Operatori", staffCount > 0 ? "ok" : "warning", `${staffCount} attivi`);
-      add("locations", "Sedi", locationCount > 0 ? "ok" : "warning", `${locationCount} attive`);
-      add("business_profile", "Profilo attività", businessCount > 0 ? "ok" : "warning", businessCount > 0 ? "Presente" : "Mancante");
+      add("admin_user", "Admin tenant", adminCount > 0 ? "ok" : "error", adminCount > 0 ? (adminCount === 1 ? "1 account amministratore" : `${adminCount} account amministratore`) : "Nessun account amministratore — si sistema dalla tab Admin");
+      add("staff", "Operatori", staffCount > 0 ? "ok" : "warning", staffCount > 0 ? (staffCount === 1 ? "1 attivo" : `${staffCount} attivi`) : "Nessun operatore attivo");
+      add("locations", "Sedi", locationCount > 0 ? "ok" : "warning", locationCount > 0 ? (locationCount === 1 ? "1 attiva" : `${locationCount} attive`) : "Nessuna sede attiva");
+      add("business_profile", "Profilo attività", businessCount > 0 ? "ok" : "warning", businessCount > 0 ? "Compilato" : "Non ancora compilato");
       // Voci di catalogo permessi assenti (tenant nati con un catalogo piu'
       // vecchio, migrati o ripristinati): buco ADDITIVO auto-riparabile.
       if (await freshTableExists("permissions")) {
@@ -556,7 +559,7 @@ export async function saasTenantHealth(tenant: SaasTenantRow, deep = true): Prom
           ? await countQuery(`SELECT COUNT(*) FROM \`permissions\` WHERE tenant_id=? AND perm IN (${catalog.map(() => "?").join(",")})`, [tenantId, ...catalog])
           : 0;
         const missingPerms = Math.max(0, catalog.length - present);
-        add("permissions", "Permessi ruoli", missingPerms > 0 ? "warning" : "ok", missingPerms > 0 ? `${missingPerms} voci di catalogo mancanti` : `Catalogo completo (${catalog.length} voci)`);
+        add("permissions", "Permessi ruoli", missingPerms > 0 ? "warning" : "ok", missingPerms > 0 ? `${missingPerms} ${missingPerms === 1 ? "voce mancante" : "voci mancanti"} — la Verifica le aggiunge da sola` : `Tutte le ${catalog.length} voci previste sono presenti`);
       }
     } catch (error) {
       add("tenant_probe", "Diagnostica tenant", "warning", error instanceof Error ? error.message : "Verifica non riuscita");
