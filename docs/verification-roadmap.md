@@ -17562,3 +17562,10 @@ Playwright 27/27 (trigger, click, titolo+frammento, Esc, zero .bs-info-box
 residue) + screenshot aperto/chiuso. tsc pulito (validator.ts di .next
 corrotto dal dev server: rigenerato). Regressioni cabine-pass2 20,
 risorse-pass2 3, dom-giftcard-improvements 5.
+
+## 2026-07-20 - Popup Come funziona: pallini lista ripristinati
+Segnalazione utente: nel popup le voci elenco sembravano testo disallineato.
+Causa: il preflight Tailwind globale azzera i list-style di TUTTE le ul, la
+lista restava rientrata (padding 18px) ma senza marker. Fix in app.css:
+.bs-info-modal-body ul e li con list-style:disc esplicito. Verifica
+computed-style (ul=disc, li=disc) + screenshot popup Gestione Rate.

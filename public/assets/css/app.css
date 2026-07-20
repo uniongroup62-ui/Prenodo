@@ -4642,8 +4642,15 @@ button.bs-info-trigger:focus-visible{
 }
 
 .bs-info-modal-body ul{
+  /* il preflight Tailwind globale azzera i marker: senza disc la lista
+     rientrata sembra testo disallineato */
+  list-style:disc;
   padding-left:18px;
   margin-bottom:8px;
+}
+
+.bs-info-modal-body ul li{
+  list-style:disc;
 }
 
 .bs-info-modal-body p:last-child,
