@@ -155,6 +155,7 @@ function TenantOverview({ detail }: { detail: TenantDetailPayload }) {
       checks = [];
     }
   }
+  const problems = checks.filter((check) => check.level !== "ok");
   return (
     <div className="grid gap-4">
       <div className="grid gap-3 md:grid-cols-3">
@@ -170,7 +171,14 @@ function TenantOverview({ detail }: { detail: TenantDetailPayload }) {
         <Detail label="Origine" value={tenant.source === "self_signup" ? "Registrazione autonoma" : "Creazione admin"} />
         <Detail label="Creato il" value={tenant.created_at || "-"} />
       </div>
-      <HealthChecks checks={checks} />
+      {/* SOLO i controlli con problemi (rilievo utente 20/07): un controllo
+          superato non e' una notizia — il dettaglio integrale vive nella tab
+          Diagnostica. A tutto verde: una riga di sintesi e basta. */}
+      {problems.length > 0 ? (
+        <HealthChecks checks={problems} />
+      ) : checks.length > 0 ? (
+        <p className="text-sm font-semibold text-emerald-700">{checks.length} controlli superati.</p>
+      ) : null}
     </div>
   );
 }
@@ -286,13 +294,23 @@ function TenantOnboarding({ tenant, canManage, onAction }: { tenant: Tenant; can
 
 function TenantHealth({ detail, canManage, onAction }: { detail: TenantDetailPayload; canManage: boolean; onAction: (action: string, payload?: Record<string, string>) => void }) {
   const tenant = detail.tenant;
+  let fullChecks = tenant.health?.checks ?? [];
+  if (!fullChecks.length && detail.healthChecks[0]?.checks_json) {
+    try {
+      fullChecks = JSON.parse(String(detail.healthChecks[0].checks_json));
+    } catch {
+      fullChecks = [];
+    }
+  }
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap gap-2">
         <Button disabled={!canManage} icon={Activity} onClick={() => onAction("record_health", { slug: tenant.slug })}>Verifica diagnostica</Button>
         <Button variant="outline" disabled={!canManage} icon={Wrench} onClick={() => onAction("repair_schema", { slug: tenant.slug })}>Ripara schema</Button>
       </div>
-      <HealthChecks checks={tenant.health?.checks ?? []} />
+      {/* Lista INTEGRALE dei controlli (dall'ultima diagnostica registrata):
+          qui e' la tab tecnica, in Panoramica restano solo i problemi. */}
+      <HealthChecks checks={fullChecks} />
       {tenant.health?.missing_schema?.length ? <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Elementi schema mancanti: {tenant.health.missing_schema.slice(0, 20).join(", ")}</div> : null}
       <Table title="Storico diagnostica" headers={["Data", "Origine", "Esito", "Errori"]} rows={detail.healthChecks.map((row) => [row.created_at || "-", row.source || "-", healthLabel[row.level] || row.level, String(row.errors_count ?? 0)])} />
     </div>

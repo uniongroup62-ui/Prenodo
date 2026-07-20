@@ -501,14 +501,21 @@ export async function saasTenantHealth(tenant: SaasTenantRow, deep = true): Prom
   };
 
   const status = tenantStatus(tenant);
-  add("status", "Stato tenant", status === "active" ? "ok" : "warning", status);
+  // Etichette dei controlli in ITALIANO (bonifica 20/07): mai enum grezzi.
+  const statusIt: Record<string, string> = { active: "Attivo", suspended: "Sospeso", provisioning: "Provisioning", failed: "Errore", deleted: "Eliminato" };
+  add("status", "Stato tenant", status === "active" ? "ok" : "warning", statusIt[status] ?? status);
 
   if (!await freshTableExists(ONBOARDING_TABLE)) {
     add("onboarding_table", "Tabella onboarding", "warning", "Tabella non disponibile");
   } else {
     const progress = await dbQuery<RowDataPacket[]>("SELECT status,current_step FROM `tenant_onboarding_progress` WHERE tenant_id=? LIMIT 1", [Number(tenant.id)]).catch(() => []);
     if (!progress[0]) add("onboarding_state", "Onboarding", "warning", "Stato onboarding mancante");
-    else add("onboarding_state", "Onboarding", "ok", `${String(progress[0].status ?? "")} / ${String(progress[0].current_step ?? "")}`);
+    else {
+      const onboardingIt: Record<string, string> = { not_started: "Non iniziato", in_progress: "In corso", completed: "Completato", dismissed: "Nascosto" };
+      const state = String(progress[0].status ?? "");
+      const step = String(progress[0].current_step ?? "");
+      add("onboarding_state", "Onboarding", "ok", `${onboardingIt[state] ?? state}${step ? ` · passo ${step}` : ""}`);
+    }
   }
 
   const schema = await schemaDiagnostics(String(tenant.slug));
@@ -525,7 +532,7 @@ export async function saasTenantHealth(tenant: SaasTenantRow, deep = true): Prom
       add("admin_user", "Admin tenant", adminCount > 0 ? "ok" : "error", adminCount > 0 ? `${adminCount} admin` : "Admin mancante");
       add("staff", "Operatori", staffCount > 0 ? "ok" : "warning", `${staffCount} attivi`);
       add("locations", "Sedi", locationCount > 0 ? "ok" : "warning", `${locationCount} attive`);
-      add("business_profile", "Profilo attivita", businessCount > 0 ? "ok" : "warning", businessCount > 0 ? "Presente" : "Mancante");
+      add("business_profile", "Profilo attività", businessCount > 0 ? "ok" : "warning", businessCount > 0 ? "Presente" : "Mancante");
     } catch (error) {
       add("tenant_probe", "Diagnostica tenant", "warning", error instanceof Error ? error.message : "Verifica non riuscita");
     }

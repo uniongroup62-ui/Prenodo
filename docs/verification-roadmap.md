@@ -16842,3 +16842,22 @@ Verifica: checker verde, tsc pulito, suite ux/dash/stats/faseE verdi
 inserimenti di commenti via script su file CRLF vanno fatti con
 ancore a riga singola e verificati col checker — due annotazioni
 finite fuori posto sono state ripulite a mano.
+
+## 2026-07-20 — PANORAMICA TENANT: SOLO PROBLEMI (rilievo utente)
+
+Il muro di righe "OK OK OK" in Panoramica non aggiungeva nulla (la
+card Salute dice gia' tutto): (1) in Panoramica compaiono SOLO i
+controlli con warning/errore; a tutto verde una riga di sintesi
+"N controlli superati." — cosi' "Schema tenant" appare solo quando e'
+rotto, cioe' quando serve; (2) la lista INTEGRALE dei controlli vive
+nella tab Diagnostica (dall'ultima diagnostica registrata, sopra lo
+storico); (3) etichette dei controlli bonificate LATO SERVER
+(saasTenantHealth): "Attivo" non 'active', "Non iniziato · passo X"
+non 'not_started / business', "Profilo attività" con l'accento — le
+righe storiche mantengono le etichette vecchie finche' una nuova
+diagnostica non le rigenera.
+
+Verifica: diagnostica rigenerata via cron -> checks_json con le
+etichette nuove; ux M5 riscritta (sintesi in Panoramica, zero righe
+OK, lista integrale in Diagnostica) 7/7; regressioni giro5/faseAB/
+faseC/faseD/dash/rifiniture/stats/fase3 verdi; tsc pulito.
