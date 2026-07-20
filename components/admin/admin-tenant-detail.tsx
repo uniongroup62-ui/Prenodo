@@ -334,10 +334,9 @@ function TenantHealth({ detail, canManage, onAction }: { detail: TenantDetailPay
         </div>
         <div className="flex flex-wrap gap-2">
           <Button disabled={!canManage} icon={Activity} onClick={() => onAction("record_health", { slug: tenant.slug })}>Verifica diagnostica</Button>
-          <Button variant="outline" disabled={!canManage} icon={Wrench} onClick={() => onAction("repair_schema", { slug: tenant.slug })}>Ripara dati tenant</Button>
         </div>
       </div>
-      <p className="text-xs text-slate-500">Verifica diagnostica esegue subito tutti i controlli e registra l&apos;esito; Ripara dati tenant ricrea onboarding e permessi ruoli del tenant e riesegue la diagnostica.</p>
+      <p className="text-xs text-slate-500">Esegue tutti i controlli, ripara da sola i buchi additivi (onboarding e permessi ruoli) e registra l&apos;esito. Admin mancante si sistema dalla tab Admin; lo schema con le migrazioni.</p>
       {/* Lista INTEGRALE dei controlli (dall'ultima diagnostica registrata):
           qui e' la tab tecnica, in Panoramica restano solo i problemi. */}
       <HealthChecks checks={fullChecks} />

@@ -550,15 +550,19 @@ async function provisionTenantFromSignup(signup: SignupRow, verifiedAt: string):
 }
 
 async function seedTenantPermissions(tenantId: number): Promise<void> {
-  for (const definition of permissionDefinitions) {
-    await insertKnown("permissions", {
-      tenant_id: tenantId,
-      perm: definition.perm,
-      label: definition.label,
-      group_name: definition.groupName,
-      sort_order: definition.sortOrder,
-    }, { ignore: true });
-  }
+  if (!permissionDefinitions.length) return;
+  // Batch unico come in saas-tenant-manager: la semina per-riga costava
+  // ~20s di round-trip nel provisioning; PK (tenant_id, perm) + ON CONFLICT
+  // DO NOTHING = stesso effetto additivo.
+  const params: unknown[] = [];
+  const rows = permissionDefinitions.map((definition) => {
+    params.push(tenantId, definition.perm, definition.label, definition.groupName, definition.sortOrder);
+    return "(?,?,?,?,?)";
+  });
+  await dbQuery(
+    `INSERT INTO \`permissions\` (\`tenant_id\`,\`perm\`,\`label\`,\`group_name\`,\`sort_order\`) VALUES ${rows.join(",")} ON CONFLICT DO NOTHING`,
+    params,
+  );
 }
 
 async function seedDefaultHours(tenantId: number, locationId: number): Promise<void> {

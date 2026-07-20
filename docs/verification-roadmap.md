@@ -16956,3 +16956,27 @@ source auto_repair coi check verdi, audit, UI origine tradotta). Regressioni
 fase4 11, faseC 7, rifiniture 8 (un 7/8 intermittente = watermark anti-spam
 timbrato dalla MIA esecuzione live del cron, ripulito dalla suite: trappola
 gia' nota), diagnostica 4, ux 7; tsc pulito.
+
+## 2026-07-20 — VERIFICA INGLOBA LA RIPARAZIONE (rilievo utente) + FIX PERF SEMINA
+
+Col cron auto-riparante il bottone "Ripara dati tenant" era un doppione: (1)
+record_health (bottone "Verifica diagnostica" + one-click della coda) ora
+esegue PRIMA autoRepairSaasTenant (stessi confini additivi) e, se non c'era
+nulla da riparare, registra la diagnostica come 'manual'; (2) ELIMINATI il
+bottone Ripara nella tab Diagnostica, il pannello bulk "Ripara dati tenant"
+in Operazioni (il cron copre tutti i tenant a ogni giro), le azioni API
+repair_schema/repair_all e le funzioni repairSaasTenantSchema/
+repairAllSaasTenants; (3) coda di lavoro: item health_error ora punta a
+record_health (etichetta "Verifica"); (4) didascalia onesta: "Esegue tutti i
+controlli, ripara da sola i buchi additivi... Admin mancante si sistema dalla
+tab Admin; lo schema con le migrazioni".
+
+FIX PERFORMANCE scoperto dalla verifica (H7 rosso): la verifica col percorso
+riparazione impiegava ~30s — seedTenantPermissions faceva 63 insertKnown
+sequenziali (~190 round-trip verso Supabase). Batch unico ON CONFLICT DO
+NOTHING sulla PK (tenant_id, perm) in ENTRAMBE le copie (saas-tenant-manager
+e manage-signup, che pagava lo stesso costo nel provisioning): 30s -> ~7s.
+H7 ora attende a poll (20s) invece dei 4s fissi.
+
+Regressioni: faseAB 11, fase4 11, autorepair 5, diagnostica 4 (D2/D4
+aggiornate), giro5 17, restore 8 — verdi; tsc pulito.

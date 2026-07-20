@@ -366,18 +366,9 @@ export async function resetSaasTenantOnboarding(slug: string): Promise<void> {
   await logSaasTenantAudit("tenant.onboarding_reset", tenant, "Onboarding resettato");
 }
 
-export async function repairSaasTenantSchema(slug: string): Promise<SaasTenantHealth> {
-  const tenant = await requireSaasTenant(slug);
-  await ensureOnboardingTable();
-  await initializeOnboarding(Number(tenant.id), false);
-  await seedTenantPermissions(Number(tenant.id));
-  const health = await saasTenantHealth(tenant, true);
-  await recordSaasTenantHealth(tenant, health, "repair");
-  await logSaasTenantAudit("tenant.schema_repair", tenant, "Dati tenant riparati (onboarding e permessi)");
-  return health;
-}
-
-// Auto-riparazione dal cron admin-health: SOLO i buchi additivi che non
+// Auto-riparazione dal cron admin-health E dalla Verifica diagnostica
+// manuale (che dal 20/07 la ingloba: repair_schema/repair_all eliminati,
+// tenant.schema_repair resta solo nello storico audit): SOLO i buchi additivi che non
 // richiedono decisioni umane (riga onboarding mancante, voci permessi di
 // catalogo assenti). Admin mancante e schema restano alert per l'umano.
 const AUTO_REPAIRABLE_CHECKS = new Set(["onboarding_state", "permissions"]);
@@ -644,21 +635,6 @@ export async function healthAllSaasTenants(deep = true, record = false, source =
   return results;
 }
 
-export async function repairAllSaasTenants(includeInactive = false): Promise<Array<{ slug: string; ok: boolean; message: string }>> {
-  const tenants = await listSaasTenants();
-  const results = [];
-  for (const tenant of tenants) {
-    const status = tenantStatus(tenant);
-    if (!includeInactive && status !== "active") continue;
-    try {
-      const health = await repairSaasTenantSchema(String(tenant.slug));
-      results.push({ slug: String(tenant.slug), ok: true, message: health.level });
-    } catch (error) {
-      results.push({ slug: String(tenant.slug), ok: false, message: error instanceof Error ? error.message : "Errore" });
-    }
-  }
-  return results;
-}
 
 export function tenantStatus(tenant: Partial<SaasTenantRow>): SaasTenantStatus {
   const status = normalizeTenantStatus(String(tenant.status ?? ""));
@@ -1092,16 +1068,19 @@ async function seedTenantDefaults({
 }
 
 async function seedTenantPermissions(tenantId: number): Promise<void> {
-  if (!await freshTableExists("permissions")) return;
-  for (const definition of permissionDefinitions) {
-    await insertKnown("permissions", {
-      tenant_id: tenantId,
-      perm: definition.perm,
-      label: definition.label,
-      group_name: definition.groupName,
-      sort_order: definition.sortOrder,
-    }, true).catch(() => undefined);
-  }
+  if (!permissionDefinitions.length || !await freshTableExists("permissions")) return;
+  // Batch unico: la semina per-riga (63 insertKnown = ~190 round-trip verso
+  // Supabase) costava ~20s a ogni riparazione/verifica; ON CONFLICT DO
+  // NOTHING sulla PK (tenant_id, perm) = stesso effetto additivo.
+  const params: unknown[] = [];
+  const rows = permissionDefinitions.map((definition) => {
+    params.push(tenantId, definition.perm, definition.label, definition.groupName, definition.sortOrder);
+    return "(?,?,?,?,?)";
+  });
+  await dbQuery(
+    `INSERT INTO \`permissions\` (\`tenant_id\`,\`perm\`,\`label\`,\`group_name\`,\`sort_order\`) VALUES ${rows.join(",")} ON CONFLICT DO NOTHING`,
+    params,
+  ).catch(() => []);
 }
 
 async function seedDefaultHours(tenantId: number, locationId: number): Promise<void> {

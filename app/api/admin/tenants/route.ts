@@ -5,6 +5,7 @@ import {
   activeSupportTokens,
   archiveSaasTenant,
   auditRows,
+  autoRepairSaasTenant,
   createSaasTenant,
   createSupportAccessToken,
   deleteSaasTenant,
@@ -12,9 +13,7 @@ import {
   latestSaasHealthChecks,
   listSaasTenants,
   recentSupportTokens,
-  repairAllSaasTenants,
   repairSaasTenantAdmin,
-  repairSaasTenantSchema,
   resetSaasTenantOnboarding,
   restoreArchivedSaasTenant,
   revokeSupportToken,
@@ -117,8 +116,13 @@ export async function POST(request: Request) {
     else if (action === "archive") await archiveSaasTenant(slug, body.reason || "");
     else if (action === "restore") await restoreArchivedSaasTenant(slug);
     else if (action === "reset_onboarding") await resetSaasTenantOnboarding(slug);
-    else if (action === "repair_schema") await repairSaasTenantSchema(slug);
-    else if (action === "record_health") await recordSaasTenantHealthForSlug(slug, "manual", true);
+    else if (action === "record_health") {
+      // Verifica manuale = stessa politica del cron: i buchi additivi
+      // (onboarding, permessi) si riparano subito; se non c'era nulla da
+      // riparare si registra la diagnostica come 'manual'.
+      const outcome = await autoRepairSaasTenant(slug);
+      if (!outcome.repaired.length) await recordSaasTenantHealthForSlug(slug, "manual", true);
+    }
     else if (action === "repair_admin") await repairSaasTenantAdmin(slug, body);
     else if (action === "delete") {
       // Conferma PRIMA del backup: senza slug esatto niente lavoro (e niente
@@ -142,8 +146,6 @@ export async function POST(request: Request) {
       return Response.json({ ok: true, result, preBackup });
     } else if (action === "health_all") {
       return Response.json({ ok: true, results: await healthAllSaasTenants(true, true, "manual_all") });
-    } else if (action === "repair_all") {
-      return Response.json({ ok: true, results: await repairAllSaasTenants(body.include_inactive === "1" || body.include_inactive === "true") });
     } else if (action === "reset_selected_onboarding") {
       const slugs = (body.slugs || "").split(",").map((item) => item.trim()).filter(Boolean);
       const results = [];

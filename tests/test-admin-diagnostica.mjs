@@ -38,10 +38,11 @@ try {
   const microsec = /\d{2}:\d{2}:\d{2}\.\d+/.test(body);
   const origin = /Automatica|Manuale|Riparazione/.test(body);
   check("D1 sintesi: data formattata + origine tradotta, niente microsecondi", dateFmt && origin && !microsec, `fmt=${dateFmt} orig=${origin} micro=${microsec}`);
-  const caption = await page.locator("text=Ripara dati tenant ricrea onboarding e permessi ruoli").count();
-  const honestButton = await page.locator("button", { hasText: "Ripara dati tenant" }).count();
-  const oldButton = await page.locator("button", { hasText: "Ripara schema" }).count();
-  check("D2 didascalia onesta + bottone rinominato", caption === 1 && honestButton === 1 && oldButton === 0, `caption=${caption} btn=${honestButton} old=${oldButton}`);
+  // 20/07: la Verifica ingloba l'auto-riparazione — il bottone Ripara NON esiste piu'.
+  const caption = await page.locator("text=ripara da sola i buchi additivi").count();
+  const verifyButton = await page.locator("button", { hasText: "Verifica diagnostica" }).count();
+  const repairButton = await page.locator("button", { hasText: "Ripara" }).count();
+  check("D2 solo Verifica diagnostica (auto-riparante), niente bottone Ripara", caption === 1 && verifyButton === 1 && repairButton === 0, `caption=${caption} verify=${verifyButton} repair=${repairButton}`);
   const fullList = await page.locator("text=Stato tenant").count();
   const oldTable = await page.locator("text=Storico diagnostica").count();
   const emptyState = await page.locator("text=Nessun problema negli ultimi").count();
@@ -54,10 +55,13 @@ try {
   await fetch(`${BASE}/api/admin/tenants`, { method: "POST", headers: { "content-type": "application/json", origin: BASE, cookie }, body: JSON.stringify({ action: "record_health", slug: SLUG }) });
   await page.goto(`${BASE}/admin?page=tenants&slug=${SLUG}&tab=health`, { waitUntil: "domcontentloaded" });
   await page.locator("text=Problemi recenti").waitFor({ timeout: 30000 });
+  // 20/07: record_health manuale ingloba l'auto-riparazione -> il ZZ senza
+  // admin resta in errore (non riparabile) ma onboarding/permessi vengono
+  // chiusi e la diagnostica e' registrata come 'Automatica (riparazione)'.
   const zzBody = await page.locator("main, body").first().innerText();
-  const zzManual = /Problemi recenti[\s\S]*Manuale/.test(zzBody);
+  const zzOrigin = /Problemi recenti[\s\S]*(Automatica \(riparazione\)|Manuale)/.test(zzBody);
   const zzEmpty = await page.locator("text=Nessun problema negli ultimi").count();
-  check("D4 con problemi: tabella Problemi recenti (origine tradotta), niente empty-state", zzManual && zzEmpty === 0, `manual=${zzManual} empty=${zzEmpty}`);
+  check("D4 con problemi: tabella Problemi recenti (origine tradotta), niente empty-state", zzOrigin && zzEmpty === 0, `origin=${zzOrigin} empty=${zzEmpty}`);
 } catch (e) {
   console.log("ERRORE:", e?.message ?? e);
   R.push(false);

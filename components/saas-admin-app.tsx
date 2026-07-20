@@ -367,7 +367,7 @@ export function SaasAdminApp({
   async function quickWorkAction(action: string, slug: string) {
     try {
       await apiPost<{ ok: boolean }>("/api/admin/tenants", { action, slug });
-      setMessage(`${action === "repair_schema" ? "Riparazione" : "Verifica"} eseguita su ${slug}.`);
+      setMessage(`Verifica eseguita su ${slug}.`);
       await loadOverview();
     } catch (error) {
       setMessage(errorMessage(error));
@@ -865,7 +865,7 @@ function DashboardView({ overview, canManage, onOpenTenant, onNavigate, onQuickA
                   {item.action && canManage ? (
                     <button className="inline-flex h-8 items-center gap-1 rounded-md border border-current px-3 text-xs font-semibold" type="button" onClick={() => onQuickAction(item.action as string, item.slug ?? "")}>
                       <Wrench size={13} aria-hidden />
-                      {item.action === "repair_schema" ? "Ripara" : "Verifica"}
+                      Verifica
                     </button>
                   ) : null}
                   <button
@@ -1350,7 +1350,6 @@ function MaintenanceView({ tenants, results, restoreCandidates, canManage, onAct
     <div className="grid gap-5">
       <div className="grid gap-3 md:grid-cols-3">
         <ActionPanel icon={Activity} title="Verifica diagnostica" detail="Controlla tutti i tenant e salva lo storico." disabled={!canManage} onClick={() => onAction("health_all")} />
-        <ActionPanel icon={Wrench} title="Ripara dati tenant" detail="Ricrea onboarding e permessi ruoli di tutti i tenant attivi e riesegue le diagnostiche." disabled={!canManage} onClick={() => onAction("repair_all")} />
         <ActionPanel icon={RotateCcw} title="Reset onboarding" detail="Riporta i tenant selezionati al primo step." disabled={!canManage || selected.length === 0} onClick={() => onAction("reset_selected_onboarding", { slugs: selected.join(",") })} />
       </div>
       {results.length ? <Table title="Risultati" headers={["Tenant", "Esito", "Messaggio"]} rows={results.map((row) => [row.slug, row.ok ? "OK" : "Errore", row.message])} /> : null}

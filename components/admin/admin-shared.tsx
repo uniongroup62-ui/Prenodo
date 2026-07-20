@@ -112,7 +112,7 @@ export type WorkItem = {
   section?: string;
   slug?: string;
   tab?: string;
-  action?: "repair_schema" | "record_health";
+  action?: "record_health";
 };
 
 export type TimelineEvent = {

@@ -19,7 +19,7 @@ export type SaasWorkItem = {
   slug?: string;
   tab?: string;
   // Azione one-click opzionale (POST /api/admin/tenants { action, slug }).
-  action?: "repair_schema" | "record_health";
+  action?: "record_health";
 };
 
 const LOGIN_ANOMALY_THRESHOLD = 10;
@@ -56,7 +56,7 @@ export async function buildSaasWorkQueue(tenants: SaasTenantRow[]): Promise<Saas
         view: "tenants",
         slug,
         tab: "health",
-        action: "repair_schema",
+        action: "record_health",
       });
     } else if (!tenant.health_checked_at) {
       items.push({

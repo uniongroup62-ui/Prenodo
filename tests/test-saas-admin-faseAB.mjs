@@ -80,8 +80,14 @@ try {
 
   // H7: azione one-click 'Verifica' dalla coda -> health registrata
   await page.locator(`xpath=//p[contains(text(),"Mai verificato: ${fakeIds[0].slug}")]/ancestor::div[contains(@class,"flex-wrap")]//button[contains(.,"Verifica")]`).first().click();
-  await page.waitForTimeout(4000);
-  const checked = await db.query("SELECT health_checked_at, health_level FROM saas_tenants WHERE id=$1", [fakeIds[0].id]);
+  // 20/07: la Verifica ingloba l'auto-riparazione (seed permessi + doppia
+  // diagnostica) -> puo' superare i 4s: poll fino a 20s invece di attesa fissa.
+  let checked = { rows: [] };
+  for (let i = 0; i < 20; i++) {
+    await page.waitForTimeout(1000);
+    checked = await db.query("SELECT health_checked_at, health_level FROM saas_tenants WHERE id=$1", [fakeIds[0].id]);
+    if (checked.rows[0]?.health_checked_at) break;
+  }
   check("H7 'Verifica' one-click -> snapshot health scritto", !!checked.rows[0]?.health_checked_at, `level=${checked.rows[0]?.health_level}`);
 
   // H8: command palette Ctrl+K -> sezione
