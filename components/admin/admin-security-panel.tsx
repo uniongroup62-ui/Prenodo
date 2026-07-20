@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { formatDateTime } from "@/components/admin/admin-shared";
 
 // Pannello "Sicurezza account" del SaaS Admin (Fase 1 blindatura 2026-07-18,
 // ristilizzato Tailwind per la SPA in Fase 3): attivazione/disattivazione 2FA
@@ -211,7 +212,7 @@ export function AdminSecurityPanel() {
                 <tr className="border-b border-slate-100" key={s.id}>
                   <td className="py-2 pr-3">{s.adminEmail}</td>
                   <td className="py-2 pr-3">{s.ip || "—"}</td>
-                  <td className="py-2 pr-3">{s.lastSeenAt ?? s.createdAt ?? "—"}</td>
+                  <td className="py-2 pr-3">{formatDateTime(s.lastSeenAt ?? s.createdAt)}</td>
                   <td className="py-2 text-right">
                     <button className={btnDanger} type="button" onClick={() => void revokeSession(s.id)}>
                       Revoca

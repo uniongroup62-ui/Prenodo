@@ -36,6 +36,7 @@ import {
   Table,
   Toggle,
   formPayload,
+  formatDateTime,
   formatEuro,
   formatKb,
   healthLabel,
@@ -288,16 +289,6 @@ function TenantOnboarding({ tenant, canManage, onAction }: { tenant: Tenant; can
 
 const healthSourceLabel: Record<string, string> = { cron: "Automatica", manual: "Manuale", manual_all: "Manuale", repair: "Riparazione", auto_repair: "Automatica (riparazione)" };
 
-// "2026-07-20 08:23:01.400698" -> "20/07/2026 08:23" (le date arrivano come
-// stringhe wall-time: niente Date/parse, solo riordino testuale).
-function diagDate(value: string | null | undefined): string {
-  const raw = String(value ?? "").trim();
-  const [y, m, d] = raw.slice(0, 10).split("-");
-  if (!y || !m || !d) return raw || "-";
-  const time = raw.slice(11, 16);
-  return `${d}/${m}/${y}${time ? ` ${time}` : ""}`;
-}
-
 function TenantHealth({ detail, canManage, onAction }: { detail: TenantDetailPayload; canManage: boolean; onAction: (action: string, payload?: Record<string, string>) => void }) {
   const tenant = detail.tenant;
   let fullChecks = tenant.health?.checks ?? [];
@@ -318,7 +309,7 @@ function TenantHealth({ detail, canManage, onAction }: { detail: TenantDetailPay
         <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
           {last ? (
             <>
-              <span>Ultima diagnostica: <span className="font-semibold text-slate-900">{diagDate(last.created_at)}</span> · {healthSourceLabel[last.source ?? ""] ?? last.source ?? "-"}</span>
+              <span>Ultima diagnostica: <span className="font-semibold text-slate-900">{formatDateTime(last.created_at)}</span> · {healthSourceLabel[last.source ?? ""] ?? last.source ?? "-"}</span>
               <Badge tone={healthTone(last.level)}>{healthLabel[last.level] ?? last.level}</Badge>
             </>
           ) : (
@@ -339,7 +330,7 @@ function TenantHealth({ detail, canManage, onAction }: { detail: TenantDetailPay
           title="Problemi recenti"
           headers={["Data", "Origine", "Esito"]}
           rows={problems.map((row) => [
-            diagDate(row.created_at),
+            formatDateTime(row.created_at),
             healthSourceLabel[row.source ?? ""] ?? row.source ?? "-",
             `${healthLabel[row.level] ?? row.level}${Number(row.errors_count ?? 0) > 0 ? ` · ${row.errors_count} errori` : ""}`,
           ])}
@@ -354,8 +345,8 @@ function TenantHealth({ detail, canManage, onAction }: { detail: TenantDetailPay
 // Esito unico di un token di supporto: ogni riga ha UNA storia sola —
 // usato, revocato, ancora attivo o scaduto senza uso.
 function supportOutcome(token: { used_at?: string | null; revoked_at?: string | null; expires_at?: string | null }): { text: string; cls: string } {
-  if (token.used_at) return { text: `Usato il ${diagDate(token.used_at)}`, cls: "text-emerald-700" };
-  if (token.revoked_at) return { text: `Revocato il ${diagDate(token.revoked_at)}`, cls: "text-red-700" };
+  if (token.used_at) return { text: `Usato il ${formatDateTime(token.used_at)}`, cls: "text-emerald-700" };
+  if (token.revoked_at) return { text: `Revocato il ${formatDateTime(token.revoked_at)}`, cls: "text-red-700" };
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   const nowStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
@@ -398,7 +389,7 @@ function TenantSupport({ detail, supportLink, canManage, onAction }: { detail: T
           rows={detail.activeTokens.map((token) => [
             token.reason || "-",
             token.created_by_email || "-",
-            diagDate(token.expires_at),
+            formatDateTime(token.expires_at),
             <button className="rounded-md border border-red-200 px-2 py-1 text-xs font-semibold text-red-700" key={token.id} disabled={!canManage} type="button" onClick={() => onAction("support_revoke", { slug: tenant.slug, token_id: String(token.id) })}>Revoca</button>,
           ])}
         />
@@ -413,8 +404,8 @@ function TenantSupport({ detail, supportLink, canManage, onAction }: { detail: T
           return [
             token.reason || "-",
             token.created_by_email || "-",
-            diagDate(token.created_at),
-            diagDate(token.expires_at),
+            formatDateTime(token.created_at),
+            formatDateTime(token.expires_at),
             <span className={`font-semibold ${outcome.cls}`} key={`o-${token.id}`}>{outcome.text}</span>,
           ];
         })}

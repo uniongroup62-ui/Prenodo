@@ -59,6 +59,7 @@ import {
   apiPost,
   errorMessage,
   formPayload,
+  formatDateTime,
   formatEuro,
   healthLabel,
   healthTone,
@@ -666,14 +667,14 @@ async function loadStats() {
             ) : null}
             {activeView === "billing" ? (
               <div className="grid gap-4">
-                <SectionTabs active={billingTab} sections={billingSections} onSelect={(key) => selectBillingTab(key as BillingSection)} />
+                <SectionTabs active={billingTab} sections={billingSections} onSelect={(key) => selectBillingTab(key as BillingSection)} action={<Button variant="outline" icon={RotateCcw} onClick={() => (billingTab === "plans" ? loadBilling() : loadSmsBilling())}>Aggiorna</Button>} />
                 {billingTab === "plans" ? <BillingView data={billing} canManage={canManageTenants} onAction={operationAction} onRefresh={loadBilling} /> : null}
                 {billingTab === "sms" ? <SmsPlansView data={smsBilling} canManage={canManageTenants} onAction={operationAction} onRefresh={loadSmsBilling} /> : null}
               </div>
             ) : null}
             {activeView === "operations" ? (
               <div className="grid gap-4">
-                <SectionTabs active={opsTab} sections={operationsSections} onSelect={(key) => selectOpsTab(key as OperationsSection)} />
+                <SectionTabs active={opsTab} sections={operationsSections} onSelect={(key) => selectOpsTab(key as OperationsSection)} action={opsTab === "maintenance" ? null : <Button variant="outline" icon={RotateCcw} onClick={() => (opsTab === "controls" ? loadControls() : loadMovements())}>Aggiorna</Button>} />
                 {opsTab === "controls" ? <ControlsView canManage={canManageTenants} data={controls} onRefresh={loadControls} onRunHealth={async () => { await operationAction({ action: "cron_run", job: "admin-health" }); await loadControls(); }} /> : null}
                 {opsTab === "movements" ? <MovementsView data={movements} onRefresh={loadMovements} /> : null}
                 {opsTab === "maintenance" ? <MaintenanceView tenants={overview.tenants} results={results} restoreCandidates={restoreCandidates} canManage={canManageTenants} onAction={tenantAction} onOperationAction={operationAction} /> : null}
@@ -702,9 +703,10 @@ async function loadStats() {
 }
 
 // Barra sottosezioni delle viste consolidate (Fatturazione/Operazioni).
-function SectionTabs({ active, sections, onSelect }: { active: string; sections: Array<{ key: string; label: string; icon: LucideIcon }>; onSelect: (key: string) => void }) {
+// `action` (es. Aggiorna) vive QUI a destra: mai bande dedicate a un bottone.
+function SectionTabs({ active, sections, onSelect, action }: { active: string; sections: Array<{ key: string; label: string; icon: LucideIcon }>; onSelect: (key: string) => void; action?: React.ReactNode }) {
   return (
-    <div className="flex flex-wrap gap-1 rounded-md border border-slate-200 bg-white p-2 shadow-sm">
+    <div className="flex flex-wrap items-center gap-1 rounded-md border border-slate-200 bg-white p-2 shadow-sm">
       {sections.map((section) => {
         const Icon = section.icon;
         return (
@@ -719,6 +721,7 @@ function SectionTabs({ active, sections, onSelect }: { active: string; sections:
           </button>
         );
       })}
+      {action ? <div className="ml-auto">{action}</div> : null}
     </div>
   );
 }
@@ -925,7 +928,7 @@ function DashboardView({ overview, canManage, onOpenTenant, onNavigate, onQuickA
         title="Attività recente"
         headers={["Quando", "Cosa", "Tenant", "Chi"]}
         rows={overview.audit.slice(0, 10).map((row) => [
-          String(row.created_at ?? "-").slice(0, 19),
+          formatDateTime(row.created_at),
           row.message || row.action,
           row.tenant_slug
             ? <button className="text-sm font-semibold text-[#365a96] hover:underline" key={`t-${row.id}`} type="button" onClick={() => onOpenTenant(String(row.tenant_slug))}>{row.tenant_slug}</button>
@@ -1078,9 +1081,6 @@ function BillingView({ data, canManage, onAction, onRefresh }: { data: BillingPa
   }
   return (
     <div className="grid gap-5">
-      <div className="flex justify-end">
-        <Button variant="outline" icon={RotateCcw} onClick={onRefresh}>Aggiorna</Button>
-      </div>
       <div className="grid gap-3 md:grid-cols-4">
         <Metric label="MRR" value={formatEuro(data.revenue.mrr_total)} detail="tenant attivi x piano" />
         <Metric label="Senza piano" value={String(data.revenue.unassigned_active)} detail="tenant attivi da assegnare" />
@@ -1107,7 +1107,8 @@ function BillingView({ data, canManage, onAction, onRefresh }: { data: BillingPa
       <Table
         title="Piani e MRR"
         headers={["Piano", "Prezzo/mese", "Max sedi", "Max staff", "Tenant", "MRR", "Azioni"]}
-        rows={data.plans.length === 0 ? [["Nessun piano definito", "-", "-", "-", "-", "-", "-"]] : data.plans.map((plan) => {
+        empty="Nessun piano ancora definito: crealo qui sopra."
+        rows={data.plans.map((plan) => {
           const rev = data.revenue.by_plan.find((row) => row.id === plan.id);
           return [
             <span key={plan.id}><strong>{plan.name}</strong>{plan.is_active === 1 ? null : <span className="ml-2 text-xs text-slate-500">(disattivo)</span>}</span>,
@@ -1148,7 +1149,8 @@ function BillingView({ data, canManage, onAction, onRefresh }: { data: BillingPa
       <Table
         title="Ricavo SMS per mese (ordini pagati)"
         headers={["Mese", "Ordini", "Crediti", "Ricavo"]}
-        rows={data.revenue.sms_monthly.length === 0 ? [["-", "-", "-", "-"]] : data.revenue.sms_monthly.map((row) => [row.month, String(row.orders), String(row.credits), formatEuro(row.revenue)])}
+        empty="Nessun ordine SMS pagato finora."
+        rows={data.revenue.sms_monthly.map((row) => [row.month, String(row.orders), String(row.credits), formatEuro(row.revenue)])}
       />
     </div>
   );
@@ -1164,9 +1166,6 @@ function ControlsView({ data, canManage, onRefresh, onRunHealth }: { data: Contr
   const provider = data.provider;
   return (
     <div className="grid gap-5">
-      <div className="flex justify-end">
-        <Button variant="outline" icon={RotateCcw} onClick={onRefresh}>Aggiorna</Button>
-      </div>
       <div className="grid gap-3 md:grid-cols-4">
         <Metric label="Provider SMS" value={provider.configured ? "Configurato" : "Non configurato"} detail={provider.environment || "-"} />
         <Metric label="Token" value={provider.token_present ? "Presente" : "Mancante"} detail={provider.sender || "sender non impostato"} />
@@ -1183,18 +1182,15 @@ function ControlsView({ data, canManage, onRefresh, onRunHealth }: { data: Contr
       </section>
       {/* Registro cron (Fase C): stato corrente per job; "Esegui ora" lancia
           la diagnostica passando dal registro (rifiniture 19/07). */}
-      <div className="flex justify-end">
-        <Button disabled={!canManage} icon={Activity} variant="outline" onClick={onRunHealth}>Esegui ora la diagnostica</Button>
-      </div>
       <Table
         title="Cron: ultima esecuzione per job"
         headers={["Job", "Esito", "Avviato", "Durata", "Sintesi"]}
-        rows={(data.cron?.jobs ?? []).length === 0
-          ? [["Nessuna esecuzione registrata: schedula /api/cron/* (EventBridge o scheduler esterno con CRON_SECRET)", "-", "-", "-", "-"]]
-          : (data.cron?.jobs ?? []).map((run) => [
+        action={<Button disabled={!canManage} icon={Activity} variant="outline" onClick={onRunHealth}>Esegui ora la diagnostica</Button>}
+        empty="Nessuna esecuzione registrata: schedula /api/cron/* (EventBridge o scheduler esterno con CRON_SECRET)."
+        rows={(data.cron?.jobs ?? []).map((run) => [
             <strong key={run.job}>{run.job}</strong>,
             <Badge tone={run.status === "ok" ? "ok" : "danger"} key={`s-${run.job}`}>{run.status === "ok" ? "OK" : "Errore"}</Badge>,
-            run.started_at || "-",
+            formatDateTime(run.started_at),
             `${Math.round(Number(run.duration_ms ?? 0))} ms`,
             <span className="block max-w-xs truncate" key={`m-${run.job}`} title={run.message ?? ""}>{run.message || "-"}</span>,
           ])}
@@ -1208,7 +1204,7 @@ function ControlsView({ data, canManage, onRefresh, onRunHealth }: { data: Contr
           row.message,
           String(row.stats.sent ?? 0),
           String(row.stats.failed ?? 0),
-          String(row.stats.last_sent_at ?? "-") || "-",
+          formatDateTime(row.stats.last_sent_at == null ? null : String(row.stats.last_sent_at)),
         ])}
       />
     </div>
@@ -1221,13 +1217,6 @@ function SmsPlansView({ data, canManage, onAction, onRefresh }: { data: SmsBilli
   }
   return (
     <div className="grid gap-5">
-      <div className="flex justify-end gap-2">
-        <a className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 px-4 text-sm font-semibold text-slate-600 hover:bg-slate-50" href="/api/admin/operations?section=export_sms_orders" download>
-          <Download size={16} aria-hidden />
-          Esporta ordini CSV
-        </a>
-        <Button variant="outline" icon={RotateCcw} onClick={onRefresh}>Aggiorna</Button>
-      </div>
       <div className="grid gap-3 md:grid-cols-4">
         <Metric label="Crediti venduti" value={String(data.summary.credits_sold)} detail="ordini paid" />
         <Metric label="Ricavo lordo" value={formatEuro(data.summary.revenue_gross)} detail="ricariche SMS" />
@@ -1277,7 +1266,9 @@ function SmsPlansView({ data, canManage, onAction, onRefresh }: { data: SmsBilli
       <Table
         title="Ordini recenti"
         headers={["ID", "Tenant", "Piano", "Stato", "Crediti", "Importo", "Data"]}
-        rows={data.orders.map((order) => [String(order.id), order.tenant_slug, order.plan_name || "-", order.status, String(order.credits), formatEuro(order.amount_gross), order.created_at || "-"])}
+        action={<a className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50" href="/api/admin/operations?section=export_sms_orders" download><Download size={14} aria-hidden />Esporta ordini CSV</a>}
+        empty="Nessun ordine SMS."
+        rows={data.orders.map((order) => [String(order.id), order.tenant_slug, order.plan_name || "-", order.status, String(order.credits), formatEuro(order.amount_gross), formatDateTime(order.created_at)])}
       />
 
       <section className="rounded-md border border-slate-200 bg-white shadow-sm">
@@ -1334,11 +1325,8 @@ function MovementsView({ data, onRefresh }: { data: MovementsPayload | null; onR
   ]);
   return (
     <div className="grid gap-5">
-      <div className="flex justify-end">
-        <Button variant="outline" icon={RotateCcw} onClick={onRefresh}>Aggiorna</Button>
-      </div>
-      <Table title="SMS" headers={["Tenant", "Tipo", "Stato", "Destinatario", "Riferimento", "Crediti", "Evento", "Dettaglio"]} rows={movementRows(data.sms)} />
-      <Table title="Email" headers={["Tenant", "Tipo", "Stato", "Destinatario", "Riferimento", "Crediti", "Evento", "Dettaglio"]} rows={movementRows(data.emails)} />
+      <Table title="SMS" headers={["Tenant", "Tipo", "Stato", "Destinatario", "Riferimento", "Crediti", "Evento", "Dettaglio"]} rows={movementRows(data.sms)} empty="Nessun invio SMS registrato." />
+      <Table title="Email" headers={["Tenant", "Tipo", "Stato", "Destinatario", "Riferimento", "Crediti", "Evento", "Dettaglio"]} rows={movementRows(data.emails)} empty="Nessuna email registrata." />
     </div>
   );
 }
@@ -1366,7 +1354,7 @@ function MaintenanceView({ tenants, results, restoreCandidates, canManage, onAct
             {restoreCandidates.map((backup) => (
               <div className="flex flex-wrap items-center gap-3 p-3 text-sm" key={backup.id}>
                 <div className="min-w-0 flex-1">
-                  <p><strong>{backup.tenant_slug}</strong><span className="ml-2 text-slate-500">{backup.created_at ? String(backup.created_at) : ""}</span></p>
+                  <p><strong>{backup.tenant_slug}</strong><span className="ml-2 text-slate-500">{backup.created_at ? formatDateTime(backup.created_at) : ""}</span></p>
                   <p className="text-xs text-slate-500">{backup.reason || "backup"} · {Math.round(Number(backup.backup_size ?? 0) / 1024)} KB</p>
                 </div>
                 <input
@@ -1439,10 +1427,10 @@ function AuditView({ data, filters, onSearch, onPageChange }: { data: AuditSearc
         title={`Registro attività${data ? ` (${data.total})` : ""}`}
         headers={["Data", "Azione", "Tenant", "Attore", "Messaggio"]}
         rows={(data?.rows ?? []).map((row) => [
-          String(row.created_at ?? "-"),
+          formatDateTime(row.created_at),
           <code className="text-xs" key={`a-${row.id}`}>{row.action}</code>,
           row.tenant_slug || "-",
-          row.actor_email || "-",
+          row.actor_email || "sistema",
           row.message || "-",
         ])}
       />
@@ -1476,20 +1464,19 @@ function SignupsView({ signups, canManage, onOpenTenant, onAction, onRefresh }: 
   }
   return (
     <div className="grid gap-5">
-      <div className="flex justify-end">
-        <Button variant="outline" icon={RotateCcw} onClick={onRefresh}>Aggiorna</Button>
-      </div>
       <Table
         title="Richieste di registrazione"
         headers={["Attività", "Titolare", "Stato", "Richiesta il", "Esito", "Azioni"]}
+        action={<Button variant="outline" icon={RotateCcw} onClick={onRefresh}>Aggiorna</Button>}
+        empty="Nessuna richiesta di registrazione."
         rows={signups.map((signup) => [
           <span key={`b-${signup.id}`}><strong>{signup.business_name}</strong><span className="ml-2 text-slate-500">{signup.slug}</span></span>,
           <span key={`o-${signup.id}`}>{signup.owner_name}<span className="ml-2 text-slate-500">{signup.owner_email}</span></span>,
           <Badge key={`s-${signup.id}`} tone={(signupStatusLabel[signup.status] ?? { tone: "muted" as const }).tone}>{signupStatusLabel[signup.status]?.label ?? signup.status}</Badge>,
-          signup.created_at ?? "-",
+          formatDateTime(signup.created_at),
           signup.provisioning_error
             ? <span className="block max-w-xs truncate text-red-700" key={`e-${signup.id}`} title={signup.provisioning_error}>{signup.provisioning_error}</span>
-            : (signup.verified_at ? `Email verificata ${signup.verified_at}` : "-"),
+            : (signup.verified_at ? `Email verificata il ${formatDateTime(signup.verified_at)}` : "-"),
           <div className="flex gap-2" key={`a-${signup.id}`}>
             {signup.tenant_exists ? (
               <button className="inline-flex h-8 items-center rounded-md bg-[#182238] px-3 text-xs font-semibold text-white" type="button" onClick={() => onOpenTenant(signup.slug)}>
@@ -1542,7 +1529,7 @@ function AdminsView({ admins, currentUser, onAction }: { admins: AdminRecord[]; 
                 <input name="id" type="hidden" value={admin.id} />
                 <Input name="password" label="Nuova password" type="text" />
                 <Button variant="outline" icon={KeyRound}>Aggiorna password</Button>
-                <div className="flex items-end justify-end text-sm text-slate-500">Ultimo login: {admin.last_login_at || "-"}</div>
+                <div className="flex items-end justify-end text-sm text-slate-500">Ultimo login: {admin.last_login_at ? formatDateTime(admin.last_login_at) : "mai"}</div>
               </form>
             </div>
           ))}

@@ -17037,3 +17037,26 @@ delle altre tab:
 TRAPPOLA batteria: gli header tabella sono uppercase VIA CSS -> innerText
 restituisce "CREATO IL": i match sugli header devono essere case-insensitive.
 Regressioni giro5 17 (ciclo token) e ux 7 — verdi; tsc pulito.
+
+## 2026-07-20 — PASS DI ORDINE GRAFICO SU TUTTE LE PAGINE ADMIN (richiesta utente)
+
+Audit visivo con screenshot di TUTTE le 10 pagine, poi pass di coerenza:
+1) formatDateTime CONDIVISO in admin-shared (dd/mm/yyyy hh:mm, mai secondi
+   ne' microsecondi, solo riordino testuale) applicato OVUNQUE: Audit (aveva
+   i MICROSECONDI in faccia), Attivita' recente dashboard, lista tenant
+   (Salute), ordini SMS, cron Avviato, Ultimo invio, backup, registrazioni
+   (Richiesta il + "Email verificata il ..."), Ultimo login admin ("mai" se
+   assente), sessioni attive Sicurezza; admin-tenant-detail ora usa lo stesso
+   formatter (via diagDate rimossa).
+2) MAI bande dedicate a un solo bottone: SectionTabs accetta `action` e
+   Aggiorna vive a destra della barra sottotab (Fatturazione/Operazioni, come
+   gia' in Statistiche); Table accetta `action` (Aggiorna in Registrazioni,
+   "Esegui ora la diagnostica" nell'header del registro cron, "Esporta ordini
+   CSV" nell'header Ordini recenti) ed `empty` parlante ("Nessun piano ancora
+   definito: crealo qui sopra.", "Nessun ordine SMS pagato finora.", ecc.) —
+   ELIMINATE le righe-fantasma di trattini.
+3) Attore vuoto in Audit = "sistema" (coerente con la dashboard).
+
+Verifica: ri-screenshot delle 10 pagine confrontati a occhio (Fatturazione,
+Audit, Operazioni, Registrazioni mostrati puliti); regressione COMPLETA
+admin: 18/18 suite verdi (150 check) via tests/run-all.mjs admin; tsc pulito.

@@ -256,16 +256,34 @@ export const timelineKindStyle: Record<TimelineEvent["kind"], { label: string; t
   sms: { label: "SMS", tone: "info" },
 };
 
-export function Table({ title, headers, rows }: { title: string; headers: string[]; rows: Array<Array<React.ReactNode>> }) {
+// Data/ora leggibile per TUTTO il pannello: "2026-07-20 13:07:47.71696"
+// (stringa wall-time dal DB) -> "20/07/2026 13:07". Solo riordino testuale,
+// mai new Date() sui valori (le date in-app sono stringhe, non timestamp).
+export function formatDateTime(value: string | null | undefined): string {
+  const raw = String(value ?? "").trim();
+  const [y, m, d] = raw.slice(0, 10).split("-");
+  if (!y || !m || !d) return raw || "-";
+  const time = raw.slice(11, 16);
+  return `${d}/${m}/${y}${time ? ` ${time}` : ""}`;
+}
+
+export function Table({ title, headers, rows, action, empty = "Nessun dato." }: { title: string; headers: string[]; rows: Array<Array<React.ReactNode>>; action?: React.ReactNode; empty?: string }) {
   return (
     <section className="rounded-md border border-slate-200 bg-white shadow-sm">
-      <SectionHead title={title} />
+      {action ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 p-4">
+          <h3 className="font-semibold">{title}</h3>
+          {action}
+        </div>
+      ) : (
+        <SectionHead title={title} />
+      )}
       <div className="overflow-x-auto">
         <table className="w-full min-w-[520px] text-left text-sm">
           <thead className="bg-slate-50 text-xs uppercase tracking-[0.12em] text-slate-500"><tr>{headers.map((header) => <th className="px-4 py-3" key={header}>{header}</th>)}</tr></thead>
           <tbody className="divide-y divide-slate-100">
             {rows.map((row, index) => <tr key={index}>{row.map((cell, cellIndex) => <td className="px-4 py-3" key={cellIndex}>{cell}</td>)}</tr>)}
-            {!rows.length ? <tr><td className="px-4 py-8 text-center text-slate-500" colSpan={headers.length}>Nessun dato.</td></tr> : null}
+            {!rows.length ? <tr><td className="px-4 py-8 text-center text-slate-500" colSpan={headers.length}>{empty}</td></tr> : null}
           </tbody>
         </table>
       </div>
@@ -413,7 +431,7 @@ export function TenantTable({ tenants, onOpenTenant }: { tenants: Tenant[]; onOp
                 </td>
                 <td className="px-4 py-3">
                   <Badge tone={tenant.health_checked_at ? healthTone(health) : "muted"}>{tenant.health_checked_at ? healthLabel[health] : "Non verificato"}</Badge>
-                  {tenant.health_checked_at ? <div className="mt-1 text-xs text-slate-500">{tenant.health_checked_at}</div> : null}
+                  {tenant.health_checked_at ? <div className="mt-1 text-xs text-slate-500">{formatDateTime(tenant.health_checked_at)}</div> : null}
                 </td>
                 <td className="px-4 py-3 text-right"><button className="rounded-md border border-slate-200 px-3 py-1.5 font-semibold" type="button" onClick={() => onOpenTenant(tenant.slug)}>Gestisci</button></td>
               </tr>
