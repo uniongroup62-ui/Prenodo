@@ -1379,7 +1379,7 @@ function SmsPlansView({ data, canManage, onAction, onRefresh }: { data: SmsBilli
       ) : null}
 
       {modal === "recharge" ? (
-      <BillingModal title="Ricarica manuale tenant" subtitle="Crea un ordine manuale e accredita subito i crediti al tenant." onClose={() => setModal(null)}>
+      <BillingModal title="Ricarica manuale tenant" subtitle="Accredita subito crediti SENZA pagamento (omaggi, correzioni): l'ordine viene registrato a importo zero, il Ricavo lordo resta quello degli acquisti digitali." onClose={() => setModal(null)}>
         <form className="grid gap-3 md:grid-cols-2" onSubmit={(event) => { submitOperation(event, "sms_manual_topup", onAction); setModal(null); }}>
           <label>
             <span className="mb-1 block text-sm font-medium text-slate-600">Tenant</span>
@@ -1395,8 +1395,7 @@ function SmsPlansView({ data, canManage, onAction, onRefresh }: { data: SmsBilli
             </select>
           </label>
           <Input name="credits" label="Crediti" type="number" min="0" placeholder="Da piano" />
-          <Input name="amount_gross" label="Importo lordo" placeholder="Da piano" />
-          <Input name="note" label="Nota" placeholder="Ricarica manuale SaaS" />
+          <Input name="note" label="Nota" placeholder="Es. omaggio di benvenuto" />
           <div className="flex items-end md:col-span-2">
             <Button disabled={!canManage} icon={CreditCard}>Accredita</Button>
           </div>

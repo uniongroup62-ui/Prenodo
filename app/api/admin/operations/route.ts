@@ -279,7 +279,6 @@ export async function POST(request: Request) {
         body.tenant_slug || body.slug || "",
         parseInteger(body.credits, 0),
         parseInteger(body.plan_id, 0) || null,
-        parseNumber(body.amount_gross, 0),
         body.note || "",
       );
       return Response.json({ ok: true, id });

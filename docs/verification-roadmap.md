@@ -17231,3 +17231,14 @@ ASSENTI; B5/B6 passano da "Gestisci piani") 6/6. TRAPPOLA Playwright: MAI
 mischiare css e text engine in un solo selettore ("div[...] text=..." e'
 parse error) — concatenare .locator(). Regressioni consolida 12 (il testo
 "Impostazioni prezzo" vive sul bottone), faseC 7, ux 7; tsc pulito.
+
+## 2026-07-20 — RICARICA MANUALE: IMPORTO SEMPRE ZERO (rilievo utente)
+
+"Il cliente non paghera' mai fuori dal digitale": la ricarica manuale e'
+quindi SOLO omaggi/correzioni. Rimosso il campo "Importo lordo" dal popup;
+createManualSmsTopUp non accetta piu' l'importo e registra SEMPRE
+amount_gross=0 (anche se un client API lo passasse: verificato con probe
+amount_gross=99 -> ordine a 0.00). Cosi' il Ricavo lordo resta la verita'
+degli ordini pagati davvero; il select Piano resta come scorciatoia per i
+CREDITI. Sottotitolo del popup riscritto (senza pagamento, importo zero).
+Regressioni giro5 17, faseD 4, rifiniture 8, billing-rifiniture 6; tsc pulito.

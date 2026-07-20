@@ -637,12 +637,15 @@ export async function setSmsPlanActive(id: number, active: boolean): Promise<voi
   await logSaasTenantAudit(active ? "sms_plan.activate" : "sms_plan.deactivate", null, active ? "Piano SMS attivato" : "Piano SMS disattivato", { plan_id: id });
 }
 
-export async function createManualSmsTopUp(tenantSlug: string, creditsInput: number, planId: number | null, amountGrossInput: number, note = ""): Promise<number> {
+export async function createManualSmsTopUp(tenantSlug: string, creditsInput: number, planId: number | null, note = ""): Promise<number> {
   await ensureSaasSmsSchema();
   const tenant = await requireSaasTenant(tenantSlug);
   const plan = planId && planId > 0 ? await smsPlanById(planId) : null;
   const credits = Math.max(1, creditsInput > 0 ? creditsInput : Number(plan?.credits ?? 0));
-  const amountGross = Math.max(0, money2(amountGrossInput > 0 ? String(amountGrossInput) : String(plan?.price_gross ?? 0)));
+  // I pagamenti passano SOLO dal canale digitale (decisione 20/07): la
+  // ricarica manuale e' per omaggi e correzioni, quindi importo SEMPRE zero —
+  // il Ricavo lordo resta la verita' degli ordini pagati davvero.
+  const amountGross = 0;
   const actor = await currentSaasAdminSession().catch(() => null);
 
   const result = await dbExecute(
