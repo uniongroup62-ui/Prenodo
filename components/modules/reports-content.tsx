@@ -40,6 +40,18 @@ type Analytics = {
   topProducts: ReportRow[];
   topItems: ReportRow[];
   operators: { name: string; revenue: number; saleCount: number; avgTicket: number; hoursWorked: number; apptCount: number }[];
+  newVsReturning: { windowClients: number; newClients: number; returningClients: number };
+  locationsBreakdown: { id: number | null; name?: string; soldRevenue: number; saleCount: number; appointmentCount: number }[];
+  fidelityPeriod: {
+    pointsIssued: number;
+    pointsUsed: number;
+    rechargesCount: number;
+    rechargesAmount: number;
+    giftcardsIssued: number;
+    giftcardsIssuedAmount: number;
+    giftcardUsedAmount: number;
+    creditUsedAmount: number;
+  };
 };
 
 type ReportsResponse = {
@@ -47,6 +59,7 @@ type ReportsResponse = {
   kpis?: { activeSales?: number; revenue?: number; cancelledRevenue?: number; averageTicket?: number; clients?: number; lowStock?: number };
   locationLabel?: string;
   locationFailClosed?: boolean;
+  locationsCount?: number;
   analytics?: Analytics;
 };
 
@@ -94,6 +107,24 @@ function itDate(iso: string): string {
   return iso.split("-").reverse().join("/");
 }
 
+// Esporta CSV (rivoluzione 2026-07-20): BOM per Excel, separatore ';' come si
+// aspetta l'Excel italiano; i numeri vanno passati già formattati con la
+// virgola (numberFormatIt).
+function downloadCsv(filename: string, rows: (string | number)[][]): void {
+  const esc = (v: string | number) => {
+    const s = String(v ?? "");
+    return /[";\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const csv = "﻿" + rows.map((r) => r.map(esc).join(";")).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 // Port di formatDeltaInfo (reports.php 1505-1536): classi legacy
 // is-good/is-bad/is-flat, formatter €/int legacy, goodWhenUp invertibile
 // (per Costi/Commissioni un aumento è "bad").
@@ -129,7 +160,7 @@ function buildTrendSeries(
   toYmd: string,
   granularity: string,
   rangeDays: number,
-): { labels: string[]; values: number[]; counts: number[] } {
+): { labels: string[]; values: number[]; counts: number[]; ranges: { from: string; to: string }[] } {
   const effective = granularity === "auto" ? (rangeDays <= 45 ? "daily" : rangeDays <= 180 ? "weekly" : "monthly") : granularity;
   const daily = new Map<string, { value: number; count: number }>();
   for (const row of rows) {
@@ -148,6 +179,9 @@ function buildTrendSeries(
   const labels: string[] = [];
   const values: number[] = [];
   const counts: number[] = [];
+  // Range ISO del bucket (drill-down 2026-07-20): il click sul punto del
+  // grafico apre Movimenti sul from/to del bucket.
+  const ranges: { from: string; to: string }[] = [];
   const appendBucket = (bucketStart: Date, bucketEnd: Date, label: string) => {
     let value = 0;
     let count = 0;
@@ -159,6 +193,7 @@ function buildTrendSeries(
     labels.push(label);
     values.push(Math.round(value * 100) / 100);
     counts.push(count);
+    ranges.push({ from: localYmd(bucketStart), to: localYmd(bucketEnd) });
   };
   if (effective === "daily") {
     for (let cur = new Date(start); cur.getTime() <= end.getTime(); cur.setDate(cur.getDate() + 1)) {
@@ -178,7 +213,7 @@ function buildTrendSeries(
       appendBucket(bucketStart, bucketEnd, `${pad(bucketStart.getMonth() + 1)}/${bucketStart.getFullYear()}`);
     }
   }
-  return { labels, values, counts };
+  return { labels, values, counts, ranges };
 }
 
 // $alignCompareSeries legacy (reports.php 1463-1471): la serie di confronto
@@ -246,6 +281,7 @@ type ReportsQuery = {
   compare_month?: string;
   compare_from?: string;
   compare_to?: string;
+  all_locations?: string;
 };
 
 export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string; initialQuery?: ReportsQuery } = {}) {
@@ -281,6 +317,9 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
     /^\d{4}-\d{2}$/.test(String(q.compare_month ?? "")) ? String(q.compare_month) : shiftMonthsYmd(todayIso, -1).slice(0, 7));
   const [compareFrom, setCompareFrom] = useState(isYmd(q.compare_from) ? String(q.compare_from) : monthStartIso);
   const [compareTo, setCompareTo] = useState(isYmd(q.compare_to) ? String(q.compare_to) : todayIso);
+  // "Tutte le sedi" (rivoluzione 2026-07-20): visibile solo con >1 sede
+  // autorizzata; attiva il breakdown per sede lato API (all_locations=1).
+  const [allLoc, setAllLoc] = useState(["1", "true", "on", "yes"].includes(String(q.all_locations ?? "").toLowerCase()));
 
   const [data, setData] = useState<ReportsResponse | null>(null);
   // Auth::requirePerm legacy: 403 → pagina 'Accesso negato' (card nel chrome).
@@ -350,6 +389,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
   const load = useCallback(() => {
     const rng = resolveRange();
     const params = new URLSearchParams({ slug, from: rng.from, to: rng.to });
+    if (allLoc) params.set("all_locations", "1");
     if (compare) {
       params.set("compare", "1");
       const cw = resolveCompareWindow(rng);
@@ -363,7 +403,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
       })
       .then((j: ReportsResponse) => setData(j))
       .catch(() => setData(null));
-  }, [slug, resolveRange, resolveCompareWindow, compare]);
+  }, [slug, resolveRange, resolveCompareWindow, compare, allLoc]);
 
   useEffect(() => {
     load();
@@ -495,6 +535,20 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
           },
         );
         options.plugins.legend.display = datasets.length > 1;
+        // Drill-down (2026-07-20): il click su un punto apre Movimenti sul
+        // range del bucket (giorno/settimana/mese) del periodo ATTUALE.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (options as any).onClick = (_evt: unknown, elements: Array<{ index: number }>) => {
+          const idx = elements?.[0]?.index;
+          if (idx === undefined || idx < 0) return;
+          const rangeBucket = trendSeries.ranges[idx];
+          if (!rangeBucket) return;
+          window.location.href = `/${encodeURIComponent(slug)}/pos_history?from=${rangeBucket.from}&to=${rangeBucket.to}`;
+        };
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (options as any).onHover = (evt: any, elements: Array<unknown>) => {
+          if (evt?.native?.target) evt.native.target.style.cursor = elements?.length ? "pointer" : "default";
+        };
         make("reportTrendChart", { type: "line", data: { labels: trendSeries.labels, datasets }, options });
       }
 
@@ -628,6 +682,14 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
     ) : null;
 
   const locationLabelText = data?.locationLabel ?? "Tutte le sedi";
+  // Percentuali prenotazioni (den = TUTTI gli appuntamenti del periodo).
+  const apptPct = (n: number | undefined): string => {
+    const tot = a?.appointments.total ?? 0;
+    return tot > 0 ? `${numberFormatIt(((n ?? 0) / tot) * 100, 1)}%` : "—";
+  };
+  // Fidelity nel periodo: la sezione compare solo se c'è almeno un numero.
+  const fp = a?.fidelityPeriod;
+  const fidelityHasData = !!fp && (fp.pointsIssued > 0 || fp.pointsUsed > 0 || fp.rechargesCount > 0 || fp.giftcardsIssued > 0 || fp.giftcardUsedAmount > 0 || fp.creditUsedAmount > 0);
   // Sottotitolo legacy: "{Range} / d/m/Y - d/m/Y / {Sede} / Grafici per giorno
   // [ / Confronto {modo}: {d/m/Y - d/m/Y}]" (reports.php 1638-1645).
   const subtitle = a
@@ -673,7 +735,18 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
               </ul>
               <p>
                 Il confronto usa la finestra precedente di pari durata. Il filtro sede mostra solo le sedi a cui hai
-                accesso.
+                accesso; con <strong>Tutte le sedi</strong>{" "}attivo compare anche il confronto tra sedi.
+              </p>
+              <h6>Navigare dai numeri</h6>
+              <ul>
+                <li>I KPI Incasso, Vendite, Prenotazioni, Costi e Commissioni aprono il modulo di origine nel periodo.</li>
+                <li>Un click su un punto del grafico incasso apre i Movimenti di quel giorno.</li>
+                <li>Nei dettagli, i clienti aprono la loro scheda e gli operatori le Commissioni.</li>
+              </ul>
+              <h6>Esportare</h6>
+              <p>
+                Ogni sezione con l&apos;icona di download esporta un CSV apribile in Excel; il pulsante{" "}
+                <strong>Stampa</strong>{" "}produce la versione stampabile del report.
               </p>
             </InfoBox>
           </div>
@@ -697,6 +770,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
                 qs.set("from", from);
                 qs.set("to", to);
               }
+              if (allLoc) qs.set("all_locations", "1");
               if (compare) {
                 qs.set("compare", "1");
                 qs.set("compare_mode", compareMode);
@@ -790,9 +864,34 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
                   Confronta
                 </label>
               </div>
+              {(data?.locationsCount ?? 0) > 1 ? (
+                <div className="form-check report-filter-switch">
+                  <input
+                    className="form-check-input"
+                    type="checkbox"
+                    name="all_locations"
+                    value="1"
+                    id="reportAllLocations"
+                    checked={allLoc}
+                    onChange={(e) => setAllLoc(e.target.checked)}
+                  />
+                  <label className="form-check-label small fw-semibold" htmlFor="reportAllLocations">
+                    Tutte le sedi
+                  </label>
+                </div>
+              ) : null}
               <button className="btn btn-outline-primary w-100" type="submit">
                 <i className="bi bi-arrow-clockwise me-1" />
                 Aggiorna
+              </button>
+              <button
+                className="btn btn-outline-secondary w-100"
+                type="button"
+                id="reportPrintBtn"
+                onClick={() => window.print()}
+              >
+                <i className="bi bi-printer me-1" />
+                Stampa
               </button>
             </div>
           </div>
@@ -882,8 +981,27 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
         </form>
       </div>
 
+      {/* Nav ancorata alle sezioni (2026-07-20): la pagina è lunga, le pillole
+          saltano alla sezione; sticky sotto la topbar, esclusa dalla stampa. */}
+      <nav className="report-anchor-nav d-print-none" aria-label="Sezioni report">
+        {([
+          ["#rep-andamento", "Andamento"],
+          ["#rep-mix", "Composizione"],
+          ["#rep-top", "Top 10"],
+          ["#rep-finanza", "Finanza"],
+          ...((a?.locationsBreakdown.length ?? 0) > 0 ? [["#rep-sedi", "Sedi"]] : []),
+          ...(fidelityHasData ? [["#rep-fidelity", "Fidelity"]] : []),
+        ] as [string, string][]).map(([href, label]) => (
+          <a key={href} className="report-anchor-pill" href={href}>
+            {label}
+          </a>
+        ))}
+      </nav>
+
       <div className="report-kpi-grid mb-3">
-        <div className="report-kpi">
+        {/* Drill-down (2026-07-20): i KPI operativi sono LINK verso il modulo
+            di origine col periodo trasferito dove la pagina lo supporta. */}
+        <a className="report-kpi report-kpi-link" href={`/${encodeURIComponent(slug)}/pos_history?from=${rng.from}&to=${rng.to}`} title="Apri Movimenti nel periodo">
           <div className="label">Incasso</div>
           <div className="value">{fmtMoney(a?.summary.totalRevenue)}</div>
           <div className="sub">
@@ -893,13 +1011,13 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
             <div className="sub">Movimenti incasso {fmtInt(a?.summary.collectionMovements)}</div>
           ) : null}
           {renderDelta(incassoDelta)}
-        </div>
-        <div className="report-kpi">
+        </a>
+        <a className="report-kpi report-kpi-link" href={`/${encodeURIComponent(slug)}/pos_history?from=${rng.from}&to=${rng.to}`} title="Apri Movimenti nel periodo">
           <div className="label">Vendite</div>
           <div className="value">{fmtInt(a?.summary.saleCount)}</div>
           <div className="sub">Periodo selezionato</div>
           {renderDelta(venditeDelta)}
-        </div>
+        </a>
         <div className="report-kpi">
           <div className="label">Scontrino medio</div>
           <div className="value">{fmtMoney(a?.summary.averageTicket)}</div>
@@ -915,14 +1033,27 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
       </div>
 
       <div className="report-kpi-grid mb-3">
-        <div className="report-kpi">
+        <a className="report-kpi report-kpi-link" href={`/${encodeURIComponent(slug)}/appointments`} title="Apri la lista appuntamenti">
           <div className="label">Prenotazioni</div>
           <div className="value">{fmtInt(a?.summary.appointmentCount)}</div>
           <div className="sub">Non annullate nel periodo</div>
           <div className="sub">
             In attesa {fmtInt(a?.appointments.pending)} / Prenotate {fmtInt(a?.appointments.scheduled)} / Eseguite {fmtInt(a?.appointments.done)} / Annullate {fmtInt(a?.appointments.canceled)} / No show {fmtInt(a?.appointments.noShow)}
           </div>
+          {(a?.appointments.total ?? 0) > 0 ? (
+            <div className="sub">
+              Eseguite {apptPct(a?.appointments.done)} · Annullate {apptPct(a?.appointments.canceled)} · No show {apptPct(a?.appointments.noShow)}
+            </div>
+          ) : null}
           {renderDelta(prenotazioniDelta)}
+        </a>
+        <div className="report-kpi">
+          <div className="label">Clienti nel periodo</div>
+          <div className="value">{fmtInt(a?.newVsReturning.windowClients)}</div>
+          <div className="sub">
+            Nuovi {fmtInt(a?.newVsReturning.newClients)} / Di ritorno {fmtInt(a?.newVsReturning.returningClients)}
+          </div>
+          <div className="sub">Nuovo = prima vendita in assoluto nel periodo</div>
         </div>
         <div className="report-kpi">
           <div className="label">Clienti in archivio</div>
@@ -947,34 +1078,55 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
       {(a?.costs || a?.commissions) ? (
         <div className="report-kpi-grid mb-3">
           {a?.costs ? (
-            <div className="report-kpi">
+            <a className="report-kpi report-kpi-link" href={`/${encodeURIComponent(slug)}/costs?from=${rng.from}&to=${rng.to}`} title="Apri Scadenziario e Costi nel periodo">
               <div className="label">Costi</div>
               <div className="value">{fmtMoney(a.costs.total)}</div>
               <div className="sub">Residuo {fmtMoney(a.costs.open)}</div>
               {renderDelta(costiDelta)}
-            </div>
+            </a>
           ) : null}
           {a?.commissions ? (
-            <div className="report-kpi">
+            <a className="report-kpi report-kpi-link" href={`/${encodeURIComponent(slug)}/commissions?from=${rng.from}&to=${rng.to}`} title="Apri Commissioni nel periodo">
               <div className="label">Commissioni</div>
               <div className="value">{fmtMoney(a.commissions.total)}</div>
               <div className="sub">Da pagare {fmtMoney(a.commissions.open)}</div>
               {renderDelta(commissioniDelta)}
-            </div>
+            </a>
           ) : null}
         </div>
       ) : null}
 
-      <div className="row g-3 mb-3">
+      <div className="row g-3 mb-3" id="rep-andamento">
         <div className="col-xl-6">
           <div className="report-panel">
             <div className="report-section-title border-bottom">
               <div className="fw-semibold">Andamento incasso</div>
-              <span className="badge text-bg-light">{trendBadge}</span>
+              <div className="report-section-actions">
+                <span className="badge text-bg-light">{trendBadge}</span>
+                {(a?.daily.length ?? 0) > 0 ? (
+                  <button
+                    className="btn btn-sm btn-outline-secondary"
+                    type="button"
+                    title="Esporta CSV"
+                    aria-label="Esporta andamento incasso in CSV"
+                    onClick={() =>
+                      downloadCsv(`incasso_${a?.from}_${a?.to}.csv`, [
+                        ["Giorno", "Incasso", "Movimenti"],
+                        ...(a?.daily ?? []).map((r) => [itDate(r.day.slice(0, 10)), numberFormatIt(r.revenue, 2), r.saleCount]),
+                      ])
+                    }
+                  >
+                    <i className="bi bi-download" />
+                  </button>
+                ) : null}
+              </div>
             </div>
             <div className="report-chart-wrap">
               {hasChart.trend ? <canvas id="reportTrendChart" aria-label="Andamento incasso" /> : chartEmpty}
             </div>
+            {hasChart.trend ? (
+              <div className="report-chart-hint text-muted small px-3 pb-2">Clicca un punto per aprire i Movimenti del giorno.</div>
+            ) : null}
           </div>
         </div>
         <div className="col-xl-6">
@@ -990,7 +1142,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
         </div>
       </div>
 
-      <div className="row g-3 mb-3">
+      <div className="row g-3 mb-3" id="rep-mix">
         <div className="col-xl-3 col-md-6">
           <div className="report-panel">
             <div className="report-section-title border-bottom">
@@ -1006,7 +1158,25 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
           <div className="report-panel">
             <div className="report-section-title border-bottom">
               <div className="fw-semibold">Metodi di pagamento</div>
-              <span className="badge text-bg-light">Importi</span>
+              <div className="report-section-actions">
+                <span className="badge text-bg-light">Importi</span>
+                {(a?.paymentMethods.length ?? 0) > 0 ? (
+                  <button
+                    className="btn btn-sm btn-outline-secondary"
+                    type="button"
+                    title="Esporta CSV"
+                    aria-label="Esporta metodi di pagamento in CSV"
+                    onClick={() =>
+                      downloadCsv(`metodi_pagamento_${a?.from}_${a?.to}.csv`, [
+                        ["Metodo", "Importo", "Movimenti", "Quota %"],
+                        ...(a?.paymentMethods ?? []).map((m) => [m.label, numberFormatIt(m.amount, 2), m.count, numberFormatIt(m.sharePct, 1)]),
+                      ])
+                    }
+                  >
+                    <i className="bi bi-download" />
+                  </button>
+                ) : null}
+              </div>
             </div>
             <div className="report-chart-wrap">
               {hasChart.paymentMethods ? <canvas id="reportPaymentMethodsChart" aria-label="Metodi di pagamento" /> : chartEmpty}
@@ -1037,7 +1207,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
         </div>
       </div>
 
-      <div className="row g-3 mb-3">
+      <div className="row g-3 mb-3" id="rep-top">
         <div className="col-xl-4">
           <div className="report-panel">
             <div className="report-section-title border-bottom">
@@ -1045,9 +1215,25 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
               <div className="report-section-actions">
                 <span className="badge text-bg-light">Top 10</span>
                 {(a?.topClients.length ?? 0) > 0 ? (
-                  <button className="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="modal" data-bs-target="#reportClientsModal">
-                    <i className="bi bi-search me-1"></i>Mostra altro
-                  </button>
+                  <>
+                    <button
+                      className="btn btn-sm btn-outline-secondary"
+                      type="button"
+                      title="Esporta CSV"
+                      aria-label="Esporta top clienti in CSV"
+                      onClick={() =>
+                        downloadCsv(`top_clienti_${a?.from}_${a?.to}.csv`, [
+                          ["Cliente", "Vendite", "Totale"],
+                          ...(a?.topClients ?? []).map((c) => [c.name, c.saleCount, numberFormatIt(c.revenue, 2)]),
+                        ])
+                      }
+                    >
+                      <i className="bi bi-download" />
+                    </button>
+                    <button className="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="modal" data-bs-target="#reportClientsModal">
+                      <i className="bi bi-search me-1"></i>Mostra altro
+                    </button>
+                  </>
                 ) : null}
               </div>
             </div>
@@ -1063,9 +1249,25 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
               <div className="report-section-actions">
                 <span className="badge text-bg-light">Top 10</span>
                 {(a?.topItems.length ?? 0) > 0 ? (
-                  <button className="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="modal" data-bs-target="#reportItemsModal">
-                    <i className="bi bi-search me-1"></i>Mostra altro
-                  </button>
+                  <>
+                    <button
+                      className="btn btn-sm btn-outline-secondary"
+                      type="button"
+                      title="Esporta CSV"
+                      aria-label="Esporta top servizi e prodotti in CSV"
+                      onClick={() =>
+                        downloadCsv(`top_voci_${a?.from}_${a?.to}.csv`, [
+                          ["Voce", "Tipo", "Quantità", "Vendite", "Totale"],
+                          ...(a?.topItems ?? []).map((it) => [it.name, it.type ?? "", fmtQty(it.qty), it.saleCount ?? 0, numberFormatIt(it.revenue, 2)]),
+                        ])
+                      }
+                    >
+                      <i className="bi bi-download" />
+                    </button>
+                    <button className="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="modal" data-bs-target="#reportItemsModal">
+                      <i className="bi bi-search me-1"></i>Mostra altro
+                    </button>
+                  </>
                 ) : null}
               </div>
             </div>
@@ -1081,9 +1283,25 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
               <div className="report-section-actions">
                 <span className="badge text-bg-light">Top 10</span>
                 {(a?.operators.length ?? 0) > 0 ? (
-                  <button className="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="modal" data-bs-target="#reportOperatorsModal">
-                    <i className="bi bi-search me-1"></i>Mostra altro
-                  </button>
+                  <>
+                    <button
+                      className="btn btn-sm btn-outline-secondary"
+                      type="button"
+                      title="Esporta CSV"
+                      aria-label="Esporta operatori in CSV"
+                      onClick={() =>
+                        downloadCsv(`operatori_${a?.from}_${a?.to}.csv`, [
+                          ["Operatore", "Vendite", "Totale", "Scontrino medio", "Ore lavorate", "Appuntamenti"],
+                          ...(a?.operators ?? []).map((o) => [o.name, o.saleCount, numberFormatIt(o.revenue, 2), numberFormatIt(o.avgTicket, 2), numberFormatIt(o.hoursWorked, 1), o.apptCount]),
+                        ])
+                      }
+                    >
+                      <i className="bi bi-download" />
+                    </button>
+                    <button className="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="modal" data-bs-target="#reportOperatorsModal">
+                      <i className="bi bi-search me-1"></i>Mostra altro
+                    </button>
+                  </>
                 ) : null}
               </div>
             </div>
@@ -1094,7 +1312,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
         </div>
       </div>
 
-      <div className="row g-3 mb-3">
+      <div className="row g-3 mb-3" id="rep-finanza">
         <div className="col-12">
           <div className="report-panel">
             <div className="report-section-title border-bottom">
@@ -1142,6 +1360,101 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
           </div>
         </div>
       </div>
+
+      {/* Sedi a confronto (rivoluzione 2026-07-20): solo con "Tutte le sedi"
+          attivo. Venduto NETTO + vendite per sale_date, prenotazioni attive
+          per starts_at — NON è l'Incasso a eventi di cassa. */}
+      {(a?.locationsBreakdown.length ?? 0) > 0 ? (
+        <div className="row g-3 mb-3" id="rep-sedi">
+          <div className="col-12">
+            <div className="report-panel">
+              <div className="report-section-title border-bottom">
+                <div className="fw-semibold">Sedi a confronto</div>
+                <div className="report-section-actions">
+                  <span className="badge text-bg-light">Venduto netto</span>
+                  <button
+                    className="btn btn-sm btn-outline-secondary"
+                    type="button"
+                    title="Esporta CSV"
+                    aria-label="Esporta confronto sedi in CSV"
+                    onClick={() =>
+                      downloadCsv(`sedi_${a?.from}_${a?.to}.csv`, [
+                        ["Sede", "Venduto", "Vendite", "Prenotazioni"],
+                        ...(a?.locationsBreakdown ?? []).map((l) => [l.name ?? "—", numberFormatIt(l.soldRevenue, 2), l.saleCount, l.appointmentCount]),
+                      ])
+                    }
+                  >
+                    <i className="bi bi-download" />
+                  </button>
+                </div>
+              </div>
+              <div className="report-modal-table-wrap p-3 pt-2">
+                <table className="table table-sm mb-0">
+                  <thead>
+                    <tr>
+                      <th>Sede</th>
+                      <th className="text-end">Venduto</th>
+                      <th className="text-end">Vendite</th>
+                      <th className="text-end">Prenotazioni</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(a?.locationsBreakdown ?? []).map((l) => (
+                      <tr key={l.id === null ? "null" : l.id}>
+                        <td>{l.name ?? "—"}</td>
+                        <td className="text-end fw-semibold">{fmtMoney(l.soldRevenue)}</td>
+                        <td className="text-end">{fmtInt(l.saleCount)}</td>
+                        <td className="text-end">{fmtInt(l.appointmentCount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="text-muted small mt-2">
+                  Venduto netto per data vendita e prenotazioni attive per data appuntamento — il totale può differire
+                  dall&apos;Incasso, che segue gli eventi di cassa.
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Fidelity del periodo (rivoluzione 2026-07-20): visibile solo se nel
+          periodo c'è almeno un numero — zero rumore per chi non usa il modulo. */}
+      {fidelityHasData ? (
+        <div className="row g-3 mb-3" id="rep-fidelity">
+          <div className="col-12">
+            <div className="report-panel">
+              <div className="report-section-title border-bottom">
+                <div className="fw-semibold">Fidelity nel periodo</div>
+                <span className="badge text-bg-light">Punti · Ricariche · GiftCard</span>
+              </div>
+              <div className="report-kpi-grid p-3 pt-2">
+                <div className="report-kpi">
+                  <div className="label">Punti emessi</div>
+                  <div className="value">{fmtQty(fp?.pointsIssued)}</div>
+                  <div className="sub">Punti utilizzati {fmtQty(fp?.pointsUsed)}</div>
+                </div>
+                <div className="report-kpi">
+                  <div className="label">Ricariche vendute</div>
+                  <div className="value">{fmtInt(fp?.rechargesCount)}</div>
+                  <div className="sub">Incassato alla cassa {fmtMoney(fp?.rechargesAmount)}</div>
+                </div>
+                <div className="report-kpi">
+                  <div className="label">GiftCard emesse</div>
+                  <div className="value">{fmtInt(fp?.giftcardsIssued)}</div>
+                  <div className="sub">Valore iniziale {fmtMoney(fp?.giftcardsIssuedAmount)}</div>
+                </div>
+                <div className="report-kpi">
+                  <div className="label">Utilizzi in vendita</div>
+                  <div className="value">{fmtMoney((fp?.giftcardUsedAmount ?? 0) + (fp?.creditUsedAmount ?? 0))}</div>
+                  <div className="sub">GiftCard {fmtMoney(fp?.giftcardUsedAmount)} / Credito {fmtMoney(fp?.creditUsedAmount)}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div
         className="modal fade report-more-modal"
@@ -1199,7 +1512,13 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
                       filteredClients.map((c, i) => (
                         <tr key={`${c.clientId}-${c.name}`}>
                           <td className="text-muted">{fmtInt(i + 1)}</td>
-                          <td>{c.name}</td>
+                          <td>
+                            {c.clientId > 0 ? (
+                              <a href={`/${encodeURIComponent(slug)}/clients?action=view&id=${c.clientId}`}>{c.name}</a>
+                            ) : (
+                              c.name
+                            )}
+                          </td>
                           <td className="text-end">{fmtInt(c.saleCount)}</td>
                           <td className="text-end fw-semibold">{fmtMoney(c.revenue)}</td>
                         </tr>
@@ -1346,7 +1665,11 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
                       filteredOperators.map((o, i) => (
                         <tr key={o.name}>
                           <td className="text-muted">{fmtInt(i + 1)}</td>
-                          <td>{o.name}</td>
+                          <td>
+                            <a href={`/${encodeURIComponent(slug)}/commissions?from=${rng.from}&to=${rng.to}`} title="Apri Commissioni nel periodo">
+                              {o.name}
+                            </a>
+                          </td>
                           <td className="text-end">{fmtHours(o.hoursWorked)}</td>
                           <td className="text-end">{fmtInt(o.apptCount)}</td>
                           <td className="text-end">{fmtInt(o.saleCount)}</td>

@@ -246,3 +246,92 @@
       grid-template-columns: 1fr;
     }
   }
+
+/* --- Rivoluzione Report (2026-07-20) ------------------------------------ */
+
+/* KPI cliccabili: stessa card, ma anchor con affordance al passaggio. */
+a.report-kpi-link{
+  display:block;
+  color:inherit;
+  text-decoration:none;
+}
+a.report-kpi-link:hover,
+a.report-kpi-link:focus-visible{
+  border-color:#b6c8e4;
+  box-shadow:0 4px 14px rgba(37,99,235,.10);
+}
+
+/* Nav ancorata alle sezioni. */
+.report-anchor-nav{
+  position:sticky;
+  top:8px;
+  z-index:20;
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  margin-bottom:12px;
+  padding:6px;
+  border:1px solid #e4e9f1;
+  border-radius:999px;
+  background:rgba(255,255,255,.92);
+  backdrop-filter:blur(4px);
+  width:fit-content;
+}
+.report-anchor-pill{
+  padding:4px 12px;
+  border-radius:999px;
+  font-size:12.5px;
+  font-weight:600;
+  color:#365a96;
+  text-decoration:none;
+}
+.report-anchor-pill:hover,
+.report-anchor-pill:focus-visible{
+  background:#eef2f9;
+  color:#24406e;
+}
+#rep-andamento, #rep-mix, #rep-top, #rep-finanza, #rep-sedi, #rep-fidelity{
+  scroll-margin-top:64px;
+}
+
+.report-chart-hint{
+  margin-top:-4px;
+}
+
+/* Stampa: solo i contenuti, a colonna piena. */
+@media print{
+  .app-sidebar,
+  .topbar,
+  .report-filter-card,
+  .report-anchor-nav,
+  .report-section-actions button,
+  .bs-info-trigger,
+  .bs-page-actions{
+    display:none !important;
+  }
+  .app-content{
+    padding:0 !important;
+  }
+  .report-panel{
+    break-inside:avoid;
+  }
+  .report-kpi-grid{
+    break-inside:avoid;
+  }
+  a.report-kpi-link{
+    box-shadow:none;
+  }
+}
+
+/* Azioni filtro a 4 elementi (Confronta, Tutte le sedi, Aggiorna, Stampa):
+   griglia 2x2 compatta invece della pila verticale. */
+.report-filter-actions{
+  display:grid !important;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:8px 14px;
+  align-items:center;
+  align-self:end;
+}
+.report-filter-actions .btn{
+  width:100%;
+}

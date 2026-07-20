@@ -110,6 +110,26 @@ export type ManageReports = {
   topProducts: ReportRow[];
   topItems: ReportRow[];
   operators: { name: string; revenue: number; saleCount: number; avgTicket: number; hoursWorked: number; apptCount: number }[];
+  // Rivoluzione Report (2026-07-20): clienti nuovi vs di ritorno nel periodo
+  // (nuovo = prima vendita ASSOLUTA del cliente dentro la finestra).
+  newVsReturning: { windowClients: number; newClients: number; returningClients: number };
+  // Breakdown per sede: SOLO con più sedi selezionate ("Tutte le sedi"),
+  // Venduto netto + vendite (sale_date) + prenotazioni attive (starts_at).
+  // name viene decorato dalla route (che ha la lista sedi in mano).
+  locationsBreakdown: { id: number | null; name?: string; soldRevenue: number; saleCount: number; appointmentCount: number }[];
+  // Fidelity del periodo: ledger punti (kind earn/redeem), ricariche non-void
+  // (base = incassato alla cassa), GiftCard emesse (valore iniziale) e
+  // utilizzi in vendita (colonne giftcard_used/credit_used, vendite attive).
+  fidelityPeriod: {
+    pointsIssued: number;
+    pointsUsed: number;
+    rechargesCount: number;
+    rechargesAmount: number;
+    giftcardsIssued: number;
+    giftcardsIssuedAmount: number;
+    giftcardUsedAmount: number;
+    creditUsedAmount: number;
+  };
 };
 
 function money(v: unknown): number {
@@ -628,6 +648,108 @@ export async function getManageReports(
 
   const dailyDays = Array.from(collections.byDay.keys()).sort();
 
+  // --- Nuovi vs di ritorno (2026-07-20): tra i clienti serviti nel periodo
+  // (vendite attive, scope sede), "nuovo" = la prima vendita ASSOLUTA del
+  // cliente (tenant-wide, non annullata, senza filtro sede) cade nella
+  // finestra; il resto sono clienti di ritorno.
+  const nvrRows = await dbQuery<RowDataPacket[]>(
+    `SELECT COUNT(*) total,
+            SUM(CASE WHEN x.fe >= ? AND x.fe < ? THEN 1 ELSE 0 END) newc
+       FROM (
+         SELECT w.cid, (SELECT MIN(s2.sale_date) FROM ${quoteIdentifier(sales.name)} s2
+                         WHERE s2.tenant_id = ? AND s2.client_id = w.cid
+                           AND LOWER(TRIM(COALESCE(s2.status,''))) NOT IN (${cph})) fe
+           FROM (SELECT DISTINCT s.client_id cid FROM ${quoteIdentifier(sales.name)} s
+                  WHERE ${baseWhere} AND COALESCE(s.client_id,0) > 0) w
+       ) x`,
+    [from, toExclusive, tid, ...CANCELLED_SALE_STATES, ...baseParams],
+  ).catch(() => [] as RowDataPacket[]);
+  const nvr = nvrRows[0] ?? {};
+  const newVsReturning = {
+    windowClients: Number(nvr.total ?? 0),
+    newClients: Number(nvr.newc ?? 0),
+    returningClients: Math.max(0, Number(nvr.total ?? 0) - Number(nvr.newc ?? 0)),
+  };
+
+  // --- Breakdown per sede (solo con più sedi selezionate) -----------------
+  let locationsBreakdown: ManageReports["locationsBreakdown"] = [];
+  if (locIds.length > 1) {
+    const keyOf = (lid: unknown) => (lid === null || lid === undefined || Number(lid) <= 0 ? "null" : String(Number(lid)));
+    const byId = new Map<string, { id: number | null; soldRevenue: number; saleCount: number; appointmentCount: number }>();
+    const entry = (k: string) => {
+      const e = byId.get(k) ?? { id: k === "null" ? null : Number(k), soldRevenue: 0, saleCount: 0, appointmentCount: 0 };
+      byId.set(k, e);
+      return e;
+    };
+    const salesByLoc = await dbQuery<RowDataPacket[]>(
+      `SELECT s.location_id lid, COUNT(*) cnt, COALESCE(SUM(${NET_SALE_REV}),0) rev
+         FROM ${quoteIdentifier(sales.name)} s WHERE ${baseWhere} GROUP BY s.location_id`,
+      baseParams,
+    ).catch(() => [] as RowDataPacket[]);
+    for (const r of salesByLoc) {
+      const e = entry(keyOf(r.lid));
+      e.soldRevenue = money(r.rev);
+      e.saleCount = Number(r.cnt ?? 0);
+    }
+    const apptByLoc = await dbQuery<RowDataPacket[]>(
+      `SELECT a.location_id lid, COUNT(*) cnt FROM ${quoteIdentifier(appt.name)} a
+        WHERE a.tenant_id = ? AND a.starts_at >= ? AND a.starts_at < ? AND ${activeCond}${apptLocClause}
+        GROUP BY a.location_id`,
+      [appt.tenantId ?? 0, from, toExclusive, ...apptLocParams],
+    ).catch(() => [] as RowDataPacket[]);
+    for (const r of apptByLoc) entry(keyOf(r.lid)).appointmentCount = Number(r.cnt ?? 0);
+    locationsBreakdown = [...byId.values()].sort((x, y) => y.soldRevenue - x.soldRevenue);
+  }
+
+  // --- Fidelity del periodo -----------------------------------------------
+  const txTable = await tenantTable(slug, "transactions").catch(() => null);
+  const txLoc = locCond("t.location_id");
+  const ptsRows = txTable
+    ? await dbQuery<RowDataPacket[]>(
+        `SELECT COALESCE(SUM(CASE WHEN LOWER(t.kind) = 'earn' THEN t.delta_points ELSE 0 END),0) issued,
+                COALESCE(SUM(CASE WHEN LOWER(t.kind) = 'redeem' THEN -t.delta_points ELSE 0 END),0) used
+           FROM ${quoteIdentifier(txTable.name)} t
+          WHERE t.tenant_id = ? AND t.created_at >= ? AND t.created_at < ?${txLoc.sql}`,
+        [txTable.tenantId ?? 0, from, toExclusive, ...txLoc.params],
+      ).catch(() => [] as RowDataPacket[])
+    : [];
+  const rechTable = await tenantTable(slug, "recharges").catch(() => null);
+  const rechLoc = locCond("r.location_id");
+  const rechRows = rechTable
+    ? await dbQuery<RowDataPacket[]>(
+        `SELECT COUNT(*) cnt, COALESCE(SUM(r.base_amount),0) amt
+           FROM ${quoteIdentifier(rechTable.name)} r
+          WHERE r.tenant_id = ? AND COALESCE(r.is_void,0) = 0 AND r.created_at >= ? AND r.created_at < ?${rechLoc.sql}`,
+        [rechTable.tenantId ?? 0, from, toExclusive, ...rechLoc.params],
+      ).catch(() => [] as RowDataPacket[])
+    : [];
+  const gcTable = await tenantTable(slug, "giftcards").catch(() => null);
+  const gcLoc = locCond("g.location_id");
+  const gcRows = gcTable
+    ? await dbQuery<RowDataPacket[]>(
+        `SELECT COUNT(*) cnt, COALESCE(SUM(g.initial_amount),0) amt
+           FROM ${quoteIdentifier(gcTable.name)} g
+          WHERE g.tenant_id = ? AND g.issued_at >= ? AND g.issued_at < ?
+            AND LOWER(TRIM(COALESCE(g.status,''))) NOT IN ('cancelled','canceled')${gcLoc.sql}`,
+        [gcTable.tenantId ?? 0, from, toExclusive, ...gcLoc.params],
+      ).catch(() => [] as RowDataPacket[])
+    : [];
+  const usedRows = await dbQuery<RowDataPacket[]>(
+    `SELECT COALESCE(SUM(s.giftcard_used),0) gc, COALESCE(SUM(s.credit_used),0) cr
+       FROM ${quoteIdentifier(sales.name)} s WHERE ${baseWhere}`,
+    baseParams,
+  ).catch(() => [] as RowDataPacket[]);
+  const fidelityPeriod = {
+    pointsIssued: money(ptsRows[0]?.issued),
+    pointsUsed: money(ptsRows[0]?.used),
+    rechargesCount: Number(rechRows[0]?.cnt ?? 0),
+    rechargesAmount: money(rechRows[0]?.amt),
+    giftcardsIssued: Number(gcRows[0]?.cnt ?? 0),
+    giftcardsIssuedAmount: money(gcRows[0]?.amt),
+    giftcardUsedAmount: money(usedRows[0]?.gc),
+    creditUsedAmount: money(usedRows[0]?.cr),
+  };
+
   return {
     from,
     to,
@@ -665,5 +787,8 @@ export async function getManageReports(
     topProducts: itemRows.filter((r) => String(r.type).toLowerCase() === "product").slice(0, 10).map((r) => ({ name: String(r.name ?? ""), revenue: money(r.rev), qty: Number(r.qty ?? 0), saleCount: Number(r.cnt ?? 0) })),
     topItems: itemRows.map((r) => ({ name: String(r.name ?? ""), type: typeLabel(String(r.type ?? "altro"), String(r.name ?? "")), revenue: money(r.rev), qty: Number(r.qty ?? 0), saleCount: Number(r.cnt ?? 0) })),
     operators,
+    newVsReturning,
+    locationsBreakdown,
+    fidelityPeriod,
   };
 }

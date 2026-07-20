@@ -17584,3 +17584,34 @@ popup trovate con scan multiline `</(strong|em|b|a)> [^<{]*&entita;`
 appuntamento, staff_availability, consent_module_form, consent_modules,
 marketplace-search breadcrumb). Scan finale = 0 residui. Verifica live
 8/8 sulle frasi ricomposte; tsc pulito.
+
+## 2026-07-20 - Report: rivoluzione (drill-down, export, nuovi indicatori)
+Pacchetto approvato dopo analisi. BACKEND (manage-reports.ts additivo):
+newVsReturning (nuovo = prima vendita ASSOLUTA tenant-wide nella finestra;
+finestra scope sede), locationsBreakdown SOLO con all_locations (venduto
+NETTO per sale_date + vendite + prenotazioni attive per starts_at, GROUP BY
+sede; nomi decorati dalla route da locationContext; null = "Senza sede"),
+fidelityPeriod (transactions earn/redeem, recharges non-void per base_amount
+- card_id NOT NULL nelle fixture!, giftcards emesse non-cancellate per
+initial_amount, utilizzi = SUM(giftcard_used/credit_used) dalle vendite
+attive - il ledger giftcard_transactions ha segni misti, NON usarlo);
+route espone locationsCount per lo switch. FRONTEND: KPI Incasso/Vendite ->
+pos_history?from&to (pos_history ora prefilla ?from/?to via effect di mount,
+MAI nell'initializer: SSR mismatch), Prenotazioni -> appointments, Costi/
+Commissioni -> pagine col periodo; click sul punto del grafico incasso ->
+Movimenti del bucket (buildTrendSeries ora restituisce ranges; onClick/
+onHover cursor nel config Chart.js); modali: clienti -> scheda, operatori ->
+Commissioni; export CSV client-side (BOM+';'+virgola decimale) su andamento/
+metodi/top clienti/voci/operatori/sedi; bottone Stampa + @media print in
+reports.css; percentuali prenotazioni (den = TUTTI gli appuntamenti);
+card Clienti nel periodo (nuovi/di ritorno); switch "Tutte le sedi"
+(visibile con locationsCount>1, viaggia in URL) + sezione Sedi a confronto
+con disclaimer venduto-vs-incasso; sezione Fidelity nel periodo (visibile
+solo con numeri); nav ancorata sticky (pillole -> id sezione,
+scroll-margin); filtro azioni a griglia 2x2; InfoBox aggiornata.
+Suite NUOVA test-report-rivoluzione (19: R1-R9 backend con fixture ZZ
+finestra 2027-04 su due sedi + ledger fidelity; D1-D10 UI: pillole, href
+KPI, tabella sedi, sezione fidelity, download CSV reale, Stampa, card
+clienti, percentuali, link scheda cliente, prefill pos_history). Trappole
+probe: label KPI UPPERCASE via CSS -> match case-insensitive. Regressioni:
+report-pass2 12, dom-pos-clientsearch 8; tsc pulito.

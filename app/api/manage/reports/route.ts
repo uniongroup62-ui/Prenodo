@@ -73,6 +73,14 @@ export async function GET(request: Request) {
       }),
     ]);
 
+    // Decora il breakdown per sede coi nomi (manage-reports restituisce solo
+    // gli id; null = vendite/prenotazioni senza sede, visibili in "tutte").
+    for (const row of analytics.locationsBreakdown) {
+      row.name = row.id === null
+        ? "Senza sede"
+        : String(locationContext.allLocations.find((l) => Number(l.id) === row.id)?.name ?? `Sede #${row.id}`);
+    }
+
     return Response.json({
       ok: true,
       sourceMode: "database",
@@ -92,6 +100,9 @@ export async function GET(request: Request) {
       latestSales: sales.slice(0, 5),
       // Etichetta sede per il sottotitolo legacy e 'Profilo clienti {sede}'.
       locationLabel,
+      // Numero sedi autorizzate: la pagina mostra lo switch "Tutte le sedi"
+      // (e il breakdown) solo quando l'utente ne ha più di una.
+      locationsCount: allowedIds.length,
       // Alert legacy 'Seleziona una sede valida per visualizzare i dati.'
       locationFailClosed: failClosed,
       analytics,

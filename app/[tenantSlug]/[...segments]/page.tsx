@@ -1105,6 +1105,7 @@ export default async function TenantPage({
             compare_month: query.compare_month,
             compare_from: query.compare_from,
             compare_to: query.compare_to,
+            all_locations: query.all_locations,
           }}
         />
       </ManageShell>

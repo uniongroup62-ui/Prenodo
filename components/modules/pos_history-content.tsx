@@ -130,6 +130,17 @@ export function PosHistoryContent({ slug: slugProp }: { slug?: string } = {}) {
   // Filter state (kept working client-side over the loaded movements).
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+
+  // ?from/?to dall'URL (drill-down dai Report, 2026-07-20): prefill al mount
+  // in effect (mai nell'initializer: divergerebbe dall'SSR).
+  useEffect(() => {
+    const qs = new URLSearchParams(window.location.search);
+    const valid = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : "");
+    const f = valid(qs.get("from"));
+    const t = valid(qs.get("to"));
+    if (f) setFrom(f);
+    if (t) setTo(t);
+  }, []);
   const [saleNumber, setSaleNumber] = useState("");
   const [clientIds, setClientIds] = useState<Set<string>>(new Set());
   const [serviceIds, setServiceIds] = useState<Set<string>>(new Set());
