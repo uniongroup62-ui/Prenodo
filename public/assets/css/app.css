@@ -4661,3 +4661,14 @@ button.bs-info-trigger:focus-visible{
 .bs-info-modal-body li + li{
   margin-top:3px;
 }
+
+/* Menu a tendina del gestionale (2026-07-21): Bootstrap li rende a 1rem
+   (16px) mentre l'app vive a 13-14px — combobox filtri, menu account e ogni
+   dropdown-item si allineano alla taglia dell'app. */
+body:not(.booking-public-body):not(.onboarding-body):not(.auth-body) .dropdown-menu{
+  font-size:14px;
+}
+body:not(.booking-public-body):not(.onboarding-body):not(.auth-body) .dropdown-menu .dropdown-item{
+  font-size:14px;
+  padding:6px 12px;
+}

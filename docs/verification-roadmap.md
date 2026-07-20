@@ -17673,3 +17673,13 @@ su click fuori. Stessi id filterStaff/filterService (solo cosmetici: i
 filtri sono stato React). Probe Playwright 6/6 (combobox presenti, ricerca
 che filtra la lista, selezione nel toggle, Enter, reset, contatore vivo);
 regressione test-calendario 20/20; tsc pulito.
+
+## 2026-07-21 - Dropdown del gestionale a 14px (testo troppo grande)
+Segnalazione utente (combobox calendario + menu account): i dropdown
+Bootstrap restavano al default 1rem/16px mentre l'app vive a 13-14px.
+Regola globale in app.css (scope body gestionale): .dropdown-menu 14px e
+.dropdown-item 14px con padding 6/12 - vale per combobox filtri, menu
+account, ricerca funzioni e ogni altro dropdown della shell. Bumpata la
+cache anche su app.css (?v=20260721 nelle 3 link di manage-shell, stessa
+trappola cache della CSS report). Probe computed-style 2/2 (item combobox
+e item menu account = 14px); screenshot verificato; tsc pulito.
