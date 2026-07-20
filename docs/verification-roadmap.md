@@ -17369,3 +17369,14 @@ ricerca."); convive con problemi-prima e 25/pagina. Caso d'uso: "il cliente
 X dice che gli SMS non partono" senza sfogliare pagine.
 Verifica: probe live (filtra ed esclude, empty-state su query inesistente);
 faseC 7/7; tsc pulito.
+
+## 2026-07-20 — MOVIMENTI INVII: RICERCA ANCHE SU SMS ED EMAIL (approvato)
+
+PagedMovements ristrutturato: riceve i MovementRow GREZZI (non righe gia'
+renderizzate) e filtra client-side su tenant (nome/slug), destinatario
+(client_name/recipient) e riferimento/oggetto — il caso "il cliente non ha
+ricevuto l'SMS" si risolve digitando il numero o il nome. Campo "Cerca
+tenant o destinatario..." nell'header di CIASCUNA tabella (stato di ricerca
+e pagina indipendenti), empty-state dedicato; mappe stati/tipi promosse a
+modulo (movementStatusIt/movementKindIt). Verifica: probe live (2 campi,
+empty-state su query inesistente); faseC 7/7; tsc pulito.

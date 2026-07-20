@@ -1497,20 +1497,55 @@ function SmsPlansView({ data, canManage, onAction, onRefresh }: { data: SmsBilli
 }
 
 // Tabella movimenti PAGINATA (il payload porta fino a 120 righe per canale:
-// 25 per tenant, mai tutte in una volta a schermo).
+// 25 per tenant, mai tutte in una volta a schermo) con RICERCA client-side
+// su tenant, destinatario e riferimento.
 const MOVEMENTS_PER_PAGE = 25;
 
-function PagedMovements({ title, empty, rows }: { title: string; empty: string; rows: Array<Array<React.ReactNode>> }) {
+// Stati e tipi in ITALIANO (mai enum grezzi); i valori ignoti passano com'e'.
+const movementStatusIt: Record<string, string> = { sent: "Inviato", delivered: "Consegnato", failed: "Fallito", error: "Errore", pending: "In coda", queued: "In coda", scheduled: "Pianificato", skipped: "Saltato" };
+const movementKindIt: Record<string, string> = { reminder: "Promemoria", approved: "Conferma", modified: "Modifica", rejected: "Rifiuto", verification: "Verifica email", booking: "Booking", marketing: "Marketing", test: "Test" };
+
+function PagedMovements({ title, empty, movements }: { title: string; empty: string; movements: MovementRow[] }) {
   const [page, setPage] = useState(1);
-  const pageCount = Math.max(1, Math.ceil(rows.length / MOVEMENTS_PER_PAGE));
+  const [query, setQuery] = useState("");
+  const needle = query.trim().toLowerCase();
+  const filtered = movements.filter((row) => !needle || [row.tenant_name, row.tenant_slug, row.client_name, row.recipient, row.reference, row.subject]
+    .some((field) => String(field ?? "").toLowerCase().includes(needle)));
+  const pageCount = Math.max(1, Math.ceil(filtered.length / MOVEMENTS_PER_PAGE));
   const current = Math.min(page, pageCount);
-  const visible = rows.slice((current - 1) * MOVEMENTS_PER_PAGE, current * MOVEMENTS_PER_PAGE);
+  const visible = filtered.slice((current - 1) * MOVEMENTS_PER_PAGE, current * MOVEMENTS_PER_PAGE);
+  const rows = visible.map((row) => [
+    <span key={`${row.channel}-${row.tenant_slug}-${row.event_at}`}><strong>{row.tenant_name}</strong><span className="ml-2 text-slate-500">{row.tenant_slug}</span></span>,
+    movementKindIt[String(row.kind ?? "").toLowerCase()] ?? row.kind,
+    <Badge tone={movementTone(row.status)} key={`status-${row.channel}-${row.tenant_slug}-${row.event_at}`}>{movementStatusIt[String(row.status ?? "").toLowerCase()] ?? row.status ?? "-"}</Badge>,
+    row.client_name || row.recipient || "-",
+    row.reference || row.subject || "-",
+    row.channel === "SMS" ? String(row.credits ?? "-") : "-",
+    formatDateTime(row.event_at),
+    row.last_error || row.provider_state || "-",
+  ]);
   return (
     <div className="grid gap-2">
-      <Table title={title} headers={["Tenant", "Tipo", "Stato", "Destinatario", "Riferimento", "Crediti", "Evento", "Dettaglio"]} rows={visible} empty={empty} />
+      <Table
+        title={title}
+        headers={["Tenant", "Tipo", "Stato", "Destinatario", "Riferimento", "Crediti", "Evento", "Dettaglio"]}
+        action={
+          <label className="relative">
+            <Search className="absolute left-3 top-2.5 text-slate-400" size={15} aria-hidden />
+            <input
+              className="h-9 w-64 rounded-md border border-slate-200 pl-9 pr-3 text-sm outline-none focus:border-[#365a96]"
+              placeholder="Cerca tenant o destinatario…"
+              value={query}
+              onChange={(event) => { setQuery(event.target.value); setPage(1); }}
+            />
+          </label>
+        }
+        rows={rows}
+        empty={needle ? "Nessun movimento corrisponde alla ricerca." : empty}
+      />
       {pageCount > 1 ? (
         <div className="flex items-center justify-between rounded-md border border-slate-200 bg-white px-4 py-2 text-sm shadow-sm">
-          <span className="text-slate-500">{rows.length} movimenti · pagina {current} di {pageCount}</span>
+          <span className="text-slate-500">{filtered.length} movimenti · pagina {current} di {pageCount}</span>
           <div className="flex gap-2">
             <button className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold disabled:opacity-40" disabled={current <= 1} type="button" onClick={() => setPage(current - 1)}>Precedente</button>
             <button className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold disabled:opacity-40" disabled={current >= pageCount} type="button" onClick={() => setPage(current + 1)}>Successiva</button>
@@ -1525,23 +1560,10 @@ function MovementsView({ data, onRefresh }: { data: MovementsPayload | null; onR
   if (!data) {
     return <EmptyOperation icon={Send} title="Movimenti invii" detail="Carica ultimo storico SMS ed email da tutti i tenant." onRefresh={onRefresh} />;
   }
-  // Stati e tipi in ITALIANO (mai enum grezzi); i valori ignoti passano com'e'.
-  const statusIt: Record<string, string> = { sent: "Inviato", delivered: "Consegnato", failed: "Fallito", error: "Errore", pending: "In coda", queued: "In coda", scheduled: "Pianificato", skipped: "Saltato" };
-  const kindIt: Record<string, string> = { reminder: "Promemoria", approved: "Conferma", modified: "Modifica", rejected: "Rifiuto", verification: "Verifica email", booking: "Booking", marketing: "Marketing", test: "Test" };
-  const movementRows = (rows: MovementRow[]) => rows.map((row) => [
-    <span key={`${row.channel}-${row.tenant_slug}-${row.event_at}`}><strong>{row.tenant_name}</strong><span className="ml-2 text-slate-500">{row.tenant_slug}</span></span>,
-    kindIt[String(row.kind ?? "").toLowerCase()] ?? row.kind,
-    <Badge tone={movementTone(row.status)} key={`status-${row.channel}-${row.tenant_slug}-${row.event_at}`}>{statusIt[String(row.status ?? "").toLowerCase()] ?? row.status ?? "-"}</Badge>,
-    row.client_name || row.recipient || "-",
-    row.reference || row.subject || "-",
-    row.channel === "SMS" ? String(row.credits ?? "-") : "-",
-    formatDateTime(row.event_at),
-    row.last_error || row.provider_state || "-",
-  ]);
   return (
     <div className="grid gap-5">
-      <PagedMovements empty="Nessun invio SMS registrato." rows={movementRows(data.sms)} title="SMS" />
-      <PagedMovements empty="Nessuna email registrata." rows={movementRows(data.emails)} title="Email" />
+      <PagedMovements empty="Nessun invio SMS registrato." movements={data.sms} title="SMS" />
+      <PagedMovements empty="Nessuna email registrata." movements={data.emails} title="Email" />
     </div>
   );
 }
