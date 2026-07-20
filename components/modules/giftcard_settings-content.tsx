@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import InfoBox from "./info-box";
 
 // Port fedele della pagina impostazioni GiftCard
 // (app/pages/giftcard_settings.php): scadenza predefinita (durata + unità) e
@@ -209,20 +210,17 @@ export function GiftcardSettingsContent({ slug: slugProp, initialQuery }: { slug
         </div>
 
         <div className="col-lg-4">
-          <div className="card p-4">
-            <div className="h6 fw-bold mb-2">Come funziona</div>
-            <div className="text-muted small">
-              <ul className="mb-0">
-                <li>
-                  <strong>Validità dal</strong> resta modificabile in fase di emissione.
-                </li>
-                <li>
-                  Se <strong>Valida al</strong> è vuoto, viene calcolata usando questa durata.
-                </li>
-                <li>Le GiftCard già emesse non vengono modificate.</li>
-              </ul>
-            </div>
-          </div>
+          <InfoBox>
+            <ul>
+              <li>
+                <strong>Validità dal</strong> resta modificabile in fase di emissione.
+              </li>
+              <li>
+                Se <strong>Valida al</strong> è vuoto, viene calcolata usando questa durata.
+              </li>
+              <li>Le GiftCard già emesse non vengono modificate.</li>
+            </ul>
+          </InfoBox>
         </div>
       </div>
 
@@ -284,13 +282,10 @@ export function GiftcardSettingsContent({ slug: slugProp, initialQuery }: { slug
         </div>
 
         <div className="col-lg-4">
-          <div className="card p-4">
-            <div className="h6 fw-bold mb-2">Suggerimento</div>
-            <div className="text-muted small">
-              Personalizza qui le condizioni mostrate nel voucher e nella mail GiftCard. Per tornare al testo standard usa{" "}
-              <strong>Ripristina testo predefinito</strong>.
-            </div>
-          </div>
+          <InfoBox>
+            Personalizza qui le condizioni mostrate nel voucher e nella mail GiftCard. Per tornare al testo standard usa{" "}
+            <strong>Ripristina testo predefinito</strong>.
+          </InfoBox>
         </div>
       </div>
     </div>

@@ -4590,3 +4590,72 @@ body:has(.app-shell) :is(
    input (in linea con la freccia dei select), non sull'intera colonna
    etichetta+campo. */
 .app-filter-tail{min-height:calc(1.5em + .75rem + 2px);}
+
+/* Box informativa unificata "Come funziona" (bonifica 2026-07-20): un solo
+   aspetto e un solo titolo per tutte le ex cabins/resources/package-settings/
+   recharges/pos-settings-info-box e per le card Suggerimento/Come funziona. */
+.bs-info-box{
+  display:flex;
+  align-items:flex-start;
+  gap:12px;
+  padding:16px 18px;
+  border:1px solid #bfd5f4;
+  border-left:4px solid #2f63d8;
+  border-radius:10px;
+  background:#f3f8ff;
+}
+
+.bs-info-box__icon{
+  width:34px;
+  height:34px;
+  flex:0 0 34px;
+  display:grid;
+  place-items:center;
+  border-radius:9px;
+  background:#dceaff;
+  color:#2f63d8;
+  font-size:16px;
+}
+
+.bs-info-box__body{
+  min-width:0;
+}
+
+.bs-info-box__title{
+  margin-bottom:6px;
+  color:#06183f;
+  font-size:14px;
+  font-weight:600;
+  line-height:1.25;
+}
+
+.bs-info-box__content{
+  color:#31518f;
+  font-size:13px;
+  line-height:1.45;
+}
+
+.bs-info-box__content p{
+  margin-bottom:6px;
+}
+
+.bs-info-box__content ul{
+  padding-left:18px;
+  margin-bottom:0;
+}
+
+.bs-info-box__content li + li{
+  margin-top:2px;
+}
+
+@media (max-width: 575.98px){
+  .bs-info-box{
+    padding:14px;
+  }
+
+  .bs-info-box__icon{
+    width:30px;
+    height:30px;
+    flex-basis:30px;
+  }
+}

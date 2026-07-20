@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import InfoBox from "./info-box";
 
 // Faithful port of the PHP resources page (app/pages/resources.php +
 // resources.js): lista (Nome | Quantità sede | Descrizione | Azioni, desc
@@ -375,20 +376,14 @@ export function ResourcesContent({ slug: slugProp, initialQuery }: { slug?: stri
           </div>
 
           <div className="col-lg-5">
-            <div className="resources-info-box">
-              <div className="resources-info-box__icon" aria-hidden="true">
-                <i className="bi bi-info-circle" />
-              </div>
-              <div className="resources-info-box__body">
-                <div className="resources-info-box__title">Come funziona la quantità</div>
-                <div className="resources-info-box__text">Imposta la disponibilità massima contemporanea della risorsa.</div>
-                <ul className="resources-info-box__list mb-0">
-                  <li>“Lettino abbronzante” → Quantità: 2</li>
-                  <li>“Macchinario Laser” → Quantità: 1</li>
-                  <li>“Sala riunioni” → Quantità: 3</li>
-                </ul>
-              </div>
-            </div>
+            <InfoBox>
+              <p>Imposta la disponibilità massima contemporanea della risorsa.</p>
+              <ul>
+                <li>“Lettino abbronzante” → Quantità: 2</li>
+                <li>“Macchinario Laser” → Quantità: 1</li>
+                <li>“Sala riunioni” → Quantità: 3</li>
+              </ul>
+            </InfoBox>
           </div>
         </div>
       ) : emptyState ? (

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import InfoBox from "./info-box";
 
 // Faithful port of the PHP cabins configuration page (app/pages/cabins.php +
 // assets/js/pages/cabins.js), fed by the existing DB-backed
@@ -326,7 +327,6 @@ export function CabinsContent({ slug: slugProp, initialQuery }: { slug?: string;
 
   return (
     <div className="container-fluid">
-      <link rel="stylesheet" href="/assets/css/pages/cabins.css" />
 
       {flash.msg ? <div className="alert alert-success">{flash.msg}</div> : null}
       {flash.err ? <div className="alert alert-danger">{flash.err}</div> : null}
@@ -437,19 +437,13 @@ export function CabinsContent({ slug: slugProp, initialQuery }: { slug?: string;
         </div>
 
         <div className="col-lg-5">
-          <div className="cabins-info-box">
-            <div className="cabins-info-box__icon" aria-hidden="true">
-              <i className="bi bi-info-circle" />
-            </div>
-            <div className="cabins-info-box__body">
-              <div className="cabins-info-box__title">Suggerimento</div>
-              <ul className="cabins-info-box__list mb-0">
-                <li>Le cabine sono necessarie per rendere prenotabili i servizi.</li>
-                <li>Ogni servizio puo essere associato a una o piu cabine.</li>
-                <li>Usa nomi brevi e riconoscibili, ad esempio Cabina 1, Cabina 2 o Cabina VIP.</li>
-              </ul>
-            </div>
-          </div>
+          <InfoBox>
+            <ul>
+              <li>Le cabine sono necessarie per rendere prenotabili i servizi.</li>
+              <li>Ogni servizio puo essere associato a una o piu cabine.</li>
+              <li>Usa nomi brevi e riconoscibili, ad esempio Cabina 1, Cabina 2 o Cabina VIP.</li>
+            </ul>
+          </InfoBox>
         </div>
       </div>
 

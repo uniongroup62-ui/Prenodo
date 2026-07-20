@@ -17471,3 +17471,24 @@ Probe Playwright forge sede 21 sulle 5 pagine (h1 unico, doppione assente,
 contenuti presenti; vendita reale 607 read-only) = 5/5. Nessuna suite
 asseriva i testi cambiati; regressioni cabine-pass2 20, risorse-pass2 3,
 magazzino-pass2 7, pos-checkout 8; tsc pulito.
+
+## 2026-07-20 - Gestionale: box informativa unificata "Come funziona"
+Richiesta utente: le box di suggerimento / come funziona avevano titoli e
+stili tutti diversi (card bianche h6, quattro *-info-box con CSS duplicata
+identica, un paragrafo inline). Nuovo componente condiviso
+components/modules/info-box.tsx (InfoBox): titolo UNICO "Come funziona",
+aspetto UNICO .bs-info-box in app.css (tinta blu, bordo sinistro, icona
+info in riquadro - lo stile gia usato dalle *-info-box). Convertite 11 box
+in 10 pagine: cabins (era "Suggerimento"), resources ("Come funziona la
+quantita"), package_settings, recharges ("...il modello di ricarica"),
+pos_settings ("Come viene applicata la scadenza"), fidelity_membership_
+settings, giftbox_settings (2), giftcard_settings (2), quote_settings
+("Suggerimento" nel form metodo pagamento), commissions (paragrafo inline
+"Come funziona:" promosso a box). NON toccati gli hint inline di
+promotion_form e staff_availability (testi di form, non box). Pulizia CSS:
+regole *-info-box rimosse da resources/package_settings/recharges.css;
+cabins.css e pos_settings.css restavano vuote -> file eliminati e link
+rimossi dai componenti. Probe Playwright forge sede 21 su tutte le pagine
+(n box atteso, titolo, contenuto, vecchi titoli/classi assenti) = 10/10;
+nessuna suite asseriva i vecchi testi; regressioni recharges 32,
+cabine-pass2 20; tsc pulito.

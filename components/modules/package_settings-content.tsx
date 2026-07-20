@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import InfoBox from "./info-box";
 
 // Faithful port of the PHP package_settings page (app/pages/package_settings.php,
 // reached via index.php?page=packages&tab=settings -> page=package_settings):
@@ -182,24 +183,18 @@ export function PackageSettingsContent({ slug: slugProp }: { slug?: string } = {
         </div>
 
         <div className="col-lg-4">
-          <div className="package-settings-info-box">
-            <div className="package-settings-info-box__icon" aria-hidden="true">
-              <i className="bi bi-info-circle" />
-            </div>
-            <div className="package-settings-info-box__body">
-              <div className="package-settings-info-box__title">Come funziona</div>
-              <ul className="package-settings-info-box__list mb-0">
-                <li>
-                  <strong>Valido dal</strong> resta modificabile in vendita o assegnazione.
-                </li>
-                <li>
-                  Se <strong>Valido al</strong> e vuoto, viene calcolato usando questa durata.
-                </li>
-                <li>La validita del catalogo pacchetti, se presente, ha priorita.</li>
-                <li>I pacchetti gia venduti o assegnati non vengono modificati.</li>
-              </ul>
-            </div>
-          </div>
+          <InfoBox>
+            <ul>
+              <li>
+                <strong>Valido dal</strong> resta modificabile in vendita o assegnazione.
+              </li>
+              <li>
+                Se <strong>Valido al</strong> e vuoto, viene calcolato usando questa durata.
+              </li>
+              <li>La validita del catalogo pacchetti, se presente, ha priorita.</li>
+              <li>I pacchetti gia venduti o assegnati non vengono modificati.</li>
+            </ul>
+          </InfoBox>
         </div>
       </div>
     </div>

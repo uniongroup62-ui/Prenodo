@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import InfoBox from "./info-box";
 
 // Port fedele di Preventivi / Impostazioni (app/pages/quote_settings.php +
 // assets/js/pages/quote_settings.js): dati anagrafici e intestazione
@@ -616,13 +617,10 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
             </div>
 
             <div className="col-lg-4">
-              <div className="card p-4">
-                <div className="h6 fw-bold mb-2">Suggerimento</div>
-                <div className="text-muted small">
-                  Compila <strong>Nome</strong> e, se serve, <strong>Dettagli</strong> come IBAN, email PayPal o note
-                  operative.
-                </div>
-              </div>
+              <InfoBox>
+                Compila <strong>Nome</strong> e, se serve, <strong>Dettagli</strong> come IBAN, email PayPal o note
+                operative.
+              </InfoBox>
             </div>
           </div>
         </>

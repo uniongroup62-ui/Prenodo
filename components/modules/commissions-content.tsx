@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import InfoBox from "./info-box";
 
 // Faithful port of the PHP commissions page (app/pages/commissions.php), the OVERVIEW
 // ("Riepilogo") tab — the commission report. Fed by the DB-backed
@@ -505,13 +506,13 @@ export function CommissionsContent({ slug: slugProp, initialQuery }: { slug?: st
                 </a>
               </div>
             </form>
-            <div className="small text-muted mt-3">
-              <strong>Come funziona:</strong> le commissioni su appuntamenti leggono automaticamente le prestazioni concluse da
-              Quick Booking e Booking pubblico. Le commissioni POS leggono l&rsquo;operatore che ha registrato la vendita in
-              Pagamenti. Pacchetti, prepagati, GiftBox, GiftCard e omaggi non generano una seconda commissione al riscatto. Se
-              una vendita viene annullata il movimento resta nello storico Commissioni come <strong>Annullato</strong> e viene
-              eliminato solo con l&rsquo;eliminazione definitiva della vendita annullata.
-            </div>
+            <InfoBox className="mt-3">
+              Le commissioni su appuntamenti leggono automaticamente le prestazioni concluse da Quick Booking e Booking
+              pubblico. Le commissioni POS leggono l&rsquo;operatore che ha registrato la vendita in Pagamenti. Pacchetti,
+              prepagati, GiftBox, GiftCard e omaggi non generano una seconda commissione al riscatto. Se una vendita viene
+              annullata il movimento resta nello storico Commissioni come <strong>Annullato</strong> e viene eliminato solo
+              con l&rsquo;eliminazione definitiva della vendita annullata.
+            </InfoBox>
           </div>
 
           {moduleEnabled && configuredRates <= 0 ? (

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import InfoBox from "./info-box";
 
 // Faithful port of the PHP POS settings page (app/pages/pos_settings.php):
 // expiry settings for preorders / prepaids, plus "apply to existing" actions.
@@ -143,7 +144,6 @@ export function PosSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
 
   return (
     <div className="container-fluid">
-      <link rel="stylesheet" href="/assets/css/pages/pos_settings.css" />
 
       <div className="bs-page-header">
         <div className="bs-page-heading">
@@ -316,18 +316,12 @@ export function PosSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
           </div>
         </div>
 
-        <div className="pos-settings-info-box mt-3">
-          <div className="pos-settings-info-box__icon" aria-hidden="true">
-            <i className="bi bi-info-circle" />
-          </div>
-          <div className="pos-settings-info-box__body">
-            <div className="pos-settings-info-box__title">Come viene applicata la scadenza</div>
-            <ul className="pos-settings-info-box__list mb-0">
-              <li>La scadenza viene calcolata dalla data vendita e salvata a fine giornata.</li>
-              <li>Se una funzione e&apos; disattivata, le date salvate non vengono mostrate e non bloccano utilizzi o ritiri.</li>
-            </ul>
-          </div>
-        </div>
+        <InfoBox className="mt-3">
+          <ul>
+            <li>La scadenza viene calcolata dalla data vendita e salvata a fine giornata.</li>
+            <li>Se una funzione e&apos; disattivata, le date salvate non vengono mostrate e non bloccano utilizzi o ritiri.</li>
+          </ul>
+        </InfoBox>
 
         <div className="d-flex gap-2 mt-3">
           <button className="btn btn-primary" type="submit">

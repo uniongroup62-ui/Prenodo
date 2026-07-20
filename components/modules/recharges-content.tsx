@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import InfoBox from "./info-box";
 
 // Faithful port of the PHP recharges page (app/pages/recharges.php +
 // assets/js/pages/recharges.js). "Modelli di ricarica" (tabella + modal
@@ -318,17 +319,12 @@ export function RechargesContent({ slug: slugProp, initialQuery }: { slug?: stri
         </div>
 
         <div className="col-lg-5">
-          <div className="recharges-info-box h-100">
-            <div className="recharges-info-box__icon" aria-hidden="true">
-              <i className="bi bi-info-circle" />
-            </div>
-            <div className="recharges-info-box__body">
-              <div className="recharges-info-box__title">Come funziona il modello di ricarica</div>
-              <div className="recharges-info-box__text">
+          <InfoBox className="h-100">
+              <p>
                 Il modello serve per velocizzare le ricariche credito dalla pagina <strong>Pagamenti</strong> mantenendo
                 sempre la stessa struttura commerciale.
-              </div>
-              <ul className="recharges-info-box__list mb-0">
+              </p>
+              <ul>
                 <li>
                   <strong>Ricarica</strong>: è l&apos;importo pagato dal cliente alla cassa.
                 </li>
@@ -353,8 +349,7 @@ export function RechargesContent({ slug: slugProp, initialQuery }: { slug?: stri
                   movimenti credito.
                 </li>
               </ul>
-            </div>
-          </div>
+          </InfoBox>
         </div>
       </div>
 

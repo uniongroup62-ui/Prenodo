@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import InfoBox from "./info-box";
 
 // Faithful port of the PHP page app/pages/fidelity_membership_settings.php
 // (?page=fidelity_membership_settings) + assets/js/pages/fidelity_membership_settings.js:
@@ -538,10 +539,8 @@ export function FidelityMembershipSettingsContent({
         </div>
 
         <div className="col-lg-4">
-          <div className="card p-4">
-            <div className="h6 fw-bold mb-2">Come funziona</div>
-            <div className="text-muted small">
-              <ul className="mb-0">
+          <InfoBox>
+              <ul>
                 <li>
                   <strong>Nuova tessera:</strong> la <strong>Data emissione</strong> è modificabile; la{" "}
                   <strong>Data scadenza</strong> viene calcolata automaticamente e non è modificabile manualmente.
@@ -570,8 +569,7 @@ export function FidelityMembershipSettingsContent({
                   usare <strong>Riattiva tessera</strong>.
                 </li>
               </ul>
-            </div>
-          </div>
+          </InfoBox>
         </div>
       </div>
 
