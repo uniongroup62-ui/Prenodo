@@ -17663,3 +17663,13 @@ era col-xl-9/col-xl-3 mentre le KPI sopra sono in TERZI (col-md-4):
 portata a col-xl-8/col-xl-4 (skeleton di caricamento incluso). Probe
 boundingBox: bordo sinistro e larghezza della colonna destra = 3a KPI
 (dLeft 0.0px, dW 0.0px); screenshot verificato; tsc pulito.
+
+## 2026-07-21 - Calendario: filtri Operatore/Servizio come combobox con ricerca
+Richiesta utente (come i clienti): i due select diventano .app-combobox
+(CalendarFilterCombobox nel modulo, clone del pattern Costi/Rate): toggle
+form-control, ricerca "Cerca..." accent-insensitive, Enter = primo
+risultato, voce "Tutti gli operatori/Tutti i servizi" che azzera, chiusura
+su click fuori. Stessi id filterStaff/filterService (solo cosmetici: i
+filtri sono stato React). Probe Playwright 6/6 (combobox presenti, ricerca
+che filtra la lista, selezione nel toggle, Enter, reset, contatore vivo);
+regressione test-calendario 20/20; tsc pulito.

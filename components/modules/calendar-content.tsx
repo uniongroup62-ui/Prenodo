@@ -3314,32 +3314,27 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
       <div className="calendar-page">
         <div className="calendar-filter-bar">
           <input type="hidden" id="filterLocation" value="" />
+          {/* Operatore/Servizio come combobox con ricerca (richiesta
+              2026-07-21), stesso pattern .app-combobox dei filtri clienti. */}
           <div className="calendar-filter-field calendar-filter-field--staff">
             <label className="form-label small text-muted">Operatore</label>
-            <select className="form-select" id="filterStaff" value={filterStaff} onChange={(e) => setFilterStaff(e.target.value)}>
-              <option value="">Tutti gli operatori</option>
-              {staff.map((s) => (
-                <option key={s.id} value={String(s.id)}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
+            <CalendarFilterCombobox
+              boxId="filterStaff"
+              allLabel="Tutti gli operatori"
+              value={filterStaff}
+              onChange={setFilterStaff}
+              items={staff.map((s) => ({ id: String(s.id), label: s.name }))}
+            />
           </div>
           <div className="calendar-filter-field calendar-filter-field--service">
             <label className="form-label small text-muted">Servizio</label>
-            <select
-              className="form-select"
-              id="filterService"
+            <CalendarFilterCombobox
+              boxId="filterService"
+              allLabel="Tutti i servizi"
               value={filterService}
-              onChange={(e) => setFilterService(e.target.value)}
-            >
-              <option value="">Tutti i servizi</option>
-              {services.map((s) => (
-                <option key={s.id} value={String(s.id)} data-location-ids={(s.locationIds ?? []).join(",")}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
+              onChange={setFilterService}
+              items={services.map((s) => ({ id: String(s.id), label: s.name }))}
+            />
           </div>
           <div className="calendar-filter-field calendar-filter-field--status">
             <label className="form-label small text-muted">Stato</label>
@@ -4499,6 +4494,96 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
               ) : null}
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Combobox filtri calendario (2026-07-21): stesso pattern .app-combobox dei
+// filtri di Costi/Rate — toggle form-control, ricerca "Cerca..."
+// accent-insensitive (Enter = primo risultato), voce "Tutti" che azzera,
+// chiusura su click fuori.
+function calComboNorm(value: string): string {
+  return value.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+}
+
+function CalendarFilterCombobox(props: {
+  boxId: string;
+  allLabel: string;
+  items: { id: string; label: string }[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const { boxId, allLabel, items, value, onChange } = props;
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    searchRef.current?.focus();
+    const onDocClick = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  const data = useMemo(
+    () => [{ id: "", label: allLabel }, ...items.map((it) => ({ id: it.id, label: it.label }))],
+    [allLabel, items],
+  );
+  const qn = calComboNorm(search);
+  const visible = qn ? data.filter((item) => calComboNorm(item.label).includes(qn)) : data;
+  const selected = value ? data.find((item) => item.id === value) : undefined;
+
+  const pick = (id: string) => {
+    onChange(id);
+    setOpen(false);
+  };
+
+  return (
+    <div className={`app-combobox dropdown${open ? " show" : ""}`} id={boxId} ref={boxRef}>
+      <button
+        className="form-control text-start app-combobox-toggle dropdown-toggle"
+        type="button"
+        aria-expanded={open}
+        onClick={() => {
+          if (!open) setSearch("");
+          setOpen(!open);
+        }}
+      >
+        <span className={`app-combobox-text${selected ? "" : " d-none"}`}>{selected?.label ?? ""}</span>
+        <span className={`text-muted app-combobox-placeholder${selected ? " d-none" : ""}`}>{allLabel}</span>
+      </button>
+      <div className={`dropdown-menu p-2 w-100${open ? " show" : ""}`}>
+        <input
+          ref={searchRef}
+          type="text"
+          className="form-control form-control-sm app-combobox-search"
+          placeholder="Cerca..."
+          autoComplete="off"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              if (visible[0]) pick(visible[0].id);
+            }
+          }}
+        />
+        <div className="app-combobox-list mt-2">
+          {visible.length === 0 ? (
+            <div className="text-muted small px-2 py-1">Nessun risultato</div>
+          ) : (
+            visible.map((item) => (
+              <button key={item.id || "all"} type="button" className="dropdown-item" onClick={() => pick(item.id)}>
+                {item.label}
+              </button>
+            ))
+          )}
         </div>
       </div>
     </div>
