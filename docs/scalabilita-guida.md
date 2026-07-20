@@ -68,18 +68,14 @@ prepariamo con uno script e una batteria di verifica come sempre.
 
 ---
 
-## 4. Certificato CA di Supabase — 5 minuti, quando vuoi
+## 4. Certificato CA di Supabase — FATTO (20/07)
 
-Oggi la connessione al database è cifrata ma NON verifica il certificato del
-server. Il codice è già pronto a verificarlo: basta dargli la CA.
-
-1. Dashboard Supabase → **Settings** → **Database** → sezione **SSL
-   Configuration** → scarica il **CA certificate** (`.crt`).
-2. Salvalo come `prenodo/db/supabase-ca.crt` (in locale) e su Amplify aggiungi
-   la variabile `PRENODO_DATABASE_CA` con il contenuto PEM del file.
-3. Riavvia: da quel momento la connessione rifiuta certificati non validi.
-   Senza CA tutto continua a funzionare come prima (con un warning nei log di
-   produzione).
+`db/supabase-ca.crt` è nel repo (la CA è pubblica, non un segreto): la
+connessione al database ora verifica il certificato del server, in locale e
+in deploy, senza variabili aggiuntive. Se in futuro Supabase ruota la CA,
+basta riscaricarla dal pannello (Settings → Database → SSL Configuration) e
+sostituire il file; in alternativa `PRENODO_DATABASE_CA` (contenuto PEM) ha
+la precedenza sul file.
 
 ---
 
