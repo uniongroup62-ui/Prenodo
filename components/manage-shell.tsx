@@ -55,6 +55,7 @@ const MENU: Group[] = [
     items: [
       { page: "fidelity", icon: "award", label: "Fidelity" },
       { page: "fidelity_membership", icon: "person-check", label: "Adesione", sub: true },
+      { page: "notifications_fidelity", icon: "hourglass-split", label: "Tessere in scadenza", sub: true },
       { page: "recharges", icon: "arrow-repeat", label: "Ricariche" },
       { page: "wallet", icon: "wallet2", label: "Portafoglio" },
       { page: "promotions", icon: "megaphone", label: "Promozioni" },

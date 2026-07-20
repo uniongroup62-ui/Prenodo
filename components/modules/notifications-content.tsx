@@ -578,71 +578,37 @@ export function NotificationsContent({ slug: slugProp }: { slug?: string } = {})
         </>
       )}
 
-      {/* Sezione Fidelity legacy (notifications.php 579-651): visibile quando
-          il permesso c'è e la config tessera non è 'disabled', con testi
-          dipendenti dalla config e empty state dedicato. */}
-      {fidelitySection?.enabled ? (
+      {/* HUB ASCIUGATO (deviazione approvata 20/07): la sezione Fidelity vive
+          nella pagina dedicata "Tessere in scadenza" (notifications_fidelity,
+          gruppo Fidelizzazione). Qui resta SOLO una riga compatta col
+          contatore, visibile quando c'è qualcosa — a zero sparisce. */}
+      {fidelitySection?.enabled && !fidelityTableOk ? (
         <>
           <hr className="my-4" />
-          <div className="d-flex justify-content-between align-items-center mb-3" id="fidelity_cards_notifications">
-            <div>
-              <div className="text-muted small">Fidelity / Adesione</div>
-              <h2 className="h5 fw-bold m-0">Tessere Fidelity in scadenza / scadute</h2>
-              <div className="text-muted small mt-1">{fidelitySection.sectionText}</div>
-            </div>
-            <a className="btn btn-outline-primary btn-sm" href={`/${encodeURIComponent(slug)}/fidelity_membership`}>
-              <i className="bi bi-box-arrow-up-right me-1" />
-              Apri Fidelity / Adesione
-            </a>
+          <div className="card p-4" id="fidelity_cards_notifications">
+            <div className="fw-semibold">Tessere Fidelity non disponibili.</div>
+            <div className="text-muted small mt-1">Importa il dump SQL completo aggiornato per vedere le notifiche di scadenza.</div>
           </div>
-          {!fidelityTableOk ? (
-            <div className="card p-4">
-              <div className="fw-semibold">Tessere Fidelity non disponibili.</div>
-              <div className="text-muted small mt-1">Importa il dump SQL completo aggiornato per vedere le notifiche di scadenza.</div>
-            </div>
-          ) : fidelityGroups.length === 0 ? (
-            <div className="card p-4">
-              <div className="fw-semibold">{loading ? "Caricamento…" : "Nessuna tessera in scadenza o scaduta."}</div>
-              <div className="text-muted small mt-1">{fidelitySection.emptyText}</div>
-            </div>
-          ) : (
-            fidelityGroups.map((group) => (
-              <div className="card mb-3 notification-card" key={group.key}>
-                <div className="d-flex flex-wrap">
-                  <div className={`p-3 flex-grow-1 notification-main notification-main--${group.kind}`}>
-                    <div className="d-flex align-items-center justify-content-between gap-2">
-                      <div className="fw-bold fs-5 mb-1">{group.title}</div>
-                      <span className={`badge ${group.badgeClass || "text-bg-info"}`}>{group.count}</span>
-                    </div>
-                    <div className="text-muted small">{group.text}</div>
-                    <div className="text-muted small mt-1">{group.dateLabel}</div>
-                  </div>
-                  <div className="p-3 flex-grow-1 notification-detail">
-                    <div className="text-muted small mb-1">Anteprima</div>
-                    {(group.previewRows ?? []).map((row, i) => (
-                      <div className="mb-2" key={i}>
-                        <div className="fw-semibold">{row.clientName || "Cliente"}</div>
-                        <div className="text-muted small">
-                          Tessera #{row.cardCode} • {row.expiresLabel || "—"}
-                          {row.statusLabel ? <> • {row.statusLabel}</> : null}
-                        </div>
-                        {row.clientEmail ? <div className="text-muted small">{row.clientEmail}</div> : null}
-                      </div>
-                    ))}
-                    {group.linesMore > 0 ? <div className="text-muted small">…e altre {group.linesMore}</div> : null}
-                  </div>
-                  <div className="p-3 notification-action">
-                    <div className="d-grid gap-2">
-                      <a className="btn btn-outline-primary btn-sm" href={group.link || `/${encodeURIComponent(slug)}/fidelity_membership`}>
-                        <i className="bi bi-box-arrow-up-right me-1" />
-                        Apri in Fidelity / Adesione
-                      </a>
-                    </div>
-                  </div>
+        </>
+      ) : fidelitySection?.enabled && fidelityGroups.length > 0 ? (
+        <>
+          <hr className="my-4" />
+          <div className="card notification-card" id="fidelity_cards_notifications">
+            <div className="d-flex flex-wrap align-items-center justify-content-between gap-3 p-3">
+              <div className="d-flex align-items-center gap-3">
+                <i className="bi bi-hourglass-split fs-4 text-warning" aria-hidden />
+                <div>
+                  <div className="fw-bold">Tessere Fidelity in scadenza / scadute</div>
+                  <div className="text-muted small">{fidelitySection.sectionText}</div>
                 </div>
+                <span className="badge text-bg-warning">{fidelityGroups.reduce((sum, group) => sum + Number(group.count || 0), 0)}</span>
               </div>
-            ))
-          )}
+              <a className="btn btn-outline-primary btn-sm" href={`/${encodeURIComponent(slug)}/notifications_fidelity`}>
+                <i className="bi bi-box-arrow-up-right me-1" />
+                Vedi
+              </a>
+            </div>
+          </div>
         </>
       ) : null}
     </div>

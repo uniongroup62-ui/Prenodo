@@ -64,6 +64,7 @@ import { StaffAvailabilityContent } from "@/components/modules/staff_availabilit
 import { AppointmentsPlanContent } from "@/components/modules/appointments_plan-content";
 import { NotificationsContent } from "@/components/modules/notifications-content";
 import { NotificationsBirthdaysContent } from "@/components/modules/notifications_birthdays-content";
+import { NotificationsFidelityContent } from "@/components/modules/notifications_fidelity-content";
 import { NotificationsInstallmentsContent } from "@/components/modules/notifications_installments-content";
 import { NotificationsQuotesContent } from "@/components/modules/notifications_quotes-content";
 import { RolesContent } from "@/components/modules/roles-content";
@@ -155,6 +156,7 @@ const FAITHFUL_MODULES: Record<string, React.ComponentType<{ slug?: string }>> =
   appointments_plan: AppointmentsPlanContent,
   notifications: NotificationsContent,
   notifications_birthdays: NotificationsBirthdaysContent,
+  notifications_fidelity: NotificationsFidelityContent,
   notifications_installments: NotificationsInstallmentsContent,
   notifications_quotes: NotificationsQuotesContent,
   roles: RolesContent,

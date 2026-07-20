@@ -17416,3 +17416,26 @@ consolida 12, fase4 11; tsc pulito.
 Verifica: probe live (badge, questa-sessione, dispositivo, card falliti con
 riga del tentativo forgiato, conferma auto-revoca con dismiss, QR
 renderizzato); rifiniture 8, hardening 19, dash 8; tsc pulito.
+
+## 2026-07-20 — GESTIONALE: PAGINA "TESSERE IN SCADENZA" (deviazione approvata)
+
+Richiesta utente (pagina separata per le tessere Fidelity in scadenza dal
+hub notifiche); variante concordata: sottovoce del gruppo Fidelizzazione
+invece di icona top-level (sidebar gia' a ~25 voci), sul modello delle
+pagine-notifiche legacy (notifications_installments):
+1) API: action=fidelity_groups su /api/manage/notifications — stessi gate
+   (fidelity.membership) e testi della sezione legacy, anteprima 25 (il hub
+   resta a 5); notificationFidelityCardGroups ora accetta previewLimit.
+2) PAGINA notifications_fidelity (components/modules/notifications_fidelity-
+   content.tsx): header con azioni "Impostazioni tessera" + "Apri Fidelity /
+   Adesione", stati permesso/schema/disabilitato/vuoto dedicati, card gruppi
+   col markup del hub. Registrata in PAGE_COMPONENTS; voce nav "Tessere in
+   scadenza" (hourglass-split, sub) nel gruppo Fidelizzazione dopo Adesione.
+3) HUB ASCIUGATO: la sezione integrale sparisce; resta una RIGA COMPATTA
+   (icona + titolo + sectionText + badge somma count + "Vedi" -> pagina)
+   visibile SOLO con tessere presenti — a zero sparisce; il caso tabella
+   cards assente conserva la card avviso (id anchor conservato).
+Suite nuova test-notifiche-fidelity-page (6: API+gate, pagina con tessera ZZ
+scaduta e voce menu, hub compatto senza card integrali, Vedi->pagina, riga
+assente a zero). Regressioni notifiche-pass2 10, notifiche-log 4,
+fidelity-pass2 10, fidelity-improvements 11; tsc pulito.

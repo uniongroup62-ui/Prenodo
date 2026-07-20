@@ -655,10 +655,11 @@ export async function listBirthdayNotificationRows(slug: string, daysAhead: numb
 
 // Gruppi "Tessere Fidelity in scadenza/scadute" per la pagina notifiche (riusa il
 // port dashboard): risolve il tenant e delega a getFidelityCardAlertGroups.
-export async function notificationFidelityCardGroups(slug: string): Promise<FidelityGroup[]> {
+export async function notificationFidelityCardGroups(slug: string, previewLimit = 5): Promise<FidelityGroup[]> {
   const tenantId = await tenantIdForSlug(slug).catch(() => null);
-  // Pagina notifiche: anteprima di 5 righe come il legacy (notifications.php:322).
-  return getFidelityCardAlertGroups(slug, tenantId, 5).catch(() => []);
+  // Hub notifiche: anteprima di 5 righe come il legacy (notifications.php:322);
+  // la pagina dedicata "Tessere in scadenza" chiede 25 (come le rate).
+  return getFidelityCardAlertGroups(slug, tenantId, previewLimit).catch(() => []);
 }
 
 // Gruppi "Rate in scadenza/scadute" per il feed notifiche browser (preview 3)

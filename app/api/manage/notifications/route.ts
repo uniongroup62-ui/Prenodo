@@ -50,6 +50,40 @@ export async function GET(request: Request) {
       return Response.json({ ok: true, ...summary }, { headers: { "Cache-Control": "no-store" } });
     }
 
+    // Pagina dedicata "Tessere Fidelity in scadenza / scadute" (deviazione
+    // approvata 20/07: la sezione esce dal hub — qui anteprima 25 come le
+    // rate). Stessi gate e testi della sezione legacy.
+    if (action === "fidelity_groups") {
+      const canFidelity = can(session.user.perms, "fidelity.membership");
+      const groups = canFidelity ? await notificationFidelityCardGroups(tenantSlug, 25) : [];
+      const cfg = await fidelityCardExpiryNotificationConfig(tenantSlug).catch(
+        () => ({ mode: "disabled" as const, value: 0, unit: "days" as const }),
+      );
+      const durLabel = (v: number, unit: string) =>
+        `${v} ${unit === "years" ? (v === 1 ? "anno" : "anni") : unit === "months" ? (v === 1 ? "mese" : "mesi") : v === 1 ? "giorno" : "giorni"}`;
+      let sectionText: string;
+      let emptyText: string;
+      if (cfg.mode === "renewal" && cfg.value > 0) {
+        sectionText = `Mostra le tessere già scadute e quelle entrate nella finestra di rinnovo automatico (${durLabel(cfg.value, cfg.unit)}).`;
+        emptyText = "Nessuna tessera è attualmente scaduta o dentro la finestra di rinnovo automatico.";
+      } else if (cfg.value > 0) {
+        sectionText = `Mostra le tessere già scadute e quelle in scadenza nei prossimi ${cfg.value} ${cfg.value === 1 ? "giorno" : "giorni"}.`;
+        emptyText = "Nessuna tessera è attualmente scaduta o dentro il promemoria di scadenza configurato.";
+      } else {
+        sectionText = "Mostra le tessere già scadute. Per vedere anche quelle in scadenza, imposta il rinnovo automatico oppure il promemoria di scadenza in Fidelity → Adesione → Impostazioni tessera Fidelity.";
+        emptyText = "Nessuna tessera è attualmente scaduta.";
+      }
+      return Response.json({
+        ok: true,
+        groups,
+        canSee: canFidelity,
+        enabled: cfg.mode !== "disabled",
+        sectionText,
+        emptyText,
+        schemaOk: await tableExists("cards").catch(() => false),
+      }, { headers: { "Cache-Control": "no-store" } });
+    }
+
     // Port di notifications.php: "Appuntamenti in attesa" (dettagli completi) +
     // "Tessere Fidelity in scadenza/scadute", filtrati per la sede corrente.
     if (action === "pending") {
