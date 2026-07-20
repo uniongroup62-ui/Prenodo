@@ -17501,3 +17501,18 @@ icona info in chip circolare navy brand #365a96 su #eef2f9, titolo scuro
 markup e componente invariati. Probe computed-style su fidelity_membership_
 settings / cabins / recharges (bg bianco + icona navy) = 3/3, screenshot
 verificati a occhio.
+
+## 2026-07-20 - Omaggi: REGRESSIONE race doppio riscatto SANATA
+test-omaggi-pass2 (verde alla scrittura, 17/07) fallito stabile: due
+riscatti PARALLELI della stessa unita passavano entrambi (net=2 su qty 1).
+Causa: il guard atomico nel WHERE dell'INSERT...SELECT basta solo contro
+stato COMMITTED - in READ COMMITTED due insert paralleli leggono lo stesso
+net. Prima passava perche il pool serializzava di fatto; con l'hardening
+del pool (connessioni multiple) il parallelismo e reale. Fix in
+gifts-instances.ts (redeem): withTenantTransaction + SELECT ... FOR UPDATE
+sulla riga gift_instances prima degli insert guardati (come il legacy
+Gifts.php ~5034); RETURNING id al posto di affectedRows; stock premio
+dentro la tx SENZA catch (un errore fa rollback esplicito, non tx
+abortita silente). Suite: omaggi-pass2 3/3 (prima 1/3), omaggi-log 10/10,
+giftbox-mutations 8/8; tsc pulito. LEZIONE: guard-nel-WHERE da solo non
+protegge dalle race; ogni contatore condiviso va serializzato con lock.

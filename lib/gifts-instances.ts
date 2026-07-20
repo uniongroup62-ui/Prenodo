@@ -25,7 +25,7 @@ import "server-only";
 
 import { randomBytes } from "crypto";
 import type { RowDataPacket } from "@/lib/tenant-db";
-import { columnExists, dbExecute, dbQuery, quoteIdentifier, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
+import { columnExists, dbExecute, dbQuery, quoteIdentifier, tenantInsert, tenantSelect, tenantTable, tenantUpdate, withTenantTransaction } from "@/lib/tenant-db";
 import { giftClientLevelKey, giftExpireInstance, giftRecalcClient, parseGiftEligibleLevels } from "@/lib/gifts-engine";
 import { buildModernEmailTemplate, EMAIL_ACCENT, emailButton, emailCodeBox, emailConfigured, sendEmail } from "@/lib/email";
 import { deleteDbAppointment } from "@/lib/db-repositories";
@@ -677,41 +677,49 @@ export async function redeemGiftInstanceItems(
   const note = (clean(input.note) || noteDefault).slice(0, 255);
   const now = new Date();
   const txTable = await tenantTable(slug, "gift_transactions");
+  const instTable = await tenantTable(slug, "gift_instances");
+  const prodTable = await tenantTable(slug, "products").catch(() => null);
+  const prodHasStock = prodTable ? await columnExists(prodTable.name, "stock") : false;
   let redeemedNow = 0;
-  for (const sel of selection) {
-    // INSERT GUARDATO (il legacy serializzava con SELECT ... FOR UPDATE,
-    // Gifts.php ~5034): il residuo viene ricontrollato ATOMICAMENTE nel WHERE
-    // (net redeem-cancel della stessa chiave + qty richiesta <= qty totale),
-    // così due riscatti concorrenti non superano mai il premio.
-    const guard = await dbExecute(
-      `INSERT INTO ${quoteIdentifier(txTable.name)} (tenant_id, instance_id, appointment_id, reward_item_index, service_id, type, qty, note, created_by, created_at, location_id, location_name)
-       SELECT ?, ?, ?, ?, ?, 'redeem', ?, ?, ?, ?, ?, ?
-        WHERE (SELECT COALESCE(SUM(CASE WHEN type = 'redeem' THEN qty WHEN type = 'cancel' THEN -qty ELSE 0 END), 0)
-                 FROM ${quoteIdentifier(txTable.name)}
-                WHERE tenant_id = ? AND instance_id = ? AND COALESCE(reward_item_index, -1) = ? AND COALESCE(service_id, 0) = ?) + ? <= ?`,
-      [
-        txTable.tenantId ?? 0, instanceId,
-        input.sourceType === "appointment" && input.sourceId ? input.sourceId : null,
-        sel.item.index, sel.item.serviceId > 0 ? sel.item.serviceId : null,
-        sel.qty, note, input.by && input.by > 0 ? input.by : null, now,
-        input.location?.id && input.location.id > 0 ? input.location.id : null,
-        clean(input.location?.name) || null,
-        txTable.tenantId ?? 0, instanceId, sel.item.index, sel.item.serviceId > 0 ? sel.item.serviceId : 0,
-        sel.qty, sel.item.qtyTotal,
-      ],
-    );
-    if (Number((guard as { affectedRows?: number }).affectedRows ?? 0) <= 0) {
-      throw new Error(`Quantità non disponibile per "${sel.item.label}".`);
-    }
-    redeemedNow += sel.qty;
-    // Stock premio prodotto (decrementRedeemedProductStock, best-effort).
-    if (sel.item.productId > 0) {
-      const prodTable = await tenantTable(slug, "products").catch(() => null);
-      if (prodTable && (await columnExists(prodTable.name, "stock"))) {
-        await dbQuery(`UPDATE ${quoteIdentifier(prodTable.name)} SET stock = GREATEST(COALESCE(stock,0) - ?, 0) WHERE tenant_id = ? AND id = ?`, [sel.qty, prodTable.tenantId ?? 0, sel.item.productId]).catch(() => []);
+  // Il legacy serializzava con SELECT ... FOR UPDATE (Gifts.php ~5034). Il solo
+  // guard nel WHERE non basta in READ COMMITTED: due INSERT...SELECT paralleli
+  // leggono lo stesso net e passano entrambi. La transazione blocca la riga
+  // istanza, i concorrenti si accodano e il secondo rilegge il net aggiornato.
+  await withTenantTransaction(slug, async (q) => {
+    await q(`SELECT id FROM ${quoteIdentifier(instTable.name)} WHERE tenant_id = ? AND id = ? FOR UPDATE`, [instTable.tenantId ?? 0, instanceId]);
+    for (const sel of selection) {
+      // INSERT GUARDATO: il residuo viene ricontrollato nel WHERE (net
+      // redeem-cancel della stessa chiave + qty richiesta <= qty totale).
+      const guard = await q<RowDataPacket>(
+        `INSERT INTO ${quoteIdentifier(txTable.name)} (tenant_id, instance_id, appointment_id, reward_item_index, service_id, type, qty, note, created_by, created_at, location_id, location_name)
+         SELECT ?, ?, ?, ?, ?, 'redeem', ?, ?, ?, ?, ?, ?
+          WHERE (SELECT COALESCE(SUM(CASE WHEN type = 'redeem' THEN qty WHEN type = 'cancel' THEN -qty ELSE 0 END), 0)
+                   FROM ${quoteIdentifier(txTable.name)}
+                  WHERE tenant_id = ? AND instance_id = ? AND COALESCE(reward_item_index, -1) = ? AND COALESCE(service_id, 0) = ?) + ? <= ?
+         RETURNING id`,
+        [
+          txTable.tenantId ?? 0, instanceId,
+          input.sourceType === "appointment" && input.sourceId ? input.sourceId : null,
+          sel.item.index, sel.item.serviceId > 0 ? sel.item.serviceId : null,
+          sel.qty, note, input.by && input.by > 0 ? input.by : null, now,
+          input.location?.id && input.location.id > 0 ? input.location.id : null,
+          clean(input.location?.name) || null,
+          txTable.tenantId ?? 0, instanceId, sel.item.index, sel.item.serviceId > 0 ? sel.item.serviceId : 0,
+          sel.qty, sel.item.qtyTotal,
+        ],
+      );
+      if (guard.length <= 0) {
+        throw new Error(`Quantità non disponibile per "${sel.item.label}".`);
+      }
+      redeemedNow += sel.qty;
+      // Stock premio prodotto (decrementRedeemedProductStock). Niente catch:
+      // dentro la transazione un errore lascerebbe la tx abortita, meglio il
+      // rollback esplicito dell'intero riscatto.
+      if (sel.item.productId > 0 && prodTable && prodHasStock) {
+        await q(`UPDATE ${quoteIdentifier(prodTable.name)} SET stock = GREATEST(COALESCE(stock,0) - ?, 0) WHERE tenant_id = ? AND id = ?`, [sel.qty, prodTable.tenantId ?? 0, sel.item.productId]);
       }
     }
-  }
+  });
 
   const redeemedAll = remainingBefore - redeemedNow <= 0;
   if (redeemedAll) {
