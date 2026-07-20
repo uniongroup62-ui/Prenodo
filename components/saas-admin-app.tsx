@@ -42,7 +42,6 @@ import { AdminSecurityPanel } from "@/components/admin/admin-security-panel";
 import { StatsView, type StatsPayload } from "@/components/admin/admin-stats-view";
 import { TenantDetailPanel } from "@/components/admin/admin-tenant-detail";
 import {
-  ActionPanel,
   AuditList,
   Badge,
   Button,
@@ -1525,18 +1524,47 @@ function MaintenanceView({ tenants, results, restoreCandidates, canManage, onAct
   const [restoreConfirm, setRestoreConfirm] = useState<Record<number, string>>({});
   return (
     <div className="grid gap-5">
-      {/* "Verifica diagnostica" era la TERZA copia della stessa azione
-          (Controlli + dashboard): rimossa (sottrazione 20/07). */}
-      <div className="grid gap-3 md:grid-cols-2">
-        <ActionPanel buttonLabel={selected.length ? `Esegui (${selected.length})` : "Esegui"} icon={RotateCcw} title="Reset onboarding" detail="Riporta al primo passo del wizard i tenant SELEZIONATI nell'elenco qui sotto." disabled={!canManage || selected.length === 0} onClick={() => onAction("reset_selected_onboarding", { slugs: selected.join(",") })} />
-      </div>
-      {results.length ? <Table title="Risultati" headers={["Tenant", "Esito", "Messaggio"]} rows={results.map((row) => [row.slug, row.ok ? "OK" : "Errore", row.message])} /> : null}
+      {/* UNA card: selezione e azione nello stesso contenitore (riorganizzazione
+          20/07) — il legame e' fisico, non spiegato a parole. L'azione vive
+          nell'header col contatore; "Verifica diagnostica" (terza copia) e'
+          stata rimossa: vive in Controlli e in dashboard. */}
+      <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 p-4">
+          <div>
+            <h3 className="font-semibold">Operazioni massive</h3>
+            <p className="mt-1 text-sm text-slate-500">Seleziona i tenant, poi lancia l&apos;azione qui accanto.</p>
+          </div>
+          <Button disabled={!canManage || selected.length === 0} icon={RotateCcw} type="button" onClick={() => onAction("reset_selected_onboarding", { slugs: selected.join(",") })}>
+            Reset onboarding{selected.length ? ` (${selected.length})` : ""}
+          </Button>
+        </div>
+        <label className="flex cursor-pointer items-center gap-3 border-b border-slate-100 p-3 text-sm font-medium text-slate-600">
+          <input
+            checked={tenants.length > 0 && selected.length === tenants.length}
+            type="checkbox"
+            onChange={(event) => setSelected(event.target.checked ? tenants.map((tenant) => tenant.slug) : [])}
+          />
+          Seleziona tutti ({tenants.length})
+        </label>
+        <div className="divide-y divide-slate-100">
+          {tenants.map((tenant) => (
+            <label className="grid cursor-pointer grid-cols-[30px_1fr_auto_auto] items-center gap-3 p-3 text-sm hover:bg-slate-50" key={tenant.slug}>
+              <input type="checkbox" checked={selected.includes(tenant.slug)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, tenant.slug] : current.filter((item) => item !== tenant.slug))} />
+              <span><strong>{tenant.name}</strong><span className="ml-2 text-slate-500">{tenant.slug}</span></span>
+              <Badge tone={statusTone(tenantStatus(tenant))}>{statusLabel[tenantStatus(tenant)]}</Badge>
+              <Badge tone={healthTone(tenant.health?.level ?? "warning")}>{healthLabel[tenant.health?.level ?? "warning"]}</Badge>
+            </label>
+          ))}
+          {!tenants.length ? <p className="p-4 text-sm text-slate-500">Nessun tenant.</p> : null}
+        </div>
+      </section>
+      {results.length ? <Table title="Risultati dell'ultima operazione" headers={["Tenant", "Esito", "Messaggio"]} rows={results.map((row) => [row.slug, row.ok ? "OK" : "Errore", row.message])} /> : null}
 
       {/* RIPRISTINO GUIDATO (feature restore 2026-07-19): ultimi backup dei
           tenant ELIMINATI — digitando lo slug esatto si ricrea il tenant con
           gli id originali. */}
       <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
-        <SectionHead title="Ripristino da backup" subtitle="Tenant eliminati con un backup disponibile: digita lo slug esatto per ricrearli." />
+        <SectionHead title={`Ripristino da backup${restoreCandidates.length ? ` (${restoreCandidates.length})` : ""}`} subtitle="Tenant eliminati con un backup disponibile: digita lo slug esatto per ricrearli." />
         {restoreCandidates.length === 0 ? (
           <p className="p-4 text-sm text-slate-500">Nessun tenant eliminato con backup disponibile.</p>
         ) : (
@@ -1566,19 +1594,6 @@ function MaintenanceView({ tenants, results, restoreCandidates, canManage, onAct
             ))}
           </div>
         )}
-      </section>
-      <section className="rounded-md border border-slate-200 bg-white shadow-sm">
-        <SectionHead title="Tenant" subtitle="Seleziona tenant per operazioni massive." />
-        <div className="divide-y divide-slate-100">
-          {tenants.map((tenant) => (
-            <label className="grid cursor-pointer grid-cols-[30px_1fr_auto_auto] items-center gap-3 p-3 text-sm" key={tenant.slug}>
-              <input type="checkbox" checked={selected.includes(tenant.slug)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, tenant.slug] : current.filter((item) => item !== tenant.slug))} />
-              <span><strong>{tenant.name}</strong><span className="ml-2 text-slate-500">{tenant.slug}</span></span>
-              <Badge tone={statusTone(tenantStatus(tenant))}>{statusLabel[tenantStatus(tenant)]}</Badge>
-              <Badge tone={healthTone(tenant.health?.level ?? "warning")}>{healthLabel[tenant.health?.level ?? "warning"]}</Badge>
-            </label>
-          ))}
-        </div>
       </section>
     </div>
   );

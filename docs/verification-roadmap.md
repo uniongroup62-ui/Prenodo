@@ -17309,3 +17309,20 @@ totali per canale, gia' ordinate DESC) e le mostravano TUTTE: ora componente
 PagedMovements con paginazione client-side 25/pagina per ciascuna tabella
 (footer solo sopra le 25 righe). Verifica: probe live (empty-state, footer
 nascosto a tabelle vuote); faseC 7/7; tsc pulito.
+
+## 2026-07-20 — MANUTENZIONE RIORGANIZZATA: UNA CARD, LEGAME FISICO (approvato)
+
+Il difetto era l'ordine di lettura (azione sopra, selezione sotto, risultati
+in mezzo). Ora: UNA card "Operazioni massive" con selezione e azione nello
+stesso contenitore — bottone "Reset onboarding (N)" nell'header col
+CONTATORE vivo (disabilitato a zero), riga "Seleziona tutti (N)", righe
+tenant = label cliccabili con hover; "Risultati dell'ultima operazione"
+SUBITO SOTTO la card; "Ripristino da backup (N)" col conteggio nel titolo.
+La vecchia sezione "Tenant" separata e' rimossa; ActionPanel non ha piu'
+consumatori nella vista (import ripulito, il componente resta in shared).
+
+Verifica: probe live (vecchia lista assente, bottone disabilitato a zero,
+Seleziona tutti -> contatore (2), click sulla riga -> (1), ripristino
+presente) + screenshot; restore 8, faseC 7, hardening 19; tsc pulito.
+TRAPPOLA probe: attendere ~2.5s l'idratazione prima di check() sulle
+checkbox (il primo click puo' andare perso).
