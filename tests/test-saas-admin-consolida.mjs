@@ -111,7 +111,8 @@ try {
   await page.fill("input[placeholder*='tenant.suspend']", "tenant.backup_prune");
   await page.locator("button", { hasText: "Filtra" }).click();
   await page.waitForTimeout(2500);
-  const pruneRow = await page.locator("code", { hasText: "tenant.backup_prune" }).count();
+  // 20/07: l'azione e' un BOTTONE cliccabile (filtro a un click), non piu' <code>
+  const pruneRow = await page.locator("button", { hasText: "tenant.backup_prune" }).count();
   const exportBtn = await page.locator("a", { hasText: "Esporta CSV" }).count();
   check("P11 vista Audit: filtro azione + bottone export", pruneRow >= 1 && exportBtn === 1, `rows=${pruneRow}`);
 
