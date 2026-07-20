@@ -95,7 +95,7 @@ try {
   const navCount = await page.locator("aside nav button").count();
   const planCell = await page.locator(`text=ZZ Piano E ${RUN}`).count();
   const mrrMetric = await page.locator("text=MRR").count();
-  check("K7 UI billing: nav 8 voci + piano in tabella + metrica MRR", navCount === 9 && planCell >= 1 && mrrMetric >= 1, `nav=${navCount} plan=${planCell}`);
+  check("K7 UI billing: nav 8 voci + piano in tabella + metrica MRR", navCount === 8 && planCell >= 1 && mrrMetric >= 1, `nav=${navCount} plan=${planCell}`);
 
   // K8: unassign -> tenant torna senza piano (illimitato)
   const un = await post(cookie, "/api/admin/operations", { action: "plan_assign", tenant_slug: REAL_SLUG, plan_id: "0" });

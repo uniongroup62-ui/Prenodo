@@ -80,21 +80,24 @@ try {
   const deadGone = (await db.query("SELECT id FROM saas_professional_signups WHERE id=$1", [signupIds[0]])).rows.length === 0;
   check("N7 signup morta -> eliminata", delDead.status === 200 && deadGone, `status=${delDead.status}`);
 
-  // N8: UI — vista Registrazioni + sezione Ripristino renderizzate
+  // N8: UI — la voce Registrazioni NON esiste piu' (fusa in Tenant 20/07):
+  // ?page=signups atterra su Tenant; le richieste PENDENTI vivono nella card
+  // "Richieste in arrivo" (le completate come ZZ Linked NON compaiono).
+  const sf3 = await db.query("INSERT INTO saas_professional_signups(business_name,slug,owner_name,owner_email,password_hash,status) VALUES($1,$2,'ZZ Pend',$3,'x','pending_verification') RETURNING id", [`ZZ Pending ${RUN}`, `zz-pending${RUN}`, `zz.pending${RUN}@example.test`]);
+  signupIds.push(Number(sf3.rows[0].id));
   browser = await chromium.launch();
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const [cn, cv] = cookie.split("=");
   await ctx.addCookies([{ name: cn, value: cv, domain: "localhost", path: "/" }]);
   const page = await ctx.newPage();
   await page.goto(`${BASE}/admin?page=signups`, { waitUntil: "domcontentloaded" });
-  // Prima visita in dev = compile lag: attendere la RIGA, non il titolo (il
-  // testo dell'empty-state matcha 'richieste di registrazione' case-insensitive).
-  await page.locator("text=ZZ Linked").first().waitFor({ timeout: 45000 });
-  const linkedRow = await page.locator("text=ZZ Linked").count();
-  const openBtn = await page.locator("tr", { hasText: "ZZ Linked" }).locator("button", { hasText: "Apri tenant" }).count();
+  await page.locator("text=Richieste in arrivo").first().waitFor({ timeout: 45000 });
+  const pendRow = await page.locator("tr", { hasText: `ZZ Pending ${RUN}` }).count();
+  const linkedInCard = await page.locator("tr", { hasText: "ZZ Linked" }).count();
+  const navSignups = await page.locator("aside nav button", { hasText: "Registrazioni" }).count();
   await page.goto(`${BASE}/admin?page=maintenance`, { waitUntil: "domcontentloaded" });
   await page.locator("text=Ripristino da backup").waitFor({ timeout: 30000 });
-  check("N8 UI: Registrazioni con 'Apri tenant' + sezione Ripristino", linkedRow >= 1 && openBtn === 1, `linked=${linkedRow} open=${openBtn}`);
+  check("N8 UI: card Richieste in arrivo (pendenti si', completate no, nav senza voce) + Ripristino", pendRow >= 1 && linkedInCard === 0 && navSignups === 0, `pend=${pendRow} linked=${linkedInCard} nav=${navSignups}`);
 } catch (e) {
   console.log("ERRORE:", e && e.message ? e.message : e);
   R.push(false);

@@ -28,6 +28,24 @@ const MAX_ITEMS = 30;
 export async function buildSaasWorkQueue(tenants: SaasTenantRow[]): Promise<SaasWorkItem[]> {
   const items: SaasWorkItem[] = [];
 
+  // Richieste self-service SENZA tenant (ferme al codice email o fallite):
+  // vivono nella card "Richieste in arrivo" della vista Tenant (20/07).
+  const pendingSignups = await dbQuery<RowDataPacket[]>(
+    `SELECT COUNT(*) AS count
+       FROM \`saas_professional_signups\` s
+      WHERE NOT EXISTS (SELECT 1 FROM \`saas_tenants\` t WHERE t.slug = s.slug)`,
+  ).catch(() => [] as RowDataPacket[]);
+  const pendingSignupCount = Number(pendingSignups[0]?.count ?? 0);
+  if (pendingSignupCount > 0) {
+    items.push({
+      key: "signups_pending",
+      severity: "warning",
+      title: `${pendingSignupCount} ${pendingSignupCount === 1 ? "registrazione da completare" : "registrazioni da completare"}`,
+      detail: "Richieste self-service senza tenant: ferme al codice email o fallite.",
+      view: "tenants",
+    });
+  }
+
   for (const tenant of tenants) {
     const slug = String(tenant.slug);
     const status = tenantStatus(tenant);

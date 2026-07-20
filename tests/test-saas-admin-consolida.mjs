@@ -85,7 +85,7 @@ try {
   await page.locator("aside nav button", { hasText: "Fatturazione" }).waitFor({ timeout: 30000 });
   const navCount = await page.locator("aside nav button").count();
   const opsNav = await page.locator("aside nav button", { hasText: "Operazioni" }).count();
-  check("P7 menu consolidato: 8 voci con Fatturazione + Operazioni", navCount === 9 && opsNav === 1, `nav=${navCount}`);
+  check("P7 menu consolidato: 8 voci con Fatturazione + Operazioni", navCount === 8 && opsNav === 1, `nav=${navCount}`);
 
   // P8: legacy ?page=sms_plans -> Fatturazione con sottotab Pacchetti SMS
   await page.goto(`${BASE}/admin?page=sms_plans`, { waitUntil: "domcontentloaded" });

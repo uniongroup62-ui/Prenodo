@@ -36,8 +36,8 @@ try {
   await page.waitForTimeout(3500);
   const navCount = await page.locator("aside nav button").count();
   const h1 = await page.locator("header h1").textContent();
-  // 8 voci (menu consolidato 2026-07-19: Fatturazione + Operazioni).
-  check("D1 /admin -> SPA con nav completa + Dashboard", navCount === 9 && (h1 || "").trim() === "Dashboard", `nav=${navCount} h1=${h1}`);
+  // 8 voci (Registrazioni fusa in Tenant, 20/07).
+  check("D1 /admin -> SPA con nav completa + Dashboard", navCount === 8 && (h1 || "").trim() === "Dashboard", `nav=${navCount} h1=${h1}`);
 
   // D2: click nav 'Audit' -> vista + URL aggiornato con pushState
   await page.locator("aside nav button", { hasText: "Audit" }).click();

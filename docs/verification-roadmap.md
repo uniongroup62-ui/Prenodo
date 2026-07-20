@@ -17339,3 +17339,23 @@ seleziona l'INTERO elenco e la selezione (per slug) sopravvive al cambio
 pagina. "Ripristino da backup" resta cappato a 20 dal server (bounded, ok).
 Verifica: probe endpoint (2 tenant, shape con health); restore 8, faseC 7;
 tsc pulito.
+
+## 2026-07-20 — VIA LA VOCE "REGISTRAZIONI": FUSA IN TENANT (approvato)
+
+Decisione (proposta accettata): la voce di menu sparisce (9 -> 8) ma la
+funzione NO — le richieste bloccate sono lead e lo spam va ripulibile.
+1) Card "Richieste in arrivo (N)" nella vista Tenant, SOPRA la lista:
+   SOLO richieste senza tenant (ferme al codice, fallite — esito "In attesa
+   del codice email" quando non verificate); compare solo se ce ne sono;
+   azione Elimina con conferma (guardie server invariate: tenant vivo ->
+   delete rifiutata). Le completate NON compaiono (sono gia' tenant).
+2) Coda "Da fare adesso": item signups_pending ("N registrazioni da
+   completare", warning, view tenants) via NOT EXISTS su saas_tenants.
+3) Legacy: ?page=signups -> tenants (LEGACY_PAGE_MAP); VIEWS/ViewKey/nav/
+   viewTitle/SignupsView rimossi; section API signups e signup_delete RESTANO
+   (li consuma la card); loadSignups agganciato alla vista tenants.
+Batterie: nav 9 -> 8 in fase3 D1/faseE K7/consolida P7/stats U8; restore N8
+riscritta (card con pendente ZZ, completata ASSENTE, voce nav assente) —
+TRAPPOLA: status CHECK ammette 'pending_verification', non 'pending'.
+Verifica: 20/20 suite verdi; probe coda ("1 registrazione da completare");
+tsc pulito.

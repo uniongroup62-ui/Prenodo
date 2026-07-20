@@ -31,7 +31,6 @@ import {
   SlidersHorizontal,
   Trash2,
   UserCog,
-  UserPlus,
   Users,
   Wallet,
   Wrench,
@@ -90,7 +89,7 @@ import {
 // abbonamenti e pacchetti SMS; "Operazioni" riunisce controlli, movimenti
 // invii e manutenzione. Le vecchie ?page= restano deep-linkabili (mappa in
 // app/admin/page.tsx) e la sottosezione vive in ?sec=.
-type ViewKey = "dashboard" | "tenants" | "stats" | "billing" | "operations" | "signups" | "audit" | "admins" | "security";
+type ViewKey = "dashboard" | "tenants" | "stats" | "billing" | "operations" | "audit" | "admins" | "security";
 type BillingSection = "plans" | "sms";
 type OperationsSection = "controls" | "movements" | "maintenance";
 
@@ -157,7 +156,6 @@ const navItems: Array<{ key: ViewKey; label: string; icon: LucideIcon }> = [
   { key: "stats", label: "Statistiche", icon: BarChart3 },
   { key: "billing", label: "Fatturazione", icon: Wallet },
   { key: "operations", label: "Operazioni", icon: Activity },
-  { key: "signups", label: "Registrazioni", icon: UserPlus },
   { key: "audit", label: "Audit", icon: ScrollText },
   { key: "admins", label: "Admin SaaS", icon: Users },
   { key: "security", label: "Sicurezza", icon: ShieldCheck },
@@ -260,7 +258,9 @@ export function SaasAdminApp({
   // Caricamento dati per-vista/sottosezione (nav, deep-link, popstate).
   const loadForView = (key: ViewKey, sec = "") => {
     if (key === "admins") void loadAdmins();
-    if (key === "signups") void loadSignups();
+    // le richieste self-service vivono nella vista Tenant (card "Richieste
+    // in arrivo", solo non-completate) — la voce Registrazioni non esiste piu'.
+    if (key === "tenants") void loadSignups();
     if (key === "audit") void loadAudit(auditFilters, 1);
     if (key === "stats") void loadStats();
     if (key === "billing") {
@@ -661,6 +661,7 @@ async function loadStats() {
                 supportLink={supportLink}
                 backups={tenantDetail ? backups[tenantDetail.tenant.slug] ?? [] : []}
                 createOpen={createOpen}
+                pendingSignups={(signups ?? []).filter((signup) => !signup.tenant_exists)}
                 onToggleCreate={setCreateOpen}
                 onQueryChange={setQuery}
                 onStatusChange={setStatusFilter}
@@ -688,7 +689,6 @@ async function loadStats() {
               </div>
             ) : null}
             {activeView === "stats" ? <StatsView data={statsData} onOpenTenant={(slug) => loadTenant(slug)} onRefresh={loadStats} /> : null}
-            {activeView === "signups" ? <SignupsView signups={signups} canManage={canManageTenants} onOpenTenant={(slug) => loadTenant(slug)} onAction={operationAction} onRefresh={loadSignups} /> : null}
             {activeView === "audit" ? <AuditView data={auditData} filters={auditFilters} onSearch={(filters) => loadAudit(filters, 1)} onPageChange={(next) => loadAudit(auditFilters, next)} /> : null}
             {activeView === "admins" ? <AdminsView admins={admins} currentUser={initialUser} onAction={adminAction} /> : null}
             {activeView === "security" ? <AdminSecurityPanel /> : null}
@@ -961,6 +961,7 @@ function TenantsView(props: {
   supportLink: string;
   backups: BackupRow[];
   createOpen: boolean;
+  pendingSignups: SignupRow[];
   onToggleCreate: (open: boolean) => void;
   onQueryChange: (value: string) => void;
   onStatusChange: (value: string) => void;
@@ -1001,6 +1002,9 @@ function TenantsView(props: {
         {/* Il modulo di creazione e' un POPUP modale (20/07): visibile subito
             al click, qualunque sia lo scroll della lista. */}
         <CreateTenantPanel canManage={props.canManage} open={props.createOpen} plans={props.overview.plans} onCreate={(payload) => props.onAction("create", payload)} onToggle={props.onToggleCreate} />
+        {/* Aspiranti clienti sopra i clienti: compare SOLO quando c'e'
+            qualcosa che richiede attenzione. */}
+        <PendingSignupsCard canManage={props.canManage} signups={props.pendingSignups} onAction={props.onOperationAction} />
         <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
           <SectionHead title="Tenant" subtitle="Cerca, filtra e apri la gestione dedicata." />
           {/* form: Invio nel campo di ricerca filtra (mai solo il click). */}
@@ -1685,46 +1689,35 @@ const signupStatusLabel: Record<string, { label: string; tone: "ok" | "warn" | "
   rejected: { label: "Rifiutata", tone: "muted" },
 };
 
-// REGISTRAZIONI SELF-SERVICE (feature signups 2026-07-19): le richieste dal
-// marketplace con stato, esito provisioning e link al tenant creato.
-function SignupsView({ signups, canManage, onOpenTenant, onAction, onRefresh }: { signups: SignupRow[] | null; canManage: boolean; onOpenTenant: (slug: string) => void; onAction: (payload: Record<string, string>) => void; onRefresh: () => void }) {
-  if (!signups) {
-    return <EmptyOperation icon={UserPlus} title="Registrazioni self-service" detail="Carica le richieste di registrazione dal marketplace." onRefresh={onRefresh} />;
-  }
+// RICHIESTE IN ARRIVO (ex vista Registrazioni, fusa in Tenant 20/07): SOLO le
+// richieste self-service NON diventate tenant — chi si e' fermato al codice
+// email, spam da ripulire, provisioning falliti. Le completate sono gia'
+// nella lista tenant: mostrarle qui sarebbe rumore.
+function PendingSignupsCard({ signups, canManage, onAction }: { signups: SignupRow[]; canManage: boolean; onAction: (payload: Record<string, string>) => void }) {
+  if (!signups.length) return null;
   return (
-    <div className="grid gap-5">
-      <Table
-        title="Richieste di registrazione"
-        headers={["Attività", "Titolare", "Stato", "Richiesta il", "Esito", "Azioni"]}
-        action={<Button variant="outline" icon={RotateCcw} onClick={onRefresh}>Aggiorna</Button>}
-        empty="Nessuna richiesta di registrazione."
-        rows={signups.map((signup) => [
-          <span key={`b-${signup.id}`}><strong>{signup.business_name}</strong><span className="ml-2 text-slate-500">{signup.slug}</span></span>,
-          <span key={`o-${signup.id}`}>{signup.owner_name}<span className="ml-2 text-slate-500">{signup.owner_email}</span></span>,
-          <Badge key={`s-${signup.id}`} tone={(signupStatusLabel[signup.status] ?? { tone: "muted" as const }).tone}>{signupStatusLabel[signup.status]?.label ?? signup.status}</Badge>,
-          formatDateTime(signup.created_at),
-          signup.provisioning_error
-            ? <span className="block max-w-xs truncate text-red-700" key={`e-${signup.id}`} title={signup.provisioning_error}>{signup.provisioning_error}</span>
-            : (signup.verified_at ? `Email verificata il ${formatDateTime(signup.verified_at)}` : "-"),
-          <div className="flex gap-2" key={`a-${signup.id}`}>
-            {signup.tenant_exists ? (
-              <button className="inline-flex h-8 items-center rounded-md bg-[#182238] px-3 text-xs font-semibold text-white" type="button" onClick={() => onOpenTenant(signup.slug)}>
-                Apri tenant
-              </button>
-            ) : (
-              <button
-                className="inline-flex h-8 items-center rounded-md border border-red-200 px-3 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-40"
-                disabled={!canManage}
-                type="button"
-                onClick={() => { if (window.confirm(`Eliminare la richiesta di "${signup.business_name}" (${signup.slug})?`)) onAction({ action: "signup_delete", id: String(signup.id) }); }}
-              >
-                Elimina richiesta
-              </button>
-            )}
-          </div>,
-        ])}
-      />
-    </div>
+    <Table
+      title={`Richieste in arrivo (${signups.length})`}
+      headers={["Attività", "Titolare", "Stato", "Richiesta il", "Esito", "Azioni"]}
+      rows={signups.map((signup) => [
+        <span key={`b-${signup.id}`}><strong>{signup.business_name}</strong><span className="ml-2 text-slate-500">{signup.slug}</span></span>,
+        <span key={`o-${signup.id}`}>{signup.owner_name}<span className="ml-2 text-slate-500">{signup.owner_email}</span></span>,
+        <Badge key={`s-${signup.id}`} tone={(signupStatusLabel[signup.status] ?? { tone: "muted" as const }).tone}>{signupStatusLabel[signup.status]?.label ?? signup.status}</Badge>,
+        formatDateTime(signup.created_at),
+        signup.provisioning_error
+          ? <span className="block max-w-xs truncate text-red-700" key={`e-${signup.id}`} title={signup.provisioning_error}>{signup.provisioning_error}</span>
+          : (signup.verified_at ? `Email verificata il ${formatDateTime(signup.verified_at)}` : "In attesa del codice email"),
+        <button
+          className="inline-flex h-8 items-center rounded-md border border-red-200 px-3 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-40"
+          disabled={!canManage}
+          key={`a-${signup.id}`}
+          type="button"
+          onClick={() => { if (window.confirm(`Eliminare la richiesta di "${signup.business_name}" (${signup.slug})?`)) onAction({ action: "signup_delete", id: String(signup.id) }); }}
+        >
+          Elimina richiesta
+        </button>,
+      ])}
+    />
   );
 }
 
@@ -1773,7 +1766,6 @@ function viewTitle(view: ViewKey): string {
   if (view === "stats") return "Statistiche";
   if (view === "billing") return "Fatturazione";
   if (view === "operations") return "Operazioni";
-  if (view === "signups") return "Registrazioni";
   if (view === "audit") return "Audit";
   if (view === "admins") return "Admin SaaS";
   if (view === "security") return "Sicurezza";

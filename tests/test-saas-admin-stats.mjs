@@ -81,12 +81,12 @@ try {
   const trendHead = await page.locator("text=Andamento MRR").count();
   check("U7 UI Statistiche/Entrate: MRR + Andamento", trendHead === 1, `trend=${trendHead}`);
 
-  // U8: dashboard executive — MRR/marketplace/nav 9 voci
+  // U8: dashboard executive — MRR/marketplace/nav 8 voci (Registrazioni fusa in Tenant 20/07)
   await page.goto(`${BASE}/admin`, { waitUntil: "domcontentloaded" });
   await page.locator("text=Ricavo abbonamenti (MRR)").first().waitFor({ timeout: 30000 });
   const navCount = await page.locator("aside nav button").count();
   const mkCard = await page.locator("text=Utenti marketplace").count();
-  check("U8 dashboard executive + nav 9 voci con Statistiche", navCount === 9 && mkCard >= 1, `nav=${navCount}`);
+  check("U8 dashboard executive + nav 8 voci con Statistiche", navCount === 8 && mkCard >= 1, `nav=${navCount}`);
 } catch (e) {
   console.log("ERRORE:", e && e.message ? e.message : e);
   R.push(false);
