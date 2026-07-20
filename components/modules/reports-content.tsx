@@ -849,6 +849,22 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
                 <option value="monthly">Per mese</option>
               </select>
             </div>
+          </div>
+
+          {/* Barra sotto i campi (riordino 2026-07-20): riepilogo periodo a
+              sinistra, interruttori e azioni a destra sulla stessa riga. */}
+          <div
+            className="report-filter-summary report-filter-summary-bar mt-2"
+            data-report-period-summary
+            data-from={rng.from}
+            data-to={rng.to}
+          >
+            <div className="report-filter-summary-info">
+              <span>
+                Periodo selezionato: <strong data-report-period-label>{itDate(rng.from)} - {itDate(rng.to)}</strong>
+              </span>
+              <span>{granularity === "auto" ? "Raggruppamento automatico" : trendBadge}</span>
+            </div>
             <div className="report-filter-actions">
               <div className="form-check report-filter-switch">
                 <input
@@ -880,12 +896,8 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
                   </label>
                 </div>
               ) : null}
-              <button className="btn btn-outline-primary w-100" type="submit">
-                <i className="bi bi-arrow-clockwise me-1" />
-                Aggiorna
-              </button>
               <button
-                className="btn btn-outline-secondary w-100"
+                className="btn btn-sm btn-outline-secondary"
                 type="button"
                 id="reportPrintBtn"
                 onClick={() => window.print()}
@@ -893,19 +905,11 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
                 <i className="bi bi-printer me-1" />
                 Stampa
               </button>
+              <button className="btn btn-sm btn-primary" type="submit">
+                <i className="bi bi-arrow-clockwise me-1" />
+                Aggiorna
+              </button>
             </div>
-          </div>
-
-          <div
-            className="report-filter-summary report-filter-summary-bar mt-2"
-            data-report-period-summary
-            data-from={rng.from}
-            data-to={rng.to}
-          >
-            <span>
-              Periodo selezionato: <strong data-report-period-label>{itDate(rng.from)} - {itDate(rng.to)}</strong>
-            </span>
-            <span>{granularity === "auto" ? "Raggruppamento automatico" : trendBadge}</span>
           </div>
 
           <div className={`report-filter-section${compare ? "" : " d-none"}`} data-report-compare-panel>

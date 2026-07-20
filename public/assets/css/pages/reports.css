@@ -323,15 +323,29 @@ a.report-kpi-link:focus-visible{
   }
 }
 
-/* Azioni filtro a 4 elementi (Confronta, Tutte le sedi, Aggiorna, Stampa):
-   griglia 2x2 compatta invece della pila verticale. */
-.report-filter-actions{
-  display:grid !important;
-  grid-template-columns:repeat(2, minmax(0, 1fr));
-  gap:8px 14px;
+/* Riordino filtri (2026-07-20): campi in griglia sopra; sotto una BARRA con
+   riepilogo periodo a sinistra e interruttori + azioni a destra. */
+.report-filter-summary-bar{
+  justify-content:space-between;
+}
+.report-filter-summary-info{
+  display:flex;
+  flex-wrap:wrap;
   align-items:center;
-  align-self:end;
+  gap:8px 18px;
+}
+.report-filter-actions{
+  display:flex !important;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:flex-end;
+  gap:6px 16px;
+}
+.report-filter-actions .report-filter-switch{
+  min-height:auto;
+  padding-top:0;
 }
 .report-filter-actions .btn{
-  width:100%;
+  width:auto;
+  white-space:nowrap;
 }

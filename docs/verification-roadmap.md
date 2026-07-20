@@ -17615,3 +17615,12 @@ KPI, tabella sedi, sezione fidelity, download CSV reale, Stampa, card
 clienti, percentuali, link scheda cliente, prefill pos_history). Trappole
 probe: label KPI UPPERCASE via CSS -> match case-insensitive. Regressioni:
 report-pass2 12, dom-pos-clientsearch 8; tsc pulito.
+
+## 2026-07-20 - Report: filtri riorganizzati
+Su richiesta utente: le azioni escono dalla griglia campi. Nuovo assetto:
+riga 1 = campi (Periodo dati, Dal/Al se personalizzato, Raggruppamento);
+riga 2 = BARRA con riepilogo periodo a sinistra e, a destra, interruttori
+Confronta / Tutte le sedi + bottoni compatti Stampa e Aggiorna (primary).
+CSS: summary-bar space-between, actions flex wrap, switch senza padding
+verticale; rimossa la griglia 2x2 provvisoria. Suite report-rivoluzione
+19/19 rieseguita (D6 bottone Stampa incluso); screenshot verificato.
