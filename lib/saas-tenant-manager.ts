@@ -377,6 +377,27 @@ export async function repairSaasTenantSchema(slug: string): Promise<SaasTenantHe
   return health;
 }
 
+// Auto-riparazione dal cron admin-health: SOLO i buchi additivi che non
+// richiedono decisioni umane (riga onboarding mancante, voci permessi di
+// catalogo assenti). Admin mancante e schema restano alert per l'umano.
+const AUTO_REPAIRABLE_CHECKS = new Set(["onboarding_state", "permissions"]);
+
+export async function autoRepairSaasTenant(slug: string): Promise<{ repaired: string[]; level: SaasHealthLevel }> {
+  const tenant = await requireSaasTenant(slug);
+  const before = await saasTenantHealth(tenant, true);
+  const targets = before.checks.filter((check) => check.level !== "ok" && AUTO_REPAIRABLE_CHECKS.has(check.key));
+  if (!targets.length) return { repaired: [], level: before.level };
+
+  await ensureOnboardingTable();
+  await initializeOnboarding(Number(tenant.id), false);
+  await seedTenantPermissions(Number(tenant.id));
+
+  const after = await saasTenantHealth(tenant, true);
+  await recordSaasTenantHealth(tenant, after, "auto_repair");
+  await logSaasTenantAudit("tenant.auto_repair", tenant, `Riparazione automatica: ${targets.map((t) => t.label).join(", ")}`);
+  return { repaired: targets.map((t) => t.key), level: after.level };
+}
+
 export async function repairSaasTenantAdmin(slug: string, input: Record<string, string>): Promise<{ user_id: number; staff_id: number }> {
   const tenant = await requireSaasTenant(slug);
   const adminName = (input.admin_name ?? "Admin").trim() || "Admin";
@@ -536,6 +557,16 @@ export async function saasTenantHealth(tenant: SaasTenantRow, deep = true): Prom
       add("staff", "Operatori", staffCount > 0 ? "ok" : "warning", `${staffCount} attivi`);
       add("locations", "Sedi", locationCount > 0 ? "ok" : "warning", `${locationCount} attive`);
       add("business_profile", "Profilo attività", businessCount > 0 ? "ok" : "warning", businessCount > 0 ? "Presente" : "Mancante");
+      // Voci di catalogo permessi assenti (tenant nati con un catalogo piu'
+      // vecchio, migrati o ripristinati): buco ADDITIVO auto-riparabile.
+      if (await freshTableExists("permissions")) {
+        const catalog = permissionDefinitions.map((definition) => definition.perm);
+        const present = catalog.length
+          ? await countQuery(`SELECT COUNT(*) FROM \`permissions\` WHERE tenant_id=? AND perm IN (${catalog.map(() => "?").join(",")})`, [tenantId, ...catalog])
+          : 0;
+        const missingPerms = Math.max(0, catalog.length - present);
+        add("permissions", "Permessi ruoli", missingPerms > 0 ? "warning" : "ok", missingPerms > 0 ? `${missingPerms} voci di catalogo mancanti` : `Catalogo completo (${catalog.length} voci)`);
+      }
     } catch (error) {
       add("tenant_probe", "Diagnostica tenant", "warning", error instanceof Error ? error.message : "Verifica non riuscita");
     }

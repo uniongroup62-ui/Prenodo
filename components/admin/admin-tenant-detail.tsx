@@ -293,7 +293,7 @@ function TenantOnboarding({ tenant, canManage, onAction }: { tenant: Tenant; can
   );
 }
 
-const healthSourceLabel: Record<string, string> = { cron: "Automatica", manual: "Manuale", manual_all: "Manuale", repair: "Riparazione" };
+const healthSourceLabel: Record<string, string> = { cron: "Automatica", manual: "Manuale", manual_all: "Manuale", repair: "Riparazione", auto_repair: "Automatica (riparazione)" };
 
 // "2026-07-20 08:23:01.400698" -> "20/07/2026 08:23" (le date arrivano come
 // stringhe wall-time: niente Date/parse, solo riordino testuale).

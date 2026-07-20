@@ -22,6 +22,21 @@ async function handler(request: Request) {
 
   try {
     const results = await healthAllSaasTenants(true, true, "cron");
+
+    // AUTO-RIPARAZIONE (2026-07-20): i buchi additivi (riga onboarding, voci
+    // permessi) si riparano da soli qui; il livello post-riparazione entra
+    // nel computo degli alert, così un tenant sistemato non allarma nessuno.
+    const { autoRepairSaasTenant } = await import("@/lib/saas-tenant-manager");
+    const autoRepaired: Array<{ slug: string; repaired: string[] }> = [];
+    for (const result of results) {
+      if (result.level === "ok") continue;
+      const outcome = await autoRepairSaasTenant(result.slug).catch(() => null);
+      if (outcome && outcome.repaired.length) {
+        autoRepaired.push({ slug: result.slug, repaired: outcome.repaired });
+        result.level = outcome.level;
+      }
+    }
+
     const errors = results.filter((r) => r.level === "error");
     const warnings = results.filter((r) => r.level === "warning");
 
@@ -115,6 +130,7 @@ async function handler(request: Request) {
       warnings: warnings.length,
       alerts: alerts.map((a) => a.key),
       alerted,
+      auto_repaired: autoRepaired,
       snapshot: snapshot?.day ?? null,
     });
   } catch (error) {

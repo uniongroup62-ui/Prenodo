@@ -16928,3 +16928,31 @@ Chiave azione audit tenant.schema_repair INVARIATA (storico coerente).
 Verifica: diagnostica rigenerata -> checks_json con "Schema database ->
 OK (condiviso...)"; test-admin-diagnostica aggiornata (D2 = didascalia onesta
 + bottone rinominato + vecchio assente) 4/4; ux 7/7, faseC 7/7; tsc pulito.
+
+## 2026-07-20 — AUTO-RIPARAZIONE NEL CRON ADMIN-HEALTH (proposta approvata)
+
+Il pannello passa da "ti mostro il problema" a "l'ho sistemato, te lo dico",
+SOLO per i buchi additivi che non richiedono decisioni umane:
+
+- Nuovo check "Permessi ruoli" in saasTenantHealth: voci di catalogo
+  (permissionDefinitions) assenti per il tenant = warning auto-riparabile
+  (tenant migrati/ripristinati o nati con un catalogo piu' vecchio).
+- autoRepairSaasTenant(slug): se i check non-ok sono SOLO onboarding_state/
+  permissions -> initializeOnboarding(false) + seedTenantPermissions (entrambi
+  additivi: ON CONFLICT DO NOTHING / insert-ignore), diagnostica post
+  registrata con source 'auto_repair', audit tenant.auto_repair col dettaglio.
+  Admin mancante e Schema database NON si toccano: restano alert umani.
+- Cron admin-health: auto-ripara i tenant non-ok PRIMA del computo alert (un
+  tenant sistemato non allarma nessuno); response espone auto_repaired[].
+- UI: origine 'auto_repair' -> "Automatica (riparazione)"; timeline
+  "Riparazione automatica".
+
+PRIMA ESECUZIONE = primo risultato reale: elite (migrato dal PHP) aveva voci
+permessi mancanti -> seminate dal cron, ora 63/63 su entrambi i tenant reali,
+tracciato in Audit.
+
+Suite tests/test-admin-autorepair (5: cron ripara i 2 buchi, DB chiuso, health
+source auto_repair coi check verdi, audit, UI origine tradotta). Regressioni
+fase4 11, faseC 7, rifiniture 8 (un 7/8 intermittente = watermark anti-spam
+timbrato dalla MIA esecuzione live del cron, ripulito dalla suite: trappola
+gia' nota), diagnostica 4, ux 7; tsc pulito.
