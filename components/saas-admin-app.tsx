@@ -1088,15 +1088,15 @@ function CreateTenantPanel({ plans, open, canManage, onCreate, onToggle }: { pla
 
 // Dialog modale riusabile della vista Fatturazione (pattern CreateTenantPanel):
 // Esc e click sul fondo chiudono, la card ferma la propagazione.
-function BillingModal({ title, subtitle, onClose, children }: { title: string; subtitle: string; onClose: () => void; children: React.ReactNode }) {
+function BillingModal({ title, subtitle, onClose, children, wide = false }: { title: string; subtitle: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   return (
-    <div aria-modal className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/40 p-4 pt-[10vh]" role="dialog" onClick={onClose}>
-      <section className="mx-auto w-full max-w-3xl min-w-0 rounded-md border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+    <div aria-modal className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/40 p-4 pt-[6vh]" role="dialog" onClick={onClose}>
+      <section className={`mx-auto w-full ${wide ? "max-w-6xl" : "max-w-3xl"} min-w-0 rounded-md border border-slate-200 bg-white shadow-xl`} onClick={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between pr-4">
           <SectionHead title={title} subtitle={subtitle} />
           <button className="mt-4 text-sm font-semibold text-slate-500 hover:text-slate-700" type="button" onClick={onClose}>Chiudi</button>
@@ -1281,6 +1281,10 @@ function ControlsView({ data, canManage, onRefresh, onRunHealth }: { data: Contr
 }
 
 function SmsPlansView({ data, canManage, onAction, onRefresh }: { data: SmsBillingPayload | null; canManage: boolean; onAction: (payload: Record<string, string>) => void; onRefresh: () => void }) {
+  // Piani / Ricarica / Impostazioni in POPUP (richiesta 20/07): la pagina
+  // resta KPI + Ordini recenti; il popup Piani NON si chiude al Salva (si
+  // lavora su piu' righe), gli altri due si'.
+  const [modal, setModal] = useState<"plans" | "recharge" | "pricing" | null>(null);
   if (!data) {
     return <EmptyOperation icon={CreditCard} title="Piani SMS" detail="Carica prezzi, piani, ordini e crediti dei tenant." onRefresh={onRefresh} />;
   }
@@ -1297,9 +1301,24 @@ function SmsPlansView({ data, canManage, onAction, onRefresh }: { data: SmsBilli
 
       
 
-      <section className="rounded-md border border-slate-200 bg-white shadow-sm">
-        <SectionHead title="Piani" subtitle="'In evidenza' mette il pacchetto in risalto nella vetrina acquisti del tenant; le frecce ne cambiano l'ordine. Sotto ogni pacchetto: costo provider, fee e margine." />
-        <div className="grid gap-3 p-4">
+      <Table
+        title="Ordini recenti"
+        headers={["ID", "Tenant", "Piano", "Stato", "Crediti", "Importo", "Data"]}
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            <Button disabled={!canManage} icon={CreditCard} type="button" onClick={() => setModal("plans")}>Gestisci piani</Button>
+            <Button disabled={!canManage} icon={Wallet} type="button" variant="outline" onClick={() => setModal("recharge")}>Ricarica manuale</Button>
+            <Button disabled={!canManage} icon={Settings} type="button" variant="outline" onClick={() => setModal("pricing")}>Impostazioni prezzo</Button>
+            <a className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50" href="/api/admin/operations?section=export_sms_orders" download><Download size={14} aria-hidden />Esporta ordini CSV</a>
+          </div>
+        }
+        empty="Nessun ordine SMS."
+        rows={data.orders.map((order) => [String(order.id), order.tenant_slug, order.plan_name || "-", order.status, String(order.credits), formatEuro(order.amount_gross), formatDateTime(order.created_at)])}
+      />
+
+      {modal === "plans" ? (
+      <BillingModal wide title="Piani" subtitle="'In evidenza' mette il pacchetto in risalto nella vetrina acquisti del tenant; le frecce ne cambiano l'ordine. Sotto ogni pacchetto: costo provider, fee e margine." onClose={() => setModal(null)}>
+        <div className="grid gap-3">
           {data.plans.map((plan) => (
             <form className="grid gap-3 rounded-md border border-slate-200 p-3 md:grid-cols-[1.2fr_120px_120px_1.4fr_90px_90px_auto]" key={plan.id} onSubmit={(event) => submitOperation(event, "sms_save_plan", onAction)}>
               <input name="plan_id" type="hidden" value={plan.id} />
@@ -1356,19 +1375,12 @@ function SmsPlansView({ data, canManage, onAction, onRefresh }: { data: SmsBilli
             <Button disabled={!canManage} icon={Plus}>Crea</Button>
           </form>
         </div>
-      </section>
+      </BillingModal>
+      ) : null}
 
-      <Table
-        title="Ordini recenti"
-        headers={["ID", "Tenant", "Piano", "Stato", "Crediti", "Importo", "Data"]}
-        action={<a className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50" href="/api/admin/operations?section=export_sms_orders" download><Download size={14} aria-hidden />Esporta ordini CSV</a>}
-        empty="Nessun ordine SMS."
-        rows={data.orders.map((order) => [String(order.id), order.tenant_slug, order.plan_name || "-", order.status, String(order.credits), formatEuro(order.amount_gross), formatDateTime(order.created_at)])}
-      />
-
-      <section className="rounded-md border border-slate-200 bg-white shadow-sm">
-        <SectionHead title="Ricarica manuale tenant" subtitle="Crea un ordine manuale e accredita subito i crediti al tenant." />
-        <form className="grid gap-3 p-4 md:grid-cols-5" onSubmit={(event) => submitOperation(event, "sms_manual_topup", onAction)}>
+      {modal === "recharge" ? (
+      <BillingModal title="Ricarica manuale tenant" subtitle="Crea un ordine manuale e accredita subito i crediti al tenant." onClose={() => setModal(null)}>
+        <form className="grid gap-3 md:grid-cols-2" onSubmit={(event) => { submitOperation(event, "sms_manual_topup", onAction); setModal(null); }}>
           <label>
             <span className="mb-1 block text-sm font-medium text-slate-600">Tenant</span>
             <select className="h-10 w-full rounded-md border border-slate-200 px-3 outline-none focus:border-[#365a96]" name="tenant_slug" required>
@@ -1385,21 +1397,27 @@ function SmsPlansView({ data, canManage, onAction, onRefresh }: { data: SmsBilli
           <Input name="credits" label="Crediti" type="number" min="0" placeholder="Da piano" />
           <Input name="amount_gross" label="Importo lordo" placeholder="Da piano" />
           <Input name="note" label="Nota" placeholder="Ricarica manuale SaaS" />
-          <Button disabled={!canManage} icon={CreditCard}>Accredita</Button>
+          <div className="flex items-end md:col-span-2">
+            <Button disabled={!canManage} icon={CreditCard}>Accredita</Button>
+          </div>
         </form>
-      </section>
+      </BillingModal>
+      ) : null}
 
-      <section className="rounded-md border border-slate-200 bg-white shadow-sm">
-        <SectionHead title="Impostazioni prezzo" subtitle="Parametri economici dei pacchetti: costo provider, margine e prezzo suggerito." />
-        <form className="grid gap-3 p-4 md:grid-cols-5" onSubmit={(event) => submitOperation(event, "sms_save_settings", onAction)}>
+      {modal === "pricing" ? (
+      <BillingModal title="Impostazioni prezzo" subtitle="Parametri economici dei pacchetti: costo provider, margine e prezzo suggerito. Non cambiano i listini: aggiornano marginalità e prezzo suggerito." onClose={() => setModal(null)}>
+        <form className="grid gap-3 md:grid-cols-2" onSubmit={(event) => { submitOperation(event, "sms_save_settings", onAction); setModal(null); }}>
           <Input name="provider_cost_per_segment" label="Costo provider (euro/SMS)" defaultValue={String(data.settings.provider_cost_per_segment ?? "0.0490")} />
           <Input name="target_margin_percent" label="Margine target (%)" defaultValue={String(data.settings.target_margin_percent ?? "25")} />
           <Input name="payment_fee_percent" label="Fee pagamento (%)" defaultValue={String(data.settings.payment_fee_percent ?? "2")} />
           <Input name="payment_fee_fixed" label="Fee fissa (euro/ordine)" defaultValue={String(data.settings.payment_fee_fixed ?? "0.30")} />
           <Input name="suggested_credit_price" label="Prezzo suggerito (euro/SMS)" defaultValue={String(data.settings.suggested_credit_price ?? "0.0700")} />
-          <Button disabled={!canManage} icon={Settings}>Salva prezzi</Button>
+          <div className="flex items-end">
+            <Button disabled={!canManage} icon={Settings}>Salva prezzi</Button>
+          </div>
         </form>
-      </section>
+      </BillingModal>
+      ) : null}
     </div>
   );
 }

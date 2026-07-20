@@ -51,13 +51,27 @@ try {
   row = (await db.query("SELECT is_active FROM saas_plans WHERE id=$1", [planId])).rows[0];
   check("B3 Attiva: is_active torna 1", Number(row?.is_active) === 1, `active=${row?.is_active}`);
 
-  // B4: Pacchetti SMS — unita' nelle etichette + wallet leggibile + tooltip frecce
+  // B4: Pacchetti SMS — le tre sezioni vivono in POPUP (20/07): la pagina e'
+  // KPI + Ordini recenti; ogni popup si apre dal suo bottone ed Esc chiude.
   await page.locator("button", { hasText: "Pacchetti SMS" }).first().click();
-  await page.locator("text=Costo provider (euro/SMS)").waitFor({ timeout: 20000 });
-  const units = await page.locator("text=Prezzo suggerito (euro/SMS)").count();
-  const wallet = await page.locator("option", { hasText: "crediti" }).count();
-  const arrowTitle = await page.locator("button[title='Sposta su nella vetrina']").count();
-  check("B4 SMS: unita' misura + '— N crediti' nel select + frecce con tooltip", units === 1 && wallet >= 1 && arrowTitle >= 1, `units=${units} wallet=${wallet} arrow=${arrowTitle}`);
+  await page.locator("text=Ordini recenti").waitFor({ timeout: 20000 });
+  const inlineForms = await page.locator("input[name='provider_cost_per_segment']").count();
+  await page.locator("button", { hasText: "Impostazioni prezzo" }).click();
+  await page.locator("div[role='dialog'] input[name='provider_cost_per_segment']").waitFor({ timeout: 10000 });
+  const units = await page.locator("div[role='dialog']").locator("text=Prezzo suggerito (euro/SMS)").count();
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(500);
+  await page.locator("button", { hasText: "Ricarica manuale" }).click();
+  await page.locator("div[role='dialog'] select[name='tenant_slug']").waitFor({ timeout: 10000 });
+  const wallet = await page.locator("div[role='dialog'] option", { hasText: "crediti" }).count();
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(500);
+  await page.locator("button", { hasText: "Gestisci piani" }).click();
+  await page.locator("div[role='dialog'] button[title='Sposta su nella vetrina']").first().waitFor({ timeout: 10000 });
+  const arrowTitle = await page.locator("div[role='dialog'] button[title='Sposta su nella vetrina']").count();
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(500);
+  check("B4 SMS: popup Impostazioni/Ricarica/Piani con unita', crediti e frecce", inlineForms === 0 && units === 1 && wallet >= 1 && arrowTitle >= 1, `inline=${inlineForms} units=${units} wallet=${wallet} arrow=${arrowTitle}`);
 
   // B5: "Porta a target" su un pacchetto ZZ fuori target (DISATTIVO: mai in
   // vetrina) — precompila il campo, NON salva; il Salva poi persiste.
@@ -67,6 +81,8 @@ try {
   const expected = (Math.round(200 * suggested * 100) / 100).toFixed(2);
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.locator("button", { hasText: "Pacchetti SMS" }).first().click();
+  await page.locator("text=Ordini recenti").waitFor({ timeout: 20000 });
+  await page.locator("button", { hasText: "Gestisci piani" }).click();
   // il nome sta nel VALUE di un input: hasText non lo vede, serve :has(...)
   const zzForm = page.locator(`form:has(input[name='name'][value='ZZ Target ${RUN}'])`);
   await zzForm.locator("button", { hasText: "Porta a target" }).waitFor({ timeout: 20000 });

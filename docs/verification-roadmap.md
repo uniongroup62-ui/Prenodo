@@ -17216,3 +17216,18 @@ resetta editing). La pagina Abbonamenti ora e': KPI -> tabella Piani e MRR
 Verifica: probe live (form inline ASSENTE dalla pagina, Nuovo piano apre il
 dialog, Esc chiude, Assegna apre il suo); ux 7/7 (M6 Modifica-precompila ora
 passa dal popup), billing-rifiniture 6/6, faseE 8/8; tsc pulito.
+
+## 2026-07-20 — PACCHETTI SMS: PIANI/RICARICA/IMPOSTAZIONI IN POPUP (richiesta utente)
+
+Stesso pattern della tab Abbonamenti: la sottotab Pacchetti SMS ora e' KPI +
+"Ordini recenti"; nell'header della tabella i bottoni "Gestisci piani"
+(popup WIDE max-w-6xl: righe pacchetti + nuovo, NON si chiude al Salva — si
+lavora su piu' righe), "Ricarica manuale" e "Impostazioni prezzo" (si
+chiudono al submit) + Esporta CSV. BillingModal con prop `wide`; sottotitolo
+Impostazioni ricorda che NON cambiano i listini.
+
+Batteria billing-rifiniture aggiornata (B4 = tre popup con Esc, form inline
+ASSENTI; B5/B6 passano da "Gestisci piani") 6/6. TRAPPOLA Playwright: MAI
+mischiare css e text engine in un solo selettore ("div[...] text=..." e'
+parse error) — concatenare .locator(). Regressioni consolida 12 (il testo
+"Impostazioni prezzo" vive sul bottone), faseC 7, ux 7; tsc pulito.
