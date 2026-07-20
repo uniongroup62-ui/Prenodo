@@ -3274,7 +3274,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
 
   return (
     <div className="container-fluid">
-      <link rel="stylesheet" href="/assets/css/pages/calendar.css" />
+      <link rel="stylesheet" href="/assets/css/pages/calendar.css?v=20260721" />
 
       {/* Hidden anchors that bridge calendar interactions to the GLOBAL quick-booking
           drawer's document-level listeners. Clicking an appointment block sets the

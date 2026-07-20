@@ -625,3 +625,17 @@ body:not(.booking-public-body):not(.onboarding-body):not(.auth-body):has(.calend
 .fc-icon-chevron-left:before{content:"\e900"}
 .fc-icon-chevron-right:before{content:"\e901"}
 .fc .fc-button .fc-icon{font-size:1.5em;vertical-align:middle}
+
+/* Rifiniture 2026-07-21 su richiesta:
+   - contatore "N appuntamenti totali" senza sfondo ne bordo;
+   - tab Giorno/Settimana/Mese rettangolari e senza bordo. */
+.calendar-shell--agenda .fc .fc-dayApptTotal-button{
+  background:transparent !important;
+  border:0 !important;
+}
+.calendar-shell--agenda .fc .fc-staffTimeGridDay-button,
+.calendar-shell--agenda .fc .fc-timeGridWeek-button,
+.calendar-shell--agenda .fc .fc-dayGridMonth-button{
+  border:0 !important;
+  border-radius:0 !important;
+}

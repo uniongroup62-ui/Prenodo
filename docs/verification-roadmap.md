@@ -17687,3 +17687,10 @@ e item menu account = 14px); screenshot verificato; tsc pulito.
 ## 2026-07-21 - Dropdown a 12px (rifinitura su richiesta)
 La taglia dei dropdown passa da 14px a 12px (menu + item, regola globale
 in app.css); app.css?v= bumpato a 20260721b. Probe computed-style 2/2.
+
+## 2026-07-21 - Calendario: contatore senza sfondo, tab viste squadrati
+Richiesta utente: (1) "N appuntamenti totali" senza sfondo ne bordo (la
+regola generica .fc-button dell'agenda gli metteva pill #f4f8ff+bordo);
+(2) tab Giorno/Settimana/Mese senza bordo e rettangolari (border 0 +
+radius 0, sfondi invariati: attivo navy). Override in calendar.css con
+?v=20260721 sulla link. Probe computed-style 2/2; screenshot verificato.
