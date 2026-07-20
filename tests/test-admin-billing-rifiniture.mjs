@@ -16,7 +16,7 @@ const R = []; const check = (l, ok, x = "") => { R.push(ok); console.log(`${ok ?
 const RUN = String(Date.now()).slice(-6);
 const EMAIL = `zz.bilr${RUN}@example.test`;
 const PLAN = `ZZ BilR ${RUN}`;
-let adminId = 0, planId = 0, browser = null;
+let adminId = 0, planId = 0, smsPlanId = 0, browser = null;
 
 try {
   const ins = await db.query("INSERT INTO saas_admins(name,email,password_hash,role,is_active) VALUES($1,$2,$3,'owner',1) RETURNING id", ["ZZ BilR", EMAIL, bcrypt.hashSync("Br!12345", 10)]);
@@ -58,6 +58,28 @@ try {
   const wallet = await page.locator("option", { hasText: "crediti" }).count();
   const arrowTitle = await page.locator("button[title='Sposta su nella vetrina']").count();
   check("B4 SMS: unita' misura + '— N crediti' nel select + frecce con tooltip", units === 1 && wallet >= 1 && arrowTitle >= 1, `units=${units} wallet=${wallet} arrow=${arrowTitle}`);
+
+  // B5: "Porta a target" su un pacchetto ZZ fuori target (DISATTIVO: mai in
+  // vetrina) — precompila il campo, NON salva; il Salva poi persiste.
+  await fetch(`${BASE}/api/admin/operations`, { method: "POST", headers: { "content-type": "application/json", origin: BASE, cookie }, body: JSON.stringify({ action: "sms_save_plan", name: `ZZ Target ${RUN}`, credits: "200", price_gross: "9.00", description: "zz test", is_active: "0" }) });
+  smsPlanId = Number((await db.query("SELECT id FROM saas_sms_plans WHERE name=$1", [`ZZ Target ${RUN}`])).rows[0]?.id ?? 0);
+  const suggested = Number((await db.query("SELECT suggested_credit_price FROM saas_sms_pricing_settings ORDER BY id ASC LIMIT 1")).rows[0]?.suggested_credit_price ?? 0);
+  const expected = (Math.round(200 * suggested * 100) / 100).toFixed(2);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator("button", { hasText: "Pacchetti SMS" }).first().click();
+  // il nome sta nel VALUE di un input: hasText non lo vede, serve :has(...)
+  const zzForm = page.locator(`form:has(input[name='name'][value='ZZ Target ${RUN}'])`);
+  await zzForm.locator("button", { hasText: "Porta a target" }).waitFor({ timeout: 20000 });
+  await zzForm.locator("button", { hasText: "Porta a target" }).click();
+  const filled = await zzForm.locator("input[name='price_gross']").inputValue();
+  let dbPrice = Number((await db.query("SELECT price_gross FROM saas_sms_plans WHERE id=$1", [smsPlanId])).rows[0]?.price_gross);
+  check("B5 Porta a target: campo precompilato (crediti x suggerito), DB intatto", filled === expected && dbPrice === 9, `filled=${filled} atteso=${expected} db=${dbPrice}`);
+
+  // B6: Salva persiste il prezzo precompilato
+  await zzForm.locator("button", { hasText: "Salva" }).click();
+  await page.waitForTimeout(2500);
+  dbPrice = Number((await db.query("SELECT price_gross FROM saas_sms_plans WHERE id=$1", [smsPlanId])).rows[0]?.price_gross);
+  check("B6 Salva dopo il target: prezzo persistito", dbPrice === Number(expected), `db=${dbPrice} atteso=${expected}`);
 } catch (e) {
   console.log("ERRORE:", e?.message ?? e);
   R.push(false);
@@ -65,6 +87,7 @@ try {
   try { if (browser) await browser.close(); } catch {}
   try {
     if (planId) await db.query("DELETE FROM saas_plans WHERE id=$1", [planId]).catch(() => {});
+    if (smsPlanId) await db.query("DELETE FROM saas_sms_plans WHERE id=$1", [smsPlanId]).catch(() => {});
     if (adminId) {
       await db.query("DELETE FROM saas_admin_sessions WHERE admin_id=$1", [adminId]).catch(() => {});
       await db.query("DELETE FROM saas_admin_audit WHERE admin_id=$1", [adminId]).catch(() => {});

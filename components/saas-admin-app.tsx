@@ -1293,6 +1293,26 @@ function SmsPlansView({ data, canManage, onAction, onRefresh }: { data: SmsBilli
                   {plan.economics.price_per_credit.toFixed(4).replace(".", ",")} euro/SMS
                 </span>
                 {" "}(suggerito {Number(data.settings.suggested_credit_price ?? 0).toFixed(4).replace(".", ",")})
+                {/* PRECOMPILA il campo Prezzo a crediti x suggerito — non salva
+                    nulla: il prezzo passa comunque dagli occhi e dal Salva. */}
+                {Math.abs(plan.economics.price_per_credit - Number(data.settings.suggested_credit_price ?? 0)) > 0.0005 ? (
+                  <button
+                    className="ml-2 rounded-md border border-amber-300 px-2 py-0.5 text-xs font-semibold text-amber-800 hover:bg-amber-50 disabled:opacity-40"
+                    disabled={!canManage}
+                    title="Precompila il prezzo a target (crediti × suggerito): controlla, ritocca se vuoi e premi Salva."
+                    type="button"
+                    onClick={(event) => {
+                      const form = event.currentTarget.closest("form");
+                      const creditsEl = form?.elements.namedItem("credits") as HTMLInputElement | null;
+                      const priceEl = form?.elements.namedItem("price_gross") as HTMLInputElement | null;
+                      const credits = Math.max(1, Number(creditsEl?.value ?? plan.credits));
+                      const target = Math.round(credits * Number(data.settings.suggested_credit_price ?? 0) * 100) / 100;
+                      if (priceEl) { priceEl.value = target.toFixed(2); priceEl.focus(); }
+                    }}
+                  >
+                    Porta a target
+                  </button>
+                ) : null}
               </div>
             </form>
           ))}

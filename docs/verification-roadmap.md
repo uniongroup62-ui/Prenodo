@@ -17186,3 +17186,19 @@ sotto il suggerito senza fare i conti. (Contesto: le Impostazioni prezzo NON
 cambiano mai i prezzi dei pacchetti — solo marginalita' ricalcolate e prezzo
 suggerito; il listino si ritocca a mano, per scelta.)
 Verifica: probe live 4 righe renderizzate; billing-rifiniture 4, faseC 7.
+
+## 2026-07-20 — PACCHETTI SMS: BOTTONE "PORTA A TARGET" (proposta approvata)
+
+Chiude il flusso prezzi senza automatismi ciechi: quando il prezzo/credito
+di un pacchetto diverge dal suggerito (>0.0005), accanto al confronto appare
+"Porta a target" che PRECOMPILA il campo Prezzo (crediti x suggerito, 2
+decimali, focus sul campo) SENZA salvare: il valore passa dagli occhi
+dell'admin (che puo' ritoccarlo, es. prezzo psicologico) e dal Salva della
+riga. Niente scritture nascoste, audit invariato (e' il normale sms_save_plan).
+Flusso: parametri -> ambra -> click -> controlla -> Salva.
+
+Batteria billing-rifiniture estesa a 6 (B5 precompila con DB INTATTO, B6 il
+Salva persiste; fixture pacchetto ZZ DISATTIVO = mai in vetrina tenant).
+TRAPPOLA Playwright: il nome del pacchetto vive nel VALUE di un input —
+hasText non lo vede, serve form:has(input[name='name'][value='...']).
+Regressione faseC 7; tsc pulito.
