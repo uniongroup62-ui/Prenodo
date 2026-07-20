@@ -1086,12 +1086,35 @@ function CreateTenantPanel({ plans, open, canManage, onCreate, onToggle }: { pla
   );
 }
 
+// Dialog modale riusabile della vista Fatturazione (pattern CreateTenantPanel):
+// Esc e click sul fondo chiudono, la card ferma la propagazione.
+function BillingModal({ title, subtitle, onClose, children }: { title: string; subtitle: string; onClose: () => void; children: React.ReactNode }) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div aria-modal className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/40 p-4 pt-[10vh]" role="dialog" onClick={onClose}>
+      <section className="mx-auto w-full max-w-3xl min-w-0 rounded-md border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between pr-4">
+          <SectionHead title={title} subtitle={subtitle} />
+          <button className="mt-4 text-sm font-semibold text-slate-500 hover:text-slate-700" type="button" onClick={onClose}>Chiudi</button>
+        </div>
+        <div className="p-4">{children}</div>
+      </section>
+    </div>
+  );
+}
+
 // PIANI & RICAVI (Fase E): piani veri con limiti che governano i gate del
 // gestionale + MRR, ricavo SMS per mese e wallet aggregato.
 function BillingView({ data, canManage, onAction, onRefresh }: { data: BillingPayload | null; canManage: boolean; onAction: (payload: Record<string, string>) => void; onRefresh: () => void }) {
-  // Modifica per riga (walkthrough UX 19/07): il bottone precompila il form
-  // (key = remount con i defaultValue del piano scelto) — niente ID a mano.
+  // Nuovo piano / Assegna piano vivono in POPUP (richiesta 20/07): bottoni a
+  // destra nell'header di "Piani e MRR"; "Modifica" apre lo stesso popup
+  // precompilato (key = remount con i defaultValue del piano scelto).
   const [editing, setEditing] = useState<BillingPayload["plans"][number] | null>(null);
+  const [modal, setModal] = useState<"plan" | "assign" | null>(null);
   if (!data) {
     return <EmptyOperation icon={Wallet} title="Piani & Ricavi" detail="Carica piani, MRR e ricavi SMS." onRefresh={onRefresh} />;
   }
@@ -1109,26 +1132,16 @@ function BillingView({ data, canManage, onAction, onRefresh }: { data: BillingPa
         <Metric label="Crediti SMS residui" value={String(data.revenue.wallet_credits_total)} detail="somma su tutti i tenant" />
       </div>
 
-      <section className="rounded-md border border-slate-200 bg-white shadow-sm">
-        <SectionHead title={editing ? `Modifica piano: ${editing.name}` : "Nuovo piano"} subtitle="Prezzo mensile e LIMITI: vuoto = illimitato. I limiti governano i gate del gestionale (es. creazione sedi)." />
-        <form className="grid gap-3 p-4 md:grid-cols-5" key={editing ? `plan-${editing.id}` : "plan-new"} onSubmit={(event) => { submitOperation(event, "plan_save", onAction); setEditing(null); }}>
-          <input name="plan_id" type="hidden" value={editing ? String(editing.id) : ""} readOnly />
-          <Input name="name" label="Nome piano" placeholder="Pro" defaultValue={editing?.name ?? ""} required />
-          <Input name="price_month" label="Prezzo/mese EUR" placeholder="49.90" defaultValue={editing ? String(editing.price_month) : ""} />
-          <Input name="max_locations" label="Max sedi" placeholder="illimitato" defaultValue={editing?.max_locations === null || editing === null ? "" : String(editing.max_locations)} />
-          <Input name="max_staff" label="Max staff" placeholder="illimitato" defaultValue={editing?.max_staff === null || editing === null ? "" : String(editing.max_staff)} />
-          <Input name="sms_included_month" label="SMS inclusi/mese" placeholder="0" defaultValue={editing ? String(editing.sms_included_month) : ""} />
-          <div className="flex gap-2 md:col-span-5">
-            <Button disabled={!canManage} icon={Plus}>{editing ? "Salva modifiche" : "Crea piano"}</Button>
-            {editing ? <Button icon={RotateCcw} type="button" variant="outline" onClick={() => setEditing(null)}>Annulla modifica</Button> : null}
-          </div>
-        </form>
-      </section>
-
       <Table
         title="Piani e MRR"
         headers={["Piano", "Prezzo/mese", "Max sedi", "Max staff", "Tenant", "MRR", "Azioni"]}
-        empty="Nessun piano ancora definito: crealo qui sopra."
+        empty="Nessun piano ancora definito: crealo con 'Nuovo piano'."
+        action={
+          <div className="flex flex-wrap gap-2">
+            <Button disabled={!canManage} icon={Plus} type="button" onClick={() => { setEditing(null); setModal("plan"); }}>Nuovo piano</Button>
+            <Button disabled={!canManage} icon={UserCog} type="button" variant="outline" onClick={() => setModal("assign")}>Assegna piano</Button>
+          </div>
+        }
         rows={data.plans.map((plan) => {
           const rev = data.revenue.by_plan.find((row) => row.id === plan.id);
           return [
@@ -1139,7 +1152,7 @@ function BillingView({ data, canManage, onAction, onRefresh }: { data: BillingPa
             String(rev?.tenants ?? 0),
             formatEuro(rev?.mrr ?? 0),
             <span className="flex justify-end gap-2" key={`actions-${plan.id}`}>
-              <button className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold hover:bg-slate-50 disabled:opacity-40" disabled={!canManage} type="button" onClick={() => setEditing(plan)}>
+              <button className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold hover:bg-slate-50 disabled:opacity-40" disabled={!canManage} type="button" onClick={() => { setEditing(plan); setModal("plan"); }}>
                 Modifica
               </button>
               {/* Ritiro dal listino SENZA toccare i tenant che lo usano:
@@ -1167,30 +1180,47 @@ function BillingView({ data, canManage, onAction, onRefresh }: { data: BillingPa
         })}
       />
 
-      <section className="rounded-md border border-slate-200 bg-white shadow-sm">
-        <SectionHead title="Assegna piano a tenant" subtitle="Collega un piano al tenant; 'Nessun piano' = nessun limite." />
-        <form className="grid gap-3 p-4 md:grid-cols-3" onSubmit={(event) => submitOperation(event, "plan_assign", onAction)}>
-          <label>
-            <span className="mb-1 block text-sm font-medium text-slate-600">Tenant</span>
-            <select className="h-10 w-full rounded-md border border-slate-200 px-3 outline-none focus:border-[#365a96]" name="tenant_slug" required>
-              {data.tenants.map((tenant) => <option key={tenant.slug} value={tenant.slug}>{tenant.name} ({tenant.slug}){tenant.plan ? ` — ${tenant.plan}` : ""}</option>)}
-            </select>
-          </label>
-          <label>
-            <span className="mb-1 block text-sm font-medium text-slate-600">Piano</span>
-            <select className="h-10 w-full rounded-md border border-slate-200 px-3 outline-none focus:border-[#365a96]" name="plan_id">
-              <option value="0">Nessun piano (illimitato)</option>
-              {data.plans.filter((plan) => plan.is_active === 1).map((plan) => <option key={plan.id} value={String(plan.id)}>{plan.name} — {formatEuro(Number(plan.price_month))}/mese</option>)}
-            </select>
-          </label>
-          <div className="flex items-end">
-            <Button disabled={!canManage} icon={UserCog}>Assegna</Button>
-          </div>
-        </form>
-      </section>
-
       {/* La tabella "Ricavo SMS per mese" viveva QUI in triplice copia
           (Statistiche/Entrate + mondo Pacchetti SMS): rimossa (20/07). */}
+
+      {modal === "plan" ? (
+        <BillingModal title={editing ? `Modifica piano: ${editing.name}` : "Nuovo piano"} subtitle="Prezzo mensile e LIMITI: vuoto = illimitato. I limiti governano i gate del gestionale (es. creazione sedi)." onClose={() => { setModal(null); setEditing(null); }}>
+          <form className="grid gap-3 md:grid-cols-2" key={editing ? `plan-${editing.id}` : "plan-new"} onSubmit={(event) => { submitOperation(event, "plan_save", onAction); setEditing(null); setModal(null); }}>
+            <input name="plan_id" type="hidden" value={editing ? String(editing.id) : ""} readOnly />
+            <Input name="name" label="Nome piano" placeholder="Pro" defaultValue={editing?.name ?? ""} required />
+            <Input name="price_month" label="Prezzo/mese EUR" placeholder="49.90" defaultValue={editing ? String(editing.price_month) : ""} />
+            <Input name="max_locations" label="Max sedi" placeholder="illimitato" defaultValue={editing?.max_locations === null || editing === null ? "" : String(editing.max_locations)} />
+            <Input name="max_staff" label="Max staff" placeholder="illimitato" defaultValue={editing?.max_staff === null || editing === null ? "" : String(editing.max_staff)} />
+            <Input name="sms_included_month" label="SMS inclusi/mese" placeholder="0" defaultValue={editing ? String(editing.sms_included_month) : ""} />
+            <div className="flex items-end gap-2">
+              <Button disabled={!canManage} icon={Plus}>{editing ? "Salva modifiche" : "Crea piano"}</Button>
+            </div>
+          </form>
+        </BillingModal>
+      ) : null}
+
+      {modal === "assign" ? (
+        <BillingModal title="Assegna piano a tenant" subtitle="Collega un piano al tenant; 'Nessun piano' = nessun limite." onClose={() => setModal(null)}>
+          <form className="grid gap-3 md:grid-cols-3" onSubmit={(event) => { submitOperation(event, "plan_assign", onAction); setModal(null); }}>
+            <label>
+              <span className="mb-1 block text-sm font-medium text-slate-600">Tenant</span>
+              <select className="h-10 w-full rounded-md border border-slate-200 px-3 outline-none focus:border-[#365a96]" name="tenant_slug" required>
+                {data.tenants.map((tenant) => <option key={tenant.slug} value={tenant.slug}>{tenant.name} ({tenant.slug}){tenant.plan ? ` — ${tenant.plan}` : ""}</option>)}
+              </select>
+            </label>
+            <label>
+              <span className="mb-1 block text-sm font-medium text-slate-600">Piano</span>
+              <select className="h-10 w-full rounded-md border border-slate-200 px-3 outline-none focus:border-[#365a96]" name="plan_id">
+                <option value="0">Nessun piano (illimitato)</option>
+                {data.plans.filter((plan) => plan.is_active === 1).map((plan) => <option key={plan.id} value={String(plan.id)}>{plan.name} — {formatEuro(Number(plan.price_month))}/mese</option>)}
+              </select>
+            </label>
+            <div className="flex items-end">
+              <Button disabled={!canManage} icon={UserCog}>Assegna</Button>
+            </div>
+          </form>
+        </BillingModal>
+      ) : null}
     </div>
   );
 }

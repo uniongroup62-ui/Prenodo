@@ -17202,3 +17202,17 @@ Salva persiste; fixture pacchetto ZZ DISATTIVO = mai in vetrina tenant).
 TRAPPOLA Playwright: il nome del pacchetto vive nel VALUE di un input —
 hasText non lo vede, serve form:has(input[name='name'][value='...']).
 Regressione faseC 7; tsc pulito.
+
+## 2026-07-20 — FATTURAZIONE: NUOVO PIANO E ASSEGNA IN POPUP (richiesta utente)
+
+Le due sezioni inline "Nuovo piano" e "Assegna piano a tenant" diventano
+POPUP aperti da due bottoni a destra nell'header di "Piani e MRR" (Table
+action). "Modifica" per riga apre lo stesso popup del piano PRECOMPILATO
+(key-remount invariato). BillingModal = dialog riusabile della vista
+(pattern CreateTenantPanel: Esc + click sul fondo chiudono, submit chiude e
+resetta editing). La pagina Abbonamenti ora e': KPI -> tabella Piani e MRR
+-> stop.
+
+Verifica: probe live (form inline ASSENTE dalla pagina, Nuovo piano apre il
+dialog, Esc chiude, Assegna apre il suo); ux 7/7 (M6 Modifica-precompila ora
+passa dal popup), billing-rifiniture 6/6, faseE 8/8; tsc pulito.
