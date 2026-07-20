@@ -120,7 +120,7 @@ export function TenantDetailPanel(props: {
         })}
       </div>
       <div className="p-4">
-        {props.activeTab === "overview" ? <TenantOverview detail={props.detail} /> : null}
+        {props.activeTab === "overview" ? <TenantOverview detail={props.detail} onOpenHealth={() => props.onTabChange("health")} /> : null}
         {props.activeTab === "timeline" ? <TenantTimeline events={props.detail.timeline ?? []} /> : null}
         {props.activeTab === "settings" ? <TenantSettings plans={props.plans} tenant={tenant} canManage={props.canManage} onAction={props.onAction} /> : null}
         {/* Visibilità in tab dedicata (richiesta 20/07; prima era fusa in Dati). */}
@@ -136,7 +136,7 @@ export function TenantDetailPanel(props: {
   );
 }
 
-function TenantOverview({ detail }: { detail: TenantDetailPayload }) {
+function TenantOverview({ detail, onOpenHealth }: { detail: TenantDetailPayload; onOpenHealth: () => void }) {
   const tenant = detail.tenant;
   const health = tenant.health?.level ?? "warning";
   // I controlli di dettaglio vivono nell'ULTIMA diagnostica registrata: lo
@@ -155,16 +155,16 @@ function TenantOverview({ detail }: { detail: TenantDetailPayload }) {
     <div className="grid gap-4">
       <div className="grid gap-3 md:grid-cols-3">
         <Metric label="Stato" value={statusLabel[tenantStatus(tenant)]} detail="tenant" />
-        <Metric label="Salute" value={healthLabel[health]} detail={tenant.health_checked_at || "mai salvata"} />
+        <Metric label="Salute" value={healthLabel[health]} detail={tenant.health_checked_at ? formatDateTime(tenant.health_checked_at) : "mai salvata"} onClick={onOpenHealth} />
         <Metric label="Onboarding" value={`${tenant.onboarding_percent ?? 0}%`} detail={onboardingLabel(tenant.onboarding_status)} />
       </div>
       <div className="grid gap-2 text-sm">
         <Detail label="URL" value={`/${tenant.slug}/`} />
         <Detail label="Email admin" value={tenant.admin_email || "-"} />
-        <Detail label="Piano" value={tenant.plan || "-"} />
+        <Detail label="Piano" value={tenant.plan || "Nessun piano (illimitato)"} />
         <Detail label="Crediti SMS" value={String(detail.smsCredits ?? 0)} />
         <Detail label="Origine" value={tenant.source === "self_signup" ? "Registrazione autonoma" : "Creazione admin"} />
-        <Detail label="Creato il" value={tenant.created_at || "-"} />
+        <Detail label="Creato il" value={tenant.created_at ? formatDateTime(tenant.created_at) : "-"} />
       </div>
       {/* SOLO i controlli con problemi (rilievo utente 20/07): un controllo
           superato non e' una notizia — il dettaglio integrale vive nella tab
@@ -172,7 +172,7 @@ function TenantOverview({ detail }: { detail: TenantDetailPayload }) {
       {problems.length > 0 ? (
         <HealthChecks checks={problems} />
       ) : checks.length > 0 ? (
-        <p className="text-sm font-semibold text-emerald-700">{checks.length} controlli superati.</p>
+        <button className="w-fit text-left text-sm font-semibold text-emerald-700 hover:underline" type="button" onClick={onOpenHealth}>{checks.length} controlli superati. Vedi Diagnostica →</button>
       ) : null}
     </div>
   );
@@ -199,7 +199,7 @@ function TenantTimeline({ events }: { events: TimelineEvent[] }) {
             <div className="flex flex-wrap items-baseline gap-2">
               <Badge tone={kind.tone}>{kind.label}</Badge>
               <span className="text-sm font-semibold">{event.title}</span>
-              <span className="text-xs text-slate-500">{event.at}</span>
+              <span className="text-xs text-slate-500">{formatDateTime(event.at)}</span>
               {event.actor ? <span className="text-xs text-slate-500">· {event.actor}</span> : null}
             </div>
             {event.detail ? <p className="mt-0.5 text-sm text-slate-600">{event.detail}</p> : null}
@@ -464,24 +464,29 @@ function TenantDanger({ tenant, canManage, onAction }: { tenant: Tenant; canMana
     <div className="grid gap-4">
       {/* Conferma esplicita su sospensione/archiviazione (walkthrough UX
           19/07): bloccano l'accesso del tenant, non devono partire per sbaglio. */}
-      <form className="grid gap-3 md:grid-cols-[1fr_auto]" onSubmit={(event) => {
-        event.preventDefault();
-        const payload = formPayload(event.currentTarget);
-        if (status === "active" && !window.confirm(`Sospendere "${tenant.slug}"? Il tenant non potra' piu' accedere.`)) return;
-        onAction(status === "active" ? "suspend" : "activate", { ...payload, slug: tenant.slug });
-      }}>
-        <Input name="reason" label={status === "active" ? "Motivo sospensione" : "Riattivazione"} placeholder="Es. pagamento scaduto" disabled={status !== "active"} />
-        <Button disabled={!canManage || status === "deleted"} icon={status === "active" ? Lock : CheckCircle2}>{status === "active" ? "Sospendi" : "Riattiva"}</Button>
-      </form>
-      <form className="grid gap-3 md:grid-cols-[1fr_auto]" onSubmit={(event) => {
-        event.preventDefault();
-        const payload = formPayload(event.currentTarget);
-        if (status !== "deleted" && !window.confirm(`Archiviare "${tenant.slug}"? Restera' recuperabile da questa pagina.`)) return;
-        onAction(status === "deleted" ? "restore" : "archive", { ...payload, slug: tenant.slug });
-      }}>
-        <Input name="reason" label={status === "deleted" ? "Archivio" : "Motivo archiviazione"} placeholder="Es. cliente cessato" disabled={status === "deleted"} />
-        <Button variant="outline" disabled={!canManage} icon={RotateCcw}>{status === "deleted" ? "Ripristina" : "Archivia"}</Button>
-      </form>
+      <section className="rounded-md border border-slate-200 bg-white shadow-sm">
+        <SectionHead title="Sospensione e archivio" subtitle="Reversibili: il tenant torna operativo con Riattiva/Ripristina. Entrambe chiedono conferma." />
+        <div className="grid gap-4 p-4">
+          <form className="grid gap-3 md:grid-cols-[1fr_auto]" onSubmit={(event) => {
+            event.preventDefault();
+            const payload = formPayload(event.currentTarget);
+            if (status === "active" && !window.confirm(`Sospendere "${tenant.slug}"? Il tenant non potra' piu' accedere.`)) return;
+            onAction(status === "active" ? "suspend" : "activate", { ...payload, slug: tenant.slug });
+          }}>
+            <Input name="reason" label={status === "active" ? "Motivo sospensione" : "Riattivazione"} placeholder="Es. pagamento scaduto" disabled={status !== "active"} />
+            <div className="flex items-end"><Button disabled={!canManage || status === "deleted"} icon={status === "active" ? Lock : CheckCircle2}>{status === "active" ? "Sospendi" : "Riattiva"}</Button></div>
+          </form>
+          <form className="grid gap-3 md:grid-cols-[1fr_auto]" onSubmit={(event) => {
+            event.preventDefault();
+            const payload = formPayload(event.currentTarget);
+            if (status !== "deleted" && !window.confirm(`Archiviare "${tenant.slug}"? Restera' recuperabile da questa pagina.`)) return;
+            onAction(status === "deleted" ? "restore" : "archive", { ...payload, slug: tenant.slug });
+          }}>
+            <Input name="reason" label={status === "deleted" ? "Archivio" : "Motivo archiviazione"} placeholder="Es. cliente cessato" disabled={status === "deleted"} />
+            <div className="flex items-end"><Button variant="outline" disabled={!canManage} icon={RotateCcw}>{status === "deleted" ? "Ripristina" : "Archivia"}</Button></div>
+          </form>
+        </div>
+      </section>
       <form className="rounded-md border border-red-200 bg-red-50 p-4" onSubmit={(event) => submitAction(event, "delete", onAction)}>
         <input name="slug" type="hidden" value={tenant.slug} />
         <p className="font-semibold text-red-800">Eliminazione definitiva</p>

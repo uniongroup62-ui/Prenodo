@@ -992,9 +992,13 @@ function TenantsView(props: {
 
   return (
     <div className="grid min-w-0 gap-5">
+        {/* Il modulo di creazione vive SOPRA la lista: aperto dal bottone in
+            alto deve comparire subito, non fuori schermo sotto 25 righe. */}
+        <CreateTenantPanel canManage={props.canManage} open={props.createOpen} plans={props.overview.plans} onCreate={(payload) => props.onAction("create", payload)} onToggle={props.onToggleCreate} />
         <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
           <SectionHead title="Tenant" subtitle="Cerca, filtra e apri la gestione dedicata." />
-          <div className="grid gap-3 border-b border-slate-100 p-4 md:grid-cols-[1fr_190px_auto]">
+          {/* form: Invio nel campo di ricerca filtra (mai solo il click). */}
+          <form className="grid gap-3 border-b border-slate-100 p-4 md:grid-cols-[1fr_190px_auto_auto]" onSubmit={(event) => { event.preventDefault(); props.onFilter(); }}>
             <label className="relative">
               <Search className="absolute left-3 top-3 text-slate-400" size={16} aria-hidden />
               <input className="h-10 w-full rounded-md border border-slate-200 pl-9 pr-3 outline-none focus:border-[#365a96]" placeholder="Slug, nome o email admin" value={props.query} onChange={(event) => props.onQueryChange(event.target.value)} />
@@ -1003,17 +1007,15 @@ function TenantsView(props: {
               <option value="">Tutti gli stati</option>
               {(["active", "suspended", "provisioning", "failed", "deleted"] as TenantStatus[]).map((status) => <option key={status} value={status}>{statusLabel[status]}</option>)}
             </select>
-            <button className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-200 px-4 text-sm font-semibold" type="button" onClick={props.onFilter}>
+            <button className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-slate-200 px-4 text-sm font-semibold" type="submit">
               <SlidersHorizontal size={16} aria-hidden />
               Filtra
             </button>
-          </div>
-          <div className="flex justify-end border-b border-slate-100 px-4 py-2">
-            <a className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50" href="/api/admin/operations?section=export_tenants" download>
-              <Download size={14} aria-hidden />
+            <a className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 px-4 text-sm font-semibold text-slate-600 hover:bg-slate-50" href="/api/admin/operations?section=export_tenants" download>
+              <Download size={15} aria-hidden />
               Esporta CSV
             </a>
-          </div>
+          </form>
           <TenantTable tenants={props.overview.tenants} onOpenTenant={(slug) => props.onOpenTenant(slug)} />
           {props.overview.pageCount > 1 ? (
             <div className="flex items-center justify-between border-t border-slate-100 px-4 py-2 text-sm">
@@ -1029,7 +1031,6 @@ function TenantsView(props: {
             </div>
           ) : null}
         </section>
-        <CreateTenantPanel canManage={props.canManage} open={props.createOpen} plans={props.overview.plans} onCreate={(payload) => props.onAction("create", payload)} onToggle={props.onToggleCreate} />
     </div>
   );
 }
@@ -1066,10 +1067,12 @@ function CreateTenantPanel({ plans, open, canManage, onCreate, onToggle }: { pla
           <span className="mb-1 block text-sm font-medium text-slate-600">Note interne</span>
           <textarea className="min-h-24 w-full rounded-md border border-slate-200 p-3 outline-none focus:border-[#365a96]" name="notes" />
         </label>
-        <button className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-[#365a96] px-4 text-sm font-semibold text-white disabled:opacity-50 md:col-span-2" disabled={!canManage}>
-          <Plus size={16} aria-hidden />
-          Crea tenant
-        </button>
+        <div className="md:col-span-2">
+          <button className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-[#365a96] px-4 text-sm font-semibold text-white disabled:opacity-50" disabled={!canManage}>
+            <Plus size={16} aria-hidden />
+            Crea tenant
+          </button>
+        </div>
       </form>
     </section>
   );

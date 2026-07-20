@@ -17101,3 +17101,22 @@ Batteria dash estesa a 8 (V6 niente doppione + dettaglio cron ATTESO via
 waitFor — il dettaglio arriva con la fetch dell'overview, contare subito =
 race; V7 righe navigabili + link Audit; V8 KPI MRR -> billing). Regressioni
 ux 7, faseAB 11, stats 8 — verdi; tsc pulito.
+
+## 2026-07-20 — SEZIONE TENANT: 9 RIFINITURE (analisi approvata)
+
+LISTA: (1) filtri dentro un FORM -> Invio nel campo di ricerca filtra (prima
+solo il click su Filtra); (2) "Esporta CSV" nella riga filtri — eliminata
+l'ultima banda-per-un-bottone del pannello; (3) tutta la RIGA apre il
+dettaglio (cursor-pointer + hover; Gestisci resta con stopPropagation).
+PANORAMICA: (4) date formattate (Salute nel Metric e "Creato il"), "Piano"
+mai muto ("Nessun piano (illimitato)"); (5) card Salute cliccabile ->
+Diagnostica; (6) sintesi "N controlli superati. Vedi Diagnostica ->" =
+bottone verso la tab. TIMELINE: (7) date via formatDateTime. AZIONI
+CRITICHE: (8) card "Sospensione e archivio" con sottotitolo (reversibili +
+conferma) e bottoni ALLINEATI ai campi (flex items-end — prima galleggiavano
+in alto). NUOVO TENANT: (9) pannello SOPRA la lista (prima si apriva fuori
+schermo sotto 25 righe) e "Crea tenant" compatto (bottone custom senza fix).
+
+Verifica: probe funzionali (Invio filtra + esclude, riga cliccabile ->
+deep-link, pannello sopra la lista via boundingBox) + screenshot Panoramica/
+Azioni critiche; regressione completa admin 18/18 suite verdi; tsc pulito.

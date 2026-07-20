@@ -425,7 +425,9 @@ export function TenantTable({ tenants, onOpenTenant }: { tenants: Tenant[]; onOp
             const status = tenantStatus(tenant);
             const health = tenant.health?.level ?? "warning";
             return (
-              <tr key={tenant.slug}>
+              // Tutta la riga apre il dettaglio; "Gestisci" resta come
+              // conferma visiva (stopPropagation per non aprire due volte).
+              <tr className="cursor-pointer hover:bg-slate-50" key={tenant.slug} onClick={() => onOpenTenant(tenant.slug)}>
                 <td className="px-4 py-3">
                   <strong>{tenant.name}</strong>
                   <div className="mt-1 text-slate-500"><code>{tenant.slug}</code>{tenant.admin_email ? ` - ${tenant.admin_email}` : ""}</div>
@@ -439,7 +441,7 @@ export function TenantTable({ tenants, onOpenTenant }: { tenants: Tenant[]; onOp
                   <Badge tone={tenant.health_checked_at ? healthTone(health) : "muted"}>{tenant.health_checked_at ? healthLabel[health] : "Non verificato"}</Badge>
                   {tenant.health_checked_at ? <div className="mt-1 text-xs text-slate-500">{formatDateTime(tenant.health_checked_at)}</div> : null}
                 </td>
-                <td className="px-4 py-3 text-right"><button className="rounded-md border border-slate-200 px-3 py-1.5 font-semibold" type="button" onClick={() => onOpenTenant(tenant.slug)}>Gestisci</button></td>
+                <td className="px-4 py-3 text-right"><button className="rounded-md border border-slate-200 px-3 py-1.5 font-semibold" type="button" onClick={(event) => { event.stopPropagation(); onOpenTenant(tenant.slug); }}>Gestisci</button></td>
               </tr>
             );
           })}
