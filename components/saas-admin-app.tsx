@@ -1270,14 +1270,18 @@ const SMS_DIAG_PER_PAGE = 25;
 
 function ControlsView({ data, canManage, onRefresh, onRunHealth, onOpenTenant }: { data: ControlsPayload | null; canManage: boolean; onRefresh: () => void; onRunHealth: () => void; onOpenTenant: (slug: string) => void }) {
   const [diagPage, setDiagPage] = useState(1);
+  const [diagQuery, setDiagQuery] = useState("");
   if (!data) {
     return <EmptyOperation icon={Activity} title="Controlli operativi" detail="Carica diagnostica provider SMS e tenant." onRefresh={onRefresh} />;
   }
   const provider = data.provider;
-  // Diagnostica tenant: PROBLEMI PRIMA (errore > avviso > ok), 25 per pagina —
-  // con molti tenant la prima pagina resta quella che conta.
+  // Diagnostica tenant: PROBLEMI PRIMA (errore > avviso > ok), ricerca
+  // CLIENT-SIDE su nome/slug (i dati sono gia' tutti qui), 25 per pagina.
   const levelRank: Record<string, number> = { error: 0, warning: 1, ok: 2 };
-  const sortedDiag = [...data.tenants].sort((a, b) => (levelRank[String(a.level)] ?? 3) - (levelRank[String(b.level)] ?? 3));
+  const diagNeedle = diagQuery.trim().toLowerCase();
+  const sortedDiag = [...data.tenants]
+    .filter((row) => !diagNeedle || String(row.tenant_name ?? "").toLowerCase().includes(diagNeedle) || String(row.tenant_slug ?? "").toLowerCase().includes(diagNeedle))
+    .sort((a, b) => (levelRank[String(a.level)] ?? 3) - (levelRank[String(b.level)] ?? 3));
   const diagPageCount = Math.max(1, Math.ceil(sortedDiag.length / SMS_DIAG_PER_PAGE));
   const diagCurrent = Math.min(diagPage, diagPageCount);
   const diagVisible = sortedDiag.slice((diagCurrent - 1) * SMS_DIAG_PER_PAGE, diagCurrent * SMS_DIAG_PER_PAGE);
@@ -1315,6 +1319,18 @@ function ControlsView({ data, canManage, onRefresh, onRunHealth, onOpenTenant }:
       <Table
         title="Diagnostica SMS tenant"
         headers={["Tenant", "Esito", "Messaggio", "Inviati", "Falliti", "Ultimo invio"]}
+        action={
+          <label className="relative">
+            <Search className="absolute left-3 top-2.5 text-slate-400" size={15} aria-hidden />
+            <input
+              className="h-9 w-56 rounded-md border border-slate-200 pl-9 pr-3 text-sm outline-none focus:border-[#365a96]"
+              placeholder="Cerca tenant…"
+              value={diagQuery}
+              onChange={(event) => { setDiagQuery(event.target.value); setDiagPage(1); }}
+            />
+          </label>
+        }
+        empty={diagNeedle ? "Nessun tenant corrisponde alla ricerca." : "Nessun dato."}
         onRowClick={(index) => { const row = diagVisible[index]; if (row) onOpenTenant(String(row.tenant_slug)); }}
         rows={diagVisible.map((row) => [
           <span key={row.tenant_slug}><strong>{row.tenant_name}</strong><span className="ml-2 text-slate-500">{row.tenant_slug}</span></span>,

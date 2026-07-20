@@ -17359,3 +17359,13 @@ riscritta (card con pendente ZZ, completata ASSENTE, voce nav assente) —
 TRAPPOLA: status CHECK ammette 'pending_verification', non 'pending'.
 Verifica: 20/20 suite verdi; probe coda ("1 registrazione da completare");
 tsc pulito.
+
+## 2026-07-20 — DIAGNOSTICA SMS TENANT: RICERCA CLIENT-SIDE (approvato)
+
+Campo "Cerca tenant..." nell'header della tabella: filtro live su nome e
+slug (i dati sono gia' tutti lato client, zero query), reset pagina alla
+digitazione, empty-state dedicato ("Nessun tenant corrisponde alla
+ricerca."); convive con problemi-prima e 25/pagina. Caso d'uso: "il cliente
+X dice che gli SMS non partono" senza sfogliare pagine.
+Verifica: probe live (filtra ed esclude, empty-state su query inesistente);
+faseC 7/7; tsc pulito.
