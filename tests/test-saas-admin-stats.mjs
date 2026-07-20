@@ -71,7 +71,7 @@ try {
 
   // U6: sottotab Piani -> piano piu' venduto visibile
   await page.locator("button", { hasText: "Piani" }).last().click();
-  await page.locator("text=Piano piu' venduto").waitFor({ timeout: 20000 });
+  await page.locator("text=Piano più venduto").waitFor({ timeout: 20000 });
   const topPlan = await page.locator(`text=ZZ Stat ${RUN}`).count();
   check("U6 UI Statistiche/Piani: top venduto renderizzato", topPlan >= 1, `top=${topPlan}`);
 

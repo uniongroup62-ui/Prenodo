@@ -82,7 +82,7 @@ export function StatsView({ data, onRefresh, onOpenTenant }: { data: StatsPayloa
         <div className="grid gap-4">
           <div className="grid gap-3 md:grid-cols-4">
             <Metric label="Utenti marketplace" value={String(data.growth.marketplace.total)} detail="account clienti registrati" />
-            <Metric label="Registrazioni completate" value={percent(data.growth.marketplace.verified, data.growth.marketplace.total)} detail="chi ha confermato l'email; il resto si e' fermato al codice" />
+            <Metric label="Registrazioni completate" value={percent(data.growth.marketplace.verified, data.growth.marketplace.total)} detail="chi ha confermato l'email; il resto si è fermato al codice" />
             <Metric label="Attivi 30 giorni" value={String(data.growth.marketplace.active_30d)} detail="accesso nell'ultimo mese" />
             <Metric label="Registrazioni self-service" value={String(data.growth.signup_funnel.requests)} detail={`${percent(data.growth.signup_funnel.active, data.growth.signup_funnel.requests)} diventate tenant`} />
           </div>
@@ -118,9 +118,9 @@ export function StatsView({ data, onRefresh, onOpenTenant }: { data: StatsPayloa
             <Metric label="Ricavo SMS (12 mesi)" value={formatEuro(data.revenue.sms_by_month.reduce((sum, row) => sum + row.revenue, 0))} detail="ordini pagati" />
           </div>
           <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
-            <SectionHead title="Andamento MRR" subtitle="Snapshot giornalieri (si costruisce dal monitoraggio: piu' giorni = piu' storia)." />
+            <SectionHead title="Andamento MRR" subtitle="Snapshot giornalieri (si costruisce dal monitoraggio: più giorni = più storia)." />
             <div className="p-4">
-              <TrendLineChart formatValue={(v) => formatEuro(v)} points={data.revenue.mrr_trend.map((row) => ({ label: row.day, value: row.mrr }))} />
+              <TrendLineChart formatValue={(v) => formatEuro(v)} points={data.revenue.mrr_trend.map((row) => ({ label: row.day, value: row.mrr }))} zeroText="Ancora nessun ricavo registrato: i piani assegnati ai tenant compariranno qui." />
             </div>
           </section>
           <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
@@ -135,21 +135,22 @@ export function StatsView({ data, onRefresh, onOpenTenant }: { data: StatsPayloa
       {section === "plans" ? (
         <div className="grid gap-4">
           <div className="grid gap-3 md:grid-cols-3">
-            <Metric label="Piano piu' venduto" value={data.plans.top_by_tenants} detail="per tenant attivi assegnati" />
-            <Metric label="Piano che rende di piu'" value={data.plans.top_by_mrr} detail="per MRR generato" />
+            <Metric label="Piano più venduto" value={data.plans.top_by_tenants === "-" ? "Nessuno assegnato" : data.plans.top_by_tenants} detail="per tenant attivi assegnati" />
+            <Metric label="Piano che rende di più" value={data.plans.top_by_mrr === "-" ? "Nessuno assegnato" : data.plans.top_by_mrr} detail="per MRR generato" />
             <Metric label="Senza piano" value={String(data.plans.unassigned_active)} detail="tenant attivi da assegnare" />
           </div>
           <Table
             title="Distribuzione per piano"
             headers={["Piano", "Tenant attivi", "MRR"]}
-            rows={data.plans.by_plan.length === 0 ? [["Nessun piano definito", "-", "-"]] : data.plans.by_plan.map((plan) => [
+            empty="Nessun piano definito: creali in Fatturazione."
+            rows={data.plans.by_plan.map((plan) => [
               <strong key={plan.id}>{plan.name}</strong>,
               String(plan.tenants),
               formatEuro(plan.mrr),
             ])}
           />
           <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
-            <SectionHead title="Assegnazioni piani per mese" subtitle="Quante volte un piano e' stato collegato a un tenant (ultimi 12 mesi)." />
+            <SectionHead title="Assegnazioni piani per mese" subtitle="Quante volte un piano è stato collegato a un tenant (ultimi 12 mesi)." />
             <div className="p-4">
               <MonthBarChart data={data.plans.assignments_by_month.map((row) => ({ label: row.month, value: row.value }))} />
             </div>
@@ -178,13 +179,15 @@ export function StatsView({ data, onRefresh, onOpenTenant }: { data: StatsPayloa
             </div>
           </section>
           <Table
-            title="Tenant piu' attivi (ultimi 30 giorni)"
+            title="Tenant più attivi (ultimi 30 giorni)"
             headers={["Tenant", "Appuntamenti", "Vendite", "Azioni"]}
+            empty="Nessuna attività negli ultimi 30 giorni."
+            onRowClick={(index) => { const tenant = data.usage.top_tenants[index]; if (tenant) onOpenTenant(tenant.slug); }}
             rows={data.usage.top_tenants.map((tenant) => [
               <span key={tenant.slug}><strong>{tenant.name}</strong><span className="ml-2 text-slate-500">{tenant.slug}</span></span>,
               String(tenant.appointments),
               String(tenant.sales),
-              <button className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold hover:bg-slate-50" key={`open-${tenant.slug}`} type="button" onClick={() => onOpenTenant(tenant.slug)}>
+              <button className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold hover:bg-slate-50" key={`open-${tenant.slug}`} type="button" onClick={(event) => { event.stopPropagation(); onOpenTenant(tenant.slug); }}>
                 Apri
               </button>,
             ])}

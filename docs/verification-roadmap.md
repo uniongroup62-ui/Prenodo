@@ -17131,3 +17131,24 @@ Suite nuova test-admin-create-popup (4: dialog col form, Esc, click sul
 fondo, submit crea davvero il tenant — fixture ZZ con cleanup completo delle
 tabelle di provisioning). Regressioni faseAB 11 (palette = altro dialog),
 ux 7, dash 8, fase3 9, hardening 19 — verdi; tsc pulito.
+
+## 2026-07-20 — STATISTICHE: GRAFICI ONESTI E SERIE CONTINUE (analisi approvata)
+
+I numeri erano giusti (batteria stats); 5 difetti di presentazione chiusi:
+1) TrendLineChart a valori TUTTI zero: MAI piu' scala inventata (niceMax(0)=1
+   disegnava griglie a 1,00/0,50 euro per soldi inesistenti) -> messaggio
+   onesto via prop zeroText ("Ancora nessun ricavo registrato: i piani
+   assegnati ai tenant compariranno qui."); assi X con date dd/mm (dayShort).
+2) fillMonths in saas-stats: TUTTE le 6 serie mensili (tenant, marketplace,
+   sms, assegnazioni, appuntamenti, vendite) sono CONTINUE dal primo mese con
+   dati al mese corrente (frame Roma via businessTodayIso) — mai barre
+   adiacenti che nascondono buchi. Verificato via API: serie contigua
+   2026-05 -> 2026-07.
+3) Tab Piani senza trattini: KPI "Nessuno assegnato", Distribuzione con
+   empty "Nessun piano definito: creali in Fatturazione.".
+4) "Tenant piu' attivi" con RIGHE cliccabili (Table.onRowClick nuovo in
+   admin-shared, Apri con stopPropagation) — coerenza con la lista Tenant.
+5) Apostrofi: piu' -> più, e' -> è in tutte le stringhe UI della vista.
+TRAPPOLA batteria: U6 cercava "Piano piu' venduto" col vecchio apostrofo.
+Verifica: probe live (MRR onesto, scala inventata assente, KPI e empty nuovi)
++ stats 8/8, ux 7/7, dash 8/8; tsc pulito.

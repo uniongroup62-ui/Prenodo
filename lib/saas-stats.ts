@@ -2,6 +2,29 @@ import "server-only";
 
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { dbExecute, dbQuery, tableExists } from "@/lib/tenant-db";
+import { businessTodayIso } from "@/lib/business-datetime";
+
+// Serie mensili CONTINUE: i mesi senza dati diventano zeri ESPLICITI (barre
+// adiacenti con un buco in mezzo si leggono come mesi consecutivi), estese
+// fino al mese corrente nel frame Roma.
+function fillMonths<T extends { month: string }>(rows: T[], zero: Omit<T, "month">): T[] {
+  if (!rows.length) return rows;
+  const sorted = [...rows].sort((a, b) => a.month.localeCompare(b.month));
+  const current = businessTodayIso().slice(0, 7);
+  const last = sorted[sorted.length - 1].month;
+  const end = current > last ? current : last;
+  const byMonth = new Map(sorted.map((row) => [row.month, row]));
+  const out: T[] = [];
+  let [year, month] = sorted[0].month.split("-").map(Number);
+  for (let i = 0; i < 24 && year > 0 && month > 0; i++) {
+    const key = `${year}-${String(month).padStart(2, "0")}`;
+    out.push(byMonth.get(key) ?? ({ ...zero, month: key } as T));
+    if (key >= end) break;
+    month += 1;
+    if (month > 12) { month = 1; year += 1; }
+  }
+  return out;
+}
 
 // STATISTICHE del pannello SaaS Admin (vista "Statistiche", 2026-07-19):
 // aggregati di crescita, entrate, piani e utilizzo + SNAPSHOT giornaliero
@@ -193,7 +216,7 @@ export async function saasStatistics(): Promise<SaasStatsPayload> {
 
   return {
     growth: {
-      tenants_by_month: tenantMonths.map((row) => ({ month: String(row.month), admin: Number(row.admin ?? 0), self_signup: Number(row.self_signup ?? 0) })),
+      tenants_by_month: fillMonths(tenantMonths.map((row) => ({ month: String(row.month), admin: Number(row.admin ?? 0), self_signup: Number(row.self_signup ?? 0) })), { admin: 0, self_signup: 0 }),
       signup_funnel: {
         requests: Number(funnel[0]?.requests ?? 0),
         verified: Number(funnel[0]?.verified ?? 0),
@@ -203,14 +226,14 @@ export async function saasStatistics(): Promise<SaasStatsPayload> {
         total: Number(marketplaceTotals[0]?.total ?? 0),
         verified: Number(marketplaceTotals[0]?.verified ?? 0),
         active_30d: Number(marketplaceTotals[0]?.active_30d ?? 0),
-        new_by_month: marketplaceMonths.map((row) => ({ month: String(row.month), value: Number(row.value ?? 0) })),
+        new_by_month: fillMonths(marketplaceMonths.map((row) => ({ month: String(row.month), value: Number(row.value ?? 0) })), { value: 0 }),
       },
     },
     revenue: {
       mrr_total: mrrTotal,
       arpu: tenantsActive > 0 ? Math.round((mrrTotal / tenantsActive) * 100) / 100 : 0,
       tenants_active: tenantsActive,
-      sms_by_month: smsMonths.map((row) => ({ month: String(row.month), revenue: Math.round(Number(row.revenue ?? 0) * 100) / 100, orders: Number(row.orders ?? 0) })),
+      sms_by_month: fillMonths(smsMonths.map((row) => ({ month: String(row.month), revenue: Math.round(Number(row.revenue ?? 0) * 100) / 100, orders: Number(row.orders ?? 0) })), { revenue: 0, orders: 0 }),
       mrr_trend: mrrTrend.map((row) => ({ day: String(row.day), mrr: Number(row.mrr ?? 0) })).reverse(),
     },
     plans: {
@@ -218,7 +241,7 @@ export async function saasStatistics(): Promise<SaasStatsPayload> {
       unassigned_active: Number(unassigned[0]?.count ?? 0),
       top_by_tenants: sortedByTenants[0]?.tenants ? sortedByTenants[0].name : "-",
       top_by_mrr: sortedByMrr[0]?.mrr ? sortedByMrr[0].name : "-",
-      assignments_by_month: assignments.map((row) => ({ month: String(row.month), value: Number(row.value ?? 0) })),
+      assignments_by_month: fillMonths(assignments.map((row) => ({ month: String(row.month), value: Number(row.value ?? 0) })), { value: 0 }),
     },
     usage: {
       totals: {
@@ -227,8 +250,8 @@ export async function saasStatistics(): Promise<SaasStatsPayload> {
         appointments: Number(totals[0]?.appointments ?? 0),
         sales: Number(totals[0]?.sales ?? 0),
       },
-      appointments_by_month: apptMonths.map((row) => ({ month: String(row.month), value: Number(row.value ?? 0) })),
-      sales_by_month: salesMonths.map((row) => ({ month: String(row.month), value: Number(row.value ?? 0) })),
+      appointments_by_month: fillMonths(apptMonths.map((row) => ({ month: String(row.month), value: Number(row.value ?? 0) })), { value: 0 }),
+      sales_by_month: fillMonths(salesMonths.map((row) => ({ month: String(row.month), value: Number(row.value ?? 0) })), { value: 0 }),
       top_tenants: topTenants.map((row) => ({ slug: String(row.slug), name: String(row.name), appointments: Number(row.appointments ?? 0), sales: Number(row.sales ?? 0) })),
     },
   };

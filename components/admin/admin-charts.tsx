@@ -137,10 +137,20 @@ export function DualMonthBarChart({ data, nameA, nameB, formatValue = (v) => Str
   );
 }
 
+function dayShort(label: string): string {
+  const m = label.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}` : label;
+}
+
 // Linea (trend giornaliero): 2px, marker sugli estremi, tooltip per punto.
-export function TrendLineChart({ points, formatValue = (v) => String(v), emptyText = "Lo storico si costruisce dagli snapshot giornalieri del cron." }: { points: Array<{ label: string; value: number }>; formatValue?: (v: number) => string; emptyText?: string }) {
+// A valori TUTTI zero niente scala inventata (niceMax(0)=1 disegnerebbe
+// griglie per soldi che non esistono): messaggio onesto e basta.
+export function TrendLineChart({ points, formatValue = (v) => String(v), emptyText = "Lo storico si costruisce dagli snapshot giornalieri del cron.", zeroText = "Tutti i valori del periodo sono a zero." }: { points: Array<{ label: string; value: number }>; formatValue?: (v: number) => string; emptyText?: string; zeroText?: string }) {
   if (points.length < 2) {
     return <p className="p-3 text-sm text-slate-500">{emptyText}</p>;
+  }
+  if (points.every((p) => p.value === 0)) {
+    return <p className="p-3 text-sm text-slate-500">{zeroText}</p>;
   }
   const max = niceMax(Math.max(...points.map((p) => p.value)));
   const innerW = W - PAD.left - PAD.right;
@@ -159,8 +169,8 @@ export function TrendLineChart({ points, formatValue = (v) => String(v), emptyTe
         </circle>
       ))}
       <text fill="#334155" fontSize={10} fontWeight={600} textAnchor="end" x={W - PAD.right} y={yAt(last.value) - 8}>{formatValue(last.value)}</text>
-      <text fill="#64748b" fontSize={10} textAnchor="start" x={PAD.left} y={H - 8}>{points[0].label}</text>
-      <text fill="#64748b" fontSize={10} textAnchor="end" x={W - PAD.right} y={H - 8}>{last.label}</text>
+      <text fill="#64748b" fontSize={10} textAnchor="start" x={PAD.left} y={H - 8}>{dayShort(points[0].label)}</text>
+      <text fill="#64748b" fontSize={10} textAnchor="end" x={W - PAD.right} y={H - 8}>{dayShort(last.label)}</text>
     </svg>
   );
 }

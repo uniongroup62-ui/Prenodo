@@ -267,7 +267,7 @@ export function formatDateTime(value: string | null | undefined): string {
   return `${d}/${m}/${y}${time ? ` ${time}` : ""}`;
 }
 
-export function Table({ title, headers, rows, action, empty = "Nessun dato." }: { title: string; headers: string[]; rows: Array<Array<React.ReactNode>>; action?: React.ReactNode; empty?: string }) {
+export function Table({ title, headers, rows, action, empty = "Nessun dato.", onRowClick }: { title: string; headers: string[]; rows: Array<Array<React.ReactNode>>; action?: React.ReactNode; empty?: string; onRowClick?: (rowIndex: number) => void }) {
   return (
     <section className="rounded-md border border-slate-200 bg-white shadow-sm">
       {action ? (
@@ -282,7 +282,11 @@ export function Table({ title, headers, rows, action, empty = "Nessun dato." }: 
         <table className="w-full min-w-[520px] text-left text-sm">
           <thead className="bg-slate-50 text-xs uppercase tracking-[0.12em] text-slate-500"><tr>{headers.map((header) => <th className="px-4 py-3" key={header}>{header}</th>)}</tr></thead>
           <tbody className="divide-y divide-slate-100">
-            {rows.map((row, index) => <tr key={index}>{row.map((cell, cellIndex) => <td className="px-4 py-3" key={cellIndex}>{cell}</td>)}</tr>)}
+            {rows.map((row, index) => (
+              <tr className={onRowClick ? "cursor-pointer hover:bg-slate-50" : undefined} key={index} onClick={onRowClick ? () => onRowClick(index) : undefined}>
+                {row.map((cell, cellIndex) => <td className="px-4 py-3" key={cellIndex}>{cell}</td>)}
+              </tr>
+            ))}
             {!rows.length ? <tr><td className="px-4 py-8 text-center text-slate-500" colSpan={headers.length}>{empty}</td></tr> : null}
           </tbody>
         </table>
