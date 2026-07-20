@@ -16893,3 +16893,21 @@ Guida scalabilita' aggiornata: scaletta backup Free->Pro($25 al lancio)->PITR
 (solo a volume), istruzioni CA Supabase, regole migrazioni+batterie.
 Regressioni: booking-pass2 9, appuntamenti-pass2 7, pos-checkout 8,
 calendario-pass2 25, ux 7 + 8 suite saas-admin — tutte verdi; tsc pulito.
+
+## 2026-07-20 — TAB DIAGNOSTICA RIORGANIZZATA (rilievo utente)
+
+Stessa regola della timeline/Panoramica applicata allo storico: (1) riga di
+sintesi in testa — "Ultima diagnostica: 20/07/2026 08:23 · Automatica · OK"
+(data formattata senza microsecondi, origine tradotta cron/manual/manual_all/
+repair -> Automatica/Manuale/Riparazione, badge esito) coi due bottoni a
+destra e una didascalia che spiega cosa fanno; (2) lista integrale dei
+controlli invariata; (3) "Storico diagnostica" (30 righe cron/OK/0) SOSTITUITO
+da "Problemi recenti": SOLO diagnostiche warning/error senza colonna Errori
+separata (conteggio fuso nell'esito); a tutto ok una riga verde "Nessun
+problema negli ultimi N controlli" che resta la prova che il cron gira.
+
+Suite nuova tests/test-admin-diagnostica (4: sintesi formattata senza
+microsecondi, didascalia, ramo sano = empty-state senza muro di OK, ramo ZZ
+con errori = tabella Problemi recenti con origine tradotta). Regressioni ux 7,
+fase3 9, faseD 4, giro5 17, faseAB 11 — verdi; fix porting giro5 (ROOT era
+diventato una URL dentro path.join/template: ora path filesystem).

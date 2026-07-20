@@ -8,7 +8,7 @@ const require = createRequire(new URL("../", import.meta.url));
 const pg = require("pg");
 const bcrypt = require("bcryptjs");
 const { S3Client, DeleteObjectCommand } = require("@aws-sdk/client-s3");
-const ROOT = new URL("../", import.meta.url);
+const ROOT = path.dirname(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")));
 const ENVSRC = readFileSync(`${ROOT}/.env.local`, "utf8");
 const env = (k) => (ENVSRC.match(new RegExp(`^\\s*${k}\\s*=\\s*(.*)\\s*$`, "m")) || [])[1]?.trim().replace(/^["']|["']$/g, "") ?? "";
 const DBURL = env("PRENODO_DATABASE_URL");

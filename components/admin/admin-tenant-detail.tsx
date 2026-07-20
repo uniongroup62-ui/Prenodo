@@ -39,6 +39,7 @@ import {
   formatEuro,
   formatKb,
   healthLabel,
+  healthTone,
   onboardingLabel,
   statusLabel,
   statusTone,
@@ -292,6 +293,18 @@ function TenantOnboarding({ tenant, canManage, onAction }: { tenant: Tenant; can
   );
 }
 
+const healthSourceLabel: Record<string, string> = { cron: "Automatica", manual: "Manuale", manual_all: "Manuale", repair: "Riparazione" };
+
+// "2026-07-20 08:23:01.400698" -> "20/07/2026 08:23" (le date arrivano come
+// stringhe wall-time: niente Date/parse, solo riordino testuale).
+function diagDate(value: string | null | undefined): string {
+  const raw = String(value ?? "").trim();
+  const [y, m, d] = raw.slice(0, 10).split("-");
+  if (!y || !m || !d) return raw || "-";
+  const time = raw.slice(11, 16);
+  return `${d}/${m}/${y}${time ? ` ${time}` : ""}`;
+}
+
 function TenantHealth({ detail, canManage, onAction }: { detail: TenantDetailPayload; canManage: boolean; onAction: (action: string, payload?: Record<string, string>) => void }) {
   const tenant = detail.tenant;
   let fullChecks = tenant.health?.checks ?? [];
@@ -302,17 +315,46 @@ function TenantHealth({ detail, canManage, onAction }: { detail: TenantDetailPay
       fullChecks = [];
     }
   }
+  const last = detail.healthChecks[0] ?? null;
+  // Lo storico mostra SOLO le diagnostiche con problemi: le righe OK sono il
+  // battito del cron, non informazione (stessa regola della timeline).
+  const problems = detail.healthChecks.filter((row) => row.level !== "ok");
   return (
     <div className="grid gap-4">
-      <div className="flex flex-wrap gap-2">
-        <Button disabled={!canManage} icon={Activity} onClick={() => onAction("record_health", { slug: tenant.slug })}>Verifica diagnostica</Button>
-        <Button variant="outline" disabled={!canManage} icon={Wrench} onClick={() => onAction("repair_schema", { slug: tenant.slug })}>Ripara schema</Button>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
+          {last ? (
+            <>
+              <span>Ultima diagnostica: <span className="font-semibold text-slate-900">{diagDate(last.created_at)}</span> · {healthSourceLabel[last.source ?? ""] ?? last.source ?? "-"}</span>
+              <Badge tone={healthTone(last.level)}>{healthLabel[last.level] ?? last.level}</Badge>
+            </>
+          ) : (
+            <span>Nessuna diagnostica registrata: eseguine una adesso.</span>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button disabled={!canManage} icon={Activity} onClick={() => onAction("record_health", { slug: tenant.slug })}>Verifica diagnostica</Button>
+          <Button variant="outline" disabled={!canManage} icon={Wrench} onClick={() => onAction("repair_schema", { slug: tenant.slug })}>Ripara schema</Button>
+        </div>
       </div>
+      <p className="text-xs text-slate-500">Verifica diagnostica esegue subito tutti i controlli e registra l&apos;esito; Ripara schema ricrea tabelle e colonne mancanti senza toccare i dati.</p>
       {/* Lista INTEGRALE dei controlli (dall'ultima diagnostica registrata):
           qui e' la tab tecnica, in Panoramica restano solo i problemi. */}
       <HealthChecks checks={fullChecks} />
       {tenant.health?.missing_schema?.length ? <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Elementi schema mancanti: {tenant.health.missing_schema.slice(0, 20).join(", ")}</div> : null}
-      <Table title="Storico diagnostica" headers={["Data", "Origine", "Esito", "Errori"]} rows={detail.healthChecks.map((row) => [row.created_at || "-", row.source || "-", healthLabel[row.level] || row.level, String(row.errors_count ?? 0)])} />
+      {problems.length ? (
+        <Table
+          title="Problemi recenti"
+          headers={["Data", "Origine", "Esito"]}
+          rows={problems.map((row) => [
+            diagDate(row.created_at),
+            healthSourceLabel[row.source ?? ""] ?? row.source ?? "-",
+            `${healthLabel[row.level] ?? row.level}${Number(row.errors_count ?? 0) > 0 ? ` · ${row.errors_count} errori` : ""}`,
+          ])}
+        />
+      ) : (
+        <p className="text-sm font-semibold text-emerald-700">Nessun problema negli ultimi {detail.healthChecks.length} controlli.</p>
+      )}
     </div>
   );
 }
