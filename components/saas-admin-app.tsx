@@ -676,7 +676,7 @@ async function loadStats() {
             {activeView === "operations" ? (
               <div className="grid gap-4">
                 <SectionTabs active={opsTab} sections={operationsSections} onSelect={(key) => selectOpsTab(key as OperationsSection)} action={opsTab === "maintenance" ? null : <Button variant="outline" icon={RotateCcw} onClick={() => (opsTab === "controls" ? loadControls() : loadMovements())}>Aggiorna</Button>} />
-                {opsTab === "controls" ? <ControlsView canManage={canManageTenants} data={controls} onRefresh={loadControls} onRunHealth={async () => { await operationAction({ action: "cron_run", job: "admin-health" }); await loadControls(); }} /> : null}
+                {opsTab === "controls" ? <ControlsView canManage={canManageTenants} data={controls} onOpenTenant={(slug) => loadTenant(slug)} onRefresh={loadControls} onRunHealth={async () => { await operationAction({ action: "cron_run", job: "admin-health" }); await loadControls(); }} /> : null}
                 {opsTab === "movements" ? <MovementsView data={movements} onRefresh={loadMovements} /> : null}
                 {opsTab === "maintenance" ? <MaintenanceView tenants={overview.tenants} results={results} restoreCandidates={restoreCandidates} canManage={canManageTenants} onAction={tenantAction} onOperationAction={operationAction} /> : null}
               </div>
@@ -1228,7 +1228,35 @@ function BillingView({ data, canManage, onAction, onRefresh }: { data: BillingPa
 // TIMELINE unificata (Fase D): la storia del tenant in un solo feed —
 // audit + diagnostiche + backup + supporto + ordini SMS in ordine cronologico.
 
-function ControlsView({ data, canManage, onRefresh, onRunHealth }: { data: ControlsPayload | null; canManage: boolean; onRefresh: () => void; onRunHealth: () => void }) {
+// Sintesi cron LEGGIBILE: il JSON della risposta resta nel tooltip, in
+// tabella vanno i numeri che contano (tenant controllati, errori, riparati).
+function cronSummaryIt(message: string | null | undefined): string {
+  const raw = String(message ?? "").trim();
+  if (!raw.startsWith("{")) return raw || "-";
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const parts: string[] = [];
+    if (typeof parsed.checked === "number") parts.push(`${parsed.checked} tenant controllati`);
+    if (typeof parsed.errors === "number") parts.push(`${parsed.errors} errori`);
+    if (typeof parsed.warnings === "number") parts.push(`${parsed.warnings} avvisi`);
+    if (Array.isArray(parsed.auto_repaired) && parsed.auto_repaired.length) parts.push(`${parsed.auto_repaired.length} riparati da soli`);
+    if (Array.isArray(parsed.alerts) && parsed.alerts.length) parts.push(`${parsed.alerts.length} alert`);
+    if (typeof parsed.sent === "number") parts.push(`${parsed.sent} inviati`);
+    if (typeof parsed.processed === "number") parts.push(`${parsed.processed} elaborati`);
+    if (parts.length) return parts.join(" · ");
+    return parsed.ok === true ? "Esecuzione riuscita" : parsed.ok === false ? `Errore: ${String(parsed.error ?? "sconosciuto")}` : raw;
+  } catch {
+    return raw;
+  }
+}
+
+// Stato problema = COLORE (in produzione sono allarmi, non dati neutri).
+function problemValue(ok: boolean, okText: string, problemText: string, tone: "amber" | "red" = "amber") {
+  if (ok) return okText;
+  return <span className={tone === "red" ? "text-red-700" : "text-amber-700"}>{problemText}</span>;
+}
+
+function ControlsView({ data, canManage, onRefresh, onRunHealth, onOpenTenant }: { data: ControlsPayload | null; canManage: boolean; onRefresh: () => void; onRunHealth: () => void; onOpenTenant: (slug: string) => void }) {
   if (!data) {
     return <EmptyOperation icon={Activity} title="Controlli operativi" detail="Carica diagnostica provider SMS e tenant." onRefresh={onRefresh} />;
   }
@@ -1236,16 +1264,16 @@ function ControlsView({ data, canManage, onRefresh, onRunHealth }: { data: Contr
   return (
     <div className="grid gap-5">
       <div className="grid gap-3 md:grid-cols-4">
-        <Metric label="Provider SMS" value={provider.configured ? "Configurato" : "Non configurato"} detail={provider.environment || "-"} />
-        <Metric label="Token" value={provider.token_present ? "Presente" : "Mancante"} detail={provider.sender || "sender non impostato"} />
-        <Metric label="Callback" value={provider.callback_configured ? "Attiva" : "Mancante"} detail={provider.callback_url_configured ? "URL dedicato" : "URL automatico"} />
-        <Metric label="Endpoint" value={provider.endpoint.ok ? "Raggiungibile" : "Da verificare"} detail={provider.endpoint.message} />
+        <Metric label="Provider SMS" value={problemValue(provider.configured, "Configurato", "Non configurato")} detail={provider.environment || "-"} />
+        <Metric label="Token" value={problemValue(provider.token_present, "Presente", "Mancante")} detail={provider.sender || "sender non impostato"} />
+        <Metric label="Callback" value={problemValue(provider.callback_configured, "Attiva", "Mancante")} detail={provider.callback_url_configured ? "URL dedicato" : "URL automatico"} />
+        <Metric label="Endpoint" value={problemValue(provider.endpoint.ok, "Raggiungibile", "Da verificare")} detail={provider.endpoint.message} />
       </div>
       <section className="rounded-md border border-slate-200 bg-white shadow-sm">
         <SectionHead title="OpenAPI SMS" subtitle={provider.base_url || "Endpoint non configurato"} />
         <div className="grid gap-2 p-4 text-sm">
           <Detail label="Timeout" value={`${provider.timeout || 0}s`} />
-          <Detail label="Stato" value={healthLabel[provider.level]} />
+          <Detail label="Stato" value={provider.level === "error" ? <span className="font-semibold text-red-700">{healthLabel[provider.level]}</span> : provider.level === "warning" ? <span className="font-semibold text-amber-700">{healthLabel[provider.level]}</span> : healthLabel[provider.level]} />
           <Detail label="Avvisi" value={[...provider.errors, ...provider.warnings].join(" | ") || "-"} />
         </div>
       </section>
@@ -1261,12 +1289,13 @@ function ControlsView({ data, canManage, onRefresh, onRunHealth }: { data: Contr
             <Badge tone={run.status === "ok" ? "ok" : "danger"} key={`s-${run.job}`}>{run.status === "ok" ? "OK" : "Errore"}</Badge>,
             formatDateTime(run.started_at),
             `${Math.round(Number(run.duration_ms ?? 0))} ms`,
-            <span className="block max-w-xs truncate" key={`m-${run.job}`} title={run.message ?? ""}>{run.message || "-"}</span>,
+            <span className="block max-w-xs truncate" key={`m-${run.job}`} title={run.message ?? ""}>{cronSummaryIt(run.message)}</span>,
           ])}
       />
       <Table
         title="Diagnostica SMS tenant"
         headers={["Tenant", "Esito", "Messaggio", "Inviati", "Falliti", "Ultimo invio"]}
+        onRowClick={(index) => { const row = data.tenants[index]; if (row) onOpenTenant(String(row.tenant_slug)); }}
         rows={data.tenants.map((row) => [
           <span key={row.tenant_slug}><strong>{row.tenant_name}</strong><span className="ml-2 text-slate-500">{row.tenant_slug}</span></span>,
           <Badge tone={healthTone(row.level)} key={`level-${row.tenant_slug}`}>{healthLabel[row.level]}</Badge>,
@@ -1426,14 +1455,17 @@ function MovementsView({ data, onRefresh }: { data: MovementsPayload | null; onR
   if (!data) {
     return <EmptyOperation icon={Send} title="Movimenti invii" detail="Carica ultimo storico SMS ed email da tutti i tenant." onRefresh={onRefresh} />;
   }
+  // Stati e tipi in ITALIANO (mai enum grezzi); i valori ignoti passano com'e'.
+  const statusIt: Record<string, string> = { sent: "Inviato", delivered: "Consegnato", failed: "Fallito", error: "Errore", pending: "In coda", queued: "In coda", scheduled: "Pianificato", skipped: "Saltato" };
+  const kindIt: Record<string, string> = { reminder: "Promemoria", approved: "Conferma", modified: "Modifica", rejected: "Rifiuto", verification: "Verifica email", booking: "Booking", marketing: "Marketing", test: "Test" };
   const movementRows = (rows: MovementRow[]) => rows.map((row) => [
     <span key={`${row.channel}-${row.tenant_slug}-${row.event_at}`}><strong>{row.tenant_name}</strong><span className="ml-2 text-slate-500">{row.tenant_slug}</span></span>,
-    row.kind,
-    <Badge tone={movementTone(row.status)} key={`status-${row.channel}-${row.tenant_slug}-${row.event_at}`}>{row.status || "-"}</Badge>,
+    kindIt[String(row.kind ?? "").toLowerCase()] ?? row.kind,
+    <Badge tone={movementTone(row.status)} key={`status-${row.channel}-${row.tenant_slug}-${row.event_at}`}>{statusIt[String(row.status ?? "").toLowerCase()] ?? row.status ?? "-"}</Badge>,
     row.client_name || row.recipient || "-",
     row.reference || row.subject || "-",
     row.channel === "SMS" ? String(row.credits ?? "-") : "-",
-    row.event_at || "-",
+    formatDateTime(row.event_at),
     row.last_error || row.provider_state || "-",
   ]);
   return (
@@ -1449,9 +1481,10 @@ function MaintenanceView({ tenants, results, restoreCandidates, canManage, onAct
   const [restoreConfirm, setRestoreConfirm] = useState<Record<number, string>>({});
   return (
     <div className="grid gap-5">
-      <div className="grid gap-3 md:grid-cols-3">
-        <ActionPanel icon={Activity} title="Verifica diagnostica" detail="Controlla tutti i tenant e salva lo storico." disabled={!canManage} onClick={() => onAction("health_all")} />
-        <ActionPanel icon={RotateCcw} title="Reset onboarding" detail="Riporta i tenant selezionati al primo step." disabled={!canManage || selected.length === 0} onClick={() => onAction("reset_selected_onboarding", { slugs: selected.join(",") })} />
+      {/* "Verifica diagnostica" era la TERZA copia della stessa azione
+          (Controlli + dashboard): rimossa (sottrazione 20/07). */}
+      <div className="grid gap-3 md:grid-cols-2">
+        <ActionPanel buttonLabel={selected.length ? `Esegui (${selected.length})` : "Esegui"} icon={RotateCcw} title="Reset onboarding" detail="Riporta al primo passo del wizard i tenant SELEZIONATI nell'elenco qui sotto." disabled={!canManage || selected.length === 0} onClick={() => onAction("reset_selected_onboarding", { slugs: selected.join(",") })} />
       </div>
       {results.length ? <Table title="Risultati" headers={["Tenant", "Esito", "Messaggio"]} rows={results.map((row) => [row.slug, row.ok ? "OK" : "Errore", row.message])} /> : null}
 

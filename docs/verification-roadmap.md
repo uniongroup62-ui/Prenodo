@@ -17265,3 +17265,26 @@ Verifica: probe live 4 testi renderizzati; billing-rifiniture 6/6.
    tutta larghezza enormi coi dati sparsi; funnel e top-tenant restano full.
 Verifica: probe live (filtro 3 mesi aggiorna i sottotitoli, 12 li ripristina)
 + screenshot; stats 8/8, consolida 12/12, dash 8/8; tsc pulito.
+
+## 2026-07-20 — OPERAZIONI: 5 RIFINITURE + 1 SOTTRAZIONE (analisi approvata)
+
+1) SINTESI CRON UMANA (cronSummaryIt): il JSON grezzo in tabella diventa
+   "2 tenant controllati · 0 errori · 0 avvisi [· N riparati da soli]"; il
+   JSON resta nel tooltip. Shape sconosciute -> testo com'e'.
+2) STATI PROBLEMA COLORATI (problemValue): "Non configurato/Mancante/Da
+   verificare" in AMBRA nei KPI Controlli; "Stato: Errore" in ROSSO nella
+   card OpenAPI (Metric.value e Detail.value ora ReactNode).
+3) MOVIMENTI: date Evento con formatDateTime; stati tradotti (sent->Inviato,
+   failed->Fallito, pending/queued->In coda...) e tipi (reminder->Promemoria,
+   approved->Conferma...) con fallback sul valore grezzo se ignoto.
+4) "Diagnostica SMS tenant" con RIGHE CLICCABILI -> dettaglio tenant
+   (ControlsView riceve onOpenTenant dal shell).
+5) MANUTENZIONE: card "Reset onboarding" con istruzione esplicita
+   ("i tenant SELEZIONATI nell'elenco qui sotto") e CONTATORE sul bottone
+   ("Esegui (N)" — ActionPanel.buttonLabel nuovo).
+6) SOTTRAZIONE: card "Verifica diagnostica" RIMOSSA da Manutenzione (terza
+   copia: vive in Controlli e in dashboard; l'azione API health_all resta).
+
+Verifica: probe live (sintesi umana, JSON assente, ambra, riga->tenant, card
+rimossa, hint, contatore Esegui(1)); faseC 7, fase4 11, consolida 12, dash 8,
+restore 8, ux 7; tsc pulito.

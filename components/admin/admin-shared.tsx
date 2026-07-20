@@ -295,18 +295,18 @@ export function Table({ title, headers, rows, action, empty = "Nessun dato.", on
   );
 }
 
-export function ActionPanel({ icon: Icon, title, detail, disabled, onClick }: { icon: LucideIcon; title: string; detail: string; disabled?: boolean; onClick: () => void }) {
+export function ActionPanel({ icon: Icon, title, detail, disabled, onClick, buttonLabel = "Esegui" }: { icon: LucideIcon; title: string; detail: string; disabled?: boolean; onClick: () => void; buttonLabel?: string }) {
   return (
     <section className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
       <Icon className="text-[#365a96]" size={20} aria-hidden />
       <h2 className="mt-3 font-semibold">{title}</h2>
       <p className="mt-1 text-sm text-slate-500">{detail}</p>
-      <button className="mt-4 h-9 rounded-md border border-slate-200 px-3 text-sm font-semibold disabled:opacity-50" disabled={disabled} type="button" onClick={onClick}>Esegui</button>
+      <button className="mt-4 h-9 rounded-md border border-slate-200 px-3 text-sm font-semibold disabled:opacity-50" disabled={disabled} type="button" onClick={onClick}>{buttonLabel}</button>
     </section>
   );
 }
 
-export function Metric({ label, value, detail, onClick }: { label: string; value: string; detail: React.ReactNode; onClick?: () => void }) {
+export function Metric({ label, value, detail, onClick }: { label: string; value: React.ReactNode; detail: React.ReactNode; onClick?: () => void }) {
   return (
     <div
       className={`rounded-md border border-slate-200 bg-white p-4 shadow-sm ${onClick ? "cursor-pointer transition-colors hover:border-[#365a96]" : ""}`}
@@ -385,7 +385,7 @@ export function Badge({ tone, children }: { tone: "ok" | "warn" | "danger" | "in
   return <span className={`inline-flex rounded-md px-2 py-1 text-xs font-semibold ${classes[tone]}`}>{children}</span>;
 }
 
-export function Detail({ label, value }: { label: string; value: string }) {
+export function Detail({ label, value }: { label: string; value: React.ReactNode }) {
   return <div className="flex justify-between gap-4 border-b border-slate-100 py-2"><strong>{label}</strong><span className="text-right text-slate-600">{value}</span></div>;
 }
 
