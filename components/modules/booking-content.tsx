@@ -124,11 +124,13 @@ export function BookingSettingsContent({ slug: slugProp, initialQuery }: { slug?
       .catch(() => {});
   }, [slug]);
 
-  const publicHref =
-    bookingUrl ||
-    (typeof window !== "undefined"
-      ? `${window.location.origin}/${encodeURIComponent(slug)}/booking?public=1`
-      : `/${encodeURIComponent(slug)}/booking?public=1`);
+  // origin SOLO post-mount (idratazione: il branch typeof window nel render
+  // faceva divergere SSR (path relativo) e client (URL assoluto) → mismatch).
+  const [origin, setOrigin] = useState("");
+  useEffect(() => {
+    setOrigin(window.location.origin);
+  }, []);
+  const publicHref = bookingUrl || `${origin}/${encodeURIComponent(slug)}/booking?public=1`;
 
   function cancelHref(): string {
     return `/${encodeURIComponent(slug)}/booking`;

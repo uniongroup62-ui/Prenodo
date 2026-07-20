@@ -17637,3 +17637,21 @@ browser e un utente puo vedere markup nuovo + CSS vecchia); (2) da ora la
 link della CSS di pagina porta ?v= bumpato a ogni modifica
 (reports.css?v=20260720b). Regole provvisorie rimosse dalla CSS. Suite
 report-rivoluzione 19/19; screenshot verificato.
+
+## 2026-07-20 - Sweep anti-bug su TUTTE le pagine (idratazione)
+Segnalazione utente: hydration error su products?action=new (href SSR
+"//products..." = slug vuoto). CAUSA-CLASSE: componenti col fallback
+`slugProp || tenantSlug()` renderizzati da page.tsx SENZA la prop slug
+(tenantSlug() e window-only -> "" in SSR). Audit di TUTTE le invocazioni:
+6 branch senza slug corretti (ProductForm, LocationForm, CostForm,
+StockMoveForm, SupplierForm, ClientHistory); il fallback FAITHFUL_MODULES
+lo passava gia. CRAWLER Playwright su 73 pagine (sessione admin con
+catalogo permessi completo, console error + pageerror): 1 secondo bug REALE
+in booking - publicHref calcolato nel render con branch typeof window
+(SSR path relativo vs client URL assoluto) -> origin spostato in stato
+valorizzato in useEffect. suppliers/suppliers?new segnalavano
+ERR_INSUFFICIENT_RESOURCES: artefatto del crawler single-page su 73 route
+dev-compilate, PASS con pagina fresca. Ricontrollo mirato 8/8 PASS
+(NB: il ricontrollo con permessi RIDOTTI produce 403 di shell nel console
+log - usare sempre il catalogo completo nel crawler). Regressioni
+booking-pass2 9; tsc pulito.

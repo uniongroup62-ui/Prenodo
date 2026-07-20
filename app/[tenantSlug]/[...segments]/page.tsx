@@ -314,7 +314,7 @@ export default async function TenantPage({
   if (page === "products" && (query.action === "new" || query.action === "edit")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
-        <ProductFormContent />
+        <ProductFormContent slug={tenantSlug} />
       </ManageShell>
     );
   }
@@ -394,7 +394,7 @@ export default async function TenantPage({
   if (page === "locations" && (query.action === "new" || query.action === "edit")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
-        <LocationFormContent />
+        <LocationFormContent slug={tenantSlug} />
       </ManageShell>
     );
   }
@@ -417,7 +417,7 @@ export default async function TenantPage({
   if (page === "costs" && tab !== "categories" && (query.action === "new" || query.action === "edit")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
-        <CostFormContent />
+        <CostFormContent slug={tenantSlug} />
       </ManageShell>
     );
   }
@@ -526,7 +526,7 @@ export default async function TenantPage({
   if (page === "stock_moves" && query.action === "new") {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
-        <StockMoveFormContent />
+        <StockMoveFormContent slug={tenantSlug} />
       </ManageShell>
     );
   }
@@ -605,7 +605,7 @@ export default async function TenantPage({
   if (page === "suppliers" && (query.action === "new" || query.action === "edit")) {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
-        <SupplierFormContent />
+        <SupplierFormContent slug={tenantSlug} />
       </ManageShell>
     );
   }
@@ -953,7 +953,7 @@ export default async function TenantPage({
   if (page === "clients" && query.action === "history") {
     return (
       <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
-        <ClientHistoryContent />
+        <ClientHistoryContent slug={tenantSlug} />
       </ManageShell>
     );
   }
