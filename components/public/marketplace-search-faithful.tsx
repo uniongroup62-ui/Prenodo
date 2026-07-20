@@ -362,7 +362,7 @@ export function MarketplaceSearchFaithful({
         <section className="results-heading">
           <div>
             <div className="breadcrumb">
-              <a href="/attivita">Home</a> &gt; Ricerca
+              <a href="/attivita">Home</a>{" "}&gt; Ricerca
             </div>
             <h1>{resultsTitle}</h1>
             <p>{resultsSubtitle}</p>

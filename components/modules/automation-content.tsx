@@ -162,8 +162,8 @@ export function AutomationContent({
             <h1 className="bs-page-title">Automazione</h1>
             <InfoBox>
               <p>
-                Ogni automazione (promemoria, follow-up, auguri…) <strong>programma i propri invii in anticipo</strong> e
-                li spedisce all&apos;orario configurato, in ora italiana.
+                Ogni automazione (promemoria, follow-up, auguri…) <strong>programma i propri invii in anticipo</strong>
+                {" "}e li spedisce all&apos;orario configurato, in ora italiana.
               </p>
               <ul>
                 <li>

@@ -199,8 +199,8 @@ export function StaffContent({ slug: slugProp, initialQuery }: { slug?: string; 
                   storico commissioni la bloccano (il popup mostra il dettaglio).
                 </li>
                 <li>
-                  Le <strong>sedi assegnate</strong> stabiliscono dove l&apos;operatore lavora e cosa vede con i filtri
-                  sede.
+                  Le <strong>sedi assegnate</strong>{" "}stabiliscono dove l&apos;operatore lavora e cosa vede con i
+                  filtri sede.
                 </li>
               </ul>
             </InfoBox>

@@ -203,7 +203,7 @@ export function CouponsContent({ slug: slugProp, initialQuery }: { slug?: string
             <InfoBox>
               <p>
                 I buoni si applicano in cassa: il loro valore viene <strong>sempre ricalcolato dai prezzi di listino
-                correnti</strong> al momento dell&apos;uso, non da quelli del giorno di emissione.
+                correnti</strong>{" "}al momento dell&apos;uso, non da quelli del giorno di emissione.
               </p>
               <ul>
                 <li>

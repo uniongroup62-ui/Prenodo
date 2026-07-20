@@ -657,7 +657,7 @@ export function GiftsContent({ slug: slugProp, initialQuery }: { slug?: string; 
                 </div>
                 <div className="modal-body">
                   <div className="text-muted small mb-3">
-                    Crea un&apos;istanza in stato <strong>Disponibile</strong> per il cliente, anche se non ha ancora completato le regole. Se il cliente non è idoneo all&apos;omaggio, prima del salvataggio verrà chiesto se vuoi assegnarlo comunque.
+                    Crea un&apos;istanza in stato <strong>Disponibile</strong>{" "}per il cliente, anche se non ha ancora completato le regole. Se il cliente non è idoneo all&apos;omaggio, prima del salvataggio verrà chiesto se vuoi assegnarlo comunque.
                   </div>
                   <div className="row g-3">
                     <div className="col-md-6">

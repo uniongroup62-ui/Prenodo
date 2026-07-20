@@ -17569,3 +17569,18 @@ Causa: il preflight Tailwind globale azzera i list-style di TUTTE le ul, la
 lista restava rientrata (padding 18px) ma senza marker. Fix in app.css:
 .bs-info-modal-body ul e li con list-style:disc esplicito. Verifica
 computed-style (ul=disc, li=disc) + screenshot popup Gestione Rate.
+
+## 2026-07-20 - Parole attaccate: quirk Turbopack spazio+entita SANATO
+Segnalazione utente (popup Commissioni: "POSl'operatore", "Annullatoe").
+ROOT CAUSE verificata sul chunk compilato: questo Turbopack STRIPPA lo
+spazio INIZIALE di un segmento di testo JSX che segue un tag inline quando
+il segmento contiene una entita HTML (&apos; ecc.) - "POS"</strong> +
+" l&apos;operatore..." compila in "l'operatore..." senza spazio; lo stesso
+segmento SENZA entita conserva lo spazio, e lo spazio FINALE prima di un
+tag e salvo. Fix: {" "} esplicito dopo il tag. Corrette 6 giunzioni nei
+popup (commissions x2, automation, costs, coupons, staff) e 8 fuori dai
+popup trovate con scan multiline `</(strong|em|b|a)> [^<{]*&entita;`
+(booking x2, gift_form, gifts assegnazione manuale, pos banner vendita da
+appuntamento, staff_availability, consent_module_form, consent_modules,
+marketplace-search breadcrumb). Scan finale = 0 residui. Verifica live
+8/8 sulle frasi ricomposte; tsc pulito.

@@ -452,7 +452,7 @@ export function ConsentModuleFormContent({
             <div className="card p-3">
               <div className="fw-semibold mb-2">Workflow cliente</div>
               <div className="small text-muted">
-                Dalla pagina cliente &gt; <strong>Moduli consenso</strong> potrai associare questo modulo e gestire
+                Dalla pagina cliente &gt; <strong>Moduli consenso</strong>{" "}potrai associare questo modulo e gestire
                 l&apos;intero flusso: stampa PDF, invio richiesta firma elettronica, upload manuale PDF firmato, invio del
                 PDF ufficiale e reset della procedura.
               </div>

@@ -732,7 +732,7 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
             <h2 className="h6 fw-semibold mb-2">Regola di sblocco</h2>
             <div className="text-muted small mb-2">
               Ogni campagna può avere <strong>una sola regola di sblocco</strong>.
-              Per <strong>Quantità servizio</strong> / <strong>Quantità prodotto</strong> il conteggio avanza di <strong>1</strong> per ogni <strong>vendita</strong> o <strong>appuntamento eseguito</strong> che contiene quell&apos;elemento.
+              Per <strong>Quantità servizio</strong> / <strong>Quantità prodotto</strong> il conteggio avanza di <strong>1</strong> per ogni <strong>vendita</strong> o <strong>appuntamento eseguito</strong>{" "}che contiene quell&apos;elemento.
               Se nella stessa vendita ci sono più quantità dello stesso servizio/prodotto, conta comunque <strong>una sola volta</strong>.
             </div>
             <div className="table-responsive">

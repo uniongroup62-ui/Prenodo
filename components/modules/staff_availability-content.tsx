@@ -664,7 +664,7 @@ export function StaffAvailabilityContent({ slug: slugProp }: { slug?: string } =
         </div>
 
         <div className="form-text mt-3">
-          Suggerimento: inserisci i <b>turni</b> per limitare la prenotazione agli orari in cui l&apos;operatore è
+          Suggerimento: inserisci i <b>turni</b>{" "}per limitare la prenotazione agli orari in cui l&apos;operatore è
           presente. Le <b>presenze</b> sovrascrivono i turni della giornata (override). Ferie/assenze bloccano sempre.
         </div>
       </div>

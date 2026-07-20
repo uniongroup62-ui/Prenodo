@@ -2579,7 +2579,7 @@ export function PosContent({ slug: slugProp }: { slug?: string } = {}) {
         <div className="alert alert-info d-flex align-items-center gap-2" id="posAppointmentBanner">
           <i className="bi bi-calendar-check"></i>
           <span>
-            Vendita da appuntamento <strong>{appointmentSaleCode}</strong> — concludendo la vendita l&apos;appuntamento verrà segnato come eseguito.
+            Vendita da appuntamento <strong>{appointmentSaleCode}</strong>{" "}— concludendo la vendita l&apos;appuntamento verrà segnato come eseguito.
           </span>
         </div>
       ) : null}

@@ -340,15 +340,15 @@ export function CommissionsContent({ slug: slugProp, initialQuery }: { slug?: st
               <ul>
                 <li>
                   Le commissioni su <strong>appuntamenti</strong> leggono automaticamente le prestazioni concluse da
-                  Quick Booking e Booking pubblico; quelle <strong>POS</strong> l&apos;operatore che ha registrato la
-                  vendita in Pagamenti.
+                  Quick Booking e Booking pubblico; quelle <strong>POS</strong>{" "}l&apos;operatore che ha registrato
+                  la vendita in Pagamenti.
                 </li>
                 <li>
                   Pacchetti, prepagati, GiftBox, GiftCard e omaggi <strong>non generano una seconda commissione</strong>{" "}
                   al riscatto.
                 </li>
                 <li>
-                  Se una vendita viene annullata, il movimento resta nello storico come <strong>Annullato</strong> e
+                  Se una vendita viene annullata, il movimento resta nello storico come <strong>Annullato</strong>{" "}e
                   viene eliminato solo con l&apos;eliminazione definitiva della vendita.
                 </li>
                 <li>

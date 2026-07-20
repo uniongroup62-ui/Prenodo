@@ -451,7 +451,7 @@ export function FidelityMembershipSettingsContent({
                 style={{ display: expiryOn ? "none" : undefined }}
               >
                 <div className="small mb-0">
-                  <strong>Scadenza tessera disattivata.</strong> Le tessere già presenti resteranno senza scadenza. Quando
+                  <strong>Scadenza tessera disattivata.</strong>{" "}Le tessere già presenti resteranno senza scadenza. Quando
                   riattiverai la scadenza automatica, recupereranno prima l&apos;ultima data di scadenza memorizzata al
                   momento della disattivazione; se per una tessera non esisteva una data specifica, useremo la durata
                   memorizzata in quell&apos;istante. Quelle con scadenza ripristinata ancora valida torneranno attive

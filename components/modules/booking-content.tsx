@@ -248,8 +248,8 @@ export function BookingSettingsContent({ slug: slugProp, initialQuery }: { slug?
                   </select>
                 </div>
                 <div className="form-text">
-                  Esempio: <strong>24 ore</strong> o <strong>2 giorni</strong> prima dell&apos;appuntamento. Imposta{" "}
-                  <strong>0</strong> per consentire l&apos;annullamento fino all&apos;inizio.
+                  Esempio: <strong>24 ore</strong> o <strong>2 giorni</strong>{" "}prima dell&apos;appuntamento. Imposta{" "}
+                  <strong>0</strong>{" "}per consentire l&apos;annullamento fino all&apos;inizio.
                 </div>
               </div>
 

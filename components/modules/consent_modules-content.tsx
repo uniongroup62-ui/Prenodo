@@ -182,7 +182,7 @@ export function ConsentModulesContent({
           <div>
             <div className="fw-semibold">Elenco moduli</div>
             <div className="text-muted small">
-              Il modulo <strong>PDF privacy GDPR</strong> e unico, modificabile ma non eliminabile. I moduli aggiuntivi
+              Il modulo <strong>PDF privacy GDPR</strong>{" "}e unico, modificabile ma non eliminabile. I moduli aggiuntivi
               possono essere associati ai clienti dalla pagina cliente &gt; Moduli consenso.
             </div>
           </div>

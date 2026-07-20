@@ -381,8 +381,8 @@ export function CostsContent({ slug: slugProp, initialQuery }: { slug?: string; 
               </p>
               <ul>
                 <li>
-                  I costi <strong>ricorrenti</strong> generano automaticamente le prossime scadenze; se il giorno impostato
-                  non esiste nel mese (29, 30 o 31), la scadenza cade l&apos;ultimo giorno del mese.
+                  I costi <strong>ricorrenti</strong>{" "}generano automaticamente le prossime scadenze; se il giorno
+                  impostato non esiste nel mese (29, 30 o 31), la scadenza cade l&apos;ultimo giorno del mese.
                 </li>
                 <li>Segnando un costo come pagato, il pagamento viene registrato alla data indicata.</li>
                 <li>Lo scadenziario evidenzia scaduto, in scadenza e pagato del periodo selezionato.</li>
