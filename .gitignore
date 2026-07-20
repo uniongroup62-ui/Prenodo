@@ -45,3 +45,6 @@ next-env.d.ts
 
 # Backup tenant SaaS (possono contenere dati reali: MAI in git)
 /storage/saas_backups/
+
+# screenshot di lavoro delle suite (root)
+/*.png
