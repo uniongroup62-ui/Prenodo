@@ -17683,3 +17683,7 @@ account, ricerca funzioni e ogni altro dropdown della shell. Bumpata la
 cache anche su app.css (?v=20260721 nelle 3 link di manage-shell, stessa
 trappola cache della CSS report). Probe computed-style 2/2 (item combobox
 e item menu account = 14px); screenshot verificato; tsc pulito.
+
+## 2026-07-21 - Dropdown a 12px (rifinitura su richiesta)
+La taglia dei dropdown passa da 14px a 12px (menu + item, regola globale
+in app.css); app.css?v= bumpato a 20260721b. Probe computed-style 2/2.

@@ -765,7 +765,7 @@ export function ManageShell({
       return (
         <>
           <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" precedence="bs" />
-          <link rel="stylesheet" href="/assets/css/app.css?v=20260721" precedence="app" />
+          <link rel="stylesheet" href="/assets/css/app.css?v=20260721b" precedence="app" />
           <div className="min-vh-100 d-flex align-items-center justify-content-center bg-light p-3">
             <div className="spinner-border text-primary" role="status">
               <span className="visually-hidden">Caricamento…</span>
@@ -778,7 +778,7 @@ export function ManageShell({
       <>
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" precedence="bs" />
         <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" precedence="bs" />
-        <link rel="stylesheet" href="/assets/css/app.css?v=20260721" precedence="app" />
+        <link rel="stylesheet" href="/assets/css/app.css?v=20260721b" precedence="app" />
         <div className="min-vh-100 d-flex align-items-center justify-content-center bg-light p-3">
           <div className="card shadow-sm" style={{ maxWidth: 480, width: "100%" }}>
             <div className="card-body p-4">
@@ -817,7 +817,7 @@ export function ManageShell({
     <>
       <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" precedence="bs" />
       <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" precedence="bs" />
-      <link rel="stylesheet" href="/assets/css/app.css?v=20260721" precedence="app" />
+      <link rel="stylesheet" href="/assets/css/app.css?v=20260721b" precedence="app" />
       <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" async />
       {/* Chart.js 4.4.1 in bundle LOCALE (prima dal CDN jsdelivr): il grafico
           dashboard non dipende più dalla raggiungibilità di un host esterno. */}
