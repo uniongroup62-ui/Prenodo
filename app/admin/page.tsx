@@ -38,12 +38,12 @@ const LEGACY_TAB_MAP: Record<string, string> = {
   tenant_backups: "backups",
   tenant_danger: "danger",
   tenant_onboarding: "onboarding",
-  // Visibilità fusa in Dati (19/07): il vecchio deep-link resta valido.
-  tenant_visibility: "settings",
+  tenant_visibility: "visibility",
   tenant_admin: "admin",
 };
-const TABS = new Set(["overview", "timeline", "settings", "admin", "onboarding", "health", "support", "backups", "danger"]);
-const LEGACY_TAB_ALIASES: Record<string, string> = { visibility: "settings" };
+const TABS = new Set(["overview", "timeline", "settings", "visibility", "admin", "onboarding", "health", "support", "backups", "danger"]);
+// Visibilità di nuovo tab dedicata (20/07): nessun alias residuo.
+const LEGACY_TAB_ALIASES: Record<string, string> = {};
 // Sottosezione delle viste consolidate: dalle pagine legacy o da ?sec=.
 const LEGACY_SEC_MAP: Record<string, string> = {
   controls: "controls",

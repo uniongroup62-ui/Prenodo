@@ -17,7 +17,7 @@ export type CronRunRow = {
   message?: string | null;
 };
 
-export type TenantTab = "overview" | "timeline" | "settings" | "admin" | "onboarding" | "health" | "support" | "backups" | "danger";
+export type TenantTab = "overview" | "timeline" | "settings" | "visibility" | "admin" | "onboarding" | "health" | "support" | "backups" | "danger";
 
 export type HealthLevel = "ok" | "warning" | "error";
 

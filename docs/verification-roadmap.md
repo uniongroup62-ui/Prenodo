@@ -17006,3 +17006,16 @@ auto-riparabile o ha una cura, DOVE si sistema.
 Verifica: diagnostica rigenerata via cron (testi nuovi nel checks_json di
 elite, verificati uno per uno); suite diagnostica 4, autorepair 5, ux 7 —
 verdi; tsc pulito. Le diagnostiche storiche mantengono i testi vecchi.
+
+## 2026-07-20 — VISIBILITA' IN TAB DEDICATA (richiesta utente)
+
+Inversione della fusione del 19/07: la sezione "Visibilita' pubblica" esce
+dalla tab Dati e diventa la tab "Visibilita'" (dopo Dati, icona Eye) — 10 tab
+nel dettaglio tenant. TenantTab + TABS + LEGACY_TAB_MAP aggiornati
+(tenant_visibility -> visibility, alias visibility->settings rimosso: il
+deep-link ?tab=visibility ora apre la tab vera). ux M4 aggiornata a 10 tab
+con "Visibilita'" nella lista.
+
+Verifica: probe live (deep-link tab=visibility -> tab attiva + 2 toggle
+renderizzati; tab Dati SENZA piu' i toggle); ux 7, fase3 9, faseD 4 — verdi;
+tsc pulito.

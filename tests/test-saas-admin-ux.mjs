@@ -55,13 +55,13 @@ try {
   await page.locator("h2", { hasText: "elite" }).first().waitFor({ timeout: 30000 });
 
   // M4: tutte e 10 le tab del dettaglio VISIBILI (a capo, niente scroll nascosto)
-  const tabNames = ["Panoramica", "Timeline", "Dati", "Admin", "Onboarding", "Diagnostica", "Supporto", "Backup", "Azioni critiche"]; // Visibilità fusa in Dati (19/07)
+  const tabNames = ["Panoramica", "Timeline", "Dati", "Visibilità", "Admin", "Onboarding", "Diagnostica", "Supporto", "Backup", "Azioni critiche"]; // Visibilità tab dedicata (20/07)
   const vis = [];
   for (const name of tabNames) {
     const box = await page.locator("button", { hasText: name }).first().boundingBox().catch(() => null);
     vis.push(box && box.x >= 0 && box.x + box.width <= 1440 && box.y > 0);
   }
-  check("M4 dettaglio: 9 tab tutte visibili nel viewport", vis.every(Boolean), vis.map((v, i) => (v ? "" : tabNames[i])).filter(Boolean).join(",") || "tutte");
+  check("M4 dettaglio: 10 tab tutte visibili nel viewport", vis.every(Boolean), vis.map((v, i) => (v ? "" : tabNames[i])).filter(Boolean).join(",") || "tutte");
 
   // M5: Panoramica a SOLO-PROBLEMI (20/07): a tutto verde niente lista OK,
   // solo la riga di sintesi; la lista integrale vive nella tab Diagnostica.

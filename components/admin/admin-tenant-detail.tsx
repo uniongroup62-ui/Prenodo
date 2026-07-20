@@ -59,6 +59,7 @@ export const tenantTabs: Array<{ key: TenantTab; label: string; icon: LucideIcon
   { key: "overview", label: "Panoramica", icon: LayoutDashboard },
   { key: "timeline", label: "Timeline", icon: History },
   { key: "settings", label: "Dati", icon: Settings },
+  { key: "visibility", label: "Visibilità", icon: Eye },
   { key: "admin", label: "Admin", icon: UserCog },
   { key: "onboarding", label: "Onboarding", icon: ClipboardCheck },
   { key: "health", label: "Diagnostica", icon: Activity },
@@ -120,17 +121,9 @@ export function TenantDetailPanel(props: {
       <div className="p-4">
         {props.activeTab === "overview" ? <TenantOverview detail={props.detail} /> : null}
         {props.activeTab === "timeline" ? <TenantTimeline events={props.detail.timeline ?? []} /> : null}
-        {/* Visibilità fusa dentro Dati (analisi organizzazione 19/07): due
-            form impilati — dati anagrafici + visibilità pubblica. */}
-        {props.activeTab === "settings" ? (
-          <div className="grid gap-6">
-            <TenantSettings plans={props.plans} tenant={tenant} canManage={props.canManage} onAction={props.onAction} />
-            <div>
-              <p className="mb-2 text-sm font-semibold text-slate-700">Visibilità pubblica</p>
-              <TenantVisibility tenant={tenant} canManage={props.canManage} onAction={props.onAction} />
-            </div>
-          </div>
-        ) : null}
+        {props.activeTab === "settings" ? <TenantSettings plans={props.plans} tenant={tenant} canManage={props.canManage} onAction={props.onAction} /> : null}
+        {/* Visibilità in tab dedicata (richiesta 20/07; prima era fusa in Dati). */}
+        {props.activeTab === "visibility" ? <TenantVisibility tenant={tenant} canManage={props.canManage} onAction={props.onAction} /> : null}
         {props.activeTab === "admin" ? <TenantAdmin tenant={tenant} canManage={props.canManage} onAction={props.onAction} /> : null}
         {props.activeTab === "onboarding" ? <TenantOnboarding tenant={tenant} canManage={props.canManage} onAction={props.onAction} /> : null}
         {props.activeTab === "health" ? <TenantHealth detail={props.detail} canManage={props.canManage} onAction={props.onAction} /> : null}
