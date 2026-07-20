@@ -17439,3 +17439,16 @@ Suite nuova test-notifiche-fidelity-page (6: API+gate, pagina con tessera ZZ
 scaduta e voce menu, hub compatto senza card integrali, Vedi->pagina, riga
 assente a zero). Regressioni notifiche-pass2 10, notifiche-log 4,
 fidelity-pass2 10, fidelity-improvements 11; tsc pulito.
+
+## 2026-07-20 - Impostazioni tessera Fidelity: allineamento campi Unita
+Segnalazione utente da screenshot: la select "Unita" era piu in basso degli
+input Durata/Entro. Causa: nelle tre row `g-2 align-items-end` (Durata/Unita,
+Entro/Unita rinnovo, Entro giorni/Unita promemoria) la colonna sinistra
+conteneva un form-text SOTTO l'input: con align-items-end i fondi colonna si
+allineano ma l'helper spingeva l'input sopra la linea della select. Fix in
+fidelity_membership_settings-content.tsx: i tre helper spostati FUORI dalle
+colonne, subito sotto la row a larghezza piena (ordine testi conservato).
+Probe Playwright con sessione forgiata: boundingBox input vs select su tutte
+e tre le righe (toggle accesi solo in UI, niente salvataggio) = dTop 0.0px,
+dH 0.0px; screenshot verificato. Regressioni notifiche-fidelity-page 6,
+fidelity-improvements 11; tsc pulito.

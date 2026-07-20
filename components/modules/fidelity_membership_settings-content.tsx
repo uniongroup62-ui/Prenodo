@@ -391,9 +391,6 @@ export function FidelityMembershipSettingsContent({
                       onChange={(e) => setForm((f) => ({ ...f, validityValue: e.target.value }))}
                       placeholder="1"
                     />
-                    <div className="form-text">
-                      Usa l&apos;interruttore sopra per attivare o disattivare la scadenza automatica della tessera.
-                    </div>
                   </div>
                   <div className="col-md-4">
                     <label className="form-label">Unità</label>
@@ -408,6 +405,11 @@ export function FidelityMembershipSettingsContent({
                       <option value="years">Anni</option>
                     </select>
                   </div>
+                </div>
+                {/* helper FUORI dalle colonne: dentro, con align-items-end,
+                    spingeva la select Unità sotto la linea del campo Durata */}
+                <div className="form-text mt-2">
+                  Usa l&apos;interruttore sopra per attivare o disattivare la scadenza automatica della tessera.
                 </div>
                 <div className="form-text mt-2">
                   La durata impostata qui si applica <strong>solo alle nuove tessere</strong> e alle{" "}
@@ -468,7 +470,6 @@ export function FidelityMembershipSettingsContent({
                         onChange={(e) => setForm((f) => ({ ...f, renewalValue: e.target.value }))}
                         placeholder="0"
                       />
-                      <div className="form-text">La finestra di rinnovo deve essere inferiore alla durata della tessera.</div>
                     </div>
                     <div className="col-md-4">
                       <label className="form-label">Unità</label>
@@ -484,6 +485,7 @@ export function FidelityMembershipSettingsContent({
                       </select>
                     </div>
                   </div>
+                  <div className="form-text mt-2">La finestra di rinnovo deve essere inferiore alla durata della tessera.</div>
                   <div className="form-text mt-2">
                     Quando una tessera entra in questa finestra, comparirà anche nel backend <strong>Notifiche</strong>{" "}
                     nella sezione <strong>Tessere Fidelity in scadenza / scadute</strong>. Questa impostazione vale sia per
@@ -511,13 +513,13 @@ export function FidelityMembershipSettingsContent({
                         onChange={(e) => setForm((f) => ({ ...f, reminderDays: e.target.value }))}
                         placeholder="0"
                       />
-                      <div className="form-text">0 = nessun promemoria nel backend Notifiche</div>
                     </div>
                     <div className="col-md-4">
                       <label className="form-label">Unità</label>
                       <input className="form-control" type="text" value="Giorni" readOnly />
                     </div>
                   </div>
+                  <div className="form-text mt-2">0 = nessun promemoria nel backend Notifiche</div>
                   <div className="form-text mt-2">
                     Se il rinnovo automatico è disattivato, il backend <strong>Notifiche</strong> mostrerà le tessere in
                     scadenza nei prossimi X giorni e quelle già scadute. Anche questa impostazione si aggiorna per le{" "}
