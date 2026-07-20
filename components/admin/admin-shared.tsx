@@ -357,7 +357,7 @@ export function RoleSelect({ defaultValue = "admin" }: { defaultValue?: string }
 
 export function Button({ icon: Icon, children, variant = "solid", ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { icon: LucideIcon; variant?: "solid" | "outline" }) {
   return (
-    <button className={`inline-flex h-10 items-center justify-center gap-2 rounded-md px-4 text-sm font-semibold disabled:opacity-50 ${variant === "solid" ? "bg-[#365a96] text-white" : "border border-slate-200 bg-white text-slate-800"}`} {...props}>
+    <button className={`inline-flex h-10 w-fit items-center justify-center gap-2 rounded-md px-4 text-sm font-semibold disabled:opacity-50 justify-self-start ${variant === "solid" ? "bg-[#365a96] text-white" : "border border-slate-200 bg-white text-slate-800"}`} {...props}>
       <Icon size={16} aria-hidden />
       {children}
     </button>

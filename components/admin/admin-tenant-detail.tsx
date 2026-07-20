@@ -222,7 +222,9 @@ function TenantTimeline({ events }: { events: TimelineEvent[] }) {
 
 function TenantSettings({ tenant, plans, canManage, onAction }: { tenant: Tenant; plans: PlanOption[]; canManage: boolean; onAction: (action: string, payload?: Record<string, string>) => void }) {
   return (
-    <form className="grid gap-3 md:grid-cols-2" key={`settings-${tenant.slug}-${tenant.plan_id ?? 0}`} onSubmit={(event) => submitAction(event, "update", onAction)}>
+    <section className="rounded-md border border-slate-200 bg-white shadow-sm">
+      <SectionHead title="Dati tenant" subtitle="Anagrafica, email admin, piano e note interne." />
+      <form className="grid gap-3 p-4 md:grid-cols-2" key={`settings-${tenant.slug}-${tenant.plan_id ?? 0}`} onSubmit={(event) => submitAction(event, "update", onAction)}>
       <input name="slug" type="hidden" value={tenant.slug} />
       <Input name="name" label="Nome" defaultValue={tenant.name} required />
       <Input name="admin_email" label="Email admin" type="email" defaultValue={tenant.admin_email ?? ""} />
@@ -240,50 +242,64 @@ function TenantSettings({ tenant, plans, canManage, onAction }: { tenant: Tenant
         <span className="mb-1 block text-sm font-medium text-slate-600">Note interne</span>
         <textarea className="min-h-24 w-full rounded-md border border-slate-200 p-3 outline-none focus:border-[#365a96]" name="notes" defaultValue={tenant.notes ?? ""} />
       </label>
-      <Button disabled={!canManage} icon={Settings}>Salva dati</Button>
-    </form>
+        <Button disabled={!canManage} icon={Settings}>Salva dati</Button>
+      </form>
+    </section>
   );
 }
 
 function TenantVisibility({ tenant, canManage, onAction }: { tenant: Tenant; canManage: boolean; onAction: (action: string, payload?: Record<string, string>) => void }) {
   return (
-    <form className="grid gap-4" onSubmit={(event) => submitAction(event, "visibility", onAction)}>
-      <input name="slug" type="hidden" value={tenant.slug} />
-      <Toggle name="booking_public_allowed" label="Consenti visibilità booking" detail="Abilita prenotazioni online pubbliche e pulsanti Prenota." defaultChecked={Number(tenant.booking_public_allowed ?? 1) === 1} />
-      <Toggle name="marketplace_public_allowed" label="Consenti visibilità marketplace" detail="Abilita scheda pubblica, sedi, ricerca e preferiti marketplace." defaultChecked={Number(tenant.marketplace_public_allowed ?? 1) === 1} />
-      <Button disabled={!canManage} icon={Eye}>Salva visibilità</Button>
-    </form>
+    <section className="rounded-md border border-slate-200 bg-white shadow-sm">
+      <SectionHead title="Visibilità pubblica" subtitle="Cosa di questo tenant può essere raggiungibile dal pubblico." />
+      <form className="grid gap-4 p-4" onSubmit={(event) => submitAction(event, "visibility", onAction)}>
+        <input name="slug" type="hidden" value={tenant.slug} />
+        <Toggle name="booking_public_allowed" label="Consenti visibilità booking" detail="Abilita prenotazioni online pubbliche e pulsanti Prenota." defaultChecked={Number(tenant.booking_public_allowed ?? 1) === 1} />
+        <Toggle name="marketplace_public_allowed" label="Consenti visibilità marketplace" detail="Abilita scheda pubblica, sedi, ricerca e preferiti marketplace." defaultChecked={Number(tenant.marketplace_public_allowed ?? 1) === 1} />
+        <Button disabled={!canManage} icon={Eye}>Salva visibilità</Button>
+      </form>
+    </section>
   );
 }
 
 function TenantAdmin({ tenant, canManage, onAction }: { tenant: Tenant; canManage: boolean; onAction: (action: string, payload?: Record<string, string>) => void }) {
   return (
-    <form className="grid gap-3 md:grid-cols-2" onSubmit={(event) => submitAction(event, "repair_admin", onAction)}>
-      <input name="slug" type="hidden" value={tenant.slug} />
-      <Input name="admin_name" label="Nome admin" defaultValue="Admin" />
-      <Input name="admin_email" label="Email admin" type="email" defaultValue={tenant.admin_email ?? ""} required />
-      <Input name="admin_pass" label="Nuova password" type="text" placeholder="Lascia vuoto per non cambiarla" />
-      <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">Ripara l&apos;accesso del titolare: ricrea o riallinea l&apos;utente admin, il suo operatore e l&apos;accesso a tutte le sedi attive. La password cambia solo se ne scrivi una nuova.</div>
-      <Button disabled={!canManage} icon={UserCog}>Verifica admin tenant</Button>
-    </form>
+    <section className="rounded-md border border-slate-200 bg-white shadow-sm">
+      <SectionHead title="Admin del tenant" subtitle="Ripara l'accesso del titolare: ricrea o riallinea l'utente admin, il suo operatore e l'accesso a tutte le sedi attive. La password cambia solo se ne scrivi una nuova." />
+      <form className="grid gap-3 p-4 md:grid-cols-2" onSubmit={(event) => submitAction(event, "repair_admin", onAction)}>
+        <input name="slug" type="hidden" value={tenant.slug} />
+        <Input name="admin_name" label="Nome admin" defaultValue="Admin" />
+        <Input name="admin_email" label="Email admin" type="email" defaultValue={tenant.admin_email ?? ""} required />
+        <Input name="admin_pass" label="Nuova password" type="text" placeholder="Lascia vuoto per non cambiarla" />
+        <div className="md:col-span-2">
+          <Button disabled={!canManage} icon={UserCog}>Verifica admin tenant</Button>
+        </div>
+      </form>
+    </section>
   );
 }
 
+const onboardingStepLabel: Record<string, string> = { business: "Attività", location: "Sede", activity_categories: "Categorie attività", hours: "Orari", staff: "Operatori", cabins: "Cabine", service_categories: "Categorie servizi", services: "Servizi", booking: "Booking" };
+
 function TenantOnboarding({ tenant, canManage, onAction }: { tenant: Tenant; canManage: boolean; onAction: (action: string, payload?: Record<string, string>) => void }) {
+  const status = tenant.onboarding_status || "not_started";
   return (
-    <div className="grid gap-4">
-      <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-        <div className="h-full bg-[#365a96]" style={{ width: `${tenant.onboarding_percent ?? 0}%` }} />
+    <section className="rounded-md border border-slate-200 bg-white shadow-sm">
+      <SectionHead title="Onboarding" subtitle="Avanzamento del wizard di primo avvio del tenant." />
+      <div className="grid gap-4 p-4">
+        <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+          <div className="h-full bg-[#365a96]" style={{ width: `${tenant.onboarding_percent ?? 0}%` }} />
+        </div>
+        <div className="grid gap-2 text-sm">
+          <Detail label="Avanzamento" value={`${tenant.onboarding_percent ?? 0}%`} />
+          <Detail label="Stato" value={onboardingLabel(status)} />
+          <Detail label="Passo corrente" value={tenant.onboarding_step ? (onboardingStepLabel[tenant.onboarding_step] ?? tenant.onboarding_step) : "-"} />
+          <Detail label="Iniziato il" value={tenant.onboarding_started_at ? formatDateTime(tenant.onboarding_started_at) : "-"} />
+          <Detail label="Completato il" value={tenant.onboarding_completed_at ? formatDateTime(tenant.onboarding_completed_at) : "-"} />
+        </div>
+        <Button disabled={!canManage} icon={RotateCcw} onClick={() => onAction("reset_onboarding", { slug: tenant.slug })}>Reset onboarding</Button>
       </div>
-      <div className="grid gap-2 text-sm">
-        <Detail label="Avanzamento" value={`${tenant.onboarding_percent ?? 0}%`} />
-        <Detail label="Stato" value={tenant.onboarding_status || "not_started"} />
-        <Detail label="Step corrente" value={tenant.onboarding_step || "-"} />
-        <Detail label="Iniziato il" value={tenant.onboarding_started_at || "-"} />
-        <Detail label="Completato il" value={tenant.onboarding_completed_at || "-"} />
-      </div>
-      <Button disabled={!canManage} icon={RotateCcw} onClick={() => onAction("reset_onboarding", { slug: tenant.slug })}>Reset onboarding</Button>
-    </div>
+    </section>
   );
 }
 
@@ -367,21 +383,23 @@ function TenantSupport({ detail, supportLink, canManage, onAction }: { detail: T
           </div>
         </div>
       ) : null}
-      <form className="grid gap-3 md:grid-cols-[1fr_150px]" onSubmit={(event) => submitAction(event, "support_create", onAction)}>
-        <input name="slug" type="hidden" value={tenant.slug} />
-        <Input name="reason" label="Motivo" placeholder="Es. verifica problema calendario" required />
-        <label>
-          <span className="mb-1 block text-sm font-medium text-slate-600">Durata</span>
-          <select className="h-10 w-full rounded-md border border-slate-200 px-3 outline-none focus:border-[#365a96]" name="minutes" defaultValue="30">
-            <option value="15">15 minuti</option>
-            <option value="30">30 minuti</option>
-            <option value="60">1 ora</option>
-            <option value="120">2 ore</option>
-          </select>
-        </label>
-        <Button disabled={!canManage} icon={LifeBuoy}>Genera accesso supporto</Button>
-      </form>
-      <p className="text-xs text-slate-500">Genera un link monouso che apre il gestionale di questo tenant come sessione di supporto. Il link vale un solo accesso, la sessione si chiude alla scadenza del token e ogni passaggio resta tracciato in Audit.</p>
+      <section className="rounded-md border border-slate-200 bg-white shadow-sm">
+        <SectionHead title="Genera accesso supporto" subtitle="Link monouso che apre il gestionale di questo tenant come sessione di supporto: vale un solo accesso, la sessione si chiude alla scadenza del token e ogni passaggio resta tracciato in Audit." />
+        <form className="grid gap-3 p-4 md:grid-cols-[1fr_150px]" onSubmit={(event) => submitAction(event, "support_create", onAction)}>
+          <input name="slug" type="hidden" value={tenant.slug} />
+          <Input name="reason" label="Motivo" placeholder="Es. verifica problema calendario" required />
+          <label>
+            <span className="mb-1 block text-sm font-medium text-slate-600">Durata</span>
+            <select className="h-10 w-full rounded-md border border-slate-200 px-3 outline-none focus:border-[#365a96]" name="minutes" defaultValue="30">
+              <option value="15">15 minuti</option>
+              <option value="30">30 minuti</option>
+              <option value="60">1 ora</option>
+              <option value="120">2 ore</option>
+            </select>
+          </label>
+          <Button disabled={!canManage} icon={LifeBuoy}>Genera accesso supporto</Button>
+        </form>
+      </section>
       {detail.activeTokens.length ? (
         <Table
           title="Token disponibili"
@@ -417,11 +435,14 @@ function TenantSupport({ detail, supportLink, canManage, onAction }: { detail: T
 function TenantBackups({ tenant, backups, canManage, onAction }: { tenant: Tenant; backups: BackupRow[]; canManage: boolean; onAction: (payload: Record<string, string>) => void }) {
   return (
     <div className="grid gap-4">
-      <form className="grid gap-3 md:grid-cols-[1fr_auto]" onSubmit={(event) => submitOperation(event, "backup_create", onAction)}>
-        <input name="slug" type="hidden" value={tenant.slug} />
-        <Input name="reason" label="Motivo backup" placeholder="Es. prima di intervento tecnico" />
-        <Button disabled={!canManage} icon={Archive}>Crea backup</Button>
-      </form>
+      <section className="rounded-md border border-slate-200 bg-white shadow-sm">
+        <SectionHead title="Crea backup" subtitle="Fotografa i dati del tenant su storage privato; il ripristino guidato è in Operazioni → Manutenzione." />
+        <form className="grid gap-3 p-4 md:grid-cols-[1fr_auto]" onSubmit={(event) => submitOperation(event, "backup_create", onAction)}>
+          <input name="slug" type="hidden" value={tenant.slug} />
+          <Input name="reason" label="Motivo backup" placeholder="Es. prima di intervento tecnico" />
+          <div className="flex items-end"><Button disabled={!canManage} icon={Archive}>Crea backup</Button></div>
+        </form>
+      </section>
       <Table
         title="Backup disponibili"
         headers={["Data", "Motivo", "Dimensione", "Percorso", "Azioni"]}

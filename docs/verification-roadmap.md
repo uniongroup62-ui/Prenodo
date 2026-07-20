@@ -17060,3 +17060,22 @@ Audit visivo con screenshot di TUTTE le 10 pagine, poi pass di coerenza:
 Verifica: ri-screenshot delle 10 pagine confrontati a occhio (Fatturazione,
 Audit, Operazioni, Registrazioni mostrati puliti); regressione COMPLETA
 admin: 18/18 suite verdi (150 check) via tests/run-all.mjs admin; tsc pulito.
+
+## 2026-07-20 — DETTAGLIO TENANT: TAB IN CARD + BOTTONI COMPATTI (rilievo utente)
+
+Il rilievo: i contenuti delle tab galleggiavano senza struttura e i bottoni
+si stiravano a tutta riga (figli diretti delle griglie).
+1) Button (admin-shared) ora ha `w-fit justify-self-start`: nessun bottone
+   si stira piu' nelle griglie, in TUTTO il pannello (i bottoni-menu della
+   card Stato sistema in dashboard restano volutamente a colonna piena:
+   markup proprio).
+2) Ogni tab del dettaglio tenant e' una CARD con SectionHead (titolo +
+   sottotitolo che assorbe le didascalie sparse): "Dati tenant",
+   "Visibilita' pubblica", "Admin del tenant" (il box grigio diventa
+   sottotitolo), "Onboarding", "Genera accesso supporto", "Crea backup".
+3) Bonifica contestuale della tab Onboarding: stato tradotto
+   (onboardingLabel e' una FUNZIONE, non una mappa), passo del wizard
+   tradotto (onboardingStepLabel), date con formatDateTime.
+
+Verifica: screenshot di tutte le tab + dashboard confrontati a occhio;
+regressione completa admin 18/18 suite verdi; tsc pulito.
