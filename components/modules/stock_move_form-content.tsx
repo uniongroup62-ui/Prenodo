@@ -393,9 +393,11 @@ export function StockMoveFormContent({ slug: slugProp }: { slug?: string } = {})
                             Aggiungi
                           </button>
                         </div>
-                        <div className="form-text">Aggiunge una riga al documento.</div>
                       </div>
                     </div>
+                    {/* helper FUORI dalla row: dentro la colonna, con
+                        align-items-end, disallineava Prodotto e Quantità */}
+                    <div className="form-text mt-2">Aggiunge una riga al documento.</div>
                   </div>
                 </div>
 

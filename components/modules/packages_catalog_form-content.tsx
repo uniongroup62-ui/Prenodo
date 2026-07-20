@@ -500,9 +500,8 @@ export function PackagesCatalogFormContent({ slug: slugProp }: { slug?: string }
                       <label className="form-label">Totale pacchetto</label>
                       <div className="input-group">
                         <span className="input-group-text">€</span>
-                        <input className="form-control" id="pkgGrandTotal" type="number" step="0.01" value={money2(total)} readOnly />
+                        <input className="form-control" id="pkgGrandTotal" type="number" step="0.01" value={money2(total)} readOnly title="Calcolato automaticamente" />
                       </div>
-                      <div className="form-text">Calcolato automaticamente.</div>
                     </div>
                     <div className="col-md-3">
                       <div className="small text-muted" id="pkgItemsHint">
@@ -511,7 +510,7 @@ export function PackagesCatalogFormContent({ slug: slugProp }: { slug?: string }
                     </div>
                   </div>
 
-                  <div className="form-text">Puoi aggiungere servizi e prodotti, impostare quantità e applicare sconti per riga e/o sul totale.</div>
+                  <div className="form-text">Totale calcolato automaticamente. Puoi aggiungere servizi e prodotti, impostare quantità e applicare sconti per riga e/o sul totale.</div>
                 </div>
               </div>
               <div className="col-md-3">

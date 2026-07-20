@@ -195,7 +195,6 @@ export function GiftboxSettingsContent({ slug: slugProp, initialQuery }: { slug?
                     value={validityValue}
                     onChange={(e) => setValidityValue(e.target.value)}
                   />
-                  <div className="form-text">0 = nessuna scadenza automatica</div>
                 </div>
                 <div className="col-md-5">
                   <label className="form-label">Unità</label>
@@ -211,6 +210,9 @@ export function GiftboxSettingsContent({ slug: slugProp, initialQuery }: { slug?
                   </select>
                 </div>
               </div>
+              {/* helper FUORI dalla row: dentro la colonna, con align-items-end,
+                  spingeva l'input sopra la linea della select Unità */}
+              <div className="form-text mt-2">0 = nessuna scadenza automatica</div>
 
               <div className="mt-3 d-flex gap-2">
                 <button className="btn btn-primary btn-pill" type="submit">

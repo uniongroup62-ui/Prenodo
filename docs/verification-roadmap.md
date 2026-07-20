@@ -17735,3 +17735,17 @@ card senza prefisso entita ("Scadenza predefinita", "Condizioni",
 condizioni/metodi -, tessera Fidelity). Nessuna suite asseriva i vecchi
 testi. Probe Playwright 5/5 (h1 + card + conteggio esatto bottoni
 "Salva" per pagina); tsc pulito.
+
+## 2026-07-21 - Sweep allineamenti campo/campo (helper dentro la colonna)
+Richiesta utente (screenshot Impostazioni GiftCard): stessa classe di bug
+della tessera Fidelity - row align-items-end/center con form-text DENTRO
+una colonna => il campo sale sopra la linea del gemello. Scanner
+automatico sui moduli: 6 candidati, 4 REALI corretti (giftbox_settings e
+giftcard_settings Durata/Unita: helper "0 = nessuna scadenza automatica"
+portato sotto la row; stock_move_form Prodotto/Quantita: helper "Aggiunge
+una riga al documento" sotto la row; packages_catalog_form Subtotale/
+Sconto/Totale: form-text "Calcolato automaticamente" rimosso dalla
+colonna -> title sull'input + testo fuso nell'hint sotto). 2 falsi
+positivi lasciati: locations (pannello marketplace volutamente composito
+center), promotion_form (helper gia in col-12 a riga piena). Probe
+boundingBox 4/4 (dTop 0.0px); tsc pulito; nessuna suite sui testi mossi.
