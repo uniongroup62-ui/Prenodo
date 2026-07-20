@@ -268,7 +268,7 @@ function TenantAdmin({ tenant, canManage, onAction }: { tenant: Tenant; canManag
       <Input name="admin_name" label="Nome admin" defaultValue="Admin" />
       <Input name="admin_email" label="Email admin" type="email" defaultValue={tenant.admin_email ?? ""} required />
       <Input name="admin_pass" label="Nuova password" type="text" placeholder="Lascia vuoto per non cambiarla" />
-      <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">Verifica o ricrea utente admin, operatore collegato e sedi abilitate.</div>
+      <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">Ripara l&apos;accesso del titolare: ricrea o riallinea l&apos;utente admin, il suo operatore e l&apos;accesso a tutte le sedi attive. La password cambia solo se ne scrivi una nuova.</div>
       <Button disabled={!canManage} icon={UserCog}>Verifica admin tenant</Button>
     </form>
   );
