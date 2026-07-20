@@ -1470,6 +1470,31 @@ function SmsPlansView({ data, canManage, onAction, onRefresh }: { data: SmsBilli
   );
 }
 
+// Tabella movimenti PAGINATA (il payload porta fino a 120 righe per canale:
+// 25 per tenant, mai tutte in una volta a schermo).
+const MOVEMENTS_PER_PAGE = 25;
+
+function PagedMovements({ title, empty, rows }: { title: string; empty: string; rows: Array<Array<React.ReactNode>> }) {
+  const [page, setPage] = useState(1);
+  const pageCount = Math.max(1, Math.ceil(rows.length / MOVEMENTS_PER_PAGE));
+  const current = Math.min(page, pageCount);
+  const visible = rows.slice((current - 1) * MOVEMENTS_PER_PAGE, current * MOVEMENTS_PER_PAGE);
+  return (
+    <div className="grid gap-2">
+      <Table title={title} headers={["Tenant", "Tipo", "Stato", "Destinatario", "Riferimento", "Crediti", "Evento", "Dettaglio"]} rows={visible} empty={empty} />
+      {pageCount > 1 ? (
+        <div className="flex items-center justify-between rounded-md border border-slate-200 bg-white px-4 py-2 text-sm shadow-sm">
+          <span className="text-slate-500">{rows.length} movimenti · pagina {current} di {pageCount}</span>
+          <div className="flex gap-2">
+            <button className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold disabled:opacity-40" disabled={current <= 1} type="button" onClick={() => setPage(current - 1)}>Precedente</button>
+            <button className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold disabled:opacity-40" disabled={current >= pageCount} type="button" onClick={() => setPage(current + 1)}>Successiva</button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function MovementsView({ data, onRefresh }: { data: MovementsPayload | null; onRefresh: () => void }) {
   if (!data) {
     return <EmptyOperation icon={Send} title="Movimenti invii" detail="Carica ultimo storico SMS ed email da tutti i tenant." onRefresh={onRefresh} />;
@@ -1489,8 +1514,8 @@ function MovementsView({ data, onRefresh }: { data: MovementsPayload | null; onR
   ]);
   return (
     <div className="grid gap-5">
-      <Table title="SMS" headers={["Tenant", "Tipo", "Stato", "Destinatario", "Riferimento", "Crediti", "Evento", "Dettaglio"]} rows={movementRows(data.sms)} empty="Nessun invio SMS registrato." />
-      <Table title="Email" headers={["Tenant", "Tipo", "Stato", "Destinatario", "Riferimento", "Crediti", "Evento", "Dettaglio"]} rows={movementRows(data.emails)} empty="Nessuna email registrata." />
+      <PagedMovements empty="Nessun invio SMS registrato." rows={movementRows(data.sms)} title="SMS" />
+      <PagedMovements empty="Nessuna email registrata." rows={movementRows(data.emails)} title="Email" />
     </div>
   );
 }

@@ -17301,3 +17301,11 @@ sequenziali per tenant — quando i tenant cresceranno, spostare la diagnostica
 SMS nel cron notturno e leggere qui lo snapshot (come la salute tenant).
 Verifica: probe live (2 righe, footer nascosto, riga cliccabile);
 faseC 7, fase4 11; tsc pulito.
+
+## 2026-07-20 — MOVIMENTI INVII: 25/PAGINA PER TABELLA (domanda utente)
+
+Le tabelle SMS ed Email caricano fino a 120 righe l'una (25 per tenant, 120
+totali per canale, gia' ordinate DESC) e le mostravano TUTTE: ora componente
+PagedMovements con paginazione client-side 25/pagina per ciascuna tabella
+(footer solo sopra le 25 righe). Verifica: probe live (empty-state, footer
+nascosto a tabelle vuote); faseC 7/7; tsc pulito.
