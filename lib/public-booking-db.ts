@@ -2,8 +2,8 @@ import "server-only";
 
 import { randomBytes } from "crypto";
 import { businessNowDateTime, businessTodayIso } from "@/lib/business-datetime";
-import type { RowDataPacket } from "@/lib/tenant-db";
-import { columnExists, dbExecute, dbQuery, quoteIdentifier, tenantInsert, tenantSelect, tenantTable, tenantUpdate } from "@/lib/tenant-db";
+import type { RowDataPacket, TenantTable, TenantTxQuery } from "@/lib/tenant-db";
+import { columnExists, dbExecute, dbQuery, quoteIdentifier, tenantInsert, tenantInsertTx, tenantSelect, tenantTable, tenantUpdate, withTenantTransaction } from "@/lib/tenant-db";
 
 export type PublicBookingBusiness = {
   name: string;
@@ -1126,14 +1126,26 @@ export async function confirmPublicBooking({
       : ([notes, discount.label].filter(Boolean).join("\n") || null),
   };
   if (await columnExists(appointments.name, "public_code")) values.public_code = publicCode;
-  const appointmentId = await tenantInsert(appointments, values);
 
-  await insertPublicAppointmentServices(slug, appointmentId, services, legacyBenefits?.serviceOverrides ?? []);
+  // Il legacy inseriva appuntamento + righe collegate in query separate: un
+  // errore a metà lasciava un appuntamento senza servizi/segmenti sul percorso
+  // PUBBLICO. L'aggregato ora è atomico; hold e redemption restano post-commit
+  // best-effort come nel legacy. Le tabelle si risolvono PRIMA della tx
+  // (tenantTable/columnExists sono letture cacheate fuori transazione).
+  const servicesTable = await tenantTable(slug, "appointment_services");
+  const staffTable = await tenantTable(slug, "appointment_staff");
+  const locationsTable = await tenantTable(slug, "appointment_locations");
+  const segmentsTable = await tenantTable(slug, "appointment_segments");
   // staff dell'appuntamento: tutti gli operatori distinti (staff_map) o il singolo.
   const staffToInsert = mapOps.length ? mapOps : (selectedStaffId ? [selectedStaffId] : []);
-  for (const opId of staffToInsert) await insertPublicAppointmentStaff(slug, appointmentId, opId);
-  if (locationId && locationId > 0) await insertPublicAppointmentLocation(slug, appointmentId, locationId);
-  await insertPublicAppointmentSegments(slug, appointmentId, normalizedDate, normalizedTime, services, selectedStaffId, staffMap);
+  const appointmentId = await withTenantTransaction(slug, async (q) => {
+    const id = await tenantInsertTx(q, appointments, values);
+    await insertPublicAppointmentServices(q, servicesTable, id, services, legacyBenefits?.serviceOverrides ?? []);
+    for (const opId of staffToInsert) await tenantInsertTx(q, staffTable, { appointment_id: id, staff_id: opId });
+    if (locationId && locationId > 0) await tenantInsertTx(q, locationsTable, { appointment_id: id, location_id: locationId });
+    await insertPublicAppointmentSegments(q, segmentsTable, id, normalizedDate, normalizedTime, services, selectedStaffId, staffMap);
+    return id;
+  });
   if (holdToken) await markPublicHoldConverted(slug, holdToken, ownerKey, appointmentId);
 
   // Promotion redemption record (same shape the manage save writes; removed by
@@ -2351,7 +2363,8 @@ async function publicDiscount(slug: string, subtotal: number, couponCode?: strin
 // `overrides` carries the promo per-service prices (price = discounted,
 // list_price = original, discount_badge) resolved by the confirm benefits.
 async function insertPublicAppointmentServices(
-  slug: string,
+  q: TenantTxQuery,
+  table: TenantTable,
   appointmentId: number,
   services: ServiceRow[],
   overrides: Array<{ serviceId: number; price: number; listPrice: number; badge: string }> = [],
@@ -2359,7 +2372,7 @@ async function insertPublicAppointmentServices(
   const overrideById = new Map(overrides.map((o) => [o.serviceId, o]));
   for (const service of services) {
     const override = overrideById.get(Number(service.id ?? 0));
-    await tenantInsert(await tenantTable(slug, "appointment_services"), {
+    await tenantInsertTx(q, table, {
       appointment_id: appointmentId,
       service_id: Number(service.id ?? 0),
       service_name: String(service.name ?? ""),
@@ -2369,25 +2382,17 @@ async function insertPublicAppointmentServices(
       list_price: override ? override.listPrice : Number(service.price ?? 0),
       discount_badge: override && override.badge ? override.badge : null,
       duration_min: Number(service.duration_min ?? 30),
-    }).catch(() => 0);
+    });
   }
 }
 
-async function insertPublicAppointmentStaff(slug: string, appointmentId: number, staffId: number): Promise<void> {
-  await tenantInsert(await tenantTable(slug, "appointment_staff"), { appointment_id: appointmentId, staff_id: staffId }).catch(() => 0);
-}
-
-async function insertPublicAppointmentLocation(slug: string, appointmentId: number, locationId: number): Promise<void> {
-  await tenantInsert(await tenantTable(slug, "appointment_locations"), { appointment_id: appointmentId, location_id: locationId }).catch(() => 0);
-}
-
-async function insertPublicAppointmentSegments(slug: string, appointmentId: number, date: string, time: string, services: ServiceRow[], staffId: number | null, staffMap: Record<number, number> | null = null): Promise<void> {
+async function insertPublicAppointmentSegments(q: TenantTxQuery, table: TenantTable, appointmentId: number, date: string, time: string, services: ServiceRow[], staffId: number | null, staffMap: Record<number, number> | null = null): Promise<void> {
   let cursor = timeToMinutes(time);
   let position = 1;
   for (const service of services) {
     const duration = Math.max(5, Number(service.duration_min ?? 30));
     const segStaffId = Number(staffMap?.[Number(service.id ?? 0)] ?? 0) || Number(staffId ?? 0) || 0;
-    await tenantInsert(await tenantTable(slug, "appointment_segments"), {
+    await tenantInsertTx(q, table, {
       appointment_id: appointmentId,
       service_id: Number(service.id ?? 0),
       service_name: String(service.name ?? ""),
@@ -2397,7 +2402,7 @@ async function insertPublicAppointmentSegments(slug: string, appointmentId: numb
       ends_at: sqlDateTime(date, minutesToTime(cursor + duration)),
       duration_minutes: duration,
       cabin_id: nullableNumber(service.cabin_id),
-    }).catch(() => 0);
+    });
     cursor += duration;
     position += 1;
   }

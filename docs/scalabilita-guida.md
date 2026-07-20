@@ -5,22 +5,19 @@ d'ambiente, quindi vanno fatti da te. In ordine di urgenza.
 
 ---
 
-## 1. PITR (Point-in-Time Recovery) su Supabase — 5 minuti, da fare SUBITO
+## 1. Backup del database — scaletta rivista (piano Supabase Free, 20/07)
 
 Il backup per-tenant del pannello copre il ripristino chirurgico di un singolo
 tenant. Per la catastrofe totale (database corrotto, cancellazione massiva)
-serve il PITR di Supabase: ti permette di riportare l'INTERO database a un
-qualsiasi istante degli ultimi N giorni.
+la scaletta giusta, visto che oggi sei sul piano Free, è:
 
-Passi:
-1. Dashboard Supabase → il tuo progetto → **Database** → **Backups**.
-2. Tab **Point in Time** → **Enable PITR**.
-3. Scegli la finestra di retention (7 giorni bastano per iniziare; è un
-   add-on a pagamento — il prezzo dipende dal piano).
-4. Fine: da quel momento ogni transazione è recuperabile.
-
-Nota: se PITR non è disponibile sul tuo piano, verifica che almeno i **Daily
-Backups** siano attivi (lo sono di default sui piani a pagamento).
+1. **Ora (Free)**: nessun upgrade necessario. Il backup per-tenant su R2 è già
+   attivo; se vuoi coprire anche le tabelle di piattaforma (saas_*) a costo
+   zero, chiedimi il backup di piattaforma su R2 via cron (offerta in sospeso).
+2. **Al lancio (clienti veri)**: passa a **Pro ($25/mese)** → Daily Backups
+   7 giorni inclusi. Dashboard → Settings → Billing → Upgrade.
+3. **Solo a volume (quando il fatturato lo giustifica)**: aggiungi **PITR**
+   (da ~$100/mese): Database → Backups → Point in Time → Enable.
 
 ---
 
@@ -71,11 +68,34 @@ prepariamo con uno script e una batteria di verifica come sempre.
 
 ---
 
+## 4. Certificato CA di Supabase — 5 minuti, quando vuoi
+
+Oggi la connessione al database è cifrata ma NON verifica il certificato del
+server. Il codice è già pronto a verificarlo: basta dargli la CA.
+
+1. Dashboard Supabase → **Settings** → **Database** → sezione **SSL
+   Configuration** → scarica il **CA certificate** (`.crt`).
+2. Salvalo come `prenodo/db/supabase-ca.crt` (in locale) e su Amplify aggiungi
+   la variabile `PRENODO_DATABASE_CA` con il contenuto PEM del file.
+3. Riavvia: da quel momento la connessione rifiuta certificati non validi.
+   Senza CA tutto continua a funzionare come prima (con un warning nei log di
+   produzione).
+
+---
+
 ## Nel frattempo, già attivo nel repo
 
 - `npm run check:tenant-scope` — la guardia anti-leak: scandisce lib/ e app/
   cercando query su tabelle tenant senza filtro tenant_id. Le eccezioni
   legittime sono annotate nel codice con `// cross-tenant: <motivo>`.
-  Falla girare (o mettila in CI) prima di ogni deploy.
+  Gira anche in CI (`.github/workflows/ci.yml`) insieme al type-check.
 - Audit indici: fatto — chiavi primarie composite (tenant_id, id) e indici
   compositi sui percorsi caldi sono già nello schema. Niente da aggiungere.
+- **Migrazioni numerate** (`db/migrations/` + `npm run db:migrate`): lo schema
+  è congelato alla baseline 0001 (20/07). Da qui in avanti ogni modifica di
+  schema è un file numerato applicato dal runner (registro in
+  `schema_migrations`, una transazione per file); i file applicati non si
+  modificano mai. Niente più DDL a mano o "ensure" runtime per le novità.
+- **Batterie di verifica versionate** (`prenodo/tests/`, 117+ suite): vedi
+  `tests/README.md`. Prima di ogni deploy: batterie dei moduli toccati in
+  locale; la CI copre type-check e guardia anti-leak a ogni push.

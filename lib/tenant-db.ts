@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import pg from "pg";
 import { normalizeTenantSlug, tenantPrefix } from "@/lib/tenant-runtime";
 
@@ -31,12 +33,10 @@ export type TenantTable = {
 
 const globalForTenantDb = globalThis as typeof globalThis & {
   __prenodoPgPool?: pg.Pool | null;
-  __prenodoPgPoolError?: string | null;
   __prenodoPgParsers?: boolean;
 };
 
 let pool: pg.Pool | null = globalForTenantDb.__prenodoPgPool ?? null;
-let poolError: string | null = globalForTenantDb.__prenodoPgPoolError ?? null;
 const tableExistsCache = new Map<string, boolean>();
 const columnExistsCache = new Map<string, boolean>();
 let sharedTenantTablesCache: boolean | null = null;
@@ -351,16 +351,31 @@ export function sanitizeIdentifier(identifier: string): string {
   return identifier.replace(/[^A-Za-z0-9_]/g, "");
 }
 
+// TLS verificato quando è disponibile la CA di Supabase (env PEM o file
+// db/supabase-ca.crt scaricato dal pannello); altrimenti si resta sul
+// comportamento storico senza verifica, ma con log all'avvio.
+function sslConfig(): { ca: string; rejectUnauthorized: true } | { rejectUnauthorized: false } {
+  const inline = String(process.env.PRENODO_DATABASE_CA ?? "");
+  if (inline.includes("BEGIN CERTIFICATE")) return { ca: inline, rejectUnauthorized: true };
+  try {
+    const caPath = path.join(process.cwd(), "db", "supabase-ca.crt");
+    if (fs.existsSync(caPath)) return { ca: fs.readFileSync(caPath, "utf8"), rejectUnauthorized: true };
+  } catch {
+    // fall through: senza CA leggibile si usa il fallback non verificato
+  }
+  if (process.env.NODE_ENV === "production") {
+    console.warn("[tenant-db] connessione DB senza verifica del certificato: fornisci PRENODO_DATABASE_CA o db/supabase-ca.crt");
+  }
+  return { rejectUnauthorized: false };
+}
+
 function getPool(): pg.Pool {
   if (pool) return pool;
-  if (poolError) throw new Error(poolError);
 
+  // Nessun errore "sticky": se la configurazione manca si rilancia a ogni
+  // chiamata, così basta correggere l'env senza riavviare il processo.
   const cs = connectionString();
-  if (!cs) {
-    poolError = "Database non configurato.";
-    globalForTenantDb.__prenodoPgPoolError = poolError;
-    throw new Error(poolError);
-  }
+  if (!cs) throw new Error("Database non configurato.");
 
   if (!globalForTenantDb.__prenodoPgParsers) {
     // Return timestamp/date/time as raw strings (no tz shift), matching the
@@ -376,7 +391,7 @@ function getPool(): pg.Pool {
 
   pool = new pg.Pool({
     connectionString: cs,
-    ssl: { rejectUnauthorized: false },
+    ssl: sslConfig(),
     max: 8,
     // Keep connections warm so we re-resolve/reconnect to the Supabase pooler
     // far less often — fewer new connections means fewer transient
@@ -384,6 +399,11 @@ function getPool(): pg.Pool {
     idleTimeoutMillis: 60000,
     keepAlive: true,
     connectionTimeoutMillis: 15000,
+  });
+  // Senza questo handler un errore socket su un client idle è una
+  // 'error' event non gestita e termina il processo Node.
+  pool.on("error", (error) => {
+    console.error("[tenant-db] errore su client idle del pool:", error instanceof Error ? error.message : error);
   });
   globalForTenantDb.__prenodoPgPool = pool;
 

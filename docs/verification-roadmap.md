@@ -16861,3 +16861,35 @@ Verifica: diagnostica rigenerata via cron -> checks_json con le
 etichette nuove; ux M5 riscritta (sintesi in Panoramica, zero righe
 OK, lista integrale in Diagnostica) 7/7; regressioni giro5/faseAB/
 faseC/faseD/dash/rifiniture/stats/fase3 verdi; tsc pulito.
+
+## 2026-07-20 — HARDENING PRE-LANCIO (esito audit "solida/scalabile/corretta")
+
+Audit a tre ricognizioni (strato DB, architettura, schema): impianto promosso
+(pooled multi-tenancy con PK composite+trigger+guardia; numeric per i soldi;
+placeholder ovunque; auth HMAC+epoch), con 4 lacune reali chiuse in questo giro:
+
+A) Robustezza strato DB/auth:
+   - TLS verificato quando c'e' la CA (env PRENODO_DATABASE_CA o file
+     db/supabase-ca.crt); senza CA comportamento storico + warning in prod;
+   - PRENODO_SESSION_SECRET mancante in produzione = errore, MAI il fallback
+     di sviluppo (l'admin era gia' fail-fast);
+   - pool.on('error') sugli idle client (prima: crash del processo);
+   - niente piu' errore "sticky" di configurazione in getPool.
+B) confirmPublicBooking ATOMICO: appuntamento + servizi + staff + sedi +
+   segmenti in withTenantTransaction (helper tx-aware, niente .catch inghiottiti
+   dentro la tx); hold e promotion redemption post-commit best-effort come nel
+   legacy. Probe live: aggregato completo, slot occupato = rifiuto a zero
+   scritture (test-booking-confirm-tx 3/3).
+C) 117 BATTERIE VERSIONATE in prenodo/tests/ (path relativi a import.meta.url,
+   porting verificato con 5 suite di ere diverse verdi) + tests/README.md +
+   runner run-all.mjs + CI GitHub Actions (tsc --noEmit + check:tenant-scope,
+   verificato senza DB). Lint NON in CI: 216 errori preesistenti da bonificare.
+D) MIGRAZIONI NUMERATE: db/migrations/ + db/tools/migrate.mjs (registro
+   schema_migrations, una tx per file, --status), baseline 0001 applicata al
+   DB di sviluppo. REGOLA: da oggi ogni nuova DDL e' una migrazione, mai
+   ensure/DDL a mano.
+
+Guida scalabilita' aggiornata: scaletta backup Free->Pro($25 al lancio)->PITR
+(solo a volume), istruzioni CA Supabase, regole migrazioni+batterie.
+Regressioni: booking-pass2 9, appuntamenti-pass2 7, pos-checkout 8,
+calendario-pass2 25, ux 7 + 8 suite saas-admin — tutte verdi; tsc pulito.

@@ -442,5 +442,12 @@ function verifySession(value: string): ManageSession | null {
 }
 
 function sessionSecret(): string {
-  return process.env.PRENODO_SESSION_SECRET || process.env.NEXTAUTH_SECRET || "prenodo-local-session-secret";
+  const secret = process.env.PRENODO_SESSION_SECRET || process.env.NEXTAUTH_SECRET || "";
+  if (secret) return secret;
+  // In produzione un segreto mancante NON deve ripiegare sul fallback di
+  // sviluppo: le sessioni sarebbero forgiabili da chiunque legga il sorgente.
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("PRENODO_SESSION_SECRET mancante: configura il segreto di sessione prima del deploy.");
+  }
+  return "prenodo-local-session-secret";
 }

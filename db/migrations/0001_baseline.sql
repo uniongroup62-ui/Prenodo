@@ -1,0 +1,14 @@
+-- 0001_baseline (2026-07-20): marcatore dello schema congelato.
+--
+-- Lo schema esistente a questa data proviene da: db/schema.sql (157 tabelle
+-- generate dal MySQL legacy, con PK composite (tenant_id, id) e trigger
+-- BEFORE INSERT su app.tenant_id) + le CREATE "ensure" runtime delle tabelle
+-- di piattaforma (saas_*, public_customer_*, ecc.), tutte idempotenti.
+--
+-- Per un database NUOVO: applicare prima db/schema.sql con
+-- `node db/tools/apply-sql.mjs db/schema.sql`, poi `node db/tools/migrate.mjs`;
+-- le tabelle di piattaforma nascono al primo avvio dell'app (ensure).
+--
+-- Da qui in avanti OGNI modifica di schema è una migrazione numerata in questa
+-- cartella. I file già applicati non si modificano mai.
+SELECT 1;
