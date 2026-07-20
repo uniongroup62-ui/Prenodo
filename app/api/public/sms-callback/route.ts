@@ -133,6 +133,7 @@ export async function POST(request: Request) {
   try {
     let updated = 0;
     if (reminderId > 0) {
+      // cross-tenant: webhook del provider SMS — la chiave e' provider_message_id, globalmente unica.
       const result = await dbExecute(
         `UPDATE \`reminders\` SET provider = 'openapi_sms',
                 provider_message_id = COALESCE(NULLIF(?, ''), provider_message_id),
@@ -144,11 +145,13 @@ export async function POST(request: Request) {
       );
       updated = Number(result.affectedRows ?? 0);
     } else {
+      // cross-tenant: webhook del provider SMS — la chiave e' provider_message_id, globalmente unica.
       const rows = await dbQuery<RowDataPacket[]>(
         `SELECT id FROM \`reminders\` WHERE channel = 'sms' AND provider = 'openapi_sms' AND provider_message_id = ? LIMIT 1`,
         [messageId],
       );
       if (rows[0]) {
+        // cross-tenant: webhook del provider SMS — aggiorna la riga trovata sopra per provider_message_id.
         const result = await dbExecute(
           `UPDATE \`reminders\` SET provider_state = ?, provider_response_json = ?, last_checked_at = NOW(),
                   delivered_at = CASE WHEN ? = 1 THEN NOW() ELSE delivered_at END,

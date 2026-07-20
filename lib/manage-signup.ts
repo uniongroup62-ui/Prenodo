@@ -743,6 +743,7 @@ async function adminEmailExists(email: string): Promise<boolean> {
   if (rows.length > 0) return true;
 
   if (await tableExists("users") && await freshColumnExists("users", "tenant_id")) {
+    // cross-tenant: verifica GLOBALE di piattaforma — l'email admin dev'essere unica fra tutti i tenant.
     const userRows = await dbQuery<RowDataPacket[]>(
       "SELECT 1 FROM `users` WHERE LOWER(email)=? AND role='admin' LIMIT 1",
       [email],

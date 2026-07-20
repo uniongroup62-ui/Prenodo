@@ -16805,3 +16805,40 @@ footer + pagina 2 da 5; rimosso un orfano PRE-ESISTENTE (health row
 di un tenant id 19 morto a giugno, slug riusato — verificato id
 inesistente prima del delete). Suite faseD/ux/giro5/faseAB/dash
 verdi; tsc pulito.
+
+## 2026-07-20 — SCALABILITA': GUARDIA ANTI-LEAK + AUDIT INDICI + GUIDA
+
+Dal giudizio sull'architettura multi-tenant (approvato "procedi").
+
+(1) GUARDIA ANTI-LEAK (npm run check:tenant-scope,
+scripts/check-tenant-scoping.mjs): scandisce lib/ e app/ cercando
+dbQuery/dbExecute su tabelle tenant (lista dal DB, cache
+scripts/tenant-tables.json per CI) il cui SQL non contiene tenant_id.
+Riconosce lo scoping DINAMICO (interpolazioni ${...tenant/scope...});
+le eccezioni legittime vanno annotate '// cross-tenant: <motivo>'
+nelle 3 righe sopra la chiamata. TRIAGE COMPLETO delle 31 segnalazioni
+iniziali: 16 scoping dinamici riconosciuti dal raffinamento, 2 falsi
+positivi annotati (baseWhere degli alert con tenantSt/tenantT), 13
+cross-tenant PER DESIGN verificati e annotati (aggregati Statistiche,
+account marketplace per account_id, verifica globale email admin,
+directory pubblica, webhook SMS per provider_message_id). ZERO leak
+reali trovati — esito genuino, non addolcito. Checker ora VERDE su
+148 tabelle.
+
+(2) AUDIT INDICI: PROMOSSO senza interventi — tutte le 148 tabelle
+tenant hanno indice che inizia con tenant_id; le tabelle calde hanno
+PK COMPOSITE (tenant_id, id) e compositi per sede
+(location_id, starts_at/sale_date/created_at: le sedi sono globali,
+quindi scopano implicitamente il tenant); log gia' (tenant_id,
+created_at). Nessun indice aggiunto: non si indicizza per sport.
+
+(3) GUIDA UTENTE docs/scalabilita-guida.md: PITR Supabase (subito),
+pooling transaction-mode porta 6543 (pre-lancio, con l'avvertenza
+session_replication_role nello sweep delete/restore), piano RLS (da
+fare insieme, mai a mano dal pannello).
+
+Verifica: checker verde, tsc pulito, suite ux/dash/stats/faseE verdi
+(le annotazioni sono commenti: zero comportamento). HARNESS: gli
+inserimenti di commenti via script su file CRLF vanno fatti con
+ancore a riga singola e verificati col checker — due annotazioni
+finite fuori posto sono state ripulite a mano.

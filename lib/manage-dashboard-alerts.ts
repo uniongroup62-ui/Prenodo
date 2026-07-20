@@ -148,6 +148,7 @@ async function getStaffOff(slug: string, tenantId: number | null, currentLocatio
     if (tenantId !== null) baseParams.push(tenantId); // t.tenant_id
     baseParams.push(...staffLocationParams);
 
+    // cross-tenant: falso positivo — lo scoping (tenantSt/tenantT) vive dentro baseWhere.
     const countRows = await dbQuery<RowDataPacket[]>(
       `SELECT COUNT(DISTINCT st.id) c
          FROM staff_timeoff t
@@ -158,6 +159,7 @@ async function getStaffOff(slug: string, tenantId: number | null, currentLocatio
     const count = Number(countRows[0]?.c ?? 0);
     if (count <= 0) return { count: 0, preview: [] };
 
+    // cross-tenant: falso positivo — lo scoping (tenantSt/tenantT) vive dentro baseWhere.
     const previewRows = await dbQuery<RowDataPacket[]>(
       `SELECT st.full_name, t.reason, t.ends_at
          FROM staff_timeoff t

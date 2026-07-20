@@ -129,6 +129,7 @@ async function marketplaceServiceSuggestions(): Promise<Array<{ name: string; su
 // alimentano la meta della card lista e il 'Categorie:' delle result-card,
 // come il category_text legacy della tenant_directory_locations.
 async function marketplaceLocationCategories(): Promise<Map<number, string[]>> {
+  // cross-tenant: directory PUBBLICA del marketplace — mappa globale sede->categorie per le card.
   const rows = await dbQuery<RowDataPacket[]>(`
     SELECT lac.location_id, mac.name
     FROM marketplace_location_activity_categories lac

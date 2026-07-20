@@ -897,6 +897,7 @@ export async function cancelPublicCustomerEmailChange(
 export async function publicCustomerFavoriteKeys(accountId: number): Promise<Record<string, true>> {
   await ensurePublicCustomerSchema();
   if (accountId <= 0) return {};
+  // cross-tenant: dati dell'ACCOUNT marketplace (chiave account_id) — il cliente attraversa i tenant per design.
   const rows = await dbQuery<RowDataPacket[]>(
     "SELECT tenant_slug,location_id,location_slug FROM `public_customer_favorites` WHERE account_id=?",
     [accountId],
@@ -923,12 +924,14 @@ export async function togglePublicCustomerFavorite(
   if (!target) return { ok: false, error: "Scheda non disponibile per i preferiti." };
 
   const key = globalFavoriteKey(target.tenantSlug, target.locationId);
+  // cross-tenant: dati dell'ACCOUNT marketplace (chiave account_id) — il cliente attraversa i tenant per design.
   const existing = await dbQuery<RowDataPacket[]>(
     "SELECT id FROM `public_customer_favorites` WHERE account_id=? AND tenant_slug=? AND location_id=? LIMIT 1",
     [accountId, target.tenantSlug, target.locationId],
   );
   if (existing[0]) {
     // Niente LIMIT su DELETE: Postgres non lo supporta (id è comunque PK).
+    // cross-tenant: delete per id gia' selezionato con filtro account_id (riga sopra).
     await dbExecute("DELETE FROM `public_customer_favorites` WHERE id=?", [Number(existing[0].id)]);
     return { ok: true, active: false, key };
   }
@@ -954,6 +957,7 @@ export async function removePublicCustomerFavorite(
   if (accountId <= 0) return { ok: false, error: "Account non valido." };
   if (!normalizedSlug || normalizedLocationId <= 0) return { ok: false, error: "Preferito non valido." };
 
+  // cross-tenant: dati dell'ACCOUNT marketplace (chiave account_id) — il cliente attraversa i tenant per design.
   await dbExecute(
     "DELETE FROM `public_customer_favorites` WHERE account_id=? AND tenant_slug=? AND location_id=?",
     [accountId, normalizedSlug, normalizedLocationId],
@@ -1064,6 +1068,7 @@ export async function publicCustomerActivities(accountId: number): Promise<Publi
 
   if (staleIds.length) {
     const placeholders = staleIds.map(() => "?").join(",");
+    // cross-tenant: dati dell'ACCOUNT marketplace (chiave account_id) — il cliente attraversa i tenant per design.
     await dbExecute(`DELETE FROM \`public_customer_tenant_links\` WHERE id IN (${placeholders})`, staleIds).catch(() => undefined);
   }
 

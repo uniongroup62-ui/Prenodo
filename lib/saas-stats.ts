@@ -159,17 +159,20 @@ export async function saasStatistics(): Promise<SaasStatsPayload> {
   ).catch(() => []);
 
   // --- Utilizzo ------------------------------------------------------------
+  // cross-tenant: aggregato di PIATTAFORMA (vista Statistiche del pannello admin, mai esposto ai tenant).
   const totals = await dbQuery<RowDataPacket[]>(
     `SELECT (SELECT COUNT(*) FROM \`users\`) AS gestionale_users,
             (SELECT COUNT(*) FROM \`clients\`) AS clients,
             (SELECT COUNT(*) FROM \`appointments\`) AS appointments,
             (SELECT COUNT(*) FROM \`sales\`) AS sales`,
   ).catch(() => []);
+  // cross-tenant: aggregato di PIATTAFORMA (vista Statistiche del pannello admin, mai esposto ai tenant).
   const apptMonths = await dbQuery<RowDataPacket[]>(
     `SELECT SUBSTRING(created_at::text FROM 1 FOR 7) AS month, COUNT(*) AS value
        FROM \`appointments\` WHERE created_at >= NOW() - interval '12 months'
       GROUP BY 1 ORDER BY 1 ASC`,
   ).catch(() => []);
+  // cross-tenant: aggregato di PIATTAFORMA (vista Statistiche del pannello admin, mai esposto ai tenant).
   const salesMonths = await dbQuery<RowDataPacket[]>(
     `SELECT SUBSTRING(created_at::text FROM 1 FOR 7) AS month, COUNT(*) AS value
        FROM \`sales\` WHERE created_at >= NOW() - interval '12 months'
