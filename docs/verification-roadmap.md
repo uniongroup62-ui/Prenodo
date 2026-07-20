@@ -17251,3 +17251,17 @@ attesa di pagamento" (e con pendenti > 0 il testo diventa AMBRA "N in attesa
 di pagamento": e' la spia dei pagamenti incagliati); "visibili tenant" ->
 "nella vetrina acquisti dei tenant". Metric.detail ora accetta ReactNode.
 Verifica: probe live 4 testi renderizzati; billing-rifiniture 6/6.
+
+## 2026-07-20 — STATISTICHE RISTRUTTURATA: FILTRO PERIODO + GRAFICI A COPPIE
+
+(richiesta utente "struttura meglio statistiche aggiungi anche filtri")
+1) FILTRO PERIODO 3/6/12 mesi (segmented control accanto ad Aggiorna, default
+   12): taglio CLIENT-SIDE delle serie mensili — corretto perche' le serie
+   dal server sono continue (fillMonths); il trend MRR taglia a mesi*30
+   snapshot. Sottotitoli DINAMICI ("ultimi N mesi").
+2) GRAFICI AFFIANCATI A COPPIE (xl:grid-cols-2, ChartCard): Crescita
+   (tenant + marketplace), Entrate (MRR + SMS), Piani (tabella distribuzione
+   + assegnazioni), Utilizzo (appuntamenti + vendite) — spariti i grafici a
+   tutta larghezza enormi coi dati sparsi; funnel e top-tenant restano full.
+Verifica: probe live (filtro 3 mesi aggiorna i sottotitoli, 12 li ripristina)
++ screenshot; stats 8/8, consolida 12/12, dash 8/8; tsc pulito.
