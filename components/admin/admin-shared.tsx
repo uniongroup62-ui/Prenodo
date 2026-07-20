@@ -306,7 +306,7 @@ export function ActionPanel({ icon: Icon, title, detail, disabled, onClick }: { 
   );
 }
 
-export function Metric({ label, value, detail, onClick }: { label: string; value: string; detail: string; onClick?: () => void }) {
+export function Metric({ label, value, detail, onClick }: { label: string; value: string; detail: React.ReactNode; onClick?: () => void }) {
   return (
     <div
       className={`rounded-md border border-slate-200 bg-white p-4 shadow-sm ${onClick ? "cursor-pointer transition-colors hover:border-[#365a96]" : ""}`}

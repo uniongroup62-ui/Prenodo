@@ -17242,3 +17242,12 @@ amount_gross=99 -> ordine a 0.00). Cosi' il Ricavo lordo resta la verita'
 degli ordini pagati davvero; il select Piano resta come scorciatoia per i
 CREDITI. Sottotitolo del popup riscritto (senza pagamento, importo zero).
 Regressioni giro5 17, faseD 4, rifiniture 8, billing-rifiniture 6; tsc pulito.
+
+## 2026-07-20 — KPI PACCHETTI SMS IN ITALIANO PARLANTE (rilievo utente)
+
+Sottotitoli dei 4 KPI bonificati: "ordini paid" -> "da ordini pagati";
+"ricariche SMS" -> "dalle ricariche SMS pagate"; "0 pending" -> "nessuno in
+attesa di pagamento" (e con pendenti > 0 il testo diventa AMBRA "N in attesa
+di pagamento": e' la spia dei pagamenti incagliati); "visibili tenant" ->
+"nella vetrina acquisti dei tenant". Metric.detail ora accetta ReactNode.
+Verifica: probe live 4 testi renderizzati; billing-rifiniture 6/6.

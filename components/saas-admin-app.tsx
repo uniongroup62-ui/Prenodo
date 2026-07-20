@@ -1291,10 +1291,11 @@ function SmsPlansView({ data, canManage, onAction, onRefresh }: { data: SmsBilli
   return (
     <div className="grid gap-5">
       <div className="grid gap-3 md:grid-cols-4">
-        <Metric label="Crediti venduti" value={String(data.summary.credits_sold)} detail="ordini paid" />
-        <Metric label="Ricavo lordo" value={formatEuro(data.summary.revenue_gross)} detail="ricariche SMS" />
-        <Metric label="Ordini" value={String(data.summary.orders_total)} detail={`${data.summary.orders_pending} pending`} />
-        <Metric label="Piani attivi" value={String(data.activePlans.length)} detail="visibili tenant" />
+        <Metric label="Crediti venduti" value={String(data.summary.credits_sold)} detail="da ordini pagati" />
+        <Metric label="Ricavo lordo" value={formatEuro(data.summary.revenue_gross)} detail="dalle ricariche SMS pagate" />
+        {/* pending = pagamenti incagliati: e' la spia da guardare, in ambra */}
+        <Metric label="Ordini" value={String(data.summary.orders_total)} detail={data.summary.orders_pending > 0 ? <span className="font-semibold text-amber-700">{data.summary.orders_pending} in attesa di pagamento</span> : "nessuno in attesa di pagamento"} />
+        <Metric label="Piani attivi" value={String(data.activePlans.length)} detail="nella vetrina acquisti dei tenant" />
       </div>
 
       
