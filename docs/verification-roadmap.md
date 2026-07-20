@@ -17380,3 +17380,17 @@ tenant o destinatario..." nell'header di CIASCUNA tabella (stato di ricerca
 e pagina indipendenti), empty-state dedicato; mappe stati/tipi promosse a
 modulo (movementStatusIt/movementKindIt). Verifica: probe live (2 campi,
 empty-state su query inesistente); faseC 7/7; tsc pulito.
+
+## 2026-07-20 — AUDIT: 5 RIFINITURE DA STRUMENTO D'INDAGINE (analisi approvata)
+
+1) TENANT CLICCABILE nella riga -> apre il dettaglio (coerenza con
+   dashboard). 2) AZIONE CLICCABILE -> imposta il filtro prefisso e rilancia
+   la ricerca (niente ricopiatura a mano). 3) TOOLTIP: meta_json leggibile
+   sul messaggio (auditMetaTitle: "chiave: valore · ...") e IP sull'attore.
+4) FILTRO PERIODO server-side (Tutto/24h/7g/30g): searchSaasAudit accetta
+   `days` — confronto con NOW() del DB (created_at ha DEFAULT
+   CURRENT_TIMESTAMP: STESSO orologio, mai wall-time app); l'export CSV lo
+   eredita. 5) Empty-state dedicato coi filtri attivi.
+Verifica: probe live (24h=276 < totale=378; click-azione compila il campo e
+raffina; click-tenant apre il dettaglio; tooltip presenti); faseD 4,
+consolida 12, fase4 11; tsc pulito.

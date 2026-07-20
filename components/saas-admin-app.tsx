@@ -108,10 +108,10 @@ type SignupRow = {
   created_at: string | null;
 };
 
-type AuditFilters = { q: string; action: string; tenant: string };
+type AuditFilters = { q: string; action: string; tenant: string; days: number };
 
 type AuditSearchPayload = {
-  rows: Array<AuditRow & { meta_json?: string | null }>;
+  rows: Array<AuditRow & { meta_json?: string | null; ip?: string | null }>;
   total: number;
   page: number;
   perPage: number;
@@ -214,7 +214,7 @@ export function SaasAdminApp({
   const [restoreCandidates, setRestoreCandidates] = useState<BackupRow[]>([]);
   const [maintTenants, setMaintTenants] = useState<Tenant[]>([]);
   const [auditData, setAuditData] = useState<AuditSearchPayload | null>(null);
-  const [auditFilters, setAuditFilters] = useState<AuditFilters>({ q: "", action: "", tenant: "" });
+  const [auditFilters, setAuditFilters] = useState<AuditFilters>({ q: "", action: "", tenant: "", days: 0 });
   const [signups, setSignups] = useState<SignupRow[] | null>(null);
   const [statsData, setStatsData] = useState<StatsPayload | null>(null);
   const [movements, setMovements] = useState<MovementsPayload | null>(null);
@@ -487,6 +487,7 @@ async function loadStats() {
       if (filters.q.trim()) search.set("q", filters.q.trim());
       if (filters.action.trim()) search.set("audit_action", filters.action.trim());
       if (filters.tenant.trim()) search.set("tenant", filters.tenant.trim());
+      if (filters.days > 0) search.set("days", String(filters.days));
       if (nextPage > 1) search.set("page", String(nextPage));
       search.set("section", "audit_search");
       const data = await apiGet<AuditSearchPayload>(`/api/admin/operations?${search}`);
@@ -689,7 +690,7 @@ async function loadStats() {
               </div>
             ) : null}
             {activeView === "stats" ? <StatsView data={statsData} onOpenTenant={(slug) => loadTenant(slug)} onRefresh={loadStats} /> : null}
-            {activeView === "audit" ? <AuditView data={auditData} filters={auditFilters} onSearch={(filters) => loadAudit(filters, 1)} onPageChange={(next) => loadAudit(auditFilters, next)} /> : null}
+            {activeView === "audit" ? <AuditView data={auditData} filters={auditFilters} onOpenTenant={(slug) => loadTenant(slug)} onSearch={(filters) => loadAudit(filters, 1)} onPageChange={(next) => loadAudit(auditFilters, next)} /> : null}
             {activeView === "admins" ? <AdminsView admins={admins} currentUser={initialUser} onAction={adminAction} /> : null}
             {activeView === "security" ? <AdminSecurityPanel /> : null}
               </>
@@ -1667,22 +1668,51 @@ function MaintenanceView({ tenants, results, restoreCandidates, canManage, onAct
 
 // AUDIT potenziato (2026-07-19): filtri testo/azione/tenant, paginazione
 // server-side, export CSV coi filtri correnti (prima: ultimi 20 e basta).
-function AuditView({ data, filters, onSearch, onPageChange }: { data: AuditSearchPayload | null; filters: AuditFilters; onSearch: (filters: AuditFilters) => void; onPageChange: (page: number) => void }) {
+// meta_json leggibile per il tooltip: "chiave: valore · chiave: valore".
+function auditMetaTitle(meta: unknown): string {
+  const raw = String(meta ?? "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const parts = Object.entries(parsed).map(([key, value]) => `${key}: ${typeof value === "object" ? JSON.stringify(value) : String(value)}`);
+    return parts.join(" · ");
+  } catch {
+    return raw;
+  }
+}
+
+const AUDIT_PERIODS: Array<{ days: number; label: string }> = [
+  { days: 0, label: "Tutto il periodo" },
+  { days: 1, label: "Ultime 24 ore" },
+  { days: 7, label: "Ultimi 7 giorni" },
+  { days: 30, label: "Ultimi 30 giorni" },
+];
+
+function AuditView({ data, filters, onSearch, onPageChange, onOpenTenant }: { data: AuditSearchPayload | null; filters: AuditFilters; onSearch: (filters: AuditFilters) => void; onPageChange: (page: number) => void; onOpenTenant: (slug: string) => void }) {
   const [q, setQ] = useState(filters.q);
   const [action, setAction] = useState(filters.action);
   const [tenant, setTenant] = useState(filters.tenant);
+  const [days, setDays] = useState(filters.days);
   const exportParams = new URLSearchParams({ section: "export_audit" });
   if (filters.q.trim()) exportParams.set("q", filters.q.trim());
   if (filters.action.trim()) exportParams.set("audit_action", filters.action.trim());
   if (filters.tenant.trim()) exportParams.set("tenant", filters.tenant.trim());
+  if (filters.days > 0) exportParams.set("days", String(filters.days));
+  const hasFilters = Boolean(filters.q.trim() || filters.action.trim() || filters.tenant.trim() || filters.days > 0);
   const pageCount = data ? Math.max(1, Math.ceil(data.total / data.perPage)) : 1;
   return (
     <div className="grid gap-4">
       <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
-        <form className="grid gap-3 p-4 md:grid-cols-[1fr_200px_200px_auto_auto]" onSubmit={(event) => { event.preventDefault(); onSearch({ q, action, tenant }); }}>
+        <form className="grid gap-3 p-4 md:grid-cols-[1fr_180px_180px_170px_auto_auto]" onSubmit={(event) => { event.preventDefault(); onSearch({ q, action, tenant, days }); }}>
           <Input label="Cerca (messaggio, attore, azione)" placeholder="Es. backup, info@..." value={q} onChange={(event) => setQ(event.target.value)} />
           <Input label="Azione (prefisso)" placeholder="Es. tenant.suspend" value={action} onChange={(event) => setAction(event.target.value)} />
           <Input label="Tenant (slug)" placeholder="Es. centroestetico" value={tenant} onChange={(event) => setTenant(event.target.value)} />
+          <label>
+            <span className="mb-1 block text-sm font-medium text-slate-600">Periodo</span>
+            <select className="h-10 w-full rounded-md border border-slate-200 px-3 outline-none focus:border-[#365a96]" value={String(days)} onChange={(event) => setDays(Number(event.target.value))}>
+              {AUDIT_PERIODS.map((period) => <option key={period.days} value={String(period.days)}>{period.label}</option>)}
+            </select>
+          </label>
           <div className="flex items-end">
             <Button icon={Search}>Filtra</Button>
           </div>
@@ -1697,12 +1727,18 @@ function AuditView({ data, filters, onSearch, onPageChange }: { data: AuditSearc
       <Table
         title={`Registro attività${data ? ` (${data.total})` : ""}`}
         headers={["Data", "Azione", "Tenant", "Attore", "Messaggio"]}
+        empty={hasFilters ? "Nessun evento corrisponde ai filtri." : "Nessun dato."}
         rows={(data?.rows ?? []).map((row) => [
           formatDateTime(row.created_at),
-          <code className="text-xs" key={`a-${row.id}`}>{row.action}</code>,
-          row.tenant_slug || "-",
-          row.actor_email || "sistema",
-          row.message || "-",
+          /* click sull'azione = filtro a un click (niente ricopiatura a mano) */
+          <button className="cursor-pointer rounded font-mono text-xs hover:bg-slate-100 hover:underline" key={`a-${row.id}`} title="Filtra per questa azione" type="button" onClick={() => { setAction(String(row.action ?? "")); onSearch({ q, action: String(row.action ?? ""), tenant, days }); }}>{row.action}</button>,
+          row.tenant_slug
+            ? <button className="cursor-pointer font-semibold text-[#365a96] hover:underline" key={`t-${row.id}`} title="Apri il tenant" type="button" onClick={() => onOpenTenant(String(row.tenant_slug))}>{row.tenant_slug}</button>
+            : "-",
+          /* IP nel tooltip dell'attore: "chi, e da dove" */
+          <span key={`u-${row.id}`} title={row.ip ? `IP: ${row.ip}` : undefined}>{row.actor_email || "sistema"}</span>,
+          /* dettagli strutturati (meta_json) nel tooltip del messaggio */
+          <span key={`m-${row.id}`} title={auditMetaTitle(row.meta_json) || undefined}>{row.message || "-"}</span>,
         ])}
       />
       {data && pageCount > 1 ? (

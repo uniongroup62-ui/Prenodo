@@ -682,10 +682,17 @@ export async function auditRows(tenantId?: number | null, limit = 80): Promise<R
 
 // Ricerca AUDIT con filtri e paginazione (2026-07-19: la vista mostrava solo
 // gli ultimi 20 senza filtri). Match case-insensitive via LOWER (trappola PG).
-export async function searchSaasAudit(filters: { q?: string; action?: string; tenant?: string; page?: number; perPage?: number } = {}): Promise<{ rows: RowDataPacket[]; total: number; page: number; perPage: number }> {
+export async function searchSaasAudit(filters: { q?: string; action?: string; tenant?: string; days?: number; page?: number; perPage?: number } = {}): Promise<{ rows: RowDataPacket[]; total: number; page: number; perPage: number }> {
   await ensureAuditTable();
   const where: string[] = [];
   const params: unknown[] = [];
+  // Filtro periodo: created_at ha DEFAULT CURRENT_TIMESTAMP (orologio DB),
+  // quindi il confronto usa lo STESSO orologio via NOW() — mai wall-time app.
+  const days = Math.max(0, Math.floor(Number(filters.days ?? 0)));
+  if (days > 0) {
+    where.push("created_at >= NOW() - (?::int * interval '1 day')");
+    params.push(days);
+  }
   const q = (filters.q ?? "").trim();
   if (q) {
     where.push("(LOWER(COALESCE(message,'')) LIKE LOWER(?) OR LOWER(COALESCE(actor_email,'')) LIKE LOWER(?) OR LOWER(action) LIKE LOWER(?))");

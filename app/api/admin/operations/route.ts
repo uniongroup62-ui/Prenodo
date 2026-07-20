@@ -169,6 +169,7 @@ export async function GET(request: Request) {
         q: url.searchParams.get("q") ?? "",
         action: url.searchParams.get("audit_action") ?? "",
         tenant: url.searchParams.get("tenant") ?? "",
+        days: parseInteger(url.searchParams.get("days"), 0),
         page: parseInteger(url.searchParams.get("page"), 1),
       });
       return Response.json({ ok: true, ...result });
@@ -180,6 +181,7 @@ export async function GET(request: Request) {
         q: url.searchParams.get("q") ?? "",
         action: url.searchParams.get("audit_action") ?? "",
         tenant: url.searchParams.get("tenant") ?? "",
+        days: parseInteger(url.searchParams.get("days"), 0),
         page: 1,
         perPage: 100,
       });
