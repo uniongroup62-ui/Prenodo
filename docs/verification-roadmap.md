@@ -17492,3 +17492,12 @@ rimossi dai componenti. Probe Playwright forge sede 21 su tutte le pagine
 (n box atteso, titolo, contenuto, vecchi titoli/classi assenti) = 10/10;
 nessuna suite asseriva i vecchi testi; regressioni recharges 32,
 cabine-pass2 20; tsc pulito.
+
+## 2026-07-20 - InfoBox: restyle su richiesta utente
+La banda blu piena non piaceva: .bs-info-box ora e una card BIANCA in linea
+con le altre card del gestionale (bordo #e4e9f1, radius 12, ombra soffice),
+icona info in chip circolare navy brand #365a96 su #eef2f9, titolo scuro
+#0f172a, testo muted #5b6b80 con strong #33465e. Solo CSS (app.css),
+markup e componente invariati. Probe computed-style su fidelity_membership_
+settings / cabins / recharges (bg bianco + icona navy) = 3/3, screenshot
+verificati a occhio.

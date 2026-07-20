@@ -4598,11 +4598,11 @@ body:has(.app-shell) :is(
   display:flex;
   align-items:flex-start;
   gap:12px;
-  padding:16px 18px;
-  border:1px solid #bfd5f4;
-  border-left:4px solid #2f63d8;
-  border-radius:10px;
-  background:#f3f8ff;
+  padding:18px;
+  border:1px solid #e4e9f1;
+  border-radius:12px;
+  background:#fff;
+  box-shadow:0 1px 2px rgba(15,23,42,.04);
 }
 
 .bs-info-box__icon{
@@ -4611,9 +4611,9 @@ body:has(.app-shell) :is(
   flex:0 0 34px;
   display:grid;
   place-items:center;
-  border-radius:9px;
-  background:#dceaff;
-  color:#2f63d8;
+  border-radius:50%;
+  background:#eef2f9;
+  color:#365a96;
   font-size:16px;
 }
 
@@ -4623,16 +4623,20 @@ body:has(.app-shell) :is(
 
 .bs-info-box__title{
   margin-bottom:6px;
-  color:#06183f;
+  color:#0f172a;
   font-size:14px;
   font-weight:600;
   line-height:1.25;
 }
 
 .bs-info-box__content{
-  color:#31518f;
+  color:#5b6b80;
   font-size:13px;
-  line-height:1.45;
+  line-height:1.5;
+}
+
+.bs-info-box__content strong{
+  color:#33465e;
 }
 
 .bs-info-box__content p{
