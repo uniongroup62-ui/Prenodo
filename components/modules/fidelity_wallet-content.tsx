@@ -246,7 +246,7 @@ export function FidelityWalletContent({ slug: slugProp, initialQuery }: { slug?:
         <div className="bs-page-header">
           <div className="bs-page-heading">
             <div className="bs-page-kicker">Portafoglio</div>
-            <h1 className="bs-page-title">Fidelity • Portafoglio</h1>
+            <h1 className="bs-page-title">Portafoglio</h1>
             <div className="bs-page-subtitle">Gestione punti per cliente, movimenti manuali e scadenze.</div>
           </div>
           <div className="bs-page-actions">
@@ -305,7 +305,7 @@ export function FidelityWalletContent({ slug: slugProp, initialQuery }: { slug?:
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Portafoglio</div>
           <div className="d-flex align-items-center gap-2">
-            <h1 className="bs-page-title">Fidelity • Portafoglio</h1>
+            <h1 className="bs-page-title">Portafoglio</h1>
             <InfoBox>
               <ul>
                 <li><strong>Saldo</strong>: il totale dei punti del cliente.</li>

@@ -341,7 +341,7 @@ export function GiftsContent({ slug: slugProp, initialQuery }: { slug?: string; 
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Fidelity</div>
           <div className="d-flex align-items-center gap-2">
-            <h1 className="bs-page-title">{view === "campaigns" ? "Fidelity / Campagne gift" : "Fidelity / Omaggi"}</h1>
+            <h1 className="bs-page-title">{view === "campaigns" ? "Campagne gift" : "Omaggi"}</h1>
             <InfoBox>
               <p>
                 Il ciclo: crei una <strong>campagna</strong> (evento) con le regole di sblocco; quando un cliente le

@@ -98,7 +98,7 @@ export function GiftboxSettingsContent({ slug: slugProp, initialQuery }: { slug?
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Programma fedelta</div>
           <div className="d-flex align-items-center gap-2">
-            <h1 className="bs-page-title">Fidelity / GiftBox / Impostazioni</h1>
+            <h1 className="bs-page-title">GiftBox / Impostazioni</h1>
             <InfoBox>
               <h6>Scadenza predefinita</h6>
               <ul>

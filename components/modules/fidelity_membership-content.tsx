@@ -301,14 +301,6 @@ export function FidelityMembershipContent({ slug: slugProp, initialQuery }: { sl
             <h1 className="bs-page-title">Adesione</h1>
             <div className="bs-page-subtitle">Gestisci tessere, stati e adesioni Fidelity.</div>
           </div>
-          {canFidelityManage ? (
-            <div className="bs-page-actions">
-              <a className="btn btn-outline-secondary btn-pill" href={pageHref("fidelity")}>
-                <i className="bi bi-arrow-left me-1" />
-                Fidelity
-              </a>
-            </div>
-          ) : null}
         </div>
 
         {flashAlerts}
@@ -343,11 +335,6 @@ export function FidelityMembershipContent({ slug: slugProp, initialQuery }: { sl
         </div>
         <div className="bs-page-actions">
           <div className="d-flex gap-2">
-            {canFidelityManage ? (
-              <a className="btn btn-light" href={pageHref("fidelity")}>
-                <i className="bi bi-arrow-left" /> Fidelity
-              </a>
-            ) : null}
             {canLevels ? (
               <a className="btn btn-light" href={`${pageHref("fidelity_points")}#livelli-card`}>
                 <i className="bi bi-stars" /> Livelli Card

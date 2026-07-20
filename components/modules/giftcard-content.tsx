@@ -168,7 +168,7 @@ export function GiftcardContent({ slug: slugProp, initialQuery }: { slug?: strin
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Programma fedelta</div>
           <div className="d-flex align-items-center gap-2">
-            <h1 className="bs-page-title">Fidelity / GiftCard</h1>
+            <h1 className="bs-page-title">GiftCard</h1>
             <InfoBox>
               <p>Qui gestisci i <strong>modelli</strong> GiftCard e consulti le GiftCard emesse.</p>
               <ul>

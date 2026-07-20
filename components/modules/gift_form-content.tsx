@@ -347,7 +347,7 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Fidelity</div>
-          <h1 className="bs-page-title">Fidelity / Omaggi</h1>
+          <h1 className="bs-page-title">Omaggi</h1>
           <div className="bs-page-subtitle">Omaggi avanzati con regole e tracking automatico.</div>
         </div>
         <div className="bs-page-actions">

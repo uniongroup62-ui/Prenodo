@@ -225,7 +225,7 @@ export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string
       <div className="bs-page-heading">
         <div className="bs-page-kicker">Programma fedelta</div>
         <div className="d-flex align-items-center gap-2">
-          <h1 className="bs-page-title">Fidelity / GiftBox</h1>
+          <h1 className="bs-page-title">GiftBox</h1>
           <InfoBox>
             <p>
               Qui gestisci i <strong>modelli</strong> GiftBox (contenuto, prezzo, validità) e consulti le GiftBox emesse
@@ -248,10 +248,6 @@ export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string
       </div>
       <div className="bs-page-actions">
         <div className="d-flex gap-2">
-          <a className="btn btn-outline-secondary btn-pill" href={href("fidelity")}>
-            <i className="bi bi-arrow-left me-1" />
-            Fidelity
-          </a>
           {canSettings ? (
             <a className="btn btn-outline-secondary btn-pill" href={href("giftbox_settings")}>
               <i className="bi bi-gear me-1" />

@@ -17694,3 +17694,20 @@ regola generica .fc-button dell'agenda gli metteva pill #f4f8ff+bordo);
 (2) tab Giorno/Settimana/Mese senza bordo e rettangolari (border 0 +
 radius 0, sfondi invariati: attivo navy). Override in calendar.css con
 ?v=20260721 sulla link. Probe computed-style 2/2; screenshot verificato.
+
+## 2026-07-21 - Titoli senza prefisso "Fidelity / " + via i bottoni "<- Fidelity"
+Richiesta utente (screenshot GiftBox). Titoli ripuliti in 11 punti:
+giftbox lista/form/dettaglio-istanza -> "GiftBox", giftcard lista/
+dettaglio -> "GiftCard", giftbox/giftcard settings -> "GiftBox|GiftCard /
+Impostazioni", gifts -> "Omaggi"/"Campagne gift", gift_form -> "Omaggi",
+fidelity_wallet (x2, "Fidelity (bullet) Portafoglio") -> "Portafoglio",
+promotions -> "Promozioni". Rimossi i 4 bottoni header "<- Fidelity"
+(giftbox lista, giftbox_form, fidelity_membership x2 - ATTENZIONE ai
+ternari {cond ? (...) : null}: rimuovere TUTTO il blocco, non solo il
+div interno). Il btn "Fidelity" con icona award nello stato-disabilitato
+di fidelity_membership_settings resta (serve a riattivare il modulo).
+Probe Playwright 10/10 (titolo atteso + zero bottoni back). BONUS: sanata
+test-dom-giftcard-improvements che usava CURRENT_DATE del DB (UTC) nelle
+fixture -> dopo mezzanotte italiana il badge diventava "Scade tra 4
+giorni" (trappola tz-period-boundary: date SEMPRE calcolate in locale
+nel test); ora 5/5 a qualsiasi ora. tsc pulito.

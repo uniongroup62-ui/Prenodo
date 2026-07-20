@@ -182,7 +182,7 @@ export function PromotionsContent({ slug: slugProp, initialQuery }: { slug?: str
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Fidelizzazione</div>
-          <h1 className="bs-page-title">Fidelity • Promozioni</h1>
+          <h1 className="bs-page-title">Promozioni</h1>
           <div className="bs-page-subtitle">Gestisci promozioni, regole e visibilita per sedi e canali.</div>
         </div>
         <div className="bs-page-actions">

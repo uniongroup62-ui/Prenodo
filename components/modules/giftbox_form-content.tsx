@@ -245,15 +245,11 @@ export function GiftBoxFormContent({ slug: slugProp, initialQuery }: { slug?: st
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Programma fedelta</div>
-          <h1 className="bs-page-title">Fidelity / GiftBox</h1>
+          <h1 className="bs-page-title">GiftBox</h1>
           <div className="bs-page-subtitle">Gestisci template, voucher e GiftBox emesse.</div>
         </div>
         <div className="bs-page-actions">
           <div className="d-flex gap-2">
-            <a className="btn btn-outline-secondary btn-pill" href={`/${encodeURIComponent(slug)}/fidelity`}>
-              <i className="bi bi-arrow-left me-1" />
-              Fidelity
-            </a>
             {perms.canSettings ? (
               <a className="btn btn-outline-secondary btn-pill" href={`/${encodeURIComponent(slug)}/giftbox_settings`}>
                 <i className="bi bi-gear me-1" />

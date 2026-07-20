@@ -18,8 +18,15 @@ let browser = null, cli = 0, gcIds = [];
 try {
   cli = Number((await db.query("INSERT INTO clients (tenant_id,full_name,location_id) VALUES (25,$1,21) RETURNING id", [`ZZ GcDomImp${RUN}`])).rows[0].id);
   // 26 card (pager) di cui la prima scade tra 5 giorni (badge)
+  // Date calcolate in ORA LOCALE (mai CURRENT_DATE del DB: e' UTC e dopo la
+  // mezzanotte italiana slitta di un giorno -> badge 'Scade tra 4 giorni').
+  const localYmd = (offsetDays) => {
+    const d = new Date();
+    d.setDate(d.getDate() + offsetDays);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
   const seeded = await db.query(`INSERT INTO giftcards (tenant_id, code, client_id, initial_amount, balance, currency, status, issued_at, expires_at, event_type, voucher_hide_amount, created_at, updated_at, location_id, location_name)
-    SELECT 25, 'ZZGDI-${RUN}-'||g, $1, 10, 10, 'EUR', 'active', NOW(), CASE WHEN g=26 THEN CURRENT_DATE+5 ELSE CURRENT_DATE+300 END, 'giftcard', 0, NOW(), NOW(), 21, 'Sede1' FROM generate_series(1,26) g RETURNING id, code`, [cli]);
+    SELECT 25, 'ZZGDI-${RUN}-'||g, $1, 10, 10, 'EUR', 'active', NOW(), CASE WHEN g=26 THEN $2::date ELSE $3::date END, 'giftcard', 0, NOW(), NOW(), 21, 'Sede1' FROM generate_series(1,26) g RETURNING id, code`, [cli, localYmd(5), localYmd(300)]);
   gcIds = seeded.rows.map((r) => Number(r.id));
   const warnCode = seeded.rows[25].code; // g=26 (id piu' alto -> prima riga pagina 1) scade tra 5 giorni
 

@@ -299,7 +299,7 @@ export function GiftBoxInstanceDetailContent({ slug: slugProp, initialQuery }: {
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Programma fedelta</div>
-          <h1 className="bs-page-title">Fidelity / GiftBox</h1>
+          <h1 className="bs-page-title">GiftBox</h1>
           <div className="bs-page-subtitle">Gestisci template, voucher e GiftBox emesse.</div>
         </div>
         <div className="bs-page-actions">

@@ -263,7 +263,7 @@ export function GiftCardDetailContent({ slug: slugProp, initialQuery }: { slug?:
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Programma fedelta</div>
-          <h1 className="bs-page-title">Fidelity / GiftCard</h1>
+          <h1 className="bs-page-title">GiftCard</h1>
           <div className="bs-page-subtitle">Gestisci GiftCard, voucher e stato delle card emesse.</div>
         </div>
         <div className="bs-page-actions">
