@@ -302,9 +302,15 @@ export function ActionPanel({ icon: Icon, title, detail, disabled, onClick }: { 
   );
 }
 
-export function Metric({ label, value, detail }: { label: string; value: string; detail: string }) {
+export function Metric({ label, value, detail, onClick }: { label: string; value: string; detail: string; onClick?: () => void }) {
   return (
-    <div className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
+    <div
+      className={`rounded-md border border-slate-200 bg-white p-4 shadow-sm ${onClick ? "cursor-pointer transition-colors hover:border-[#365a96]" : ""}`}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onClick={onClick}
+      onKeyDown={onClick ? (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onClick(); } } : undefined}
+    >
       <p className="text-sm text-slate-500">{label}</p>
       <strong className="mt-2 block text-2xl">{value}</strong>
       <p className="mt-1 text-sm text-slate-500">{detail}</p>

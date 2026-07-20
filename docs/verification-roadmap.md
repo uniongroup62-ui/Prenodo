@@ -17079,3 +17079,25 @@ si stiravano a tutta riga (figli diretti delle griglie).
 
 Verifica: screenshot di tutte le tab + dashboard confrontati a occhio;
 regressione completa admin 18/18 suite verdi; tsc pulito.
+
+## 2026-07-20 — DASHBOARD: 5 RIFINITURE DI NAVIGAZIONE (analisi approvata)
+
+Esito dell'analisi "e' tutto ok?": dati corretti (batteria dash), 5 vicoli
+ciechi chiusi:
+1) Stato sistema NAVIGABILE: Cron -> Operazioni/Controlli, Ultimo backup ->
+   Manutenzione, Policy 2FA -> Sicurezza; riga Cron col dettaglio ultimo run
+   ("admin-health · 20/07/2026 15:5x" via cron_last_job/cron_last_at nuovi in
+   saasSystemStatus); 2FA spenta = badge AMBRA "da attivare" (raccomandazione,
+   non dato neutro).
+2) Via il doppione "Nuovo tenant" dalle azioni rapide (vive gia' nella barra
+   in alto; onOpenCreate rimosso dalla DashboardView).
+3) Attivita' recente con footer-azione "Apri l'Audit completo" -> vista Audit.
+4) Coda vuota: card self-start, non si stira piu' accanto a Stato sistema.
+5) KPI CLICCABILI (Metric con onClick accessibile: role/tabIndex/Enter):
+   MRR -> Fatturazione, Tenant attivi -> Tenant, Utenti marketplace ->
+   Statistiche, Ricavo SMS -> Fatturazione/SMS.
+
+Batteria dash estesa a 8 (V6 niente doppione + dettaglio cron ATTESO via
+waitFor — il dettaglio arriva con la fetch dell'overview, contare subito =
+race; V7 righe navigabili + link Audit; V8 KPI MRR -> billing). Regressioni
+ux 7, faseAB 11, stats 8 — verdi; tsc pulito.

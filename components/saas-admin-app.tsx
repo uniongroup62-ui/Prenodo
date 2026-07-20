@@ -130,6 +130,8 @@ type ExecSummary = {
 type SystemStatus = {
   cron_ok: number;
   cron_error: number;
+  cron_last_job?: string | null;
+  cron_last_at?: string | null;
   last_backup_slug: string | null;
   last_backup_at: string | null;
   totp_policy: boolean;
@@ -639,7 +641,6 @@ async function loadStats() {
                 onOpenTenant={(slug, tab) => loadTenant(slug, (tab ?? "overview") as TenantTab)}
                 onNavigate={(view, sec) => navigateView(view as ViewKey, true, sec ?? "")}
                 onQuickAction={quickWorkAction}
-                onOpenCreate={() => { navigateView("tenants"); setCreateOpen(true); }}
                 onRunDiagnostics={async () => { await operationAction({ action: "cron_run", job: "admin-health" }); await loadOverview(); }}
               />
             ) : null}
@@ -816,13 +817,12 @@ function CommandPalette({ open, nav, onClose, onNavigate, onOpenTenant }: {
   );
 }
 
-function DashboardView({ overview, canManage, onOpenTenant, onNavigate, onQuickAction, onOpenCreate, onRunDiagnostics }: {
+function DashboardView({ overview, canManage, onOpenTenant, onNavigate, onQuickAction, onRunDiagnostics }: {
   overview: OverviewPayload;
   canManage: boolean;
   onOpenTenant: (slug: string, tab?: string) => void;
   onNavigate: (view: string, sec?: string) => void;
   onQuickAction: (action: string, slug: string) => void;
-  onOpenCreate: () => void;
   onRunDiagnostics: () => void;
 }) {
   // Riga EXECUTIVE (vista Statistiche 19/07): business prima, operativo
@@ -835,22 +835,23 @@ function DashboardView({ overview, canManage, onOpenTenant, onNavigate, onQuickA
     const value = euro ? formatEuro(Math.abs(diff)) : String(Math.abs(diff));
     return ` · ${diff > 0 ? "+" : "-"}${value} vs 30gg fa`;
   };
-  const execMetrics = [
-    ["Ricavo abbonamenti (MRR)", formatEuro(overview.exec.mrr), `somma piani dei tenant attivi${delta(overview.exec.mrr, overview.exec.mrr_prev, true)}`],
-    ["Tenant attivi", String(overview.summary.active), `su ${overview.summary.total} totali`],
-    ["Utenti marketplace", String(overview.exec.marketplace_accounts), `account clienti${delta(overview.exec.marketplace_accounts, overview.exec.marketplace_prev)}`],
-    ["Ricavo SMS (mese)", formatEuro(overview.exec.sms_month_revenue), "ordini pagati nel mese"],
+  // KPI cliccabili: ogni numero porta alla vista che lo spiega.
+  const execMetrics: Array<[string, string, string, () => void]> = [
+    ["Ricavo abbonamenti (MRR)", formatEuro(overview.exec.mrr), `somma piani dei tenant attivi${delta(overview.exec.mrr, overview.exec.mrr_prev, true)}`, () => onNavigate("billing")],
+    ["Tenant attivi", String(overview.summary.active), `su ${overview.summary.total} totali`, () => onNavigate("tenants")],
+    ["Utenti marketplace", String(overview.exec.marketplace_accounts), `account clienti${delta(overview.exec.marketplace_accounts, overview.exec.marketplace_prev)}`, () => onNavigate("stats")],
+    ["Ricavo SMS (mese)", formatEuro(overview.exec.sms_month_revenue), "ordini pagati nel mese", () => onNavigate("billing", "sms")],
   ];
   return (
     <div className="grid gap-5">
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        {execMetrics.map(([label, value, detail]) => <Metric key={label} label={String(label)} value={String(value)} detail={String(detail)} />)}
+        {execMetrics.map(([label, value, detail, open]) => <Metric key={label} label={label} value={value} detail={detail} onClick={open} />)}
       </div>
 
       {/* Fascia centrale (redesign 19/07): coda a 2/3 + stato sistema e
-          azioni rapide a 1/3. */}
+          azioni rapide a 1/3. A coda vuota la card non si stira (self-start). */}
       <div className="grid gap-5 xl:grid-cols-[2fr_1fr]">
-        <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
+        <section className={`min-w-0 rounded-md border border-slate-200 bg-white shadow-sm ${overview.workQueue.length === 0 ? "self-start" : ""}`}>
           <SectionHead title="Da fare adesso" subtitle="Segnalazioni operative in ordine di gravità." />
           {overview.workQueue.length === 0 ? (
             <p className="flex items-center gap-2 p-4 text-sm font-semibold text-emerald-700">
@@ -886,28 +887,30 @@ function DashboardView({ overview, canManage, onOpenTenant, onNavigate, onQuickA
 
         <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
           <SectionHead title="Stato sistema" subtitle="Cron, backup e sicurezza a colpo d'occhio." />
-          <div className="grid gap-2 p-4 text-sm">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+          <div className="grid gap-1 p-4 text-sm">
+            {/* Ogni riga porta alla vista che la spiega: mai vicoli ciechi. */}
+            <button className="flex items-center justify-between gap-2 rounded-md border-b border-slate-100 px-1 pb-2 pt-1 text-left hover:bg-slate-50" type="button" onClick={() => onNavigate("operations", "controls")}>
               <span className="font-medium text-slate-600">Cron</span>
-              {overview.system.cron_error > 0
-                ? <Badge tone="danger">{overview.system.cron_error} in errore</Badge>
-                : overview.system.cron_ok > 0
-                  ? <Badge tone="ok">{overview.system.cron_ok} job OK</Badge>
-                  : <Badge tone="muted">nessuna esecuzione</Badge>}
-            </div>
-            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+              <span className="text-right">
+                {overview.system.cron_error > 0
+                  ? <Badge tone="danger">{overview.system.cron_error} in errore</Badge>
+                  : overview.system.cron_ok > 0
+                    ? <Badge tone="ok">{overview.system.cron_ok} job OK</Badge>
+                    : <Badge tone="muted">nessuna esecuzione</Badge>}
+                {overview.system.cron_last_job ? <span className="mt-0.5 block text-xs text-slate-500">{overview.system.cron_last_job} · {formatDateTime(overview.system.cron_last_at)}</span> : null}
+              </span>
+            </button>
+            <button className="flex items-center justify-between gap-2 rounded-md border-b border-slate-100 px-1 pb-2 pt-1 text-left hover:bg-slate-50" type="button" onClick={() => onNavigate("operations", "maintenance")}>
               <span className="font-medium text-slate-600">Ultimo backup</span>
-              <span className="text-right text-slate-600">{overview.system.last_backup_at ? `${overview.system.last_backup_slug} · ${overview.system.last_backup_at}` : "nessuno"}</span>
-            </div>
-            <div className="flex items-center justify-between pb-1">
+              <span className="text-right text-slate-600">{overview.system.last_backup_at ? `${overview.system.last_backup_slug} · ${formatDateTime(overview.system.last_backup_at)}` : "nessuno"}</span>
+            </button>
+            <button className="flex items-center justify-between gap-2 rounded-md px-1 pb-1 pt-1 text-left hover:bg-slate-50" type="button" onClick={() => onNavigate("security")}>
               <span className="font-medium text-slate-600">Policy 2FA</span>
-              {overview.system.totp_policy ? <Badge tone="ok">obbligatoria</Badge> : <Badge tone="muted">non attiva</Badge>}
-            </div>
+              {overview.system.totp_policy ? <Badge tone="ok">obbligatoria</Badge> : <Badge tone="warn">da attivare</Badge>}
+            </button>
+            {/* Azioni rapide senza doppioni: Nuovo tenant vive gia' nella
+                barra in alto, sempre visibile. */}
             <div className="mt-2 grid gap-2 border-t border-slate-100 pt-3">
-              <button className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-[#365a96] px-3 text-sm font-semibold text-white disabled:opacity-50" disabled={!canManage} type="button" onClick={onOpenCreate}>
-                <Plus size={15} aria-hidden />
-                Nuovo tenant
-              </button>
               <button className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-200 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50" disabled={!canManage} type="button" onClick={onRunDiagnostics}>
                 <Activity size={15} aria-hidden />
                 Esegui diagnostica
@@ -927,6 +930,8 @@ function DashboardView({ overview, canManage, onOpenTenant, onNavigate, onQuickA
       <Table
         title="Attività recente"
         headers={["Quando", "Cosa", "Tenant", "Chi"]}
+        action={<button className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-200 px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50" type="button" onClick={() => onNavigate("audit")}>Apri l&apos;Audit completo</button>}
+        empty="Nessuna attività registrata."
         rows={overview.audit.slice(0, 10).map((row) => [
           formatDateTime(row.created_at),
           row.message || row.action,

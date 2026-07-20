@@ -60,6 +60,32 @@ try {
   await page.waitForTimeout(12000);
   const runRows = (await db.query("SELECT id FROM saas_cron_runs WHERE id > $1 AND job='admin-health'", [cronWatermark])).rows.length;
   check("V5 Esegui diagnostica -> run admin-health registrata", runRows >= 1, `rows=${runRows}`);
+
+  // V6 (rifinitura 20/07): niente 'Nuovo tenant' duplicato nelle azioni
+  // rapide (resta SOLO nella barra in alto) + dettaglio ultimo cron in card.
+  await page.goto(`${BASE}/admin`, { waitUntil: "domcontentloaded" });
+  await page.locator("text=Stato sistema").waitFor({ timeout: 30000 });
+  // il dettaglio cron arriva con la fetch dell'overview: attenderlo, non contarlo
+  await page.locator("text=admin-health ·").first().waitFor({ timeout: 20000 });
+  const newTenantButtons = await page.locator("button", { hasText: "Nuovo tenant" }).count();
+  check("V6 azioni rapide senza doppione Nuovo tenant + dettaglio cron", newTenantButtons === 1, `nt=${newTenantButtons}`);
+
+  // V7: righe Stato sistema NAVIGABILI (Policy 2FA -> Sicurezza) e footer
+  // 'Apri l'Audit completo' -> vista Audit.
+  await page.locator("button", { hasText: "Policy 2FA" }).click();
+  await page.waitForURL(/page=security/, { timeout: 20000 });
+  await page.goBack();
+  await page.locator("button", { hasText: "Apri l'Audit completo" }).waitFor({ timeout: 20000 });
+  await page.locator("button", { hasText: "Apri l'Audit completo" }).click();
+  await page.waitForURL(/page=audit/, { timeout: 20000 });
+  check("V7 Stato sistema navigabile + link Audit completo", /page=audit/.test(page.url()), page.url().slice(-15));
+
+  // V8: KPI cliccabile -> MRR apre Fatturazione.
+  await page.goBack();
+  await page.locator("text=Ricavo abbonamenti (MRR)").waitFor({ timeout: 20000 });
+  await page.locator("text=Ricavo abbonamenti (MRR)").click();
+  await page.waitForURL(/page=billing/, { timeout: 20000 });
+  check("V8 KPI MRR cliccabile -> Fatturazione", /page=billing/.test(page.url()), page.url().slice(-18));
 } catch (e) {
   console.log("ERRORE:", e && e.message ? e.message : e);
   R.push(false);

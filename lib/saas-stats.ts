@@ -268,10 +268,15 @@ export async function saasSystemStatus() {
   const lastBackup = await dbQuery<RowDataPacket[]>(
     "SELECT tenant_slug, created_at FROM `saas_tenant_backups` WHERE status='completed' ORDER BY id DESC LIMIT 1",
   ).catch(() => []);
+  const lastRun = await dbQuery<RowDataPacket[]>(
+    "SELECT job, started_at FROM `saas_cron_runs` ORDER BY id DESC LIMIT 1",
+  ).catch(() => []);
   const { getAdminSetting } = await import("@/lib/saas-admin-security");
   return {
     cron_ok: Number(cron.find((row) => String(row.status) === "ok")?.count ?? 0),
     cron_error: Number(cron.find((row) => String(row.status) === "error")?.count ?? 0),
+    cron_last_job: lastRun[0] ? String(lastRun[0].job) : null,
+    cron_last_at: lastRun[0] ? String(lastRun[0].started_at ?? "") : null,
     last_backup_slug: lastBackup[0] ? String(lastBackup[0].tenant_slug) : null,
     last_backup_at: lastBackup[0] ? String(lastBackup[0].created_at ?? "") : null,
     totp_policy: (await getAdminSetting("require_totp").catch(() => "")) === "1",
