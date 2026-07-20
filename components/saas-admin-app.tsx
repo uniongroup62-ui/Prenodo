@@ -214,6 +214,7 @@ export function SaasAdminApp({
   const [smsBilling, setSmsBilling] = useState<SmsBillingPayload | null>(null);
   const [billing, setBilling] = useState<BillingPayload | null>(null);
   const [restoreCandidates, setRestoreCandidates] = useState<BackupRow[]>([]);
+  const [maintTenants, setMaintTenants] = useState<Tenant[]>([]);
   const [auditData, setAuditData] = useState<AuditSearchPayload | null>(null);
   const [auditFilters, setAuditFilters] = useState<AuditFilters>({ q: "", action: "", tenant: "" });
   const [signups, setSignups] = useState<SignupRow[] | null>(null);
@@ -500,8 +501,14 @@ async function loadStats() {
 
   async function loadRestoreCandidates() {
     try {
-      const data = await apiGet<{ candidates: BackupRow[] }>("/api/admin/operations?section=restore_candidates");
+      // insieme ai backup si carica l'elenco COMPLETO dei tenant per la
+      // selezione massiva (l'overview e' paginato: non basta).
+      const [data, all] = await Promise.all([
+        apiGet<{ candidates: BackupRow[] }>("/api/admin/operations?section=restore_candidates"),
+        apiGet<{ tenants: Tenant[] }>("/api/admin/operations?section=maintenance_tenants"),
+      ]);
       setRestoreCandidates(data.candidates ?? []);
+      setMaintTenants(all.tenants ?? []);
     } catch (error) {
       setMessage(errorMessage(error));
     }
@@ -677,7 +684,7 @@ async function loadStats() {
                 <SectionTabs active={opsTab} sections={operationsSections} onSelect={(key) => selectOpsTab(key as OperationsSection)} action={opsTab === "maintenance" ? null : <Button variant="outline" icon={RotateCcw} onClick={() => (opsTab === "controls" ? loadControls() : loadMovements())}>Aggiorna</Button>} />
                 {opsTab === "controls" ? <ControlsView canManage={canManageTenants} data={controls} onOpenTenant={(slug) => loadTenant(slug)} onRefresh={loadControls} onRunHealth={async () => { await operationAction({ action: "cron_run", job: "admin-health" }); await loadControls(); }} /> : null}
                 {opsTab === "movements" ? <MovementsView data={movements} onRefresh={loadMovements} /> : null}
-                {opsTab === "maintenance" ? <MaintenanceView tenants={overview.tenants} results={results} restoreCandidates={restoreCandidates} canManage={canManageTenants} onAction={tenantAction} onOperationAction={operationAction} /> : null}
+                {opsTab === "maintenance" ? <MaintenanceView tenants={maintTenants.length ? maintTenants : overview.tenants} results={results} restoreCandidates={restoreCandidates} canManage={canManageTenants} onAction={tenantAction} onOperationAction={operationAction} /> : null}
               </div>
             ) : null}
             {activeView === "stats" ? <StatsView data={statsData} onOpenTenant={(slug) => loadTenant(slug)} onRefresh={loadStats} /> : null}
@@ -1519,9 +1526,17 @@ function MovementsView({ data, onRefresh }: { data: MovementsPayload | null; onR
   );
 }
 
+const MAINT_PER_PAGE = 25;
+
 function MaintenanceView({ tenants, results, restoreCandidates, canManage, onAction, onOperationAction }: { tenants: Tenant[]; results: Array<{ slug: string; ok: boolean; message: string }>; restoreCandidates: BackupRow[]; canManage: boolean; onAction: (action: string, payload?: Record<string, string>) => void; onOperationAction: (payload: Record<string, string>) => void }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [restoreConfirm, setRestoreConfirm] = useState<Record<number, string>>({});
+  // 25 tenant per pagina; "Seleziona tutti" seleziona l'INTERO elenco
+  // (la selezione sopravvive al cambio pagina: e' per slug, non per riga).
+  const [listPage, setListPage] = useState(1);
+  const listPageCount = Math.max(1, Math.ceil(tenants.length / MAINT_PER_PAGE));
+  const listCurrent = Math.min(listPage, listPageCount);
+  const listVisible = tenants.slice((listCurrent - 1) * MAINT_PER_PAGE, listCurrent * MAINT_PER_PAGE);
   return (
     <div className="grid gap-5">
       {/* UNA card: selezione e azione nello stesso contenitore (riorganizzazione
@@ -1547,7 +1562,7 @@ function MaintenanceView({ tenants, results, restoreCandidates, canManage, onAct
           Seleziona tutti ({tenants.length})
         </label>
         <div className="divide-y divide-slate-100">
-          {tenants.map((tenant) => (
+          {listVisible.map((tenant) => (
             <label className="grid cursor-pointer grid-cols-[30px_1fr_auto_auto] items-center gap-3 p-3 text-sm hover:bg-slate-50" key={tenant.slug}>
               <input type="checkbox" checked={selected.includes(tenant.slug)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, tenant.slug] : current.filter((item) => item !== tenant.slug))} />
               <span><strong>{tenant.name}</strong><span className="ml-2 text-slate-500">{tenant.slug}</span></span>
@@ -1557,6 +1572,15 @@ function MaintenanceView({ tenants, results, restoreCandidates, canManage, onAct
           ))}
           {!tenants.length ? <p className="p-4 text-sm text-slate-500">Nessun tenant.</p> : null}
         </div>
+        {listPageCount > 1 ? (
+          <div className="flex items-center justify-between border-t border-slate-100 px-4 py-2 text-sm">
+            <span className="text-slate-500">{tenants.length} tenant · pagina {listCurrent} di {listPageCount}</span>
+            <div className="flex gap-2">
+              <button className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold disabled:opacity-40" disabled={listCurrent <= 1} type="button" onClick={() => setListPage(listCurrent - 1)}>Precedente</button>
+              <button className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold disabled:opacity-40" disabled={listCurrent >= listPageCount} type="button" onClick={() => setListPage(listCurrent + 1)}>Successiva</button>
+            </div>
+          </div>
+        ) : null}
       </section>
       {results.length ? <Table title="Risultati dell'ultima operazione" headers={["Tenant", "Esito", "Messaggio"]} rows={results.map((row) => [row.slug, row.ok ? "OK" : "Errore", row.message])} /> : null}
 

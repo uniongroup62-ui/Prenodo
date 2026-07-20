@@ -17326,3 +17326,16 @@ Seleziona tutti -> contatore (2), click sulla riga -> (1), ripristino
 presente) + screenshot; restore 8, faseC 7, hardening 19; tsc pulito.
 TRAPPOLA probe: attendere ~2.5s l'idratazione prima di check() sulle
 checkbox (il primo click puo' andare perso).
+
+## 2026-07-20 — OPERAZIONI MASSIVE: ELENCO COMPLETO + 25/PAGINA (domanda utente)
+
+Scoperto rispondendo alla domanda sui limiti: la card usava overview.tenants,
+cioe' la PAGINA CORRENTE della lista (25, max 50) — oltre i 25 tenant la
+selezione massiva ne avrebbe visti solo una parte. Fix: (1) nuova section
+`maintenance_tenants` nelle operations = elenco COMPLETO leggero (slug, nome,
+stato, health_level; esclusi i deleted) caricato insieme ai candidati di
+ripristino; (2) card paginata 25/pagina con footer; (3) "Seleziona tutti (N)"
+seleziona l'INTERO elenco e la selezione (per slug) sopravvive al cambio
+pagina. "Ripristino da backup" resta cappato a 20 dal server (bounded, ok).
+Verifica: probe endpoint (2 tenant, shape con health); restore 8, faseC 7;
+tsc pulito.

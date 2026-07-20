@@ -204,6 +204,25 @@ export async function GET(request: Request) {
       return Response.json({ ok: true, candidates: await restorableSaasBackups(20) });
     }
 
+    // Elenco COMPLETO (leggero) per le operazioni massive: la lista tenant
+    // dell'overview e' PAGINATA (25/50) — la selezione bulk deve vederli tutti.
+    if (section === "maintenance_tenants") {
+      const tenants = await listSaasTenants();
+      return Response.json({
+        ok: true,
+        tenants: tenants
+          .filter((tenant) => tenantStatus(tenant) !== "deleted")
+          .map((tenant) => ({
+            slug: String(tenant.slug),
+            name: String(tenant.name ?? tenant.slug),
+            status: tenant.status,
+            is_active: tenant.is_active,
+            health: { level: tenant.health_level ?? null },
+            health_checked_at: tenant.health_checked_at ?? null,
+          })),
+      });
+    }
+
     // Registrazioni self-service (lettura censurata, mai hash).
     if (section === "signups") {
       const { listSaasSignups } = await import("@/lib/saas-operations");
