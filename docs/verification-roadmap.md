@@ -17175,3 +17175,14 @@ prezzo con UNITA' (euro/SMS, %, euro/ordine); (6) select ricarica manuale
 Suite nuova test-admin-billing-rifiniture (4). Regressioni ux 7, faseE 8,
 stats 8, faseC 7, fase4 11 (E5 stabilizzata: audit export fire-and-forget ->
 poll 6s invece di lettura immediata, flake nota sotto carico); tsc pulito.
+
+## 2026-07-20 — PACCHETTI SMS: PREZZO/CREDITO VS SUGGERITO (approvato "ok")
+
+Nella riga di marginalita' di ogni pacchetto ora compare anche
+"0,0700 euro/SMS (suggerito 0,0700)": prezzo per credito del pacchetto
+confrontato col prezzo suggerito dalle Impostazioni; sotto target = AMBRA.
+Chiude il flusso: aggiorni i parametri -> vedi subito quali listini sono
+sotto il suggerito senza fare i conti. (Contesto: le Impostazioni prezzo NON
+cambiano mai i prezzi dei pacchetti — solo marginalita' ricalcolate e prezzo
+suggerito; il listino si ritocca a mano, per scelta.)
+Verifica: probe live 4 righe renderizzate; billing-rifiniture 4, faseC 7.

@@ -1287,6 +1287,12 @@ function SmsPlansView({ data, canManage, onAction, onRefresh }: { data: SmsBilli
               </div>
               <div className="md:col-span-7 text-sm text-slate-500">
                 Costo provider {formatEuro(plan.economics.provider_cost)} - Fee {formatEuro(plan.economics.payment_fee)} - Margine {formatEuro(plan.economics.margin_value)} ({plan.economics.margin_percent.toFixed(1)}%)
+                {" · "}
+                {/* prezzo/credito vs suggerito: sotto target = ambra, a colpo d'occhio */}
+                <span className={plan.economics.price_per_credit < Number(data.settings.suggested_credit_price ?? 0) ? "font-semibold text-amber-700" : ""}>
+                  {plan.economics.price_per_credit.toFixed(4).replace(".", ",")} euro/SMS
+                </span>
+                {" "}(suggerito {Number(data.settings.suggested_credit_price ?? 0).toFixed(4).replace(".", ",")})
               </div>
             </form>
           ))}
