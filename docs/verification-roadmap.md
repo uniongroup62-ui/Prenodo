@@ -16779,3 +16779,10 @@ tenant" (header o azione rapida della dashboard) e sparisce con
 Chiudi o a creazione riuscita. Verifica live: box assente in lista,
 click header -> form con campi, Chiudi -> sparito; suite ux/faseAB/
 dash/consolida/stats/fase3 verdi.
+
+## 2026-07-20 — HEADER: VIA IL BOTTONE "CERCA"
+
+Richiesta utente: rimosso il bottone Cerca (Ctrl K) in alto a destra;
+resta solo "Nuovo tenant". La COMMAND PALETTE rimane attiva con
+Ctrl/Cmd+K (verificato live: bottone assente, palette apre da
+tastiera). Suite faseAB (palette da tastiera), dash e fase3 verdi.

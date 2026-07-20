@@ -596,17 +596,12 @@ async function loadStats() {
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#365a96]">Pannello SaaS</p>
               <h1 className="text-2xl font-semibold">{viewTitle(activeView)}</h1>
             </div>
-            <div className="flex items-center gap-2">
-              <button className="inline-flex h-10 items-center gap-2 rounded-md border border-slate-200 px-4 text-sm font-semibold text-slate-600 hover:bg-slate-50" type="button" onClick={() => setPaletteOpen(true)}>
-                <Search size={16} aria-hidden />
-                Cerca
-                <kbd className="rounded border border-slate-300 bg-slate-100 px-1.5 text-[11px] font-semibold text-slate-500">Ctrl K</kbd>
-              </button>
-              <button className="inline-flex h-10 items-center gap-2 rounded-md bg-[#365a96] px-4 text-sm font-semibold text-white disabled:opacity-50" disabled={!canManageTenants} type="button" onClick={() => { navigateView("tenants"); setCreateOpen(true); }}>
-                <Plus size={17} aria-hidden />
-                Nuovo tenant
-              </button>
-            </div>
+            {/* Niente bottone Cerca (richiesta utente 20/07): la palette
+                resta disponibile con Ctrl/Cmd+K. */}
+            <button className="inline-flex h-10 items-center gap-2 rounded-md bg-[#365a96] px-4 text-sm font-semibold text-white disabled:opacity-50" disabled={!canManageTenants} type="button" onClick={() => { navigateView("tenants"); setCreateOpen(true); }}>
+              <Plus size={17} aria-hidden />
+              Nuovo tenant
+            </button>
           </header>
 
           <div className="p-5">
