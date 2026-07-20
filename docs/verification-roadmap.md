@@ -17516,3 +17516,29 @@ dentro la tx SENZA catch (un errore fa rollback esplicito, non tx
 abortita silente). Suite: omaggi-pass2 3/3 (prima 1/3), omaggi-log 10/10,
 giftbox-mutations 8/8; tsc pulito. LEZIONE: guard-nel-WHERE da solo non
 protegge dalle race; ogni contatore condiviso va serializzato con lock.
+
+## 2026-07-20 - InfoBox "Come funziona" estesa a 17 nuove pagine
+Approvata l'analisi: box aggiunta dove esistono regole non ovvie senza
+spiegazioni, con testi BREVI verificati sul codice/memorie di dominio.
+Consigliate: fidelity_wallet (saldo/riservato/disponibile/in scadenza -
+expiringSoonPoints), reports (Incasso eventi di cassa vs Venduto),
+gifts (chiusura derivata a residuo 0, riapertura, punti mai scalati),
+automation (toggle OFF cancella i pending - manage-feature-settings 829),
+giftbox+giftcard (emissione solo da Pagamenti; snapshot / saldo),
+coupons (preview dal listino + auto-scelta promo), hours (per-sede vince
+su globali, eccezioni per data vincono su tutto - businessIntervals),
+stock_moves (documento, annullo ripristina stock), fidelity_points
+(1 campagna/periodo, livello derivato). Secondarie: installments_manage
+(annullo piano totale - cancelPlan 17198), consent_modules (privacy di
+sistema, delete bloccata dai firmati), roles (replace intero set),
+staff (aggancio account per email, owner protetto, delete con guardie),
+quotes (N/anno, conversione via Vai a Pagamenti + ?quote=), costs
+(ricorrenze clamp fine mese, costo per sede), fidelity (toggle globale,
+dati conservati). Posizione: fondo pagina full-width mt-3; in hours nel
+MAIN dopo i tab (primo tentativo finito dentro ExceptionsTab, corretto);
+stock_moves/installments/costs hanno helper in coda al file - inserita
+nella chiusura del componente principale. La pagina hub Portafoglio resta
+senza box (la box vive in fidelity_wallet). Probe Playwright 17/17
+(titolo+frammento contenuto per pagina; frammenti senza apostrofi curly).
+Regressioni: orari-pass2 14, portafoglio-pass2 10, punti-pass2 5,
+report-pass2 12, ruoli-pass2 10; tsc pulito. Totale: 28 box su 27 pagine.

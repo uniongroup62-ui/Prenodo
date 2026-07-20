@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import InfoBox from "./info-box";
 
 // Pixel-faithful port of the PHP automation page (app/pages/automation.php,
 // ?page=automation). Original Bootstrap markup preserved verbatim. The form is
@@ -526,6 +527,12 @@ export function AutomationContent({
         </div>
       </div>
 
+      <InfoBox className="mt-3">
+        <ul>
+          <li>Ogni automazione programma i propri invii in anticipo e li spedisce all&apos;orario indicato (ora italiana).</li>
+          <li>Se disattivi un&apos;automazione, gli invii già programmati e non ancora spediti vengono cancellati.</li>
+        </ul>
+      </InfoBox>
     </div>
   );
 }

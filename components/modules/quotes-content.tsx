@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import InfoBox from "./info-box";
 import { ClientSearchCombobox } from "@/components/client-search-combobox";
 
 // Port fedele della LISTA preventivi (app/pages/quotes.php action=list):
@@ -429,6 +430,12 @@ export function QuotesContent({ slug: slugProp, initialQuery }: { slug?: string;
           </div>
         </>
       )}
+      <InfoBox className="mt-3">
+        <ul>
+          <li>I preventivi sono numerati per anno (es. 3/2026).</li>
+          <li>Per trasformare un preventivo in vendita aprilo e usa <strong>Vai a Pagamenti</strong>: il carrello si precompila e all&apos;incasso il preventivo risulta convertito.</li>
+        </ul>
+      </InfoBox>
     </div>
   );
 }

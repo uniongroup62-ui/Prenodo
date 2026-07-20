@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import InfoBox from "./info-box";
 
 // Faithful port of the PHP stock_moves page (app/pages/stock_moves.php): LISTA
 // documenti (filtri con combobox Prodotto/Fornitore, paginazione 10 per pagina,
@@ -813,6 +814,12 @@ export function StockMovesContent({ slug: slugProp, initialQuery }: { slug?: str
           </div>
         ) : null}
       </div>
+      <InfoBox className="mt-3">
+        <ul>
+          <li>Ogni carico o scarico è un documento: le righe aggiornano subito lo stock.</li>
+          <li>I documenti non si modificano: per correggere annulla il documento e lo stock viene ripristinato automaticamente.</li>
+        </ul>
+      </InfoBox>
     </div>
   );
 }

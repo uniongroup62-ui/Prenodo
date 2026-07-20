@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import InfoBox from "./info-box";
 
 // Port fedele della pagina Fidelity (app/pages/fidelity.php): card
 // "Impostazione generale" con lo switch globale businesses.fidelity_enabled e
@@ -407,6 +408,12 @@ export function FidelityContent({ slug: slugProp, initialQuery }: { slug?: strin
           <div className="modal-backdrop fade show" />
         </>
       ) : null}
+      <InfoBox className="mt-3">
+        <ul>
+          <li>L&apos;interruttore accende o spegne l&apos;intero programma Fidelity: adesione, punti e benefici in cassa.</li>
+          <li>Spegnendolo non perdi nulla: i dati restano e riattivandolo ritrovi tutto com&apos;era.</li>
+        </ul>
+      </InfoBox>
     </div>
   );
 }

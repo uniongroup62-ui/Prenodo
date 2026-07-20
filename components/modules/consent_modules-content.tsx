@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import InfoBox from "./info-box";
 
 // Faithful port of the PHP "Moduli consenso" settings page
 // (app/pages/consent_modules.php + assets/js/pages/consent_modules.js), fed by
@@ -294,6 +295,12 @@ export function ConsentModulesContent({
           </div>
         </div>
       ) : null}
+      <InfoBox className="mt-3">
+        <ul>
+          <li>Il modulo Privacy (GDPR) è di sistema: sempre attivo e non eliminabile.</li>
+          <li>Un modulo con consensi già firmati non può essere eliminato.</li>
+        </ul>
+      </InfoBox>
     </div>
   );
 }

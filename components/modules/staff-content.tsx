@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import InfoBox from "./info-box";
 
 // Faithful port of the PHP staff list page (app/pages/staff.php), fed by the
 // existing DB-backed /api/manage/resources?section=staff. Reproduces the
@@ -427,6 +428,13 @@ export function StaffContent({ slug: slugProp, initialQuery }: { slug?: string; 
           <div className="modal-backdrop fade show" />
         </>
       ) : null}
+      <InfoBox className="mt-3">
+        <ul>
+          <li>L&apos;operatore è collegato al suo account di accesso tramite l&apos;email: usa la stessa email per agganciare l&apos;account.</li>
+          <li>Il titolare è protetto: sempre attivo e non eliminabile.</li>
+          <li>Un operatore con prenotazioni, servizi o commissioni collegate non può essere eliminato.</li>
+        </ul>
+      </InfoBox>
     </div>
   );
 }

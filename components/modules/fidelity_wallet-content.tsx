@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import InfoBox from "./info-box";
 
 // Port fedele del Portafoglio punti (app/pages/fidelity_wallet.php):
 // - stati disabilitati legacy (Fidelity generale off / Punti off) con early
@@ -833,6 +834,14 @@ export function FidelityWalletContent({ slug: slugProp, initialQuery }: { slug?:
           </div>
         </div>
       </div>
+      <InfoBox className="mt-3">
+        <ul>
+          <li><strong>Saldo</strong>: tutti i punti del cliente.</li>
+          <li><strong>Riservato</strong>: punti impegnati da operazioni in attesa o programmate.</li>
+          <li><strong>Disponibile</strong>: saldo meno riservato, è quello utilizzabile in cassa.</li>
+          <li><strong>In scadenza</strong>: punti che scadranno a breve, se la scadenza punti è attiva.</li>
+        </ul>
+      </InfoBox>
     </div>
   );
 }

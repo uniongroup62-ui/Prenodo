@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import InfoBox from "./info-box";
 
 // Faithful port of the PHP coupons list page (app/pages/coupons.php), fed by
 // the existing DB-backed /api/manage/coupons. The PHP page renders an empty
@@ -339,6 +340,12 @@ export function CouponsContent({ slug: slugProp, initialQuery }: { slug?: string
             </div>
           </div>
       ) : null}
+      <InfoBox className="mt-3">
+        <ul>
+          <li>Il valore del buono viene sempre ricalcolato dai prezzi di listino correnti.</li>
+          <li>In cassa non devi scegliere: se più promozioni sono applicabili viene usata automaticamente la più conveniente.</li>
+        </ul>
+      </InfoBox>
     </div>
   );
 }

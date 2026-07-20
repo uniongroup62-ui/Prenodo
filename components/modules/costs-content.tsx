@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import InfoBox from "./info-box";
 
 // Faithful port of the PHP "Scadenziario e Costi" page (app/pages/costs.php,
 // scadenziario tab), fed by the existing DB-backed /api/manage/costs.
@@ -796,6 +797,13 @@ export function CostsContent({ slug: slugProp, initialQuery }: { slug?: string; 
           <div className="modal-backdrop fade show" onClick={() => setDetailCost(null)} />
         </>
       ) : null}
+      <InfoBox className="mt-3">
+        <ul>
+          <li>I costi ricorrenti generano automaticamente le prossime scadenze.</li>
+          <li>Se il giorno impostato non esiste nel mese (29, 30 o 31), la scadenza cade l&apos;ultimo giorno del mese.</li>
+          <li>Ogni costo appartiene a una sede.</li>
+        </ul>
+      </InfoBox>
     </div>
   );
 }

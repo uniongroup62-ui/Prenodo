@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import InfoBox from "./info-box";
 import { ClientSearchCombobox } from "@/components/client-search-combobox";
 
 // Port fedele della pagina GiftBox (app/pages/giftbox.php):
@@ -563,6 +564,13 @@ export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string
           </div>
         </>
       )}
+      <InfoBox className="mt-3">
+        <ul>
+          <li>Qui crei i modelli GiftBox e consulti quelle emesse.</li>
+          <li>L&apos;emissione avviene solo dalla pagina <strong>Pagamenti</strong>, aggiungendo la GiftBox al carrello.</li>
+          <li>Il contenuto di una GiftBox venduta resta congelato: le modifiche al modello non toccano le emissioni passate.</li>
+        </ul>
+      </InfoBox>
     </div>
   );
 }

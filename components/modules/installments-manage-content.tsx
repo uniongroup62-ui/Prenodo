@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import InfoBox from "./info-box";
 
 // Faithful port of the PHP installments page (app/pages/installments_manage.php).
 // Backed by the DB-backed /api/manage/installments route:
@@ -719,6 +720,13 @@ export function InstallmentsManageContent({ slug: slugProp, initialQuery }: { sl
           </div>
         </>
       )}
+      <InfoBox className="mt-3">
+        <ul>
+          <li>Ogni vendita a rate genera un piano con le sue scadenze.</li>
+          <li>Segnando una rata come pagata, l&apos;incasso viene registrato alla data indicata.</li>
+          <li>L&apos;annullamento del piano è definitivo e annulla tutte le rate in un colpo solo.</li>
+        </ul>
+      </InfoBox>
     </div>
   );
 }

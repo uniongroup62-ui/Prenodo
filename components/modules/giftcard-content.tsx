@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import InfoBox from "./info-box";
 import { ClientSearchCombobox } from "@/components/client-search-combobox";
 
 // Port fedele della LISTA GiftCard (app/pages/giftcard.php action=list):
@@ -382,6 +383,13 @@ export function GiftcardContent({ slug: slugProp, initialQuery }: { slug?: strin
           </div>
         </>
       )}
+      <InfoBox className="mt-3">
+        <ul>
+          <li>Qui crei i modelli GiftCard e consulti quelle emesse.</li>
+          <li>L&apos;emissione avviene solo dalla pagina <strong>Pagamenti</strong>.</li>
+          <li>Ogni GiftCard ha un saldo che si scala a ogni utilizzo in cassa, fino a esaurimento.</li>
+        </ul>
+      </InfoBox>
     </div>
   );
 }

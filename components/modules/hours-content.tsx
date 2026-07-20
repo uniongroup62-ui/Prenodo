@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import InfoBox from "./info-box";
 
 // Faithful port of the PHP "Orari & chiusure" settings page (app/pages/hours.php),
 // reproducing the original Bootstrap markup verbatim: View::alert flash ABOVE the
@@ -288,6 +289,13 @@ export function HoursContent({
       ) : (
         <ExceptionsTab loading={loading} exceptions={exceptions} onAction={postAction} />
       )}
+      <InfoBox className="mt-3">
+        <ul>
+          <li>Gli orari globali valgono per tutte le sedi; se una sede ha orari propri, per quella sede vincono i suoi.</li>
+          <li>Le chiusure e le aperture straordinarie per data vincono su tutto.</li>
+          <li>Questi orari guidano il calendario e la prenotazione online.</li>
+        </ul>
+      </InfoBox>
     </div>
   );
 }

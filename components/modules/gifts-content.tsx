@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import InfoBox from "./info-box";
 
 // Faithful port of the PHP fidelity/gifts page (app/pages/gifts.php): the
 // ASSIGNED INSTANCES list (default view, ~1465-1610), the CAMPAIGNS view
@@ -869,6 +870,13 @@ export function GiftsContent({ slug: slugProp, initialQuery }: { slug?: string; 
           <div className="modal-backdrop fade show" />
         </>
       ) : null}
+      <InfoBox className="mt-3">
+        <ul>
+          <li>Crea un evento con le sue regole: quando un cliente le soddisfa, l&apos;omaggio gli viene assegnato.</li>
+          <li>L&apos;omaggio si chiude da solo quando il residuo arriva a zero; se il residuo torna disponibile, si riapre.</li>
+          <li>Gli omaggi non scalano mai i punti del cliente.</li>
+        </ul>
+      </InfoBox>
     </div>
   );
 }

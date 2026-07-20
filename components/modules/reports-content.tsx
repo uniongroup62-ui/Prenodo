@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import InfoBox from "./info-box";
 
 // Port fedele della pagina report PHP (app/pages/reports.php, ?page=reports).
 // Tutti i KPI/grafici/modali sono cablati all'API DB-backed /api/manage/reports:
@@ -1339,6 +1340,13 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
           </div>
         </div>
       </div>
+      <InfoBox className="mt-3">
+        <ul>
+          <li><strong>Incasso</strong>: le somme registrate in cassa nel periodo (le rate contano alla data del pagamento).</li>
+          <li><strong>Venduto</strong>: il valore di servizi e prodotti venduti nel periodo.</li>
+          <li>I due totali possono differire: una vendita a rate entra nel Venduto subito, nell&apos;Incasso man mano che le rate vengono pagate.</li>
+        </ul>
+      </InfoBox>
     </div>
   );
 }

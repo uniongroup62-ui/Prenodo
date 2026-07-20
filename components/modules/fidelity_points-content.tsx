@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import InfoBox from "./info-box";
 import { FidelityCampaignsSection } from "@/components/modules/fidelity_campaigns-section";
 import { FidelityLevelsContent } from "@/components/modules/fidelity_levels-content";
 
@@ -770,6 +771,13 @@ export function FidelityPointsContent({ slug: slugProp, initialQuery }: { slug?:
           <div className="modal-backdrop fade show" />
         </>
       ) : null}
+      <InfoBox className="mt-3">
+        <ul>
+          <li>I punti si maturano in cassa secondo la campagna attiva: una sola campagna alla volta per periodo.</li>
+          <li>Il livello Card è calcolato automaticamente dai punti maturati nel periodo: non si assegna a mano.</li>
+          <li>Se la scadenza punti è attiva, i punti non usati scadono dopo i giorni impostati.</li>
+        </ul>
+      </InfoBox>
     </div>
   );
 }

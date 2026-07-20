@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import InfoBox from "./info-box";
 
 // Faithful port of the PHP roles page (app/pages/roles.php): role list + the
 // permissions tree form for the selected manageable role (Staff / Altro). Fed
@@ -491,6 +492,12 @@ export function RolesContent({
           </div>
         </div>
       </div>
+      <InfoBox className="mt-3">
+        <ul>
+          <li>Un ruolo definisce cosa possono vedere e fare gli operatori collegati.</li>
+          <li>Il salvataggio sostituisce l&apos;intero elenco di permessi del ruolo e vale subito per tutti gli operatori con quel ruolo.</li>
+        </ul>
+      </InfoBox>
     </div>
   );
 }
