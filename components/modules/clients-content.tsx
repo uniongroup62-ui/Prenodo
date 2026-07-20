@@ -349,7 +349,7 @@ export function ClientsContent({ slug: slugProp, initialQuery }: { slug?: string
           <div className="card">
             <div className="card-header bg-transparent d-flex flex-wrap align-items-center justify-content-between gap-2 py-2">
               <span className="text-muted small">
-                {loading ? "Caricamento…" : totalCount === 1 ? "1 cliente" : `${totalCount} clienti`}
+                {loading ? "Caricamento…" : totalCount === 1 ? "1 risultato" : `${totalCount} risultati`}
                 {!loading && totalCount > pageSize ? ` · pagina ${page} di ${Math.max(1, Math.ceil(totalCount / pageSize))}` : ""}
                 {!loading && (applied.q !== "" || applied.all) ? " · filtri attivi" : ""}
               </span>

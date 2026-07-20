@@ -361,7 +361,7 @@ export function QuotesContent({ slug: slugProp, initialQuery }: { slug?: string;
                   const pageN = Number(applied.page ?? 1);
                   return (
                     <>
-                      {loading ? "Caricamento…" : total === 1 ? "1 preventivo" : `${total} preventivi`}
+                      {loading ? "Caricamento…" : total === 1 ? "1 risultato" : `${total} risultati`}
                       {!loading && total > pageSize ? ` · pagina ${pageN} di ${Math.max(1, Math.ceil(total / pageSize))}` : ""}
                       {!loading && (applied.clientId !== "0" || applied.status !== "" || applied.date !== "" || applied.number !== "" || applied.allLocations) ? " · filtri attivi" : ""}
                     </>

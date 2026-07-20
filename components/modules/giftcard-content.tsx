@@ -314,7 +314,7 @@ export function GiftcardContent({ slug: slugProp, initialQuery }: { slug?: strin
                   const total = Number(data?.totalCount ?? rows.length);
                   const pageSize = Math.max(1, Number(data?.pageSize ?? 25));
                   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-                  return `${total === 1 ? "1 GiftCard" : `${total} GiftCard`}${total > pageSize ? ` · pagina ${applied.page} di ${totalPages}` : ""}`;
+                  return `${total === 1 ? "1 risultato" : `${total} risultati`}${total > pageSize ? ` · pagina ${applied.page} di ${totalPages}` : ""}`;
                 })()}
                 {!loading && (applied.clientId !== "0" || applied.q !== "" || applied.status !== "" || applied.allLocations) ? " · filtri attivi" : ""}
               </span>

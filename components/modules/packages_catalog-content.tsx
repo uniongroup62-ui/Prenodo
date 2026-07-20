@@ -184,7 +184,7 @@ export function PackagesCatalogContent({ slug: slugProp, initialQuery }: { slug?
               GET legacy; l'URL ?all_locations=1 resta allineato) + conteggio. */}
           <div className="card-header bg-transparent d-flex flex-wrap align-items-center justify-content-between gap-2 py-2">
             <span className="text-muted small">
-              {rows.length === 1 ? "1 pacchetto" : `${rows.length} pacchetti`}
+              {rows.length === 1 ? "1 risultato" : `${rows.length} risultati`}
               {!allLocations && showLocationsFilter ? " nella sede corrente" : ""}
             </span>
             {showLocationsFilter ? (

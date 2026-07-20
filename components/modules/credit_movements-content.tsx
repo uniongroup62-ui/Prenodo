@@ -135,7 +135,7 @@ export function CreditMovementsContent({ slug: slugProp }: { slug?: string } = {
           <div className="bs-page-subtitle">Consulta movimenti, filtri e saldi credito.</div>
         </div>
         <div className="bs-page-actions">
-          <div className="text-muted small">{data ? `${data.total} movimenti` : ""}</div>
+          <div className="text-muted small">{data ? (Number(data.total) === 1 ? "1 risultato" : `${data.total} risultati`) : ""}</div>
         </div>
       </div>
 
@@ -245,7 +245,7 @@ export function CreditMovementsContent({ slug: slugProp }: { slug?: string } = {
             {data && (data.totalPages ?? 1) > 1 ? (
               <div className="card-footer d-flex flex-wrap justify-content-between align-items-center gap-2">
                 <div className="text-muted small">
-                  Pagina {data.page ?? 1} di {data.totalPages} • {data.total} movimenti
+                  Pagina {data.page ?? 1} di {data.totalPages} • {Number(data.total) === 1 ? "1 risultato" : `${data.total} risultati`}
                 </div>
                 <div className="btn-group btn-group-sm">
                   <button

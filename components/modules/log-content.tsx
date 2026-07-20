@@ -312,7 +312,7 @@ export function LogContent({ slug: slugProp, initialQuery }: { slug?: string; in
       <div className="card">
         <div className="card-header bg-transparent d-flex flex-wrap align-items-center justify-content-between gap-2 py-2">
           <span className="text-muted small">
-            {loading ? "Caricamento…" : totalCount === 1 ? "1 voce" : `${totalCount} voci`}
+            {loading ? "Caricamento…" : totalCount === 1 ? "1 risultato" : `${totalCount} risultati`}
             {!loading && totalCount > pageSize ? ` · pagina ${page} di ${totalPages}` : ""}
             {!loading && view === "activity" && filtersActive ? " · filtri attivi" : ""}
           </span>

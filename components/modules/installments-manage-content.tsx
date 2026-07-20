@@ -629,7 +629,7 @@ export function InstallmentsManageContent({ slug: slugProp, initialQuery }: { sl
                 <div className="d-flex align-items-center justify-content-between mb-2">
                   <div className="fw-semibold">Piani rateali</div>
                   <div className="text-muted small">
-                    {plans.length} risultati
+                    {plans.length === 1 ? "1 risultato" : `${plans.length} risultati`}
                     {filtersActive ? " · filtri attivi" : ""}
                   </div>
                 </div>

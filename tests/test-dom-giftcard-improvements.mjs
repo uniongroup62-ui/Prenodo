@@ -41,7 +41,7 @@ try {
   const nRows = await page.locator("table tbody tr").count();
   check("DOM1 pagina 1: 25 righe renderizzate", nRows === 25, `rows=${nRows}`);
   const header = await page.locator(".card-header .text-muted").first().textContent();
-  check("DOM2 header '26 GiftCard · pagina 1 di 2'", /26 GiftCard · pagina 1 di 2/.test(String(header ?? "")), JSON.stringify(header));
+  check("DOM2 header '26 risultati · pagina 1 di 2'", /26 risultati · pagina 1 di 2/.test(String(header ?? "")), JSON.stringify(header));
   const badge = await page.locator(`tr:has-text("${warnCode}") .badge.text-bg-warning`).first().textContent().catch(() => null);
   check("DOM3 badge 'Scade tra 5 giorni' in lista", String(badge ?? "").includes("Scade tra 5 giorni"), JSON.stringify(badge));
   // Pager -> pagina 2

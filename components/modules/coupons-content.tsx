@@ -251,7 +251,7 @@ export function CouponsContent({ slug: slugProp, initialQuery }: { slug?: string
                 ?all_locations=1 resta identico) + conteggio a sinistra. */}
             <div className="card-header bg-transparent d-flex flex-wrap align-items-center justify-content-between gap-2 py-2">
               <span className="text-muted small">
-                {coupons.length === 1 ? "1 buono" : `${coupons.length} buoni`}
+                {coupons.length === 1 ? "1 risultato" : `${coupons.length} risultati`}
                 {!allLocations && showLocationsFilter ? " nella sede corrente" : ""}
               </span>
               {showLocationsFilter ? (

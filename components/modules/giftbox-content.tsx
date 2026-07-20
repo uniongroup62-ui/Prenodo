@@ -489,7 +489,7 @@ export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string
                   const pageSize = Math.max(1, Number(data?.pageSize ?? 25));
                   return (
                     <>
-                      {loading ? "Caricamento…" : total === 1 ? "1 GiftBox" : `${total} GiftBox`}
+                      {loading ? "Caricamento…" : total === 1 ? "1 risultato" : `${total} risultati`}
                       {!loading && total > pageSize ? ` · pagina ${applied.page} di ${Math.max(1, Math.ceil(total / pageSize))}` : ""}
                       {!loading && (applied.clientId !== "0" || applied.q !== "" || applied.status !== "" || applied.allLocations) ? " · filtri attivi" : ""}
                     </>

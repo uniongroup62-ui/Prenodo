@@ -547,7 +547,7 @@ export function CostsContent({ slug: slugProp, initialQuery }: { slug?: string; 
               <div className="fw-semibold">
                 Voci{" "}
                 <span className="text-muted small fw-normal">
-                  {loading ? "· caricamento…" : `· ${costs.length === 1 ? "1 voce" : `${costs.length} voci`}`}
+                  {loading ? "· caricamento…" : `· ${costs.length === 1 ? "1 risultato" : `${costs.length} risultati`}`}
                   {!loading && filtersActive ? " · filtri attivi" : ""}
                 </span>
               </div>

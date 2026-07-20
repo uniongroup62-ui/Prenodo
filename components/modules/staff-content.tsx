@@ -288,7 +288,7 @@ export function StaffContent({ slug: slugProp, initialQuery }: { slug?: string; 
       <div className="card">
         <div className="card-header bg-transparent py-2">
           <span className="text-muted small">
-            {loading ? "Caricamento…" : filtered.length === 1 ? "1 operatore" : `${filtered.length} operatori`}
+            {loading ? "Caricamento…" : filtered.length === 1 ? "1 risultato" : `${filtered.length} risultati`}
             {!loading && (appliedQ || appliedRole || appliedStatus || appliedAllLoc) ? " · filtri attivi" : ""}
           </span>
         </div>

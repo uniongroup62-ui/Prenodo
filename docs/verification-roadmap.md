@@ -17711,3 +17711,17 @@ test-dom-giftcard-improvements che usava CURRENT_DATE del DB (UTC) nelle
 fixture -> dopo mezzanotte italiana il badge diventava "Scade tra 4
 giorni" (trappola tz-period-boundary: date SEMPRE calcolate in locale
 nel test); ora 5/5 a qualsiasi ora. tsc pulito.
+
+## 2026-07-21 - Contatori liste: "N risultato/i" ovunque
+Richiesta utente: "1 GiftBox"/"1 cliente" ecc -> "1 risultato"/"N
+risultati" su tutte le pagine. Convertiti 13 contatori: clients, costs
+(". N risultati"), coupons, giftbox, giftcard, log, packages,
+packages_catalog, quotes, staff, installments (reso singolare-aware),
+credit_movements (header + pager). NON toccati i messaggi d'azione
+("1 appuntamento eliminato"), i conteggi contestuali (celle calendario,
+"N movimenti" nelle card commissioni) e gli empty-state ("Nessun...").
+Aggiornata l'asserzione DOM2 di test-dom-giftcard-improvements
+("26 risultati . pagina 1 di 2"), suite 5/5. Probe live: liste con dati
+mostrano "N risultato/i" e zero vecchie etichette (attenzione ai falsi
+positivi del body.innerText: badge notifiche + titolo pagina adiacenti
+simulano "4 GiftBox"); tsc pulito.
