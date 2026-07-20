@@ -102,7 +102,7 @@ export function PackageSettingsContent({ slug: slugProp }: { slug?: string } = {
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Gestione pacchetti e sedute</div>
           <div className="d-flex align-items-center gap-2">
-            <h1 className="bs-page-title">Pacchetti / Impostazioni</h1>
+            <h1 className="bs-page-title">Impostazioni Pacchetti</h1>
             <InfoBox>
               <p>
                 La durata predefinita vale per i pacchetti venduti o assegnati <strong>da qui in avanti</strong>:{" "}
@@ -137,7 +137,7 @@ export function PackageSettingsContent({ slug: slugProp }: { slug?: string } = {
       <div className="row g-3">
         <div className="col-12">
           <div className="card p-4">
-            <div className="h5 fw-bold mb-3">Pacchetti - Scadenza predefinita</div>
+            <div className="h5 fw-bold mb-3">Scadenza predefinita</div>
             <div className="text-muted small mb-3">
               Quando vendi o assegni un <strong>pacchetto</strong> e lasci vuoto il campo <em>&quot;Valido al&quot;</em>,
               la scadenza viene calcolata automaticamente partendo da <em>&quot;Valido dal&quot;</em>. La validita impostata
@@ -188,7 +188,7 @@ export function PackageSettingsContent({ slug: slugProp }: { slug?: string } = {
               <div className="mt-3 d-flex gap-2">
                 <button className="btn btn-primary btn-pill" type="submit">
                   <i className="bi bi-check2-circle me-1" />
-                  Salva Pacchetti
+                  Salva
                 </button>
               </div>
             </form>

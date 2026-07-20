@@ -98,7 +98,7 @@ export function GiftboxSettingsContent({ slug: slugProp, initialQuery }: { slug?
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Programma fedelta</div>
           <div className="d-flex align-items-center gap-2">
-            <h1 className="bs-page-title">GiftBox / Impostazioni</h1>
+            <h1 className="bs-page-title">Impostazioni GiftBox</h1>
             <InfoBox>
               <h6>Scadenza predefinita</h6>
               <ul>
@@ -161,7 +161,7 @@ export function GiftboxSettingsContent({ slug: slugProp, initialQuery }: { slug?
       <div className="row g-3">
         <div className="col-12">
           <div className="card p-4">
-            <div className="h5 fw-bold mb-3">GiftBox — Scadenza predefinita</div>
+            <div className="h5 fw-bold mb-3">Scadenza predefinita</div>
             <div className="text-muted small mb-3">
               Quando emetti una <strong>GiftBox</strong> e lasci vuoto il campo <em>“Valida al”</em>, la scadenza viene
               calcolata automaticamente partendo da <em>“Validità dal”</em>. Imposta qui la durata predefinita:{" "}
@@ -215,7 +215,7 @@ export function GiftboxSettingsContent({ slug: slugProp, initialQuery }: { slug?
               <div className="mt-3 d-flex gap-2">
                 <button className="btn btn-primary btn-pill" type="submit">
                   <i className="bi bi-check2-circle me-1" />
-                  Salva GiftBox
+                  Salva
                 </button>
               </div>
             </form>
@@ -227,7 +227,7 @@ export function GiftboxSettingsContent({ slug: slugProp, initialQuery }: { slug?
       <div className="row g-3 mt-3">
         <div className="col-12">
           <div className="card p-4">
-            <div className="h5 fw-bold mb-3">GiftBox — Condizioni</div>
+            <div className="h5 fw-bold mb-3">Condizioni</div>
             <div className="text-muted small mb-3">
               Testo mostrato nel <strong>Voucher GiftBox</strong> e nella <strong>mail</strong> inviata al destinatario.
               Inserisci <strong>una riga per ogni condizione</strong>.
@@ -257,7 +257,7 @@ export function GiftboxSettingsContent({ slug: slugProp, initialQuery }: { slug?
               <div className="col-12 d-flex flex-wrap gap-2">
                 <button className="btn btn-primary btn-pill" type="submit" name="action" value="save_giftbox_terms">
                   <i className="bi bi-check2-circle me-1" />
-                  Salva condizioni
+                  Salva
                 </button>
                 <button
                   className="btn btn-outline-danger btn-pill"

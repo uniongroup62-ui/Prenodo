@@ -17725,3 +17725,13 @@ Aggiornata l'asserzione DOM2 di test-dom-giftcard-improvements
 mostrano "N risultato/i" e zero vecchie etichette (attenzione ai falsi
 positivi del body.innerText: badge notifiche + titolo pagina adiacenti
 simulano "4 GiftBox"); tsc pulito.
+
+## 2026-07-21 - Pagine impostazioni: titoli "Impostazioni X", card e Salva puliti
+Richiesta utente (screenshot GiftBox/Impostazioni), estesa alle gemelle:
+titoli -> "Impostazioni GiftBox/GiftCard/Pacchetti/Preventivi"; titoli
+card senza prefisso entita ("Scadenza predefinita", "Condizioni",
+"Metodi di pagamento"); bottoni di salvataggio -> "Salva" semplice
+(giftbox x2, giftcard x2, pacchetti, preventivi x3 - dati anagrafici/
+condizioni/metodi -, tessera Fidelity). Nessuna suite asseriva i vecchi
+testi. Probe Playwright 5/5 (h1 + card + conteggio esatto bottoni
+"Salva" per pagina); tsc pulito.

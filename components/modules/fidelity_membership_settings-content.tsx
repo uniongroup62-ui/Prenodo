@@ -565,7 +565,7 @@ export function FidelityMembershipSettingsContent({
                   title={dirty ? "Salva le modifiche alla tessera Fidelity" : "Nessuna modifica da salvare"}
                 >
                   <i className="bi bi-check2-circle me-1" />
-                  Salva tessera Fidelity
+                  Salva
                 </button>
               </div>
             </form>

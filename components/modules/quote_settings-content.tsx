@@ -183,7 +183,7 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Vendite</div>
           <div className="d-flex align-items-center gap-2">
-            <h1 className="bs-page-title">Preventivi / Impostazioni</h1>
+            <h1 className="bs-page-title">Impostazioni Preventivi</h1>
             <InfoBox>
               <h6>Intestazione documenti</h6>
               <p>I dati anagrafici compilati qui compaiono nell&apos;intestazione dei preventivi stampati e inviati.</p>
@@ -463,7 +463,7 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
                   <div className="col-12 d-flex flex-wrap gap-2">
                     <button className="btn btn-primary btn-pill" type="submit">
                       <i className="bi bi-check2-circle me-1" />
-                      Salva dati anagrafici
+                      Salva
                     </button>
                     <a className="btn btn-outline-secondary btn-pill" href={settingsUrl()}>
                       Annulla
@@ -523,7 +523,7 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
                   <div className="col-12 d-flex flex-wrap gap-2">
                     <button className="btn btn-primary btn-pill" type="submit">
                       <i className="bi bi-check2-circle me-1" />
-                      Salva condizioni preventivo
+                      Salva
                     </button>
                     <a className="btn btn-outline-secondary btn-pill" href={settingsUrl()}>
                       Annulla
@@ -547,7 +547,7 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
           <div className="row g-3 mt-3">
             <div className="col-12">
               <div className="card p-4">
-                <div className="h5 fw-bold mb-3">Preventivi — Metodi di pagamento</div>
+                <div className="h5 fw-bold mb-3">Metodi di pagamento</div>
                 <div className="text-muted small mb-3">
                   Aggiungi i metodi di pagamento selezionabili nei preventivi. Ogni metodo ha un <strong>nome</strong> e,
                   opzionalmente, dei <strong>dettagli</strong>.
@@ -619,7 +619,7 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
                   <div className="col-12 d-flex flex-wrap gap-2">
                     <button className="btn btn-primary btn-pill" type="submit">
                       <i className="bi bi-check2-circle me-1" />
-                      Salva metodi
+                      Salva
                     </button>
                     <a className="btn btn-outline-secondary btn-pill" href={settingsUrl()}>
                       Annulla
