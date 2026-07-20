@@ -17394,3 +17394,25 @@ empty-state su query inesistente); faseC 7/7; tsc pulito.
 Verifica: probe live (24h=276 < totale=378; click-azione compila il campo e
 raffina; click-tenant apre il dettaglio; tooltip presenti); faseD 4,
 consolida 12, fase4 11; tsc pulito.
+
+## 2026-07-20 — SICUREZZA: 6 RIFINITURE (analisi approvata)
+
+1) AUTO-REVOCA PROTETTA: la sessione corrente e' marcata "questa sessione"
+   (currentSaasAdminSessionId nuovo in saas-admin-auth: id per token_hash del
+   cookie; GET /api/admin/security espone currentSessionId); Revoca chiede
+   SEMPRE conferma, con testo dedicato per la propria ("verrai disconnesso
+   subito" -> redirect a login dopo la revoca).
+2) QR CODE nel setup 2FA: dipendenza `qrcode` (locale, nessun servizio
+   esterno), import dinamico -> toDataURL dell'otpauth URI; secret e URI
+   restano come fallback testuale.
+3) Badge stato sulla card Policy (Attiva verde / Non attiva ambra).
+4) Colonna DISPOSITIVO nelle sessioni (deviceLabel: browser+OS dal
+   user_agent, tooltip con l'UA grezzo, "Sconosciuto" sui casi ignoti).
+5) Card "Tentativi di accesso falliti (24 ore)" SOLO OWNER: stessa sorgente
+   dell'alert cron (saas_admin_login_attempts, confronto NOW() DB), contatore
+   colorato (verde 0 / ambra >0 / rosso >=10) + ultime 10 righe email/IP/quando.
+6) (con 4-5) tabelle coerenti col resto del pannello.
+
+Verifica: probe live (badge, questa-sessione, dispositivo, card falliti con
+riga del tentativo forgiato, conferma auto-revoca con dismiss, QR
+renderizzato); rifiniture 8, hardening 19, dash 8; tsc pulito.

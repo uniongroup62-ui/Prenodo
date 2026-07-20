@@ -1,6 +1,7 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import {
   confirmTotpSetup,
+  currentSaasAdminSessionId,
   disableTotp,
   listSaasAdminSessions,
   requireSaasAdminSession,
@@ -8,6 +9,7 @@ import {
   saasAdminTotpEnabled,
   startTotpSetup,
 } from "@/lib/saas-admin-auth";
+import { dbQuery } from "@/lib/tenant-db";
 import { assertSameOrigin, logSaasAdminAction, totpUri } from "@/lib/saas-admin-security";
 
 // Sicurezza account admin (Fase 1 blindatura 2026-07-18): setup/disattivazione
@@ -17,12 +19,31 @@ export async function GET() {
   try {
     const session = await requireSaasAdminSession();
     const { getAdminSetting } = await import("@/lib/saas-admin-security");
+    const isOwner = session.user.role === "owner";
+    // Tentativi falliti (solo owner): stessa sorgente dell'alert del cron —
+    // attempted_at ha DEFAULT CURRENT_TIMESTAMP, confronto con NOW() del DB.
+    const failedLogins = isOwner
+      ? await dbQuery<Array<Record<string, unknown>>>(
+          `SELECT email, ip, attempted_at::text AS attempted_at
+             FROM \`saas_admin_login_attempts\`
+            WHERE success=0 AND attempted_at >= NOW() - interval '24 hours'
+            ORDER BY id DESC LIMIT 10`,
+        ).catch(() => [])
+      : [];
+    const failedCount = isOwner
+      ? Number((await dbQuery<Array<Record<string, unknown>>>(
+          "SELECT COUNT(*) AS count FROM `saas_admin_login_attempts` WHERE success=0 AND attempted_at >= NOW() - interval '24 hours'",
+        ).catch(() => []))[0]?.count ?? 0)
+      : 0;
     return Response.json({
       ok: true,
       totpEnabled: await saasAdminTotpEnabled(session.user.id),
       totpPolicyRequired: (await getAdminSetting("require_totp")) === "1",
-      isOwner: session.user.role === "owner",
+      isOwner,
+      currentSessionId: await currentSaasAdminSessionId(),
       sessions: await listSaasAdminSessions(session.user),
+      failedLogins,
+      failedCount,
     });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Accesso admin richiesto.", 401);

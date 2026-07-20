@@ -3,6 +3,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { formatDateTime } from "@/components/admin/admin-shared";
 
+// "Chrome su Windows" dal user agent: parsing LEGGERO, i casi ignoti
+// mostrano un generico "Sconosciuto" (mai stringhe UA grezze a schermo).
+function deviceLabel(userAgent: string): string {
+  const ua = userAgent.toLowerCase();
+  const browser = ua.includes("edg/") ? "Edge" : ua.includes("firefox/") ? "Firefox" : ua.includes("chrome/") ? "Chrome" : ua.includes("safari/") ? "Safari" : "";
+  const os = ua.includes("windows") ? "Windows" : ua.includes("mac os") ? "macOS" : ua.includes("android") ? "Android" : ua.includes("iphone") || ua.includes("ipad") ? "iOS" : ua.includes("linux") ? "Linux" : "";
+  if (!browser && !os) return "Sconosciuto";
+  return [browser, os].filter(Boolean).join(" su ");
+}
+
 // Pannello "Sicurezza account" del SaaS Admin (Fase 1 blindatura 2026-07-18,
 // ristilizzato Tailwind per la SPA in Fase 3): attivazione/disattivazione 2FA
 // TOTP (con codici di backup mostrati UNA volta) e sessioni attive con revoca.
@@ -16,11 +26,16 @@ type AdminSession = {
   lastSeenAt: string | null;
 };
 
+type FailedLogin = { email: string | null; ip: string | null; attempted_at: string | null };
+
 type SecurityState = {
   totpEnabled: boolean;
   totpPolicyRequired: boolean;
   isOwner: boolean;
+  currentSessionId: number;
   sessions: AdminSession[];
+  failedLogins: FailedLogin[];
+  failedCount: number;
 };
 
 const inputCls = "h-10 w-full rounded-md border border-slate-200 px-3 text-sm outline-none focus:border-[#365a96]";
@@ -33,6 +48,7 @@ export function AdminSecurityPanel() {
   const [error, setError] = useState("");
   const [setupSecret, setSetupSecret] = useState("");
   const [setupUri, setSetupUri] = useState("");
+  const [setupQr, setSetupQr] = useState("");
   const [setupCode, setSetupCode] = useState("");
   const [backupCodes, setBackupCodes] = useState<string[]>([]);
   const [disablePassword, setDisablePassword] = useState("");
@@ -42,7 +58,7 @@ export function AdminSecurityPanel() {
     try {
       const res = await fetch("/api/admin/security");
       const data = await res.json();
-      if (data.ok) setState({ totpEnabled: Boolean(data.totpEnabled), totpPolicyRequired: Boolean(data.totpPolicyRequired), isOwner: Boolean(data.isOwner), sessions: data.sessions ?? [] });
+      if (data.ok) setState({ totpEnabled: Boolean(data.totpEnabled), totpPolicyRequired: Boolean(data.totpPolicyRequired), isOwner: Boolean(data.isOwner), currentSessionId: Number(data.currentSessionId ?? 0), sessions: data.sessions ?? [], failedLogins: data.failedLogins ?? [], failedCount: Number(data.failedCount ?? 0) });
     } catch {
       /* pannello secondario: nessun blocco */
     }
@@ -76,9 +92,18 @@ export function AdminSecurityPanel() {
   async function startSetup() {
     const data = await post({ action: "totp_start" });
     if (!data) return;
+    const uri = String(data.uri ?? "");
     setSetupSecret(String(data.secret ?? ""));
-    setSetupUri(String(data.uri ?? ""));
+    setSetupUri(uri);
     setBackupCodes([]);
+    // QR generato in locale (nessun servizio esterno): si inquadra invece di
+    // ricopiare 32 caratteri; il secret resta visibile come fallback.
+    try {
+      const qrcode = await import("qrcode");
+      setSetupQr(await qrcode.toDataURL(uri, { margin: 1, width: 180 }));
+    } catch {
+      setSetupQr("");
+    }
   }
 
   async function confirmSetup() {
@@ -87,6 +112,7 @@ export function AdminSecurityPanel() {
     setBackupCodes((data.backupCodes as string[]) ?? []);
     setSetupSecret("");
     setSetupUri("");
+    setSetupQr("");
     setSetupCode("");
     setMessage("2FA attivata. Salva i codici di backup: non verranno più mostrati.");
     void load();
@@ -103,8 +129,19 @@ export function AdminSecurityPanel() {
   }
 
   async function revokeSession(id: number) {
+    // CONFERMA sempre — e avviso esplicito se stai revocando la TUA sessione
+    // (equivale a un logout immediato).
+    const isCurrent = id === state?.currentSessionId;
+    const question = isCurrent
+      ? "Questa è la TUA sessione attuale: revocandola verrai disconnesso subito. Continuare?"
+      : "Revocare questa sessione? L'admin collegato verrà disconnesso.";
+    if (!window.confirm(question)) return;
     const data = await post({ action: "session_revoke", id });
     if (!data) return;
+    if (isCurrent) {
+      window.location.href = "/admin/login";
+      return;
+    }
     setMessage("Sessione revocata.");
     void load();
   }
@@ -123,7 +160,12 @@ export function AdminSecurityPanel() {
         <section className="rounded-md border border-slate-200 bg-white p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="text-lg font-semibold">Policy: 2FA obbligatoria</h2>
+              <h2 className="flex items-center gap-2 text-lg font-semibold">
+                Policy: 2FA obbligatoria
+                {state.totpPolicyRequired
+                  ? <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">Attiva</span>
+                  : <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-900">Non attiva</span>}
+              </h2>
               <p className="mt-1 text-sm text-slate-500">Con la policy attiva, ogni admin senza 2FA deve configurarla prima di usare il pannello.</p>
             </div>
             <button
@@ -163,8 +205,9 @@ export function AdminSecurityPanel() {
         ) : setupSecret ? (
           <div className="mt-4 grid gap-3">
             <p className="text-sm text-slate-600">
-              Aggiungi la chiave alla tua app authenticator (Google Authenticator, 1Password, Aegis…):
+              Inquadra il QR con la tua app authenticator (Google Authenticator, 1Password, Aegis…) oppure inserisci la chiave a mano:
             </p>
+            {setupQr ? <img alt="QR code per l'app authenticator" className="w-fit rounded-md border border-slate-200" src={setupQr} /> : null}
             <code className="w-fit rounded-md bg-slate-100 px-3 py-2 text-base tracking-widest">{setupSecret}</code>
             <p className="break-all text-xs text-slate-400">{setupUri}</p>
             <div className="grid gap-3 md:grid-cols-2">
@@ -202,6 +245,7 @@ export function AdminSecurityPanel() {
             <thead>
               <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
                 <th className="py-2 pr-3">Admin</th>
+                <th className="py-2 pr-3">Dispositivo</th>
                 <th className="py-2 pr-3">IP</th>
                 <th className="py-2 pr-3">Ultimo accesso</th>
                 <th className="py-2"></th>
@@ -210,7 +254,11 @@ export function AdminSecurityPanel() {
             <tbody>
               {state.sessions.map((s) => (
                 <tr className="border-b border-slate-100" key={s.id}>
-                  <td className="py-2 pr-3">{s.adminEmail}</td>
+                  <td className="py-2 pr-3">
+                    {s.adminEmail}
+                    {s.id === state.currentSessionId ? <span className="ml-2 rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-800">questa sessione</span> : null}
+                  </td>
+                  <td className="py-2 pr-3" title={s.userAgent || undefined}>{deviceLabel(s.userAgent)}</td>
                   <td className="py-2 pr-3">{s.ip || "—"}</td>
                   <td className="py-2 pr-3">{formatDateTime(s.lastSeenAt ?? s.createdAt)}</td>
                   <td className="py-2 text-right">
@@ -221,12 +269,47 @@ export function AdminSecurityPanel() {
                 </tr>
               ))}
               {state.sessions.length === 0 ? (
-                <tr><td className="py-3 text-slate-500" colSpan={4}>Nessuna sessione attiva.</td></tr>
+                <tr><td className="py-3 text-slate-500" colSpan={5}>Nessuna sessione attiva.</td></tr>
               ) : null}
             </tbody>
           </table>
         </div>
       </section>
+
+      {/* ---- Tentativi falliti (solo owner): stessa sorgente dell'alert del
+            cron (>=10 in 24h), qui la si vede PRIMA che scatti. ---- */}
+      {state.isOwner ? (
+        <section className="rounded-md border border-slate-200 bg-white p-5">
+          <h2 className="flex items-center gap-2 text-lg font-semibold">
+            Tentativi di accesso falliti (24 ore)
+            <span className={`rounded-full px-3 py-1 text-xs font-semibold ${state.failedCount >= 10 ? "bg-red-100 text-red-800" : state.failedCount > 0 ? "bg-amber-100 text-amber-900" : "bg-emerald-100 text-emerald-800"}`}>{state.failedCount}</span>
+          </h2>
+          {state.failedLogins.length === 0 ? (
+            <p className="mt-3 text-sm text-slate-500">Nessun tentativo fallito nelle ultime 24 ore.</p>
+          ) : (
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
+                    <th className="py-2 pr-3">Email tentata</th>
+                    <th className="py-2 pr-3">IP</th>
+                    <th className="py-2">Quando</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {state.failedLogins.map((row, index) => (
+                    <tr className="border-b border-slate-100" key={index}>
+                      <td className="py-2 pr-3">{row.email || "—"}</td>
+                      <td className="py-2 pr-3">{row.ip || "—"}</td>
+                      <td className="py-2">{formatDateTime(row.attempted_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      ) : null}
     </div>
   );
 }

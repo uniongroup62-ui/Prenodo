@@ -338,6 +338,19 @@ export async function listSaasAdminSessions(user: SaasAdminUser): Promise<Array<
   }));
 }
 
+// Id della sessione della RICHIESTA corrente (per marcarla nella lista e
+// avvisare prima dell'auto-revoca).
+export async function currentSaasAdminSessionId(): Promise<number> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(saasSessionCookieName())?.value;
+  if (!token || !/^[a-f0-9]{64}$/.test(token)) return 0;
+  const rows = await dbQuery<RowDataPacket[]>(
+    "SELECT id FROM `saas_admin_sessions` WHERE token_hash=? AND revoked_at IS NULL LIMIT 1",
+    [sha256(token)],
+  ).catch(() => []);
+  return Number(rows[0]?.id ?? 0);
+}
+
 export async function revokeSaasAdminSessionById(user: SaasAdminUser, sessionId: number): Promise<boolean> {
   if (sessionId <= 0) return false;
   const clause = user.role === "owner" ? "" : " AND admin_id = ?";
