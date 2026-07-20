@@ -17655,3 +17655,11 @@ dev-compilate, PASS con pagina fresca. Ricontrollo mirato 8/8 PASS
 (NB: il ricontrollo con permessi RIDOTTI produce 403 di shell nel console
 log - usare sempre il catalogo completo nel crawler). Regressioni
 booking-pass2 9; tsc pulito.
+
+## 2026-07-21 - Dashboard: colonna destra allineata alla 3a KPI
+Richiesta utente: Prossimi appuntamenti / Avvisi / Scadenziario e Costi
+allargati in linea con la card "Vendite ultimi 30gg". La griglia inferiore
+era col-xl-9/col-xl-3 mentre le KPI sopra sono in TERZI (col-md-4):
+portata a col-xl-8/col-xl-4 (skeleton di caricamento incluso). Probe
+boundingBox: bordo sinistro e larghezza della colonna destra = 3a KPI
+(dLeft 0.0px, dW 0.0px); screenshot verificato; tsc pulito.

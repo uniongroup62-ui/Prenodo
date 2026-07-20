@@ -250,7 +250,9 @@ export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: 
           </div>
 
           <div className="row g-3 dashboard-layout">
-            <div className="col-xl-9 col-lg-8">
+            {/* 8/4 come le KPI in terzi sopra: la colonna destra combacia con
+                la card "Vendite ultimi 30gg" (richiesta 2026-07-21). */}
+            <div className="col-xl-8 col-lg-8">
               <div className="card dashboard-card dashboard-weekly-card">
                 <div className="card-header dashboard-card-header fw-semibold d-flex align-items-center gap-2">
                   <span className="dashboard-card-title">
@@ -284,7 +286,7 @@ export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: 
               </div>
             </div>
 
-            <div className="col-xl-3 col-lg-4">
+            <div className="col-xl-4 col-lg-4">
               <div className="dashboard-side-stack">
                 <div className="card dashboard-card dashboard-side-card dashboard-alerts">
                   <div className="card-header dashboard-card-header fw-semibold d-flex justify-content-between align-items-center">
@@ -340,7 +342,9 @@ export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: 
         </div>
 
         <div className="row g-3 dashboard-layout">
-          <div className="col-xl-9 col-lg-8">
+          {/* 8/4 come le KPI in terzi sopra: la colonna destra combacia con
+              la card "Vendite ultimi 30gg" (richiesta 2026-07-21). */}
+          <div className="col-xl-8 col-lg-8">
             <div className="card dashboard-card dashboard-weekly-card">
               <div className="card-header dashboard-card-header fw-semibold d-flex align-items-center gap-2">
                 <span className="dashboard-card-title">
@@ -388,7 +392,7 @@ export function DashboardContent({ slug, sedeName }: { slug: string; sedeName?: 
             </div>
           </div>
 
-          <div className="col-xl-3 col-lg-4">
+          <div className="col-xl-4 col-lg-4">
             <div className="dashboard-side-stack">
               {upcoming !== null ? (
                 <div className="card dashboard-card dashboard-side-card dashboard-upcoming-card">
