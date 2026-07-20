@@ -711,7 +711,9 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
 
   return (
     <div className="container-fluid">
-      <link rel="stylesheet" href="/assets/css/pages/reports.css" />
+      {/* ?v= bumpato quando la CSS cambia: senza, il browser tiene la
+          versione in cache e il layout dei filtri si sfalda. */}
+      <link rel="stylesheet" href="/assets/css/pages/reports.css?v=20260720b" />
 
       <div className="bs-page-header">
         <div className="bs-page-heading">
@@ -786,8 +788,12 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
           }}
         >
           <input type="hidden" name="page" value="reports" />
-          <div className="report-filter-grid">
-            <div className="report-filter-field">
+          {/* Filtri su UNA riga (riordino 2026-07-20, pattern delle liste):
+              campi compatti a sinistra, interruttori + azioni in coda riga
+              allineati alla linea degli input. Layout con utility Bootstrap,
+              indipendente dalla cache della CSS di pagina. */}
+          <div className="d-flex flex-wrap align-items-end gap-3">
+            <div className="report-filter-field" style={{ width: 230 }}>
               <label className="form-label small text-muted" htmlFor="reportRange">
                 Periodo dati
               </label>
@@ -810,7 +816,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
                 <option value="custom">Personalizzato</option>
               </select>
             </div>
-            <div className={`report-filter-field${showCustom ? "" : " d-none"}`} data-report-custom-group>
+            <div className={`report-filter-field${showCustom ? "" : " d-none"}`} style={{ width: 170 }} data-report-custom-group>
               <label className="form-label small text-muted">Dal</label>
               <input
                 className="form-control"
@@ -821,7 +827,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
                 data-report-custom-date
               />
             </div>
-            <div className={`report-filter-field${showCustom ? "" : " d-none"}`} data-report-custom-group>
+            <div className={`report-filter-field${showCustom ? "" : " d-none"}`} style={{ width: 170 }} data-report-custom-group>
               <label className="form-label small text-muted">Al</label>
               <input
                 className="form-control"
@@ -832,7 +838,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
                 data-report-custom-date
               />
             </div>
-            <div className="report-filter-field">
+            <div className="report-filter-field" style={{ width: 200 }}>
               <label className="form-label small text-muted" htmlFor="reportGranularity">
                 Raggruppamento grafici
               </label>
@@ -849,24 +855,8 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
                 <option value="monthly">Per mese</option>
               </select>
             </div>
-          </div>
-
-          {/* Barra sotto i campi (riordino 2026-07-20): riepilogo periodo a
-              sinistra, interruttori e azioni a destra sulla stessa riga. */}
-          <div
-            className="report-filter-summary report-filter-summary-bar mt-2"
-            data-report-period-summary
-            data-from={rng.from}
-            data-to={rng.to}
-          >
-            <div className="report-filter-summary-info">
-              <span>
-                Periodo selezionato: <strong data-report-period-label>{itDate(rng.from)} - {itDate(rng.to)}</strong>
-              </span>
-              <span>{granularity === "auto" ? "Raggruppamento automatico" : trendBadge}</span>
-            </div>
-            <div className="report-filter-actions">
-              <div className="form-check report-filter-switch">
+            <div className="d-flex flex-wrap align-items-center gap-3 ms-auto pb-1">
+              <div className="form-check mb-0">
                 <input
                   className="form-check-input"
                   type="checkbox"
@@ -881,7 +871,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
                 </label>
               </div>
               {(data?.locationsCount ?? 0) > 1 ? (
-                <div className="form-check report-filter-switch">
+                <div className="form-check mb-0">
                   <input
                     className="form-check-input"
                     type="checkbox"
@@ -896,20 +886,34 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
                   </label>
                 </div>
               ) : null}
-              <button
-                className="btn btn-sm btn-outline-secondary"
-                type="button"
-                id="reportPrintBtn"
-                onClick={() => window.print()}
-              >
-                <i className="bi bi-printer me-1" />
-                Stampa
-              </button>
-              <button className="btn btn-sm btn-primary" type="submit">
-                <i className="bi bi-arrow-clockwise me-1" />
-                Aggiorna
-              </button>
+              <div className="d-flex gap-2">
+                <button
+                  className="btn btn-outline-secondary"
+                  type="button"
+                  id="reportPrintBtn"
+                  onClick={() => window.print()}
+                >
+                  <i className="bi bi-printer me-1" />
+                  Stampa
+                </button>
+                <button className="btn btn-primary" type="submit">
+                  <i className="bi bi-arrow-clockwise me-1" />
+                  Aggiorna
+                </button>
+              </div>
             </div>
+          </div>
+
+          <div
+            className="report-filter-summary d-flex flex-wrap align-items-center gap-2 column-gap-4 mt-2"
+            data-report-period-summary
+            data-from={rng.from}
+            data-to={rng.to}
+          >
+            <span>
+              Periodo selezionato: <strong data-report-period-label>{itDate(rng.from)} - {itDate(rng.to)}</strong>
+            </span>
+            <span>{granularity === "auto" ? "Raggruppamento automatico" : trendBadge}</span>
           </div>
 
           <div className={`report-filter-section${compare ? "" : " d-none"}`} data-report-compare-panel>

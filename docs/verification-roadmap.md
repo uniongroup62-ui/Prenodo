@@ -17624,3 +17624,16 @@ Confronta / Tutte le sedi + bottoni compatti Stampa e Aggiorna (primary).
 CSS: summary-bar space-between, actions flex wrap, switch senza padding
 verticale; rimossa la griglia 2x2 provvisoria. Suite report-rivoluzione
 19/19 rieseguita (D6 bottone Stampa incluso); screenshot verificato.
+
+## 2026-07-20 - Report: filtri su riga unica (secondo giro, il primo bocciato)
+La barra a due righe non piaceva (e la CSS in cache la mostrava rotta:
+azioni impilate al centro). Nuovo assetto DEFINITIVO, pattern delle liste:
+UNA riga con Periodo dati (230px), Dal/Al (170px, solo con Personalizzato),
+Raggruppamento (200px), poi in coda riga (ms-auto, allineati alla linea
+degli input) Confronta, Tutte le sedi, Stampa e Aggiorna (primary);
+riepilogo periodo sotto. LEZIONI: (1) layout critico con utility Bootstrap
+NEL MARKUP, non nella CSS di pagina (le /assets/css sono cacheate dal
+browser e un utente puo vedere markup nuovo + CSS vecchia); (2) da ora la
+link della CSS di pagina porta ?v= bumpato a ogni modifica
+(reports.css?v=20260720b). Regole provvisorie rimosse dalla CSS. Suite
+report-rivoluzione 19/19; screenshot verificato.

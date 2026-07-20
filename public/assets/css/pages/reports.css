@@ -323,29 +323,5 @@ a.report-kpi-link:focus-visible{
   }
 }
 
-/* Riordino filtri (2026-07-20): campi in griglia sopra; sotto una BARRA con
-   riepilogo periodo a sinistra e interruttori + azioni a destra. */
-.report-filter-summary-bar{
-  justify-content:space-between;
-}
-.report-filter-summary-info{
-  display:flex;
-  flex-wrap:wrap;
-  align-items:center;
-  gap:8px 18px;
-}
-.report-filter-actions{
-  display:flex !important;
-  flex-wrap:wrap;
-  align-items:center;
-  justify-content:flex-end;
-  gap:6px 16px;
-}
-.report-filter-actions .report-filter-switch{
-  min-height:auto;
-  padding-top:0;
-}
-.report-filter-actions .btn{
-  width:auto;
-  white-space:nowrap;
-}
+/* Riordino filtri (2026-07-20): riga unica coi layout via utility Bootstrap
+   nel markup (nessuna dipendenza dalla cache di questa CSS). */
