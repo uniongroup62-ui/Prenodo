@@ -1256,11 +1256,21 @@ function problemValue(ok: boolean, okText: string, problemText: string, tone: "a
   return <span className={tone === "red" ? "text-red-700" : "text-amber-700"}>{problemText}</span>;
 }
 
+const SMS_DIAG_PER_PAGE = 25;
+
 function ControlsView({ data, canManage, onRefresh, onRunHealth, onOpenTenant }: { data: ControlsPayload | null; canManage: boolean; onRefresh: () => void; onRunHealth: () => void; onOpenTenant: (slug: string) => void }) {
+  const [diagPage, setDiagPage] = useState(1);
   if (!data) {
     return <EmptyOperation icon={Activity} title="Controlli operativi" detail="Carica diagnostica provider SMS e tenant." onRefresh={onRefresh} />;
   }
   const provider = data.provider;
+  // Diagnostica tenant: PROBLEMI PRIMA (errore > avviso > ok), 25 per pagina —
+  // con molti tenant la prima pagina resta quella che conta.
+  const levelRank: Record<string, number> = { error: 0, warning: 1, ok: 2 };
+  const sortedDiag = [...data.tenants].sort((a, b) => (levelRank[String(a.level)] ?? 3) - (levelRank[String(b.level)] ?? 3));
+  const diagPageCount = Math.max(1, Math.ceil(sortedDiag.length / SMS_DIAG_PER_PAGE));
+  const diagCurrent = Math.min(diagPage, diagPageCount);
+  const diagVisible = sortedDiag.slice((diagCurrent - 1) * SMS_DIAG_PER_PAGE, diagCurrent * SMS_DIAG_PER_PAGE);
   return (
     <div className="grid gap-5">
       <div className="grid gap-3 md:grid-cols-4">
@@ -1295,8 +1305,8 @@ function ControlsView({ data, canManage, onRefresh, onRunHealth, onOpenTenant }:
       <Table
         title="Diagnostica SMS tenant"
         headers={["Tenant", "Esito", "Messaggio", "Inviati", "Falliti", "Ultimo invio"]}
-        onRowClick={(index) => { const row = data.tenants[index]; if (row) onOpenTenant(String(row.tenant_slug)); }}
-        rows={data.tenants.map((row) => [
+        onRowClick={(index) => { const row = diagVisible[index]; if (row) onOpenTenant(String(row.tenant_slug)); }}
+        rows={diagVisible.map((row) => [
           <span key={row.tenant_slug}><strong>{row.tenant_name}</strong><span className="ml-2 text-slate-500">{row.tenant_slug}</span></span>,
           <Badge tone={healthTone(row.level)} key={`level-${row.tenant_slug}`}>{healthLabel[row.level]}</Badge>,
           row.message,
@@ -1305,6 +1315,15 @@ function ControlsView({ data, canManage, onRefresh, onRunHealth, onOpenTenant }:
           formatDateTime(row.stats.last_sent_at == null ? null : String(row.stats.last_sent_at)),
         ])}
       />
+      {diagPageCount > 1 ? (
+        <div className="flex items-center justify-between rounded-md border border-slate-200 bg-white px-4 py-2 text-sm shadow-sm">
+          <span className="text-slate-500">{sortedDiag.length} tenant · pagina {diagCurrent} di {diagPageCount}</span>
+          <div className="flex gap-2">
+            <button className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold disabled:opacity-40" disabled={diagCurrent <= 1} type="button" onClick={() => setDiagPage(diagCurrent - 1)}>Precedente</button>
+            <button className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold disabled:opacity-40" disabled={diagCurrent >= diagPageCount} type="button" onClick={() => setDiagPage(diagCurrent + 1)}>Successiva</button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

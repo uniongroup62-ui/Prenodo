@@ -17288,3 +17288,16 @@ Verifica: probe live (filtro 3 mesi aggiorna i sottotitoli, 12 li ripristina)
 Verifica: probe live (sintesi umana, JSON assente, ambra, riga->tenant, card
 rimossa, hint, contatore Esegui(1)); faseC 7, fase4 11, consolida 12, dash 8,
 restore 8, ux 7; tsc pulito.
+
+## 2026-07-20 — DIAGNOSTICA SMS TENANT: 25/PAGINA, PROBLEMI PRIMA (approvato)
+
+La tabella mostrava TUTTI i tenant senza limite (allTenantSmsDiagnostics).
+Ora: ordinamento PROBLEMI PRIMA (errore > avviso > ok) + paginazione
+client-side 25/pagina (footer Precedente/Successiva, nascosto sotto le 26
+righe); onRowClick rimappato sull'array ordinato+paginato. Il registro cron
+resta senza paginazione: e' 1 riga per job, tetto naturale 8.
+NOTA FUTURA (annotata anche in chat): il costo server resta N query
+sequenziali per tenant — quando i tenant cresceranno, spostare la diagnostica
+SMS nel cron notturno e leggere qui lo snapshot (come la salute tenant).
+Verifica: probe live (2 righe, footer nascosto, riga cliccabile);
+faseC 7, fase4 11; tsc pulito.
