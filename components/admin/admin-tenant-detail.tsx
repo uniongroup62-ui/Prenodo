@@ -4,6 +4,7 @@
 // tab (panoramica, timeline, configurazione, supporto, backup, danger zone)
 // estratto dal monolite saas-admin-app.tsx.
 
+import { useState } from "react";
 import {
   Activity,
   Archive,
@@ -174,13 +175,20 @@ function TenantOverview({ detail }: { detail: TenantDetailPayload }) {
   );
 }
 
+const TIMELINE_PER_PAGE = 25;
+
 function TenantTimeline({ events }: { events: TimelineEvent[] }) {
+  const [page, setPage] = useState(1);
   if (!events.length) {
     return <p className="p-2 text-sm text-slate-500">Nessun evento registrato per questo tenant.</p>;
   }
+  const pageCount = Math.max(1, Math.ceil(events.length / TIMELINE_PER_PAGE));
+  const current = Math.min(page, pageCount);
+  const visible = events.slice((current - 1) * TIMELINE_PER_PAGE, current * TIMELINE_PER_PAGE);
   return (
+    <div className="grid gap-3">
     <ol className="relative grid gap-0 border-l border-slate-200 pl-4">
-      {events.map((event, index) => {
+      {visible.map((event, index) => {
         const kind = timelineKindStyle[event.kind] ?? timelineKindStyle.audit;
         return (
           <li className="relative pb-4" key={`${event.at}-${event.kind}-${index}`}>
@@ -196,6 +204,16 @@ function TenantTimeline({ events }: { events: TimelineEvent[] }) {
         );
       })}
     </ol>
+    {pageCount > 1 ? (
+      <div className="flex items-center justify-between border-t border-slate-100 pt-2 text-sm">
+        <span className="text-slate-500">{events.length} eventi · pagina {current} di {pageCount}</span>
+        <div className="flex gap-2">
+          <button className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold disabled:opacity-40" disabled={current <= 1} type="button" onClick={() => setPage(current - 1)}>Precedente</button>
+          <button className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold disabled:opacity-40" disabled={current >= pageCount} type="button" onClick={() => setPage(current + 1)}>Successiva</button>
+        </div>
+      </div>
+    ) : null}
+    </div>
   );
 }
 

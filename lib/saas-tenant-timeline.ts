@@ -89,10 +89,14 @@ export async function buildTenantTimeline(tenantId: number, limit = 60): Promise
 
   for (const row of health) {
     const level = String(row.level ?? "");
+    // Le diagnostiche OK sono rumore (una per ogni giro di cron): in timeline
+    // entrano SOLO warning/error — "l'ultima verifica e' andata bene" vive
+    // gia' nella card Salute della Panoramica (rilievo utente 20/07).
+    if (level === "ok") continue;
     events.push({
       at: at(row.created_at),
       kind: "health",
-      title: `Diagnostica: ${level}`,
+      title: `Diagnostica: ${level === "error" ? "errore" : "avvisi"}`,
       detail: `${Number(row.errors_count ?? 0)} errori, ${Number(row.warnings_count ?? 0)} avvisi (${String(row.source ?? "-")})`,
       actor: "",
     });

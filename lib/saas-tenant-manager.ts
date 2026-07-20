@@ -572,6 +572,13 @@ export async function recordSaasTenantHealth(tenant: SaasTenantRow, health: Saas
       JSON.stringify(health.missing_schema ?? []),
     ],
   );
+  // Retention (rilievo utente 20/07: "a cosa serve accumulare?"): lo storico
+  // diagnostiche serve solo recente — restano le ultime 30 righe per tenant.
+  await dbExecute(
+    `DELETE FROM \`${HEALTH_TABLE}\` WHERE tenant_id=? AND id NOT IN (
+       SELECT id FROM \`${HEALTH_TABLE}\` WHERE tenant_id=? ORDER BY id DESC LIMIT 30)`,
+    [Number(tenant.id), Number(tenant.id)],
+  ).catch(() => undefined);
 }
 
 export async function latestSaasHealthChecks(tenantId: number, limit = 10): Promise<RowDataPacket[]> {

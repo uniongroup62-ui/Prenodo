@@ -42,7 +42,7 @@ export async function GET(request: Request) {
         activeSupportTokens(Number(tenant.id)),
         recentSupportTokens(Number(tenant.id), 20),
         auditRows(Number(tenant.id), 40),
-        buildTenantTimeline(Number(tenant.id), 60),
+        buildTenantTimeline(Number(tenant.id), 100),
         tenantWalletBalance({ id: Number(tenant.id), slug: String(tenant.slug) }).catch(() => 0),
       ]);
       return Response.json({ ok: true, tenant, healthChecks, activeTokens, recentTokens, audit: tenantAudit, timeline, smsCredits });

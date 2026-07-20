@@ -16786,3 +16786,22 @@ Richiesta utente: rimosso il bottone Cerca (Ctrl K) in alto a destra;
 resta solo "Nuovo tenant". La COMMAND PALETTE rimane attiva con
 Ctrl/Cmd+K (verificato live: bottone assente, palette apre da
 tastiera). Suite faseAB (palette da tastiera), dash e fase3 verdi.
+
+## 2026-07-20 — TIMELINE: 25 PER PAGINA + STOP AL RUMORE "Diagnostica: ok"
+
+Rilievi utente: (1) la timeline del tenant era un muro di
+"Diagnostica: ok" — una per ogni giro di cron, nessun valore
+("l'ultima verifica ok" vive gia' nella card Salute della
+Panoramica). In timeline entrano ora SOLO le diagnostiche con
+warning/error (titoli in italiano: "Diagnostica: errore/avvisi").
+(2) RETENTION dello storico: recordSaasTenantHealth conserva le
+ultime 30 righe per tenant (66/68 accumulate -> 30 al primo giro).
+(3) PAGINAZIONE timeline a 25 eventi per pagina (client-side,
+payload server alzato a 100) con footer Precedente/Successiva.
+
+Verifica live: zero "Diagnostica: ok" nelle timeline dei tenant
+reali; retention 66->30; fixture con 30 audit -> pagina 1 da 25 +
+footer + pagina 2 da 5; rimosso un orfano PRE-ESISTENTE (health row
+di un tenant id 19 morto a giugno, slug riusato — verificato id
+inesistente prima del delete). Suite faseD/ux/giro5/faseAB/dash
+verdi; tsc pulito.
