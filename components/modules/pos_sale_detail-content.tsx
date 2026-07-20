@@ -622,7 +622,7 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
           <div className="card p-3 mb-3">
             <div className="d-flex align-items-start justify-content-between gap-3 flex-wrap">
               <div>
-                <div className="h5 fw-semibold mb-1">Dettaglio vendita #{sale.id}</div>
+                <div className="h5 fw-semibold mb-1">Vendita #{sale.id}</div>
                 <div className="text-muted small">
                   Data: <strong>{fmtDateTime(sale.createdAt)}</strong>
                   {" • "}Cliente: <strong>{clientLabel}</strong>

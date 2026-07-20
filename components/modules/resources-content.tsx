@@ -267,8 +267,6 @@ export function ResourcesContent({ slug: slugProp, initialQuery }: { slug?: stri
         <div className="row g-3">
           <div className="col-lg-7">
             <div className="card p-4">
-              <div className="h5 fw-bold mb-3">{action === "edit" ? "Modifica risorsa" : "Nuova risorsa"}</div>
-
               <form className="row g-3" id="resourceForm" onSubmit={saveResource}>
                 <input type="hidden" name="id" value={form.id} />
 

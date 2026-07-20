@@ -17452,3 +17452,22 @@ Probe Playwright con sessione forgiata: boundingBox input vs select su tutte
 e tre le righe (toggle accesi solo in UI, niente salvataggio) = dTop 0.0px,
 dH 0.0px; screenshot verificato. Regressioni notifiche-fidelity-page 6,
 fidelity-improvements 11; tsc pulito.
+
+## 2026-07-20 - Gestionale: eliminati i doppi titoli pagina/card
+Segnalazione utente (screenshot Impostazioni tessera Fidelity): il titolo
+compariva sia nel bs-page-header sia come heading dentro la card. Scansione
+automatica di TUTTI i moduli (h1 bs-page-title vs heading interni letterali,
+match esatto + loose) su components/modules: 5 pagine reali trovate.
+Principio applicato: il titolo vive SOLO nell header di pagina; la card
+conserva solo l informazione aggiuntiva.
+1) fidelity_membership_settings: rimosso blocco h5+descrizione quasi-doppia.
+2) cabins: "Cabine - {sede}" -> "Sede: {sede}".
+3) pos_sale_detail: "Dettaglio vendita #id" -> "Vendita #id" (modali annulla/
+   elimina invariati: azioni diverse, non doppioni).
+4) stock_move_form: h6 doppione rimosso, resta "Torna alla lista" a destra.
+5) resources (new/edit): h5 interno rimosso (h1 gia dinamico).
+Falso positivo escluso: notifications ("Personalizza notifiche" e sezione).
+Probe Playwright forge sede 21 sulle 5 pagine (h1 unico, doppione assente,
+contenuti presenti; vendita reale 607 read-only) = 5/5. Nessuna suite
+asseriva i testi cambiati; regressioni cabine-pass2 20, risorse-pass2 3,
+magazzino-pass2 7, pos-checkout 8; tsc pulito.

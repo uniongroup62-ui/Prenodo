@@ -315,14 +315,6 @@ export function FidelityMembershipSettingsContent({
       <div className="row g-3 fidelity-card-settings-anchor" id="fidelity_card_settings">
         <div className="col-lg-8">
           <div className="card p-4">
-            <div className="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-2 mb-3">
-              <div>
-                <div className="h5 fw-bold mb-1">Impostazioni tessera Fidelity</div>
-                <div className="text-muted small">
-                  Configura scadenza, rinnovo automatico e promemoria di scadenza dalla pagina dedicata di Adesione.
-                </div>
-              </div>
-            </div>
             <div className="text-muted small mb-3">
               Quando crei una <strong>nuova tessera Fidelity</strong> da <strong>Fidelity → Adesione</strong>, la{" "}
               <em>Data scadenza</em> del popup <em>Nuova tessera</em> viene calcolata automaticamente partendo dalla{" "}

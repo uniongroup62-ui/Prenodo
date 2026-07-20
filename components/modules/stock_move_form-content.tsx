@@ -277,8 +277,7 @@ export function StockMoveFormContent({ slug: slugProp }: { slug?: string } = {})
           <div className="card p-3 text-muted small">Caricamento…</div>
         ) : (
           <div className="card p-3 mb-3">
-            <div className="d-flex justify-content-between align-items-center">
-              <div className="h6 fw-semibold m-0">Nuovo carico / scarico</div>
+            <div className="d-flex justify-content-end align-items-center">
               <a className="btn btn-sm btn-outline-secondary" href={`/${encodeURIComponent(slug)}/stock_moves`}>
                 Torna alla lista
               </a>

@@ -345,7 +345,7 @@ export function CabinsContent({ slug: slugProp, initialQuery }: { slug?: string;
       <div className="row g-3">
         <div className="col-lg-7">
           <div className="card p-4">
-            <div className="h5 fw-bold mb-3">Cabine - {selectedLocationName}</div>
+            <div className="h5 fw-bold mb-3">Sede: {selectedLocationName}</div>
 
             <form method="post" className="row g-3" id="cabinsForm" onSubmit={onSubmit}>
               <input type="hidden" name="location_id" value={activeLocationId || ""} />
