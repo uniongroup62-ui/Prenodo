@@ -17019,3 +17019,21 @@ con "Visibilita'" nella lista.
 Verifica: probe live (deep-link tab=visibility -> tab attiva + 2 toggle
 renderizzati; tab Dati SENZA piu' i toggle); ux 7, fase3 9, faseD 4 — verdi;
 tsc pulito.
+
+## 2026-07-20 — TAB SUPPORTO: VERIFICA FUNZIONALE + RIFINITURA (richiesta utente)
+
+Funzionamento CONFERMATO end-to-end (suite nuova test-admin-supporto, 6):
+creazione token via API e via form, consumo del link monouso (redirect al
+gestionale + used_at), revoca, scadenza. Rifiniture applicate col pattern
+delle altre tab:
+- Storico: colonne "Creato il"/"Scadeva il" con date dd/mm/yyyy hh:mm (via
+  diagDate, niente secondi) + colonna ESITO unica e colorata ("Usato il X" /
+  "Revocato il X" / "Scaduto senza uso" / "Attivo") al posto del campo minato
+  di trattini Uso/Revoca; esito calcolato client-side (supportOutcome).
+- Didascalia sotto il form: cosa genera, monouso, sessione chiusa alla
+  scadenza, tracciato in Audit.
+- Bottone "Copia" sul link generato (clipboard + feedback "Copiato").
+- Empty-state "Nessun token attivo." al posto della tabella vuota.
+TRAPPOLA batteria: gli header tabella sono uppercase VIA CSS -> innerText
+restituisce "CREATO IL": i match sugli header devono essere case-insensitive.
+Regressioni giro5 17 (ciclo token) e ux 7 — verdi; tsc pulito.

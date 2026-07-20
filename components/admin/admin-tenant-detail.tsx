@@ -351,14 +351,29 @@ function TenantHealth({ detail, canManage, onAction }: { detail: TenantDetailPay
   );
 }
 
+// Esito unico di un token di supporto: ogni riga ha UNA storia sola —
+// usato, revocato, ancora attivo o scaduto senza uso.
+function supportOutcome(token: { used_at?: string | null; revoked_at?: string | null; expires_at?: string | null }): { text: string; cls: string } {
+  if (token.used_at) return { text: `Usato il ${diagDate(token.used_at)}`, cls: "text-emerald-700" };
+  if (token.revoked_at) return { text: `Revocato il ${diagDate(token.revoked_at)}`, cls: "text-red-700" };
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const nowStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  return String(token.expires_at ?? "") > nowStr ? { text: "Attivo", cls: "text-sky-700" } : { text: "Scaduto senza uso", cls: "text-slate-500" };
+}
+
 function TenantSupport({ detail, supportLink, canManage, onAction }: { detail: TenantDetailPayload; supportLink: string; canManage: boolean; onAction: (action: string, payload?: Record<string, string>) => void }) {
   const tenant = detail.tenant;
+  const [copied, setCopied] = useState(false);
   return (
     <div className="grid gap-4">
       {supportLink ? (
         <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3">
           <p className="text-sm font-semibold text-emerald-800">Link monouso generato. Dopo il primo accesso non sara riutilizzabile.</p>
-          <input className="mt-2 h-10 w-full rounded-md border border-emerald-200 bg-white px-3 text-sm" readOnly value={supportLink} onFocus={(event) => event.currentTarget.select()} />
+          <div className="mt-2 flex gap-2">
+            <input className="h-10 w-full rounded-md border border-emerald-200 bg-white px-3 text-sm" readOnly value={supportLink} onFocus={(event) => event.currentTarget.select()} />
+            <button className="h-10 shrink-0 rounded-md border border-emerald-300 bg-white px-3 text-sm font-semibold text-emerald-800" type="button" onClick={() => { void navigator.clipboard.writeText(supportLink).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); }}>{copied ? "Copiato" : "Copia"}</button>
+          </div>
         </div>
       ) : null}
       <form className="grid gap-3 md:grid-cols-[1fr_150px]" onSubmit={(event) => submitAction(event, "support_create", onAction)}>
@@ -375,17 +390,35 @@ function TenantSupport({ detail, supportLink, canManage, onAction }: { detail: T
         </label>
         <Button disabled={!canManage} icon={LifeBuoy}>Genera accesso supporto</Button>
       </form>
+      <p className="text-xs text-slate-500">Genera un link monouso che apre il gestionale di questo tenant come sessione di supporto. Il link vale un solo accesso, la sessione si chiude alla scadenza del token e ogni passaggio resta tracciato in Audit.</p>
+      {detail.activeTokens.length ? (
+        <Table
+          title="Token disponibili"
+          headers={["Motivo", "Creato da", "Scade il", "Azioni"]}
+          rows={detail.activeTokens.map((token) => [
+            token.reason || "-",
+            token.created_by_email || "-",
+            diagDate(token.expires_at),
+            <button className="rounded-md border border-red-200 px-2 py-1 text-xs font-semibold text-red-700" key={token.id} disabled={!canManage} type="button" onClick={() => onAction("support_revoke", { slug: tenant.slug, token_id: String(token.id) })}>Revoca</button>,
+          ])}
+        />
+      ) : (
+        <p className="text-sm text-slate-500">Nessun token attivo.</p>
+      )}
       <Table
-        title="Token disponibili"
-        headers={["Motivo", "Creato da", "Scadenza", "Azioni"]}
-        rows={detail.activeTokens.map((token) => [
-          token.reason || "-",
-          token.created_by_email || "-",
-          token.expires_at || "-",
-          <button className="rounded-md border border-red-200 px-2 py-1 text-xs font-semibold text-red-700" key={token.id} disabled={!canManage} type="button" onClick={() => onAction("support_revoke", { slug: tenant.slug, token_id: String(token.id) })}>Revoca</button>,
-        ])}
+        title="Storico accessi supporto"
+        headers={["Motivo", "Creato da", "Creato il", "Scadeva il", "Esito"]}
+        rows={detail.recentTokens.map((token) => {
+          const outcome = supportOutcome(token);
+          return [
+            token.reason || "-",
+            token.created_by_email || "-",
+            diagDate(token.created_at),
+            diagDate(token.expires_at),
+            <span className={`font-semibold ${outcome.cls}`} key={`o-${token.id}`}>{outcome.text}</span>,
+          ];
+        })}
       />
-      <Table title="Storico accessi supporto" headers={["Motivo", "Creato da", "Scadenza", "Uso", "Revoca"]} rows={detail.recentTokens.map((token) => [token.reason || "-", token.created_by_email || "-", token.expires_at || "-", token.used_at || "-", token.revoked_at || "-"])} />
     </div>
   );
 }
