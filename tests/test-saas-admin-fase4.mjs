@@ -45,9 +45,15 @@ try {
   const csvSBody = await csvS.text();
   check("E4 export_sms_orders -> CSV con header", csvS.status === 200 && (csvS.headers.get("content-type") || "").includes("text/csv") && csvSBody.includes('"id";"tenant";"crediti"'), `status=${csvS.status}`);
 
-  // E5: audit registra gli export
-  const aud = await db.query("SELECT action FROM saas_admin_audit WHERE admin_id=$1 AND action LIKE 'ops_export%'", [adminId]);
-  const audActions = aud.rows.map((r) => r.action);
+  // E5: audit registra gli export — la scrittura e' fire-and-forget: POLL
+  // fino a 6s invece di leggere subito (flake nota sotto carico).
+  let audActions = [];
+  for (let i = 0; i < 6; i++) {
+    const aud = await db.query("SELECT action FROM saas_admin_audit WHERE admin_id=$1 AND action LIKE 'ops_export%'", [adminId]);
+    audActions = aud.rows.map((r) => r.action);
+    if (audActions.includes("ops_export_tenants") && audActions.includes("ops_export_sms_orders")) break;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
   check("E5 audit ops_export_tenants + ops_export_sms_orders", audActions.includes("ops_export_tenants") && audActions.includes("ops_export_sms_orders"), audActions.join(","));
 
   // E6: crea token supporto via API -> link con support_token

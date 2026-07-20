@@ -17152,3 +17152,26 @@ I numeri erano giusti (batteria stats); 5 difetti di presentazione chiusi:
 TRAPPOLA batteria: U6 cercava "Piano piu' venduto" col vecchio apostrofo.
 Verifica: probe live (MRR onesto, scala inventata assente, KPI e empty nuovi)
 + stats 8/8, ux 7/7, dash 8/8; tsc pulito.
+
+## 2026-07-20 — FATTURAZIONE: TOGGLE PIANI + RIFINITURE (analisi approvata)
+
+Il buco funzionale: un piano ABBONAMENTO non si poteva disattivare dalla UI
+(l'API plan_save accettava is_active ma nessun controllo lo esponeva; i
+pacchetti SMS il toggle ce l'avevano). Ora ogni riga di "Piani e MRR" ha
+Disattiva/Attiva: plan_save COMPLETO con is_active ribaltato — prezzo e
+limiti restano intatti (verificato B2), i tenant assegnati non vengono
+toccati, la riga mostra "(disattivo)".
+
+Rifiniture: (2) RIMOSSA la tabella "Ricavo SMS per mese" dalla tab
+Abbonamenti (triplice copia: vive in Statistiche/Entrate e nel mondo
+Pacchetti SMS); (3) KPI "Ricavo SMS (mese corrente)" ora confronta col MESE
+CORRENTE vero (la serie e' DESC: [0] era solo l'ultimo mese CON ordini —
+avrebbe mostrato ricavi d'epoca come correnti) e a vuoto dice "nessun ordine
+questo mese"; (4) frecce riordino pacchetti con title/aria "Sposta su/giu'
+nella vetrina" + sottotitolo che spiega "In evidenza"; (5) Impostazioni
+prezzo con UNITA' (euro/SMS, %, euro/ordine); (6) select ricarica manuale
+"Nome — N crediti".
+
+Suite nuova test-admin-billing-rifiniture (4). Regressioni ux 7, faseE 8,
+stats 8, faseC 7, fase4 11 (E5 stabilizzata: audit export fire-and-forget ->
+poll 6s invece di lettura immediata, flake nota sotto carico); tsc pulito.

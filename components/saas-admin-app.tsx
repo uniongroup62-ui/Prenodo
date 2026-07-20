@@ -1095,12 +1095,17 @@ function BillingView({ data, canManage, onAction, onRefresh }: { data: BillingPa
   if (!data) {
     return <EmptyOperation icon={Wallet} title="Piani & Ricavi" detail="Carica piani, MRR e ricavi SMS." onRefresh={onRefresh} />;
   }
+  // "Mese corrente" DAVVERO: la serie e' DESC e [0] e' solo l'ultimo mese con
+  // ordini — se e' un mese vecchio il KPI mostrerebbe ricavi d'epoca.
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const smsCurrent = data.revenue.sms_monthly.find((row) => row.month === currentMonth);
   return (
     <div className="grid gap-5">
       <div className="grid gap-3 md:grid-cols-4">
         <Metric label="MRR" value={formatEuro(data.revenue.mrr_total)} detail="tenant attivi x piano" />
         <Metric label="Senza piano" value={String(data.revenue.unassigned_active)} detail="tenant attivi da assegnare" />
-        <Metric label="Ricavo SMS (mese corrente)" value={formatEuro(data.revenue.sms_monthly[0]?.revenue ?? 0)} detail={data.revenue.sms_monthly[0]?.month ?? "-"} />
+        <Metric label="Ricavo SMS (mese corrente)" value={formatEuro(smsCurrent?.revenue ?? 0)} detail={smsCurrent ? `${smsCurrent.orders} ordini pagati` : "nessun ordine questo mese"} />
         <Metric label="Crediti SMS residui" value={String(data.revenue.wallet_credits_total)} detail="somma su tutti i tenant" />
       </div>
 
@@ -1133,9 +1138,31 @@ function BillingView({ data, canManage, onAction, onRefresh }: { data: BillingPa
             plan.max_staff === null ? "illimitato" : String(plan.max_staff),
             String(rev?.tenants ?? 0),
             formatEuro(rev?.mrr ?? 0),
-            <button className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold hover:bg-slate-50 disabled:opacity-40" disabled={!canManage} key={`edit-${plan.id}`} type="button" onClick={() => setEditing(plan)}>
-              Modifica
-            </button>,
+            <span className="flex justify-end gap-2" key={`actions-${plan.id}`}>
+              <button className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold hover:bg-slate-50 disabled:opacity-40" disabled={!canManage} type="button" onClick={() => setEditing(plan)}>
+                Modifica
+              </button>
+              {/* Ritiro dal listino SENZA toccare i tenant che lo usano:
+                  plan_save completo con is_active ribaltato. */}
+              <button
+                className="inline-flex h-8 items-center rounded-md border border-slate-200 px-3 text-xs font-semibold hover:bg-slate-50 disabled:opacity-40"
+                disabled={!canManage}
+                type="button"
+                onClick={() => onAction({
+                  action: "plan_save",
+                  plan_id: String(plan.id),
+                  name: plan.name,
+                  price_month: String(plan.price_month),
+                  max_locations: plan.max_locations === null ? "" : String(plan.max_locations),
+                  max_staff: plan.max_staff === null ? "" : String(plan.max_staff),
+                  sms_included_month: String(plan.sms_included_month ?? 0),
+                  notes: plan.notes ?? "",
+                  is_active: plan.is_active === 1 ? "0" : "1",
+                })}
+              >
+                {plan.is_active === 1 ? "Disattiva" : "Attiva"}
+              </button>
+            </span>,
           ];
         })}
       />
@@ -1162,12 +1189,8 @@ function BillingView({ data, canManage, onAction, onRefresh }: { data: BillingPa
         </form>
       </section>
 
-      <Table
-        title="Ricavo SMS per mese (ordini pagati)"
-        headers={["Mese", "Ordini", "Crediti", "Ricavo"]}
-        empty="Nessun ordine SMS pagato finora."
-        rows={data.revenue.sms_monthly.map((row) => [row.month, String(row.orders), String(row.credits), formatEuro(row.revenue)])}
-      />
+      {/* La tabella "Ricavo SMS per mese" viveva QUI in triplice copia
+          (Statistiche/Entrate + mondo Pacchetti SMS): rimossa (20/07). */}
     </div>
   );
 }
@@ -1245,7 +1268,7 @@ function SmsPlansView({ data, canManage, onAction, onRefresh }: { data: SmsBilli
       
 
       <section className="rounded-md border border-slate-200 bg-white shadow-sm">
-        <SectionHead title="Piani" subtitle="Ordine, attivazione, evidenza e marginalità per pacchetto." />
+        <SectionHead title="Piani" subtitle="'In evidenza' mette il pacchetto in risalto nella vetrina acquisti del tenant; le frecce ne cambiano l'ordine. Sotto ogni pacchetto: costo provider, fee e margine." />
         <div className="grid gap-3 p-4">
           {data.plans.map((plan) => (
             <form className="grid gap-3 rounded-md border border-slate-200 p-3 md:grid-cols-[1.2fr_120px_120px_1.4fr_90px_90px_auto]" key={plan.id} onSubmit={(event) => submitOperation(event, "sms_save_plan", onAction)}>
@@ -1258,8 +1281,8 @@ function SmsPlansView({ data, canManage, onAction, onRefresh }: { data: SmsBilli
               <Toggle name="is_featured" label="In evidenza" defaultChecked={Number(plan.is_featured) === 1} compact />
               <div className="flex items-end gap-2">
                 <Button disabled={!canManage} icon={Settings}>Salva</Button>
-                <button className="h-10 rounded-md border border-slate-200 px-2" disabled={!canManage} type="button" onClick={() => onAction({ action: "sms_move_plan", plan_id: String(plan.id), direction: "-1" })}><ArrowUp size={16} aria-hidden /></button>
-                <button className="h-10 rounded-md border border-slate-200 px-2" disabled={!canManage} type="button" onClick={() => onAction({ action: "sms_move_plan", plan_id: String(plan.id), direction: "1" })}><ArrowDown size={16} aria-hidden /></button>
+                <button aria-label="Sposta su nella vetrina" className="h-10 rounded-md border border-slate-200 px-2" disabled={!canManage} title="Sposta su nella vetrina" type="button" onClick={() => onAction({ action: "sms_move_plan", plan_id: String(plan.id), direction: "-1" })}><ArrowUp size={16} aria-hidden /></button>
+                <button aria-label="Sposta giù nella vetrina" className="h-10 rounded-md border border-slate-200 px-2" disabled={!canManage} title="Sposta giù nella vetrina" type="button" onClick={() => onAction({ action: "sms_move_plan", plan_id: String(plan.id), direction: "1" })}><ArrowDown size={16} aria-hidden /></button>
                 <button className="h-10 rounded-md border border-slate-200 px-3 text-sm font-semibold" disabled={!canManage} type="button" onClick={() => onAction({ action: "sms_set_plan_active", plan_id: String(plan.id), active: Number(plan.is_active) === 1 ? "0" : "1" })}>{Number(plan.is_active) === 1 ? "Disattiva" : "Attiva"}</button>
               </div>
               <div className="md:col-span-7 text-sm text-slate-500">
@@ -1293,7 +1316,7 @@ function SmsPlansView({ data, canManage, onAction, onRefresh }: { data: SmsBilli
           <label>
             <span className="mb-1 block text-sm font-medium text-slate-600">Tenant</span>
             <select className="h-10 w-full rounded-md border border-slate-200 px-3 outline-none focus:border-[#365a96]" name="tenant_slug" required>
-              {data.tenants.map((tenant) => <option key={tenant.slug} value={tenant.slug}>{tenant.name} ({tenant.wallet_balance})</option>)}
+              {data.tenants.map((tenant) => <option key={tenant.slug} value={tenant.slug}>{tenant.name} — {tenant.wallet_balance} crediti</option>)}
             </select>
           </label>
           <label>
@@ -1313,11 +1336,11 @@ function SmsPlansView({ data, canManage, onAction, onRefresh }: { data: SmsBilli
       <section className="rounded-md border border-slate-200 bg-white shadow-sm">
         <SectionHead title="Impostazioni prezzo" subtitle="Parametri economici dei pacchetti: costo provider, margine e prezzo suggerito." />
         <form className="grid gap-3 p-4 md:grid-cols-5" onSubmit={(event) => submitOperation(event, "sms_save_settings", onAction)}>
-          <Input name="provider_cost_per_segment" label="Costo provider" defaultValue={String(data.settings.provider_cost_per_segment ?? "0.0490")} />
-          <Input name="target_margin_percent" label="Margine target %" defaultValue={String(data.settings.target_margin_percent ?? "25")} />
-          <Input name="payment_fee_percent" label="Fee pagamento %" defaultValue={String(data.settings.payment_fee_percent ?? "2")} />
-          <Input name="payment_fee_fixed" label="Fee fissa" defaultValue={String(data.settings.payment_fee_fixed ?? "0.30")} />
-          <Input name="suggested_credit_price" label="Prezzo suggerito" defaultValue={String(data.settings.suggested_credit_price ?? "0.0700")} />
+          <Input name="provider_cost_per_segment" label="Costo provider (euro/SMS)" defaultValue={String(data.settings.provider_cost_per_segment ?? "0.0490")} />
+          <Input name="target_margin_percent" label="Margine target (%)" defaultValue={String(data.settings.target_margin_percent ?? "25")} />
+          <Input name="payment_fee_percent" label="Fee pagamento (%)" defaultValue={String(data.settings.payment_fee_percent ?? "2")} />
+          <Input name="payment_fee_fixed" label="Fee fissa (euro/ordine)" defaultValue={String(data.settings.payment_fee_fixed ?? "0.30")} />
+          <Input name="suggested_credit_price" label="Prezzo suggerito (euro/SMS)" defaultValue={String(data.settings.suggested_credit_price ?? "0.0700")} />
           <Button disabled={!canManage} icon={Settings}>Salva prezzi</Button>
         </form>
       </section>
