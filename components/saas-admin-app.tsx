@@ -992,8 +992,8 @@ function TenantsView(props: {
 
   return (
     <div className="grid min-w-0 gap-5">
-        {/* Il modulo di creazione vive SOPRA la lista: aperto dal bottone in
-            alto deve comparire subito, non fuori schermo sotto 25 righe. */}
+        {/* Il modulo di creazione e' un POPUP modale (20/07): visibile subito
+            al click, qualunque sia lo scroll della lista. */}
         <CreateTenantPanel canManage={props.canManage} open={props.createOpen} plans={props.overview.plans} onCreate={(payload) => props.onAction("create", payload)} onToggle={props.onToggleCreate} />
         <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
           <SectionHead title="Tenant" subtitle="Cerca, filtra e apri la gestione dedicata." />
@@ -1036,11 +1036,18 @@ function TenantsView(props: {
 }
 
 function CreateTenantPanel({ plans, open, canManage, onCreate, onToggle }: { plans: PlanOption[]; open: boolean; canManage: boolean; onCreate: (payload: Record<string, string>) => void; onToggle: (open: boolean) => void }) {
-  // Nessuna box fissa in lista (richiesta utente 20/07): il modulo appare
-  // SOLO quando lo apre il bottone "Nuovo tenant" (header o dashboard).
+  // POPUP (richiesta utente 20/07): il modulo si apre in un dialog modale
+  // sopra la lista — stesso pattern della palette. Esc e click fuori chiudono.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onToggle(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onToggle]);
   if (!open) return null;
   return (
-    <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
+    <div aria-modal className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/40 p-4 pt-[8vh]" role="dialog" onClick={() => onToggle(false)}>
+    <section className="mx-auto w-full max-w-3xl min-w-0 rounded-md border border-slate-200 bg-white shadow-xl" onClick={(event) => event.stopPropagation()}>
       <div className="flex items-start justify-between pr-4">
         <SectionHead title="Nuovo tenant" subtitle="Crea tenant, admin iniziale, sede principale e onboarding." />
         <button className="mt-4 text-sm font-semibold text-slate-500 hover:text-slate-700" type="button" onClick={() => onToggle(false)}>Chiudi</button>
@@ -1075,6 +1082,7 @@ function CreateTenantPanel({ plans, open, canManage, onCreate, onToggle }: { pla
         </div>
       </form>
     </section>
+    </div>
   );
 }
 

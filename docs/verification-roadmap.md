@@ -17120,3 +17120,14 @@ schermo sotto 25 righe) e "Crea tenant" compatto (bottone custom senza fix).
 Verifica: probe funzionali (Invio filtra + esclude, riga cliccabile ->
 deep-link, pannello sopra la lista via boundingBox) + screenshot Panoramica/
 Azioni critiche; regressione completa admin 18/18 suite verdi; tsc pulito.
+
+## 2026-07-20 — NUOVO TENANT IN POPUP MODALE (richiesta utente)
+
+CreateTenantPanel ora si apre in un dialog modale (stesso pattern della
+palette: overlay fixed inset-0 con role=dialog, overflow-y-auto per i form
+lunghi, card max-w-3xl centrata): Esc e click sul fondo chiudono
+(stopPropagation sulla card), visibile subito a qualunque scroll della lista.
+Suite nuova test-admin-create-popup (4: dialog col form, Esc, click sul
+fondo, submit crea davvero il tenant — fixture ZZ con cleanup completo delle
+tabelle di provisioning). Regressioni faseAB 11 (palette = altro dialog),
+ux 7, dash 8, fase3 9, hardening 19 — verdi; tsc pulito.
