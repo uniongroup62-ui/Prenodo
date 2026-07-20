@@ -334,14 +334,14 @@ function TenantHealth({ detail, canManage, onAction }: { detail: TenantDetailPay
         </div>
         <div className="flex flex-wrap gap-2">
           <Button disabled={!canManage} icon={Activity} onClick={() => onAction("record_health", { slug: tenant.slug })}>Verifica diagnostica</Button>
-          <Button variant="outline" disabled={!canManage} icon={Wrench} onClick={() => onAction("repair_schema", { slug: tenant.slug })}>Ripara schema</Button>
+          <Button variant="outline" disabled={!canManage} icon={Wrench} onClick={() => onAction("repair_schema", { slug: tenant.slug })}>Ripara dati tenant</Button>
         </div>
       </div>
-      <p className="text-xs text-slate-500">Verifica diagnostica esegue subito tutti i controlli e registra l&apos;esito; Ripara schema ricrea tabelle e colonne mancanti senza toccare i dati.</p>
+      <p className="text-xs text-slate-500">Verifica diagnostica esegue subito tutti i controlli e registra l&apos;esito; Ripara dati tenant ricrea onboarding e permessi ruoli del tenant e riesegue la diagnostica.</p>
       {/* Lista INTEGRALE dei controlli (dall'ultima diagnostica registrata):
           qui e' la tab tecnica, in Panoramica restano solo i problemi. */}
       <HealthChecks checks={fullChecks} />
-      {tenant.health?.missing_schema?.length ? <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Elementi schema mancanti: {tenant.health.missing_schema.slice(0, 20).join(", ")}</div> : null}
+      {tenant.health?.missing_schema?.length ? <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Elementi schema mancanti nel database condiviso: {tenant.health.missing_schema.slice(0, 20).join(", ")} — si ripristinano con le migrazioni (npm run db:migrate / redeploy), non da questo pannello.</div> : null}
       {problems.length ? (
         <Table
           title="Problemi recenti"

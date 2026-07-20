@@ -34,7 +34,7 @@ const AUDIT_LABELS: Record<string, string> = {
   "tenant.archive": "Tenant archiviato",
   "tenant.restore_archive": "Tenant ripristinato",
   "tenant.onboarding_reset": "Onboarding resettato",
-  "tenant.schema_repair": "Schema verificato/riparato",
+  "tenant.schema_repair": "Dati tenant riparati",
   "tenant.admin_repair": "Admin tenant riparato",
   "tenant.delete_start": "Eliminazione avviata",
   "tenant.delete_complete": "Tenant eliminato",

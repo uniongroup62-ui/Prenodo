@@ -38,8 +38,10 @@ try {
   const microsec = /\d{2}:\d{2}:\d{2}\.\d+/.test(body);
   const origin = /Automatica|Manuale|Riparazione/.test(body);
   check("D1 sintesi: data formattata + origine tradotta, niente microsecondi", dateFmt && origin && !microsec, `fmt=${dateFmt} orig=${origin} micro=${microsec}`);
-  const caption = await page.locator("text=Ripara schema ricrea tabelle e colonne mancanti").count();
-  check("D2 didascalia bottoni presente", caption === 1, `caption=${caption}`);
+  const caption = await page.locator("text=Ripara dati tenant ricrea onboarding e permessi ruoli").count();
+  const honestButton = await page.locator("button", { hasText: "Ripara dati tenant" }).count();
+  const oldButton = await page.locator("button", { hasText: "Ripara schema" }).count();
+  check("D2 didascalia onesta + bottone rinominato", caption === 1 && honestButton === 1 && oldButton === 0, `caption=${caption} btn=${honestButton} old=${oldButton}`);
   const fullList = await page.locator("text=Stato tenant").count();
   const oldTable = await page.locator("text=Storico diagnostica").count();
   const emptyState = await page.locator("text=Nessun problema negli ultimi").count();

@@ -16911,3 +16911,20 @@ microsecondi, didascalia, ramo sano = empty-state senza muro di OK, ramo ZZ
 con errori = tabella Problemi recenti con origine tradotta). Regressioni ux 7,
 fase3 9, faseD 4, giro5 17, faseAB 11 — verdi; fix porting giro5 (ROOT era
 diventato una URL dentro path.join/template: ora path filesystem).
+
+## 2026-07-20 — SCHEMA TENANT / RIPARA SCHEMA: NOMI ONESTI (rilievo utente)
+
+Entrambi utili, entrambi con nomi bugiardi: (1) il check "Schema tenant" in
+architettura pooled controlla il database CONDIVISO (stesso esito per tutti i
+tenant) -> rinominato "Schema database" con messaggio "OK (condiviso, non
+dipende dal tenant)" / "N tabelle/campi mancanti nel database condiviso";
+(2) il bottone "Ripara schema" NON crea tabelle: ricrea onboarding + permessi
+ruoli del tenant e riesegue la diagnostica -> rinominato "Ripara dati tenant"
+ovunque (tab Diagnostica, azione bulk in Operazioni, didascalia, messaggio
+audit, etichetta timeline); (3) l'avviso ambra sugli elementi mancanti ora
+indica la cura vera: migrazioni (db:migrate / redeploy), non il pannello.
+Chiave azione audit tenant.schema_repair INVARIATA (storico coerente).
+
+Verifica: diagnostica rigenerata -> checks_json con "Schema database ->
+OK (condiviso...)"; test-admin-diagnostica aggiornata (D2 = didascalia onesta
++ bottone rinominato + vecchio assente) 4/4; ux 7/7, faseC 7/7; tsc pulito.

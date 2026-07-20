@@ -373,7 +373,7 @@ export async function repairSaasTenantSchema(slug: string): Promise<SaasTenantHe
   await seedTenantPermissions(Number(tenant.id));
   const health = await saasTenantHealth(tenant, true);
   await recordSaasTenantHealth(tenant, health, "repair");
-  await logSaasTenantAudit("tenant.schema_repair", tenant, "Schema tenant verificato/riparato");
+  await logSaasTenantAudit("tenant.schema_repair", tenant, "Dati tenant riparati (onboarding e permessi)");
   return health;
 }
 
@@ -518,9 +518,12 @@ export async function saasTenantHealth(tenant: SaasTenantRow, deep = true): Prom
     }
   }
 
+  // Schema pooled: il controllo e' sul database CONDIVISO (stesso esito per
+  // ogni tenant) — un errore qui significa deploy/migrazione rotti, non un
+  // problema del singolo cliente.
   const schema = await schemaDiagnostics(String(tenant.slug));
-  if (schema.missing.length > 0) add("schema", "Schema tenant", "error", `${schema.missing.length} tabelle/campi mancanti`);
-  else add("schema", "Schema tenant", "ok", "OK");
+  if (schema.missing.length > 0) add("schema", "Schema database", "error", `${schema.missing.length} tabelle/campi mancanti nel database condiviso`);
+  else add("schema", "Schema database", "ok", "OK (condiviso, non dipende dal tenant)");
 
   if (deep) {
     try {

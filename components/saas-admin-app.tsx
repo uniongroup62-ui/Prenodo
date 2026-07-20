@@ -1350,7 +1350,7 @@ function MaintenanceView({ tenants, results, restoreCandidates, canManage, onAct
     <div className="grid gap-5">
       <div className="grid gap-3 md:grid-cols-3">
         <ActionPanel icon={Activity} title="Verifica diagnostica" detail="Controlla tutti i tenant e salva lo storico." disabled={!canManage} onClick={() => onAction("health_all")} />
-        <ActionPanel icon={Wrench} title="Ripara schema" detail="Aggiorna schema e onboarding dei tenant attivi." disabled={!canManage} onClick={() => onAction("repair_all")} />
+        <ActionPanel icon={Wrench} title="Ripara dati tenant" detail="Ricrea onboarding e permessi ruoli di tutti i tenant attivi e riesegue le diagnostiche." disabled={!canManage} onClick={() => onAction("repair_all")} />
         <ActionPanel icon={RotateCcw} title="Reset onboarding" detail="Riporta i tenant selezionati al primo step." disabled={!canManage || selected.length === 0} onClick={() => onAction("reset_selected_onboarding", { slugs: selected.join(",") })} />
       </div>
       {results.length ? <Table title="Risultati" headers={["Tenant", "Esito", "Messaggio"]} rows={results.map((row) => [row.slug, row.ok ? "OK" : "Errore", row.message])} /> : null}
