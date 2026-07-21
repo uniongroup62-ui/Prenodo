@@ -51,3 +51,6 @@ next-env.d.ts
 
 # Artefatto generato dalla suite email (auto-build in test-email-template.mjs)
 /tests/email-bundle.mjs
+
+# log locale del dev server avviato detached
+dev-server.log

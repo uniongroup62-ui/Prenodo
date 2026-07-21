@@ -128,9 +128,15 @@ export function AccountRegisterFaithful() {
     const email = String(data.get("email") ?? "").trim();
     const password = String(data.get("password") ?? "");
     const password2 = String(data.get("password2") ?? "");
+    const privacyAccepted = data.get("privacy_accepted") === "1";
+    const marketingOptIn = data.get("marketing_opt_in") === "1";
 
     if (password !== password2) {
       setError("Le password non coincidono.");
+      return;
+    }
+    if (!privacyAccepted) {
+      setError("Devi accettare l'informativa sulla privacy per registrarti.");
       return;
     }
 
@@ -148,6 +154,8 @@ export function AccountRegisterFaithful() {
           email,
           password,
           password_confirm: password2,
+          privacy_accepted: privacyAccepted ? "1" : "0",
+          marketing_opt_in: marketingOptIn ? "1" : "0",
         }),
       });
       const result = (await response.json()) as AccountResponse;
@@ -413,13 +421,33 @@ export function AccountRegisterFaithful() {
                 </div>
                 <div className="grid-2">
                   <label>
-                    Password <input type="password" name="password" autoComplete="new-password" required minLength={6} />
+                    Password <input type="password" name="password" autoComplete="new-password" required minLength={8} />
                   </label>
                   <label>
                     Conferma password{" "}
-                    <input type="password" name="password2" autoComplete="new-password" required minLength={6} />
+                    <input type="password" name="password2" autoComplete="new-password" required minLength={8} />
                   </label>
                 </div>
+                {/* GDPR (audit 2026-07-21): accettazione informativa obbligatoria
+                    (mai pre-spuntata) + opt-in marketing facoltativo separato. */}
+                <label className="auth-consent">
+                  <input type="checkbox" name="privacy_accepted" value="1" required />
+                  <span>
+                    Ho letto l&apos;
+                    <a href="/legal/privacy" target="_blank" rel="noopener noreferrer">
+                      informativa sulla privacy
+                    </a>{" "}
+                    e accetto i{" "}
+                    <a href="/legal/termini" target="_blank" rel="noopener noreferrer">
+                      termini di servizio
+                    </a>
+                    . <span className="auth-consent__required">*</span>
+                  </span>
+                </label>
+                <label className="auth-consent">
+                  <input type="checkbox" name="marketing_opt_in" value="1" />
+                  <span>Acconsento a ricevere comunicazioni promozionali (facoltativo).</span>
+                </label>
                 <button className="auth-submit" type="submit" disabled={busy}>
                   {busy ? "Creazione in corso…" : "Crea account"}
                 </button>

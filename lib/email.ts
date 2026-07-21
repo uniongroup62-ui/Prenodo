@@ -72,6 +72,16 @@ export type EmailTemplateOpts = {
 
 export const EMAIL_ACCENT = "#365a96";
 
+// Maschera un'email per i LOG (audit GDPR 2026-07-21): gli error-log finiscono
+// su CloudWatch — l'indirizzo completo è un dato personale che lì non serve.
+// "luca.rossi@example.com" -> "l***@example.com".
+export function maskEmail(value: unknown): string {
+  const email = String(value ?? "").trim();
+  const at = email.indexOf("@");
+  if (at <= 0) return email ? "***" : "";
+  return `${email[0]}***@${email.slice(at + 1)}`;
+}
+
 export function emailButton(href: string, label: string): string {
   return `<a href="${h(href)}" style="display:inline-block;background:${EMAIL_ACCENT};color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:12px;font-weight:700;letter-spacing:.2px">${h(label)}</a>`;
 }

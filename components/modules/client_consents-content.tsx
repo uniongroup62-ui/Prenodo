@@ -666,6 +666,19 @@ export function ClientConsentsContent({ slug: slugProp }: { slug?: string } = {}
                     )}
                   </>
                 )}
+                {/* Export dati (audit GDPR 2026-07-21): diritto di accesso/
+                    portabilità — sempre disponibile, scarica il JSON completo. */}
+                <button
+                  className="btn btn-gdpr-outline"
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    window.open(`/api/manage/client-gdpr?slug=${encodeURIComponent(slug)}&client_id=${clientId}&do=gdpr_export`, "_blank")
+                  }
+                >
+                  <i className="bi bi-download me-1" />
+                  Esporta dati (GDPR)
+                </button>
               </div>
 
               {gdpr?.status === "draft" ? (

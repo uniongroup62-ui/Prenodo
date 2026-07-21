@@ -114,7 +114,7 @@ try {
   await browser.close();
 
   // ===== C. preferiti via API con account temporaneo =====
-  const reg = await fetch(`${BASE}/api/account`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "register", first_name: "ZZ", last_name: `MkFav${RUN}`, email: `zz.mkfav${RUN}@example.test`, password: "Passw0rd!123", password_confirm: "Passw0rd!123" }) }).then((r) => r.json());
+  const reg = await fetch(`${BASE}/api/account`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "register", privacy_accepted: "1", first_name: "ZZ", last_name: `MkFav${RUN}`, email: `zz.mkfav${RUN}@example.test`, password: "Passw0rd!123", password_confirm: "Passw0rd!123" }) }).then((r) => r.json());
   const devCode = reg.devCode ?? reg.verificationCode ?? "";
   check("C1 register account temporaneo ok (devCode esposto senza SES)", reg.ok === true && devCode !== "", JSON.stringify([reg.ok, !!devCode, reg.error]));
   accountId = Number(reg.accountId ?? 0);

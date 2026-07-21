@@ -69,12 +69,17 @@ export async function POST(request: Request) {
       if ((body.password ?? "") !== (body.password_confirm ?? body.confirm_password ?? "")) {
         return jsonError("Le password non coincidono.");
       }
+      const forwardedFor = request.headers.get("x-forwarded-for") ?? "";
+      const requestIp = forwardedFor.split(",")[0]?.trim() || request.headers.get("x-real-ip") || "";
       const result = await registerPublicCustomer({
         firstName: body.first_name ?? body.firstName ?? "",
         lastName: body.last_name ?? body.lastName ?? "",
         phone: body.phone ?? "",
         email: body.email ?? "",
         password: body.password ?? "",
+        privacyAccepted: ["1", "true"].includes(String(body.privacy_accepted ?? "")),
+        marketingOptIn: ["1", "true"].includes(String(body.marketing_opt_in ?? "")),
+        requestIp,
       });
       if (!result.ok) return jsonError(result.error);
       return Response.json({

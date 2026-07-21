@@ -14,7 +14,7 @@ import {
   tenantTable,
   tenantUpdate,
 } from "@/lib/tenant-db";
-import { buildModernEmailTemplate, emailButton, emailCodeBox, emailConfigured, sendEmail } from "@/lib/email";
+import { buildModernEmailTemplate, emailButton, emailCodeBox, emailConfigured, maskEmail, sendEmail } from "@/lib/email";
 
 // public_customer_accounts is a GLOBAL marketplace account (unique by email, not
 // tenant-scoped). These emails therefore come from the PLATFORM, not a tenant
@@ -51,7 +51,7 @@ async function sendPublicAccountEmail(to: string, subject: string, bodyHtml: str
     const { html, text } = buildModernEmailTemplate(subject, bodyHtml, { business_name: brand });
     const res = await sendEmail({ to: recipient, subject, html, text });
     if (!res.ok) {
-      console.error(`[public-customer-account] email send failed for ${recipient}: ${res.error}`);
+      console.error(`[public-customer-account] email send failed for ${maskEmail(recipient)}: ${res.error}`);
     }
   } catch (error) {
     console.error("[public-customer-account] email send error:", error);
@@ -257,6 +257,9 @@ export async function ensurePublicCustomerSchema(): Promise<void> {
       \`password_reset_hash\` CHAR(64) NULL DEFAULT NULL,
       \`password_reset_expires_at\` DATETIME NULL DEFAULT NULL,
       \`password_reset_sent_at\` DATETIME NULL DEFAULT NULL,
+      \`privacy_accepted_at\` DATETIME NULL DEFAULT NULL,
+      \`privacy_accept_ip\` VARCHAR(64) NULL DEFAULT NULL,
+      \`marketing_opt_in\` TINYINT(1) NOT NULL DEFAULT 0,
       \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       \`updated_at\` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       \`last_login_at\` DATETIME NULL DEFAULT NULL,
@@ -345,6 +348,13 @@ export async function ensurePublicCustomerSchema(): Promise<void> {
     // anti brute-force; il legacy non li aveva).
     ["email_verification_attempts", "`email_verification_attempts` INT NOT NULL DEFAULT 0"],
     ["pending_email_verification_attempts", "`pending_email_verification_attempts` INT NOT NULL DEFAULT 0"],
+    // Audit GDPR 2026-07-21 (migrazioni 0003/0004; qui solo per gli ambienti
+    // freschi creati dall'ensure): prova consenso + throttle login password.
+    ["privacy_accepted_at", "`privacy_accepted_at` DATETIME NULL DEFAULT NULL"],
+    ["privacy_accept_ip", "`privacy_accept_ip` VARCHAR(64) NULL DEFAULT NULL"],
+    ["marketing_opt_in", "`marketing_opt_in` TINYINT(1) NOT NULL DEFAULT 0"],
+    ["password_login_attempts", "`password_login_attempts` INT NOT NULL DEFAULT 0"],
+    ["password_login_last_attempt_at", "`password_login_last_attempt_at` DATETIME NULL DEFAULT NULL"],
   ];
 
   for (const [column, definition] of accountColumns) {
@@ -361,6 +371,9 @@ export async function registerPublicCustomer(input: {
   phone?: string;
   email: string;
   password: string;
+  privacyAccepted?: boolean;
+  marketingOptIn?: boolean;
+  requestIp?: string;
 }): Promise<{ ok: true; accountId: number; email: string; requiresVerification: true; devCode?: string } | { ok: false; error: string }> {
   await ensurePublicCustomerSchema();
 
@@ -369,10 +382,16 @@ export async function registerPublicCustomer(input: {
   const phone = clean(input.phone ?? "", 50);
   const email = normalizeEmail(input.email);
   const password = input.password;
+  // GDPR (audit 2026-07-21): accettazione informativa obbligatoria, con prova
+  // timestamp+IP (stesso modello della registrazione tenant su saas_tenants).
+  const privacyAccepted = input.privacyAccepted === true;
+  const marketingOptIn = input.marketingOptIn === true;
+  const requestIp = clean(input.requestIp ?? "", 64);
 
   if (!firstName || !lastName || !email || !password) return { ok: false, error: "Compila nome, cognome, email e password." };
   if (!isValidEmail(email)) return { ok: false, error: "Email non valida." };
-  if (password.length < 6) return { ok: false, error: "La password deve avere almeno 6 caratteri." };
+  if (password.length < 8) return { ok: false, error: "La password deve avere almeno 8 caratteri." };
+  if (!privacyAccepted) return { ok: false, error: "Devi accettare l'informativa sulla privacy per registrarti." };
 
   const existing = await dbQuery<PublicCustomerRow[]>(
     "SELECT id,email_verified_at FROM `public_customer_accounts` WHERE email=? LIMIT 1",
@@ -393,16 +412,19 @@ export async function registerPublicCustomer(input: {
               last_name=?,
               phone=?,
               email_verified_at=NULL,
+              privacy_accepted_at=NOW(),
+              privacy_accept_ip=?,
+              marketing_opt_in=?,
               updated_at=NOW()
         WHERE id=?`,
-      [passwordHash, fullName, firstName, lastName, phone || null, accountId],
+      [passwordHash, fullName, firstName, lastName, phone || null, requestIp || null, marketingOptIn ? 1 : 0, accountId],
     );
   } else {
     const result = await dbExecute(
       `INSERT INTO \`public_customer_accounts\`
-        (email,password_hash,full_name,first_name,last_name,phone,email_verified_at)
-       VALUES(?,?,?,?,?,?,NULL)`,
-      [email, passwordHash, fullName, firstName, lastName, phone || null],
+        (email,password_hash,full_name,first_name,last_name,phone,email_verified_at,privacy_accepted_at,privacy_accept_ip,marketing_opt_in)
+       VALUES(?,?,?,?,?,?,NULL,NOW(),?,?)`,
+      [email, passwordHash, fullName, firstName, lastName, phone || null, requestIp || null, marketingOptIn ? 1 : 0],
     );
     accountId = result.insertId;
   }
@@ -429,13 +451,40 @@ export async function loginPublicCustomer(input: { email: string; password: stri
   const password = input.password;
   if (!email || !password) return { ok: false, error: "Email e password obbligatorie." };
 
-  const rows = await dbQuery<PublicCustomerRow[]>("SELECT * FROM `public_customer_accounts` WHERE email=? LIMIT 1", [email]);
+  // Finestra di throttle calcolata dal DB contro il SUO stesso NOW() (trappola
+  // TZ: il timestamp riletto in JS arriva come stringa wall e il confronto con
+  // Date.now() sballa dell'offset del server).
+  const rows = await dbQuery<PublicCustomerRow[]>(
+    "SELECT *, (password_login_last_attempt_at IS NOT NULL AND password_login_last_attempt_at > NOW() - INTERVAL '15 minutes') AS pw_throttle_in_window FROM `public_customer_accounts` WHERE email=? LIMIT 1",
+    [email],
+  );
   const row = rows[0];
-  if (!row || !await verifyPhpPassword(password, String(row.password_hash ?? ""))) {
+
+  // Art. 32 (audit GDPR 2026-07-21): throttle per-account sul login password —
+  // 10 fallimenti in 15 minuti bloccano temporaneamente, con lo STESSO
+  // messaggio generico (niente enumeration). I codici OTP erano già protetti.
+  const THROTTLE_MAX = 10;
+  if (row) {
+    const inWindow = row.pw_throttle_in_window === true || row.pw_throttle_in_window === "t" || row.pw_throttle_in_window === 1;
+    if (inWindow && Number(row.password_login_attempts ?? 0) >= THROTTLE_MAX) {
+      return { ok: false, error: "Troppi tentativi. Riprova tra qualche minuto." };
+    }
+    if (!await verifyPhpPassword(password, String(row.password_hash ?? ""))) {
+      await dbExecute(
+        "UPDATE `public_customer_accounts` SET password_login_attempts=?, password_login_last_attempt_at=NOW() WHERE id=?",
+        [inWindow ? Number(row.password_login_attempts ?? 0) + 1 : 1, Number(row.id)],
+      ).catch(() => undefined);
+      return { ok: false, error: "Credenziali non valide." };
+    }
+  }
+  if (!row) {
     return { ok: false, error: "Credenziali non valide." };
   }
 
-  await dbExecute("UPDATE `public_customer_accounts` SET last_login_at=NOW() WHERE id=? LIMIT 1", [Number(row.id)]).catch(() => undefined);
+  await dbExecute(
+    "UPDATE `public_customer_accounts` SET last_login_at=NOW(), password_login_attempts=0, password_login_last_attempt_at=NULL WHERE id=?",
+    [Number(row.id)],
+  ).catch(() => undefined);
 
   if (!row.email_verified_at) {
     const issued = await issuePublicCustomerVerificationCode(Number(row.id), false);
@@ -460,7 +509,7 @@ export async function issuePublicCustomerVerificationCode(
   if (accountId <= 0) return { ok: false, error: "Account non valido." };
 
   const rows = await dbQuery<PublicCustomerRow[]>(
-    "SELECT id,email,email_verification_hash,email_verification_expires_at,email_verification_sent_at FROM `public_customer_accounts` WHERE id=? LIMIT 1",
+    "SELECT id,email,email_verification_hash,email_verification_expires_at,email_verification_sent_at FROM `public_customer_accounts` WHERE id=?",
     [accountId],
   );
   const row = rows[0];
@@ -511,7 +560,7 @@ export async function verifyPublicCustomerCode(
   if (accountId <= 0) return { ok: false, error: "Account non valido." };
   if (!/^\d{6}$/.test(normalizedCode)) return { ok: false, error: "Inserisci un codice valido di 6 cifre." };
 
-  const rows = await dbQuery<PublicCustomerRow[]>("SELECT * FROM `public_customer_accounts` WHERE id=? LIMIT 1", [accountId]);
+  const rows = await dbQuery<PublicCustomerRow[]>("SELECT * FROM `public_customer_accounts` WHERE id=?", [accountId]);
   const row = rows[0];
   if (!row) return { ok: false, error: "Account non trovato." };
   if (row.email_verified_at) return { ok: true, account: publicCustomerFromRow(row) };
@@ -605,7 +654,7 @@ export async function resetPublicCustomerPassword(input: {
   const token = input.token.trim().toLowerCase();
   const password = input.password;
   if (!isValidEmail(email) || !/^[a-f0-9]{64}$/.test(token)) return { ok: false, error: "Link di reset non valido." };
-  if (password.length < 6) return { ok: false, error: "La password deve avere almeno 6 caratteri." };
+  if (password.length < 8) return { ok: false, error: "La password deve avere almeno 8 caratteri." };
 
   const rows = await dbQuery<PublicCustomerRow[]>(
     "SELECT id,password_reset_hash,password_reset_expires_at FROM `public_customer_accounts` WHERE email=? LIMIT 1",
@@ -632,6 +681,9 @@ export async function resetPublicCustomerPassword(input: {
     [passwordHash, Number(row.id)],
   );
   await syncPublicCustomerPasswordToTenantUsers(Number(row.id), passwordHash);
+  // Art. 32 (audit GDPR 2026-07-21): il reset password revoca TUTTE le sessioni
+  // esistenti (il chiamante ne apre una nuova per l'utente appena resettato).
+  await dbExecute("DELETE FROM `public_customer_sessions` WHERE account_id=?", [Number(row.id)]).catch(() => undefined);
   const account = await accountById(Number(row.id));
   if (!account) return { ok: false, error: "Account non trovato." };
   return { ok: true, account };
@@ -685,7 +737,7 @@ export async function currentPublicCustomerSession(): Promise<PublicCustomer | n
   );
   const row = rows[0];
   if (!row) return null;
-  await dbExecute("UPDATE `public_customer_sessions` SET last_seen_at=NOW() WHERE token_hash=? LIMIT 1", [hash]).catch(() => undefined);
+  await dbExecute("UPDATE `public_customer_sessions` SET last_seen_at=NOW() WHERE token_hash=?", [hash]).catch(() => undefined);
   return publicCustomerFromRow(row);
 }
 
@@ -738,10 +790,10 @@ export async function changePublicCustomerPassword(
   await ensurePublicCustomerSchema();
   if (accountId <= 0) return { ok: false, error: "Account non valido." };
   if (!input.currentPassword || !input.newPassword || !input.confirmPassword) return { ok: false, error: "Compila tutti i campi password." };
-  if (input.newPassword.length < 6) return { ok: false, error: "La nuova password deve avere almeno 6 caratteri." };
+  if (input.newPassword.length < 8) return { ok: false, error: "La nuova password deve avere almeno 8 caratteri." };
   if (input.newPassword !== input.confirmPassword) return { ok: false, error: "Le nuove password non coincidono." };
 
-  const rows = await dbQuery<PublicCustomerRow[]>("SELECT * FROM `public_customer_accounts` WHERE id=? LIMIT 1", [accountId]);
+  const rows = await dbQuery<PublicCustomerRow[]>("SELECT * FROM `public_customer_accounts` WHERE id=?", [accountId]);
   const row = rows[0];
   if (!row) return { ok: false, error: "Account non trovato." };
   if (!await verifyPhpPassword(input.currentPassword, String(row.password_hash ?? ""))) {
@@ -760,6 +812,19 @@ export async function changePublicCustomerPassword(
     [passwordHash, accountId],
   );
   await syncPublicCustomerPasswordToTenantUsers(accountId, passwordHash);
+  // Art. 32 (audit GDPR 2026-07-21): il cambio password revoca le ALTRE
+  // sessioni (es. dispositivo rubato); quella corrente resta valida.
+  try {
+    const cookieStore = await cookies();
+    const currentToken = (cookieStore.get(PUBLIC_CUSTOMER_SESSION_COOKIE)?.value ?? "").trim().toLowerCase();
+    if (/^[a-f0-9]{64}$/.test(currentToken)) {
+      await dbExecute("DELETE FROM `public_customer_sessions` WHERE account_id=? AND token_hash<>?", [accountId, sha256(currentToken)]);
+    } else {
+      await dbExecute("DELETE FROM `public_customer_sessions` WHERE account_id=?", [accountId]);
+    }
+  } catch {
+    // best-effort: il cambio password è comunque riuscito
+  }
   const account = await accountById(accountId);
   return account ? { ok: true, account } : { ok: false, error: "Account non trovato." };
 }
@@ -774,7 +839,7 @@ export async function requestPublicCustomerEmailChange(
   if (!newEmail || !input.currentPassword) return { ok: false, error: "Inserisci nuova email e password attuale." };
   if (!isValidEmail(newEmail)) return { ok: false, error: "Email non valida." };
 
-  const rows = await dbQuery<PublicCustomerRow[]>("SELECT * FROM `public_customer_accounts` WHERE id=? LIMIT 1", [accountId]);
+  const rows = await dbQuery<PublicCustomerRow[]>("SELECT * FROM `public_customer_accounts` WHERE id=?", [accountId]);
   const row = rows[0];
   if (!row) return { ok: false, error: "Account non trovato." };
   if (!await verifyPhpPassword(input.currentPassword, String(row.password_hash ?? ""))) {
@@ -827,7 +892,7 @@ export async function confirmPublicCustomerEmailChange(
   if (accountId <= 0) return { ok: false, error: "Account non valido." };
   if (!code) return { ok: false, error: "Inserisci il codice ricevuto via email." };
 
-  const rows = await dbQuery<PublicCustomerRow[]>("SELECT * FROM `public_customer_accounts` WHERE id=? LIMIT 1", [accountId]);
+  const rows = await dbQuery<PublicCustomerRow[]>("SELECT * FROM `public_customer_accounts` WHERE id=?", [accountId]);
   const row = rows[0];
   if (!row) return { ok: false, error: "Account non trovato." };
 
@@ -1161,7 +1226,7 @@ export async function upsertPublicCustomerFromBooking(input: {
 
 async function accountById(accountId: number): Promise<PublicCustomer | null> {
   if (accountId <= 0) return null;
-  const rows = await dbQuery<PublicCustomerRow[]>("SELECT * FROM `public_customer_accounts` WHERE id=? LIMIT 1", [accountId]);
+  const rows = await dbQuery<PublicCustomerRow[]>("SELECT * FROM `public_customer_accounts` WHERE id=?", [accountId]);
   return rows[0] ? publicCustomerFromRow(rows[0]) : null;
 }
 

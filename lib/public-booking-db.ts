@@ -1036,6 +1036,8 @@ export async function confirmPublicBooking({
   promotionId,
   notes,
   benefits = null,
+  privacyAccepted = false,
+  marketingOptIn = false,
 }: {
   slug: string;
   date: string;
@@ -1053,6 +1055,8 @@ export async function confirmPublicBooking({
   promotionId?: number | null;
   notes?: string;
   benefits?: PublicBookingConfirmBenefits | null;
+  privacyAccepted?: boolean;
+  marketingOptIn?: boolean;
 }): Promise<PublicBookingConfirmation> {
   const normalizedDate = normalizeDate(date);
   const normalizedTime = normalizeTime(time);
@@ -1088,6 +1092,8 @@ export async function confirmPublicBooking({
     email: clientEmail ?? "",
     phone: clientPhone ?? "",
     locationId: locationId ?? null,
+    privacyAccepted,
+    marketingOptIn,
   });
   const subtotal = services.reduce((sum, service) => sum + Number(service.price ?? 0), 0);
   // Legacy-faithful benefit application when the route resolved them; the plain
@@ -2302,12 +2308,16 @@ async function resolvePublicClient({
   email,
   phone,
   locationId,
+  privacyAccepted = false,
+  marketingOptIn = false,
 }: {
   slug: string;
   name: string;
   email: string;
   phone: string;
   locationId: number | null;
+  privacyAccepted?: boolean;
+  marketingOptIn?: boolean;
 }): Promise<{ id: number; name: string }> {
   const normalizedName = name.trim() || email.trim() || phone.trim() || "Cliente online";
   const normalizedEmail = email.trim().toLowerCase();
@@ -2334,7 +2344,18 @@ async function resolvePublicClient({
     params,
     limit: 1,
   });
-  if (existing[0]) return { id: Number(existing[0].id), name: String(existing[0].full_name ?? normalizedName) };
+  if (existing[0]) {
+    const existingId = Number(existing[0].id);
+    // GDPR (audit 2026-07-21): la checkbox del wizard aggiorna i consensi anche
+    // sul cliente già anagrafato — solo in "salita" (mai revoca implicita).
+    if (privacyAccepted || marketingOptIn) {
+      const values: Record<string, unknown> = {};
+      if (privacyAccepted) values.gdpr_consent_data_processing = 1;
+      if (marketingOptIn) values.gdpr_consent_marketing = 1;
+      await tenantUpdate({ slug, table: "clients", id: existingId, values }).catch(() => undefined);
+    }
+    return { id: existingId, name: String(existing[0].full_name ?? normalizedName) };
+  }
 
   const id = await tenantInsert(await tenantTable(slug, "clients"), {
     full_name: normalizedName,
@@ -2347,6 +2368,8 @@ async function resolvePublicClient({
     credit_balance: 0,
     is_blocked: 0,
     location_id: locationId,
+    gdpr_consent_data_processing: privacyAccepted ? 1 : 0,
+    gdpr_consent_marketing: marketingOptIn ? 1 : 0,
   });
   return { id, name: normalizedName };
 }

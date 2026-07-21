@@ -362,11 +362,11 @@ export function AccountResetFaithful() {
                 <div className="grid-2">
                   <label>
                     Nuova password{" "}
-                    <input type="password" name="password" autoComplete="new-password" required minLength={6} />
+                    <input type="password" name="password" autoComplete="new-password" required minLength={8} />
                   </label>
                   <label>
                     Conferma password{" "}
-                    <input type="password" name="password2" autoComplete="new-password" required minLength={6} />
+                    <input type="password" name="password2" autoComplete="new-password" required minLength={8} />
                   </label>
                 </div>
                 <button className="auth-submit" type="submit" disabled={busy}>

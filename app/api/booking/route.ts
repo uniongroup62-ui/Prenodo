@@ -324,6 +324,16 @@ export async function POST(request: Request) {
     // Write action: a real booking must hit the DB. On failure, surface the
     // error (the outer catch returns {ok:false,error}) instead of confirming a
     // fake appointment the customer would believe was booked.
+    // GDPR (audit 2026-07-21): la prenotazione crea/aggiorna un'anagrafica
+    // cliente, quindi esige l'accettazione esplicita dell'informativa privacy.
+    const privacyAccepted = ["1", "true"].includes(String(body.privacy_accepted ?? ""));
+    const marketingOptIn = ["1", "true"].includes(String(body.marketing_opt_in ?? ""));
+    if (!privacyAccepted) {
+      return Response.json(
+        { ok: false, error: "Per prenotare devi accettare l'informativa sulla privacy." },
+        { status: 400 },
+      );
+    }
     const confirmation = await confirmPublicBooking({
       slug,
       date: confirmDate,
@@ -339,6 +349,8 @@ export async function POST(request: Request) {
       clientPhone: String(body.client_phone ?? body.phone ?? ""),
       notes: String(body.notes ?? ""),
       benefits,
+      privacyAccepted,
+      marketingOptIn,
     });
     const linkedAccount = await upsertPublicCustomerFromBooking({
       tenantSlug: slug,

@@ -497,7 +497,23 @@ export async function deleteSaasTenant(slug: string, confirmation: string): Prom
     await dbExecute("SET session_replication_role = 'origin'").catch(() => undefined);
   }
 
-  await logSaasTenantAudit("tenant.delete_complete", tenant, "Tenant eliminato definitivamente", { shared_rows_deleted: sharedRowsDeleted, warnings });
+  // GDPR (audit 2026-07-21): il hard-delete rimuove anche gli OGGETTI R2 del
+  // tenant (documenti clienti, schede, allegati, branding) da entrambi i
+  // bucket — prima restavano orfani a tempo indefinito. Best-effort DOPO le
+  // delete DB; i backup su R2 sono
+  // volutamente esclusi (prefisso saas-backups/, fuori da t{id}/): restano per
+  // il ripristino guidato, con prune a cap di retention.
+  let storageObjectsDeleted = 0;
+  try {
+    const { deleteObjectsByPrefix } = await import("@/lib/storage");
+    const prefix = `t${tenantId}/`;
+    storageObjectsDeleted =
+      (await deleteObjectsByPrefix(prefix, "private")) + (await deleteObjectsByPrefix(prefix, "public"));
+  } catch {
+    warnings.push("storage R2: pulizia oggetti tenant non riuscita");
+  }
+
+  await logSaasTenantAudit("tenant.delete_complete", tenant, "Tenant eliminato definitivamente", { shared_rows_deleted: sharedRowsDeleted, storage_objects_deleted: storageObjectsDeleted, warnings });
   return { shared_rows_deleted: sharedRowsDeleted, tenant_deleted: true, warnings };
 }
 

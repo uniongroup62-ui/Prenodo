@@ -243,7 +243,12 @@ export async function createSaasTenantBackup(slug: string, reason = ""): Promise
 // il piu' recente di ogni mese fra i piu' vecchi; il resto viene eliminato
 // (oggetto R2/file locale + riga). Il piu' recente resta SEMPRE (e' quello
 // che alimenta il ripristino guidato).
+// CAP di eta' (audit GDPR 2026-07-21): i backup contengono dati personali
+// completi (clienti inclusi) e sopravvivono anche al hard-delete del tenant —
+// oltre i 12 mesi vengono eliminati comunque, tranne il piu' recente in
+// assoluto, che resta sempre finche' non e' superato da un backup nuovo.
 const BACKUP_KEEP_LATEST = 10;
+const BACKUP_MAX_AGE_DAYS = 365;
 
 export async function pruneSaasTenantBackups(tenantId: number): Promise<{ deleted: number }> {
   await ensureSaasBackupSchema();
@@ -252,16 +257,30 @@ export async function pruneSaasTenantBackups(tenantId: number): Promise<{ delete
     `SELECT id, tenant_slug, backup_path, created_at FROM \`${BACKUP_TABLE}\` WHERE tenant_id=? AND status='completed' ORDER BY id DESC`,
     [tenantId],
   );
+  const ageCutoff = new Date(Date.now() - BACKUP_MAX_AGE_DAYS * 86400 * 1000).toISOString().slice(0, 10);
+  const isExpired = (row: SaasBackupRow): boolean => {
+    const created = String(row.created_at ?? "").slice(0, 10);
+    return Boolean(created) && created < ageCutoff;
+  };
   const older = rows.slice(BACKUP_KEEP_LATEST);
   const keptMonths = new Set<string>();
   const toDelete: SaasBackupRow[] = [];
   for (const row of older) {
+    if (isExpired(row)) {
+      toDelete.push(row);
+      continue;
+    }
     const month = String(row.created_at ?? "").slice(0, 7);
     if (month && !keptMonths.has(month)) {
       keptMonths.add(month);
       continue;
     }
     toDelete.push(row);
+  }
+  // Cap di eta' anche sui "recenti" (tenant fermo da oltre un anno): si salva
+  // solo rows[0], il backup del ripristino guidato.
+  for (const row of rows.slice(1, BACKUP_KEEP_LATEST)) {
+    if (isExpired(row)) toDelete.push(row);
   }
 
   let deleted = 0;

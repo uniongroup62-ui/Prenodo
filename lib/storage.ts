@@ -21,7 +21,7 @@ import "server-only";
 // Con env mancanti storageConfigured() è false e le feature degradano con un
 // errore chiaro (pattern emailConfigured), senza rompere il resto dell'app.
 
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 type StorageEnv = {
@@ -149,6 +149,41 @@ export async function deletePrivateObject(key: string): Promise<void> {
   await r2Client()
     .send(new DeleteObjectCommand({ Bucket: env.privateBucket, Key: key }))
     .catch(() => undefined);
+}
+
+// Cancellazione per-PREFISSO (audit GDPR 2026-07-21): usata dal hard-delete
+// tenant per rimuovere TUTTI gli oggetti `t{tenantId}/…` da entrambi i bucket.
+// Best-effort e paginata; restituisce il numero di oggetti rimossi. Il prefisso
+// deve essere non-vuoto e tenant-namespaced (guardia anti-svuotamento bucket).
+export async function deleteObjectsByPrefix(prefix: string, scope: "public" | "private"): Promise<number> {
+  const cleanPrefix = String(prefix ?? "").trim();
+  if (!/^t\d+\//.test(cleanPrefix)) return 0;
+  const configured = scope === "public" ? storageConfigured() : storagePrivateConfigured();
+  if (!configured) return 0;
+  const env = storageEnv();
+  const bucket = scope === "public" ? env.publicBucket : env.privateBucket;
+  let removed = 0;
+  let continuationToken: string | undefined;
+  try {
+    do {
+      const page = await r2Client().send(
+        new ListObjectsV2Command({ Bucket: bucket, Prefix: cleanPrefix, ContinuationToken: continuationToken }),
+      );
+      for (const obj of page.Contents ?? []) {
+        if (!obj.Key) continue;
+        await r2Client()
+          .send(new DeleteObjectCommand({ Bucket: bucket, Key: obj.Key }))
+          .then(() => {
+            removed += 1;
+          })
+          .catch(() => undefined);
+      }
+      continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (continuationToken);
+  } catch {
+    // best-effort: la pulizia storage non deve mai bloccare la cancellazione
+  }
+  return removed;
 }
 
 // GET diretto server-side dal bucket PRIVATO (Fase restore 2026-07-19): usato

@@ -205,7 +205,7 @@ export async function loginSaasAdmin(input: { email: string; password: string; i
   }
 
   await recordLoginAttempt(email, input.ip, true);
-  await dbExecute("UPDATE `saas_admins` SET last_login_at=NOW() WHERE id=? LIMIT 1", [Number(row.id)]).catch(() => undefined);
+  await dbExecute("UPDATE `saas_admins` SET last_login_at=NOW() WHERE id=?", [Number(row.id)]).catch(() => undefined);
   return { ok: true, session: { user: adminRowToUser(row), issuedAt: Date.now() } };
 }
 
@@ -214,7 +214,7 @@ export async function loginSaasAdmin(input: { email: string; password: string; i
 export async function verifyTotpLogin(input: { challenge: string; code: string; ip: string }): Promise<LoginResult> {
   const adminId = readTotpChallenge(input.challenge);
   if (!adminId) return { ok: false, error: "Verifica scaduta. Ripeti il login." };
-  const rows = await dbQuery<SaasAdminRow[]>("SELECT * FROM `saas_admins` WHERE id=? LIMIT 1", [adminId]);
+  const rows = await dbQuery<SaasAdminRow[]>("SELECT * FROM `saas_admins` WHERE id=?", [adminId]);
   const row = rows[0] as (SaasAdminRow & { totp_secret?: string | null; totp_backup_codes?: string | null }) | undefined;
   if (!row || Number(row.is_active ?? 1) !== 1) return { ok: false, error: "Account admin non valido." };
   const secret = String(row.totp_secret ?? "").trim();
@@ -239,7 +239,7 @@ export async function verifyTotpLogin(input: { challenge: string; code: string; 
   }
 
   await recordLoginAttempt(email, input.ip, true);
-  await dbExecute("UPDATE `saas_admins` SET last_login_at=NOW() WHERE id=? LIMIT 1", [adminId]).catch(() => undefined);
+  await dbExecute("UPDATE `saas_admins` SET last_login_at=NOW() WHERE id=?", [adminId]).catch(() => undefined);
   return { ok: true, session: { user: adminRowToUser(row), issuedAt: Date.now() } };
 }
 
@@ -393,7 +393,7 @@ export async function startTotpSetup(adminId: number): Promise<{ secret: string 
 }
 
 export async function confirmTotpSetup(adminId: number, code: string): Promise<{ ok: true; backupCodes: string[] } | { ok: false; error: string }> {
-  const rows = await dbQuery<RowDataPacket[]>("SELECT totp_pending_secret FROM `saas_admins` WHERE id=? LIMIT 1", [adminId]);
+  const rows = await dbQuery<RowDataPacket[]>("SELECT totp_pending_secret FROM `saas_admins` WHERE id=?", [adminId]);
   const pending = String(rows[0]?.totp_pending_secret ?? "").trim();
   if (!pending) return { ok: false, error: "Nessuna configurazione 2FA in corso." };
   if (!verifyTotp(pending, code)) return { ok: false, error: "Codice non valido: controlla l'app authenticator." };
@@ -407,7 +407,7 @@ export async function confirmTotpSetup(adminId: number, code: string): Promise<{
 }
 
 export async function disableTotp(adminId: number, password: string, code: string): Promise<{ ok: true } | { ok: false; error: string }> {
-  const rows = await dbQuery<SaasAdminRow[]>("SELECT * FROM `saas_admins` WHERE id=? LIMIT 1", [adminId]);
+  const rows = await dbQuery<SaasAdminRow[]>("SELECT * FROM `saas_admins` WHERE id=?", [adminId]);
   const row = rows[0] as (SaasAdminRow & { totp_secret?: string | null; totp_backup_codes?: string | null }) | undefined;
   if (!row) return { ok: false, error: "Admin non trovato." };
   if (!await verifyPhpPassword(password, String(row.password_hash ?? ""))) return { ok: false, error: "Password non corretta." };
@@ -424,13 +424,13 @@ export async function disableTotp(adminId: number, password: string, code: strin
 }
 
 export async function saasAdminTotpEnabled(adminId: number): Promise<boolean> {
-  const rows = await dbQuery<RowDataPacket[]>("SELECT totp_secret FROM `saas_admins` WHERE id=? LIMIT 1", [adminId]);
+  const rows = await dbQuery<RowDataPacket[]>("SELECT totp_secret FROM `saas_admins` WHERE id=?", [adminId]);
   return String(rows[0]?.totp_secret ?? "").trim() !== "";
 }
 
 async function requireSaasAdminById(id: number): Promise<SaasAdminUser> {
   if (id <= 0) throw new Error("Admin SaaS non valido.");
-  const rows = await dbQuery<SaasAdminRow[]>("SELECT * FROM `saas_admins` WHERE id=? LIMIT 1", [id]);
+  const rows = await dbQuery<SaasAdminRow[]>("SELECT * FROM `saas_admins` WHERE id=?", [id]);
   const row = rows[0];
   if (!row) throw new Error("Admin SaaS non trovato.");
   return adminRowToUser(row);

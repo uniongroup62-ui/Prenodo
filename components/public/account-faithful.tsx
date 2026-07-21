@@ -550,12 +550,12 @@ export function AccountFaithful({ mode }: { mode: AccountMode }) {
                       Password attuale <input type="password" name="current_password" autoComplete="current-password" required />
                     </label>
                     <label>
-                      Nuova password <input type="password" name="new_password" autoComplete="new-password" minLength={6} required />
+                      Nuova password <input type="password" name="new_password" autoComplete="new-password" minLength={8} required />
                     </label>
                   </div>
                   <div className="grid-2">
                     <label>
-                      Conferma nuova password <input type="password" name="new_password_confirm" autoComplete="new-password" minLength={6} required />
+                      Conferma nuova password <input type="password" name="new_password_confirm" autoComplete="new-password" minLength={8} required />
                     </label>
                   </div>
                   <div className="form-actions">

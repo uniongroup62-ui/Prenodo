@@ -260,6 +260,11 @@ export function BookingFaithful({
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  // GDPR (audit 2026-07-21): la conferma crea/aggiorna l'anagrafica presso il
+  // centro (titolare distinto dalla piattaforma) — consenso privacy richiesto,
+  // opt-in marketing facoltativo e mai pre-spuntato.
+  const [privacyOk, setPrivacyOk] = useState(false);
+  const [marketingOk, setMarketingOk] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [confirmation, setConfirmation] = useState<BookingConfirmation | null>(null);
   // Importi REALMENTE applicati dal server al confirm (clampati/ri-validati):
@@ -945,7 +950,7 @@ export function BookingFaithful({
     // niente Avanti/Invia con hold scaduto.
     if (step === 5) return Boolean(slot) && !slotsLoading && Boolean(hold) && !holdExpired;
     if (step === 6) return Boolean(hold) && !holdExpired;
-    if (step === 7) return Boolean(firstName.trim()) && Boolean(email.trim()) && Boolean(slot) && Boolean(hold) && !holdExpired;
+    if (step === 7) return Boolean(firstName.trim()) && Boolean(email.trim()) && Boolean(slot) && Boolean(hold) && !holdExpired && privacyOk;
     return true;
   }
 
@@ -1076,6 +1081,8 @@ export function BookingFaithful({
             chosenGiftcard && giftcardAppliedAmount > 0
               ? JSON.stringify([{ giftcard_id: chosenGiftcard.id, amount: giftcardAppliedAmount }])
               : "",
+          privacy_accepted: privacyOk ? "1" : "0",
+          marketing_opt_in: marketingOk ? "1" : "0",
           // Deep-link redeem (book_package / book_prepaid / book_giftbox /
           // book_omaggio): only when its covered service is still in the cart.
           ...(redeemPrefill && serviceIds.includes(redeemPrefill.serviceId)
@@ -2278,6 +2285,38 @@ export function BookingFaithful({
                     — nello step 6 Vantaggi). Residuo dichiarato: nel legacy il
                     coupon è inseribile anche allo step 7; qui l'inserimento
                     coupon free-text vive nello step 6. */}
+
+                <hr className="my-4" />
+
+                <div className="form-check mb-2">
+                  <input
+                    className="form-check-input"
+                    type="checkbox"
+                    id="bookingPrivacyConsent"
+                    checked={privacyOk}
+                    onChange={(e) => setPrivacyOk(e.target.checked)}
+                  />
+                  <label className="form-check-label small" htmlFor="bookingPrivacyConsent">
+                    Ho letto l&apos;
+                    <a href="/legal/privacy" target="_blank" rel="noopener noreferrer">
+                      informativa sulla privacy
+                    </a>{" "}
+                    e acconsento al trattamento dei miei dati da parte del centro per gestire la prenotazione.{" "}
+                    <span className="text-danger">*</span>
+                  </label>
+                </div>
+                <div className="form-check">
+                  <input
+                    className="form-check-input"
+                    type="checkbox"
+                    id="bookingMarketingConsent"
+                    checked={marketingOk}
+                    onChange={(e) => setMarketingOk(e.target.checked)}
+                  />
+                  <label className="form-check-label small" htmlFor="bookingMarketingConsent">
+                    Acconsento a ricevere comunicazioni promozionali dal centro (facoltativo).
+                  </label>
+                </div>
               </div>
             </form>
 

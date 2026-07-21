@@ -18027,3 +18027,45 @@ fix del giro 3: 125/125 suite verdi + crawler console 73/73 pulito +
 tsc pulito. LEZIONE: dopo un crash controllare SUBITO (1) baseline
 clienti tenant 25, (2) integrita' .next, (3) sanita' spawn del layer
 permessi (git --version vs node -e).
+
+### 2026-07-21 - CAMPAGNA GDPR: audit 4 dimensioni + fix completi
+Audit (consensi/informative, diritti interessato, terze parti, art.32)
+-> fix su approvazione. CONSENSI: pagine legali /legal/{privacy,cookie,
+termini,note-legali} (route [doc], slug 'legal'+'login' riservati nel
+signup, testi con segnaposto [DA COMPLETARE] per i dati societari);
+footer marketplace linkato (era href="#"); checkbox informativa+termini
+nel register tenant (con link) e nella registrazione area clienti
+(privacy OBBLIGATORIA + marketing opt-in, prova timestamp+IP in
+migrazione 0003); booking pubblico: consenso obbligatorio nello step 7
+(server-side 400 senza privacy_accepted; flag gdpr_consent_* scritti su
+insert E su cliente esistente, solo in salita). DIRITTI: export dati
+cliente do=gdpr_export (lib/client-gdpr-export, JSON completo con
+colonne VERIFICATE su schema.sql, bottone nella scheda consensi,
+export loggato in activity_logs); delete cliente raccoglie le chiavi R2
+PRIMA della tx e cancella gli oggetti DOPO il commit; retention 24 mesi
+su client_deletion_logs (purge opportunistica). SENDER: is_blocked=0 su
+promemoria email/SMS e card reminders (blocco = limitazione del
+trattamento); flag marketing documentato come gate per futuri motori
+campagne. TENANT: hard-delete cancella anche gli oggetti R2 t{id}/ da
+entrambi i bucket (deleteObjectsByPrefix paginata con guardia
+anti-svuotamento); cap 365gg sui backup (salvo il piu' recente).
+ART.32: reset password gestionale revoca TUTTE le sessioni (epoch+1),
+cambio password revoca le ALTRE e riemette il cookie col nuovo epoch;
+area clienti: reset cancella tutte le sessioni, cambio le altre;
+throttle login password clienti 10/15min (migrazione 0004, finestra
+calcolata IN SQL contro NOW() del DB - trappola TZ: il timestamp
+riletto in JS e' stringa wall); min password clienti 6->8 (lib+UI+suite
+aggiornate); CA DB OBBLIGATORIA in produzione (prima warn+prosegui
+senza verifica cert); header globali Referrer-Policy strict-origin-
+when-cross-origin + nosniff in next.config (token in URL vs CDN);
+maskEmail nei console.error (CloudWatch). BUG LATENTE TROVATO:
+'UPDATE ... LIMIT 1' e' sintassi INVALIDA in Postgres e toPostgresSql
+non la traduce -> i 5 update cosi' scritti (last_login_at clienti/admin,
+last_seen_at sessioni, + i 2 nuovi del throttle) fallivano in SILENZIO
+dietro .catch(()=>undefined). Rimossi i LIMIT. REGOLA: mai LIMIT su
+UPDATE/DELETE; mai .catch muto su scritture nuove senza probe.
+Igiene: next-cookies.txt/php-cookies.txt (token reali) eliminati dal
+working tree esterno + pattern *-cookies.txt nel .gitignore esterno
+(ATTENZIONE: repo esterno e annidato puntano allo STESSO remote GitHub
+- il repo esterno NON va mai pushato). Suite nuova
+tests/test-gdpr-compliance.mjs (21 check).

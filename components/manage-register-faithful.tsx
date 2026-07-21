@@ -309,7 +309,17 @@ export function ManageRegisterFaithful({
                 onChange={(e) => setTerms(e.target.checked)}
                 required
               />
-              <span>Accetto termini e privacy.</span>
+              <span>
+                Accetto i{" "}
+                <a href="/legal/termini" target="_blank" rel="noopener noreferrer">
+                  termini di servizio
+                </a>{" "}
+                e{" "}
+                <a href="/legal/privacy" target="_blank" rel="noopener noreferrer">
+                  l&apos;informativa privacy
+                </a>
+                .
+              </span>
             </label>
             <button className="auth-submit" type="submit" disabled={submitting}>
               Crea gestionale

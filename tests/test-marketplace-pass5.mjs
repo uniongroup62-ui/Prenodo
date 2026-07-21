@@ -19,24 +19,24 @@ let accountId = 0, cookieA = "";
 
 try {
   // ===== R. register =====
-  const r1 = await api({ action: "register", first_name: "ZZ", last_name: "Mk5", email: "non-una-email", password: "Passw0rd!123", password_confirm: "Passw0rd!123" }).then((r) => r.json());
+  const r1 = await api({ action: "register", privacy_accepted: "1", first_name: "ZZ", last_name: "Mk5", email: "non-una-email", password: "Passw0rd!123", password_confirm: "Passw0rd!123" }).then((r) => r.json());
   check("R1 email invalida -> 'Email non valida.'", r1.ok === false && /Email non valida/.test(r1.error || ""), r1.error);
-  const r2 = await api({ action: "register", first_name: "ZZ", last_name: "Mk5", email: EMAIL, password: "abc", password_confirm: "abc" }).then((r) => r.json());
-  check("R2 password corta -> 'almeno 6 caratteri'", r2.ok === false && /almeno 6/.test(r2.error || ""), r2.error);
+  const r2 = await api({ action: "register", privacy_accepted: "1", first_name: "ZZ", last_name: "Mk5", email: EMAIL, password: "abc", password_confirm: "abc" }).then((r) => r.json());
+  check("R2 password corta -> 'almeno 8 caratteri'", r2.ok === false && /almeno 8/.test(r2.error || ""), r2.error);
 
-  const reg1 = await api({ action: "register", first_name: "ZZ", last_name: "Mk5", email: EMAIL, password: "Passw0rd!123", password_confirm: "Passw0rd!123" }).then((r) => r.json());
+  const reg1 = await api({ action: "register", privacy_accepted: "1", first_name: "ZZ", last_name: "Mk5", email: EMAIL, password: "Passw0rd!123", password_confirm: "Passw0rd!123" }).then((r) => r.json());
   accountId = Number(reg1.accountId ?? 0);
   check("R3 register ok -> accountId + devCode", reg1.ok === true && accountId > 0 && /^\d{6}$/.test(String(reg1.devCode ?? "")), JSON.stringify([reg1.ok, accountId]));
 
   // HARDENING: re-register/resend entro 60s dall'ultimo invio -> COOLDOWN
-  const reg2cold = await api({ action: "register", first_name: "ZZ2", last_name: "Mk5b", email: EMAIL, password: "AltraPass!9", password_confirm: "AltraPass!9" }).then((r) => r.json());
+  const reg2cold = await api({ action: "register", privacy_accepted: "1", first_name: "ZZ2", last_name: "Mk5b", email: EMAIL, password: "AltraPass!9", password_confirm: "AltraPass!9" }).then((r) => r.json());
   check("H1 re-register entro 60s -> cooldown 'Attendi un minuto…'", reg2cold.ok === false && /Attendi un minuto/.test(reg2cold.error || ""), reg2cold.error);
   const backdate = () => db.query("UPDATE public_customer_accounts SET email_verification_sent_at = email_verification_sent_at - interval '2 minutes' WHERE id=$1", [accountId]);
   await backdate();
 
   // Re-register sulla STESSA email NON verificata -> overwrite consentito
   // (stesso id, nuovo codice; il vecchio codice diventa invalido)
-  const reg2 = await api({ action: "register", first_name: "ZZ2", last_name: "Mk5b", email: EMAIL, password: "AltraPass!9", password_confirm: "AltraPass!9" }).then((r) => r.json());
+  const reg2 = await api({ action: "register", privacy_accepted: "1", first_name: "ZZ2", last_name: "Mk5b", email: EMAIL, password: "AltraPass!9", password_confirm: "AltraPass!9" }).then((r) => r.json());
   check("R4 re-register pre-verifica (post-cooldown) -> overwrite, STESSO id, nuovo codice", reg2.ok === true && Number(reg2.accountId) === accountId && reg2.devCode !== reg1.devCode, JSON.stringify([Number(reg2.accountId), reg2.devCode !== reg1.devCode]));
   const vOld = await api({ action: "verify", account_id: accountId, code: String(reg1.devCode) }).then((r) => r.json());
   check("R5 il VECCHIO codice non vale più", vOld.ok === false, JSON.stringify(vOld.error));

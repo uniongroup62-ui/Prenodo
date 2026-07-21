@@ -110,12 +110,15 @@ export async function POST(request: Request) {
         return jsonError("La nuova password deve avere almeno 8 caratteri", 400);
       }
 
-      await changeManagePassword({
+      const changed = await changeManagePassword({
         slug: tenantSlug,
         userId: session.user.id,
         currentPassword,
         newPassword,
       });
+      // Art. 32: la revoca epoch+1 butta fuori le ALTRE sessioni; la sessione
+      // corrente viene riemessa con il nuovo epoch per restare valida.
+      await setManageSessionCookie({ ...session, epoch: changed.newEpoch, issuedAt: Date.now() });
       void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "accessi", action: "modifica", entityType: "user", entityId: session.user.id, label: "Password di accesso aggiornata" });
       return Response.json({ ok: true, message: "Password aggiornata" });
     }

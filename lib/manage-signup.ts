@@ -6,7 +6,7 @@ import type { RowDataPacket } from "@/lib/tenant-db";
 import { allAssignablePermissions, permissionDefinitions } from "@/lib/role-permissions";
 import { dbExecute, dbQuery, quoteIdentifier, tableExists } from "@/lib/tenant-db";
 import { tenantPrefix } from "@/lib/tenant-runtime";
-import { buildModernEmailTemplate, emailButton, emailCodeBox, emailConfigured, sendEmail } from "@/lib/email";
+import { buildModernEmailTemplate, emailButton, emailCodeBox, emailConfigured, maskEmail, sendEmail } from "@/lib/email";
 
 const SIGNUPS_TABLE = "saas_professional_signups";
 const CODE_TTL_MINUTES = 15;
@@ -14,7 +14,7 @@ const RESEND_COOLDOWN_SECONDS = 60;
 const MAX_CODE_ATTEMPTS = 5;
 const CODE_LOCK_MINUTES = 15;
 
-const RESERVED_SLUGS = new Set(["admin", "assets", "uploads", "app", "database", "cron", "public", "attivita", "saloni", "account", "manage"]);
+const RESERVED_SLUGS = new Set(["admin", "assets", "uploads", "app", "database", "cron", "public", "attivita", "saloni", "account", "manage", "legal", "login"]);
 const TENANT_BOOTSTRAP_TABLES = [
   "automation_settings",
   "booking_users",
@@ -992,7 +992,7 @@ async function sendSignupVerificationEmail(email: string, name: string, business
     const { html, text } = buildModernEmailTemplate(subject, body, { business_name: brand });
     const res = await sendEmail({ to, subject, html, text });
     if (!res.ok) {
-      console.error(`[manage-signup] verification email send failed for ${to}: ${res.error}`);
+      console.error(`[manage-signup] verification email send failed for ${maskEmail(to)}: ${res.error}`);
     }
   } catch (error) {
     console.error("[manage-signup] verification email send error:", error);

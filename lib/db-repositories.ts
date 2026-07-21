@@ -61,7 +61,7 @@ import {
   reconcilePointLots,
   type PointLotScheduleRow,
 } from "@/lib/fidelity-lots";
-import { buildModernEmailTemplate, emailButton, emailConfigured, sendEmail } from "@/lib/email";
+import { buildModernEmailTemplate, emailButton, emailConfigured, maskEmail, sendEmail } from "@/lib/email";
 import { giftPersistGlobalResetMarker, giftRecalcClient, giftRollbackAppointmentSelection } from "@/lib/gifts-engine";
 import { assertAppointmentSlotAvailable, busyCabinRangesForDate, busyRangesForDate, sharedResourcesContext, staffTimeoffReasonForRange, uniqueStaffForService, type CabinBusyRange } from "@/lib/public-booking-db";
 
@@ -314,6 +314,48 @@ export async function deleteDbClientCascade(
   // Snapshot the client row before the cascade (used for the return value + log).
   const client = await getSingleClient(slug, clientId);
   const clientIds = [clientId];
+
+  // GDPR (audit 2026-07-21): raccogli PRIMA della cascata le chiavi R2 dei
+  // documenti cliente e degli allegati delle schede tecniche — le righe DB
+  // spariscono nella transazione e gli oggetti vanno rimossi DOPO il commit
+  // (mai prima: un rollback lascerebbe record senza file).
+  const r2KeysToDelete: string[] = [];
+  try {
+    const docRows = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "customer_documents",
+      columns: "file_path",
+      where: "client_id = ?",
+      params: [clientId],
+    }).catch(() => [] as RowDataPacket[]);
+    for (const row of docRows) {
+      const path = String(row.file_path ?? "").trim();
+      if (/^t\d+\//.test(path)) r2KeysToDelete.push(path);
+    }
+    const sheetRows = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "client_sheet_records",
+      columns: "values_json",
+      where: "client_id = ?",
+      params: [clientId],
+    }).catch(() => [] as RowDataPacket[]);
+    for (const row of sheetRows) {
+      try {
+        const values = JSON.parse(String(row.values_json ?? "{}")) as Record<string, unknown>;
+        for (const value of Object.values(values)) {
+          if (!Array.isArray(value)) continue;
+          for (const att of value) {
+            const path = String((att as { path?: unknown })?.path ?? "").trim();
+            if (/^t\d+\//.test(path)) r2KeysToDelete.push(path);
+          }
+        }
+      } catch {
+        // values_json non parsabile: nessuna chiave da raccogliere.
+      }
+    }
+  } catch {
+    // Tabelle opzionali assenti: nessun oggetto storage da rimuovere.
+  }
 
   // Resolve each table's PHYSICAL name + the tenant clause ONCE (cached). In
   // shared-tenant mode every row carries tenant_id and we scope every statement
@@ -572,6 +614,15 @@ export async function deleteDbClientCascade(
     bump("commissioni", rows.length);
   }
 
+  // GDPR: rimozione best-effort degli oggetti R2 raccolti, DOPO il commit —
+  // i PDF consensi e le foto delle schede non devono sopravvivere al cliente.
+  if (r2KeysToDelete.length > 0) {
+    const { deletePrivateObject } = await import("@/lib/storage");
+    for (const key of r2KeysToDelete) {
+      await deletePrivateObject(key).catch(() => undefined);
+    }
+  }
+
   // Record the deletion best-effort, OUTSIDE the critical path (a failure here
   // must NOT roll back the cascade — the rows are already gone).
   try {
@@ -777,6 +828,17 @@ async function recordClientDeletionLog(
 ): Promise<void> {
   if (!(await tableExists((await tenantTable(slug, "client_deletion_logs")).name))) return;
   const table = await tenantTable(slug, "client_deletion_logs");
+  // Retention (audit GDPR 2026-07-21): il registro eliminazioni conserva il
+  // NOME del cliente cancellato come prova dell'avvenuta cancellazione — dopo
+  // 24 mesi anche questa traccia viene rimossa (purge opportunistica).
+  {
+    const cutoff = new Date(Date.now() - 730 * 86400 * 1000).toISOString().slice(0, 10) + " 00:00:00";
+    const scoped = table.mode === "shared" ? " AND tenant_id = ?" : "";
+    await dbExecute(
+      `DELETE FROM ${quoteIdentifier(table.name)} WHERE deleted_at < ?${scoped}`,
+      table.mode === "shared" ? [cutoff, table.tenantId ?? 0] : [cutoff],
+    ).catch(() => undefined);
+  }
   await tenantInsert(table, {
     client_ids: clientIds.join(","),
     client_names: clientNames.join(" | "),
@@ -8634,7 +8696,7 @@ export async function sendQuoteEmail(
       fromName: bizName || undefined,
     });
     if (!res.ok) {
-      console.error(`[db-repositories] quote email send failed for quote ${id} -> ${to}: ${res.error}`);
+      console.error(`[db-repositories] quote email send failed for quote ${id} -> ${maskEmail(to)}: ${res.error}`);
       return;
     }
 

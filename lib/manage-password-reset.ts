@@ -5,7 +5,8 @@ import bcrypt from "bcryptjs";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { dbExecute, dbQuery, tenantSelect, tenantTable, columnExists, tableExists, tenantIdForSlug } from "@/lib/tenant-db";
 import { normalizeTenantSlug } from "@/lib/tenant-runtime";
-import { buildModernEmailTemplate, emailButton, emailConfigured, sendEmail } from "@/lib/email";
+import { revokeManageSessions } from "@/lib/manage-auth";
+import { buildModernEmailTemplate, emailButton, emailConfigured, maskEmail, sendEmail } from "@/lib/email";
 
 const TOKEN_TTL_MINUTES = 60;
 const MIN_PASSWORD_ADMIN = 8;
@@ -126,7 +127,7 @@ async function sendManageResetEmail(slug: string, recipient: string, resetUrl: s
       replyTo: branding.email.trim() || undefined,
     });
     if (!res.ok) {
-      console.error(`[manage-password-reset] email send failed for ${to}: ${res.error}`);
+      console.error(`[manage-password-reset] email send failed for ${maskEmail(to)}: ${res.error}`);
     }
   } catch (error) {
     console.error("[manage-password-reset] email send error:", error);
@@ -277,6 +278,9 @@ export async function resetManagePassword({
 
   await markResetUsed(tenantSlug, info.resetId);
   await invalidatePendingResets(tenantSlug, info.userId);
+  // Art. 32 (audit GDPR 2026-07-21): un reset password (tipico dopo un sospetto
+  // di compromissione) revoca TUTTE le sessioni firmate esistenti dell'utente.
+  await revokeManageSessions(tenantSlug, info.userId);
   return { ok: true };
 }
 
@@ -290,7 +294,7 @@ export async function changeManagePassword({
   userId: number;
   currentPassword: string;
   newPassword: string;
-}): Promise<{ ok: true }> {
+}): Promise<{ ok: true; newEpoch: number }> {
   const tenantSlug = normalizeTenantSlug(slug) ?? "";
   if (!tenantSlug) throw new Error("URL attivita mancante.");
   if (!currentPassword.trim()) throw new Error("Inserisci la password attuale.");
@@ -322,7 +326,19 @@ export async function changeManagePassword({
   }
   await dbExecute(`UPDATE \`${table.name}\` SET password_hash = ? WHERE ${clauses.join(" AND ")}`, params);
   await invalidatePendingResets(tenantSlug, userId);
-  return { ok: true };
+  // Art. 32 (audit GDPR 2026-07-21): il cambio password revoca le ALTRE
+  // sessioni firmate (epoch+1); il chiamante riemette il cookie della sessione
+  // corrente con il nuovo epoch, così l'utente resta collegato.
+  await revokeManageSessions(tenantSlug, userId);
+  const after = await tenantSelect<RowDataPacket>({
+    slug: tenantSlug,
+    table: "users",
+    columns: "session_epoch",
+    where: "id = ?",
+    params: [userId],
+    limit: 1,
+  }).catch(() => [] as RowDataPacket[]);
+  return { ok: true, newEpoch: Number(after[0]?.session_epoch ?? 0) || 0 };
 }
 
 export async function invalidateManagePasswordResets(slug: string, userId: number): Promise<void> {

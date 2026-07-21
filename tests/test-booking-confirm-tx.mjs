@@ -41,7 +41,7 @@ try {
   // B1: confirm senza hold -> aggregato completo
   const conf = await (await fetch(`${BASE}/api/booking`, {
     method: "POST", headers: { "content-type": "application/json", origin: BASE },
-    body: JSON.stringify({ slug: SLUG, action: "confirm", date, time, service_ids: [serviceId], location_id: LOC, client_name: `ZZ BookTx ${RUN}`, client_email: EMAIL, client_phone: "3330000001" }),
+    body: JSON.stringify({ slug: SLUG, action: "confirm", privacy_accepted: "1", date, time, service_ids: [serviceId], location_id: LOC, client_name: `ZZ BookTx ${RUN}`, client_email: EMAIL, client_phone: "3330000001" }),
   })).json();
   apptId = Number(conf?.confirmation?.id ?? conf?.id ?? 0);
   clientId = Number(conf?.confirmation?.clientId ?? conf?.clientId ?? 0);
@@ -56,7 +56,7 @@ try {
   const before = Number((await db.query("SELECT COALESCE(MAX(id),0) AS m FROM appointments WHERE tenant_id=$1", [TID])).rows[0].m);
   const dup = await (await fetch(`${BASE}/api/booking`, {
     method: "POST", headers: { "content-type": "application/json", origin: BASE },
-    body: JSON.stringify({ slug: SLUG, action: "confirm", date, time, service_ids: [serviceId], location_id: LOC, client_name: `ZZ BookTx dup ${RUN}`, client_email: `zz.booktxdup${RUN}@example.test`, client_phone: "3330000002" }),
+    body: JSON.stringify({ slug: SLUG, action: "confirm", privacy_accepted: "1", date, time, service_ids: [serviceId], location_id: LOC, client_name: `ZZ BookTx dup ${RUN}`, client_email: `zz.booktxdup${RUN}@example.test`, client_phone: "3330000002" }),
   })).json();
   const after = Number((await db.query("SELECT COALESCE(MAX(id),0) AS m FROM appointments WHERE tenant_id=$1", [TID])).rows[0].m);
   check("B2 slot occupato: rifiuto senza scritture", dup?.ok === false && after === before, `ok=${dup?.ok} err=${String(dup?.error ?? "").slice(0, 40)} max ${before}->${after}`);

@@ -27,6 +27,11 @@ export const MODERN_AUTH_FORM_STYLE = `
 .account-page--auth .auth-card .links a:hover{text-decoration:underline}
 .account-page--auth .auth-card .links span{color:#cbd5e1}
 .account-page--auth .auth-card .alert{background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;border-radius:12px;padding:12px 14px;font-size:14px;margin-bottom:16px}
+.auth-card .auth-consent{display:flex;align-items:flex-start;gap:9px;font-size:13px;line-height:1.5;color:#475569;margin:2px 0}
+.auth-card .auth-consent input{margin-top:3px;flex:0 0 auto;width:15px;height:15px;accent-color:#365a96}
+.auth-card .auth-consent a{color:#365a96;font-weight:600;text-decoration:none}
+.auth-card .auth-consent a:hover{text-decoration:underline}
+.auth-card .auth-consent__required{color:#b91c1c;font-weight:700}
 `;
 
 // LAYOUT cliente: card centrata stile Fresha, aside promozionale e search

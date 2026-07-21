@@ -6,7 +6,7 @@ import type { RowDataPacket } from "@/lib/tenant-db";
 import { columnExists, dbExecute, dbQuery, tableExists, tenantIdForSlug, tenantSelect, tenantTable, withTenantTransaction } from "@/lib/tenant-db";
 import { invalidateManagePasswordResets } from "@/lib/manage-password-reset";
 import { normalizeTenantSlug } from "@/lib/tenant-runtime";
-import { buildModernEmailTemplate, emailCodeBox, emailConfigured, sendEmail } from "@/lib/email";
+import { buildModernEmailTemplate, emailCodeBox, emailConfigured, maskEmail, sendEmail } from "@/lib/email";
 
 const EMAIL_CODE_TTL_SECONDS = 15 * 60;
 const EMAIL_CODE_RESEND_SECONDS = 60;
@@ -490,7 +490,7 @@ export async function sendStaffInviteEmailCode(args: {
       replyTo: branding.email.trim() || undefined,
     });
     if (!res.ok) {
-      console.error(`[manage-accessibility] staff invite email send failed for ${to}: ${res.error}`);
+      console.error(`[manage-accessibility] staff invite email send failed for ${maskEmail(to)}: ${res.error}`);
     }
   } catch (error) {
     console.error("[manage-accessibility] staff invite email send error:", error);

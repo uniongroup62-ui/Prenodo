@@ -18,7 +18,7 @@ const EMAIL_A = `zz.mk4a${RUN}@example.test`, EMAIL_B = `zz.mk4b${RUN}@example.t
 let idA = 0, idB = 0, cookieA = "";
 
 async function mkAccount(email) {
-  const reg = await api({ action: "register", first_name: "ZZ", last_name: `Mk4_${RUN}`, email, password: "Passw0rd!123", password_confirm: "Passw0rd!123" }).then((r) => r.json());
+  const reg = await api({ action: "register", privacy_accepted: "1", first_name: "ZZ", last_name: `Mk4_${RUN}`, email, password: "Passw0rd!123", password_confirm: "Passw0rd!123" }).then((r) => r.json());
   const ver = await api({ action: "verify", account_id: Number(reg.accountId), code: String(reg.devCode) });
   const cookie = (ver.headers.getSetCookie() || []).map((c) => c.split(";")[0]).join("; ");
   return { id: Number(reg.accountId), cookie, ok: reg.ok && (await ver.json()).ok };
@@ -45,7 +45,7 @@ try {
   const cp1 = await api({ action: "change_password", current_password: "sbagliata", new_password: "NuovaPass!1", confirm_password: "NuovaPass!1" }, cookieA).then((r) => r.json());
   check("W1 password attuale errata -> guardia", cp1.ok === false && /attuale non e corretta/.test(cp1.error || ""), cp1.error);
   const cp2 = await api({ action: "change_password", current_password: "Passw0rd!123", new_password: "abc", confirm_password: "abc" }, cookieA).then((r) => r.json());
-  check("W2 nuova corta -> 'almeno 6 caratteri'", cp2.ok === false && /almeno 6/.test(cp2.error || ""), cp2.error);
+  check("W2 nuova corta -> 'almeno 8 caratteri'", cp2.ok === false && /almeno 8/.test(cp2.error || ""), cp2.error);
   const cp3 = await api({ action: "change_password", current_password: "Passw0rd!123", new_password: "NuovaPass!1", confirm_password: "Diversa!1" }, cookieA).then((r) => r.json());
   check("W3 conferma diversa -> 'non coincidono'", cp3.ok === false && /non coincidono/.test(cp3.error || ""), cp3.error);
   const cp4 = await api({ action: "change_password", current_password: "Passw0rd!123", new_password: "NuovaPass!1", confirm_password: "NuovaPass!1" }, cookieA).then((r) => r.json());

@@ -352,8 +352,10 @@ export function sanitizeIdentifier(identifier: string): string {
 }
 
 // TLS verificato quando è disponibile la CA di Supabase (env PEM o file
-// db/supabase-ca.crt scaricato dal pannello); altrimenti si resta sul
-// comportamento storico senza verifica, ma con log all'avvio.
+// db/supabase-ca.crt scaricato dal pannello). In PRODUZIONE la CA è
+// obbligatoria (audit GDPR art.32 2026-07-21): senza, prima si proseguiva
+// cifrati ma senza verifica del certificato (MITM possibile) con un semplice
+// warning — ora è un errore fatale. In dev resta il fallback storico.
 function sslConfig(): { ca: string; rejectUnauthorized: true } | { rejectUnauthorized: false } {
   const inline = String(process.env.PRENODO_DATABASE_CA ?? "");
   if (inline.includes("BEGIN CERTIFICATE")) return { ca: inline, rejectUnauthorized: true };
@@ -361,10 +363,10 @@ function sslConfig(): { ca: string; rejectUnauthorized: true } | { rejectUnautho
     const caPath = path.join(process.cwd(), "db", "supabase-ca.crt");
     if (fs.existsSync(caPath)) return { ca: fs.readFileSync(caPath, "utf8"), rejectUnauthorized: true };
   } catch {
-    // fall through: senza CA leggibile si usa il fallback non verificato
+    // fall through: gestito sotto (fatale in prod, fallback in dev)
   }
   if (process.env.NODE_ENV === "production") {
-    console.warn("[tenant-db] connessione DB senza verifica del certificato: fornisci PRENODO_DATABASE_CA o db/supabase-ca.crt");
+    throw new Error("CA del database mancante: fornisci PRENODO_DATABASE_CA o db/supabase-ca.crt (la connessione senza verifica del certificato non è ammessa in produzione).");
   }
   return { rejectUnauthorized: false };
 }

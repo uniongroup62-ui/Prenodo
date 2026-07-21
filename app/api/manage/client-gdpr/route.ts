@@ -18,6 +18,8 @@ import {
   privacySendOfficialPdfEmail,
   privacySendSignatureEmail,
 } from "@/lib/consent-records";
+import { logActivity } from "@/lib/activity-log";
+import { buildClientGdprExport } from "@/lib/client-gdpr-export";
 import { currentManageSession } from "@/lib/manage-auth";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import {
@@ -223,6 +225,30 @@ export async function GET(request: Request) {
   try {
     const client = await loadClient(tenantSlug, clientId);
     if (!client) return jsonError("Cliente non trovato.", 404);
+
+    // --- Export dati cliente (do=gdpr_export, audit GDPR 2026-07-21):
+    // diritto di accesso/portabilità — JSON completo scaricabile. L'export è
+    // una LETTURA di dati personali: viene registrata nel log attività.
+    if (doAction === "gdpr_export") {
+      const payload = await buildClientGdprExport(tenantSlug, clientId);
+      void logActivity(tenantSlug, {
+        user: session.user,
+        locationId: session.user.currentLocationId,
+        module: "clienti",
+        action: "export_gdpr",
+        entityType: "client",
+        entityId: clientId,
+        label: `Export dati GDPR cliente "${privacyClientDisplayName(client)}"`,
+      });
+      const fileName = privacyPdfSafeFilename(`export-dati-cliente-${clientId}`).replace(/\.pdf$/i, "") + ".json";
+      return new Response(JSON.stringify(payload, null, 2), {
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "content-disposition": `attachment; filename="${fileName}"`,
+          "cache-control": "no-store",
+        },
+      });
+    }
 
     // --- Stampa PDF privacy (do=gdpr_print, solo bozza) ---
     if (doAction === "gdpr_print") {

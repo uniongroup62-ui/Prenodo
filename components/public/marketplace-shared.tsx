@@ -36,10 +36,10 @@ export function MarketplaceFooter() {
             <nav className="marketplace-footer__links" aria-label="Informazioni">
               <a href="/attivita">Cerca attivit&agrave;</a>
               <a href="/account/login">Accedi</a>
-              <a href="#">Note legali</a>
-              <a href="#">Informativa sulla privacy</a>
-              <a href="#">Informativa sui cookie</a>
-              <a href="#">Gestisci preferenze</a>
+              <a href="/legal/note-legali">Note legali</a>
+              <a href="/legal/privacy">Informativa sulla privacy</a>
+              <a href="/legal/cookie">Informativa sui cookie</a>
+              <a href="/legal/termini">Termini di servizio</a>
             </nav>
           </section>
 

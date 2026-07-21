@@ -81,13 +81,13 @@ try {
 
   // H4 (FIX): confirm con hold SCADUTO -> rifiutato
   await seedHold("15:00", "16:00", rome(-30), `zzexp2-${RUN}`);
-  const h4 = await apiPost({ action: "confirm", date: DATE, time: "15:00", service_ids: String(SVC), location_id: String(LOC), owner_key: OWNER, hold_token: `zzexp2-${RUN}`, client_name: "ZZ Book", client_email: `zz.book.${RUN}@example.com` });
+  const h4 = await apiPost({ action: "confirm", privacy_accepted: "1", date: DATE, time: "15:00", service_ids: String(SVC), location_id: String(LOC), owner_key: OWNER, hold_token: `zzexp2-${RUN}`, client_name: "ZZ Book", client_email: `zz.book.${RUN}@example.com` });
   check("H4 confirm con hold scaduto -> 'Riserva non disponibile o scaduta.'", h4.j?.ok !== true && err(h4) === "Riserva non disponibile o scaduta.", JSON.stringify(err(h4)));
 
   // C1: confirm con hold valido -> appuntamento pending completo + cliente ESISTENTE riusato (email case-insensitive)
   // staff_id esplicito: nel legacy la riga appointment_staff nasce SOLO con
   // operatore scelto (any-staff = nessuna riga, fedele nel port).
-  const c1 = await apiPost({ action: "confirm", date: DATE, time: "10:00", service_ids: String(SVC), staff_id: String(STAFF), location_id: String(LOC), owner_key: OWNER, hold_token: tok, client_name: `ZZ Book ${RUN}`, client_email: `zz.book.${RUN}@example.com` });
+  const c1 = await apiPost({ action: "confirm", privacy_accepted: "1", date: DATE, time: "10:00", service_ids: String(SVC), staff_id: String(STAFF), location_id: String(LOC), owner_key: OWNER, hold_token: tok, client_name: `ZZ Book ${RUN}`, client_email: `zz.book.${RUN}@example.com` });
   apptId = Number(c1.j?.confirmation?.id ?? c1.j?.id ?? 0);
   if (!apptId) apptId = Number((await q1("SELECT id FROM appointments WHERE tenant_id=$1 AND client_id=$2 AND starts_at=$3", [T, cid, `${DATE} 10:00:00`]))?.id ?? 0);
   const arow = await q1("SELECT status, client_id, location_id FROM appointments WHERE tenant_id=$1 AND id=$2", [T, apptId]);
@@ -101,7 +101,7 @@ try {
   check("C1b righe collegate: servizio+staff+sede+segmento, hold 'converted'", rel.svc === 1 && rel.st === 1 && rel.loc === 1 && rel.seg === 1 && holdRow?.status === "converted", JSON.stringify({ rel, hold: holdRow?.status }));
 
   // C2: doppia prenotazione stesso slot -> rifiutata
-  const c2 = await apiPost({ action: "confirm", date: DATE, time: "10:00", service_ids: String(SVC), location_id: String(LOC), owner_key: `${OWNER}-b`, client_name: "ZZ Book Due", client_email: `zz.book2.${RUN}@example.com` });
+  const c2 = await apiPost({ action: "confirm", privacy_accepted: "1", date: DATE, time: "10:00", service_ids: String(SVC), location_id: String(LOC), owner_key: `${OWNER}-b`, client_name: "ZZ Book Due", client_email: `zz.book2.${RUN}@example.com` });
   check("C2 doppia prenotazione stesso slot -> 'Orario non disponibile.'", c2.j?.ok !== true && err(c2) === "Orario non disponibile.", JSON.stringify(err(c2)));
 } catch (e) {
   check("EXCEPTION", false, e.stack || e.message);

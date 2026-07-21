@@ -569,8 +569,11 @@ function appointmentReminderSelect(channel: "email" | "sms"): string {
              AND (r.status='pending'
                   OR (r.status='sending' AND r.updated_at < ?))
              AND r.scheduled_at <= ?
+             AND COALESCE(c.is_blocked, 0) = 0
            ORDER BY r.scheduled_at ASC
            LIMIT ${SELECT_LIMIT}`;
+  // GDPR (audit 2026-07-21): il blocco cliente è una limitazione del
+  // trattamento — sospende anche gli invii automatici, promemoria inclusi.
   // NB TZ: scheduled_at è in ORA LOCALE dell'app (Rome) — il confronto va
   // fatto con businessNowDateTime(), MAI con NOW() del DB (UTC su Supabase:
   // i promemoria partivano con 2 ore di RITARDO).
@@ -915,6 +918,7 @@ async function handler(request: Request) {
                 AND fc.expires_at >= CURRENT_DATE
                 AND COALESCE(NULLIF(TRIM(c.email), ''), '') <> ''
                 AND fc.status='active'
+                AND COALESCE(c.is_blocked, 0) = 0
               ORDER BY fc.expires_at ASC, fc.id ASC`,
             [tenantId],
           );
@@ -967,6 +971,7 @@ async function handler(request: Request) {
             AND (cr.status='pending'
                  OR (cr.status='sending' AND cr.updated_at < ?))
             AND cr.scheduled_at <= ?
+            AND COALESCE(c.is_blocked, 0) = 0
           ORDER BY cr.scheduled_at ASC, cr.id ASC
           LIMIT ${SELECT_LIMIT}`,
         [tenantId, claimCutoff(), businessNowDateTime()],
