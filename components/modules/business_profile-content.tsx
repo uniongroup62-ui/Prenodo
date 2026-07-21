@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTakenFlash } from "./flash";
+import InfoBox from "./info-box";
 
 // Faithful port of the PHP business profile page (app/pages/business_profile.php
 // + assets/js/pages/business_profile.js): public profile name + "Chi siamo"
@@ -390,7 +391,30 @@ export function BusinessProfileContent({
       <div className="bs-page-header">
         <div className="bs-page-heading">
           <div className="bs-page-kicker">Impostazioni</div>
-          <h1 className="bs-page-title">Profilo attivita</h1>
+          <div className="d-flex align-items-center gap-2">
+            <h1 className="bs-page-title">Profilo attivita</h1>
+            <InfoBox>
+              <ul>
+                <li>
+                  <strong>Nome</strong> e <strong>Chi siamo</strong> compaiono nel booking pubblico: il nome sotto al
+                  logo, il testo in una sezione dedicata sopra la gallery.
+                </li>
+                <li>
+                  Il <strong>logo</strong> viene mostrato nel booking pubblico e nelle email automatiche (JPG/PNG, max 5
+                  MB). Per una resa migliore usa un logo con sfondo chiaro o trasparente ed evita immagini troppo grandi:
+                  verranno compresse.
+                </li>
+                <li>
+                  L&apos;<strong>immagine di copertina</strong> è l&apos;immagine orizzontale usata nel booking pubblico
+                  e nelle schermate brandizzate.
+                </li>
+                <li>
+                  Dopo il caricamento puoi <strong>trascinare l&apos;anteprima</strong> di logo e copertina per regolare
+                  la porzione visibile, poi salvare la posizione.
+                </li>
+              </ul>
+            </InfoBox>
+          </div>
           <div className="bs-page-subtitle">Gestisci profilo pubblico, logo, copertina e dati mostrati nel booking.</div>
         </div>
       </div>
@@ -449,7 +473,7 @@ export function BusinessProfileContent({
             </form>
 
             <div className="row g-4">
-              <div className="col-lg-7">
+              <div className="col-12">
                 <div className="h6 fw-bold mb-2">Logo attività</div>
                 <div className="text-muted small mb-3">
                   Il logo verrà mostrato nel <strong>booking pubblico</strong> e nelle <strong>email automatiche</strong>.
@@ -638,19 +662,6 @@ export function BusinessProfileContent({
                     )}
                   </button>
                 </form>
-              </div>
-
-              <div className="col-lg-5">
-                <div className="border rounded-3 bg-light p-3 h-100">
-                  <div className="h6 fw-bold mb-2">Nota</div>
-                  <div className="text-muted small">
-                    Per una resa migliore nel booking e nelle email:
-                    <ul className="mb-0">
-                      <li>usa un logo con sfondo chiaro o trasparente</li>
-                      <li>evita immagini troppo grandi (verranno compresse)</li>
-                    </ul>
-                  </div>
-                </div>
               </div>
 
               <div className="col-12">
