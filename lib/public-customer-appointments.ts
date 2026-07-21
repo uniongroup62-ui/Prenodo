@@ -91,11 +91,18 @@ function canCancelAppointment(
   }
   const trimmed = String(startsAt ?? "").trim();
   if (!trimmed) return { canCancel: false, reason: "Data appuntamento non valida." };
+  // STESSO FRAME temporale (audit giro 3): starts_at è wall-time ROMA — il
+  // confronto con Date.now() (epoch reale, server UTC su Amplify) spostava il
+  // gate di ~2h: il cliente poteva annullare anche DOPO l'inizio reale e la
+  // finestra di preavviso era sfasata a suo favore. Entrambi i lati vengono
+  // parsati come wall-clock con la STESSA interpretazione (server-local):
+  // le differenze relative restano corrette in qualunque fuso del server.
   const startMs = new Date(trimmed.replace(" ", "T")).getTime();
   if (!Number.isFinite(startMs) || Number.isNaN(startMs)) {
     return { canCancel: false, reason: "Data appuntamento non valida." };
   }
-  const nowMs = Date.now();
+  const nowWall = businessNowDateTime();
+  const nowMs = new Date(nowWall.replace(" ", "T")).getTime();
   if (startMs <= nowMs) return { canCancel: false, reason: "L'appuntamento è già iniziato o passato." };
   if (policy.seconds > 0 && (startMs - nowMs) / 1000 < policy.seconds) {
     return { canCancel: false, reason: `Puoi annullare solo entro ${policy.label} prima dell'appuntamento.` };

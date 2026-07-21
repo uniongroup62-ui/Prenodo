@@ -1311,6 +1311,32 @@ export async function redeemGiftBoxInstancePartial(
   const locationId = location && location.id > 0 ? location.id : 0;
   const rawRows = await gbInstanceItemRows(slug, id, Number(inst.giftbox_id ?? 0));
   const rawById = new Map(rawRows.map((r) => [Number(r.giftbox_item_id ?? 0), r]));
+  // Compensazione stock (audit giro 3): gli scarichi già applicati vengono
+  // RIPRISTINATI se un passo successivo fallisce (prima restavano scalati).
+  const appliedStock: Array<{ perLocation: boolean; productId: number; qty: number }> = [];
+  const restoreAppliedStock = async (): Promise<void> => {
+    for (const a of appliedStock.splice(0)) {
+      try {
+        if (a.perLocation) {
+          const psT = await tenantTable(slug, "product_stocks");
+          const scoped = psT.mode === "shared" && (await columnExists(psT.name, "tenant_id"));
+          await dbExecute(
+            `UPDATE \`${psT.name}\` SET stock = stock + ? WHERE product_id = ? AND location_id = ?${scoped ? " AND tenant_id = ?" : ""}`,
+            scoped ? [a.qty, a.productId, locationId, psT.tenantId ?? 0] : [a.qty, a.productId, locationId],
+          );
+        } else {
+          const pT = await tenantTable(slug, "products");
+          const scoped = pT.mode === "shared" && (await columnExists(pT.name, "tenant_id"));
+          await dbExecute(
+            `UPDATE \`${pT.name}\` SET stock = stock + ? WHERE id = ?${scoped ? " AND tenant_id = ?" : ""}`,
+            scoped ? [a.qty, a.productId, pT.tenantId ?? 0] : [a.qty, a.productId],
+          );
+        }
+      } catch (error) {
+        console.error(`[giftbox] COMPENSAZIONE stock fallita per prodotto #${a.productId} (+${a.qty}):`, error instanceof Error ? error.message : error);
+      }
+    }
+  };
   if (locationId > 0) {
     for (const [itId] of toRedeem) {
       const raw = rawById.get(itId);
@@ -1331,7 +1357,10 @@ export async function redeemGiftBoxInstancePartial(
       const anyStock = await tenantSelect<RowDataPacket>({ slug, table: "product_stocks", columns: "location_id", where: "product_id = ?", params: [productId], limit: 1 }).catch(() => [] as RowDataPacket[]);
       if (anyStock.length > 0) {
         const enabled = await tenantSelect<RowDataPacket>({ slug, table: "product_stocks", columns: "location_id", where: "product_id = ? AND location_id = ? AND COALESCE(is_enabled,1) = 1", params: [productId, locationId], limit: 1 }).catch(() => [] as RowDataPacket[]);
-        if (enabled.length === 0) throw new Error(`Prodotto non abbinato alla sede selezionata: ${label}.`);
+        if (enabled.length === 0) {
+          await restoreAppliedStock();
+          throw new Error(`Prodotto non abbinato alla sede selezionata: ${label}.`);
+        }
         const psT = await tenantTable(slug, "product_stocks");
         const scoped = psT.mode === "shared" && (await columnExists(psT.name, "tenant_id"));
         const res = await dbExecute(
@@ -1339,8 +1368,10 @@ export async function redeemGiftBoxInstancePartial(
           scoped ? [qReq, productId, locationId, qReq, psT.tenantId ?? 0] : [qReq, productId, locationId, qReq],
         ).catch(() => ({ affectedRows: 0 }));
         if (Number((res as { affectedRows?: number }).affectedRows ?? 0) <= 0) {
+          await restoreAppliedStock();
           throw new Error(`Stock insufficiente per il prodotto "${label}" nella sede selezionata.`);
         }
+        appliedStock.push({ perLocation: true, productId, qty: qReq });
       } else {
         const pT = await tenantTable(slug, "products");
         const scoped = pT.mode === "shared" && (await columnExists(pT.name, "tenant_id"));
@@ -1349,8 +1380,10 @@ export async function redeemGiftBoxInstancePartial(
           scoped ? [qReq, productId, qReq, pT.tenantId ?? 0] : [qReq, productId, qReq],
         ).catch(() => ({ affectedRows: 0 }));
         if (Number((res as { affectedRows?: number }).affectedRows ?? 0) <= 0) {
+          await restoreAppliedStock();
           throw new Error(`Stock insufficiente per il prodotto "${label}" nella sede selezionata.`);
         }
+        appliedStock.push({ perLocation: false, productId, qty: qReq });
       }
     }
   }
@@ -1369,10 +1402,40 @@ export async function redeemGiftBoxInstancePartial(
     location_id: locationId > 0 ? locationId : null,
     location_name: location ? clean(location.name) || null : null,
     created_at: now,
+  }).catch(async (error) => {
+    await restoreAppliedStock();
+    throw error;
   });
   const itemTable = await tenantTable(slug, "giftbox_redemption_items");
   for (const [itId, qReq] of toRedeem) {
-    await tenantInsert(itemTable, { redemption_id: redemptionId, giftbox_item_id: itId, qty: qReq }).catch(() => 0);
+    await tenantInsert(itemTable, { redemption_id: redemptionId, giftbox_item_id: itId, qty: qReq }).catch((error) => console.error(`[giftbox] riga riscatto NON scritta (redemption #${redemptionId}, item ${itId}):`, error instanceof Error ? error.message : error));
+  }
+
+  // POST-CHECK anti race (audit giro 3): il residuo è verificato con
+  // read-then-insert — due riscatti concorrenti potevano passare entrambi il
+  // check. Se DOPO gli insert un item risulta oltre il totale, questa
+  // redemption viene rimossa (compensazione completa, stock incluso).
+  {
+    const redT = await tenantTable(slug, "giftbox_redemptions");
+    const redItT = await tenantTable(slug, "giftbox_redemption_items");
+    const redScoped = redT.mode === "shared" && (await columnExists(redT.name, "tenant_id"));
+    for (const [itId] of toRedeem) {
+      const totalQty = Number(itemById.get(itId)?.qty ?? 0);
+      if (totalQty <= 0) continue;
+      const usedRows = await dbQuery<RowDataPacket[]>(
+        `SELECT COALESCE(SUM(gri.qty),0) AS used
+           FROM \`${redItT.name}\` gri
+           JOIN \`${redT.name}\` gr ON gr.id = gri.redemption_id
+          WHERE gr.instance_id = ? AND gri.giftbox_item_id = ?${redScoped ? " AND gr.tenant_id = ?" : ""}`,
+        redScoped ? [id, itId, redT.tenantId ?? 0] : [id, itId],
+      ).catch(() => [] as RowDataPacket[]);
+      if (Number(usedRows[0]?.used ?? 0) > totalQty) {
+        await dbExecute(`DELETE FROM \`${redItT.name}\` WHERE redemption_id = ?`, [redemptionId]).catch(() => 0);
+        await dbExecute(`DELETE FROM \`${redT.name}\` WHERE id = ?${redScoped ? " AND tenant_id = ?" : ""}`, redScoped ? [redemptionId, redT.tenantId ?? 0] : [redemptionId]).catch(() => 0);
+        await restoreAppliedStock();
+        throw new Error("Quantità non più disponibile: un riscatto concorrente ha esaurito il residuo. Riprova.");
+      }
+    }
   }
 
   // Riscattata quando TUTTI gli elementi risultano utilizzati.
@@ -2468,7 +2531,20 @@ export async function redeemGiftCardItemManage(slug: string, id: number, itemRow
     }
   }
 
-  await tenantUpdate({ slug, table: "giftcard_items", id: itemRowId, values: { redeemed_qty: it.redeemedQty + qty } });
+  // Incremento ATOMICO con guardia sul residuo nel WHERE (audit giro 3): il
+  // valore assoluto da lettura stale permetteva l'over-redeem concorrente
+  // (lo stock sopra è già atomico; le voci-servizio erano scoperte).
+  {
+    const giT = await tenantTable(slug, "giftcard_items");
+    const giScoped = giT.mode === "shared" && (await columnExists(giT.name, "tenant_id"));
+    const giRes = await dbExecute(
+      `UPDATE \`${giT.name}\` SET redeemed_qty = redeemed_qty + ? WHERE id = ? AND qty - redeemed_qty >= ?${giScoped ? " AND tenant_id = ?" : ""}`,
+      giScoped ? [qty, itemRowId, qty, giT.tenantId ?? 0] : [qty, itemRowId, qty],
+    );
+    if (Number((giRes as { affectedRows?: number }).affectedRows ?? 0) <= 0) {
+      throw new Error(`Quantità eccede il residuo (residuo: ${it.remainingQty}).`);
+    }
+  }
 
   // Nota di default legacy: 'Riscatto servizio/prodotto: <label> xN'.
   let txNote = clean(note);

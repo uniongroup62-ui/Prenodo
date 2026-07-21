@@ -26,6 +26,11 @@ export async function GET(request: Request) {
     return Response.json({ ok: true, source: "locations?action=get", sourceMode: "database", location });
   }
 
+  // Gate sessione (audit giro 3): il ramo lista era l'unico senza — un probe
+  // ANONIMO leggeva l'anagrafica sedi del tenant (nomi, indirizzi, telefoni).
+  const session = await currentManageSession(tenantSlug);
+  if (!session) return jsonError("Sessione gestionale scaduta.", 401);
+
   const locationContext = await getManageLocationContext(tenantSlug);
 
   return Response.json({

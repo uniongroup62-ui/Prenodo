@@ -446,10 +446,18 @@ function truncate(value: string, max: number): string {
 }
 
 function exposeResetUrl(): boolean {
-  return process.env.NODE_ENV !== "production" || process.env.PRENODO_EXPOSE_RESET_LINK === "1";
+  // HARD-GUARD produzione (audit 21/07): il link contiene il token di reset —
+  // esporlo nella risposta JSON permetterebbe il takeover; nessuna env lo riapre.
+  if (process.env.NODE_ENV === "production") return false;
+  return true;
 }
 
 function manageResetUrl(origin: string | undefined, slug: string, token: string): string {
-  const base = (origin || process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").replace(/\/$/, "");
+  // AUDIT 21/07: la base del link NON deve mai derivare da header controllati
+  // dal client (Origin/Host spoofabili): un attaccante che chiede il reset per
+  // l'email della vittima farebbe arrivare nella mail un link col token valido
+  // verso il PROPRIO dominio (token theft). Env esplicita prima di tutto;
+  // l'origin del server resta solo come fallback dev.
+  const base = (process.env.PRENODO_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || origin || "http://localhost:3000").replace(/\/$/, "");
   return `${base}/manage/reset-password?slug=${encodeURIComponent(slug)}&token=${encodeURIComponent(token)}`;
 }

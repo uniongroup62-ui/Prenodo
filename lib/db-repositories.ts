@@ -5727,11 +5727,17 @@ async function restoreClientPackageSession(slug: string, clientPackageId: number
       limit: 1,
     });
     if (!rows[0]) return;
-    const remaining = Math.max(0, Number(rows[0].sessions_remaining ?? 0)) + 1;
-    const values: Record<string, unknown> = { sessions_remaining: remaining };
-    // A package the redeem flipped to 'completed' becomes usable again.
-    if (String(rows[0].status ?? "") === "completed") values.status = "active";
-    await tenantUpdate({ slug, table: "client_packages", id: clientPackageId, values });
+    // Incremento RELATIVO (audit giro 3): il +1 assoluto da lettura stale
+    // perdeva un movimento concorrente. Il flip completed->active resta.
+    const cpT2 = await tenantTable(slug, "client_packages");
+    const cpScoped2 = cpT2.mode === "shared" && (await columnExists(cpT2.name, "tenant_id"));
+    await dbExecute(
+      `UPDATE \`${cpT2.name}\`
+          SET sessions_remaining = sessions_remaining + 1,
+              status = CASE WHEN status = 'completed' THEN 'active' ELSE status END
+        WHERE id = ?${cpScoped2 ? " AND tenant_id = ?" : ""}`,
+      cpScoped2 ? [clientPackageId, cpT2.tenantId ?? 0] : [clientPackageId],
+    );
     // Write the inverse usage ledger entry (+1), mirroring the -1 the consume wrote.
     await tryInsertPackageUsage(slug, clientPackageId, 1, "Ripristino eliminazione appuntamento").catch(() => {});
   } catch {
@@ -5748,12 +5754,13 @@ async function restoreClientPackageSession(slug: string, clientPackageId: number
         limit: 1,
       });
       if (cps[0]) {
-        await tenantUpdate({
-          slug,
-          table: "client_package_services",
-          id: clientPackageServiceId,
-          values: { sessions_remaining: Math.max(0, Number(cps[0].sessions_remaining ?? 0)) + 1 },
-        });
+        // Incremento RELATIVO (audit giro 3, come sopra).
+        const cpsT3 = await tenantTable(slug, "client_package_services");
+        const cpsScoped3 = cpsT3.mode === "shared" && (await columnExists(cpsT3.name, "tenant_id"));
+        await dbExecute(
+          `UPDATE \`${cpsT3.name}\` SET sessions_remaining = sessions_remaining + 1 WHERE id = ?${cpsScoped3 ? " AND tenant_id = ?" : ""}`,
+          cpsScoped3 ? [clientPackageServiceId, cpsT3.tenantId ?? 0] : [clientPackageServiceId],
+        );
       }
     } catch {
       // best-effort
@@ -5775,10 +5782,17 @@ async function restoreClientPrepaidUnit(slug: string, clientPrepaidServiceId: nu
       limit: 1,
     });
     if (!rows[0]) return;
-    const remaining = Math.max(0, Number(rows[0].remaining_qty ?? 0)) + 1;
-    const values: Record<string, unknown> = { remaining_qty: remaining };
-    if (String(rows[0].status ?? "") === "completed") values.status = "active";
-    await tenantUpdate({ slug, table: "client_prepaid_services", id: clientPrepaidServiceId, values });
+    // Incremento RELATIVO (audit giro 3): il +1 assoluto da lettura stale
+    // perdeva un movimento concorrente.
+    const cpsT4 = await tenantTable(slug, "client_prepaid_services");
+    const cpsScoped4 = cpsT4.mode === "shared" && (await columnExists(cpsT4.name, "tenant_id"));
+    await dbExecute(
+      `UPDATE \`${cpsT4.name}\`
+          SET remaining_qty = remaining_qty + 1,
+              status = CASE WHEN status = 'completed' THEN 'active' ELSE status END
+        WHERE id = ?${cpsScoped4 ? " AND tenant_id = ?" : ""}`,
+      cpsScoped4 ? [clientPrepaidServiceId, cpsT4.tenantId ?? 0] : [clientPrepaidServiceId],
+    );
   } catch {
     // best-effort
   }
@@ -6050,7 +6064,7 @@ export async function checkoutDbSale(input: PosCheckoutInput, slug: string): Pro
   const saleTable = await tenantTable(slug, "sales");
   const saleId = await tenantInsert(saleTable, {
     client_id: client.id > 0 ? client.id : null,
-    sale_date: new Date(),
+    sale_date: businessNowDateTime(),
     subtotal,
     discount,
     total,
@@ -6128,7 +6142,7 @@ export async function cancelDbSale({
     slug,
     table: "sales",
     id: saleId,
-    values: { status: "cancelled", cancelled_at: new Date(), cancelled_reason: reason || "Annullamento vendita" },
+    values: { status: "cancelled", cancelled_at: businessNowDateTime(), cancelled_reason: reason || "Annullamento vendita" },
   });
   await cancelDbSaleResidues(slug, saleId);
 
@@ -6161,7 +6175,7 @@ export async function costDbSummary(slug: string): Promise<{ open: number; overd
 export async function markDbCostPaid(id: number, slug: string): Promise<CostItem> {
   const rows = await tenantSelect<RowDataPacket>({ slug, table: "costs", where: "id = ?", params: [id], limit: 1 });
   if (!rows[0]) throw new Error("Costo non trovato.");
-  await tenantUpdate({ slug, table: "costs", id, values: { is_paid: 1, paid_amount: Number(rows[0].amount ?? 0), paid_at: new Date() } });
+  await tenantUpdate({ slug, table: "costs", id, values: { is_paid: 1, paid_amount: Number(rows[0].amount ?? 0), paid_at: businessNowDateTime() } });
   const updatedRows = await tenantSelect<RowDataPacket>({ slug, table: "costs", where: "id = ?", params: [id], limit: 1 });
   if (!updatedRows[0]) throw new Error("Costo non trovato.");
   return mapCost(slug, updatedRows[0]);
@@ -9203,13 +9217,19 @@ export async function refundDbGiftCard(id: number, amount: number, slug: string,
     limit: 1,
   });
   if (!rows[0]) return;
-  const balance = roundMoney(Math.max(0, parseMoney(rows[0].balance, 0)) + refund);
-  const values: Record<string, unknown> = { balance };
-  if (String(rows[0].status ?? "") === "redeemed") {
-    values.status = "active";
-    values.redeemed_at = null;
-  }
-  await tenantUpdate({ slug, table: "giftcards", id, values });
+  // Incremento RELATIVO (audit giro 3): il saldo assoluto da lettura stale
+  // SOVRASCRIVEVA un redeem committato nel frattempo (denaro regalato). Il
+  // flip redeemed->active resta nello stesso statement.
+  const gcrT = await tenantTable(slug, "giftcards");
+  const gcrScoped = gcrT.mode === "shared" && (await columnExists(gcrT.name, "tenant_id"));
+  await dbExecute(
+    `UPDATE \`${gcrT.name}\`
+        SET balance = balance + ?,
+            status = CASE WHEN status = 'redeemed' THEN 'active' ELSE status END,
+            redeemed_at = CASE WHEN status = 'redeemed' THEN NULL ELSE redeemed_at END
+      WHERE id = ?${gcrScoped ? " AND tenant_id = ?" : ""}`,
+    gcrScoped ? [refund, id, gcrT.tenantId ?? 0] : [refund, id],
+  );
   // Storno = topupGiftCard nel legacy (movimento type='topup'): 'refund' non è ammesso dal
   // CHECK di giftcard_transactions.type -> l'insert fallirebbe silenziosamente (audit perso).
   await tenantInsert(await tenantTable(slug, "giftcard_transactions"), {
@@ -9217,8 +9237,8 @@ export async function refundDbGiftCard(id: number, amount: number, slug: string,
     type: "topup",
     amount: refund,
     note,
-    created_at: new Date(),
-  }).catch(() => 0);
+    created_at: businessNowDateTime(),
+  }).catch((error) => console.error(`[giftcard] ledger storno NON scritto per GC #${id}:`, error instanceof Error ? error.message : error));
 }
 
 // Available (redeemable) GiftCards for a client — used by the POS "Residui" panel.
@@ -10396,7 +10416,9 @@ export async function addManageClientPackageUsage(
     }
 
     const usageNote = note.trim() !== "" ? note.trim() : delta < 0 ? "Ritiro prodotto incluso nel pacchetto" : "Ripristino ritiro prodotto incluso nel pacchetto";
-    await tenantInsert(usageTable, { client_package_id: id, service_id: null, item_type: "product", item_id: usageItemId, location_id: packageLocationId > 0 ? packageLocationId : null, used_at: usedAt, delta, note: usageNote, appointment_id: null, created_by: operatorUserId }).catch(() => 0);
+    // Ledger AUTORITATIVO dei ritiri: l'errore non blocca (parità) ma va loggato
+    // (audit giro 3: stock scaricato + residuo invariato = ritiro infinito invisibile).
+    await tenantInsert(usageTable, { client_package_id: id, service_id: null, item_type: "product", item_id: usageItemId, location_id: packageLocationId > 0 ? packageLocationId : null, used_at: usedAt, delta, note: usageNote, appointment_id: null, created_by: operatorUserId }).catch((error) => console.error(`[packages] ledger ritiro NON scritto per pacchetto #${id}:`, error instanceof Error ? error.message : error));
     return { ok: true, message: delta < 0 ? "Ritiro prodotto registrato" : "Ripristino ritiro prodotto registrato" };
   }
 
@@ -10423,17 +10445,29 @@ export async function addManageClientPackageUsage(
     }
     if (newRemaining > total) throw new Error("Superi le sedute totali del servizio selezionato");
 
-    await tenantUpdate({ slug, table: "client_package_services", id: Number(target.id ?? 0), values: { sessions_remaining: newRemaining } });
+    // Lock OTTIMISTICO (audit giro 3): l'update è condizionato al valore letto —
+    // un movimento concorrente fa fallire questo invece di perdere un decremento.
+    const cpsT2 = await tenantTable(slug, "client_package_services");
+    const cpsScoped2 = cpsT2.mode === "shared" && (await columnExists(cpsT2.name, "tenant_id"));
+    const cpsRes = await dbExecute(
+      `UPDATE \`${cpsT2.name}\` SET sessions_remaining = ? WHERE id = ? AND sessions_remaining = ?${cpsScoped2 ? " AND tenant_id = ?" : ""}`,
+      cpsScoped2 ? [newRemaining, Number(target.id ?? 0), remaining, cpsT2.tenantId ?? 0] : [newRemaining, Number(target.id ?? 0), remaining],
+    );
+    if (Number((cpsRes as { affectedRows?: number }).affectedRows ?? 0) <= 0) {
+      throw new Error("Sedute aggiornate da un'altra operazione: ricarica e riprova");
+    }
 
+    // Somme RI-LETTE dal DB dopo l'update (non dallo snapshot stale).
+    const freshRows = await tenantSelect<RowDataPacket>({ slug, table: "client_package_services", columns: "sessions_total, sessions_remaining", where: "client_package_id = ?", params: [id] }).catch(() => [] as RowDataPacket[]);
     let sumTotal = 0;
     let sumRemaining = 0;
-    for (const r of cpsRows) {
+    for (const r of freshRows) {
       sumTotal += Number(r.sessions_total ?? 0);
-      sumRemaining += Number(r.id ?? 0) === Number(target.id ?? 0) ? newRemaining : Number(r.sessions_remaining ?? 0);
+      sumRemaining += Number(r.sessions_remaining ?? 0);
     }
     if (sumTotal <= 0) sumTotal = Math.max(1, Number(cp.sessions_total ?? 1));
 
-    await tenantInsert(usageTable, { client_package_id: id, service_id: serviceIdPost, item_type: "service", item_id: serviceIdPost, location_id: packageLocationId > 0 ? packageLocationId : null, used_at: usedAt, delta, note: note.trim() !== "" ? note.trim() : null, created_by: operatorUserId }).catch(() => 0);
+    await tenantInsert(usageTable, { client_package_id: id, service_id: serviceIdPost, item_type: "service", item_id: serviceIdPost, location_id: packageLocationId > 0 ? packageLocationId : null, used_at: usedAt, delta, note: note.trim() !== "" ? note.trim() : null, created_by: operatorUserId }).catch((error) => console.error(`[packages] ledger movimento NON scritto per pacchetto #${id}:`, error instanceof Error ? error.message : error));
     const newStatus = recomputeClientPackageStatus(stored, sumRemaining, expiresAt);
     await tenantUpdate({ slug, table: "client_packages", id, values: { sessions_total: sumTotal, sessions_remaining: sumRemaining, status: newStatus } });
     return { ok: true, message: "Movimento registrato" };
@@ -10452,7 +10486,7 @@ export async function addManageClientPackageUsage(
   }
   if (newRemaining > total) throw new Error("Superi le sedute totali: aumenta prima le sedute totali");
   const sid = Number(cp.service_id ?? 0);
-  await tenantInsert(usageTable, { client_package_id: id, service_id: sid > 0 ? sid : null, item_type: sid > 0 ? "service" : null, item_id: sid > 0 ? sid : null, location_id: packageLocationId > 0 ? packageLocationId : null, used_at: usedAt, delta, note: note.trim() !== "" ? note.trim() : null, created_by: operatorUserId }).catch(() => 0);
+  await tenantInsert(usageTable, { client_package_id: id, service_id: sid > 0 ? sid : null, item_type: sid > 0 ? "service" : null, item_id: sid > 0 ? sid : null, location_id: packageLocationId > 0 ? packageLocationId : null, used_at: usedAt, delta, note: note.trim() !== "" ? note.trim() : null, created_by: operatorUserId }).catch((error) => console.error(`[packages] ledger movimento NON scritto per pacchetto #${id}:`, error instanceof Error ? error.message : error));
   const newStatus = recomputeClientPackageStatus(stored, newRemaining, expiresAt);
   await tenantUpdate({ slug, table: "client_packages", id, values: { sessions_remaining: newRemaining, status: newStatus } });
   return { ok: true, message: "Movimento registrato" };
@@ -10843,13 +10877,21 @@ export async function consumeDbClientPackage(id: number, sessions: number, slug:
   if (current.status !== "active") throw new Error("Pacchetto non utilizzabile.");
   const quantity = Math.max(1, Math.round(sessions));
   if (current.remainingSessions < quantity) throw new Error("Sedute pacchetto insufficienti.");
-  const remaining = current.remainingSessions - quantity;
-  await tenantUpdate({
-    slug,
-    table: "client_packages",
-    id,
-    values: { sessions_remaining: remaining, status: remaining <= 0 ? "completed" : "active" },
-  });
+  // Decremento ATOMICO con guardia nel WHERE (audit giro 3, PG guard race
+  // trap): il valore assoluto da lettura stale permetteva a due riscatti
+  // concorrenti di scalare UNA sola seduta erogandone due.
+  const cpT = await tenantTable(slug, "client_packages");
+  const cpScoped = cpT.mode === "shared" && (await columnExists(cpT.name, "tenant_id"));
+  const res = await dbExecute(
+    `UPDATE \`${cpT.name}\`
+        SET sessions_remaining = sessions_remaining - ?,
+            status = CASE WHEN sessions_remaining - ? <= 0 THEN 'completed' ELSE 'active' END
+      WHERE id = ? AND status = 'active' AND sessions_remaining >= ?${cpScoped ? " AND tenant_id = ?" : ""}`,
+    cpScoped ? [quantity, quantity, id, quantity, cpT.tenantId ?? 0] : [quantity, quantity, id, quantity],
+  );
+  if (Number((res as { affectedRows?: number }).affectedRows ?? 0) <= 0) {
+    throw new Error("Sedute pacchetto insufficienti.");
+  }
   await tryInsertPackageUsage(slug, id, -quantity, "Consumo manuale pacchetto");
   return getSingleClientPackage(slug, id);
 }
@@ -11019,12 +11061,14 @@ export async function applyAppointmentPackageRedeems({
       //    (the legacy recomputes the package total from the cps rows after redeem).
       await consumeDbClientPackage(clientPackageId, 1, slug);
       if (coverageRowId !== null && coverageRemaining !== null) {
-        await tenantUpdate({
-          slug,
-          table: "client_package_services",
-          id: coverageRowId,
-          values: { sessions_remaining: Math.max(0, coverageRemaining - 1) },
-        });
+        // Decremento RELATIVO (audit giro 3): il mirror per-servizio scritto
+        // come assoluto da lettura stale perdeva un decremento concorrente.
+        const cpsvT = await tenantTable(slug, "client_package_services");
+        const cpsvScoped = cpsvT.mode === "shared" && (await columnExists(cpsvT.name, "tenant_id"));
+        await dbExecute(
+          `UPDATE \`${cpsvT.name}\` SET sessions_remaining = GREATEST(0, sessions_remaining - 1) WHERE id = ?${cpsvScoped ? " AND tenant_id = ?" : ""}`,
+          cpsvScoped ? [coverageRowId, cpsvT.tenantId ?? 0] : [coverageRowId],
+        );
       }
 
       // 6) Link the appointment_services row + zero its charge (keep list_price).
@@ -12455,7 +12499,8 @@ export async function issueDbPrepaid(
     unit_price: unitPrice,
     total_paid: roundMoney(unitPrice * quantity),
     status: "active",
-    purchase_date: new Date(),
+    // Wall-time ROMA (audit giro 3: new Date() = UTC del server).
+    purchase_date: businessNowDateTime(),
     expires_at: input.expiresAt ?? addDaysDate(120),
   });
   return getSinglePrepaid(slug, id);
@@ -12466,19 +12511,28 @@ export async function consumeDbPrepaid(id: number, quantity: number, slug: strin
   if (current.status !== "active") throw new Error("Prepagato non utilizzabile.");
   const usedQuantity = Math.max(1, Math.round(quantity));
   if (current.remainingQuantity < usedQuantity) throw new Error("Residuo prepagato insufficiente.");
-  const remaining = current.remainingQuantity - usedQuantity;
-  await tenantUpdate({
-    slug,
-    table: "client_prepaid_services",
-    id,
-    values: { remaining_qty: remaining, status: remaining <= 0 ? "completed" : "active" },
-  });
-  await tenantInsert(await tenantTable(slug, "client_prepaid_service_usages"), {
+  // Decremento ATOMICO con guardia nel WHERE (audit giro 3): niente valore
+  // assoluto da lettura stale — double-redeem concorrente impossibile.
+  const cpsT = await tenantTable(slug, "client_prepaid_services");
+  const cpsScoped = cpsT.mode === "shared" && (await columnExists(cpsT.name, "tenant_id"));
+  const res = await dbExecute(
+    `UPDATE \`${cpsT.name}\`
+        SET remaining_qty = remaining_qty - ?,
+            status = CASE WHEN remaining_qty - ? <= 0 THEN 'completed' ELSE 'active' END
+      WHERE id = ? AND status = 'active' AND remaining_qty >= ?${cpsScoped ? " AND tenant_id = ?" : ""}`,
+    cpsScoped ? [usedQuantity, usedQuantity, id, usedQuantity, cpsT.tenantId ?? 0] : [usedQuantity, usedQuantity, id, usedQuantity],
+  );
+  if (Number((res as { affectedRows?: number }).affectedRows ?? 0) <= 0) {
+    throw new Error("Residuo prepagato insufficiente.");
+  }
+  const usageErr = await tenantInsert(await tenantTable(slug, "client_prepaid_service_usages"), {
     client_prepaid_service_id: id,
     qty: usedQuantity,
-    used_at: new Date(),
+    // Wall-time ROMA (audit giro 3: era new Date(), UTC del server).
+    used_at: businessNowDateTime(),
     note: "Esecuzione manuale",
-  }).catch(() => 0);
+  }).then(() => null).catch((error) => error as Error);
+  if (usageErr) console.error(`[prepaid] ledger usage NON scritto per prepagato #${id}:`, usageErr.message);
   return getSinglePrepaid(slug, id);
 }
 
@@ -12932,7 +12986,9 @@ export async function createDbPreorder(
   const deposit = roundMoney(Math.max(0, Number(input.deposit ?? 0)));
   const saleId = await tenantInsert(await tenantTable(slug, "sales"), {
     client_id: client.id > 0 ? client.id : null,
-    sale_date: new Date(),
+    // Wall-time ROMA (audit giro 3): sale_date guida l'Incasso dei Report —
+    // con new Date() (UTC) la vendita-acconto notturna finiva sul giorno prima.
+    sale_date: businessNowDateTime(),
     subtotal: deposit,
     discount: 0,
     total: deposit,
@@ -12958,8 +13014,28 @@ export async function collectDbPreorder(id: number, slug: string): Promise<Preor
   if (preorder.status !== "open") throw new Error("Preordine non ritirabile.");
   const product = await getSingleProduct(slug, preorder.productId);
   if (product.stock < preorder.quantity) throw new Error("Giacenza insufficiente per ritiro preordine.");
-  await decrementProductStock(slug, product.id, preorder.quantity);
-  await tenantUpdate({ slug, table: "sale_items", id, values: { item_status: "collected" } });
+  // CLAIM atomico sullo stato PRIMA dello scarico (audit giro 3): due ritiri
+  // concorrenti dello stesso preordine passavano entrambi i check e scaricavano
+  // lo stock due volte. Il flip guardato nel WHERE fa vincere uno solo.
+  const siT = await tenantTable(slug, "sale_items");
+  const siScoped = siT.mode === "shared" && (await columnExists(siT.name, "tenant_id"));
+  const claim = await dbExecute(
+    `UPDATE \`${siT.name}\` SET item_status = 'collected' WHERE id = ? AND item_status = 'ordered'${siScoped ? " AND tenant_id = ?" : ""}`,
+    siScoped ? [id, siT.tenantId ?? 0] : [id],
+  );
+  if (Number((claim as { affectedRows?: number }).affectedRows ?? 0) <= 0) {
+    throw new Error("Preordine non ritirabile.");
+  }
+  try {
+    await decrementProductStock(slug, product.id, preorder.quantity);
+  } catch (error) {
+    // Compensazione: stock non scaricato -> il preordine torna 'ordered'.
+    await dbExecute(
+      `UPDATE \`${siT.name}\` SET item_status = 'ordered' WHERE id = ?${siScoped ? " AND tenant_id = ?" : ""}`,
+      siScoped ? [id, siT.tenantId ?? 0] : [id],
+    ).catch(() => 0);
+    throw error;
+  }
   return getSinglePreorder(slug, id);
 }
 
@@ -16877,7 +16953,7 @@ export async function cancelManageGiftBoxInstance(slug: string, id: number, by: 
   const st = String(rows[0].status ?? "").trim().toLowerCase();
   if (st === "cancelled" || st === "canceled") throw new Error("GiftBox già annullata.");
   if (st === "redeemed") throw new Error("GiftBox già riscattata: non annullabile.");
-  await tenantUpdate({ slug, table: "giftbox_instances", id, values: { status: "cancelled", cancelled_at: new Date(), cancelled_by: by > 0 ? by : null } });
+  await tenantUpdate({ slug, table: "giftbox_instances", id, values: { status: "cancelled", cancelled_at: businessNowDateTime(), cancelled_by: by > 0 ? by : null } });
   return { ok: true };
 }
 
@@ -20935,10 +21011,16 @@ async function insertClientPackageItemsFromCatalog(slug: string, clientPackageId
 async function tryInsertPackageUsage(slug: string, clientPackageId: number, delta: number, note: string): Promise<void> {
   await tenantInsert(await tenantTable(slug, "client_package_usages"), {
     client_package_id: clientPackageId,
-    used_at: new Date(),
+    // Wall-time ROMA (audit giro 3: era new Date(), UTC — la STESSA colonna
+    // veniva scritta in due frame diversi dai due percorsi).
+    used_at: businessNowDateTime(),
     delta,
     note,
-  }).catch(() => 0);
+  }).catch((error) => {
+    // Il ledger è l'autorità dei residui ritirabili: un insert fallito non
+    // blocca l'operazione (parità legacy) ma NON deve più sparire nel nulla.
+    console.error(`[packages] ledger usage NON scritto per pacchetto #${clientPackageId} (delta ${delta}):`, error instanceof Error ? error.message : error);
+  });
 }
 
 async function getSinglePrepaid(slug: string, id: number): Promise<ClientPrepaid> {
@@ -23437,15 +23519,28 @@ async function buildDbSaleItem(slug: string, input: PosCheckoutInput["items"][nu
 }
 
 async function decrementProductStock(slug: string, productId: number, quantity: number): Promise<void> {
+  // Decremento ATOMICO con guardia nel WHERE (audit giro 3): il valore
+  // assoluto da lettura stale permetteva oversell su ritiri concorrenti.
   const product = await getSingleProduct(slug, productId);
-  const nextStock = product.stock - quantity;
-  if (nextStock < 0) throw new Error(`Giacenza insufficiente per ${product.name}.`);
-  await tenantUpdate({ slug, table: "products", id: productId, values: { stock: nextStock } });
+  const pT = await tenantTable(slug, "products");
+  const pScoped = pT.mode === "shared" && (await columnExists(pT.name, "tenant_id"));
+  const res = await dbExecute(
+    `UPDATE \`${pT.name}\` SET stock = stock - ? WHERE id = ? AND stock >= ?${pScoped ? " AND tenant_id = ?" : ""}`,
+    pScoped ? [quantity, productId, quantity, pT.tenantId ?? 0] : [quantity, productId, quantity],
+  );
+  if (Number((res as { affectedRows?: number }).affectedRows ?? 0) <= 0) {
+    throw new Error(`Giacenza insufficiente per ${product.name}.`);
+  }
 }
 
 async function incrementProductStock(slug: string, productId: number, quantity: number): Promise<void> {
-  const product = await getSingleProduct(slug, productId);
-  await tenantUpdate({ slug, table: "products", id: productId, values: { stock: product.stock + quantity } });
+  // Incremento RELATIVO (audit giro 3): niente valore assoluto da lettura stale.
+  const pT = await tenantTable(slug, "products");
+  const pScoped = pT.mode === "shared" && (await columnExists(pT.name, "tenant_id"));
+  await dbExecute(
+    `UPDATE \`${pT.name}\` SET stock = stock + ? WHERE id = ?${pScoped ? " AND tenant_id = ?" : ""}`,
+    pScoped ? [quantity, productId, pT.tenantId ?? 0] : [quantity, productId],
+  );
 }
 
 async function issueDbPrepaidFromSale({ slug, saleId, saleItemId, clientId, item }: { slug: string; saleId: number; saleItemId: number; clientId: number; item: PosSaleItem }): Promise<void> {

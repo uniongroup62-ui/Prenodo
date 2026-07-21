@@ -519,17 +519,26 @@ export async function cancelStockDocument(slug: string, documentId: number, user
   const locationId = Number(doc.location_id ?? 0) || 0;
   const items = await tenantSelect<RowDataPacket>({ slug, table: "stock_doc_items", where: "stock_doc_id=?", params: [documentId] }).catch(() => []);
   if (!items.length) throw new Error("Nessuna riga prodotto");
-  // Reverse the stock delta for each line.
+  // Reverse the stock delta for each line, con COMPENSAZIONE (audit giro 3):
+  // se lo storno della riga N fallisce, le righe 1..N-1 già stornate vengono
+  // ri-applicate — prima restavano stornate col documento ANCORA attivo, e
+  // ogni retry dell'annullo ri-stornava le prime righe corrompendo lo stock.
   const touchedProducts = new Set<number>();
+  const appliedReversals: Array<{ productId: number; delta: number }> = [];
   for (const item of items) {
     const productId = Number(item.product_id ?? 0);
     const qty = Number(item.qty ?? 0);
     if (productId <= 0 || qty <= 0) continue;
+    const reversalDelta = cause === "carico" ? -qty : qty;
     try {
-      await adjustProductStock(slug, productId, locationId, cause === "carico" ? -qty : qty);
+      await adjustProductStock(slug, productId, locationId, reversalDelta);
     } catch {
+      for (const a of appliedReversals.reverse()) {
+        await adjustProductStock(slug, a.productId, locationId, -a.delta).catch((error) => console.error(`[magazzino] compensazione storno fallita per prodotto #${a.productId}:`, error instanceof Error ? error.message : error));
+      }
       throw new Error("Impossibile annullare: storno porta giacenza negativa");
     }
+    appliedReversals.push({ productId, delta: reversalDelta });
     touchedProducts.add(productId);
   }
   // Mark canceled FIRST so this doc is excluded from the incoming recompute below.
@@ -988,16 +997,44 @@ async function adjustProductStock(slug: string, productId: number, locationId: n
         is_enabled: 1,
       }));
     }
-    const current = await currentProductStock(slug, productId, locationId, product);
-    const next = current + delta;
-    if (next < 0) throw new Error("Giacenza insufficiente.");
-    await updateProductStockRow(slug, productId, locationId, { stock: next, is_enabled: 1 });
+    // Delta ATOMICO con guardia nel WHERE (audit giro 3): il read-compute-write
+    // perdeva un delta su scarichi concorrenti (il POS ha già questo pattern).
+    const psScoped = stocksTable.mode === "shared" && (await columnExists(stocksTable.name, "tenant_id"));
+    const hasEnabled = await columnExists(stocksTable.name, "is_enabled");
+    const psParams: unknown[] = [delta, productId, locationId];
+    let psSql = `UPDATE \`${stocksTable.name}\` SET stock = stock + ?${hasEnabled ? ", is_enabled = 1" : ""} WHERE product_id = ? AND location_id = ?`;
+    if (delta < 0) {
+      psSql += " AND stock + ? >= 0";
+      psParams.push(delta);
+    }
+    if (psScoped) {
+      psSql += " AND tenant_id = ?";
+      psParams.push(stocksTable.tenantId ?? 0);
+    }
+    const psRes = await dbExecute(psSql, psParams);
+    if (delta < 0 && Number((psRes as { affectedRows?: number }).affectedRows ?? 0) <= 0) {
+      throw new Error("Giacenza insufficiente.");
+    }
     await refreshProductAggregateStock(slug, productId);
     return;
   }
-  const next = Number(product.stock ?? 0) + delta;
-  if (next < 0) throw new Error("Giacenza insufficiente.");
-  await tenantUpdate({ slug, table: "products", id: productId, values: { stock: next } });
+  // Fallback products.stock: stesso delta atomico con guardia.
+  const pT2 = await tenantTable(slug, "products");
+  const pScoped2 = pT2.mode === "shared" && (await columnExists(pT2.name, "tenant_id"));
+  const pParams: unknown[] = [delta, productId];
+  let pSql = `UPDATE \`${pT2.name}\` SET stock = stock + ? WHERE id = ?`;
+  if (delta < 0) {
+    pSql += " AND stock + ? >= 0";
+    pParams.push(delta);
+  }
+  if (pScoped2) {
+    pSql += " AND tenant_id = ?";
+    pParams.push(pT2.tenantId ?? 0);
+  }
+  const pRes = await dbExecute(pSql, pParams);
+  if (delta < 0 && Number((pRes as { affectedRows?: number }).affectedRows ?? 0) <= 0) {
+    throw new Error("Giacenza insufficiente.");
+  }
 }
 
 async function currentProductStock(slug: string, productId: number, locationId: number, product?: RowDataPacket): Promise<number> {
