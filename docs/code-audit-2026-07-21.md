@@ -107,3 +107,68 @@ LIMIT (Report è il caso peggiore e cresce con lo storico), catch silenziosi su
 scritture monetarie, hardening (XFF/cron/db-status/logging) e l'assenza del layer
 condiviso client (hook comuni). Piano suggerito: (1) bug confermati, (2) Report+
 listDbSales, (3) logging errori + hardening, (4) hook condivisi, (5) split monoliti.
+
+---
+
+# GIRO 2 (stesso giorno) — superfici non coperte dal giro 1
+
+Tre revisioni profonde: superficie PUBBLICA (booking/account/marketplace/voucher,
+letti integralmente), infrastruttura (8 cron, email SES, SMS, R2, PDF, log),
+monoliti client (calendar 4.6k e quick-booking-drawer 5.8k letti INTEGRALMENTE,
+saas-admin). I 47 lint "seri" verificati nel contesto: quasi tutti benigni
+(pattern SSR-safety deliberati); nessuno e' un bug runtime.
+
+## URGENTE (azione utente + codice)
+- CREDENZIALI REALI COMMITTATE: db/tools/admin-shot.mjs:11,24 e auth-shot.mjs:20,27
+  contengono email+password admin in chiaro (valide per gestionale E pannello SaaS),
+  anche nella history git. Ruotare la password SUBITO e spostare in env. [verificato]
+
+## ALTA
+- Stored XSS server-rendered: JSON-LD marketplace (attivita/[slug]/page.tsx:69 e
+  sedi/[locationSlug]) — JSON.stringify in dangerouslySetInnerHTML senza escape di
+  `<`: nome attivita' con `</script>` esegue JS su ogni visitatore. Fix one-liner
+  .replace(/</g,"\u003c"). [verificato]
+- Cron reminders SENZA claim atomico (route.ts:549-575, sent marcato DOPO l'invio):
+  run sovrapposti = email/SMS doppi con doppio addebito wallet; giftbox/giftcard
+  hanno gia' il pattern giusto (claim 15min). Vale anche per card_reminders. [verificato]
+- 6 cron su 8 senza try/catch per-tenant: un tenant rotto salta TUTTI i successivi
+  (ordine alfabetico) a ogni run, in silenzio. Pattern giusto in saas-tenant-health.
+- Drawer: hold "orfano" rinnovato all'infinito a drawer chiuso — runAvailability/
+  applyAvailabilitySlot sono le UNICHE fetch senza guardia anti-stale: risposta che
+  arriva dopo resetForm setta holdToken e l'auto-renew blocca lo slot per sempre.
+
+## MEDIA (selezione)
+- Open redirect post-auth: account-auth-destination accetta //evil.com e /\evil.com.
+- javascript: URL nei social sede (normalizeSocialUrl non allow-lista https/http)
+  → XSS-on-click su marketplace-detail 853/858/863.
+- Login cliente senza rate-limit (unico endpoint credenziale senza throttle).
+- Double-escape nelle email "plain": L'Estetica → L&#039;Estetica (buildReminderEmail/
+  buildFidelityEmail + ramo rejected di appointment-lifecycle-email).
+- TZ server (UTC) nei confini di fidelity-expire/reconcile, todayYmd reminders,
+  timestamp firma GDPR nel PDF (documento legale 2h indietro), localSqlNow registro cron.
+- Promemoria falliti → status='failed' MAI ritentati (contraddice il commento in testa).
+- migrate-data.mjs: TRUNCATE CASCADE con fallback silenzioso al DB live se manca
+  SUPA_URL — serve guardia/conferma.
+- Calendario: loadContext senza seq (risposta lenta di un range vecchio vince),
+  revert del move su snapshot stale (perde aggiornamenti concorrenti; meglio
+  ricaricare), action=move risponde con TUTTO lo storico appuntamenti.
+- SaaS admin: errori nel banner VERDE di successo (delete fallita sembra riuscita);
+  popstate con filtri stale; ricerca palette senza seq; bulk reset senza confirm.
+- Booking pubblico: chooseSlot senza guardia anti-stale + hold mai rilasciati sui
+  ripensamenti (slot bloccati per altri fino al TTL); coupon non ri-validato al
+  cambio carrello (solo display, il server ri-risolve).
+
+## BASSA (selezione)
+- fromName email non sanificato RFC5322 (nome con <> = SES rifiuta tutto);
+  assertCronAuth non timing-safe + secret in query; token nei GET (parita' legacy);
+  error.message nei GET pubblici; PRENODO_EXPOSE_ACCOUNT_DEBUG foot-gun;
+  user-enumeration su register (parita'?); CDN senza SRI; ghost calendario su liste
+  filtrate; filtro servizio per NOME (omonimi); resetForm drawer non azzera 7 stati
+  redeem (oggi schermato); pdfkit .notdef su caratteri fuori WinAnsi.
+
+## Fatto bene (giro 2)
+Confirm booking blindato server-side (hold atomico, prezzi/coupon sempre ri-risolti);
+auth cliente robusta (bcrypt, codici hashati timing-safe, cap+cooldown); storage R2
+multi-tenant pulito con anti-traversal; privacy-pdf valida i PNG prima di pdfkit;
+drawer con 10 fetch guardate da req-id e redeem come derived-state; admin con
+conferme proporzionate al rischio e zero superfici innerHTML.
