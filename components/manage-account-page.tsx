@@ -47,8 +47,8 @@ export function ManageAccountPage({
   const [businessName, setBusinessName] = useState("Centro Estetico Elite");
   const [ownerName, setOwnerName] = useState("Elena Rossi");
   const [ownerPhone, setOwnerPhone] = useState("");
-  const [email, setEmail] = useState(initialEmail || "info@artebrand.it");
-  const [password, setPassword] = useState(initialMode === "reset-password" ? "" : "iosono98");
+  const [email, setEmail] = useState(initialEmail || "");
+  const [password, setPassword] = useState("");
   const [passwordConfirm, setPasswordConfirm] = useState("");
   const [resetToken, setResetToken] = useState(initialToken);
   const [resetEmail, setResetEmail] = useState("");

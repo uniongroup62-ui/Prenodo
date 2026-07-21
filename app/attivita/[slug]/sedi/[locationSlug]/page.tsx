@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { MarketplaceDetailFaithful } from "@/components/public/marketplace-detail-faithful";
-import { marketplaceJsonLd, marketplaceSeoProfile } from "@/lib/marketplace-seo";
+import { jsonLdSerialize, marketplaceJsonLd, marketplaceSeoProfile } from "@/lib/marketplace-seo";
 
 // Scheda SEDE del marketplace (public_marketplace.php $locationSlug:
 // /attivita/<slug>/sedi/<citta-nome-id>): il dettaglio attività con la sede
@@ -54,7 +54,7 @@ export default async function AttivitaLocationPage({
       {seo ? (
         <script
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(marketplaceJsonLd(seo, publicBaseUrl(), seoLocation)) }}
+          dangerouslySetInnerHTML={{ __html: jsonLdSerialize(marketplaceJsonLd(seo, publicBaseUrl(), seoLocation)) }}
         />
       ) : null}
       <MarketplaceDetailFaithful slug={slug} locationId={locationId > 0 ? locationId : undefined} />

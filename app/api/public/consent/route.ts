@@ -129,7 +129,12 @@ export async function GET(request: Request) {
       signedAt: fmtDateTime(record.signed_at),
     });
   } catch (error) {
-    return Response.json({ ok: false, error: error instanceof Error ? error.message : "Documento non disponibile." }, { status: 400 });
+    // Mai esporre errori tecnici interni (driver pg, rete) al pubblico: solo i
+    // messaggi verbatim di dominio passano; il tecnico va nei log server.
+    const message = error instanceof Error ? error.message : "";
+    const isTechnical = !message || /relation|column|syntax|SQLSTATE|ECONN|ETIMEDOUT|ENOTFOUND|timeout|SSL|pool|connect/i.test(message);
+    if (isTechnical) console.error("[public/consent GET]", message || error);
+    return Response.json({ ok: false, error: isTechnical ? "Documento non disponibile." : message }, { status: 400 });
   }
 }
 

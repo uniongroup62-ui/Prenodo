@@ -1,5 +1,6 @@
 import "server-only";
 
+import crypto from "node:crypto";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { dbExecute, dbQuery, tableExists } from "@/lib/tenant-db";
 
@@ -20,9 +21,16 @@ export function assertCronAuth(request: Request): void {
     if (process.env.NODE_ENV === "production") throw new Error("unauthorized");
     return;
   }
+  // Confronto timing-safe (come il webhook SMS); ?key= resta per compatibilità
+  // con scheduler che non possono impostare header.
+  const safeEq = (a: string, b: string): boolean => {
+    const ab = Buffer.from(a);
+    const bb = Buffer.from(b);
+    return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
+  };
   const auth = request.headers.get("authorization") ?? "";
   const key = new URL(request.url).searchParams.get("key") ?? "";
-  if (auth === `Bearer ${secret}` || key === secret) return;
+  if (safeEq(auth, `Bearer ${secret}`) || safeEq(key, secret)) return;
   throw new Error("unauthorized");
 }
 

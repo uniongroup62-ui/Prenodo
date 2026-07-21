@@ -8,6 +8,14 @@ import fs from "node:fs";
 
 const [nextPath, phpPath, name] = process.argv.slice(2);
 const OUT = process.env.OUT_DIR || ".";
+// Credenziali SOLO da env (audit 21/07: mai committare password in chiaro).
+const SHOT_SLUG = process.env.PRENODO_SHOT_SLUG || "centroesteticoelite";
+const SHOT_EMAIL = process.env.PRENODO_SHOT_EMAIL || "";
+const SHOT_PASSWORD = process.env.PRENODO_SHOT_PASSWORD || "";
+if (!SHOT_EMAIL || !SHOT_PASSWORD) {
+  console.error("Imposta PRENODO_SHOT_EMAIL e PRENODO_SHOT_PASSWORD nell'ambiente.");
+  process.exit(1);
+}
 const W = 1440, H = 900;
 const browser = await chromium.launch();
 
@@ -17,14 +25,14 @@ async function shoot(base, target, mode) {
   if (mode === "next-api") {
     // deterministic login: set the session cookie via the JSON API (shared ctx cookies)
     await ctx.request.post(`${base}/api/manage/auth/login`, {
-      data: { slug: "centroesteticoelite", email: "info@artebrand.it", password: "iosono98" },
+      data: { slug: SHOT_SLUG, email: SHOT_EMAIL, password: SHOT_PASSWORD },
     });
   } else {
     // PHP form login
     await page.goto(`${base}/manage/login`, { waitUntil: "domcontentloaded", timeout: 45000 });
-    await page.fill('input[name="login_slug"]', "centroesteticoelite");
-    await page.fill('input[name="login_email"]', "info@artebrand.it");
-    await page.fill('input[name="password"]', "iosono98");
+    await page.fill('input[name="login_slug"]', SHOT_SLUG);
+    await page.fill('input[name="login_email"]', SHOT_EMAIL);
+    await page.fill('input[name="password"]', SHOT_PASSWORD);
     await Promise.all([
       page.waitForNavigation({ timeout: 45000 }).catch(() => {}),
       page.click('.auth-submit, button[type="submit"]'),

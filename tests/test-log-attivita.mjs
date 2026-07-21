@@ -41,10 +41,17 @@ try {
   const supActs = (await db.query(`SELECT action FROM activity_logs WHERE tenant_id=25 AND module='fornitori' AND label LIKE '%LogF${RUN}%' OR (tenant_id=25 AND module='fornitori' AND action='elimina' AND entity_id = ${supId || -1}) ORDER BY id`)).rows;
   check("L3 fornitore crea+elimina tracciati", supActs.length >= 2, JSON.stringify(supActs.map((a) => a.action)));
   // === Login reale tracciato ===
-  const login = await fetch(`http://localhost:3000/api/manage/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: SLUG, email: "info@artebrand.it", password: "iosono98" }) });
-  await new Promise((r) => setTimeout(r, 800));
-  const loginActs = (await db.query("SELECT label FROM activity_logs WHERE tenant_id=25 AND module='accessi' ORDER BY id DESC LIMIT 1")).rows;
-  check("L4 login tracciato (modulo accessi)", login.ok && loginActs.length >= 1 && /Accesso di/.test(loginActs[0]?.label ?? ""), JSON.stringify(loginActs[0]?.label));
+  // Password SOLO da .env.local (PRENODO_TEST_ADMIN_PASSWORD, mai committata):
+  // senza, il check L4 viene saltato invece di fallire l'intera batteria.
+  const TESTPW = ((readFileSync(new URL("../.env.local", import.meta.url), "utf8").match(/^\s*PRENODO_TEST_ADMIN_PASSWORD\s*=\s*(.*)\s*$/m) || [])[1] ?? "").trim().replace(/^["']|["']$/g, "");
+  if (TESTPW) {
+    const login = await fetch(`http://localhost:3000/api/manage/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: SLUG, email: "info@artebrand.it", password: TESTPW }) });
+    await new Promise((r) => setTimeout(r, 800));
+    const loginActs = (await db.query("SELECT label FROM activity_logs WHERE tenant_id=25 AND module='accessi' ORDER BY id DESC LIMIT 1")).rows;
+    check("L4 login tracciato (modulo accessi)", login.ok && loginActs.length >= 1 && /Accesso di/.test(loginActs[0]?.label ?? ""), JSON.stringify(loginActs[0]?.label));
+  } else {
+    console.log("SKIP | L4 login tracciato (PRENODO_TEST_ADMIN_PASSWORD assente in .env.local)");
+  }
   // === API admin-only ===
   let r = await logsGet("");
   check("L5 GET logs (admin): righe + filtri select", r.s === 200 && r.j.ok === true && r.j.rows.length >= 4 && r.j.modules.includes("clienti") && r.j.pageSize === 25, `rows=${r.j.rows?.length} modules=${JSON.stringify(r.j.modules)}`);

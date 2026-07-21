@@ -2010,7 +2010,10 @@ function normalizeSocialUrl(platform: "facebook" | "instagram" | "tiktok", value
 function isValidUrl(value: string) {
   try {
     const parsed = new URL(value);
-    return Boolean(parsed.protocol && parsed.host);
+    // Allow-list http/https: `javascript://x/%0aalert(1)` ha protocol+host e
+    // passerebbe — renderizzato come href diretto sulla scheda marketplace
+    // diventerebbe XSS-on-click per i visitatori.
+    return (parsed.protocol === "https:" || parsed.protocol === "http:") && Boolean(parsed.host);
   } catch {
     return false;
   }

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { MarketplaceDetailFaithful } from "@/components/public/marketplace-detail-faithful";
-import { marketplaceJsonLd, marketplaceSeoProfile } from "@/lib/marketplace-seo";
+import { jsonLdSerialize, marketplaceJsonLd, marketplaceSeoProfile } from "@/lib/marketplace-seo";
 
 const SEARCH_ALIASES = ["cerca", "risultati"]; // + /attivita/ricerca (route statica)
 
@@ -66,7 +66,7 @@ export default async function AttivitaDetailPage({
       {seo ? (
         <script
           type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(marketplaceJsonLd(seo, publicBaseUrl())) }}
+          dangerouslySetInnerHTML={{ __html: jsonLdSerialize(marketplaceJsonLd(seo, publicBaseUrl())) }}
         />
       ) : null}
       <MarketplaceDetailFaithful slug={slug} />

@@ -29,6 +29,9 @@ export function accountAuthDestination(tenant: string, next: string, returnTarge
     return `/${encodeURIComponent(slug)}/booking?${params.toString()}`;
   }
   const target = returnTarget.trim();
-  if (target.startsWith("/")) return target;
+  // Solo path RELATIVI interni: "//evil.com" è protocol-relative (naviga su
+  // dominio esterno) e "/\evil.com" viene normalizzato dai browser in "//" —
+  // entrambi renderebbero ?return= un open redirect post-login.
+  if (target.startsWith("/") && !target.startsWith("//") && !target.startsWith("/\\")) return target;
   return "/attivita";
 }

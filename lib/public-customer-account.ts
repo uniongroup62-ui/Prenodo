@@ -1573,7 +1573,10 @@ function mysqlDate(date: Date): string {
 }
 
 function exposeLocalDebug(): boolean {
-  return process.env.NODE_ENV !== "production" || process.env.PRENODO_EXPOSE_ACCOUNT_DEBUG === "1";
+  // HARD-GUARD: in produzione MAI, nemmeno via env — devCode/devToken nelle
+  // risposte JSON permetterebbero il takeover degli account cliente.
+  if (process.env.NODE_ENV === "production") return false;
+  return true;
 }
 
 function firstNameFromFullName(fullName: string): string {

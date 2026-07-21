@@ -51,8 +51,12 @@ export async function GET(request: Request) {
       business,
     });
   } catch (error) {
+    // Solo messaggi di dominio al pubblico; il tecnico (pg/rete) va nei log.
+    const message = error instanceof Error ? error.message : "";
+    const isTechnical = !message || /relation|column|syntax|SQLSTATE|ECONN|ETIMEDOUT|ENOTFOUND|timeout|SSL|pool|connect/i.test(message);
+    if (isTechnical) console.error("[public/gift-voucher GET]", message || error);
     return Response.json(
-      { ok: false, error: error instanceof Error ? error.message : "Errore voucher omaggio." },
+      { ok: false, error: isTechnical ? "Errore voucher omaggio." : message },
       { status: 500 },
     );
   }

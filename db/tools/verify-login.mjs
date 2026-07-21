@@ -22,6 +22,14 @@ async function tryLogin(slug, email, password) {
   return { ok, tenantId, role: row.role, id: row.id };
 }
 
-console.log("centroesteticoelite / info@artebrand.it / iosono98:", JSON.stringify(await tryLogin("centroesteticoelite", "info@artebrand.it", "iosono98")));
-console.log("centroesteticoelite / info@artebrand.it / WRONGPASS  :", JSON.stringify(await tryLogin("centroesteticoelite", "info@artebrand.it", "wrong")));
+// Credenziali SOLO da env (audit 21/07: mai committare password in chiaro).
+const SLUG = process.env.PRENODO_SHOT_SLUG || "centroesteticoelite";
+const EMAIL = process.env.PRENODO_SHOT_EMAIL || "";
+const PASSWORD = process.env.PRENODO_SHOT_PASSWORD || "";
+if (!EMAIL || !PASSWORD) {
+  console.error("Imposta PRENODO_SHOT_EMAIL e PRENODO_SHOT_PASSWORD nell'ambiente.");
+  process.exit(1);
+}
+console.log(`${SLUG} / ${EMAIL} / <env>:`, JSON.stringify(await tryLogin(SLUG, EMAIL, PASSWORD)));
+console.log(`${SLUG} / ${EMAIL} / WRONGPASS:`, JSON.stringify(await tryLogin(SLUG, EMAIL, "wrong")));
 await c.end();

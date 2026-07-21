@@ -161,8 +161,8 @@ Replica Next aggiornata:
 - POS checkout/cancel e annullamento vendita scrivono su `sales`, `sale_items`, scorte prodotto, residui prepagati/pacchetti/giftcard e piani rateali; l'annullo ripristina stock e marca residui/rate come annullati.
 - Smoke test booking pubblico su `centroesteticoelite`: contesto DB, slot DB per servizio 9/sede 21/staff 22, hold DB + release, conferma DB + cleanup righe test.
 - Smoke test appuntamento gestionale su `centroesteticoelite`: login DB, sede 21, availability/hold/save DB, `appointments.location_id=21`, pivot sede, segmento, hold `converted` e cleanup righe test.
-- Smoke test reset password gestionale: richiesta token DB, validazione token, reset a `iosono98` e login DB riuscito.
-- Smoke test accessibilita: cambio password interno a `iosono98` con sessione DB e login successivo riuscito.
+- Smoke test reset password gestionale: richiesta token DB, validazione token, reset a una password di test e login DB riuscito.
+- Smoke test accessibilita: cambio password interno a una password di test con sessione DB e login successivo riuscito.
 - Smoke test verifica email: codice DB per email corrente, conferma codice, pending rimosso e sessione verificata.
 - Smoke test signup professionista: registrazione DB con codice locale, verifica codice, creazione tenant/admin/sede/orari/permessi/onboarding, redirect dashboard e cleanup tenant temporaneo.
 - Smoke test onboarding nuovo tenant: verifica signup reindirizza a `index.php?page=onboarding`, stato `not_started/business`, dashboard 307 verso onboarding e cleanup tenant temporaneo.

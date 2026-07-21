@@ -111,7 +111,9 @@ export function AccountResetFaithful() {
   // behaviour (defaults to the marketplace home).
   function destination(): string {
     const target = returnTarget.trim();
-    if (target.startsWith("/")) return target;
+    // Solo path interni: "//" e "/\" sarebbero open redirect (vedi
+    // account-auth-destination.ts).
+    if (target.startsWith("/") && !target.startsWith("//") && !target.startsWith("/\\")) return target;
     return "/attivita";
   }
 

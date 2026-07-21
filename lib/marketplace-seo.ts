@@ -82,6 +82,14 @@ async function loadMarketplaceSeoProfile(slugInput: string): Promise<Marketplace
 
 // JSON-LD schema.org/LocalBusiness (BeautySalon) per la scheda attività o la
 // scheda SEDE (location valorizzata = indirizzo della sede).
+// Serializzazione SICURA per <script type="application/ld+json"> via
+// dangerouslySetInnerHTML: JSON.stringify NON escapa "<" — un nome attività
+// contenente "</script>" uscirebbe dal blocco ed eseguirebbe script su ogni
+// visitatore (stored XSS). < resta JSON valido per i motori.
+export function jsonLdSerialize(value: unknown): string {
+  return JSON.stringify(value).replace(/</g, "\\u003c");
+}
+
 export function marketplaceJsonLd(
   profile: MarketplaceSeoProfile,
   baseUrl: string,

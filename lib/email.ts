@@ -175,7 +175,15 @@ export function emailConfigured(): boolean {
 
 // RFC 2047 encode a display name containing non-ASCII chars (like mb_encode_mimeheader).
 function encodeMimeWord(value: string): string {
-  if (/^[\x20-\x7E]*$/.test(value)) return value;
+  if (/^[\x20-\x7E]*$/.test(value)) {
+    // RFC 5322: una display-phrase ASCII con caratteri speciali (<>()[]:;@,."\)
+    // va QUOTATA, altrimenti `Nome <3 <from@x>` è un From malformato e SES
+    // rifiuta TUTTE le email del tenant.
+    if (/[()<>[\]:;@\\,."]/.test(value)) {
+      return `"${value.replace(/(["\\])/g, "\\$1")}"`;
+    }
+    return value;
+  }
   return `=?UTF-8?B?${Buffer.from(value, "utf8").toString("base64")}?=`;
 }
 
