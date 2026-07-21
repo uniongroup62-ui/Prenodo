@@ -64,6 +64,9 @@ export function AutomationContent({
   const [settings, setSettings] = useState<AutomationSettings | null>(null);
   const [page, setPage] = useState<PageContext | null>(null);
   const [saving, setSaving] = useState(false);
+  // Audit giro 3: se il load fallisce la pagina mostra i DEFAULT dei toggle —
+  // un Salva in buona fede sovrascriverebbe la configurazione reale.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(0);
   // Flash legacy (View::alert msg success sopra il page header).
   const [flash, setFlash] = useState<Flash | null>(() =>
@@ -90,7 +93,11 @@ export function AutomationContent({
         setPage(ctx);
         if (ctx) setSelectedPlan(ctx.smsDefaultPlanId || ctx.smsPlans[0]?.id || 0);
       })
-      .catch(() => setSettings(null));
+      .then(() => setLoadFailed(false))
+      .catch(() => {
+        setSettings(null);
+        setLoadFailed(true);
+      });
   }, [slug]);
 
   const fidelityConfigOk = page?.fidelity?.configOk ?? false;
@@ -115,6 +122,10 @@ export function AutomationContent({
   // che persiste e rischedula i promemoria futuri; flash "Automazione salvata".
   const submitSave = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (loadFailed) {
+      showFlash({ text: "Impossibile salvare: impostazioni correnti non caricate. Ricarica la pagina.", type: "danger" });
+      return;
+    }
     const form = new FormData(event.currentTarget);
     const flag = (name: string) => (form.get(name) ? "1" : "0");
     setSaving(true);
@@ -395,7 +406,7 @@ export function AutomationContent({
               </div>
 
               <div className="mt-4 d-flex gap-2">
-                <button className="btn btn-primary" type="submit" disabled={saving}><i className="bi bi-check2-circle me-1" />Salva</button>
+                <button className="btn btn-primary" type="submit" disabled={saving || loadFailed}><i className="bi bi-check2-circle me-1" />Salva</button>
                 <a className="btn btn-outline-secondary" href={`/${encodeURIComponent(slug)}/dashboard`}>Indietro</a>
               </div>
             </form>

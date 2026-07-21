@@ -49,6 +49,10 @@ export function PosSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
 
   const [settings, setSettings] = useState<PosSettingsState>(DEFAULT_SETTINGS);
   const [feedback, setFeedback] = useState<{ type: "success" | "danger"; text: string } | null>(null);
+  // Audit giro 3: guardia doppio-submit (save + applicazioni massive) e blocco
+  // se il load fallisce (i DEFAULT sarebbero salvabili sopra la config reale).
+  const [saving, setSaving] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const load = useCallback(() => {
     fetch(`/api/manage/configuration?slug=${encodeURIComponent(slug)}&module=pos_settings`, {
@@ -68,7 +72,11 @@ export function PosSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
           prepaids_without_expiry: Number(s.prepaids_without_expiry ?? 0) || 0,
         });
       })
-      .catch(() => setSettings(DEFAULT_SETTINGS));
+      .then(() => setLoadFailed(false))
+      .catch(() => {
+        setSettings(DEFAULT_SETTINGS);
+        setLoadFailed(true);
+      });
   }, [slug]);
 
   useEffect(() => {
@@ -76,6 +84,12 @@ export function PosSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
   }, [load]);
 
   async function postAction(payload: Record<string, unknown>): Promise<void> {
+    if (saving) return;
+    if (loadFailed) {
+      setFeedback({ type: "danger", text: "Impossibile salvare: impostazioni correnti non caricate. Ricarica la pagina." });
+      return;
+    }
+    setSaving(true);
     setFeedback(null);
     const action = String(payload.action ?? "");
     try {
@@ -110,6 +124,8 @@ export function PosSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
       load();
     } catch {
       setFeedback({ type: "danger", text: "Errore di rete." });
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -247,7 +263,7 @@ export function PosSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
                 <button
                   className="btn btn-outline-primary btn-sm"
                   type="button"
-                  disabled={preordersApplyDisabled}
+                  disabled={preordersApplyDisabled || saving || loadFailed}
                   onClick={() => postAction({ action: "apply_existing_preorders" })}
                 >
                   <i className="bi bi-calendar-plus me-1" />
@@ -316,7 +332,7 @@ export function PosSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
                 <button
                   className="btn btn-outline-primary btn-sm"
                   type="button"
-                  disabled={prepaidsApplyDisabled}
+                  disabled={prepaidsApplyDisabled || saving || loadFailed}
                   onClick={() => postAction({ action: "apply_existing_prepaids" })}
                 >
                   <i className="bi bi-calendar-plus me-1" />
@@ -330,7 +346,7 @@ export function PosSettingsContent({ slug: slugProp }: { slug?: string } = {}) {
 
 
         <div className="d-flex gap-2 mt-3">
-          <button className="btn btn-primary" type="submit">
+          <button className="btn btn-primary" type="submit" disabled={saving || loadFailed}>
             <i className="bi bi-check2-circle me-1" />
             Salva impostazioni
           </button>

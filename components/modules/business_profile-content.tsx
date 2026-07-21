@@ -157,7 +157,12 @@ export function BusinessProfileContent({
 
   // POST JSON per profilo/posizioni: come i form non-AJAX legacy, l'esito va
   // nell'alert globale (msg -> info, err -> danger).
+  // Audit giro 3: guardia doppio-submit sui salvataggi globali.
+  const [globalBusy, setGlobalBusy] = useState(false);
+
   async function postGlobal(payload: Record<string, unknown>, fallbackMsg: string): Promise<void> {
+    if (globalBusy) return;
+    setGlobalBusy(true);
     try {
       const res = await fetch(`/api/manage/business-settings?slug=${encodeURIComponent(slug)}`, {
         method: "POST",
@@ -173,6 +178,8 @@ export function BusinessProfileContent({
       showFlash({ type: "info", text: String(j?.message ?? fallbackMsg) });
     } catch {
       showFlash({ type: "danger", text: "Errore di rete." });
+    } finally {
+      setGlobalBusy(false);
     }
   }
 
@@ -434,7 +441,7 @@ export function BusinessProfileContent({
                 <div className="form-text">Verrà mostrato nel booking pubblico in una sezione dedicata sopra la gallery.</div>
               </div>
               <div className="col-12">
-                <button className="btn btn-primary btn-pill" type="submit">
+                <button className="btn btn-primary btn-pill" type="submit" disabled={globalBusy}>
                   <i className="bi bi-check2-circle me-1" />
                   Salva profilo
                 </button>
@@ -499,7 +506,7 @@ export function BusinessProfileContent({
                   >
                     Centra
                   </button>
-                  <button className="btn btn-primary btn-sm" type="submit">
+                  <button className="btn btn-primary btn-sm" type="submit" disabled={globalBusy}>
                     <i className="bi bi-check2-circle me-1" />
                     Salva posizione
                   </button>
@@ -703,7 +710,7 @@ export function BusinessProfileContent({
                   >
                     Centra
                   </button>
-                  <button className="btn btn-primary btn-sm" type="submit">
+                  <button className="btn btn-primary btn-sm" type="submit" disabled={globalBusy}>
                     <i className="bi bi-check2-circle me-1" />
                     Salva posizione
                   </button>

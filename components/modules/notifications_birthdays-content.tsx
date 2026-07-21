@@ -85,8 +85,12 @@ export function NotificationsBirthdaysContent({ slug: slugProp }: { slug?: strin
   const windowText = alertDays === 0 ? "oggi" : `nei prossimi ${alertDays} ${alertDays === 1 ? "giorno" : "giorni"}`;
 
   // Port di action=save_settings: clamp 0..365, flash 'Impostazioni salvate'.
+  // Audit giro 3: guardia doppio-submit (il gemello installments ce l'ha già).
+  const [savingSettings, setSavingSettings] = useState(false);
   const submitSettings = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (savingSettings) return;
+    setSavingSettings(true);
     const parsed = Number.parseInt(daysInput, 10);
     const n = Number.isFinite(parsed) ? Math.min(365, Math.max(0, parsed)) : alertDays;
     try {
@@ -106,6 +110,8 @@ export function NotificationsBirthdaysContent({ slug: slugProp }: { slug?: strin
       }
     } catch {
       setFlash("Operazione non valida");
+    } finally {
+      setSavingSettings(false);
     }
     closeBirthdaySettingsModal();
     if (typeof window !== "undefined") window.scrollTo({ top: 0 });
@@ -238,7 +244,7 @@ export function NotificationsBirthdaysContent({ slug: slugProp }: { slug?: strin
               <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal">
                 Annulla
               </button>
-              <button className="btn btn-primary" type="submit">
+              <button className="btn btn-primary" type="submit" disabled={savingSettings}>
                 <i className="bi bi-check2-circle me-1" />
                 Salva
               </button>

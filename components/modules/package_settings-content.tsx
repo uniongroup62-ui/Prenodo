@@ -39,6 +39,10 @@ export function PackageSettingsContent({ slug: slugProp }: { slug?: string } = {
   const [validityValue, setValidityValue] = useState("0");
   const [validityUnit, setValidityUnit] = useState("days");
   const [feedback, setFeedback] = useState<{ type: "success" | "danger"; text: string } | null>(null);
+  // Audit giro 3: guardia doppio-submit + blocco save se il load fallisce
+  // (il default "0 days" in pagina sarebbe salvabile sopra la config reale).
+  const [saving, setSaving] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const load = useCallback(() => {
     fetch(`/api/manage/configuration?module=package_settings&slug=${encodeURIComponent(slug)}`, {
@@ -60,7 +64,8 @@ export function PackageSettingsContent({ slug: slugProp }: { slug?: string } = {
           }
         }
       })
-      .catch(() => {});
+      .then(() => setLoadFailed(false))
+      .catch(() => setLoadFailed(true));
   }, [slug]);
 
   useEffect(() => {
@@ -68,6 +73,12 @@ export function PackageSettingsContent({ slug: slugProp }: { slug?: string } = {
   }, [load]);
 
   async function saveValidity(): Promise<void> {
+    if (saving) return;
+    if (loadFailed) {
+      setFeedback({ type: "danger", text: "Impossibile salvare: impostazioni correnti non caricate. Ricarica la pagina." });
+      return;
+    }
+    setSaving(true);
     setFeedback(null);
     try {
       const res = await fetch(`/api/manage/configuration?module=package_settings&slug=${encodeURIComponent(slug)}`, {
@@ -91,6 +102,8 @@ export function PackageSettingsContent({ slug: slugProp }: { slug?: string } = {
       load();
     } catch {
       setFeedback({ type: "danger", text: "Errore di rete." });
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -186,7 +199,7 @@ export function PackageSettingsContent({ slug: slugProp }: { slug?: string } = {
               </div>
 
               <div className="mt-3 d-flex gap-2">
-                <button className="btn btn-primary btn-pill" type="submit">
+                <button className="btn btn-primary btn-pill" type="submit" disabled={saving || loadFailed}>
                   <i className="bi bi-check2-circle me-1" />
                   Salva
                 </button>

@@ -44,6 +44,10 @@ export function GiftboxSettingsContent({ slug: slugProp, initialQuery }: { slug?
   const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
   useTakenFlash(setFlash);
   const [error, setError] = useState("");
+  // Audit giro 3: guardia doppio-submit + blocco del form se il load fallisce
+  // (i DEFAULT in pagina sarebbero salvabili sopra la config reale).
+  const [saving, setSaving] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const load = useCallback(() => {
     fetch(`/api/manage/configuration?module=giftbox_settings&slug=${encodeURIComponent(slug)}`, {
@@ -60,7 +64,8 @@ export function GiftboxSettingsContent({ slug: slugProp, initialQuery }: { slug?
         const rawTerms = String(s.giftbox_terms ?? "");
         setTerms(rawTerms.trim() !== "" ? rawTerms : DEFAULT_TERMS);
       })
-      .catch(() => {});
+      .then(() => setLoadFailed(false))
+      .catch(() => setLoadFailed(true));
   }, [slug]);
 
   useEffect(() => {
@@ -72,6 +77,13 @@ export function GiftboxSettingsContent({ slug: slugProp, initialQuery }: { slug?
   // Salvataggio: successo -> redirect flash legacy (?msg=), errore -> alert
   // in pagina (il legacy non fa redirect e mantiene i valori inseriti).
   async function postAction(payload: Record<string, unknown>): Promise<void> {
+    if (saving) return;
+    if (loadFailed) {
+      setError("Impossibile salvare: impostazioni correnti non caricate. Ricarica la pagina.");
+      window.scrollTo(0, 0);
+      return;
+    }
+    setSaving(true);
     setError("");
     try {
       const res = await fetch(`/api/manage/configuration?module=giftbox_settings&slug=${encodeURIComponent(slug)}`, {
@@ -89,6 +101,8 @@ export function GiftboxSettingsContent({ slug: slugProp, initialQuery }: { slug?
     } catch {
       setError("Errore di rete.");
       window.scrollTo(0, 0);
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -152,6 +166,9 @@ export function GiftboxSettingsContent({ slug: slugProp, initialQuery }: { slug?
           <div><i className="bi bi-info-circle" /></div>
           <div>{flash.err}</div>
         </div>
+      ) : null}
+      {loadFailed ? (
+        <div className="alert alert-danger">Impossibile caricare le impostazioni correnti: il salvataggio è disabilitato. Ricarica la pagina.</div>
       ) : null}
       {error ? (
         <div className="alert alert-danger d-flex align-items-start gap-2" role="alert">
@@ -217,7 +234,7 @@ export function GiftboxSettingsContent({ slug: slugProp, initialQuery }: { slug?
               <div className="form-text mt-2">0 = nessuna scadenza automatica</div>
 
               <div className="mt-3 d-flex gap-2">
-                <button className="btn btn-primary btn-pill" type="submit">
+                <button className="btn btn-primary btn-pill" type="submit" disabled={saving || loadFailed}>
                   <i className="bi bi-check2-circle me-1" />
                   Salva
                 </button>
@@ -259,12 +276,13 @@ export function GiftboxSettingsContent({ slug: slugProp, initialQuery }: { slug?
               </div>
 
               <div className="col-12 d-flex flex-wrap gap-2">
-                <button className="btn btn-primary btn-pill" type="submit" name="action" value="save_giftbox_terms">
+                <button className="btn btn-primary btn-pill" type="submit" disabled={saving || loadFailed} name="action" value="save_giftbox_terms">
                   <i className="bi bi-check2-circle me-1" />
                   Salva
                 </button>
                 <button
                   className="btn btn-outline-danger btn-pill"
+                  disabled={saving || loadFailed}
                   type="button"
                   name="action"
                   value="reset_giftbox_terms"

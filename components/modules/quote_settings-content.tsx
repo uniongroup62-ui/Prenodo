@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import InfoBox from "./info-box";
 import { flashNavigate, useTakenFlash } from "./flash";
 
@@ -55,12 +55,19 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
   const [footer, setFooter] = useState("");
 
   // Metodi di pagamento (sempre almeno una riga, come nel PHP).
-  const [paymentMethods, setPaymentMethods] = useState<PaymentMethodRow[]>([{ name: "", details: "" }]);
+  // key stabile per riga (audit giro 3: key={idx} riciclava i nodi sbagliati
+  // rimuovendo una riga in mezzo). _k assegnata a load/add via contatore.
+  const pmKeyRef = useRef(1);
+  const [paymentMethods, setPaymentMethods] = useState<Array<PaymentMethodRow & { _k: number }>>([{ name: "", details: "", _k: 0 }]);
 
   // Flash legacy (View::alert): ?msg= success dal redirect + errore in pagina.
   const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
   useTakenFlash(setFlash);
   const [error, setError] = useState("");
+  // Audit giro 3: guardia doppio-submit + blocco save se il load fallisce
+  // (un form VUOTO sarebbe salvabile e sovrascriverebbe anagrafica/condizioni).
+  const [saving, setSaving] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
     fetch(`/api/manage/configuration?module=quote_settings&slug=${encodeURIComponent(slug)}`, {
@@ -87,15 +94,13 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
         try {
           const rows = JSON.parse(str("payment_methods_rows")) as PaymentMethodRow[];
           if (Array.isArray(rows) && rows.length > 0) {
-            setPaymentMethods(rows.map((row) => ({ name: String(row.name ?? ""), details: String(row.details ?? "") })));
+            setPaymentMethods(rows.map((row) => ({ name: String(row.name ?? ""), details: String(row.details ?? ""), _k: pmKeyRef.current++ })));
           }
         } catch {
           /* keep the single empty row */
         }
       })
-      .catch(() => {
-        /* leave defaults */
-      })
+      .catch(() => setLoadFailed(true))
       .finally(() => setLoading(false));
   }, [slug]);
 
@@ -120,6 +125,13 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
   // Salvataggio: successo -> redirect flash legacy (?msg=), errore -> alert
   // in pagina (il legacy non fa redirect e mantiene i valori inseriti).
   async function postAction(payload: Record<string, unknown>): Promise<void> {
+    if (saving) return;
+    if (loadFailed) {
+      setError("Impossibile salvare: impostazioni correnti non caricate. Ricarica la pagina.");
+      window.scrollTo(0, 0);
+      return;
+    }
+    setSaving(true);
     setError("");
     try {
       const res = await fetch(`/api/manage/configuration?module=quote_settings&slug=${encodeURIComponent(slug)}`, {
@@ -137,6 +149,8 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
     } catch {
       setError("Errore di rete.");
       window.scrollTo(0, 0);
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -145,13 +159,13 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
   }
 
   function addPm(): void {
-    setPaymentMethods((rows) => [...rows, { name: "", details: "" }]);
+    setPaymentMethods((rows) => [...rows, { name: "", details: "", _k: pmKeyRef.current++ }]);
   }
 
   function removePm(idx: number): void {
     setPaymentMethods((rows) => {
       const next = rows.filter((_, i) => i !== idx);
-      return next.length > 0 ? next : [{ name: "", details: "" }];
+      return next.length > 0 ? next : [{ name: "", details: "", _k: pmKeyRef.current++ }];
     });
   }
 
@@ -231,6 +245,9 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
           <div><i className="bi bi-info-circle" /></div>
           <div>{flash.err}</div>
         </div>
+      ) : null}
+      {loadFailed ? (
+        <div className="alert alert-danger">Impossibile caricare le impostazioni correnti: il salvataggio è disabilitato. Ricarica la pagina.</div>
       ) : null}
       {error ? (
         <div className="alert alert-danger d-flex align-items-start gap-2" role="alert">
@@ -463,7 +480,7 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
                     />
                   </div>
                   <div className="col-12 d-flex flex-wrap gap-2">
-                    <button className="btn btn-primary btn-pill" type="submit">
+                    <button className="btn btn-primary btn-pill" type="submit" disabled={saving || loadFailed}>
                       <i className="bi bi-check2-circle me-1" />
                       Salva
                     </button>
@@ -523,7 +540,7 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
                   </div>
 
                   <div className="col-12 d-flex flex-wrap gap-2">
-                    <button className="btn btn-primary btn-pill" type="submit">
+                    <button className="btn btn-primary btn-pill" type="submit" disabled={saving || loadFailed}>
                       <i className="bi bi-check2-circle me-1" />
                       Salva
                     </button>
@@ -574,7 +591,7 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
                   <div className="col-12">
                     <div className="border rounded-3 p-3 bg-light" id="pmRowsWrap">
                       {paymentMethods.map((pm, idx) => (
-                        <div className="row g-2 align-items-start pm-row mb-2" data-idx={idx} key={idx}>
+                        <div className="row g-2 align-items-start pm-row mb-2" data-idx={idx} key={pm._k}>
                           <div className="col-md-4">
                             <label className="form-label small mb-1">Nome</label>
                             <input
@@ -619,7 +636,7 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
                   </div>
 
                   <div className="col-12 d-flex flex-wrap gap-2">
-                    <button className="btn btn-primary btn-pill" type="submit">
+                    <button className="btn btn-primary btn-pill" type="submit" disabled={saving || loadFailed}>
                       <i className="bi bi-check2-circle me-1" />
                       Salva
                     </button>

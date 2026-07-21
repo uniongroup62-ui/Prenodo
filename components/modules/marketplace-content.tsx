@@ -92,7 +92,12 @@ export function MarketplaceSettingsContent({ slug: slugProp }: { slug?: string }
     load();
   }, [load]);
 
+  // Audit giro 3: guardia doppio-submit condivisa da salvataggi e rimozioni.
+  const [actionBusy, setActionBusy] = useState(false);
+
   async function postAction(payload: Record<string, unknown>): Promise<void> {
+    if (actionBusy) return;
+    setActionBusy(true);
     setFeedback(null);
     try {
       const res = await fetch(`/api/manage/business-settings?slug=${encodeURIComponent(slug)}`, {
@@ -109,6 +114,8 @@ export function MarketplaceSettingsContent({ slug: slugProp }: { slug?: string }
       load();
     } catch {
       setFeedback({ type: "danger", text: "Errore di rete." });
+    } finally {
+      setActionBusy(false);
     }
   }
 
@@ -183,7 +190,7 @@ export function MarketplaceSettingsContent({ slug: slugProp }: { slug?: string }
                 <div className="form-text">Verra mostrato nel booking pubblico in una sezione dedicata sopra la gallery.</div>
               </div>
               <div className="col-12">
-                <button className="btn btn-primary btn-pill" type="submit">
+                <button className="btn btn-primary btn-pill" type="submit" disabled={actionBusy}>
                   <i className="bi bi-check2-circle me-1" />
                   Salva profilo
                 </button>
@@ -259,7 +266,7 @@ export function MarketplaceSettingsContent({ slug: slugProp }: { slug?: string }
                   >
                     Centra
                   </button>
-                  <button className="btn btn-primary btn-sm" type="submit">
+                  <button className="btn btn-primary btn-sm" type="submit" disabled={actionBusy}>
                     <i className="bi bi-check2-circle me-1" />
                     Salva posizione
                   </button>
@@ -308,7 +315,7 @@ export function MarketplaceSettingsContent({ slug: slugProp }: { slug?: string }
                     <div className="form-text">Suggerito: logo orizzontale. Verra ridimensionato se necessario.</div>
                   </div>
                   <div className="col-md-4 d-flex align-items-end">
-                    <button className="btn btn-primary btn-pill w-100" type="submit">
+                    <button className="btn btn-primary btn-pill w-100" type="submit" disabled={actionBusy}>
                       <i className="bi bi-upload me-1" />
                       Carica
                     </button>
@@ -327,7 +334,7 @@ export function MarketplaceSettingsContent({ slug: slugProp }: { slug?: string }
                   }}
                 >
                   <input type="hidden" name="action" value="delete_logo" />
-                  <button className="btn btn-outline-danger btn-pill" type="submit">
+                  <button className="btn btn-outline-danger btn-pill" type="submit" disabled={actionBusy}>
                     <i className="bi bi-trash3 me-1" />
                     Rimuovi logo
                   </button>
@@ -417,7 +424,7 @@ export function MarketplaceSettingsContent({ slug: slugProp }: { slug?: string }
                   >
                     Centra
                   </button>
-                  <button className="btn btn-primary btn-sm" type="submit">
+                  <button className="btn btn-primary btn-sm" type="submit" disabled={actionBusy}>
                     <i className="bi bi-check2-circle me-1" />
                     Salva posizione
                   </button>
@@ -466,7 +473,7 @@ export function MarketplaceSettingsContent({ slug: slugProp }: { slug?: string }
                     <div className="form-text">Max 5 MB. Verra ridimensionata se necessario.</div>
                   </div>
                   <div className="col-md-4 d-flex align-items-end">
-                    <button className="btn btn-primary btn-pill w-100" type="submit">
+                    <button className="btn btn-primary btn-pill w-100" type="submit" disabled={actionBusy}>
                       <i className="bi bi-upload me-1" />
                       Carica
                     </button>
@@ -485,7 +492,7 @@ export function MarketplaceSettingsContent({ slug: slugProp }: { slug?: string }
                   }}
                 >
                   <input type="hidden" name="action" value="delete_cover" />
-                  <button className="btn btn-outline-danger btn-pill" type="submit">
+                  <button className="btn btn-outline-danger btn-pill" type="submit" disabled={actionBusy}>
                     <i className="bi bi-trash3 me-1" />
                     Rimuovi copertina
                   </button>
