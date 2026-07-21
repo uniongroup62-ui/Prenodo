@@ -1,6 +1,25 @@
 // Coerenza email 2026-07-18: render-test standalone delle primitive di
 // lib/email.ts (bundle esbuild con shim server-only, SES esternalizzato).
-import * as bundle from "./email-bundle.mjs";
+// Il bundle è un artefatto (gitignored): se manca viene RICOSTRUITO qui,
+// così la batteria non dipende da build manuali.
+import { existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+const bundleUrl = new URL("./email-bundle.mjs", import.meta.url);
+if (!existsSync(bundleUrl)) {
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const build = spawnSync("npx", [
+    "esbuild", "lib/email.ts", "--bundle", "--format=esm", "--platform=node",
+    "--outfile=tests/email-bundle.mjs",
+    "--alias:server-only=./tests/server-only-shim.mjs",
+    "--external:@aws-sdk/client-sesv2",
+  ], { cwd: root, shell: true, encoding: "utf8" });
+  if (build.status !== 0) {
+    console.error("build email-bundle FALLITA:", build.stdout, build.stderr);
+    process.exit(1);
+  }
+}
+const bundle = await import(bundleUrl.href);
 const { buildModernEmailTemplate, emailButton, emailCodeBox, EMAIL_ACCENT, htmlToText } = bundle;
 const R = []; const check = (l, ok, x = "") => { R.push(ok); console.log(`${ok ? "PASS" : "FAIL"} | ${l}${x ? " | " + x : ""}`); };
 

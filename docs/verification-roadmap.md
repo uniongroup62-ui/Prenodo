@@ -17870,3 +17870,22 @@ useModuleFetch/usePagination/useFlash (~70 moduli), split monoliti
 (db-repositories 26k, drawer 5.8k), availability browser N+1, TZ
 new Date()/NOW() residui nei path Db-legacy, codemod logging sulle 152
 route, verifica chunking con next build, next/dynamic.
+
+### 2026-07-21 - VERIFICA TOTALE post-piano audit: batteria COMPLETA 125 suite
+Crawler console 73/73 pagine pulite. Batteria intera (run-all.mjs,
+sequenziale, ~oltre 1000 check): 122/125 al primo giro; le 3 rosse
+NON erano regressioni del piano:
+- test-email-template: mancava l'ARTEFATTO tests/email-bundle.mjs
+  (build esbuild mai committata) -> ora la suite lo RICOSTRUISCE da
+  sola se assente (npx esbuild + tests/server-only-shim.mjs committato,
+  bundle gitignored). 10/10.
+- test-fidelity: mancava tests/fid-baseline.json (snapshot impostazioni
+  fidelity di businesses tenant 25 per il restore garantito) ->
+  rigenerato dallo stato corrente e COMMITTATO. 42/42.
+- test-dom-credit-combobox: asserzione stantia "0 movimenti" -> la UI
+  segue la convenzione contatori "N risultati" (richiesta utente):
+  aggiornata l'asserzione. 5/5.
+LEZIONE: artefatti richiesti dalle suite (bundle, baseline) vanno
+committati o auto-generati dalla suite stessa - una batteria che passa
+solo sulla macchina che li ha prodotti non e' riproducibile.
+Risultato finale: 125/125 suite verdi.

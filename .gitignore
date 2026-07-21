@@ -48,3 +48,6 @@ next-env.d.ts
 
 # screenshot di lavoro delle suite (root)
 /*.png
+
+# Artefatto generato dalla suite email (auto-build in test-email-template.mjs)
+/tests/email-bundle.mjs

@@ -40,9 +40,10 @@ try {
   const toggleTxt = await page.locator(".app-combobox-toggle").first().textContent();
   check("DOM3 selezione filtro: label con nome + saldo (selectedClient)", String(toggleTxt ?? "").includes(`ZZ CredCli${RUN}`) && /42,50/.test(String(toggleTxt ?? "")), JSON.stringify(toggleTxt));
 
-  // DOM4: header movimenti filtrati (0 movimenti per il seed)
+  // DOM4: header movimenti filtrati (0 per il seed). Convenzione contatori
+  // 2026-07-21: "N risultati" ovunque (prima "N movimenti").
   const total = await page.locator(".bs-page-actions .text-muted").first().textContent().catch(() => null);
-  check("DOM4 lista filtrata per il cliente (0 movimenti)", /0 movimenti/.test(String(total ?? "")), JSON.stringify(total));
+  check("DOM4 lista filtrata per il cliente (0 risultati)", /0 risultati/.test(String(total ?? "")), JSON.stringify(total));
 
   // DOM5: combobox scalo manuale — stessa ricerca server
   await page.locator(".app-combobox-toggle").nth(1).click();

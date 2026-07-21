@@ -1,0 +1,26 @@
+{
+  "settings": {
+    "fidelity_enabled": 1,
+    "fidelity_points_enabled": 1,
+    "fidelity_levels_enabled": 0,
+    "fidelity_silver_threshold": 200,
+    "fidelity_gold_threshold": 500,
+    "fidelity_level_period_days": 365,
+    "fidelity_expire_warn_days": 30,
+    "fidelity_redeem_auto_discount_enabled": 0,
+    "fidelity_earn_step_euro": "10.00",
+    "fidelity_earn_points_per_appointment": "0.00",
+    "fidelity_redeem_enabled": 1,
+    "fidelity_redeem_euro_per_point": "0.10",
+    "fidelity_redeem_min_points": "0.00",
+    "fidelity_earn_on_appointment_done": 1,
+    "fidelity_expire_enabled": 1,
+    "fidelity_expire_days": 365,
+    "fidelity_points_label": "Punti",
+    "fidelity_earn_mode": "amount",
+    "fidelity_gift_terms": null,
+    "fidelity_gifts_json": null,
+    "fidelity_adhesion_json": "{\"card_expiry_enabled\":1,\"card_default_validity_value\":12,\"card_default_validity_unit\":\"months\",\"renewal_enabled\":1,\"renewal_window_value\":7,\"renewal_window_unit\":\"days\",\"expiry_reminder_days\":15}",
+    "fidelity_card_levels_json": null
+  }
+}
