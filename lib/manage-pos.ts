@@ -1251,7 +1251,9 @@ async function createManageInstallmentPlan(
 
     const installmentsTable = await tenantTable(slug, "sale_installments");
     for (const row of schedule) {
-      await tenantInsert(installmentsTable, await filterColumns(installmentsTable.name, {
+      // insertRow (tx-aware come il piano sopra): con tenantInsert liscio le rate
+      // girerebbero su un'altra connessione, fuori dalla tx del checkout.
+      await insertRow(installmentsTable, await filterColumns(installmentsTable.name, {
         plan_id: planId,
         sale_id: input.saleId,
         client_id: input.clientId,

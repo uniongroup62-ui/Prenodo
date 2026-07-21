@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import InfoBox from "./info-box";
 import { flashNavigate, useTakenFlash } from "./flash";
 
@@ -90,17 +90,26 @@ export function StaffContent({ slug: slugProp, initialQuery }: { slug?: string; 
   // $staffShowAllLocationsFilter = count($staffLocations) > 1).
   const [locationsCount, setLocationsCount] = useState(0);
 
+  // Sequenza anti-stale: toggle rapido di 'Tutte le sedi' lancia fetch
+  // concorrenti e vincerebbe la risposta più lenta — applichiamo solo l'ultima.
+  const loadSeqRef = useRef(0);
   const load = useCallback(() => {
+    const seq = ++loadSeqRef.current;
     fetch(`/api/manage/resources?slug=${encodeURIComponent(slug)}&section=staff${appliedAllLoc ? "&all_locations=1" : ""}`, {
       headers: { "x-tenant-slug": slug },
     })
       .then((r) => r.json())
       .then((j) => {
+        if (seq !== loadSeqRef.current) return;
         setStaff(Array.isArray(j.staff) ? j.staff : []);
         setLocationsCount(Array.isArray(j.locations) ? j.locations.length : 0);
       })
-      .catch(() => setStaff([]))
-      .finally(() => setLoading(false));
+      .catch(() => {
+        if (seq === loadSeqRef.current) setStaff([]);
+      })
+      .finally(() => {
+        if (seq === loadSeqRef.current) setLoading(false);
+      });
   }, [slug, appliedAllLoc]);
 
   useEffect(() => {

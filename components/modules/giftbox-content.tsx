@@ -137,16 +137,27 @@ export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string
   useTakenFlash(setFlash);
 
   useEffect(() => {
+    // Guardia anti-stale: cambiando tab in rapida successione partono fetch
+    // concorrenti e vincerebbe la risposta più lenta — il cleanup scarta le
+    // risposte del tab superato.
+    let alive = true;
     if (tab === "boxes") {
       fetch(`/api/manage/giftboxes?slug=${encodeURIComponent(slug)}&action=templates`, { headers: { "x-tenant-slug": slug } })
         .then((r) => r.json())
         .then((j) => {
+          if (!alive) return;
           setTemplates(Array.isArray(j.templates) ? j.templates : []);
           setTemplatePerms({ canSettings: j.canSettings === true, canCreate: j.canCreate === true });
         })
-        .catch(() => setTemplates([]))
-        .finally(() => setLoading(false));
-      return;
+        .catch(() => {
+          if (alive) setTemplates([]);
+        })
+        .finally(() => {
+          if (alive) setLoading(false);
+        });
+      return () => {
+        alive = false;
+      };
     }
     const params = new URLSearchParams({ slug, action: "manage_list" });
     if (applied.clientId !== "0") params.set("client_id", applied.clientId);
@@ -156,9 +167,18 @@ export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string
     params.set("p", String(applied.page ?? 1));
     fetch(`/api/manage/giftboxes?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
-      .then((j: ListPayload) => setData(j))
-      .catch(() => setData({ rows: [], hasAnyInstances: false }))
-      .finally(() => setLoading(false));
+      .then((j: ListPayload) => {
+        if (alive) setData(j);
+      })
+      .catch(() => {
+        if (alive) setData({ rows: [], hasAnyInstances: false });
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug, tab]);
 

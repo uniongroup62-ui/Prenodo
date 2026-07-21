@@ -934,6 +934,17 @@ export default async function TenantPage({
     );
   }
 
+  // Faithful client STORICO ("Vedi tutto" / action=history): the deep per-status
+  // appointment lists + active packages/giftboxes/giftcards + quotes/sales.
+  // DEVE precedere il branch lista generico, che altrimenti cattura ogni ?action=.
+  if (page === "clients" && query.action === "history") {
+    return (
+      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
+        <ClientHistoryContent slug={tenantSlug} />
+      </ManageShell>
+    );
+  }
+
   // Faithful clients LIST: la pagina legacy legge ?q=&all_locations= (form GET)
   // e il flash ?msg=&err= dei redirect delle azioni.
   if (page === "clients") {
@@ -943,17 +954,6 @@ export default async function TenantPage({
           slug={tenantSlug}
           initialQuery={{ q: query.q, all_locations: query.all_locations, msg: query.msg, err: query.err, p: query.p }}
         />
-      </ManageShell>
-    );
-  }
-
-  // Faithful client STORICO ("Vedi tutto" / action=history): the deep per-status
-  // appointment lists + active packages/giftboxes/giftcards + quotes/sales,
-  // instead of the Tailwind ManagementApp fallback.
-  if (page === "clients" && query.action === "history") {
-    return (
-      <ManageShell slug={tenantSlug} userName={session.user.name} needsLocationSelectionHint={session.user.needsLocationSelection} currentPage={page}>
-        <ClientHistoryContent slug={tenantSlug} />
       </ManageShell>
     );
   }

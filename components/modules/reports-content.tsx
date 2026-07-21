@@ -386,7 +386,12 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
     }
   }, [compareMode, compareMonth, compareFrom, compareTo, range]);
 
+  // Sequenza monotona anti-stale: cambi rapidi di periodo/confronto lanciano
+  // fetch concorrenti e vincerebbe la risposta più LENTA — applichiamo solo
+  // l'ultima richiesta (pattern seqRef di pos-content).
+  const loadSeqRef = useRef(0);
   const load = useCallback(() => {
+    const seq = ++loadSeqRef.current;
     const rng = resolveRange();
     const params = new URLSearchParams({ slug, from: rng.from, to: rng.to });
     if (allLoc) params.set("all_locations", "1");
@@ -398,11 +403,15 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
     }
     return fetch(`/api/manage/reports?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => {
-        if (r.status === 403) setAccessDenied(true);
+        if (seq === loadSeqRef.current && r.status === 403) setAccessDenied(true);
         return r.json();
       })
-      .then((j: ReportsResponse) => setData(j))
-      .catch(() => setData(null));
+      .then((j: ReportsResponse) => {
+        if (seq === loadSeqRef.current) setData(j);
+      })
+      .catch(() => {
+        if (seq === loadSeqRef.current) setData(null);
+      });
   }, [slug, resolveRange, resolveCompareWindow, compare, allLoc]);
 
   useEffect(() => {

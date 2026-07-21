@@ -162,11 +162,20 @@ export function PosHistoryContent({ slug: slugProp }: { slug?: string } = {}) {
     const params = new URLSearchParams({ slug });
     if (from) params.set("from", from);
     if (to) params.set("to", to);
+    // Guardia anti-stale: cambiando i filtri in rapida successione partono fetch
+    // concorrenti e vincerebbe la risposta più LENTA — `alive` scarta quelle
+    // superate (il cleanup scatta a ogni cambio di deps).
     fetch(`/api/manage/pos?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
-      .then((j: PosContext) => setCtx(j ?? null))
-      .catch(() => setCtx(null))
-      .finally(() => setLoading(false));
+      .then((j: PosContext) => {
+        if (alive) setCtx(j ?? null);
+      })
+      .catch(() => {
+        if (alive) setCtx(null);
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
     return () => {
       alive = false;
     };

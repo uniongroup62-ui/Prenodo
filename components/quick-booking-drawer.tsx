@@ -838,6 +838,9 @@ export function QuickBookingDrawer() {
   const [findQuery, setFindQuery] = useState("");
   const [findResults, setFindResults] = useState<QbClient[]>([]);
   const findTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Sequenza anti-stale della ricerca clienti (stesso pattern di contextReqRef):
+  // due richieste in volo oltre il debounce non devono far vincere la più lenta.
+  const findSeqRef = useRef(0);
 
   // ---- New-client modal state ----
   const [createError, setCreateError] = useState("");
@@ -2271,10 +2274,12 @@ export function QuickBookingDrawer() {
       if (findTimerRef.current) clearTimeout(findTimerRef.current);
       const q = value.trim();
       if (!q) {
+        findSeqRef.current += 1;
         setFindResults([]);
         return;
       }
       findTimerRef.current = setTimeout(() => {
+        const seq = ++findSeqRef.current;
         // Semantica della SEARCH legacy (api_clients action=search): tenant-wide
         // (Modello A, nessun filtro sede) + exclude_blocked=1 — la lista default
         // della route è invece sede-strict per la pagina Clienti.
@@ -2282,6 +2287,7 @@ export function QuickBookingDrawer() {
         fetch(`/api/manage/clients?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
           .then((r) => r.json())
           .then((j: { clients?: Array<{ id: number; name: string; email?: string; phone?: string }> }) => {
+            if (seq !== findSeqRef.current) return;
             setFindResults(
               (j.clients ?? []).slice(0, 20).map((c) => ({
                 id: String(c.id),
@@ -2291,7 +2297,9 @@ export function QuickBookingDrawer() {
               })),
             );
           })
-          .catch(() => setFindResults([]));
+          .catch(() => {
+            if (seq === findSeqRef.current) setFindResults([]);
+          });
       }, 200);
     },
     [slug],
