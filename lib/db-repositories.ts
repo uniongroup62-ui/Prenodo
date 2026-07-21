@@ -5921,11 +5921,62 @@ export async function listDbSales({
     orderBy: "sale_date DESC, id DESC",
   });
 
-  return Promise.all(rows.map((row) => mapSale(slug, row)));
+  return mapSalesBatch(slug, rows);
 }
 
-export async function posDbSummary(slug: string): Promise<PosSummary> {
-  const sales = await listDbSales({ slug });
+// Dettagli vendita in BATCH (audit 2026-07-21): sale_items e nomi cliente in
+// una query ciascuno con = ANY(?) invece di 2 query PER vendita — la pagina
+// Report carica l'intero storico e costava ~2N query a apertura.
+async function mapSalesBatch(slug: string, rows: RowDataPacket[]): Promise<PosSale[]> {
+  if (rows.length === 0) return [];
+  const saleIds = rows.map((row) => Number(row.id ?? 0)).filter((n) => n > 0);
+  const clientIds = [...new Set(rows.map((row) => Number(row.client_id ?? 0)).filter((n) => n > 0))];
+
+  const itemsBySale = new Map<number, PosSaleItem[]>();
+  try {
+    const itemRows = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "sale_items",
+      where: "sale_id = ANY(?)",
+      params: [saleIds],
+      orderBy: "id ASC",
+    });
+    for (const row of itemRows) {
+      const sid = Number(row.sale_id ?? 0);
+      const list = itemsBySale.get(sid);
+      if (list) list.push(mapSaleItemRow(row));
+      else itemsBySale.set(sid, [mapSaleItemRow(row)]);
+    }
+  } catch {
+    // Tabella opzionale assente: items vuoti, come il catch di saleItems().
+  }
+
+  const clientNameById = new Map<number, string>();
+  if (clientIds.length > 0) {
+    try {
+      const clientRows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "clients",
+        columns: "id,full_name,email",
+        where: "id = ANY(?)",
+        params: [clientIds],
+      });
+      for (const row of clientRows) {
+        clientNameById.set(Number(row.id ?? 0), String(row.full_name ?? row.email ?? "Cliente"));
+      }
+    } catch {
+      // Come appointmentClientName: fallback "Cliente".
+    }
+  }
+
+  return rows.map((row) => {
+    const clientId = Number(row.client_id ?? 0);
+    return mapSaleRow(row, itemsBySale.get(Number(row.id ?? 0)) ?? [], clientId > 0 ? clientNameById.get(clientId) ?? "Cliente" : "Cliente");
+  });
+}
+
+export async function posDbSummary(slug: string, preloadedSales?: PosSale[]): Promise<PosSummary> {
+  const sales = preloadedSales ?? await listDbSales({ slug });
   const activeSales = sales.filter((sale) => sale.status !== "cancelled");
   const cancelledSales = sales.filter((sale) => sale.status === "cancelled");
   const paymentTotals: Record<PosPaymentMethod, number> = {
@@ -6043,10 +6094,11 @@ export async function checkoutDbSale(input: PosCheckoutInput, slug: string): Pro
     await createDbInstallmentPlanFromSale({ slug, saleId, clientId: client.id, total, count: input.installments });
   }
 
-  const sales = await listDbSales({ slug });
-  const sale = sales.find((item) => item.id === saleId);
-  if (!sale) throw new Error("Vendita creata ma non riletta.");
-  return sale;
+  // Rilettura PUNTUALE (audit 2026-07-21): prima ricaricava l'intera lista
+  // vendite (2 query per vendita) solo per trovare quella appena creata.
+  const saleRows = await tenantSelect<RowDataPacket>({ slug, table: "sales", where: "id = ?", params: [saleId], limit: 1 });
+  if (!saleRows[0]) throw new Error("Vendita creata ma non riletta.");
+  return mapSale(slug, saleRows[0]);
 }
 
 export async function cancelDbSale({
@@ -6080,10 +6132,11 @@ export async function cancelDbSale({
   });
   await cancelDbSaleResidues(slug, saleId);
 
-  const sales = await listDbSales({ slug });
-  const sale = sales.find((item) => item.id === saleId);
-  if (!sale) throw new Error("Vendita annullata ma non riletta.");
-  return sale;
+  // Rilettura PUNTUALE (audit 2026-07-21): come nel checkout, niente reload
+  // dell'intera lista per una singola vendita.
+  const saleRows = await tenantSelect<RowDataPacket>({ slug, table: "sales", where: "id = ?", params: [saleId], limit: 1 });
+  if (!saleRows[0]) throw new Error("Vendita annullata ma non riletta.");
+  return mapSale(slug, saleRows[0]);
 }
 
 export async function listDbCosts(slug: string): Promise<CostItem[]> {
@@ -6120,7 +6173,28 @@ export async function listDbQuotes(slug: string): Promise<Quote[]> {
     table: "quotes",
     orderBy: "created_at DESC, id DESC",
   });
-  return Promise.all(rows.map((row) => mapQuote(slug, row)));
+  if (rows.length === 0) return [];
+  // Righe preventivo in BATCH (audit 2026-07-21): una query con = ANY(?) al
+  // posto di una query PER preventivo (la lista carica l'intero storico).
+  const linesByQuote = new Map<number, QuoteLine[]>();
+  try {
+    const lineRows = await tenantSelect<RowDataPacket>({
+      slug,
+      table: "quote_items",
+      where: "quote_id = ANY(?)",
+      params: [rows.map((row) => Number(row.id ?? 0)).filter((n) => n > 0)],
+      orderBy: "position ASC, id ASC",
+    });
+    for (const row of lineRows) {
+      const qid = Number(row.quote_id ?? 0);
+      const list = linesByQuote.get(qid);
+      if (list) list.push(mapQuoteLineRow(row));
+      else linesByQuote.set(qid, [mapQuoteLineRow(row)]);
+    }
+  } catch {
+    // Tabella opzionale assente: righe vuote, come il catch di quoteLines().
+  }
+  return rows.map((row) => mapQuoteRow(row, linesByQuote.get(Number(row.id ?? 0)) ?? []));
 }
 
 // Drop values whose column doesn't exist on the physical table (schema-guarded
@@ -23229,8 +23303,14 @@ function mapLocation(slug: string, row: RowDataPacket): Location {
 async function mapSale(slug: string, row: RowDataPacket): Promise<PosSale> {
   const id = Number(row.id ?? 0);
   const items = await saleItems(slug, id);
-  const total = Number(row.total ?? 0);
   const clientName = await appointmentClientName(slug, Number(row.client_id ?? 0));
+  return mapSaleRow(row, items, clientName);
+}
+
+// Mapping puro riga->PosSale, condiviso da mapSale (singola) e mapSalesBatch.
+function mapSaleRow(row: RowDataPacket, items: PosSaleItem[], clientName: string): PosSale {
+  const id = Number(row.id ?? 0);
+  const total = Number(row.total ?? 0);
   const status = String(row.status ?? "active") === "cancelled" ? "cancelled" : "active";
 
   return {
@@ -23255,6 +23335,20 @@ async function mapSale(slug: string, row: RowDataPacket): Promise<PosSale> {
   };
 }
 
+function mapSaleItemRow(row: RowDataPacket): PosSaleItem {
+  const itemType = String(row.item_type ?? "");
+  return {
+    id: Number(row.id ?? 0),
+    type: itemType === "product" ? "product" : itemType === "giftcard" ? "giftcard" : itemType === "prepaid" ? "prepaid" : "service",
+    refId: Number(row.item_id ?? 0),
+    name: String(row.item_name ?? "Voce"),
+    quantity: Number(row.qty ?? 1),
+    unitPrice: Number(row.unit_price ?? 0),
+    total: Number(row.line_total ?? 0),
+    status: String(row.item_status ?? "") === "ordered" ? "ordered" : itemType === "product" ? "collected" : "executed",
+  };
+}
+
 async function saleItems(slug: string, saleId: number): Promise<PosSaleItem[]> {
   try {
     const rows = await tenantSelect<RowDataPacket>({
@@ -23264,19 +23358,7 @@ async function saleItems(slug: string, saleId: number): Promise<PosSaleItem[]> {
       params: [saleId],
       orderBy: "id ASC",
     });
-    return rows.map((row) => {
-      const itemType = String(row.item_type ?? "");
-      return {
-        id: Number(row.id ?? 0),
-        type: itemType === "product" ? "product" : itemType === "giftcard" ? "giftcard" : itemType === "prepaid" ? "prepaid" : "service",
-        refId: Number(row.item_id ?? 0),
-        name: String(row.item_name ?? "Voce"),
-        quantity: Number(row.qty ?? 1),
-        unitPrice: Number(row.unit_price ?? 0),
-        total: Number(row.line_total ?? 0),
-        status: String(row.item_status ?? "") === "ordered" ? "ordered" : itemType === "product" ? "collected" : "executed",
-      } satisfies PosSaleItem;
-    });
+    return rows.map((row) => mapSaleItemRow(row));
   } catch {
     return [];
   }
@@ -23522,8 +23604,13 @@ function recurrenceFromDb(unit: string): CostItem["recurrence"] {
 }
 
 async function mapQuote(slug: string, row: RowDataPacket): Promise<Quote> {
+  const lines = await quoteLines(slug, Number(row.id ?? 0));
+  return mapQuoteRow(row, lines);
+}
+
+// Mapping puro riga->Quote, condiviso da mapQuote (singolo) e listDbQuotes (batch).
+function mapQuoteRow(row: RowDataPacket, lines: QuoteLine[]): Quote {
   const id = Number(row.id ?? 0);
-  const lines = await quoteLines(slug, id);
   const status = quoteStatus(String(row.status ?? "draft"));
   return {
     id,
@@ -23546,6 +23633,18 @@ async function mapQuote(slug: string, row: RowDataPacket): Promise<Quote> {
   };
 }
 
+function mapQuoteLineRow(row: RowDataPacket): QuoteLine {
+  return {
+    id: Number(row.id ?? 0),
+    type: String(row.item_type ?? "") === "product" ? "product" : "service",
+    refId: Number(row.item_id ?? 0),
+    name: String(row.description ?? "Voce"),
+    quantity: Number(row.qty ?? 1),
+    unitPrice: Number(row.unit_price ?? 0),
+    total: Number(row.line_total ?? 0),
+  };
+}
+
 async function quoteLines(slug: string, quoteId: number): Promise<QuoteLine[]> {
   try {
     const rows = await tenantSelect<RowDataPacket>({
@@ -23555,15 +23654,7 @@ async function quoteLines(slug: string, quoteId: number): Promise<QuoteLine[]> {
       params: [quoteId],
       orderBy: "position ASC, id ASC",
     });
-    return rows.map((row) => ({
-      id: Number(row.id ?? 0),
-      type: String(row.item_type ?? "") === "product" ? "product" : "service",
-      refId: Number(row.item_id ?? 0),
-      name: String(row.description ?? "Voce"),
-      quantity: Number(row.qty ?? 1),
-      unitPrice: Number(row.unit_price ?? 0),
-      total: Number(row.line_total ?? 0),
-    }));
+    return rows.map((row) => mapQuoteLineRow(row));
   } catch {
     return [];
   }

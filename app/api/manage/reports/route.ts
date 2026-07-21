@@ -56,9 +56,11 @@ export async function GET(request: Request) {
         : locationIds.length === 1
           ? String(locationContext.allLocations.find((l) => Number(l.id) === locationIds[0])?.name ?? `Sede #${locationIds[0]}`)
           : "Tutte le sedi";
-    const [summary, sales, clientsCount, products, analytics] = await Promise.all([
-      posDbSummary(tenantSlug),
-      listDbSales({ slug: tenantSlug }),
+    // Una sola lettura delle vendite (audit 2026-07-21): posDbSummary riusa la
+    // lista invece di ricaricare l'intero storico una seconda volta.
+    const sales = await listDbSales({ slug: tenantSlug });
+    const [summary, clientsCount, products, analytics] = await Promise.all([
+      posDbSummary(tenantSlug, sales),
       // Solo il CONTEGGIO (2026-07-16): la lista completa serviva solo per .length.
       countDbClients({ slug: tenantSlug }),
       listDbProducts({ slug: tenantSlug }),
