@@ -34,7 +34,17 @@ export function takeFlash(): FlashPayload {
 // Naviga con flash: da usare al posto di `window.location.href = url?msg=...`.
 export function flashNavigate(url: string, flash: FlashPayload): void {
   stashFlash(flash);
+  // Se il bersaglio è la STESSA pagina e differisce solo per l'ancora #, il
+  // browser non ricarica (scroll soltanto): il flash resterebbe in storage
+  // fino al prossimo F5. In quel caso forziamo il reload dopo aver applicato
+  // l'ancora.
+  const target = new URL(url, window.location.href);
+  const sameDocument =
+    target.hash !== "" &&
+    target.pathname === window.location.pathname &&
+    target.search === window.location.search;
   window.location.href = url;
+  if (sameDocument) window.location.reload();
 }
 
 // Consumo al mount (solo client, mai negli initializer: SSR mismatch).

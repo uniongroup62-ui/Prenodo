@@ -17814,3 +17814,22 @@ nasconde il banner ma takeFlash consuma comunque: falso FAIL.
 CONCLUSIONE: il codice su localhost:3000 e' verificato funzionante;
 se l'utente non vede gli avvisi la causa probabile e' bundle vecchio
 nel browser (hard refresh) o deploy produzione non aggiornato.
+
+### 2026-07-21 - FIX: flash perso su redirect same-page con #ancora
+Sintomo utente: "dopo un salvataggio l'avviso compare solo se aggiorno
+la pagina". Causa: flashNavigate verso la STESSA pagina con #ancora
+(fidelity_membership_settings#fidelity_card_settings, unico caso) -
+il browser esegue solo lo scroll all'ancora SENZA ricaricare, il
+flash resta in sessionStorage e compare al primo F5. Col vecchio
+?msg= l'URL cambiava sempre, quindi ricaricava: la conversione aveva
+rotto il caso hash. FIX centrale in flashNavigate: se il bersaglio
+differisce solo per l'ancora (stesso pathname+search, hash non
+vuoto), dopo l'assegnazione di location.href forza location.reload().
+Copre anche il re-salvataggio con URL gia' ancorato (target identico
+hash incluso). VERIFICA: probe-flash-hash 5/5 con POST stubbata via
+route intercept (gira il VERO flashNavigate compilato, zero mutazioni
+server: il save reale ha apply_to_existing sulle tessere) - banner
+SUBITO senza F5, URL con ancora e senza ?msg=, storage consumato, F5
+muto; regressione probe-flash-e2e 5/5; tsc pulito. TRAPPOLA PROBE:
+input in sezioni collassate = hidden, rendere dirty il form dal primo
+campo VISIBILE.
