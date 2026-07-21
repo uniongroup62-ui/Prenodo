@@ -172,3 +172,102 @@ auth cliente robusta (bcrypt, codici hashati timing-safe, cap+cooldown); storage
 multi-tenant pulito con anti-traversal; privacy-pdf valida i PNG prima di pdfkit;
 drawer con 10 fetch guardate da req-id e redeem come derived-state; admin con
 conferme proporzionate al rischio e zero superfici innerHTML.
+
+---
+
+# GIRO 3 (stesso giorno) - copertura TOTALE residua + revisione avversaria
+
+Metodo: 4 revisori principali di cui uno AVVERSARIO sui 15 commit di oggi;
+il revisore moduli ha delegato a 9 batch che hanno letto INTEGRALMENTE i
+~53 moduli mai coperti (~42.500 righe); lib+route con 2 sotto-audit
+(catalogo/stock, agenda/money). Finding gravi riverificati a mano.
+
+## REGRESSIONE NEI FIX DI OGGI (trovata dall'avversario, GIA' CORRETTA 4e1397f)
+- claim 'sending' violava la CHECK constraint di reminders/card_reminders
+  (verificato sul DB live): cron promemoria morto in silenzio per tenant.
+  Migrazione 0002 applicata. + isTransientSendError senza 5\d\d;
+  force_plain_body anti flip-HTML; blocklist estese. Diverse verifiche
+  avversarie risultate PULITE (ANY([]) vuoto, range move, holdGenRef,
+  posDbSummary preloaded, release null-safe).
+
+## ALTA (da fixare, in ordine)
+1. Reset password gestionale: link costruito dall'header Origin
+   (forgot-password/route.ts:13 + manage-password-reset.ts:452) - token
+   theft da remoto. Base URL da env/allowlist. NB: stessa route usa
+   ancora XFF leftmost per l'ip del rate-limit. [verificato a mano]
+2. Race contatori PREPAGATI/PACCHETTI: consumeDbClientPackage (10841) e
+   consumeDbPrepaid (12464) read-then-write con valore ASSOLUTO senza
+   guardia nel WHERE - double-redeem di sedute/quantita' pagate; stessi
+   satelliti (applyAppointmentPackageRedeems 11021, path servizi di
+   addManageClientPackageUsage 10426, restore 5730). Vivi su POS,
+   pacchetti, appuntamenti e booking pubblico. [verificato a mano]
+3. Riscatto GiftCard/GiftBox item: redeemed_qty riscritto assoluto da
+   lettura stale (gift-issue-details.ts:2471, 1324-1375) - over-redeem.
+4. Magazzino: adjustProductStock read-then-write (manage-products.ts:991)
+   - il POS ha il pattern atomico giusto; cancelStockDocument storna a
+   meta' senza compensazione ne' tx (524-534): retry corrompe lo stock.
+5. Annullo cliente area pubblica: gate temporale confronta wall Roma con
+   Date.now() del server (public-customer-appointments.ts:94-99) - in
+   prod il cliente annulla fino a ~2h DOPO l'inizio reale.
+6. Moduli: staff_availability 'const window' shadowa il globale (riga
+   159): offcanvas Modifica NON si apre, modali non si chiudono
+   [verificato]; + submit/duplica-settimana senza guardia doppio-click
+   (eventi disponibilita' duplicati).
+7. Moduli: pos_prepaids filtro Sede COSMETICO (badge senza effetto);
+   costs togglePaid doppio click = stato flippato due volte;
+   credit_movements race pagina/cliente con loading mai riattivato;
+   accessibility 4 submit senza guardia (doppio codice email, 2/5
+   tentativi consumati); preorders race cambio sede.
+
+## MEDIA (selezione)
+- GET /api/manage/locations SENZA sessione espone l'anagrafica sedi
+  (solo ?action=get e' gated).
+- Onboarding scrive categorie arbitrarie nella tabella GLOBALE
+  marketplace_activity_categories (pollution cross-tenant, admin-gated).
+- Commissioni: .catch(()=>[]) sulle sorgenti + reconcile = snapshot
+  attivi marcati 'cancelled' in massa su errore transiente (self-healing
+  ma dashboard falsata).
+- Rate/logs: sentinella locationIds []=admin fail-open per non-admin con
+  lista vuota (sessione degradata) in all_locations (costs ha il guard).
+- resources GET: payload completo (email/telefono staff) anche a chi ha
+  solo hours.manage; upload stock-doc/product-image/category-image senza
+  magic-bytes (staff-photo ce l'ha).
+- collectDbPreorder: decrementProductStock non atomico + flip stato non
+  guardato (doppio ritiro); createDbPreorder/issueDbPrepaid scritture
+  business con new Date() (sale_date UTC -> Report); TZ dashboard KPI
+  (isoLocal server), fidelity NOW() nei blockers servizi, GDPR/consensi
+  todayDisplay, saveAvailabilityEvent delete+insert non atomici,
+  replaceOwnerLinks delete-then-insert con insert .catch (servizio che
+  perde cabine/operatori in silenzio).
+- N+1: area cliente appuntamenti (fino a ~1000 query/render),
+  listDbGifts (2/riga su ogni save), listCabins blockers (~6N a ogni GET
+  resources), commissioni per-entry.
+- MODULI (pattern ricorrenti sui 53 file): catch{setBusy(false)} MUTO
+  sulle scritture (giftbox/giftcard detail TUTTE le azioni, wallet,
+  membership, client_package_*, quote duplicate/send/delete);
+  'Caricamento...' PERPETUO su errore (quote/giftbox/giftcard detail,
+  client_package_*); empty-state INGANNEVOLE su errore rete (~15 liste);
+  settings che su errore di load mostrano DEFAULT salvabili (giftbox/
+  giftcard/quote settings, automation: un Salva sovrascrive la config
+  vera); doppio submit sulle pagine impostazioni (quote/giftbox/
+  giftcard/pos/package settings, marketplace, business_profile,
+  notifications_birthdays, service_categories, recharges delete, hours
+  delete-chiusure, client_sheets delete); race ricerca-cliente debounced
+  senza seq (giftbox/giftcard detail, membership, appointments_plan);
+  race filtri (log, costs, commissions, packages, roles, fidelity
+  campaigns preview); resolveAction() nell'initializer = hydration
+  mismatch titolo (gift_form, coupon_form, service_form, supplier_form,
+  product_form, packages_catalog_form, location_form, staff_form);
+  key={index} su righe editabili (quote_settings pm, giftbox_form,
+  gift_form rewards, promotion_form windows/blackout, fidelity tiers/
+  levels, packages_catalog_form); timer print/search non puliti;
+  quote_form refreshAutoNumber sovrascrive il numero manuale.
+- Avversario su fix email: divergenza dal legacy DELIBERATA e ora
+  documentata (il PHP double-escapava davvero).
+
+## Fatto bene (giro 3)
+Primitive wallet/giftcard-redeem/stock-POS atomiche esemplari; delete
+cascata clienti transazionale; poller notifiche batchato; authz uniforme
+anche su tutte le route nuove campionate; admin con assertSameOrigin+
+audit; planner con rollback compensativo; zero SQL injection e zero
+leak cross-tenant su TUTTA la superficie letta nei 3 giri.
