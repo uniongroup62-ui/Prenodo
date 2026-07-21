@@ -17833,3 +17833,40 @@ SUBITO senza F5, URL con ancora e senza ?msg=, storage consumato, F5
 muto; regressione probe-flash-e2e 5/5; tsc pulito. TRAPPOLA PROBE:
 input in sezioni collassate = hidden, rendere dirty il form dal primo
 campo VISIBILE.
+
+## 2026-07-21 - PIANO AUDIT QUALITA' (fasi 1-3 eseguite)
+Riferimento: docs/code-audit-2026-07-21.md. Tre commit:
+FASE 1 (2e1a2c3) bug confermati: branch clients?action=history spostato
+PRIMA del branch lista generico che lo rendeva irraggiungibile;
+sale_installments con insertRow tx-aware (erano FUORI dalla tx del
+checkout); guardie anti-stale sui fetch filtrati (pos_history alive su
+setCtx, reports/staff seqRef, giftbox alive per tab, typeahead drawer
+findSeqRef). Probe: storico raggiungibile; race DETERMINISTICA con
+risposta ritardata via route interception (route.fetch + sleep +
+fulfill) - vince l'ultimo filtro. Suite rate-pass4 7/7, pagamenti 5/5.
+FASE 2 (30e5bad) perf: mapSalesBatch (sale_items + nomi cliente con
+"= ANY(?)" in 2 query totali, prima 2 query PER vendita), route Report
+legge la lista UNA volta e la passa a posDbSummary(slug, preloaded);
+checkout/annullo rileggono la vendita PUNTUALE; listDbQuotes batch.
+NB: tenantSelect passa gli array a pg che li serializza per ANY($n).
+Suite report-rivoluzione 19/19, report-pass2 12/12, preventivi-pass4
+5/5, pos-checkout 8/8.
+FASE 3 hardening: verifySession confronta le LUNGHEZZE prima di
+timingSafeEqual (cookie malformato = 401, prima RangeError = 500
+globale); assertCronAuth FAIL-CLOSED in produzione senza CRON_SECRET;
+/api/manage/db-status con gate sessione (era l'unica route manage
+non-auth, zero consumer nel codice); X-Forwarded-For = valore piu' a
+DESTRA su allowlist admin e rate-limit login (il leftmost e'
+controllato dal client); marketplaceSeoProfile in React cache() (4->2
+query per hit); logMoneyError sui catch monetari POS (emissioni
+GiftCard/GiftBox/Ricariche da vendita, storni annullo, flip is_void)
+e log sui guard conflitti booking fail-open; bail-out del poller shell
+a conteggi invariati (prima re-render di topbar+sidebar ogni 5s);
+guardia NaN sul discount POS; mysql2 in devDependencies. Probe: cookie
+malformato 401, db-status 401, /attivita 200. Suite recharges 32/32,
+booking-pass2 9/9, booking-confirm-tx 3/3, pagamenti-pass2 5/5.
+RIMANDATO (post-lancio, annotato in code-audit): hook condivisi
+useModuleFetch/usePagination/useFlash (~70 moduli), split monoliti
+(db-repositories 26k, drawer 5.8k), availability browser N+1, TZ
+new Date()/NOW() residui nei path Db-legacy, codemod logging sulle 152
+route, verifica chunking con next build, next/dynamic.

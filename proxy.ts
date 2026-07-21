@@ -27,7 +27,11 @@ export function proxy(request: NextRequest) {
       .filter(Boolean);
     if (allowlist.length > 0) {
       const fwd = request.headers.get("x-forwarded-for") ?? "";
-      const ip = fwd.split(",")[0]?.trim() || request.headers.get("x-real-ip") || "";
+      // IP = valore più a DESTRA di X-Forwarded-For: è quello APPESO dall'edge
+      // fidato (CloudFront/ALB). Il primo (leftmost) è controllato dal client:
+      // bastava inviare "X-Forwarded-For: <ip-in-allowlist>" per superare il gate.
+      const parts = fwd.split(",").map((entry) => entry.trim()).filter(Boolean);
+      const ip = parts[parts.length - 1] || request.headers.get("x-real-ip") || "";
       if (!ip || !allowlist.includes(ip)) {
         return new NextResponse("Not found", { status: 404 });
       }

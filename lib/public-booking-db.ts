@@ -1697,21 +1697,32 @@ export async function busyRangesForDate(
       where: appointmentWhere,
       params: appointmentParams,
       orderBy: "starts_at ASC",
-    }).catch(() => [] as RowDataPacket[]),
+    }).catch((error) => {
+      // Design fail-open ("never blocks"), ma un errore DB qui significa
+      // controllo conflitti SALTATO: senza log un double-booking è invisibile.
+      console.error("[booking] query appointments fallita (guardia conflitti saltata):", error instanceof Error ? error.message : error);
+      return [] as RowDataPacket[];
+    }),
     tenantSelect<RowDataPacket>({
       slug,
       table: "appointment_segments",
       where: segmentWhere,
       params: segmentParams,
       orderBy: "starts_at ASC",
-    }).catch(() => [] as RowDataPacket[]),
+    }).catch((error) => {
+      console.error("[booking] query appointment_segments fallita (guardia conflitti saltata):", error instanceof Error ? error.message : error);
+      return [] as RowDataPacket[];
+    }),
     tenantSelect<RowDataPacket>({
       slug,
       table: "appointment_holds",
       where: holdWhere,
       params: holdParams,
       orderBy: "starts_at ASC",
-    }).catch(() => [] as RowDataPacket[]),
+    }).catch((error) => {
+      console.error("[booking] query appointment_holds fallita (guardia conflitti saltata):", error instanceof Error ? error.message : error);
+      return [] as RowDataPacket[];
+    }),
   ]);
 
   // Un segmento occupa SOLO se il suo appuntamento padre è in uno stato ATTIVO
@@ -1808,21 +1819,32 @@ export async function busyCabinRangesForDate(
       where: appointmentWhere,
       params: appointmentParams,
       orderBy: "starts_at ASC",
-    }).catch(() => [] as RowDataPacket[]),
+    }).catch((error) => {
+      // Design fail-open ("never blocks"), ma un errore DB qui significa
+      // controllo conflitti SALTATO: senza log un double-booking è invisibile.
+      console.error("[booking] query appointments fallita (guardia conflitti saltata):", error instanceof Error ? error.message : error);
+      return [] as RowDataPacket[];
+    }),
     tenantSelect<RowDataPacket>({
       slug,
       table: "appointment_segments",
       where: segmentWhere,
       params: segmentParams,
       orderBy: "starts_at ASC",
-    }).catch(() => [] as RowDataPacket[]),
+    }).catch((error) => {
+      console.error("[booking] query appointment_segments fallita (guardia conflitti saltata):", error instanceof Error ? error.message : error);
+      return [] as RowDataPacket[];
+    }),
     tenantSelect<RowDataPacket>({
       slug,
       table: "appointment_holds",
       where: holdWhere,
       params: holdParams,
       orderBy: "starts_at ASC",
-    }).catch(() => [] as RowDataPacket[]),
+    }).catch((error) => {
+      console.error("[booking] query appointment_holds fallita (guardia conflitti saltata):", error instanceof Error ? error.message : error);
+      return [] as RowDataPacket[];
+    }),
   ]);
 
   const out: CabinBusyRange[] = [];
@@ -2159,10 +2181,18 @@ export async function assertAppointmentSlotAvailable({
   // Gather only the resource ranges we actually need (best-effort, each guarded).
   const [busyRanges, cabinRanges] = await Promise.all([
     staffedSegments.length
-      ? busyRangesForDate(slug, date, { excludeAppointmentId, excludeHoldToken }).catch(() => [] as BusyRange[])
+      ? busyRangesForDate(slug, date, { excludeAppointmentId, excludeHoldToken }).catch((error) => {
+          // Fail-open fedele ("never blocks"), ma il salvataggio procede SENZA
+          // controllo conflitti: senza log un double-booking è invisibile.
+          console.error("[booking] busyRangesForDate fallita (controllo conflitti staff saltato):", error instanceof Error ? error.message : error);
+          return [] as BusyRange[];
+        })
       : Promise.resolve([] as BusyRange[]),
     cabinSegments.length
-      ? busyCabinRangesForDate(slug, date, { excludeAppointmentId, excludeHoldToken }).catch(() => [] as CabinBusyRange[])
+      ? busyCabinRangesForDate(slug, date, { excludeAppointmentId, excludeHoldToken }).catch((error) => {
+          console.error("[booking] busyCabinRangesForDate fallita (controllo conflitti cabine saltato):", error instanceof Error ? error.message : error);
+          return [] as CabinBusyRange[];
+        })
       : Promise.resolve([] as CabinBusyRange[]),
   ]);
 

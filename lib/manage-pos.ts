@@ -598,6 +598,14 @@ type PosPromoApplied = { id: number; name: string; nonDiscountedSubtotal: number
 // ricarica matura a sé (issueRechargeFromSale); GiftCard/GiftBox non maturano affatto.
 const NON_EARNING_SALE_LINE_TYPES = new Set(["recharge", "giftcard", "giftbox"]);
 
+// Log degli errori "best-effort" su scritture MONETARIE (audit 2026-07-21): la
+// semantica legacy resta (la vendita/lo storno non si bloccano), ma l'errore
+// non deve più sparire nel nulla — un voucher non emesso o uno storno mancato
+// senza traccia nei log è invisibile a chiunque.
+function logMoneyError(context: string, error: unknown): void {
+  console.error(`[pos] ${context}:`, error instanceof Error ? error.message : error);
+}
+
 export async function checkoutManageSale(
   slug: string,
   input: PosCheckoutInput,
@@ -621,7 +629,10 @@ export async function checkoutManageSale(
   assertCartExclusivityRules(items, client.id, input);
 
   const subtotal = roundMoney(items.reduce((total, item) => total + item.total, 0));
-  const manualDiscount = roundMoney(Math.max(0, input.discount ?? 0));
+  // Guardia NaN: un discount non numerico propagherebbe NaN nei totali e il
+  // check "Pagamento insufficiente" (x < NaN = false) non scatterebbe mai.
+  const rawDiscount = Number(input.discount ?? 0);
+  const manualDiscount = roundMoney(Math.max(0, Number.isFinite(rawDiscount) ? rawDiscount : 0));
 
   // PROMOTION (Block 3b): apply the operator-selected promotion (input.promotionId) to
   // the service/product cart via the promotions engine (evaluatePromotionsForCart). The
@@ -4933,13 +4944,13 @@ async function cancelLinkedSaleResidues(
   const pointsEarned = normalizePoints(Number(saleRow.fidelity_points_earned ?? 0) || 0);
 
   if (giftcardId > 0 && giftcardUsed > 0) {
-    await refundDbGiftCard(giftcardId, giftcardUsed, slug, `Storno vendita #${saleId}`).catch(() => undefined);
+    await refundDbGiftCard(giftcardId, giftcardUsed, slug, `Storno vendita #${saleId}`).catch((error) => logMoneyError(`storno GiftCard #${giftcardId} su annullo vendita #${saleId} FALLITO`, error));
   }
   if (creditUsed > 0 && clientId > 0) {
     await addDbWalletMovement(
       { clientId, type: "recharge", amount: creditUsed, note: `Storno credito vendita #${saleId}` },
       slug,
-    ).catch(() => undefined);
+    ).catch((error) => logMoneyError(`storno credito su annullo vendita #${saleId} FALLITO`, error));
   }
   // SALE-level fidelity points, applied IN THE LEGACY ORDER (pos_history.php ~1604-1652):
   //   1) REFUND the redeemed points (+ptsUsed) — the inverse of the points spent as discount.
@@ -4954,7 +4965,7 @@ async function cancelLinkedSaleResidues(
     await addDbWalletMovement(
       { clientId, type: "points_earn", points: pointsUsed, source: "sale", note: `Storno punti Fidelity vendita #${saleId}` },
       slug,
-    ).catch(() => undefined);
+    ).catch((error) => logMoneyError(`restituzione punti usati su annullo vendita #${saleId} FALLITA`, error));
   }
   // REVERSE the EARNED fidelity points, honouring pointsStornoMode:
   //  - skip     → do NOT reverse (audit-note only, best-effort; balance untouched).
@@ -4978,7 +4989,7 @@ async function cancelLinkedSaleResidues(
       await addDbWalletMovement(
         { clientId, type: "points_redeem", points: -pointsEarned, source: "sale", note: `Storno punti guadagnati vendita #${saleId}` },
         slug,
-      ).catch(() => undefined);
+      ).catch((error) => logMoneyError(`storno punti guadagnati su annullo vendita #${saleId} FALLITO`, error));
     }
     // mode === "skip": intentionally no movement — the earned points are left on the client's
     // balance (the operator chose to complete the void without scaling them).
@@ -5177,7 +5188,10 @@ async function reverseIssuedSaleRecharges(
       table: table.name,
       id: rechargeId,
       values: { is_void: 1, voided_at: businessNowDateTime(), voided_by: voidedBy },
-    }).catch(() => 0);
+    }).catch((error) => {
+      logMoneyError(`flip is_void della Ricarica R#${rechargeId} vendita #${saleId} FALLITO (rischio doppio storno a un re-void)`, error);
+      return 0;
+    });
 
     if (clientId > 0 && totalAmount > 0) {
       // DEBIT the wallet by the credited total (negative -> credit_adjustments debit row +
@@ -5185,7 +5199,7 @@ async function reverseIssuedSaleRecharges(
       await addDbWalletMovement(
         { clientId, type: "debit", amount: -totalAmount, note: `Storno ricarica vendita #${saleId}` },
         slug,
-      ).catch(() => undefined);
+      ).catch((error) => logMoneyError(`addebito storno Ricarica R#${rechargeId} vendita #${saleId} FALLITO`, error));
     }
     // REVERSE the earned points, honouring the per-recharge storno mode (port of
     // recharge_cancel_void_apply, CreditRechargeCancel.php ~876-922):
@@ -5480,7 +5494,10 @@ async function issueRechargeFromSale(
     is_void: 0,
     created_at: businessNowDateTime(),
     created_by: createdBy,
-  })).catch(() => 0);
+  })).catch((error) => {
+    logMoneyError(`emissione Ricarica da vendita #${saleId} FALLITA (vendita conclusa senza ricarica)`, error);
+    return 0;
+  });
   if (!rechargeId) return 0;
 
   // CREDIT the wallet by base+bonus (a positive 'recharge' movement: credit_adjustments row +
@@ -5488,7 +5505,7 @@ async function issueRechargeFromSale(
   await addDbWalletMovement(
     { clientId, type: "recharge", amount: totalAmount, note: `Ricarica vendita #${saleId}` },
     slug,
-  ).catch(() => undefined);
+  ).catch((error) => logMoneyError(`accredito wallet della Ricarica R#${rechargeId} vendita #${saleId} FALLITO (riga creata senza credito)`, error));
 
   // EARN the fidelity points (a positive 'points_earn' movement: transactions row +
   // clients.points increment), tagged with the sale id so a later void can reverse them.
@@ -5860,7 +5877,10 @@ async function issueGiftcardFromSale(slug: string, saleId: number, clientId: num
     internal_note: clean(item.internalNote, 2000) || null,
     scheduled_send_on: sendMode === "date" && sendOn ? sendOn : null,
     location_id: locationId > 0 ? locationId : null,
-  })).catch(() => 0);
+  })).catch((error) => {
+    logMoneyError(`emissione GiftCard da vendita #${saleId} FALLITA (vendita conclusa senza voucher)`, error);
+    return 0;
+  });
   if (!giftcardId) return { id: 0, voucher: null };
 
   // Invio immediato ("Invia subito alla conclusione della vendita"): best-effort
@@ -6097,7 +6117,10 @@ async function issueGiftboxFromSale(slug: string, saleId: number, clientId: numb
     internal_note: clean(item.internalNote, 2000) || null,
     scheduled_send_on: sendMode === "date" && sendOn ? sendOn : null,
     location_id: locationId > 0 ? locationId : null,
-  })).catch(() => 0);
+  })).catch((error) => {
+    logMoneyError(`emissione GiftBox da vendita #${saleId} FALLITA (vendita conclusa senza voucher)`, error);
+    return 0;
+  });
   if (!instanceId) return { id: 0, voucher: null };
 
   // Copy EACH template giftbox_items row into giftbox_instance_items: the redeem reader keys

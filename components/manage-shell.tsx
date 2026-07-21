@@ -520,12 +520,19 @@ export function ManageShell({
     const applyCounts = (data: Record<string, unknown>) => {
       const prev = notifCountsRef.current;
       const next = { ...prev };
+      let changed = false;
       for (const key of ["count", "quotes", "installments", "birthdays"] as const) {
         if (!Object.prototype.hasOwnProperty.call(data, key)) continue;
         const value = numeric(data[key]);
-        if (value !== prev[key]) pulseBell(key);
+        if (value !== prev[key]) {
+          pulseBell(key);
+          changed = true;
+        }
         next[key] = value;
       }
+      // Bail-out a conteggi invariati: il poller gira ogni 5s e un setNotif con
+      // oggetto sempre nuovo ri-renderizzava topbar+sidebar su ogni pagina.
+      if (!changed) return;
       notifCountsRef.current = next;
       setNotif(next);
     };

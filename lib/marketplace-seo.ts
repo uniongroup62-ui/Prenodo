@@ -1,5 +1,6 @@
 import "server-only";
 
+import { cache } from "react";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { dbQuery } from "@/lib/tenant-db";
 import { storagePublicUrl } from "@/lib/storage";
@@ -21,7 +22,11 @@ export type MarketplaceSeoProfile = {
   locations: Array<{ id: number; name: string; city: string; province: string; address: string }>;
 };
 
-export async function marketplaceSeoProfile(slugInput: string): Promise<MarketplaceSeoProfile | null> {
+// React cache(): generateMetadata e il body della pagina chiamano entrambi
+// questa funzione nella STESSA richiesta — senza cache erano 4 query invece di 2.
+export const marketplaceSeoProfile = cache(loadMarketplaceSeoProfile);
+
+async function loadMarketplaceSeoProfile(slugInput: string): Promise<MarketplaceSeoProfile | null> {
   const slug = String(slugInput ?? "").trim().toLowerCase();
   if (!/^[a-z0-9_-]{1,80}$/.test(slug)) return null;
   const rows = await dbQuery<RowDataPacket[]>(`

@@ -432,7 +432,12 @@ function verifySession(value: string): ManageSession | null {
   const [payload, signature] = value.split(".");
   if (!payload || !signature) return null;
   const expected = crypto.createHmac("sha256", sessionSecret()).update(payload).digest("base64url");
-  if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
+  // timingSafeEqual LANCIA (RangeError) se le lunghezze differiscono: un cookie
+  // malformato deve valere "sessione non valida" (401), non un 500 su tutte le
+  // richieste finché il cookie non viene cancellato a mano.
+  const sigBuf = Buffer.from(signature);
+  const expBuf = Buffer.from(expected);
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) return null;
 
   try {
     return JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as ManageSession;

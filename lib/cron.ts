@@ -10,11 +10,16 @@ import { dbExecute, dbQuery, tableExists } from "@/lib/tenant-db";
 
 // Authorize a cron request. A scheduler must send `Authorization: Bearer
 // <CRON_SECRET>` (Vercel cron does this automatically when CRON_SECRET is set)
-// or `?key=<CRON_SECRET>`. If CRON_SECRET is unset (local dev) requests are
-// allowed so the jobs can be exercised manually.
+// or `?key=<CRON_SECRET>`. If CRON_SECRET is unset in local dev requests are
+// allowed so the jobs can be exercised manually; in PRODUZIONE la env mancante
+// è fail-closed (i cron mutano dati e inviano email/SMS: senza secret non
+// devono diventare endpoint pubblici in silenzio).
 export function assertCronAuth(request: Request): void {
   const secret = process.env.CRON_SECRET;
-  if (!secret) return;
+  if (!secret) {
+    if (process.env.NODE_ENV === "production") throw new Error("unauthorized");
+    return;
+  }
   const auth = request.headers.get("authorization") ?? "";
   const key = new URL(request.url).searchParams.get("key") ?? "";
   if (auth === `Bearer ${secret}` || key === secret) return;
