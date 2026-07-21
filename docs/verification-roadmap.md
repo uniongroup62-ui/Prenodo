@@ -17960,3 +17960,55 @@ looksHtml iniettando HTML non escapato); blocklist GET pubblici estesa
 CRON_SECRET ora fail-closed in prod (impostarla PRIMA del deploy);
 verificare in prod il formato X-Forwarded-For (rightmost corretto solo
 con un singolo hop fidato che appende: loggarlo una volta).
+
+## 2026-07-21 - FIX GIRO 3 (blocchi 1-3, su ok utente) - 8 commit
+B1 SICUREZZA+DENARO (f6537f0): reset password base-URL SOLO da env
+(PRENODO_PUBLIC_BASE_URL; mai header Origin = token theft) + hard-guard
+prod expose-link + XFF destro su forgot; race contatori chiuse col
+pattern atomico (guardia nel WHERE, delta RELATIVI): consumeDbClient
+Package/Prepaid + mirror per-servizio + restore inversi + movimento
+manuale con lock ottimistico e somme RI-LETTE; refundDbGiftCard
+relativo (il refund assoluto sovrascriveva un redeem concorrente);
+giftcard_items redeemed_qty relativo con guardia residuo; GiftBox
+partial redeem con COMPENSAZIONE stock completa + POST-CHECK anti race
+(delete redemption su over-redeem); decrement/incrementProductStock e
+adjustProductStock magazzino atomici; cancelStockDocument con
+compensazione degli storni; collectDbPreorder claim su item_status;
+ledger monetari loggati; TZ Roma su used_at/purchase_date/sale_date/
+cancelled_at/paid_at; annullo cliente wall-vs-wall (era ~2h di grazia);
+GET locations con gate sessione.
+B2 MODULI ROTTI (428cb34): staff_availability dayWindow (const window
+shadowava il globale: offcanvas Modifica MORTO) + guardie submit/
+duplica; pos_prepaids filtro Sede REALE server-side (regola legacy
+_pos_pp_row_match in listDbPrepaids: pacchetto->vendita->catalogo;
+altri = sede vendita, senza vendita ESCLUSO) con probe live coerente;
+costs rowBusyId su toggle/delete; credit_movements seq+loading;
+accessibility actionBusy su 4 azioni; preorders seq su cambio sede.
+B3a SETTINGS (d5a24c4): 9 pagine con loadFailed (form NON salvabile su
+load fallito: i default sovrascrivevano la config reale) + doppio-
+submit uniforme + key stabili pm quote_settings.
+B3b MODULI (7d756cc, 8abcc9e): scritture mai piu' mute (alert rete su
+giftbox/giftcard detail, pacchetti cliente, fidelity x4, quote
+duplicate/send/delete, coupon disattiva, catalogo delete, staff foto,
+schede cliente); gate Caricamento con errore (quote detail/print,
+package detail/form, giftbox/giftcard detail); empty-state con
+loadError dove ingannava; seq anti-stale su log/commissioni(+toggle
+busy)/pacchetti/catalogo/ruoli/anteprima campagne + ricerche debounced
+(membership, plan) + quote_form autonumber (non sovrascrive il numero
+manuale); service_categories redirect out-of-render + guardie; hours
+delete guardate; stock_moves print timer pulito; hydration action
+POST-MOUNT in 8 form; key stabili packages_catalog_form (combobox che
+migrava) e fidelity_levels (key degenerata).
+B3c INFRA (322b4fd): rate/log fail-closed anche in all_locations per
+non-admin con lista vuota; onboarding categorie globali is_active=0;
+fidelity fallback DEFAULT-DENY; commissioni sorgenti senza catch->[]
+(il reconcile cancellava snapshot in massa su errore transiente); TZ
+Roma su dashboard/privacy/consensi/gdpr/audit-permessi/product-image/
+disponibilita'/schede; magic-bytes su product-image/category-image/
+stock-doc (lib/upload-sniff, MIME autoritativo).
+RIMANDATI (annotati): key=index su giftbox_form/gift_form/
+promotion_form/fidelity_campaigns tiers (solo focus, controlled);
+alive-guard blanket sui fetch di mount (benigni React 18); coupon
+re-validate display; N+1 area cliente/listDbGifts/listCabins blockers;
+SRI CDN; ghost calendario su liste filtrate; automation-reminders
+clamp frame.
