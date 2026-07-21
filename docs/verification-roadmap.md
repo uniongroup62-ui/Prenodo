@@ -17889,3 +17889,17 @@ LEZIONE: artefatti richiesti dalle suite (bundle, baseline) vanno
 committati o auto-generati dalla suite stessa - una batteria che passa
 solo sulla macchina che li ha prodotti non e' riproducibile.
 Risultato finale: 125/125 suite verdi.
+
+### 2026-07-21 - FIX flake reale: trigger app_touch clobbera updated_at same-second
+Check totale run 2: 124/125 - test-preventivi-pass3 P2 rosso IN BATTERIA
+(ua UTC con frazioni) ma verde isolato. NON flakiness di suite: BUG APP.
+Il trigger app_touch_updated_at fa NEW==OLD -> CURRENT_TIMESTAMP (UTC):
+la catena save->quoteSaveLocationSnapshotDb atterra spesso nello STESSO
+secondo, lo snapshot riscrive lo stesso valore Roma e il trigger lo
+interpreta come "non cambiato" clobberandolo in UTC. FIX: lo snapshot
+legge l'updated_at corrente e, se coincide col nuovo, avanza di 1
+secondo (wallTimePlusOneSecond, aritmetica pura sui componenti) - valore
+DISTINTO, l'esplicito vince sempre. Verifica: pass3 5/5 run consecutivi
++ 4 suite preventivi + quote-decision verdi. TRAPPOLA GENERALE: con
+questo trigger OGNI updater in catena nello stesso secondo deve scrivere
+un updated_at DISTINTO, non solo esplicito.

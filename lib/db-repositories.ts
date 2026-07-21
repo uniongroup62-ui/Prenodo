@@ -6860,6 +6860,16 @@ const QUOTE_LOCATION_SNAPSHOT_MAP: Array<[string, keyof QuoteBizProfile]> = [
   ["location_website", "website"],
 ];
 
+// "YYYY-MM-DD HH:MM:SS" wall-time +1 secondo, aritmetica pura sui componenti
+// (via Date.UTC solo come calcolatrice: nessuna timezone coinvolta).
+function wallTimePlusOneSecond(wall: string): string {
+  const m = wall.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})/);
+  if (!m) return wall;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]) + 1));
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+}
+
 // app_quote_refresh_location_snapshot(): stampa sede + profilo sulle colonne
 // location_* del preventivo (il profilo sede legacy è il profilo business con
 // il nome della sede — app_location_legal_profile aggiunge solo location_name).
@@ -6873,13 +6883,20 @@ async function quoteSaveLocationSnapshotDb(slug: string, quoteId: number, locati
   if (locId <= 0) return;
   const locRows = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "id, name", where: "id = ?", params: [locId], limit: 1 }).catch(() => [] as RowDataPacket[]);
   const profile = await quoteBusinessProfile(slug);
+  // Assegnamento ESPLICITO: questo update POST-save è l'ultimo a toccare la
+  // riga — senza, il trigger app_touch ri-clobbererebbe updated_at in UTC
+  // vanificando l'ora di Roma scritta dal save (classe TZ).
+  // TRAPPOLA same-second (audit 21/07): il trigger considera "non cambiato"
+  // un NEW uguale a OLD — e la catena save→snapshot atterra spesso nello
+  // STESSO secondo, quindi lo stesso valore Roma veniva clobberato in UTC.
+  // Se coincide con l'updated_at corrente, avanza di 1 secondo (distinto).
+  let touch = businessNowDateTime();
+  const curRows = await tenantSelect<RowDataPacket>({ slug, table: "quotes", columns: "updated_at", where: "id = ?", params: [quoteId], limit: 1 }).catch(() => [] as RowDataPacket[]);
+  if (String(curRows[0]?.updated_at ?? "") === touch) touch = wallTimePlusOneSecond(touch);
   const values: Record<string, unknown> = {
     location_id: locId,
     location_name: String(locRows[0]?.name ?? "").trim() || null,
-    // Assegnamento ESPLICITO: questo update POST-save è l'ultimo a toccare la
-    // riga — senza, il trigger app_touch ri-clobbererebbe updated_at in UTC
-    // vanificando l'ora di Roma scritta dal save (classe TZ).
-    updated_at: businessNowDateTime(),
+    updated_at: touch,
   };
   for (const [qCol, pKey] of QUOTE_LOCATION_SNAPSHOT_MAP) {
     const v = String(profile[pKey] ?? "").trim();
