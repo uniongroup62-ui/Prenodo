@@ -149,7 +149,7 @@ export function MarketplaceSettingsContent({ slug: slugProp }: { slug?: string }
         </div>
       ) : null}
 
-      <div className="row g-3 mt-3">
+      <div className="row g-3">
         <div className="col-12">
           <div className="card p-4">
             <form

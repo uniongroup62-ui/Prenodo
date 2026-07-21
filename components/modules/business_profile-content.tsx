@@ -397,7 +397,7 @@ export function BusinessProfileContent({
 
       <link rel="stylesheet" href="/assets/css/pages/business_profile.css" />
 
-      <div className="row g-3 mt-3">
+      <div className="row g-3">
         <div className="col-12">
           <div className="card p-4">
             <form
