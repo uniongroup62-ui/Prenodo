@@ -171,6 +171,8 @@ export function CommissionsContent({ slug: slugProp, initialQuery }: { slug?: st
   const [dashboard, setDashboard] = useState<CommissionDashboard>(EMPTY_DASHBOARD);
   const [canQuickBook, setCanQuickBook] = useState(false);
   const [loading, setLoading] = useState(true);
+  const loadSeqRef = useRef(0);
+  const [toggleBusy, setToggleBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
   // Draft dei filtri (i controlli del form GET); applicati solo con "Aggiorna".
@@ -213,15 +215,20 @@ export function CommissionsContent({ slug: slugProp, initialQuery }: { slug?: st
         source: filters.source,
       });
       if (filters.locationId > 0) qs.set("location_id", String(filters.locationId));
+      const seq = ++loadSeqRef.current; // anti-stale (audit giro 3)
       fetch(`/api/manage/commissions?${qs.toString()}`, { headers: { "x-tenant-slug": slug } })
         .then((r) => r.json())
         .then((j: DashboardResponse) => {
+          if (seq !== loadSeqRef.current) return;
           if (j.dashboard) setDashboard(j.dashboard);
           else setDashboard(EMPTY_DASHBOARD);
           if (typeof j.canQuickBook === "boolean") setCanQuickBook(j.canQuickBook);
         })
-        .catch(() => setDashboard(EMPTY_DASHBOARD))
+        .catch(() => {
+          if (seq === loadSeqRef.current) setDashboard(EMPTY_DASHBOARD);
+        })
         .finally(() => {
+          if (seq !== loadSeqRef.current) return;
           setLoading(false);
           setLoaded(true);
         });
@@ -266,6 +273,8 @@ export function CommissionsContent({ slug: slugProp, initialQuery }: { slug?: st
 
   // POST toggle_commission_paid with the current filters; refresh from the returned dashboard.
   async function onToggle(entry: CommissionEntry) {
+    if (toggleBusy) return; // guardia doppio-click (audit giro 3)
+    setToggleBusy(true);
     setError("");
     setFlash("");
     const applied = appliedRef.current;
@@ -292,8 +301,11 @@ export function CommissionsContent({ slug: slugProp, initialQuery }: { slug?: st
       setDashboard(j.dashboard);
       // Flash verbatim legacy (redirect ?msg=...).
       setFlash(markPaid ? "Commissione segnata come pagata" : "Commissione riportata da pagare");
+      loadSeqRef.current += 1; // il toggle è l'ultimo stato valido: invalida i load in volo
     } catch {
       setError("Errore di rete.");
+    } finally {
+      setToggleBusy(false);
     }
   }
 
@@ -744,6 +756,7 @@ export function CommissionsContent({ slug: slugProp, initialQuery }: { slug?: st
                                 <button
                                   type="button"
                                   className={`btn btn-sm ${row.isPaid ? "btn-outline-secondary" : "btn-success"}`}
+                                  disabled={toggleBusy}
                                   onClick={() => onToggle(row)}
                                 >
                                   {row.isPaid ? "Da pagare" : "Pagato"}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { flashNavigate } from "./flash";
 
 // Faithful port of the PHP "Livelli Card" editor (fidelity_points.php#livelli-card
@@ -22,6 +22,7 @@ type EditorPayload = {
 };
 
 type Row = {
+  _k: number; // key stabile di render (audit giro 3)
   key: string; // key persistita ('' per righe nuove)
   name: string;
   points: string;
@@ -64,6 +65,10 @@ export function FidelityLevelsContent({ slug: slugProp, embedded = false }: { sl
   const slug = slugProp || tenantSlug();
 
   const [rows, setRows] = useState<Row[]>([]);
+  // Key STABILE per riga (audit giro 3: `${row.key}-${idx}` degenerava a
+  // -idx sulle righe nuove e slittava dopo un'eliminazione -> remount con
+  // input attivi). _k assegnata a load/add.
+  const rowKeyRef = useRef(1);
   const [label, setLabel] = useState("Punti");
   const [inlineError, setInlineError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -86,6 +91,7 @@ export function FidelityLevelsContent({ slug: slugProp, embedded = false }: { sl
         setLabel(String(payload.label ?? "Punti"));
         setRows(
           (apiLevels.length > 0 ? apiLevels : [{ key: "base", name: "Base", minPoints: 0 }]).map((l) => ({
+            _k: rowKeyRef.current++,
             key: l.key,
             name: l.name,
             points: l.key === bk ? "0" : fmtIntForInput(l.minPoints),
@@ -112,7 +118,7 @@ export function FidelityLevelsContent({ slug: slugProp, embedded = false }: { sl
   }
 
   function addRow() {
-    setRows((prev) => [...prev, { key: "", name: "", points: "", baseLevel: false, usage: 0 }]);
+    setRows((prev) => [...prev, { _k: rowKeyRef.current++, key: "", name: "", points: "", baseLevel: false, usage: 0 }]);
     setInlineError("");
   }
 
@@ -419,7 +425,7 @@ export function FidelityLevelsContent({ slug: slugProp, embedded = false }: { sl
               {rows.map((row, idx) => (
                 <div
                   className="row g-2 align-items-end fidPointsLevelRow"
-                  key={`${row.key}-${idx}`}
+                  key={row._k}
                   data-level-family="points"
                   data-level-key={row.key}
                   data-level-name={row.name}

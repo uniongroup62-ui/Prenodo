@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTakenFlash } from "./flash";
 
 // Faithful port of the PHP packages page CATALOG tab
@@ -54,17 +54,24 @@ export function PackagesCatalogContent({ slug: slugProp, initialQuery }: { slug?
   const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
   useTakenFlash(setFlash);
 
+  const fetchSeqRef = useRef(0);
   // Fetch puro (setState nei callback della Promise; loading gia' true di default).
   const fetchData = useCallback((all?: boolean) => {
+    const seq = ++fetchSeqRef.current; // anti-stale (audit giro 3)
     fetch(`/api/manage/packages?slug=${encodeURIComponent(slug)}&action=catalog${all ? "&all_locations=1" : ""}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
       .then((j) => {
+        if (seq !== fetchSeqRef.current) return;
         setRows(Array.isArray(j.catalog) ? j.catalog : []);
         setTotalCount(Number(j.totalCount ?? (Array.isArray(j.catalog) ? j.catalog.length : 0)));
         setLocationsCount(Number(j.locationsCount ?? 0));
       })
-      .catch(() => setRows([]))
-      .finally(() => setLoading(false));
+      .catch(() => {
+        if (seq === fetchSeqRef.current) setRows([]);
+      })
+      .finally(() => {
+        if (seq === fetchSeqRef.current) setLoading(false);
+      });
   }, [slug]);
 
   const load = useCallback((all?: boolean) => {

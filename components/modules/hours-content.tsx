@@ -660,8 +660,12 @@ function ClosuresTab({
     }
   }
 
+  // Audit giro 3: guardia doppio-click sulla delete periodo.
+  const [removing, setRemoving] = useState(false);
   async function remove(range: ClosureRange) {
+    if (removing) return;
     if (!window.confirm("Eliminare questo periodo?")) return;
+    setRemoving(true);
     await onAction(
       {
         action: "closure_delete_range",
@@ -672,7 +676,7 @@ function ClosuresTab({
         reason: range.reason ?? "",
       },
       "Chiusura eliminata",
-    );
+    ).finally(() => setRemoving(false));
   }
 
   return (
@@ -764,6 +768,7 @@ function ClosuresTab({
                       <button
                         type="button"
                         className="btn btn-sm btn-outline-danger"
+                        disabled={removing}
                         onClick={() => remove(r)}
                       >
                         Elimina
@@ -836,8 +841,12 @@ function ExceptionsTab({
     }
   }
 
+  // Audit giro 3: guardia doppio-click sulla delete periodo.
+  const [removing, setRemoving] = useState(false);
   async function remove(range: ExceptionRange) {
+    if (removing) return;
     if (!window.confirm("Eliminare questo periodo?")) return;
+    setRemoving(true);
     await onAction(
       {
         action: "exception_delete_range",
@@ -845,7 +854,7 @@ function ExceptionsTab({
         to: range.start,
       },
       "Straordinario eliminato",
-    );
+    ).finally(() => setRemoving(false));
   }
 
   function removeSplit() {
@@ -1025,6 +1034,7 @@ function ExceptionsTab({
                       <button
                         type="button"
                         className="btn btn-sm btn-outline-danger"
+                        disabled={removing}
                         onClick={() => remove(r)}
                       >
                         Elimina

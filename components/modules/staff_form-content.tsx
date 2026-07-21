@@ -81,7 +81,12 @@ export function StaffFormContent({ slug: slugProp, action: actionProp, staffId: 
   // SSR (slug="" -> link //pagina; action="new" -> titolo "Nuovo operatore" mentre il
   // client legge "edit") -> hydration mismatch. Con le prop, server e client coincidono.
   const slug = slugProp || tenantSlug();
-  const [action] = useState<"new" | "edit">(() => actionProp ?? resolveAction());
+  const [action, setAction] = useState<"new" | "edit">(actionProp ?? "new");
+  // Audit giro 3: azione letta POST-MOUNT (pattern SSR-safe) — l'initializer
+  // leggeva window e il titolo divergeva tra server ("Nuovo") e client (edit).
+  useEffect(() => {
+    if (!actionProp) setAction(resolveAction());
+  }, [actionProp]);
   const staffId = staffIdProp ?? 0;
   const [form, setForm] = useState<StaffForm>(emptyForm());
   const [ctx, setCtx] = useState<StaffContext>({});

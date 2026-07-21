@@ -328,7 +328,10 @@ export function StockMovesContent({ slug: slugProp, initialQuery }: { slug?: str
   useEffect(() => {
     if (printMode && viewDoc && !printedRef.current && typeof window !== "undefined") {
       printedRef.current = true;
-      setTimeout(() => window.print(), 150);
+      // Timer PULITO nel cleanup (audit giro 3): tornando al dettaglio entro
+      // 150ms la stampa scattava comunque fuori dalla vista stampa.
+      const t = setTimeout(() => window.print(), 150);
+      return () => clearTimeout(t);
     }
     if (!printMode) printedRef.current = false;
   }, [printMode, viewDoc]);

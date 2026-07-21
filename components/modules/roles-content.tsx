@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import InfoBox from "./info-box";
 import { useTakenFlash } from "./flash";
 
@@ -174,8 +174,11 @@ export function RolesContent({
     if (next && typeof window !== "undefined") window.scrollTo({ top: 0 });
   }, []);
 
+  const loadSeqRef = useRef(0);
   const load = useCallback(
     (role: string) => {
+      const seq = ++loadSeqRef.current; // anti-stale (audit giro 3: la risposta
+      // lenta del ruolo precedente riportava la UI sul ruolo sbagliato)
       // `loading` parte true e viene azzerato nel .finally; i chiamanti da
       // event handler (selectRole) lo riattivano prima di chiamare load.
       fetch(`/api/manage/permissions?slug=${encodeURIComponent(slug)}&role=${encodeURIComponent(role)}`, {
@@ -186,6 +189,7 @@ export function RolesContent({
           return r.json();
         })
         .then((j) => {
+          if (seq !== loadSeqRef.current) return;
           const rp: RolePermissions | null = j?.rolePermissions ?? null;
           setData(rp);
           if (rp) {
@@ -195,8 +199,12 @@ export function RolesContent({
             setDirectSelected(initial);
           }
         })
-        .catch(() => setData(null))
-        .finally(() => setLoading(false));
+        .catch(() => {
+          if (seq === loadSeqRef.current) setData(null);
+        })
+        .finally(() => {
+          if (seq === loadSeqRef.current) setLoading(false);
+        });
     },
     [slug],
   );

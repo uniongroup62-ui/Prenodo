@@ -423,6 +423,7 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
   useEffect(() => {
     if (!findOpen) return;
     const q = findQuery.trim();
+    let alive = true; // anti-stale (audit giro 3)
     const handle = window.setTimeout(() => {
       // Search legacy (api_clients search, planner JS 120: exclude_blocked=1):
       // tenant-wide senza filtro sede + clienti bloccati esclusi.
@@ -430,10 +431,17 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
         headers: { "x-tenant-slug": slug },
       })
         .then((r) => r.json())
-        .then((j) => setFindResults(Array.isArray(j.clients) ? j.clients : []))
-        .catch(() => setFindResults([]));
+        .then((j) => {
+          if (alive) setFindResults(Array.isArray(j.clients) ? j.clients : []);
+        })
+        .catch(() => {
+          if (alive) setFindResults([]);
+        });
     }, 200);
-    return () => window.clearTimeout(handle);
+    return () => {
+      alive = false;
+      window.clearTimeout(handle);
+    };
   }, [findOpen, findQuery, slug]);
 
   function pickClient(c: Client) {

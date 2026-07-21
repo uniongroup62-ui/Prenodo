@@ -48,6 +48,17 @@ type CategoryResult = { ok: boolean; error?: string; msg?: string; popup?: Categ
 type CategoriesQuery = { msg?: string; err?: string; action?: string; id?: string; category_id?: string; p?: string };
 type CategoryBlockPopup = { category_name: string; services: Array<{ id: number; name: string; active: boolean }> };
 
+// Redirect "Categoria non trovata" spostato in un EFFECT (audit giro 3: prima
+// il render chiamava direttamente redirectFlash — side effect nel render,
+// doppia esecuzione in StrictMode).
+function OrderCategoryMissingRedirect({ redirectFlash }: { redirectFlash: (flash: { msg?: string; err?: string }) => void }) {
+  useEffect(() => {
+    redirectFlash({ err: "Categoria non trovata" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return null;
+}
+
 function tenantSlug(): string {
   if (typeof window === "undefined") return "";
   return window.location.pathname.split("/")[1] || "";
@@ -81,6 +92,8 @@ export function ServiceCategoriesContent({ slug: slugProp, initialQuery }: { slu
   const [editName, setEditName] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // Audit giro 3: guardia doppio-click su delete categoria e salva-ordine.
+  const [actionBusy, setActionBusy] = useState(false);
   const [busyMove, setBusyMove] = useState(false);
   // Immagine categoria: file scelto nei due modal + flag "rimuovi" (edit).
   const [createImageFile, setCreateImageFile] = useState<File | null>(null);
@@ -256,6 +269,7 @@ export function ServiceCategoriesContent({ slug: slugProp, initialQuery }: { slu
   // 3544-3589): con servizi collegati -> popup 'Categoria non eliminabile';
   // senza -> confirm verbatim e flash dal server.
   async function onDelete(category: Category) {
+    if (actionBusy) return;
     const linked = servicesForCategory(category.id);
     if (linked.length > 0) {
       setBlockPopup({
@@ -266,8 +280,9 @@ export function ServiceCategoriesContent({ slug: slugProp, initialQuery }: { slu
       return;
     }
     if (typeof window !== "undefined" && !window.confirm("Eliminare definitivamente questa categoria? Verra eliminata solo se non ha servizi associati.")) return;
+    setActionBusy(true);
     setError("");
-    const j = await postCategory({ action: "category_delete", id: String(category.id) });
+    const j = await postCategory({ action: "category_delete", id: String(category.id) }).finally(() => setActionBusy(false));
     if (!j.ok) {
       if (j.popup) {
         setBlockPopup(j.popup);
@@ -282,8 +297,9 @@ export function ServiceCategoriesContent({ slug: slugProp, initialQuery }: { slu
 
   // Salva ordine servizi della categoria (action=order, services.php 3527-3541).
   async function onSaveServiceOrder() {
-    if (!orderCategoryId) return;
-    const j = await postCategory({ action: "save_service_order", category_id: String(orderCategoryId), service_order: orderIds.join(",") });
+    if (!orderCategoryId || actionBusy) return;
+    setActionBusy(true);
+    const j = await postCategory({ action: "save_service_order", category_id: String(orderCategoryId), service_order: orderIds.join(",") }).finally(() => setActionBusy(false));
     const usp = new URLSearchParams({ tab: "categories", action: "order", id: String(orderCategoryId) });
     flashNavigate(`/${encodeURIComponent(slug)}/services?${usp.toString()}`, {
       msg: String((j as CategoryResult & { msg?: string }).msg ?? (j.ok ? "Ordine servizi aggiornato" : "Nessun servizio da ordinare")),
@@ -350,8 +366,7 @@ export function ServiceCategoriesContent({ slug: slugProp, initialQuery }: { slu
     const byId = new Map(services.map((s) => [s.id, s]));
     const orderRows = orderIds.map((id) => byId.get(id)).filter((s): s is Service => Boolean(s));
     if (!loading && !category) {
-      redirectFlash({ err: "Categoria non trovata" });
-      return null;
+      return <OrderCategoryMissingRedirect redirectFlash={redirectFlash} />;
     }
     return (
       <div className="container-fluid">
@@ -424,7 +439,7 @@ export function ServiceCategoriesContent({ slug: slugProp, initialQuery }: { slu
                 </div>
 
                 <div className="mt-3 d-flex justify-content-end">
-                  <button className="btn btn-primary btn-pill" type="button" onClick={() => void onSaveServiceOrder()}>
+                  <button className="btn btn-primary btn-pill" type="button" disabled={actionBusy} onClick={() => void onSaveServiceOrder()}>
                     <i className="bi bi-check2-circle me-1" />
                     Salva ordine
                   </button>

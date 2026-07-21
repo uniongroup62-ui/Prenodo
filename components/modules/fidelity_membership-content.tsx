@@ -98,6 +98,11 @@ export function FidelityMembershipContent({ slug: slugProp, initialQuery }: { sl
   const [cardClientSearch, setCardClientSearch] = useState("");
   const [searchResults, setSearchResults] = useState<SearchClient[] | null>(null);
   const searchTimer = useRef<number | null>(null);
+  // Audit giro 3: seq anti-stale + cleanup del timer allo smontaggio.
+  const searchSeqRef = useRef(0);
+  useEffect(() => () => {
+    if (searchTimer.current) window.clearTimeout(searchTimer.current);
+  }, []);
   const [selectedClient, setSelectedClient] = useState<SearchClient | null>(null);
   const [cardCode, setCardCode] = useState("");
   const [cardIssuedAt, setCardIssuedAt] = useState(today);
@@ -140,6 +145,7 @@ export function FidelityMembershipContent({ slug: slugProp, initialQuery }: { sl
     setCardClientSearch(term);
     if (searchTimer.current) window.clearTimeout(searchTimer.current);
     searchTimer.current = window.setTimeout(async () => {
+      const seq = ++searchSeqRef.current; // anti-stale (audit giro 3)
       const needle = term.trim();
       if (needle.length < 2) {
         setSearchResults(null);
@@ -148,9 +154,10 @@ export function FidelityMembershipContent({ slug: slugProp, initialQuery }: { sl
       try {
         const res = await fetch(`/api/manage/fidelity?slug=${encodeURIComponent(slug)}&action=client_search&q=${encodeURIComponent(needle)}`, { headers: { "x-tenant-slug": slug } });
         const j = await res.json();
+        if (seq !== searchSeqRef.current) return;
         setSearchResults(Array.isArray(j.clients) ? j.clients : []);
       } catch {
-        setSearchResults(null);
+        if (seq === searchSeqRef.current) setSearchResults(null);
       }
     }, 250);
   }

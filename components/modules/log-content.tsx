@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // Pagina "Log" (registro attività, feature approvata 2026-07-16, SOLO ADMIN).
 // Due viste: Attività (activity_logs, retention 30 giorni) ed Eliminazioni
@@ -109,6 +109,9 @@ export function LogContent({ slug: slugProp, initialQuery }: { slug?: string; in
     return Number.isFinite(n) && n >= 1 ? n : 1;
   });
   const [loading, setLoading] = useState(true);
+  // Seq anti-stale (audit giro 3): tab/pager rapidi facevano vincere la
+  // risposta più lenta (conteggi/righe della vista sbagliata).
+  const fetchSeqRef = useRef(0);
   const [accessDenied, setAccessDenied] = useState(false);
   // Viste consentite (permessi logs.view / logs.deletions; admin entrambe):
   // arrivano dalla risposta API e gatano i tab. Default entrambe finché non
@@ -132,6 +135,7 @@ export function LogContent({ slug: slugProp, initialQuery }: { slug?: string; in
   // Funzione dichiarata (hoisted), NON useCallback: il ramo 403-switch la
   // richiama ricorsivamente (profondità max 1: l'altra vista è permessa).
   function fetchData(v: "activity" | "deletions", f: { module: string; action: string; user: string; q: string }, pageN: number) {
+      const seq = ++fetchSeqRef.current;
       const params = new URLSearchParams({ slug, view: v, p: String(Math.max(1, pageN)) });
       if (v === "activity") {
         if (f.module) params.set("module", f.module);
@@ -142,6 +146,7 @@ export function LogContent({ slug: slugProp, initialQuery }: { slug?: string; in
       fetch(`/api/manage/logs?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
         .then(async (r) => ({ status: r.status, j: await r.json() }))
         .then(({ status, j }) => {
+          if (seq !== fetchSeqRef.current) return;
           if (j?.views) setViews({ activity: Boolean(j.views.activity), deletions: Boolean(j.views.deletions) });
           if (status === 403) {
             // Vista richiesta non permessa ma l'altra sì -> switch automatico
@@ -167,10 +172,13 @@ export function LogContent({ slug: slugProp, initialQuery }: { slug?: string; in
           setPageSize(Math.max(1, Number(j.pageSize ?? 25)));
         })
         .catch(() => {
+          if (seq !== fetchSeqRef.current) return;
           setRows([]);
           setDeletions([]);
         })
-        .finally(() => setLoading(false));
+        .finally(() => {
+          if (seq === fetchSeqRef.current) setLoading(false);
+        });
   }
 
   useEffect(() => {

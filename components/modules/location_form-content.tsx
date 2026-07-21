@@ -72,7 +72,12 @@ export function LocationFormContent({ slug: slugProp }: { slug?: string } = {}) 
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
-  const [action] = useState<"new" | "edit">(resolveAction);
+  const [action, setAction] = useState<"new" | "edit">("new");
+  // Audit giro 3: azione letta POST-MOUNT (pattern SSR-safe) — l'initializer
+  // leggeva window e il titolo divergeva tra server ("Nuovo") e client (edit).
+  useEffect(() => {
+    setAction(resolveAction());
+  }, []);
   const [form, setForm] = useState<LocationForm>(emptyForm());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

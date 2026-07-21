@@ -283,6 +283,7 @@ export function QuoteFormContent({ slug: slugProp, initialQuery }: { slug?: stri
   const [quoteDate, setQuoteDate] = useState("");
   const [number, setNumber] = useState("");
   const manualNumberRef = useRef(false);
+  const autoNumberSeqRef = useRef(0); // anti-stale sul numero automatico (audit giro 3)
   const [validUntil, setValidUntil] = useState("");
   const [locationId, setLocationId] = useState("");
   const [initialLocation, setInitialLocation] = useState("");
@@ -406,12 +407,16 @@ export function QuoteFormContent({ slug: slugProp, initialQuery }: { slug?: stri
     if (isEdit || manualNumberRef.current) return;
     const d = String(dateValue || "").trim();
     if (!d) return;
+    const seq = ++autoNumberSeqRef.current;
     try {
       const res = await fetch(`/api/manage/quotes?slug=${encodeURIComponent(slug)}&action=next_number&quote_date=${encodeURIComponent(d)}`, {
         headers: { "x-tenant-slug": slug },
       });
       if (!res.ok) return;
       const j = await res.json();
+      // Ricontrollo DOPO l'await: l'utente può aver digitato un numero manuale
+      // (o cambiato di nuovo data) mentre la richiesta era in volo.
+      if (seq !== autoNumberSeqRef.current || manualNumberRef.current) return;
       if (j?.ok && j?.number) setNumber(String(j.number));
     } catch { /* best-effort */ }
   }

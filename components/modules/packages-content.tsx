@@ -191,6 +191,7 @@ export function PackagesContent({ slug: slugProp, initialQuery }: { slug?: strin
   const [totalCount, setTotalCount] = useState(0);
   const [pageSize, setPageSize] = useState(25);
 
+  const fetchSeqRef = useRef(0);
   // Fetch puro (setState nei callback della Promise; loading gia' true di default).
   const fetchData = useCallback(
     (f: { clientId: string; packageName: string; status: string; allLocations: boolean }, pageN = 1) => {
@@ -198,9 +199,11 @@ export function PackagesContent({ slug: slugProp, initialQuery }: { slug?: strin
       if (f.clientId !== "") qs.set("client_id", f.clientId);
       if (f.packageName !== "") qs.set("package_name", f.packageName);
       if (f.allLocations) qs.set("all_locations", "1");
+      const seq = ++fetchSeqRef.current;
       fetch(`/api/manage/packages?${qs.toString()}`, { headers: { "x-tenant-slug": slug } })
         .then((r) => r.json())
         .then((j) => {
+          if (seq !== fetchSeqRef.current) return;
           setRows(Array.isArray(j.clientPackages) ? j.clientPackages : []);
           setTotalCount(Number(j.totalCount ?? (Array.isArray(j.clientPackages) ? j.clientPackages.length : 0)));
           setPageSize(Math.max(1, Number(j.pageSize ?? 25)));
@@ -210,8 +213,12 @@ export function PackagesContent({ slug: slugProp, initialQuery }: { slug?: strin
           setLocationsCount(Number(j.locationsCount ?? 0));
           if (j.perms) setPerms(j.perms as Perms);
         })
-        .catch(() => setRows([]))
-        .finally(() => setLoading(false));
+        .catch(() => {
+          if (seq === fetchSeqRef.current) setRows([]);
+        })
+        .finally(() => {
+          if (seq === fetchSeqRef.current) setLoading(false);
+        });
     },
     [slug],
   );

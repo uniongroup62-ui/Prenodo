@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 // Sezione "Campagne punti" (port di fidelity_points.php): tabella legacy
 // Nome (+ 'ID: N') | Periodo ('Subito -> Mai') | Accredito ('Fisso: 1 punto
@@ -90,6 +90,7 @@ export function FidelityCampaignsSection({ slug, defaultEarnStep = 10 }: { slug:
   const [deleteTarget, setDeleteTarget] = useState<Campaign | null>(null);
   const [deleteReason, setDeleteReason] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
+  const previewSeqRef = useRef(0);
   const [previewError, setPreviewError] = useState("");
 
   const load = useCallback(() => {
@@ -242,13 +243,19 @@ export function FidelityCampaignsSection({ slug, defaultEarnStep = 10 }: { slug:
       setDeleteTarget(target);
       setDeleteReason("");
     }
+    // Anti-stale (audit giro 3): aprendo B dopo A, la risposta lenta di A
+    // poteva mostrare l'impatto della campagna SBAGLIATA nella modale.
+    const seq = ++previewSeqRef.current;
     fetch(`/api/manage/fidelity?slug=${encodeURIComponent(slug)}&action=campaign_preview&id=${target.id}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
       .then((j) => {
+        if (seq !== previewSeqRef.current) return;
         if (!j?.ok || !j?.preview) throw new Error(String(j?.error ?? "Preview non disponibile."));
         setPreview(j.preview as Preview);
       })
-      .catch((e) => setPreviewError(e instanceof Error ? e.message : "Errore non previsto"));
+      .catch((e) => {
+        if (seq === previewSeqRef.current) setPreviewError(e instanceof Error ? e.message : "Errore non previsto");
+      });
   }
 
   function updateTier(idx: number, patch: Partial<Tier>) {

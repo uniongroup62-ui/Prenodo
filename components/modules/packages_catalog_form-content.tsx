@@ -19,7 +19,9 @@ type ServiceOpt = { id: number; name: string; price: number };
 type ProductOpt = { id: number; name: string; price: number; sku: string };
 type Ctx = { services: ServiceOpt[]; products: ProductOpt[]; locations: { id: number; name: string }[] };
 
-type Row = { itemType: "service" | "product"; itemId: number; qty: number; unitPrice: number; discountType: "percent" | "amount"; discountValue: string };
+// _k: key stabile per riga (audit giro 3: key={idx} faceva migrare lo stato
+// aperto/ricerca della ItemCombobox sulla riga successiva alle rimozioni).
+type Row = { _k: number; itemType: "service" | "product"; itemId: number; qty: number; unitPrice: number; discountType: "percent" | "amount"; discountValue: string };
 
 function tenantSlug(): string {
   if (typeof window === "undefined") return "";
@@ -32,8 +34,9 @@ function resolveAction(): "new" | "edit" {
 function money2(n: number): string {
   return (Math.round(Number(n || 0) * 100) / 100).toFixed(2);
 }
+let rowKeySeq = 1;
 function emptyRow(type: "service" | "product" = "service"): Row {
-  return { itemType: type, itemId: 0, qty: 1, unitPrice: 0, discountType: "percent", discountValue: "0.00" };
+  return { _k: rowKeySeq++, itemType: type, itemId: 0, qty: 1, unitPrice: 0, discountType: "percent", discountValue: "0.00" };
 }
 function lineTotal(r: Row): number {
   const sub = Math.max(1, r.qty) * Math.max(0, r.unitPrice);
@@ -128,7 +131,12 @@ export function PackagesCatalogFormContent({ slug: slugProp }: { slug?: string }
   // Prop dal server preferita: il fallback window-only rende slug="" in SSR
   // e i link assoluti diventano protocol-relative rotti (//pagina).
   const slug = slugProp || tenantSlug();
-  const [action] = useState<"new" | "edit">(resolveAction);
+  const [action, setAction] = useState<"new" | "edit">("new");
+  // Audit giro 3: azione letta POST-MOUNT (pattern SSR-safe) — l'initializer
+  // leggeva window e il titolo divergeva tra server ("Nuovo") e client (edit).
+  useEffect(() => {
+    setAction(resolveAction());
+  }, []);
   const [ctx, setCtx] = useState<Ctx>({ services: [], products: [], locations: [] });
   const [id, setId] = useState(0);
   const [name, setName] = useState("");
@@ -184,7 +192,7 @@ export function PackagesCatalogFormContent({ slug: slugProp }: { slug?: string }
                 discountType: it.discountType === "amount" ? "amount" : "percent",
                 discountValue: money2(Number(it.discountValue ?? 0)),
               }));
-              setRows(items.length > 0 ? items : [emptyRow()]);
+              setRows(items.length > 0 ? items.map((it: Omit<Row, "_k">) => ({ ...it, _k: rowKeySeq++ })) : [emptyRow()]);
             })
             .catch(() => setError("Errore nel caricamento del pacchetto."))
         : Promise.resolve();
@@ -382,7 +390,7 @@ export function PackagesCatalogFormContent({ slug: slugProp }: { slug?: string }
                           ? ctx.products.map((p) => ({ id: p.id, label: p.sku ? `${p.name} (${p.sku})` : p.name }))
                           : ctx.services.map((s) => ({ id: s.id, label: s.name }));
                       return (
-                        <div className="row g-2 align-items-end pkg-item-row mb-2" data-item-type={r.itemType} key={idx}>
+                        <div className="row g-2 align-items-end pkg-item-row mb-2" data-item-type={r.itemType} key={r._k}>
                           <div className="col-md-4">
                             <ItemCombobox
                               placeholder={r.itemType === "product" ? "Seleziona prodotto…" : "Seleziona servizio…"}
