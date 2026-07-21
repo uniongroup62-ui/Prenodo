@@ -17903,3 +17903,40 @@ DISTINTO, l'esplicito vince sempre. Verifica: pass3 5/5 run consecutivi
 + 4 suite preventivi + quote-decision verdi. TRAPPOLA GENERALE: con
 questo trigger OGNI updater in catena nello stesso secondo deve scrivere
 un updated_at DISTINTO, non solo esplicito.
+
+## 2026-07-21 - FIX GIRO 2 AUDIT (blocchi A/B/C, su ok utente)
+BLOCCO A sicurezza (9efa251): credenziali admin RIMOSSE da tutti i file
+tracciati (shot tools, verify-login, componente morto, suite log via
+PRENODO_TEST_ADMIN_PASSWORD in .env.local, docs redatti) - la password
+resta nella HISTORY git: rotazione a carico utente; stored XSS JSON-LD
+marketplace fixata (jsonLdSerialize escapa <); open redirect ?return=
+(// e /\ rifiutati, helper + duplicato reset, unit 5/5); social sede
+allow-list http/https; exposeLocalDebug hard-guard prod; GET pubblici
+consent/quote/gift-voucher con errori tecnici solo nei log; From email
+RFC5322 quotato; assertCronAuth timing-safe.
+BLOCCO B cron/infra (582ff41): claim atomico anti double-send su
+reminders email+SMS+card_reminders SENZA DDL (status pending->sending
++ recovery 15min su updated_at; select estesa alle righe sending
+scadute); errori provider transienti -> tornano pending (retry);
+isolamento per-tenant su 6 job (try/catch + error nel payload);
+TZ Roma su fidelity-expire/reconcile/todayYmd/registro cron/scadenza
+preventivi (era CURRENT_DATE UTC)/firma GDPR nel PDF; double-escape
+rimosso dalle email plain (reminder/fidelity/lifecycle-rejected);
+giftcard-send sendEnabled per-request; migrate-data con SUPA_URL
+esplicita + CONFIRM_WIPE=1.
+BLOCCO C client: drawer - holdGenRef invalida le hold-response in volo
+(dropAndReleaseHold incrementa; risposta stale -> release immediato del
+token: niente piu' slot bloccato all'infinito a drawer chiuso) + reset
+dei 7 stati redeem mancanti; calendario - loadSeqRef anti-stale su
+loadContext, fallimento move -> RELOAD dal server (niente revert su
+snapshot stale), reconcile move limitato al range visibile (range_from/
+range_to nel payload, fallback compatibile), filtro servizio per ID;
+booking pubblico - releaseHeldSlot su OGNI ripensamento (cambio sede/
+servizi/data/slot/rientro step 5) + seq-guard su chooseSlot (risposta
+lenta rilasciata); saas-admin - banner errori ROSSO (17 catch su
+setMessageError), popstate via ref (filtri audit non piu' azzerati),
+palette con guardia anti-stale, conferma sul bulk reset onboarding.
+VERIFICHE: tsc pulito; suite quickbooking 5, calendario 25,
+appuntamenti 7, booking 9+3, saas-admin 19+9, log-attivita 16,
+profilo 14, automazioni 8, fidelity-pass2 10; crawler 73/73; unit
+redirect 5/5; JSON-LD live valido.

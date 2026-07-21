@@ -27,7 +27,7 @@
  * The legacy `_csrf` hidden input is intentionally dropped.
  */
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 const CSS_LINKS = [
   "https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css",
@@ -313,6 +313,25 @@ export function BookingFaithful({
     ownerKeyRef.current = `public-${Math.random().toString(36).slice(2)}`;
   }
 
+  // Igiene hold (audit 21/07): ogni ripensamento (cambio sede/servizi/data,
+  // nuovo slot, rientro sullo step 5) prima AZZERAVA l'hold senza rilasciarlo
+  // sul server — lo slot restava bloccato per gli altri clienti fino al TTL.
+  // holdSeqRef è anche la guardia anti-stale di chooseSlot: click rapidi su due
+  // slot non fanno più vincere la risposta più lenta (hold di A con slot B).
+  const holdSeqRef = useRef(0);
+  const holdRef = useRef<BookingHold | null>(null);
+  useEffect(() => {
+    holdRef.current = hold;
+  }, [hold]);
+  const releaseHeldSlot = useCallback((toRelease: BookingHold | null) => {
+    if (!toRelease?.token) return;
+    void fetch("/api/booking", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "release_hold", slug, token: toRelease.token, owner_key: ownerKeyRef.current }),
+    }).catch(() => {});
+  }, [slug]);
+
   // Swap document.body.className like the legacy embed shell (body class="embed-body"); restore on unmount.
   useEffect(() => {
     const previous = document.body.className;
@@ -419,6 +438,10 @@ export function BookingFaithful({
 
     setSlotsLoading(true);
     setSlot("");
+    // Rilascio dell'hold anche qui (rientro sullo step 5): senza, lo slot
+    // riservato restava bloccato per gli altri fino al TTL (audit 21/07).
+    holdSeqRef.current += 1;
+    releaseHeldSlot(holdRef.current);
     setHold(null);
     setExpandedHours(new Set());
     fetch(`/api/booking?${params.toString()}`)
@@ -442,7 +465,7 @@ export function BookingFaithful({
     return () => {
       active = false;
     };
-  }, [step, slug, date, serviceIds, locationId, staffMapJson]);
+  }, [step, slug, date, serviceIds, locationId, staffMapJson, releaseHeldSlot]);
 
   // Auto-refresh silenzioso ogni 15s sullo step Data/Ora (in pausa se la tab è
   // nascosta), come il legacy — senza azzerare la selezione/hold.
@@ -927,6 +950,8 @@ export function BookingFaithful({
   }
 
   function chooseLocation(id: number) {
+    holdSeqRef.current += 1;
+    releaseHeldSlot(hold);
     setLocationId(id);
     setServiceIds([]);
     setSlot("");
@@ -934,6 +959,8 @@ export function BookingFaithful({
   }
 
   function toggleService(id: number) {
+    holdSeqRef.current += 1;
+    releaseHeldSlot(hold);
     setServiceIds((current) =>
       current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
     );
@@ -942,6 +969,8 @@ export function BookingFaithful({
   }
 
   function chooseDate(ymd: string) {
+    holdSeqRef.current += 1;
+    releaseHeldSlot(hold);
     setDate(ymd);
     setSlot("");
     setHold(null);
@@ -949,6 +978,8 @@ export function BookingFaithful({
 
   async function chooseSlot(item: BookingSlot) {
     if (!item.available) return;
+    const seq = ++holdSeqRef.current;
+    releaseHeldSlot(hold);
     setSlot(item.time);
     setHold(null);
     setError("");
@@ -971,9 +1002,16 @@ export function BookingFaithful({
         }),
       });
       const data = await response.json();
+      if (seq !== holdSeqRef.current) {
+        // Selezione cambiata mentre l'hold era in volo: rilascia il token
+        // appena creato e non toccare lo stato (vince l'ultima scelta).
+        if (data?.ok && data.hold) releaseHeldSlot(data.hold as BookingHold);
+        return;
+      }
       if (!data.ok) throw new Error(data.error || "Orario non più disponibile.");
       setHold(data.hold as BookingHold);
     } catch (caught) {
+      if (seq !== holdSeqRef.current) return;
       setSlot("");
       setError(caught instanceof Error ? caught.message : "Orario non più disponibile.");
     }

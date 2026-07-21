@@ -911,6 +911,13 @@ export function QuickBookingDrawer() {
   // always release the CURRENT hold without re-binding, and dropAndReleaseHold can read it
   // without threading the token through every setter.
   const holdTokenRef = useRef<string>("");
+  // Generazione dell'hold (audit 21/07): incrementata a ogni invalidazione
+  // (dropAndReleaseHold, quindi anche chiusura/reset). Le risposte di
+  // hold_availability arrivate DOPO l'invalidazione vengono scartate e il
+  // token appena ricevuto viene rilasciato — prima una risposta lenta a
+  // drawer già chiuso settava holdToken e l'auto-renew teneva lo slot
+  // bloccato per tutti all'infinito.
+  const holdGenRef = useRef(0);
   // Scadenza CLIENT-side dell'hold (port di qbHoldIsExpired): il backend usa
   // TTL 300s; il timestamp si rinfresca alla creazione e a ogni renew riuscito.
   const HOLD_TTL_MS = 300_000;
@@ -935,6 +942,7 @@ export function QuickBookingDrawer() {
   // time change) both clears the input and frees the technical hold. Reads the latest token
   // from the ref (avoids threading it through every setter). No-op when there is no hold.
   const dropAndReleaseHold = useCallback(() => {
+    holdGenRef.current += 1; // invalida le richieste di hold in volo
     const tok = holdTokenRef.current;
     if (tok) releaseHold(tok);
     holdTokenRef.current = "";
@@ -1006,6 +1014,17 @@ export function QuickBookingDrawer() {
     setPackageRedeems({});
     setClientPrepaids([]);
     setPrepaidRedeems({});
+    // Simmetria col reset di packages/prepaids (audit 21/07): anche gli stati
+    // redeem GiftCard/GiftBox/Omaggi vanno azzerati — oggi il leak è schermato
+    // da selectClient/loadClientContext, ma un edit con clientId non valido
+    // erediterebbe pick e liste del cliente precedente (serializzabili nel save).
+    setClientGiftcards([]);
+    setGiftcardPick(null);
+    setGiftcardAmountInput("");
+    setClientGiftboxes([]);
+    setGiftboxRedeems({});
+    setClientGifts([]);
+    setGiftRedeems({});
     setSelectedServiceIds([]);
     setBookedPriceByService({}); // Item D: drop the edit-only booked-price snapshot
     setPromoByService({}); // drop the auto-detected promo lines (re-fetched on next context)
@@ -2938,6 +2957,7 @@ export function QuickBookingDrawer() {
     }
     setAvailLoading(true);
     try {
+      const holdGen = holdGenRef.current; // scarta la risposta se l'hold viene invalidato nel frattempo
       const staffName = staffId ? staff.find((s) => String(s.id) === staffId)?.name ?? "" : "";
       const res = await fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}`, {
         method: "POST",
@@ -2953,6 +2973,12 @@ export function QuickBookingDrawer() {
       });
       const data: { ok?: boolean; error?: string; token?: string; time?: string; staffName?: string; staffId?: number | null } =
         await res.json().catch(() => ({}));
+      if (holdGen !== holdGenRef.current) {
+        // Drawer chiuso/reset mentre l'hold era in volo: rilascia subito il
+        // token appena creato, altrimenti l'auto-renew bloccherebbe lo slot.
+        if (data.token) releaseHold(data.token);
+        return;
+      }
       if (!res.ok || data.ok === false || !data.token) {
         setFormError(String(data.error || "Orario non piu disponibile. Ricarica e scegli un altro slot."));
         return;
@@ -2970,7 +2996,7 @@ export function QuickBookingDrawer() {
     } finally {
       setAvailLoading(false);
     }
-  }, [selectedServiceNames, date, startTime, staffId, staff, slug, locationId]);
+  }, [selectedServiceNames, date, startTime, staffId, staff, slug, locationId, releaseHold]);
 
   // ---- "Disponibilità" MODAL (port of #qbAvailabilityModal, app.js ~9979-11360) ----
   // The button opens an XL modal that browses availability per period: Giorno =
@@ -3099,6 +3125,7 @@ export function QuickBookingDrawer() {
     if (availApplying || !slotDate || !slotTime) return;
     setAvailApplying(true);
     try {
+      const holdGen = holdGenRef.current; // scarta la risposta se l'hold viene invalidato nel frattempo
       const names = selectedServiceNames();
       const staffName = staffId ? staff.find((s) => String(s.id) === staffId)?.name ?? "" : "";
       const res = await fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}`, {
@@ -3115,6 +3142,12 @@ export function QuickBookingDrawer() {
       });
       const data: { ok?: boolean; error?: string; token?: string; time?: string; staffId?: number | null } =
         await res.json().catch(() => ({}));
+      if (holdGen !== holdGenRef.current) {
+        // Drawer chiuso/reset mentre l'hold era in volo: rilascia il token
+        // appena creato (altrimenti l'auto-renew bloccherebbe lo slot).
+        if (data.token) releaseHold(data.token);
+        return;
+      }
       if (!res.ok || data.ok === false || !data.token) {
         setAvailModalError(String(data.error || "Orario non piu disponibile. Ricarica e scegli un altro slot."));
         void loadAvailabilityPeriod(slotDate, availMode);
@@ -3132,7 +3165,7 @@ export function QuickBookingDrawer() {
     } finally {
       setAvailApplying(false);
     }
-  }, [availApplying, selectedServiceNames, staffId, staff, slug, locationId, availMode, loadAvailabilityPeriod, closeAvailabilityModal]);
+  }, [availApplying, selectedServiceNames, staffId, staff, slug, locationId, availMode, loadAvailabilityPeriod, closeAvailabilityModal, releaseHold]);
 
   // Prev / Oggi / Next (legacy period navigation per mode).
   const availNavigate = useCallback((direction: -1 | 0 | 1) => {

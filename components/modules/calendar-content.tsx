@@ -207,9 +207,18 @@ function findOperatorStaff(
   return staff.find((s) => (s.name || "").trim().toLowerCase() === t);
 }
 
-function apptIncludesService(a: Appointment, serviceName: string): boolean {
+// Match per ID dove il payload lo espone (audit 21/07: il confronto per NOME
+// faceva matchare anche i servizi omonimi di altre sedi); il nome resta solo
+// come fallback per le righe testuali senza services/segments.
+function apptIncludesService(a: Appointment, serviceId: number, serviceName: string): boolean {
   const t = serviceName.trim().toLowerCase();
-  if (!t) return true;
+  if (serviceId <= 0 && !t) return true;
+  const hasStructured = (a.services ?? []).length > 0 || (a.segments ?? []).length > 0;
+  if (serviceId > 0 && hasStructured) {
+    if ((a.services ?? []).some((s) => Number(s.serviceId) === serviceId)) return true;
+    return (a.segments ?? []).some((seg) => Number(seg.serviceId) === serviceId);
+  }
+  if (!t) return false;
   if ((a.service || "").trim().toLowerCase() === t) return true;
   if ((a.services ?? []).some((s) => (s.name || "").trim().toLowerCase() === t)) return true;
   return (a.segments ?? []).some((seg) => (seg.serviceName || "").trim().toLowerCase() === t);
@@ -1226,12 +1235,20 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
     return { from: date, to: addDays(date, 1) };
   }, [view, date]);
 
+  const loadSeqRef = useRef(0);
   const loadContext = useCallback(
     (forDate: string, range: { from: string; to: string }) => {
+      // Sequenza monotona anti-stale (audit 21/07): prev/next rapidi lanciano
+      // fetch concorrenti e vincerebbe la risposta più LENTA (appuntamenti e
+      // orari di un ALTRO range a schermo) — applichiamo solo l'ultima
+      // richiesta (stesso pattern seqRef del drawer).
+      const seq = ++loadSeqRef.current;
+      const fresh = () => seq === loadSeqRef.current;
       // Reset in microtask: loadContext parte anche dall'effect di mount/nav e un
       // setState sincrono lì innescherebbe render a cascata (lint). loading parte
       // già true al mount; il .finally della fetch arriva sempre dopo.
       Promise.resolve().then(() => {
+        if (!fresh()) return;
         setLoading(true);
         setLoadError("");
       });
@@ -1242,6 +1259,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
       fetch(`/api/manage/calendar?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
         .then((r) => r.json())
         .then((j: CalendarContextResponse) => {
+          if (!fresh()) return;
           setStaff(Array.isArray(j.staff) ? j.staff : []);
           setServices(Array.isArray(j.services) ? j.services : []);
           setNotes(Array.isArray(j.notes) ? j.notes : []);
@@ -1256,6 +1274,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
           setCanCreate(j.canCreateAppointments === true);
         })
         .catch(() => {
+          if (!fresh()) return;
           setStaff([]);
           setServices([]);
           setNotes([]);
@@ -1279,14 +1298,18 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
       fetch(`/api/manage/appointments?${apptParams.toString()}`, { headers: { "x-tenant-slug": slug } })
         .then((r) => r.json())
         .then((j: { appointments?: Appointment[] }) => {
+          if (!fresh()) return;
           setAppointments(Array.isArray(j.appointments) ? j.appointments : []);
         })
         .catch(() => {
+          if (!fresh()) return;
           setAppointments([]);
           // Legacy events-failure message (calendar.js ~4778) -> error overlay + Riprova.
           setLoadError("Non e stato possibile aggiornare gli appuntamenti del calendario.");
         })
-        .finally(() => setLoading(false));
+        .finally(() => {
+          if (fresh()) setLoading(false);
+        });
     },
     [slug],
   );
@@ -1525,7 +1548,7 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
       }
       if (filterService) {
         const svc = services.find((s) => String(s.id) === filterService);
-        if (svc && !apptIncludesService(a, svc.name)) return false;
+        if (svc && !apptIncludesService(a, Number(svc.id) || 0, svc.name)) return false;
       }
       return true;
     },
@@ -1537,11 +1560,11 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
   // legacy), così il totale (M7) lo riflette e tutte le colonne restano visibili.
   const visibleAppts = useMemo(() => {
     const staffCol = filterStaff ? staff.find((s) => String(s.id) === filterStaff) : undefined;
-    const svcName = filterService ? services.find((s) => String(s.id) === filterService)?.name ?? "" : "";
+    const svcSel = filterService ? services.find((s) => String(s.id) === filterService) : undefined;
     return appointments.filter((a) => {
       if (a.date && a.date !== date) return false;
       if (filterStatus && statusKeyFromLabel(a.statusCode ?? a.status).key !== filterStatus) return false;
-      if (svcName && !apptIncludesService(a, svcName)) return false;
+      if (svcSel && !apptIncludesService(a, Number(svcSel.id) || 0, svcSel.name)) return false;
       if (staffCol && !apptInvolvesStaff(a, staffCol)) return false;
       return true;
     });
@@ -1962,28 +1985,33 @@ export function CalendarContent({ slug: slugProp }: { slug?: string } = {}) {
       // Gate manage (legacy editable:CAN_MANAGE_APPOINTMENTS): senza il permesso
       // niente drag/resize (il server rifiuta comunque action=move).
       if (!canManage) return;
-      const prev = appointments;
       setAppointments(patch);
       try {
         const res = await fetch(`/api/manage/appointments?slug=${encodeURIComponent(slug)}`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-tenant-slug": slug },
-          body: JSON.stringify({ action: "move", ...payload }),
+          // range_from/range_to: il reconcile della route torna SOLO il range
+          // visibile invece dell'intero storico appuntamenti (audit 21/07).
+          body: JSON.stringify({ action: "move", range_from: visibleRange.from, range_to: visibleRange.to, ...payload }),
         });
         const json: { ok?: boolean; error?: string; appointments?: Appointment[] } = await res.json().catch(() => ({}));
         if (!res.ok || json.ok === false || json.error) {
-          setAppointments(prev); // revert (port di info.revert())
+          // RICARICA dal server invece del revert su snapshot (audit 21/07):
+          // lo snapshot pre-move poteva essere STALE (un salvataggio dal drawer
+          // o un secondo drag nel frattempo) e il revert cancellava dal
+          // calendario aggiornamenti già avvenuti fino al refetch successivo.
+          loadContext(date, visibleRange);
           window.alert(String(json.error || fallbackMsg));
           return;
         }
         if (Array.isArray(json.appointments)) setAppointments(json.appointments);
         else loadContext(date, visibleRange);
       } catch {
-        setAppointments(prev); // revert su errore di rete
+        loadContext(date, visibleRange); // stato reale dal server anche su errore di rete
         window.alert(fallbackMsg);
       }
     },
-    [appointments, date, loadContext, slug, visibleRange, canManage],
+    [date, loadContext, slug, visibleRange, canManage],
   );
 
   // Drop nella vista GIORNO (port di eventDrop in staffTimeGridDay): cambia l'ORA

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Archive,
@@ -229,7 +229,19 @@ export function SaasAdminApp({
   const [admins, setAdmins] = useState<AdminRecord[]>([]);
   const [results, setResults] = useState<Array<{ slug: string; ok: boolean; message: string }>>([]);
   const [supportLink, setSupportLink] = useState("");
-  const [message, setMessage] = useState("");
+  const [message, setMessageRaw] = useState("");
+  // Tono del banner (audit 21/07): gli ERRORI comparivano nel banner VERDE di
+  // successo — una delete tenant fallita sembrava riuscita. setMessage = esito
+  // ok (verde, com'era per i successi); setMessageError = errore (rosso).
+  const [messageTone, setMessageTone] = useState<"success" | "error">("success");
+  const setMessage = useCallback((text: string) => {
+    setMessageTone("success");
+    setMessageRaw(text);
+  }, []);
+  const setMessageError = useCallback((text: string) => {
+    setMessageTone("error");
+    setMessageRaw(text);
+  }, []);
   const [loading, setLoading] = useState(true);
 
   const canManageTenants = initialUser.role === "owner" || initialUser.role === "admin";
@@ -297,6 +309,11 @@ export function SaasAdminApp({
   }
 
   // Deep-link iniziale (?page/slug/tab) + tasto Indietro (popstate).
+  // Il listener è registrato UNA volta ma chiama le funzioni dell'ULTIMA
+  // render via ref (audit 21/07): la closure della prima render usava gli
+  // auditFilters iniziali e "Indietro" sulla vista Audit li azzerava.
+  const popNavRef = useRef({ loadTenant, navigateView });
+  popNavRef.current = { loadTenant, navigateView };
   useEffect(() => {
     if (initialSlug) void loadTenant(initialSlug, initialTab);
     else loadForView(initialView, initialSection);
@@ -306,11 +323,11 @@ export function SaasAdminApp({
       const slug = params.get("slug") || "";
       const tab = (params.get("tab") || "overview") as TenantTab;
       const sec = params.get("sec") || "";
-      if (view === "tenants" && slug) void loadTenant(slug, tab, false);
+      if (view === "tenants" && slug) void popNavRef.current.loadTenant(slug, tab, false);
       else if (navItems.some((item) => item.key === view) || view === "dashboard") {
-        navigateView(view, false, sec);
+        popNavRef.current.navigateView(view, false, sec);
       } else {
-        navigateView("dashboard", false);
+        popNavRef.current.navigateView("dashboard", false);
       }
     };
     window.addEventListener("popstate", onPop);
@@ -338,7 +355,7 @@ export function SaasAdminApp({
         if (!cancelled) setOverview(data);
       })
       .catch((error) => {
-        if (!cancelled) setMessage(errorMessage(error));
+        if (!cancelled) setMessageError(errorMessage(error));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -359,7 +376,7 @@ export function SaasAdminApp({
       setOverview(data);
       setPage(data.page ?? nextPage);
     } catch (error) {
-      setMessage(errorMessage(error));
+      setMessageError(errorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -373,7 +390,7 @@ export function SaasAdminApp({
       setMessage(`Verifica eseguita su ${slug}.`);
       await loadOverview();
     } catch (error) {
-      setMessage(errorMessage(error));
+      setMessageError(errorMessage(error));
     }
   }
 
@@ -388,7 +405,7 @@ export function SaasAdminApp({
       syncUrl("tenants", slug, tab, push);
       if (tab === "backups") await loadBackups(slug);
     } catch (error) {
-      setMessage(errorMessage(error));
+      setMessageError(errorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -406,7 +423,7 @@ export function SaasAdminApp({
       if (slug && action !== "delete") await loadTenant(slug);
       if (action === "delete") setTenantDetail(null);
     } catch (error) {
-      setMessage(errorMessage(error));
+      setMessageError(errorMessage(error));
     }
   }
 
@@ -416,7 +433,7 @@ export function SaasAdminApp({
       const data = await apiGet<{ admins: AdminRecord[] }>("/api/admin/admins");
       setAdmins(data.admins);
     } catch (error) {
-      setMessage(errorMessage(error));
+      setMessageError(errorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -428,7 +445,7 @@ export function SaasAdminApp({
       setAdmins(data.admins);
       setMessage("Admin SaaS aggiornati.");
     } catch (error) {
-      setMessage(errorMessage(error));
+      setMessageError(errorMessage(error));
     }
   }
 
@@ -438,7 +455,7 @@ export function SaasAdminApp({
       const data = await apiGet<ControlsPayload>("/api/admin/operations?section=controls");
       setControls(data);
     } catch (error) {
-      setMessage(errorMessage(error));
+      setMessageError(errorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -450,7 +467,7 @@ export function SaasAdminApp({
       const data = await apiGet<SmsBillingPayload>("/api/admin/operations?section=sms_plans");
       setSmsBilling(data);
     } catch (error) {
-      setMessage(errorMessage(error));
+      setMessageError(errorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -462,7 +479,7 @@ export function SaasAdminApp({
       const data = await apiGet<BillingPayload>("/api/admin/operations?section=billing");
       setBilling(data);
     } catch (error) {
-      setMessage(errorMessage(error));
+      setMessageError(errorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -474,7 +491,7 @@ async function loadStats() {
       const data = await apiGet<{ stats: StatsPayload }>("/api/admin/operations?section=stats");
       setStatsData(data.stats);
     } catch (error) {
-      setMessage(errorMessage(error));
+      setMessageError(errorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -494,7 +511,7 @@ async function loadStats() {
       setAuditData(data);
       setAuditFilters(filters);
     } catch (error) {
-      setMessage(errorMessage(error));
+      setMessageError(errorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -511,7 +528,7 @@ async function loadStats() {
       setRestoreCandidates(data.candidates ?? []);
       setMaintTenants(all.tenants ?? []);
     } catch (error) {
-      setMessage(errorMessage(error));
+      setMessageError(errorMessage(error));
     }
   }
 
@@ -521,7 +538,7 @@ async function loadStats() {
       const data = await apiGet<{ signups: SignupRow[] }>("/api/admin/operations?section=signups");
       setSignups(data.signups ?? []);
     } catch (error) {
-      setMessage(errorMessage(error));
+      setMessageError(errorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -533,7 +550,7 @@ async function loadStats() {
       const data = await apiGet<MovementsPayload>("/api/admin/operations?section=send_movements");
       setMovements(data);
     } catch (error) {
-      setMessage(errorMessage(error));
+      setMessageError(errorMessage(error));
     } finally {
       setLoading(false);
     }
@@ -544,7 +561,7 @@ async function loadStats() {
       const data = await apiGet<{ backups: BackupRow[] }>(`/api/admin/operations?section=backups&slug=${encodeURIComponent(slug)}`);
       setBackups((current) => ({ ...current, [slug]: data.backups }));
     } catch (error) {
-      setMessage(errorMessage(error));
+      setMessageError(errorMessage(error));
     }
   }
 
@@ -558,7 +575,7 @@ async function loadStats() {
       if (payload.action === "backup_restore") { await loadRestoreCandidates(); await loadOverview(); }
       if (payload.action === "signup_delete") await loadSignups();
     } catch (error) {
-      setMessage(errorMessage(error));
+      setMessageError(errorMessage(error));
     }
   }
 
@@ -616,9 +633,9 @@ async function loadStats() {
 
           <div className="p-5">
             {message ? (
-              <div className="mb-4 flex items-center justify-between rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-800">
+              <div className={`mb-4 flex items-center justify-between rounded-md border p-3 text-sm font-semibold ${messageTone === "error" ? "border-red-200 bg-red-50 text-red-800" : "border-emerald-200 bg-emerald-50 text-emerald-800"}`}>
                 <span>{message}</span>
-                <button className="text-emerald-900" type="button" onClick={() => setMessage("")}>Chiudi</button>
+                <button className={messageTone === "error" ? "text-red-900" : "text-emerald-900"} type="button" onClick={() => setMessage("")}>Chiudi</button>
               </div>
             ) : null}
             {loading ? <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-600"><Loader2 className="animate-spin" size={16} aria-hidden /> Caricamento</div> : null}
@@ -758,14 +775,24 @@ function CommandPalette({ open, nav, onClose, onNavigate, onOpenTenant }: {
 
   useEffect(() => {
     if (!open) return;
+    // Guardia anti-stale (audit 21/07): oltre il debounce, una risposta lenta
+    // di un termine vecchio non deve sovrascrivere i risultati dell'attuale.
+    let alive = true;
     const handle = window.setTimeout(() => {
       const search = new URLSearchParams({ per_page: "8" });
       if (term.trim()) search.set("q", term.trim());
       apiGet<OverviewPayload>(`/api/admin/tenants?${search}`)
-        .then((data) => setTenants(data.tenants ?? []))
-        .catch(() => setTenants([]));
+        .then((data) => {
+          if (alive) setTenants(data.tenants ?? []);
+        })
+        .catch(() => {
+          if (alive) setTenants([]);
+        });
     }, 200);
-    return () => window.clearTimeout(handle);
+    return () => {
+      alive = false;
+      window.clearTimeout(handle);
+    };
   }, [open, term]);
 
   const needle = term.trim().toLowerCase();
@@ -1592,7 +1619,16 @@ function MaintenanceView({ tenants, results, restoreCandidates, canManage, onAct
             <h3 className="font-semibold">Operazioni massive</h3>
             <p className="mt-1 text-sm text-slate-500">Seleziona i tenant, poi lancia l&apos;azione qui accanto.</p>
           </div>
-          <Button disabled={!canManage || selected.length === 0} icon={RotateCcw} type="button" onClick={() => onAction("reset_selected_onboarding", { slugs: selected.join(",") })}>
+          <Button
+            disabled={!canManage || selected.length === 0}
+            icon={RotateCcw}
+            type="button"
+            onClick={() => {
+              // Conferma come le altre azioni massive/distruttive (audit 21/07).
+              if (!window.confirm(`Reset onboarding per ${selected.length} tenant selezionati?`)) return;
+              onAction("reset_selected_onboarding", { slugs: selected.join(",") });
+            }}
+          >
             Reset onboarding{selected.length ? ` (${selected.length})` : ""}
           </Button>
         </div>

@@ -963,10 +963,20 @@ export async function POST(request: Request) {
       await automationScheduleReminder(tenantSlug, id);
 
       void logActivity(tenantSlug, { user: session.user, locationId: session.user.currentLocationId, module: "appuntamenti", action: "sposta", entityType: "appointment", entityId: id, label: `Spostato appuntamento #${id}` });
+      // Reconcile LIMITATO al range visibile del calendario (audit 21/07): senza
+      // from/to la lista tornava TUTTO lo storico appuntamenti del tenant a ogni
+      // micro-drag. I client vecchi che non mandano il range ricevono ancora la
+      // lista completa (fallback compatibile).
+      const moveFrom = String(body.range_from ?? "").trim();
+      const moveTo = String(body.range_to ?? "").trim();
+      const ymdRe = /^\d{4}-\d{2}-\d{2}$/;
+      const moveRange = ymdRe.test(moveFrom) && ymdRe.test(moveTo) && moveFrom <= moveTo
+        ? { start: moveFrom, end: moveTo }
+        : {};
       return Response.json({
         ok: true,
         sourceMode: "database",
-        appointments: await listDbAppointments({ slug: tenantSlug, locationId: postListLocationId }),
+        appointments: await listDbAppointments({ slug: tenantSlug, locationId: postListLocationId, ...moveRange }),
       });
     }
 
