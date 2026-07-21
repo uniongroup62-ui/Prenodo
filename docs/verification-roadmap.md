@@ -17780,3 +17780,19 @@ cross-pagina fornitore creato, fallback deep-link ?msg= vivo, booking
 in-page); crawler console 73/73 pagine pulite; tsc pulito; regressioni
 cabine-pass2 20, giftbox-mutations 8, dom-giftcard 5, notifiche-fidelity
 6, booking-pass2 9 (isolata).
+
+### 2026-07-21 - FIX: 3 ricevitori flash mancanti (segnalazione utente)
+"Non viene visualizzato piu' l'avviso": la mappa emettitore->BERSAGLIO
+aveva 3 buchi - client_detail (arrivo del flusso crea-cliente: hook
+importato ma MAI chiamato), giftcard (arrivo del delete da
+giftcard_detail), stock_moves (arrivo del salvataggio movimento; il
+legacy non mostrava mai quel msg, ora si': msg->flash, err->error).
+Effetto collaterale del buco: il flash NON consumato restava in
+sessionStorage e riappariva sulla prima pagina successiva con
+ricevitore. LEZIONE: a ogni flashNavigate(url) DEVE corrispondere un
+useTakenFlash sul modulo che renderizza quell'url - verificare la
+mappa con grep incrociato emissioni/ricevitori, non solo i moduli
+toccati. Probe probe-flash-receivers.mjs 4/4 (crea cliente reale ->
+banner "Cliente creato" su ?action=view + URL pulito + F5 muto;
+stash simulato su giftcard e stock_moves con storage svuotato);
+cleanup cliente ZZ per id tracciato (1727). tsc pulito.

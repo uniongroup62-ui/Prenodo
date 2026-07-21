@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import InfoBox from "./info-box";
+import { useTakenFlash } from "./flash";
 
 // Faithful port of the PHP stock_moves page (app/pages/stock_moves.php): LISTA
 // documenti (filtri con combobox Prodotto/Fornitore, paginazione 10 per pagina,
@@ -140,6 +141,10 @@ export function StockMovesContent({ slug: slugProp, initialQuery }: { slug?: str
 
   const [flash, setFlash] = useState("");
   const [error, setError] = useState("");
+  useTakenFlash((f) => {
+    if (f.msg) setFlash(f.msg);
+    if (f.err) setError(f.err);
+  });
 
   const fetchData = useCallback(() => {
     const params = new URLSearchParams({ slug });

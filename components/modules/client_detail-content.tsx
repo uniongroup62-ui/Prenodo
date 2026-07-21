@@ -152,6 +152,7 @@ export function ClientDetailContent({ slug: slugProp, initialQuery }: { slug?: s
     msg: initialQuery?.msg,
     err: initialQuery?.err,
   }));
+  useTakenFlash(setFlash);
 
   // Tag add input.
   const [tagInput, setTagInput] = useState("");

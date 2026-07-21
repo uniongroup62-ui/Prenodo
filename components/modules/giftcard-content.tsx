@@ -111,6 +111,7 @@ export function GiftcardContent({ slug: slugProp, initialQuery }: { slug?: strin
     msg: initialQuery?.msg ?? (initialQuery?.action === "new" ? 'Per creare una GiftCard vai in "Pagamenti" e usa il pulsante GiftCard.' : undefined),
     err: initialQuery?.err,
   }));
+  useTakenFlash(setFlash);
 
   useEffect(() => {
     const params = new URLSearchParams({ slug, action: "manage_list" });
