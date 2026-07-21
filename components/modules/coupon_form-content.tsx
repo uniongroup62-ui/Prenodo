@@ -336,6 +336,8 @@ export function CouponFormContent({ slug: slugProp, initialQuery }: { slug?: str
         return;
       }
       flashNavigate(base, { msg: "Coupon disattivato", type: "success" });
+    } catch {
+      if (typeof window !== "undefined") window.alert("Errore di rete: operazione non eseguita. Riprova.");
     } finally {
       setCancelling(false);
     }

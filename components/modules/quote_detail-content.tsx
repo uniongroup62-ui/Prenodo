@@ -85,6 +85,8 @@ export function QuoteDetailContent({ slug: slugProp, initialQuery }: { slug?: st
   const slug = slugProp || tenantSlug();
   const [data, setData] = useState<ViewData | null>(null);
   const [loading, setLoading] = useState(true);
+  // Audit giro 3: errore di rete = "Caricamento…" perpetuo, senza messaggio.
+  const [loadError, setLoadError] = useState(false);
   const [sendOpen, setSendOpen] = useState(false);
   // Duplica (feature 2026-07-16): nuova bozza dalle righe di questo preventivo.
   const [duplicating, setDuplicating] = useState(false);
@@ -107,6 +109,7 @@ export function QuoteDetailContent({ slug: slugProp, initialQuery }: { slug?: st
       flashNavigate(pageUrl(`quotes?action=edit&id=${j.id}`), { msg: "Preventivo duplicato" });
     } catch {
       setDuplicating(false);
+      if (typeof window !== "undefined") window.alert("Errore di rete: operazione non eseguita. Riprova.");
     }
   }
   const [toEmail, setToEmail] = useState("");
@@ -140,7 +143,10 @@ export function QuoteDetailContent({ slug: slugProp, initialQuery }: { slug?: st
         setToEmail(String(v.client?.email ?? ""));
         setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch(() => {
+        setLoading(false);
+        setLoadError(true);
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
 
@@ -168,6 +174,8 @@ export function QuoteDetailContent({ slug: slugProp, initialQuery }: { slug?: st
       const params = new URLSearchParams({ action: "view", id: String(j?.id ?? data.id) });
       const flash = j?.msg ? { msg: String(j.msg) } : j?.err ? { err: String(j.err) } : {};
       flashNavigate(pageUrl(`quotes?${params.toString()}`), flash);
+    } catch {
+      if (typeof window !== "undefined") window.alert("Errore di rete: operazione non eseguita. Riprova.");
     } finally {
       setSending(false);
     }
@@ -303,7 +311,9 @@ export function QuoteDetailContent({ slug: slugProp, initialQuery }: { slug?: st
         </div>
       ) : null}
 
-      {loading || !data ? (
+      {loadError ? (
+        <div className="alert alert-danger">Errore di caricamento. Ricarica la pagina.</div>
+      ) : loading || !data ? (
         <div className="card p-3 text-muted small">Caricamento…</div>
       ) : (
         <>

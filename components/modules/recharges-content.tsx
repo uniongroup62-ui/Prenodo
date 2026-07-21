@@ -197,9 +197,13 @@ export function RechargesContent({ slug: slugProp, initialQuery }: { slug?: stri
     }
   }
 
+  // Audit giro 3: guardia doppio-click sulla delete modello.
+  const [deleteBusyId, setDeleteBusyId] = useState(0);
   async function onDelete(t: RechargeTemplate) {
+    if (deleteBusyId) return;
     // Confirm verbatim di recharges.js.
     if (typeof window !== "undefined" && !window.confirm(`Eliminare il modello: ${t.title}?`)) return;
+    setDeleteBusyId(t.id);
     setPageError(null);
     try {
       const res = await fetch(`/api/manage/recharges?slug=${encodeURIComponent(slug)}`, {
@@ -216,6 +220,8 @@ export function RechargesContent({ slug: slugProp, initialQuery }: { slug?: stri
       redirectFlash(String(j?.message ?? "Modello eliminato."));
     } catch {
       setPageError("Errore di rete.");
+    } finally {
+      setDeleteBusyId(0);
     }
   }
 
@@ -327,7 +333,7 @@ export function RechargesContent({ slug: slugProp, initialQuery }: { slug?: stri
                             <button className="btn btn-sm btn-outline-warning" type="button" title="Modifica" onClick={() => openEdit(t)}>
                               <i className="bi bi-pencil" />
                             </button>
-                            <button className="btn btn-sm btn-outline-danger" type="button" title="Elimina" onClick={() => onDelete(t)}>
+                            <button className="btn btn-sm btn-outline-danger" type="button" title="Elimina" disabled={deleteBusyId !== 0} onClick={() => onDelete(t)}>
                               <i className="bi bi-trash" />
                             </button>
                           </div>

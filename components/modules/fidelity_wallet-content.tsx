@@ -238,6 +238,7 @@ export function FidelityWalletContent({ slug: slugProp, initialQuery }: { slug?:
       window.location.href = walletUrl(params);
     } catch {
       setBusy(false);
+      if (typeof window !== "undefined") window.alert("Errore di rete: operazione non eseguita. Riprova.");
     }
   }
 

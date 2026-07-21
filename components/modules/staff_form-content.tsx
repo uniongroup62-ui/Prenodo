@@ -265,6 +265,8 @@ export function StaffFormContent({ slug: slugProp, action: actionProp, staffId: 
       setRemovePhoto(false);
       setFlashMsg("Immagine operatore eliminata definitivamente");
       window.scrollTo(0, 0);
+    } catch {
+      setError("Errore di rete: operazione non eseguita. Riprova.");
     } finally {
       setSaving(false);
     }

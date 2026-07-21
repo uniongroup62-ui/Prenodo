@@ -118,6 +118,15 @@ export function GiftCardDetailContent({ slug: slugProp, initialQuery }: { slug?:
   const [searchResults, setSearchResults] = useState<SearchClient[] | null>(null);
   const [searchError, setSearchError] = useState("");
   const searchTimer = useRef<number | null>(null);
+  // Audit giro 3: seq anti-stale ricerca (la risposta lenta di un termine
+  // vecchio non deve vincere) + errore rete su scritture/caricamento visibile.
+  const searchSeqRef = useRef(0);
+  const [pageError, setPageError] = useState("");
+  const [loadError, setLoadError] = useState(false);
+  // Cleanup del timer di ricerca allo smontaggio (audit giro 3).
+  useEffect(() => () => {
+    if (searchTimer.current) window.clearTimeout(searchTimer.current);
+  }, []);
   const [note, setNote] = useState("");
   const [giftMessage, setGiftMessage] = useState("");
 
@@ -174,7 +183,10 @@ export function GiftCardDetailContent({ slug: slugProp, initialQuery }: { slug?:
         setExpiryValue(d.expiryModalValue);
         setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch(() => {
+        setLoading(false);
+        setLoadError(true);
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
 
@@ -197,7 +209,10 @@ export function GiftCardDetailContent({ slug: slugProp, initialQuery }: { slug?:
       const flash = j?.ok && j?.message ? { msg: String(j.message) } : j?.error ? { err: String(j.error) } : {};
       flashNavigate(pageUrl(`giftcard?${params.toString()}`), flash);
     } catch {
+      // Errore di rete su una SCRITTURA: prima falliva in totale silenzio.
       setBusy(false);
+      setPageError("Errore di rete: operazione non eseguita. Riprova.");
+      if (typeof window !== "undefined") window.scrollTo(0, 0);
     }
   }
 
@@ -206,6 +221,7 @@ export function GiftCardDetailContent({ slug: slugProp, initialQuery }: { slug?:
     setRecipientSearch(term);
     if (searchTimer.current) window.clearTimeout(searchTimer.current);
     searchTimer.current = window.setTimeout(async () => {
+      const seq = ++searchSeqRef.current;
       const q = term.trim();
       if (q.length < 2) {
         setSearchResults(null);
@@ -216,9 +232,11 @@ export function GiftCardDetailContent({ slug: slugProp, initialQuery }: { slug?:
         const res = await fetch(`/api/manage/giftcards?slug=${encodeURIComponent(slug)}&action=client_search&q=${encodeURIComponent(q)}`, { headers: { "x-tenant-slug": slug } });
         const j = await res.json();
         if (!j?.ok) throw new Error(String(j?.error ?? "Errore ricerca"));
+        if (seq !== searchSeqRef.current) return;
         setSearchResults(Array.isArray(j.clients) ? j.clients : []);
         setSearchError("");
       } catch (e) {
+        if (seq !== searchSeqRef.current) return;
         setSearchResults(null);
         setSearchError(e instanceof Error ? e.message : "Errore ricerca");
       }
@@ -313,7 +331,12 @@ export function GiftCardDetailContent({ slug: slugProp, initialQuery }: { slug?:
         </div>
       ) : null}
 
-      {loading || !d ? (
+      {pageError ? (
+        <div className="alert alert-danger">{pageError}</div>
+      ) : null}
+      {loadError ? (
+        <div className="alert alert-danger">Errore di caricamento. Ricarica la pagina.</div>
+      ) : loading || !d ? (
         <div className="card p-3 text-muted small">Caricamento…</div>
       ) : (
         <div className="row g-3">

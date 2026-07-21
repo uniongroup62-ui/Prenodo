@@ -203,6 +203,7 @@ export function FidelityMembershipContent({ slug: slugProp, initialQuery }: { sl
       window.location.href = listUrl({ msg: composeMsg(j) });
     } catch {
       setBusy(false);
+      if (typeof window !== "undefined") window.alert("Errore di rete: operazione non eseguita. Riprova.");
     }
   }
 

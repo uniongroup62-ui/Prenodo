@@ -283,6 +283,7 @@ export function FidelityPointsContent({ slug: slugProp, initialQuery }: { slug?:
       flashNavigate(pageUrl("fidelity_points"), { msg: String(j?.settings?.message ?? "") || "Impostazioni Fidelity salvate" });
     } catch {
       setSavingSettings(false);
+      if (typeof window !== "undefined") window.alert("Errore di rete: operazione non eseguita. Riprova.");
     }
   }
 

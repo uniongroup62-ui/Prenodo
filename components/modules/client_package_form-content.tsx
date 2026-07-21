@@ -135,6 +135,8 @@ export function ClientPackageFormContent({ slug: slugProp, initialQuery }: { slu
   const [services, setServices] = useState<Array<{ id: string; label: string }>>([]);
   const [locations, setLocations] = useState<Array<{ id: number; name: string }>>([]);
   const [loading, setLoading] = useState(true);
+  // Audit giro 3: su errore di rete la pagina restava su "Caricamento…" per sempre.
+  const [loadError, setLoadError] = useState(false);
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
   useTakenFlash(setFlash);
@@ -208,7 +210,7 @@ export function ClientPackageFormContent({ slug: slugProp, initialQuery }: { slu
         const locRows = Array.isArray(lj?.locations) ? lj.locations : [];
         setLocations(locRows.map((l: { id: number; name?: string }) => ({ id: Number(l.id), name: String(l.name ?? "") })));
       })
-      .catch(() => undefined)
+      .catch(() => setLoadError(true))
       .finally(() => {
         if (active) setLoading(false);
       });
@@ -258,6 +260,7 @@ export function ClientPackageFormContent({ slug: slugProp, initialQuery }: { slu
       flashNavigate(listUrl(`&action=client_view&id=${cpId}`), { msg: "Pacchetto aggiornato" });
     } catch {
       setBusy(false);
+      if (typeof window !== "undefined") window.alert("Errore di rete: operazione non eseguita. Riprova.");
     }
   }
 
@@ -293,7 +296,9 @@ export function ClientPackageFormContent({ slug: slugProp, initialQuery }: { slu
         </div>
       </div>
 
-      {loading || !edit ? (
+      {loadError ? (
+        <div className="alert alert-danger">Errore di caricamento. Ricarica la pagina.</div>
+      ) : loading || !edit ? (
         <div className="card p-3 text-muted small">Caricamento…</div>
       ) : (
         <>

@@ -95,6 +95,8 @@ export function ClientPackageDetailContent({ slug: slugProp, initialQuery }: { s
   const [data, setData] = useState<Detail | null>(null);
   const [perms, setPerms] = useState<Perms>({});
   const [loading, setLoading] = useState(true);
+  // Audit giro 3: su errore di rete la pagina restava su "Caricamento…" per sempre.
+  const [loadError, setLoadError] = useState(false);
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
   useTakenFlash(setFlash);
@@ -144,7 +146,7 @@ export function ClientPackageDetailContent({ slug: slugProp, initialQuery }: { s
           flashNavigate(`/${encodeURIComponent(slug)}/packages?tab=clients`, { msg: String(j?.error ?? "Pacchetto cliente non trovato") });
         }
       })
-      .catch(() => undefined)
+      .catch(() => setLoadError(true))
       .finally(() => {
         if (active) setLoading(false);
       });
@@ -199,6 +201,7 @@ export function ClientPackageDetailContent({ slug: slugProp, initialQuery }: { s
       flashNavigate(selfUrl(""), { msg: String(j?.message ?? "Movimento registrato") });
     } catch {
       setBusy(false);
+      if (typeof window !== "undefined") window.alert("Errore di rete: operazione non eseguita. Riprova.");
     }
   }
 
@@ -221,6 +224,7 @@ export function ClientPackageDetailContent({ slug: slugProp, initialQuery }: { s
       flashNavigate(selfUrl(""), { msg: "Scadenza pacchetto aggiornata" });
     } catch {
       setBusy(false);
+      if (typeof window !== "undefined") window.alert("Errore di rete: operazione non eseguita. Riprova.");
     }
   }
 
@@ -235,7 +239,11 @@ export function ClientPackageDetailContent({ slug: slugProp, initialQuery }: { s
             <div className="bs-page-subtitle">Configura catalogo, assegnazioni clienti e sedute residue.</div>
           </div>
         </div>
-        <div className="card p-3 text-muted small">Caricamento…</div>
+        {loadError ? (
+          <div className="alert alert-danger">Errore di caricamento. Ricarica la pagina.</div>
+        ) : (
+          <div className="card p-3 text-muted small">Caricamento…</div>
+        )}
       </div>
     );
   }

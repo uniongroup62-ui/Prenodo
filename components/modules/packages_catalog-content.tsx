@@ -104,6 +104,8 @@ export function PackagesCatalogContent({ slug: slugProp, initialQuery }: { slug?
         load();
       }
       if (typeof window !== "undefined") window.scrollTo(0, 0);
+    } catch {
+      setFlash({ err: "Errore di rete: operazione non eseguita. Riprova." });
     } finally {
       setBusyId(0);
     }

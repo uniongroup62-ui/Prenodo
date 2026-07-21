@@ -93,6 +93,8 @@ export function ClientSheetsContent({ slug: slugProp }: { slug?: string } = {}) 
   const [records, setRecords] = useState<SheetRecord[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState(0);
   const [editingRecordId, setEditingRecordId] = useState(0);
+  // Audit giro 3: guardia doppio-click sulla delete scheda.
+  const [deletingRecordId, setDeletingRecordId] = useState(0);
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -218,7 +220,10 @@ export function ClientSheetsContent({ slug: slugProp }: { slug?: string } = {}) 
   };
 
   const deleteRecord = async (record: SheetRecord) => {
+    if (deletingRecordId) return;
     if (!globalThis.confirm("Eliminare questa scheda tecnica? L'operazione sarà immediata.")) return;
+    setDeletingRecordId(record.id);
+    try {
     const response = await fetch(`/api/manage/client-sheets?slug=${encodeURIComponent(slug)}`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-tenant-slug": slug },
@@ -234,6 +239,11 @@ export function ClientSheetsContent({ slug: slugProp }: { slug?: string } = {}) 
       }
     } else {
       setMessage({ text: String(json.error ?? "Operazione non riuscita."), ok: false });
+    }
+    } catch {
+      setMessage({ text: "Errore di rete: operazione non eseguita. Riprova.", ok: false });
+    } finally {
+      setDeletingRecordId(0);
     }
   };
 
@@ -474,7 +484,7 @@ export function ClientSheetsContent({ slug: slugProp }: { slug?: string } = {}) 
                           <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => openRecord(record)}>
                             Apri
                           </button>
-                          <button type="button" className="btn btn-sm btn-outline-danger" onClick={() => deleteRecord(record)}>
+                          <button type="button" className="btn btn-sm btn-outline-danger" disabled={deletingRecordId !== 0} onClick={() => deleteRecord(record)}>
                             <i className="bi bi-trash" />
                           </button>
                         </div>

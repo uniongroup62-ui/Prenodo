@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 // Port funzionante di app/pages/client_sheet_templates.php ("Configura
 // schede"): lista template reali (client_sheet_templates via
@@ -125,6 +125,8 @@ export function ClientSheetTemplatesContent({ slug: slugProp }: { slug?: string 
 
   // Stato builder.
   const [editingId, setEditingId] = useState(0);
+  // Audit giro 3: guardia doppio-click sulla delete tab.
+  const [deletingTemplateId, setDeletingTemplateId] = useState(0);
   const [editingLocked, setEditingLocked] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -153,13 +155,20 @@ export function ClientSheetTemplatesContent({ slug: slugProp }: { slug?: string 
     setReturnClientId(Number(params.get("return_client_id") ?? "0") || 0);
   }, [load]);
 
-  // Prefill ?edit_template= una volta caricata la lista.
+  // Prefill ?edit_template= una volta caricata la lista. UNA SOLA volta
+  // (audit giro 3): l'effect scatta a ogni setTemplates post-save/delete e
+  // riapriva a sorpresa il template dell'URL clobberando il builder.
+  const editPrefillFiredRef = useRef(false);
   useEffect(() => {
+    if (editPrefillFiredRef.current) return;
     const params = new URLSearchParams(window.location.search);
     const editId = Number(params.get("edit_template") ?? "0") || 0;
     if (editId > 0 && templates.length && editingId !== editId) {
       const template = templates.find((t) => t.id === editId);
-      if (template) startEdit(template);
+      if (template) {
+        editPrefillFiredRef.current = true;
+        startEdit(template);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templates]);
@@ -240,6 +249,9 @@ export function ClientSheetTemplatesContent({ slug: slugProp }: { slug?: string 
       ? "Eliminare questo tab? Le compilazioni gia salvate resteranno conservate nello storico cliente, ma il tab non sara piu disponibile per nuove compilazioni."
       : "Eliminare questo tab?";
     if (!globalThis.confirm(confirmText)) return;
+    if (deletingTemplateId) return;
+    setDeletingTemplateId(template.id);
+    try {
     const response = await fetch(`/api/manage/client-sheets?slug=${encodeURIComponent(slug)}`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-tenant-slug": slug },
@@ -252,6 +264,11 @@ export function ClientSheetTemplatesContent({ slug: slugProp }: { slug?: string 
       if (editingId === template.id) startNew();
     } else {
       setMessage({ text: String(json.error ?? "Operazione non riuscita."), ok: false });
+    }
+    } catch {
+      setMessage({ text: "Errore di rete: operazione non eseguita. Riprova.", ok: false });
+    } finally {
+      setDeletingTemplateId(0);
     }
   };
 
@@ -365,7 +382,7 @@ export function ClientSheetTemplatesContent({ slug: slugProp }: { slug?: string 
                         <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => startEdit(template)}>
                           <i className="bi bi-pencil" />
                         </button>
-                        <button type="button" className="btn btn-sm btn-outline-danger" onClick={() => deleteTemplate(template)}>
+                        <button type="button" className="btn btn-sm btn-outline-danger" disabled={deletingTemplateId !== 0} onClick={() => deleteTemplate(template)}>
                           <i className="bi bi-trash" />
                         </button>
                       </div>

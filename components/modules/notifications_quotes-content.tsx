@@ -91,8 +91,12 @@ export function NotificationsQuotesContent({ slug: slugProp }: { slug?: string }
 
   // Port di action=seen / seen_all coi flash legacy; seen_all chiede conferma
   // come notifications_quotes.js (data-notifications-quotes-confirm).
+  // Audit giro 3: guardia doppio-click (POST multipli su seen/seen_all).
+  const [seenBusy, setSeenBusy] = useState(false);
   const markSeen = async (id: number | null) => {
+    if (seenBusy) return;
     if (id === null && typeof window !== "undefined" && !window.confirm("Segnare tutti i preventivi come letti?")) return;
+    setSeenBusy(true);
     try {
       const response = await fetch(`/api/manage/quotes?slug=${encodeURIComponent(slug)}`, {
         method: "POST",
@@ -108,6 +112,8 @@ export function NotificationsQuotesContent({ slug: slugProp }: { slug?: string }
       }
     } catch {
       setFlash("Operazione non valida");
+    } finally {
+      setSeenBusy(false);
     }
     if (typeof window !== "undefined") window.scrollTo({ top: 0 });
   };
@@ -135,7 +141,7 @@ export function NotificationsQuotesContent({ slug: slugProp }: { slug?: string }
         </div>
         {visible.length > 0 ? (
           <div className="bs-page-actions">
-            <button className="btn btn-outline-secondary btn-sm" type="button" onClick={() => markSeen(null)}>
+            <button className="btn btn-outline-secondary btn-sm" type="button" disabled={seenBusy} onClick={() => markSeen(null)}>
               <i className="bi bi-check2-all me-1" />
               Segna tutti come letti
             </button>
@@ -185,7 +191,7 @@ export function NotificationsQuotesContent({ slug: slugProp }: { slug?: string }
                         <i className="bi bi-box-arrow-up-right me-1" />
                         Apri preventivo
                       </a>
-                      <button className="btn btn-outline-secondary btn-sm w-100" type="button" onClick={() => markSeen(q.id)}>
+                      <button className="btn btn-outline-secondary btn-sm w-100" type="button" disabled={seenBusy} onClick={() => markSeen(q.id)}>
                         <i className="bi bi-check2 me-1" />
                         Segna come letto
                       </button>

@@ -125,6 +125,7 @@ export function FidelityContent({ slug: slugProp, initialQuery }: { slug?: strin
       flashNavigate(pageUrl("fidelity"), { msg: String(j?.message ?? (nextEnabled ? "Fidelity attivata" : "Fidelity disattivata")) });
     } catch {
       setSaving(false);
+      if (typeof window !== "undefined") window.alert("Errore di rete: operazione non eseguita. Riprova.");
     }
   }
 

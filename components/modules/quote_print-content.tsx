@@ -66,6 +66,8 @@ export function QuotePrintContent({ slug: slugProp, initialQuery }: { slug?: str
   const slug = slugProp || tenantSlug();
   const [data, setData] = useState<PrintData | null>(null);
   const [loading, setLoading] = useState(true);
+  // Audit giro 3: errore di rete = "Caricamento…" perpetuo, senza messaggio.
+  const [loadError, setLoadError] = useState(false);
 
   useEffect(() => {
     const raw = initialQuery?.id ?? new URLSearchParams(window.location.search).get("id") ?? "";
@@ -84,14 +86,21 @@ export function QuotePrintContent({ slug: slugProp, initialQuery }: { slug?: str
         setData(j.print as PrintData);
         setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch(() => {
+        setLoading(false);
+        setLoadError(true);
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug]);
 
   if (loading || !data) {
     return (
       <div className="container-fluid">
-        <div className="card p-3 text-muted small">Caricamento…</div>
+        {loadError ? (
+          <div className="alert alert-danger">Errore di caricamento. Ricarica la pagina.</div>
+        ) : (
+          <div className="card p-3 text-muted small">Caricamento…</div>
+        )}
       </div>
     );
   }

@@ -188,6 +188,8 @@ export function QuotesContent({ slug: slugProp, initialQuery }: { slug?: string;
       }
       const flash = j?.msg ? { msg: String(j.msg) } : j?.err ? { err: String(j.err) } : {};
       flashNavigate(listUrl(new URLSearchParams()), flash);
+    } catch {
+      if (typeof window !== "undefined") window.alert("Errore di rete: operazione non eseguita. Riprova.");
     } finally {
       setBusyId(0);
     }
