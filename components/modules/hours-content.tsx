@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import InfoBox from "./info-box";
+import { useTakenFlash } from "./flash";
 
 // Faithful port of the PHP "Orari & chiusure" settings page (app/pages/hours.php),
 // reproducing the original Bootstrap markup verbatim: View::alert flash ABOVE the
@@ -118,6 +119,10 @@ export function HoursContent({
   const [flash, setFlash] = useState<Flash | null>(() =>
     initialQuery?.msg ? { text: String(initialQuery.msg), type: "success" } : null,
   );
+  useTakenFlash((f) => {
+    if (f.msg) setFlash({ text: f.msg, type: "success" });
+    else if (f.err) setFlash({ text: f.err, type: "danger" });
+  });
 
   const showFlash = useCallback((next: Flash | null) => {
     setFlash(next);

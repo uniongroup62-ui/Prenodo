@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { flashNavigate, useTakenFlash } from "./flash";
 
 // Faithful port of the PHP client DETAIL page (app/pages/clients.php action=view).
 // Layout legacy: col-lg-4 (avatar card + stats "Iscritto da/Età/Compleanno",
@@ -182,7 +183,7 @@ export function ClientDetailContent({ slug: slugProp, initialQuery }: { slug?: s
         } else {
           // Legacy: client_load_accessible fa redirect alla lista con l'errore.
           const msg = String(j?.error || "Cliente non trovato o non disponibile per le tue sedi.");
-          window.location.href = `/${encodeURIComponent(slug)}/clients?err=${encodeURIComponent(msg)}`;
+          flashNavigate(`/${encodeURIComponent(slug)}/clients`, { err: msg });
         }
       })
       .catch(() => {

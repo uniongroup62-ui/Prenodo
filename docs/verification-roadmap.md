@@ -17749,3 +17749,34 @@ colonna -> title sull'input + testo fuso nell'hint sotto). 2 falsi
 positivi lasciati: locations (pannello marketplace volutamente composito
 center), promotion_form (helper gia in col-12 a riga piena). Probe
 boundingBox 4/4 (dTop 0.0px); tsc pulito; nessuna suite sui testi mossi.
+
+## 2026-07-21 - CAMPAGNA: flash moderno, via il ?msg= dagli URL (PHP-ectomy)
+Richiesta utente: niente istruzioni PHP residue, codice ottimizzato.
+ARCHITETTURA: components/modules/flash.ts - stashFlash/takeFlash su
+sessionStorage (chiave prenodo:flash, monouso), flashNavigate(url, flash)
+al posto di window.location.href con ?msg=/?err=, hook useTakenFlash
+(consumo in effect di MOUNT, mai negli initializer: SSR mismatch).
+Payload {msg, err, warn, type} (type = variante success/warning/danger
+dei Buoni; warn = warning aggiuntivo coupon). Il PRG resta (redirect
+reale post-azione, F5 sicuro); la LETTURA di ?msg=/?err= resta nei
+moduli come fallback per i vecchi deep-link e i flussi server (es.
+support-login admin). ~45 moduli convertiti: TUTTE le emissioni
+(href/assign/replace, helper redirectFlash di staff/service_categories
+splittati: msg/err -> storage, altri param -> URL) + hook sui ricevitori
+(inclusi i puri: packages, services, suppliers, resources, cabins,
+locations, roles, consent_modules, fidelity_membership/wallet,
+automation, booking, appointments, pos_sale_detail...). booking:
+replaceState ora scrive l'URL PULITO. client_package_cancel_redirect:
+stash + location.replace (pagina-ponte fuori dalla history).
+TRAPPOLE: (1) ternari {cond ? (<div/>) : null} - rimuovere tutto il
+blocco; (2) coupons ha flash {msg,type}+warn NON {msg,err}; (3) nella
+shell esistono 2 contenitori alert VUOTI sempre presenti - le probe
+contano solo alert con testo; (4) suite parallele sullo stesso tenant
+si sporcano i conteggi clienti (booking C1) - MAI batch concorrenti.
+VERIFICA: zero emissioni residue (grep (\?|&)(msg|err)= nei moduli =
+0 non-commento); NESSUNA suite asseriva ?msg= negli URL; probe E2E 5/5
+(banner+URL pulito su giftbox_settings, F5 senza riproposizione,
+cross-pagina fornitore creato, fallback deep-link ?msg= vivo, booking
+in-page); crawler console 73/73 pagine pulite; tsc pulito; regressioni
+cabine-pass2 20, giftbox-mutations 8, dom-giftcard 5, notifiche-fidelity
+6, booking-pass2 9 (isolata).

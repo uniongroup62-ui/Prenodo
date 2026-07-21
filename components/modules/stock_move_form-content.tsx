@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { flashNavigate } from "./flash";
 
 // Faithful port of the PHP stock_moves NEW document operation form
 // (app/pages/stock_moves.php, action=new — "Nuovo carico / scarico"). This is
@@ -239,7 +240,7 @@ export function StockMoveFormContent({ slug: slugProp }: { slug?: string } = {})
       }
       // Legacy: redirect a ?action=view&id=<doc>&msg=Movimento salvato.
       if (stockDocId > 0) {
-        window.location.href = `/${encodeURIComponent(slug)}/stock_moves?action=view&id=${stockDocId}&msg=${encodeURIComponent("Movimento salvato")}`;
+        flashNavigate(`/${encodeURIComponent(slug)}/stock_moves?action=view&id=${stockDocId}`, { msg: "Movimento salvato" });
       } else {
         backToList();
       }

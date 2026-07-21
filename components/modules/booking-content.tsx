@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTakenFlash } from "./flash";
 
 // Faithful port of the PHP booking settings page (app/pages/booking.php — admin
 // view, ?page=booking). Two-column layout: a settings form (choose-staff toggle,
@@ -31,6 +32,9 @@ export function BookingSettingsContent({ slug: slugProp, initialQuery }: { slug?
   // Flash legacy: View::alert PRIMA del pageHeader; danger se il messaggio
   // contiene 'non' o 'chiusi', altrimenti success (booking.php 8742-8744).
   const [flash, setFlash] = useState<string>(initialQuery?.msg ?? "");
+  useTakenFlash((f) => {
+    if (f.msg) setFlash(f.msg);
+  });
   const flashType = flash && (flash.includes("non") || flash.includes("chiusi")) ? "danger" : "success";
 
   // Save (port of the legacy booking.php admin POST): the 4 settings land on
@@ -71,8 +75,8 @@ export function BookingSettingsContent({ slug: slugProp, initialQuery }: { slug?
       }
       const msg = data.message || "Impostazioni booking salvate";
       setFlash(msg);
-      // Deep-link come il redirect legacy index.php?page=booking&msg=...
-      window.history.replaceState(null, "", `/${encodeURIComponent(slug)}/booking?msg=${encodeURIComponent(msg)}`);
+      // URL sempre pulito: il flash vive solo nello stato.
+      window.history.replaceState(null, "", `/${encodeURIComponent(slug)}/booking`);
       window.scrollTo({ top: 0 });
     } catch {
       setFlash("Errore salvataggio impostazioni booking: errore di rete (verifica schema o permessi ALTER TABLE)");

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import InfoBox from "./info-box";
+import { flashNavigate, useTakenFlash } from "./flash";
 
 // Faithful port of the PHP staff list page (app/pages/staff.php), fed by the
 // existing DB-backed /api/manage/resources?section=staff. Reproduces the
@@ -129,12 +130,22 @@ export function StaffContent({ slug: slugProp, initialQuery }: { slug?: string; 
   // duplicati timeoff che diventano danger), err rosso.
   const [msg, setMsg] = useState(() => String(initialQuery?.msg ?? ""));
   const [err, setErr] = useState(() => String(initialQuery?.err ?? ""));
+  useTakenFlash((f) => {
+    if (f.msg) setMsg(f.msg);
+    if (f.err) setErr(f.err);
+  });
   const msgIsDanger = msg.startsWith("Periodo già presente") || msg.startsWith("Esiste già un periodo per l'intera giornata");
 
   function redirectFlash(params: Record<string, string>) {
     const usp = filtersQuery();
-    for (const [k, v] of Object.entries(params)) if (v !== "") usp.set(k, v);
-    window.location.assign(`/${encodeURIComponent(slug)}/staff${usp.size > 0 ? `?${usp.toString()}` : ""}`);
+    const flash: { msg?: string; err?: string } = {};
+    for (const [k, v] of Object.entries(params)) {
+      if (v === "") continue;
+      if (k === "msg") flash.msg = v;
+      else if (k === "err") flash.err = v;
+      else usp.set(k, v);
+    }
+    flashNavigate(`/${encodeURIComponent(slug)}/staff${usp.size > 0 ? `?${usp.toString()}` : ""}`, flash);
   }
 
   // Eliminazione operatore (staff.js confirmStaffDelete + staff.php 626-703):

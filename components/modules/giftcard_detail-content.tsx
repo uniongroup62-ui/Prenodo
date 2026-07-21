@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { flashNavigate, useTakenFlash } from "./flash";
 import { ClientSearchCombobox } from "@/components/client-search-combobox";
 import { giftcardExpiryWarning } from "@/components/modules/giftcard-content";
 
@@ -100,7 +101,8 @@ export function GiftCardDetailContent({ slug: slugProp, initialQuery }: { slug?:
   const [busy, setBusy] = useState(false);
 
   // Flash legacy (View::alert): ?msg= success + ?err= danger dal redirect.
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
 
   // Form "Dati GiftCard".
   const [senderClientId, setSenderClientId] = useState(0);
@@ -136,7 +138,7 @@ export function GiftCardDetailContent({ slug: slugProp, initialQuery }: { slug?:
     const raw = initialQuery?.id ?? new URLSearchParams(window.location.search).get("id") ?? "";
     const cardId = Number.parseInt(String(raw), 10) || 0;
     if (cardId <= 0) {
-      window.location.href = `/${encodeURIComponent(slug)}/giftcard?err=${encodeURIComponent("GiftCard non trovata")}`;
+      flashNavigate(`/${encodeURIComponent(slug)}/giftcard`, { err: "GiftCard non trovata" });
       return;
     }
     void Promise.resolve().then(() => setId(cardId));
@@ -145,7 +147,7 @@ export function GiftCardDetailContent({ slug: slugProp, initialQuery }: { slug?:
       .then((j) => {
         if (!j.ok || !j.detail) {
           // Legacy: redirect alla lista con "GiftCard non trovata".
-          window.location.href = `/${encodeURIComponent(slug)}/giftcard?err=${encodeURIComponent(String(j.error ?? "GiftCard non trovata"))}`;
+          flashNavigate(`/${encodeURIComponent(slug)}/giftcard`, { err: String(j.error ?? "GiftCard non trovata") });
           return;
         }
         const d = j.detail as Detail;
@@ -192,9 +194,8 @@ export function GiftCardDetailContent({ slug: slugProp, initialQuery }: { slug?:
       });
       const j = await res.json().catch(() => ({}));
       const params = new URLSearchParams({ action: "edit", id: String(id) });
-      if (j?.ok && j?.message) params.set("msg", String(j.message));
-      else if (j?.error) params.set("err", String(j.error));
-      window.location.href = pageUrl(`giftcard?${params.toString()}`);
+      const flash = j?.ok && j?.message ? { msg: String(j.message) } : j?.error ? { err: String(j.error) } : {};
+      flashNavigate(pageUrl(`giftcard?${params.toString()}`), flash);
     } catch {
       setBusy(false);
     }

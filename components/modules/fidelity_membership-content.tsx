@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTakenFlash } from "./flash";
 
 // Port fedele della pagina Adesione (app/pages/fidelity_membership.php):
 // - stato disabilitato legacy (Fidelity generale off) con header 'Fidelity'
@@ -82,7 +83,8 @@ export function FidelityMembershipContent({ slug: slugProp, initialQuery }: { sl
     q: String(initialQuery?.q ?? ""),
     p: Math.max(1, Number.parseInt(String(initialQuery?.p ?? "1"), 10) || 1),
   }));
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
 
   const [membership, setMembership] = useState<Membership | null>(null);
   const [canFidelityManage, setCanFidelityManage] = useState(false);

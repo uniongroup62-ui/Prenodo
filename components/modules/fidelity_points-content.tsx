@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import InfoBox from "./info-box";
+import { flashNavigate, useTakenFlash } from "./flash";
 import { FidelityCampaignsSection } from "@/components/modules/fidelity_campaigns-section";
 import { FidelityLevelsContent } from "@/components/modules/fidelity_levels-content";
 
@@ -203,7 +204,8 @@ export function FidelityPointsContent({ slug: slugProp, initialQuery }: { slug?:
   const [locationName, setLocationName] = useState("Tutte le sedi");
 
   // Flash legacy (View::alert): ?msg= success + ?err= danger dal redirect.
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
 
   // Modali conferma legacy (client-side come fidelity_points.js): la variante
   // redeem/points e la variante scadenza enable/disable/days.
@@ -275,10 +277,10 @@ export function FidelityPointsContent({ slug: slugProp, initialQuery }: { slug?:
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j?.error) {
-        window.location.href = pageUrl(`fidelity_points?err=${encodeURIComponent(String(j?.error ?? "Errore salvataggio."))}`);
+        flashNavigate(pageUrl("fidelity_points"), { err: String(j?.error ?? "Errore salvataggio.") });
         return;
       }
-      window.location.href = pageUrl(`fidelity_points?msg=${encodeURIComponent(String(j?.settings?.message ?? "") || "Impostazioni Fidelity salvate")}`);
+      flashNavigate(pageUrl("fidelity_points"), { msg: String(j?.settings?.message ?? "") || "Impostazioni Fidelity salvate" });
     } catch {
       setSavingSettings(false);
     }

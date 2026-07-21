@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import InfoBox from "./info-box";
+import { flashNavigate, useTakenFlash } from "./flash";
 
 // Faithful port of the PHP giftbox_settings page (app/pages/giftbox_settings.php):
 // GiftBox default validity + GiftBox terms text. Current values are pre-filled
@@ -40,7 +41,8 @@ export function GiftboxSettingsContent({ slug: slugProp, initialQuery }: { slug?
   const [terms, setTerms] = useState(DEFAULT_TERMS);
   const [perms, setPerms] = useState({ canGiftboxManage: false, canCreate: false });
   // Flash legacy (View::alert): ?msg= success dal redirect + errore in pagina.
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
   const [error, setError] = useState("");
 
   const load = useCallback(() => {
@@ -83,7 +85,7 @@ export function GiftboxSettingsContent({ slug: slugProp, initialQuery }: { slug?
         window.scrollTo(0, 0);
         return;
       }
-      window.location.href = `${pageBase}?msg=${encodeURIComponent(String(j?.message ?? ""))}`;
+      flashNavigate(pageBase, { msg: String(j?.message ?? "") });
     } catch {
       setError("Errore di rete.");
       window.scrollTo(0, 0);

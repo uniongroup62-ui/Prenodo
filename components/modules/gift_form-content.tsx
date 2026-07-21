@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { flashNavigate } from "./flash";
 
 // Faithful port of the PHP gift CAMPAIGN editor (app/pages/gifts.php,
 // action=new|edit|clone — "Nuova/Modifica/Clona campagna"): the campaign
@@ -167,12 +168,12 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
         .then(([ctx, j, guard]) => {
           if (!j.ok || !j.gift) {
             // gifts.php 629-631 / 646-648: campagna inesistente -> redirect lista.
-            window.location.href = `/${encodeURIComponent(slug)}/gifts?action=campaigns&err=${encodeURIComponent("Campagna non trovata")}`;
+            flashNavigate(`/${encodeURIComponent(slug)}/gifts?action=campaigns`, { err: "Campagna non trovata" });
             return;
           }
           if (act === "edit" && guard && (guard as Record<string, unknown>).blocked) {
             const reason = String((guard as Record<string, unknown>).reason ?? "La campagna ha gia dati operativi: usa Clona campagna.");
-            window.location.href = `/${encodeURIComponent(slug)}/gifts?action=campaigns&open_summary=${id}&err=${encodeURIComponent(reason)}`;
+            flashNavigate(`/${encodeURIComponent(slug)}/gifts?action=campaigns&open_summary=${id}`, { err: reason });
             return;
           }
           const g = j.gift;
@@ -327,7 +328,7 @@ export function GiftFormContent({ slug: slugProp }: { slug?: string } = {}) {
       // Redirect flash legacy (gifts.php 533-539): msg + apertura Riepilogo.
       const savedId = Number(j.gift?.id ?? 0) || 0;
       const msg = form.clone_source_id > 0 ? "Clone campagna creato" : "Campagna salvata";
-      window.location.href = `/${encodeURIComponent(slug)}/gifts?action=campaigns&msg=${encodeURIComponent(msg)}${savedId > 0 ? `&open_summary=${savedId}` : ""}`;
+      flashNavigate(`/${encodeURIComponent(slug)}/gifts?action=campaigns${savedId > 0 ? `&open_summary=${savedId}` : ""}`, { msg });
     } catch {
       setError("Errore nel salvataggio della campagna.");
       setSaving(false);

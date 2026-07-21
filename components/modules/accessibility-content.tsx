@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { flashNavigate, useTakenFlash } from "./flash";
 
 // Faithful port of the PHP accessibility page (app/pages/accessibility.php):
 // manage login email (verify / change with email code) and change password.
@@ -62,6 +63,10 @@ export function AccessibilityContent({
     if (initialQuery?.err) return { type: "danger", text: String(initialQuery.err) };
     if (initialQuery?.msg) return { type: "success", text: String(initialQuery.msg) };
     return null;
+  });
+  useTakenFlash((f) => {
+    if (f.err) setFeedback({ type: "danger", text: f.err });
+    else if (f.msg) setFeedback({ type: "success", text: f.msg });
   });
   // Port di accessibility.js: countdown 'Reinvia tra Ns' e avviso di codice
   // scaduto allo scadere del TTL (inizializzati nel callback di load).
@@ -149,7 +154,7 @@ export function AccessibilityContent({
       // navigazione piena rilegge il cookie aggiornato e toglie il gate
       // verifica email dal chrome (nav/topbar riappaiono).
       if (opts?.navigateOnSuccess) {
-        window.location.assign(`/${encodeURIComponent(slug)}/accessibility?msg=${encodeURIComponent(String(j?.message ?? "Operazione completata."))}`);
+        flashNavigate(`/${encodeURIComponent(slug)}/accessibility`, { msg: String(j?.message ?? "Operazione completata.") });
         return;
       }
       showFlash({ type: "success", text: String(j?.message ?? "Operazione completata.") });

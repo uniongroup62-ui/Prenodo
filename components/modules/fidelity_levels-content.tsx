@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { flashNavigate } from "./flash";
 
 // Faithful port of the PHP "Livelli Card" editor (fidelity_points.php#livelli-card
 // + fidelity_points.js, che posta a index.php?page=fidelity_levels _mode=save_levels).
@@ -237,10 +238,10 @@ export function FidelityLevelsContent({ slug: slugProp, embedded = false }: { sl
       });
       const msg = String((j.levels as { message?: string } | undefined)?.message ?? j.message ?? "Livelli Card salvati");
       // Redirect flash legacy su fidelity_points.
-      window.location.href = `/${encodeURIComponent(slug)}/fidelity_points?msg=${encodeURIComponent(msg)}`;
+      flashNavigate(`/${encodeURIComponent(slug)}/fidelity_points`, { msg });
     } catch (err) {
       const msg = `Errore salvataggio livelli card: ${err instanceof Error ? err.message : "Errore non previsto"}`;
-      window.location.href = `/${encodeURIComponent(slug)}/fidelity_points?err=${encodeURIComponent(msg)}`;
+      flashNavigate(`/${encodeURIComponent(slug)}/fidelity_points`, { err: msg });
     } finally {
       setSaving(false);
     }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { flashNavigate, useTakenFlash } from "./flash";
 import { packageExpiryWarning } from "@/components/modules/packages-content";
 
 // Faithful port of the PHP client-package DETAIL (packages.php action=client_view):
@@ -95,7 +96,8 @@ export function ClientPackageDetailContent({ slug: slugProp, initialQuery }: { s
   const [perms, setPerms] = useState<Perms>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
   const [reloadKey, setReloadKey] = useState(0);
   const reload = useCallback(() => setReloadKey((k) => k + 1), []);
 
@@ -116,7 +118,7 @@ export function ClientPackageDetailContent({ slug: slugProp, initialQuery }: { s
       const id = clientPackageIdFromUrl();
       if (id > 0) setCpId(id);
       else if (typeof window !== "undefined") {
-        window.location.href = `/${encodeURIComponent(slug)}/packages?tab=clients&err=${encodeURIComponent("Pacchetto cliente non trovato")}`;
+        flashNavigate(`/${encodeURIComponent(slug)}/packages?tab=clients`, { err: "Pacchetto cliente non trovato" });
       }
     });
   }, [slug]);
@@ -139,7 +141,7 @@ export function ClientPackageDetailContent({ slug: slugProp, initialQuery }: { s
           setExpiryValue(value);
         } else {
           // Legacy: redirect alla lista col messaggio querystring.
-          window.location.href = `/${encodeURIComponent(slug)}/packages?tab=clients&msg=${encodeURIComponent(String(j?.error ?? "Pacchetto cliente non trovato"))}`;
+          flashNavigate(`/${encodeURIComponent(slug)}/packages?tab=clients`, { msg: String(j?.error ?? "Pacchetto cliente non trovato") });
         }
       })
       .catch(() => undefined)
@@ -191,10 +193,10 @@ export function ClientPackageDetailContent({ slug: slugProp, initialQuery }: { s
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j?.error) {
-        window.location.href = selfUrl(`&err=${encodeURIComponent(String(j?.error ?? "Errore salvataggio movimento"))}`);
+        flashNavigate(selfUrl(""), { err: String(j?.error ?? "Errore salvataggio movimento") });
         return;
       }
-      window.location.href = selfUrl(`&msg=${encodeURIComponent(String(j?.message ?? "Movimento registrato"))}`);
+      flashNavigate(selfUrl(""), { msg: String(j?.message ?? "Movimento registrato") });
     } catch {
       setBusy(false);
     }
@@ -213,10 +215,10 @@ export function ClientPackageDetailContent({ slug: slugProp, initialQuery }: { s
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j?.error) {
-        window.location.href = selfUrl(`&err=${encodeURIComponent(String(j?.error ?? "Errore: Errore aggiornamento scadenza"))}`);
+        flashNavigate(selfUrl(""), { err: String(j?.error ?? "Errore: Errore aggiornamento scadenza") });
         return;
       }
-      window.location.href = selfUrl(`&msg=${encodeURIComponent("Scadenza pacchetto aggiornata")}`);
+      flashNavigate(selfUrl(""), { msg: "Scadenza pacchetto aggiornata" });
     } catch {
       setBusy(false);
     }

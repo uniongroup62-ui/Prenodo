@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import InfoBox from "./info-box";
+import { useTakenFlash } from "./flash";
 import { ClientSearchCombobox } from "@/components/client-search-combobox";
 
 // Port fedele della LISTA GiftCard (app/pages/giftcard.php action=list):
@@ -106,7 +107,7 @@ export function GiftcardContent({ slug: slugProp, initialQuery }: { slug?: strin
 
   // Flash legacy (View::alert): ?msg= success + ?err= danger dal redirect;
   // action=new -> messaggio legacy "vai in Pagamenti".
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({
     msg: initialQuery?.msg ?? (initialQuery?.action === "new" ? 'Per creare una GiftCard vai in "Pagamenti" e usa il pulsante GiftCard.' : undefined),
     err: initialQuery?.err,
   }));

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { flashNavigate, useTakenFlash } from "./flash";
 
 // Faithful port of the PHP consent-module NEW / EDIT editor
 // (app/pages/consent_modules.php, action=new|edit + consent_modules.js):
@@ -96,7 +97,10 @@ export function ConsentModuleFormContent({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [flashMsg] = useState(() => String(initialQuery?.msg ?? ""));
+  const [flashMsg, setFlashMsg] = useState(() => String(initialQuery?.msg ?? ""));
+  useTakenFlash((f) => {
+    if (f.msg) setFlashMsg(f.msg);
+  });
   // Modale anteprima PDF (consentTemplatePreviewModal): blob URL nell'iframe.
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewUrl, setPreviewUrl] = useState("");
@@ -183,7 +187,7 @@ export function ConsentModuleFormContent({
       }
       // Redirect legacy: si resta sull'EDIT del modulo col flash verde.
       const newId = Number(j.consentModule?.id ?? form.id);
-      window.location.assign(listHref(`?action=edit&id=${newId}&msg=${encodeURIComponent("Modulo consenso salvato con successo.")}`));
+      flashNavigate(listHref(`?action=edit&id=${newId}`), { msg: "Modulo consenso salvato con successo." });
     } catch {
       setError("Errore configurazione.");
       setSaving(false);
@@ -211,7 +215,7 @@ export function ConsentModuleFormContent({
       const message = removed > 0
         ? `Modulo consenso eliminato. Rimosse anche ${removed} associazione/i non firmate dai clienti.`
         : "Modulo consenso eliminato.";
-      window.location.assign(listHref(`?msg=${encodeURIComponent(message)}`));
+      flashNavigate(listHref(""), { msg: message });
     } catch {
       setDeleteOpen(false);
       setDeleting(false);

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTakenFlash } from "./flash";
 
 // Faithful port of the PHP business profile page (app/pages/business_profile.php
 // + assets/js/pages/business_profile.js): public profile name + "Chi siamo"
@@ -89,6 +90,10 @@ export function BusinessProfileContent({
     if (initialQuery?.err) return { type: "danger", text: String(initialQuery.err) };
     if (initialQuery?.msg) return { type: "info", text: String(initialQuery.msg) };
     return null;
+  });
+  useTakenFlash((f) => {
+    if (f.err) setFlash({ type: "danger", text: f.err });
+    else if (f.msg) setFlash({ type: "info", text: f.msg });
   });
 
   // Profile form (pre-filled from the API on mount).

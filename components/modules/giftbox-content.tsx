@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import InfoBox from "./info-box";
+import { flashNavigate, useTakenFlash } from "./flash";
 import { ClientSearchCombobox } from "@/components/client-search-combobox";
 
 // Port fedele della pagina GiftBox (app/pages/giftbox.php):
@@ -132,7 +133,8 @@ export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string
   const [allLocations, setAllLocations] = useState(applied.allLocations);
 
   // Flash legacy (View::alert): ?msg= success + ?err= danger dal redirect.
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
 
   useEffect(() => {
     if (tab === "boxes") {
@@ -204,10 +206,10 @@ export function GiftboxContent({ slug: slugProp, initialQuery }: { slug?: string
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j?.error) {
-        window.location.href = href(`giftbox?err=${encodeURIComponent(String(j?.error ?? "Errore GiftBox."))}`);
+        flashNavigate(href("giftbox"), { err: String(j?.error ?? "Errore GiftBox.") });
         return;
       }
-      window.location.href = href(`giftbox?msg=${encodeURIComponent("GiftBox eliminata")}`);
+      flashNavigate(href("giftbox"), { msg: "GiftBox eliminata" });
     } finally {
       setBusyId(0);
     }

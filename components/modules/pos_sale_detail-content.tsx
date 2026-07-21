@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTakenFlash } from "./flash";
 
 // Faithful port of the PHP POS "Dettaglio vendita" page (app/pages/pos_sale_detail.php),
 // fed by the DB-backed /api/manage/pos route:
@@ -313,6 +314,10 @@ export function PosSaleDetailContent({ slug: slugProp }: { slug?: string } = {})
   const [detail, setDetail] = useState<SaleDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  // Flash in arrivo (es. redirect annullo pacchetto): mostrato come errore.
+  useTakenFlash((f) => {
+    if (f.err) setError(f.err);
+  });
   const [flash, setFlash] = useState("");
 
   // Cancel modal state.

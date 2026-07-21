@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import InfoBox from "./info-box";
+import { useTakenFlash } from "./flash";
 
 // Port fedele del Portafoglio punti (app/pages/fidelity_wallet.php):
 // - stati disabilitati legacy (Fidelity generale off / Punti off) con early
@@ -150,7 +151,8 @@ export function FidelityWalletContent({ slug: slugProp, initialQuery }: { slug?:
     pList: Math.max(1, Number.parseInt(String(initialQuery?.p_list ?? "1"), 10) || 1),
     warnLocked: Math.max(0, Math.round(Number(String(initialQuery?.warn_locked ?? "0").replace(",", ".")) || 0)),
   }));
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
 
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [loading, setLoading] = useState(true);

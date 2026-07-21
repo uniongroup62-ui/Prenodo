@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTakenFlash } from "./flash";
 
 // Faithful port of the PHP clients list page (app/pages/clients.php, action=list),
 // fed by the DB-backed /api/manage/clients (legacy ordering created_at DESC LIMIT
@@ -116,7 +117,8 @@ export function ClientsContent({ slug: slugProp, initialQuery }: { slug?: string
   // PAGINA si gata col flag pageAllowed -> card 'Accesso negato'.
   const [accessDenied, setAccessDenied] = useState(false);
   // Flash legacy (View::alert): ?msg= success + ?err= danger dal redirect.
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
 
   // Fetch puro (setState nei callback della Promise; loading gia' true di default).
   const fetchData = useCallback(

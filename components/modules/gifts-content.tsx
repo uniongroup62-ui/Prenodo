@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import InfoBox from "./info-box";
+import { useTakenFlash } from "./flash";
 
 // Faithful port of the PHP fidelity/gifts page (app/pages/gifts.php): the
 // ASSIGNED INSTANCES list (default view, ~1465-1610), the CAMPAIGNS view
@@ -109,7 +110,8 @@ export function GiftsContent({ slug: slugProp, initialQuery }: { slug?: string; 
   const view: "list" | "campaigns" = initialQuery?.action === "campaigns" ? "campaigns" : "list";
 
   // Flash legacy dal redirect: msg che inizia con 'errore:' -> danger.
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
   const flashMsgIsError = (flash.msg ?? "").toLowerCase().startsWith("errore:");
 
   const [rows, setRows] = useState<GiftPageRow[]>([]);

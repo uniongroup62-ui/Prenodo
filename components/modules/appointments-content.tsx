@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { takeFlash } from "./flash";
 
 // Port fedele della pagina "Lista appuntamenti" legacy (appointments.php), alimentata
 // dal /api/manage/appointments?action=list DB-backed.
@@ -207,10 +208,11 @@ export function AppointmentsContent({ slug: slugProp }: { slug?: string } = {}) 
     // Prefill da querystring in MICROTASK: niente setState sincroni nell'effect
     // di mount (pattern consolidato; l'ordine resta pre-paint).
     Promise.resolve().then(() => {
-      // Alert da redirect legacy (?msg/?err — es. l'arrivo dal planner con
-      // "Pianificazione completata: creati N appuntamenti").
-      const urlMsg = String(sp.get("msg") ?? "").trim();
-      const urlErr = String(sp.get("err") ?? "").trim();
+      // Flash: sessionStorage (moderno, es. l'arrivo dal planner) + ?msg/?err
+      // come fallback per i vecchi deep-link.
+      const taken = takeFlash();
+      const urlMsg = String(taken.msg ?? sp.get("msg") ?? "").trim();
+      const urlErr = String(taken.err ?? sp.get("err") ?? "").trim();
       if (urlMsg) setMsg(urlMsg);
       if (urlErr) setErr(urlErr);
       // Filtri dal redirect legacy (?from/?to/?q, es. range ±1 giorno del planner).

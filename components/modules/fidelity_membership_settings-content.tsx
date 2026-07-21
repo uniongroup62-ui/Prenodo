@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import InfoBox from "./info-box";
+import { flashNavigate, useTakenFlash } from "./flash";
 
 // Faithful port of the PHP page app/pages/fidelity_membership_settings.php
 // (?page=fidelity_membership_settings) + assets/js/pages/fidelity_membership_settings.js:
@@ -95,7 +96,8 @@ export function FidelityMembershipSettingsContent({
   const [canFidelityManage, setCanFidelityManage] = useState(false);
   const [canLevels, setCanLevels] = useState(false);
   // Flash legacy via redirect ?msg/?err; gli errori del POST restano in pagina.
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
   const [pageError, setPageError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -215,7 +217,7 @@ export function FidelityMembershipSettingsContent({
         return;
       }
       const msg = String(j?.message ?? "Impostazioni tessera Fidelity salvate.");
-      window.location.href = `/${encodeURIComponent(slug)}/fidelity_membership_settings?msg=${encodeURIComponent(msg)}#fidelity_card_settings`;
+      flashNavigate(`/${encodeURIComponent(slug)}/fidelity_membership_settings#fidelity_card_settings`, { msg });
     } catch {
       setPageError("Errore di rete.");
     } finally {

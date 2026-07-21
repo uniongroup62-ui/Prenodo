@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { flashNavigate } from "./flash";
 
 // Faithful port of the PHP cost NEW / EDIT form (app/pages/costs.php,
 // tab=scadenziario action=new|edit — "Nuovo costo" / "Modifica costo"). Field
@@ -204,10 +205,8 @@ export function CostFormContent({ slug: slugProp }: { slug?: string } = {}) {
   }
 
   function backToList(msg = "") {
-    // Flash legacy dopo il salvataggio ("Costo creato"/"Costo aggiornato"): passato via ?msg,
-    // letto dalla lista (costs.php redirect con msg=Costo%20creato).
-    const q = msg ? `&msg=${encodeURIComponent(msg)}` : "";
-    window.location.href = `/${encodeURIComponent(slug)}/costs?tab=scadenziario${q}`;
+    // Flash moderno: l'esito viaggia in sessionStorage, URL pulito.
+    flashNavigate(`/${encodeURIComponent(slug)}/costs?tab=scadenziario`, msg ? { msg } : {});
   }
 
   // Legacy: il select Sede compare quando la colonna location esiste, anche con

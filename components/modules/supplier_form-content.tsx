@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { flashNavigate } from "./flash";
 
 // Faithful port of the PHP supplier NEW / EDIT form (app/pages/suppliers.php,
 // the $isFormAction editor posted with action=supplier_save). Card/section
@@ -252,7 +253,7 @@ export function SupplierFormContent({ slug: slugProp }: { slug?: string } = {}) 
         setSaving(false);
         return;
       }
-      window.location.href = `/${encodeURIComponent(slug)}/suppliers?msg=${encodeURIComponent(form.id > 0 ? "Fornitore aggiornato" : "Fornitore creato")}`;
+      flashNavigate(`/${encodeURIComponent(slug)}/suppliers`, { msg: form.id > 0 ? "Fornitore aggiornato" : "Fornitore creato" });
     } catch {
       setError("Errore nel salvataggio del fornitore.");
       setSaving(false);

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import InfoBox from "./info-box";
+import { useTakenFlash } from "./flash";
 
 // Faithful port of the PHP "Moduli consenso" settings page
 // (app/pages/consent_modules.php + assets/js/pages/consent_modules.js), fed by
@@ -71,6 +72,10 @@ export function ConsentModulesContent({
     if (initialQuery?.err) return { text: String(initialQuery.err), type: "danger" };
     if (initialQuery?.msg) return { text: String(initialQuery.msg), type: "success" };
     return null;
+  });
+  useTakenFlash((f) => {
+    if (f.err) setFlash({ text: f.err, type: "danger" });
+    else if (f.msg) setFlash({ text: f.msg, type: "success" });
   });
   // Modale conferma eliminazione (consent_modules.js): record in eliminazione.
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string; associationCount: number } | null>(null);

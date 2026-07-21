@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { flashNavigate, useTakenFlash } from "./flash";
 import { giftboxExpiryWarning } from "@/components/modules/giftbox-content";
 import { ClientSearchCombobox } from "@/components/client-search-combobox";
 
@@ -113,7 +114,8 @@ export function GiftBoxInstanceDetailContent({ slug: slugProp, initialQuery }: {
   const [busy, setBusy] = useState(false);
 
   // Flash legacy (View::alert): ?msg= success + ?err= danger dal redirect.
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
 
   // Form "Dati GiftBox".
   const [senderClientId, setSenderClientId] = useState(0);
@@ -146,7 +148,7 @@ export function GiftBoxInstanceDetailContent({ slug: slugProp, initialQuery }: {
     const raw = initialQuery?.id ?? new URLSearchParams(window.location.search).get("id") ?? "";
     const instanceId = Number.parseInt(String(raw), 10) || 0;
     if (instanceId <= 0) {
-      window.location.href = `/${encodeURIComponent(slug)}/giftbox?tab=instances&err=${encodeURIComponent("Istanza non trovata")}`;
+      flashNavigate(`/${encodeURIComponent(slug)}/giftbox?tab=instances`, { err: "Istanza non trovata" });
       return;
     }
     void Promise.resolve().then(() => setId(instanceId));
@@ -155,7 +157,7 @@ export function GiftBoxInstanceDetailContent({ slug: slugProp, initialQuery }: {
       .then((j) => {
         if (!j.ok || !j.detail) {
           // Legacy: redirect alla lista con "Istanza non trovata".
-          window.location.href = `/${encodeURIComponent(slug)}/giftbox?tab=instances&err=${encodeURIComponent(String(j.error ?? "Istanza non trovata"))}`;
+          flashNavigate(`/${encodeURIComponent(slug)}/giftbox?tab=instances`, { err: String(j.error ?? "Istanza non trovata") });
           return;
         }
         const d = j.detail as Detail;
@@ -204,9 +206,8 @@ export function GiftBoxInstanceDetailContent({ slug: slugProp, initialQuery }: {
       });
       const j = await res.json().catch(() => ({}));
       const params = new URLSearchParams({ tab: "instances", action: "edit_instance", id: String(id) });
-      if (j?.ok && j?.message) params.set("msg", String(j.message));
-      else if (j?.error) params.set("err", String(j.error));
-      window.location.href = pageUrl(`giftbox?${params.toString()}`);
+      const flash = j?.ok && j?.message ? { msg: String(j.message) } : j?.error ? { err: String(j.error) } : {};
+      flashNavigate(pageUrl(`giftbox?${params.toString()}`), flash);
     } catch {
       setBusy(false);
     }

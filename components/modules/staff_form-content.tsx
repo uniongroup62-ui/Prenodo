@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { flashNavigate } from "./flash";
 
 // Faithful port of the PHP operator NEW / EDIT form (app/pages/staff.php,
 // the #staffOperatorCreateModal / action=edit form posted with action=staff_save).
@@ -232,7 +233,7 @@ export function StaffFormContent({ slug: slugProp, action: actionProp, staffId: 
       }
 
       // Redirect flash legacy (staff.php 1069).
-      window.location.assign(`/${encodeURIComponent(slug)}/staff?msg=${encodeURIComponent(String(j.msg ?? "Operatore salvato"))}`);
+      flashNavigate(`/${encodeURIComponent(slug)}/staff`, { msg: String(j.msg ?? "Operatore salvato") });
     } catch {
       setError("Errore nel salvataggio dell'operatore.");
       setSaving(false);

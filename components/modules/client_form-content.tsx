@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { flashNavigate, useTakenFlash } from "./flash";
 
 // Faithful port of the PHP client NEW / EDIT form (app/pages/clients.php,
 // action=new|edit): Informazioni principali / Indirizzo Contatti (con le
@@ -140,7 +141,8 @@ export function ClientFormContent({ slug: slugProp, initialQuery }: { slug?: str
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // Flash legacy (View::alert): ?msg= success + ?err= danger dal redirect.
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
   // Stato blocco (edit): badge + pannello Azioni cliente.
   const [blocked, setBlocked] = useState<{ isBlocked: boolean; blockedAt: string | null; note: string }>({ isBlocked: false, blockedAt: null, note: "" });
   const [showBlockModal, setShowBlockModal] = useState(false);
@@ -186,7 +188,7 @@ export function ClientFormContent({ slug: slugProp, initialQuery }: { slug?: str
           if (!j.ok || !j.client) {
             // Legacy: client_load_accessible fa redirect alla lista con l'errore.
             const msg = String(j.error ?? "Cliente non trovato o non disponibile per le tue sedi.");
-            window.location.href = `/${encodeURIComponent(slug)}/clients?err=${encodeURIComponent(msg)}`;
+            flashNavigate(`/${encodeURIComponent(slug)}/clients`, { err: msg });
             return;
           }
           const c = j.client;
@@ -330,7 +332,7 @@ export function ClientFormContent({ slug: slugProp, initialQuery }: { slug?: str
       // Redirect legacy: alla SCHEDA con il flash.
       const newId = Number(j.client?.id ?? form.id);
       const msg = action === "edit" ? "Cliente aggiornato" : "Cliente creato";
-      window.location.href = listUrl(`?action=view&id=${newId}&msg=${encodeURIComponent(msg)}`);
+      flashNavigate(listUrl(`?action=view&id=${newId}`), { msg });
     } catch {
       setError("Errore nel salvataggio del cliente.");
       setSaving(false);
@@ -344,7 +346,7 @@ export function ClientFormContent({ slug: slugProp, initialQuery }: { slug?: str
     const note = blockNote.trim();
     const editUrl = listUrl(`?action=edit&id=${form.id}`);
     if (note === "") {
-      window.location.href = `${editUrl}&err=${encodeURIComponent("Inserisci una nota interna con il motivo della disattivazione.")}`;
+      flashNavigate(editUrl, { err: "Inserisci una nota interna con il motivo della disattivazione." });
       return;
     }
     setBusy(true);
@@ -356,10 +358,10 @@ export function ClientFormContent({ slug: slugProp, initialQuery }: { slug?: str
       });
       const j = await res.json();
       if (!res.ok || !j.ok) {
-        window.location.href = `${editUrl}&err=${encodeURIComponent(String(j.error ?? "Errore nella disattivazione."))}`;
+        flashNavigate(editUrl, { err: String(j.error ?? "Errore nella disattivazione.") });
         return;
       }
-      window.location.href = `${editUrl}&msg=${encodeURIComponent("Cliente disattivato. Nessun dato associato e stato eliminato e potrai riattivarlo in qualsiasi momento.")}`;
+      flashNavigate(editUrl, { msg: "Cliente disattivato. Nessun dato associato e stato eliminato e potrai riattivarlo in qualsiasi momento." });
     } catch {
       setBusy(false);
       setError("Errore nella disattivazione.");
@@ -380,10 +382,10 @@ export function ClientFormContent({ slug: slugProp, initialQuery }: { slug?: str
       });
       const j = await res.json();
       if (!res.ok || !j.ok) {
-        window.location.href = `${editUrl}&err=${encodeURIComponent(String(j.error ?? "Errore nella riattivazione."))}`;
+        flashNavigate(editUrl, { err: String(j.error ?? "Errore nella riattivazione.") });
         return;
       }
-      window.location.href = `${editUrl}&msg=${encodeURIComponent("Cliente riattivato. Tutti i dati associati sono rimasti disponibili.")}`;
+      flashNavigate(editUrl, { msg: "Cliente riattivato. Tutti i dati associati sono rimasti disponibili." });
     } catch {
       setBusy(false);
       setError("Errore nella riattivazione.");

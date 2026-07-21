@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import InfoBox from "./info-box";
+import { flashNavigate, useTakenFlash } from "./flash";
 
 // Port fedele della pagina Fidelity (app/pages/fidelity.php): card
 // "Impostazione generale" con lo switch globale businesses.fidelity_enabled e
@@ -80,7 +81,8 @@ export function FidelityContent({ slug: slugProp, initialQuery }: { slug?: strin
   const [modalOpen, setModalOpen] = useState(false);
 
   // Flash legacy (View::alert): ?msg= success + ?err= danger dal redirect.
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
 
   useEffect(() => {
     fetch(`/api/manage/fidelity?slug=${encodeURIComponent(slug)}&action=state`, { headers: { "x-tenant-slug": slug } })
@@ -117,10 +119,10 @@ export function FidelityContent({ slug: slugProp, initialQuery }: { slug?: strin
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j?.error) {
-        window.location.href = pageUrl(`fidelity?err=${encodeURIComponent(String(j?.error ?? "Errore salvataggio."))}`);
+        flashNavigate(pageUrl("fidelity"), { err: String(j?.error ?? "Errore salvataggio.") });
         return;
       }
-      window.location.href = pageUrl(`fidelity?msg=${encodeURIComponent(String(j?.message ?? (nextEnabled ? "Fidelity attivata" : "Fidelity disattivata")))}`);
+      flashNavigate(pageUrl("fidelity"), { msg: String(j?.message ?? (nextEnabled ? "Fidelity attivata" : "Fidelity disattivata")) });
     } catch {
       setSaving(false);
     }

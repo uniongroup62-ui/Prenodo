@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { flashNavigate, useTakenFlash } from "./flash";
 
 // Faithful port of the PHP services page, "Servizi consigliati" tab
 // (?page=services&tab=recommended). Fed by the existing DB-backed
@@ -37,6 +38,7 @@ export function ServiceRecommendationsContent({ slug: slugProp, initialQuery }: 
   const [loading, setLoading] = useState(true);
   // Flash legacy + filtro/pagina dal querystring; ?action=edit&id apre la modale.
   const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
   const page = Math.max(1, Number.parseInt(initialQuery?.p ?? "1", 10) || 1);
   const [filterServiceId, setFilterServiceId] = useState<string>(() => {
     const raw = Number.parseInt(initialQuery?.service_id ?? "0", 10) || 0;
@@ -113,9 +115,10 @@ export function ServiceRecommendationsContent({ slug: slugProp, initialQuery }: 
       const usp = new URLSearchParams({ tab: "recommended" });
       if (filterServiceId) usp.set("service_id", filterServiceId);
       if (page > 1) usp.set("p", String(page));
-      if (res.ok && j.ok !== false) usp.set("msg", String(j.msg ?? "Servizi consigliati aggiornati"));
-      else usp.set("err", String(j.error ?? "Seleziona un servizio valido"));
-      window.location.assign(`/${encodeURIComponent(slug)}/services?${usp.toString()}`);
+      const flash = res.ok && j.ok !== false
+        ? { msg: String(j.msg ?? "Servizi consigliati aggiornati") }
+        : { err: String(j.error ?? "Seleziona un servizio valido") };
+      flashNavigate(`/${encodeURIComponent(slug)}/services?${usp.toString()}`, flash);
     } finally {
       setSaving(false);
     }

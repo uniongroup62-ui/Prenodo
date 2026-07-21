@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { flashNavigate } from "./flash";
 
 // Faithful port of the PHP client delete-confirm page (clients.php
 // action=delete_confirm -> client_delete_render_confirmation): header
@@ -54,7 +55,7 @@ export function ClientDeleteConfirmContent({ slug: slugProp }: { slug?: string }
       if (id > 0) setClientId(id);
       else if (typeof window !== "undefined") {
         // Legacy: nessun id -> lista con "Nessun cliente selezionato."
-        window.location.href = `/${encodeURIComponent(slug)}/clients?err=${encodeURIComponent("Nessun cliente selezionato.")}`;
+        flashNavigate(`/${encodeURIComponent(slug)}/clients`, { err: "Nessun cliente selezionato." });
       }
     });
   }, [slug]);
@@ -69,7 +70,7 @@ export function ClientDeleteConfirmContent({ slug: slugProp }: { slug?: string }
       .then(([cj, sj]) => {
         if (!active) return;
         if (!cj?.ok || !cj.client) {
-          window.location.href = `/${encodeURIComponent(slug)}/clients?err=${encodeURIComponent("Cliente non trovato o non disponibile per le tue sedi.")}`;
+          flashNavigate(`/${encodeURIComponent(slug)}/clients`, { err: "Cliente non trovato o non disponibile per le tue sedi." });
           return;
         }
         setClientLabel({ name: String(cj.client.name ?? `Cliente #${clientId}`), email: String(cj.client.email ?? "") });
@@ -114,7 +115,7 @@ export function ClientDeleteConfirmContent({ slug: slugProp }: { slug?: string }
       const deletedClients = Number(j.counts?.clienti ?? 1);
       let message = `Clienti eliminati definitivamente: ${deletedClients}`;
       if (Number(j.restoredStockQty ?? 0) > 0) message += ` - Stock ripristinato: ${Number(j.restoredStockQty)} pezzi`;
-      window.location.href = `/${encodeURIComponent(slug)}/clients?msg=${encodeURIComponent(message)}`;
+      flashNavigate(`/${encodeURIComponent(slug)}/clients`, { msg: message });
     } catch {
       setError("Errore nell'eliminazione.");
       setBusy(false);

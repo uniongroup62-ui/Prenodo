@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import InfoBox from "./info-box";
+import { flashNavigate, useTakenFlash } from "./flash";
 
 // Faithful port of the PHP recharges page (app/pages/recharges.php +
 // assets/js/pages/recharges.js). "Modelli di ricarica" (tabella + modal
@@ -97,7 +98,8 @@ export function RechargesContent({ slug: slugProp, initialQuery }: { slug?: stri
   const [loading, setLoading] = useState(true);
 
   // Flash legacy via redirect ?msg; gli errori del POST restano in pagina.
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
   const [pageError, setPageError] = useState<string | null>(null);
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -156,7 +158,7 @@ export function RechargesContent({ slug: slugProp, initialQuery }: { slug?: stri
   }
 
   function redirectFlash(msg: string) {
-    window.location.href = `/${encodeURIComponent(slug)}/recharges?msg=${encodeURIComponent(msg)}`;
+    flashNavigate(`/${encodeURIComponent(slug)}/recharges`, { msg });
   }
 
   async function onSubmit(event: React.FormEvent) {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { flashNavigate, useTakenFlash } from "./flash";
 
 // Faithful port of the PHP services page, "Categorie" tab
 // (?page=services&tab=categories). Fed by the existing DB-backed
@@ -61,7 +62,8 @@ export function ServiceCategoriesContent({ slug: slugProp, initialQuery }: { slu
   const [services, setServices] = useState<Service[]>([]);
   const [loading, setLoading] = useState(true);
   // Flash legacy dal redirect (?msg / ?err) + vista/pagina/filtro dal querystring.
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
   const orderCategoryId = initialQuery?.action === "order" ? Math.max(0, Number.parseInt(initialQuery?.id ?? "0", 10) || 0) : 0;
   const page = Math.max(1, Number.parseInt(initialQuery?.p ?? "1", 10) || 1);
   const [filterCategoryId, setFilterCategoryId] = useState<string>(() => {
@@ -127,8 +129,14 @@ export function ServiceCategoriesContent({ slug: slugProp, initialQuery }: { slu
       if (filterCategoryId) usp.set("category_id", filterCategoryId);
       if (page > 1) usp.set("p", String(page));
     }
-    for (const [k, v] of Object.entries(params)) if (String(v) !== "") usp.set(k, String(v));
-    window.location.assign(`/${encodeURIComponent(slug)}/services?${usp.toString()}`);
+    const flash: { msg?: string; err?: string } = {};
+    for (const [k, v] of Object.entries(params)) {
+      if (String(v) === "") continue;
+      if (k === "msg") flash.msg = String(v);
+      else if (k === "err") flash.err = String(v);
+      else usp.set(k, String(v));
+    }
+    flashNavigate(`/${encodeURIComponent(slug)}/services?${usp.toString()}`, flash);
   }
 
   // POST a category action to the services API; on success refresh the list with
@@ -277,8 +285,9 @@ export function ServiceCategoriesContent({ slug: slugProp, initialQuery }: { slu
     if (!orderCategoryId) return;
     const j = await postCategory({ action: "save_service_order", category_id: String(orderCategoryId), service_order: orderIds.join(",") });
     const usp = new URLSearchParams({ tab: "categories", action: "order", id: String(orderCategoryId) });
-    usp.set("msg", String((j as CategoryResult & { msg?: string }).msg ?? (j.ok ? "Ordine servizi aggiornato" : "Nessun servizio da ordinare")));
-    window.location.assign(`/${encodeURIComponent(slug)}/services?${usp.toString()}`);
+    flashNavigate(`/${encodeURIComponent(slug)}/services?${usp.toString()}`, {
+      msg: String((j as CategoryResult & { msg?: string }).msg ?? (j.ok ? "Ordine servizi aggiornato" : "Nessun servizio da ordinare")),
+    });
   }
 
   function moveOrderId(id: number, direction: -1 | 1) {

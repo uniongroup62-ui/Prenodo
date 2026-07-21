@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { flashNavigate, useTakenFlash } from "./flash";
 
 // Faithful port of the PHP coupon NEW / EDIT form (app/pages/coupons.php,
 // action=new|edit). Field groups and Bootstrap markup mirror the legacy editor:
@@ -149,14 +150,17 @@ export function CouponFormContent({ slug: slugProp, initialQuery }: { slug?: str
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  // Flash legacy (View::alert sopra il page header) dal redirect ?msg=&type=.
-  // Ogni esito (save/cancel) naviga via redirect, quindi non serve un setter.
-  const [flash] = useState<{ msg: string; type: string } | null>(() =>
+  // Flash (fallback ?msg=&type= per i vecchi deep-link + sessionStorage).
+  const [flash, setFlash] = useState<{ msg: string; type: string } | null>(() =>
     initialQuery?.msg ? { msg: initialQuery.msg, type: initialQuery.type || "success" } : null,
   );
   // Warning aggiuntivo dal save (prenotazioni aperte), mostrato SOTTO il flash
   // di successo — non lo sostituisce.
-  const [flashWarn] = useState<string>(() => String(initialQuery?.warn ?? ""));
+  const [flashWarn, setFlashWarn] = useState<string>(() => String(initialQuery?.warn ?? ""));
+  useTakenFlash((f) => {
+    if (f.msg) setFlash({ msg: f.msg, type: f.type || "success" });
+    if (f.warn) setFlashWarn(f.warn);
+  });
   const [showCancel, setShowCancel] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelling, setCancelling] = useState(false);
@@ -215,7 +219,7 @@ export function CouponFormContent({ slug: slugProp, initialQuery }: { slug?: str
                 // trovato" danger / "Coupon gia eliminato dalla gestione" warning).
                 const msg = String(j.error ?? "Coupon non trovato");
                 const type = String(j.errorType ?? "danger");
-                window.location.href = `/${encodeURIComponent(slug)}/coupons?msg=${encodeURIComponent(msg)}&type=${encodeURIComponent(type)}`;
+                flashNavigate(`/${encodeURIComponent(slug)}/coupons`, { msg, type });
                 return;
               }
               const c = j.coupon;
@@ -325,13 +329,13 @@ export function CouponFormContent({ slug: slugProp, initialQuery }: { slug?: str
         const msg = String(j?.error ?? "Impossibile disattivare il coupon.");
         const type = String(j?.errorType ?? "warning");
         if (msg === "Coupon non trovato") {
-          window.location.href = `/${encodeURIComponent(slug)}/coupons?msg=${encodeURIComponent(msg)}&type=danger`;
+          flashNavigate(`/${encodeURIComponent(slug)}/coupons`, { msg, type: "danger" });
           return;
         }
-        window.location.href = `${base}&msg=${encodeURIComponent(msg)}&type=${encodeURIComponent(type)}`;
+        flashNavigate(base, { msg, type });
         return;
       }
-      window.location.href = `${base}&msg=${encodeURIComponent("Coupon disattivato")}&type=success`;
+      flashNavigate(base, { msg: "Coupon disattivato", type: "success" });
     } finally {
       setCancelling(false);
     }
@@ -418,7 +422,7 @@ export function CouponFormContent({ slug: slugProp, initialQuery }: { slug?: str
         // Legacy: not-found / already-deleted redirect to the list with the flash.
         if (msg === "Coupon non trovato" || msg === "Coupon gia eliminato dalla gestione") {
           const type = msg === "Coupon non trovato" ? "danger" : "warning";
-          window.location.href = `/${encodeURIComponent(slug)}/coupons?msg=${encodeURIComponent(msg)}&type=${type}`;
+          flashNavigate(`/${encodeURIComponent(slug)}/coupons`, { msg, type });
           return;
         }
         setError(msg);
@@ -428,13 +432,11 @@ export function CouponFormContent({ slug: slugProp, initialQuery }: { slug?: str
       // Legacy redirects: create -> list "Coupon creato"; edit -> stay on the
       // edit view with "Coupon aggiornato" (both type=success).
       if (form.id > 0) {
-        // Warning aggiuntivo (prenotazioni aperte): viaggia nel redirect come
-        // ?warn= e viene mostrato sotto il flash di successo.
+        // Warning aggiuntivo (prenotazioni aperte), mostrato sotto il flash.
         const warn = String(j.warning ?? "").trim();
-        const warnParam = warn !== "" ? `&warn=${encodeURIComponent(warn)}` : "";
-        window.location.href = `/${encodeURIComponent(slug)}/coupons?action=edit&id=${form.id}&msg=${encodeURIComponent("Coupon aggiornato")}&type=success${warnParam}`;
+        flashNavigate(`/${encodeURIComponent(slug)}/coupons?action=edit&id=${form.id}`, { msg: "Coupon aggiornato", type: "success", ...(warn !== "" ? { warn } : {}) });
       } else {
-        window.location.href = `/${encodeURIComponent(slug)}/coupons?msg=${encodeURIComponent("Coupon creato")}&type=success`;
+        flashNavigate(`/${encodeURIComponent(slug)}/coupons`, { msg: "Coupon creato", type: "success" });
       }
     } catch {
       setError("Errore nel salvataggio del coupon.");

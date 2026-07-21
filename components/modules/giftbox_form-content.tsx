@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { flashNavigate, useTakenFlash } from "./flash";
 
 // Faithful port of the PHP giftbox TEMPLATE editor (app/pages/giftbox.php,
 // tab=boxes action=new|edit). A template is the box CATALOG the POS giftbox-sale
@@ -83,7 +84,8 @@ export function GiftBoxFormContent({ slug: slugProp, initialQuery }: { slug?: st
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   // Flash legacy (View::alert): ?msg= dal redirect post-salvataggio.
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -125,7 +127,7 @@ export function GiftBoxFormContent({ slug: slugProp, initialQuery }: { slug?: st
         .then(([, j]) => {
           if (!j.ok || !j.template) {
             // Legacy: redirect alla pagina GiftBox con "GiftBox non trovata".
-            window.location.href = `/${encodeURIComponent(slug)}/giftbox?err=${encodeURIComponent("GiftBox non trovata")}`;
+            flashNavigate(`/${encodeURIComponent(slug)}/giftbox`, { err: "GiftBox non trovata" });
             return;
           }
           const t = j.template;
@@ -230,7 +232,7 @@ export function GiftBoxFormContent({ slug: slugProp, initialQuery }: { slug?: st
       }
       // Redirect legacy: resta sull'editor della GiftBox salvata con flash.
       const savedId = Number(j?.template?.id ?? form.id) || form.id;
-      window.location.href = `/${encodeURIComponent(slug)}/giftbox?action=edit&id=${savedId}&msg=${encodeURIComponent("GiftBox salvata")}`;
+      flashNavigate(`/${encodeURIComponent(slug)}/giftbox?action=edit&id=${savedId}`, { msg: "GiftBox salvata" });
     } catch {
       setError("Errore: impossibile salvare la GiftBox. Verifica nome, livelli e contenuti.");
       setSaving(false);

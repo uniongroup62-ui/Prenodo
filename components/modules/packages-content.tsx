@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTakenFlash } from "./flash";
 import { ClientSearchCombobox } from "@/components/client-search-combobox";
 
 // Faithful port of the PHP packages page, CLIENTS tab (packages.php tab=clients
@@ -156,7 +157,8 @@ export function PackagesContent({ slug: slugProp, initialQuery }: { slug?: strin
   const [locationsCount, setLocationsCount] = useState(0);
   const [perms, setPerms] = useState<Perms>({});
   const [loading, setLoading] = useState(true);
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
 
   // Filtri (draft applicati con "Filtra", come il form GET legacy).
   const [clientId, setClientId] = useState(() => initialQuery?.client_id ?? "");

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { flashNavigate, useTakenFlash } from "./flash";
 import { quoteExpiryWarning } from "@/components/modules/quotes-content";
 
 // Port fedele del DETTAGLIO preventivo (app/pages/quotes.php action=view):
@@ -100,10 +101,10 @@ export function QuoteDetailContent({ slug: slugProp, initialQuery }: { slug?: st
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok || !j.id) {
-        window.location.assign(pageUrl(`quotes?action=view&id=${data.id}&err=${encodeURIComponent(String(j.error ?? "Errore duplicazione preventivo."))}`));
+        flashNavigate(pageUrl(`quotes?action=view&id=${data.id}`), { err: String(j.error ?? "Errore duplicazione preventivo.") });
         return;
       }
-      window.location.assign(pageUrl(`quotes?action=edit&id=${j.id}&msg=${encodeURIComponent("Preventivo duplicato")}`));
+      flashNavigate(pageUrl(`quotes?action=edit&id=${j.id}`), { msg: "Preventivo duplicato" });
     } catch {
       setDuplicating(false);
     }
@@ -113,24 +114,25 @@ export function QuoteDetailContent({ slug: slugProp, initialQuery }: { slug?: st
   const [sending, setSending] = useState(false);
 
   // Flash legacy (View::alert): ?msg= success + ?err= danger dal redirect.
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
 
   useEffect(() => {
     const raw = initialQuery?.id ?? new URLSearchParams(window.location.search).get("id") ?? "";
     const id = Number.parseInt(String(raw), 10) || 0;
     if (id <= 0) {
-      window.location.href = `/${encodeURIComponent(slug)}/quotes?err=${encodeURIComponent("Preventivo non trovato")}`;
+      flashNavigate(`/${encodeURIComponent(slug)}/quotes`, { err: "Preventivo non trovato" });
       return;
     }
     fetch(`/api/manage/quotes?slug=${encodeURIComponent(slug)}&action=view&id=${id}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
       .then((j) => {
         if (j?.redirect?.to === "list") {
-          window.location.href = `/${encodeURIComponent(slug)}/quotes?err=${encodeURIComponent(String(j.redirect.err ?? "Preventivo non trovato"))}`;
+          flashNavigate(`/${encodeURIComponent(slug)}/quotes`, { err: String(j.redirect.err ?? "Preventivo non trovato") });
           return;
         }
         if (!j?.view) {
-          window.location.href = `/${encodeURIComponent(slug)}/quotes?err=${encodeURIComponent("Preventivo non trovato")}`;
+          flashNavigate(`/${encodeURIComponent(slug)}/quotes`, { err: "Preventivo non trovato" });
           return;
         }
         const v = j.view as ViewData;
@@ -160,13 +162,12 @@ export function QuoteDetailContent({ slug: slugProp, initialQuery }: { slug?: st
       });
       const j = await res.json().catch(() => ({}));
       if (j?.redirect === "list") {
-        window.location.href = pageUrl(`quotes?${j?.err ? `err=${encodeURIComponent(String(j.err))}` : ""}`);
+        flashNavigate(pageUrl("quotes"), j?.err ? { err: String(j.err) } : {});
         return;
       }
       const params = new URLSearchParams({ action: "view", id: String(j?.id ?? data.id) });
-      if (j?.msg) params.set("msg", String(j.msg));
-      else if (j?.err) params.set("err", String(j.err));
-      window.location.href = pageUrl(`quotes?${params.toString()}`);
+      const flash = j?.msg ? { msg: String(j.msg) } : j?.err ? { err: String(j.err) } : {};
+      flashNavigate(pageUrl(`quotes?${params.toString()}`), flash);
     } finally {
       setSending(false);
     }

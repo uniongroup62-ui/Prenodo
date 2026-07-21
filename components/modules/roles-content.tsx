@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import InfoBox from "./info-box";
+import { useTakenFlash } from "./flash";
 
 // Faithful port of the PHP roles page (app/pages/roles.php): role list + the
 // permissions tree form for the selected manageable role (Staff / Altro). Fed
@@ -155,6 +156,10 @@ export function RolesContent({
   // Auth::requirePerm legacy: 403 → pagina 'Accesso negato' (card nel chrome).
   const [accessDenied, setAccessDenied] = useState(false);
   // Flash legacy (View::alert msg success / err danger PRIMA del page header).
+  useTakenFlash((f) => {
+    if (f.err) setFlash({ text: f.err, type: "danger" });
+    else if (f.msg) setFlash({ text: f.msg, type: "success" });
+  });
   const [flash, setFlash] = useState<Flash | null>(() => {
     if (initialQuery?.err) return { text: String(initialQuery.err), type: "danger" };
     if (initialQuery?.msg) return { text: String(initialQuery.msg), type: "success" };

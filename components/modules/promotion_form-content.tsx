@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { flashNavigate } from "./flash";
 import { ClientSearchCombobox } from "@/components/client-search-combobox";
 
 // Port PIXEL-FEDELE dell'editor promozioni PHP (promotions.php action=new|edit,
@@ -161,7 +162,7 @@ export function PromotionFormContent({ slug: slugProp }: { slug?: string } = {})
                 .then((g) => {
                   const reason = String(g?.reason ?? "");
                   if (reason !== "") {
-                    window.location.href = `/${encodeURIComponent(slug)}/promotions?open_summary=${id}&err=${encodeURIComponent(reason)}`;
+                    flashNavigate(`/${encodeURIComponent(slug)}/promotions?open_summary=${id}`, { err: reason });
                     return null;
                   }
                   return true;
@@ -363,7 +364,7 @@ export function PromotionFormContent({ slug: slugProp }: { slug?: string } = {})
       // Redirect flash legacy: lista con msg + open_summary della promo salvata.
       const savedId = Number(j?.promotion?.id ?? 0);
       const msg = String(j?.message ?? "Promozione salvata");
-      window.location.href = `/${encodeURIComponent(slug)}/promotions?msg=${encodeURIComponent(msg)}${savedId > 0 ? `&open_summary=${savedId}` : ""}`;
+      flashNavigate(`/${encodeURIComponent(slug)}/promotions${savedId > 0 ? `?open_summary=${savedId}` : ""}`, { msg });
     } catch {
       setError("Errore nel salvataggio della promozione.");
       setSaving(false);

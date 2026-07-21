@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTakenFlash } from "./flash";
 
 // Faithful port of the PHP "Sedi" page (app/pages/locations.php — anche
 // index.php?page=settings via shim) + assets/js/pages/locations.js:
@@ -247,6 +248,10 @@ export function LocationsContent({
   const [ctx, setCtx] = useState<Ctx | null>(null);
   const [loading, setLoading] = useState(true);
   // Flash legacy (View::alert msg success / err danger sopra il page header).
+  useTakenFlash((f) => {
+    if (f.err) setFlash({ text: f.err, type: "danger" });
+    else if (f.msg) setFlash({ text: f.msg, type: "success" });
+  });
   const [flash, setFlash] = useState<Flash | null>(() => {
     if (initialQuery?.err) return { text: String(initialQuery.err), type: "danger" };
     if (initialQuery?.msg) return { text: String(initialQuery.msg), type: "success" };

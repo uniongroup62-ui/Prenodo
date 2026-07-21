@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import InfoBox from "./info-box";
+import { useTakenFlash } from "./flash";
 
 // Faithful port of the PHP resources page (app/pages/resources.php +
 // resources.js): lista (Nome | Quantità sede | Descrizione | Azioni, desc
@@ -48,7 +49,8 @@ export function ResourcesContent({ slug: slugProp, initialQuery }: { slug?: stri
   const editId = Math.max(0, Number.parseInt(initialQuery?.id ?? "0", 10) || 0);
 
   // Flash legacy dal redirect (?msg / ?err) + errori delle azioni in pagina.
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
   const [err, setErr] = useState("");
 
   const [items, setItems] = useState<SharedResource[]>([]);

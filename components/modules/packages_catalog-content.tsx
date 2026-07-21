@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTakenFlash } from "./flash";
 
 // Faithful port of the PHP packages page CATALOG tab
 // (app/pages/packages.php?tab=catalog): the package templates table
@@ -51,6 +52,7 @@ export function PackagesCatalogContent({ slug: slugProp, initialQuery }: { slug?
   const [busyId, setBusyId] = useState(0);
   // Flash legacy (?msg/?err dai redirect) + esito delete in pagina.
   const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
 
   // Fetch puro (setState nei callback della Promise; loading gia' true di default).
   const fetchData = useCallback((all?: boolean) => {

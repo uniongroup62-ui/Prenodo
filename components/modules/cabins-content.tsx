@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import InfoBox from "./info-box";
+import { useTakenFlash } from "./flash";
 
 // Faithful port of the PHP cabins configuration page (app/pages/cabins.php +
 // assets/js/pages/cabins.js), fed by the existing DB-backed
@@ -85,7 +86,8 @@ export function CabinsContent({ slug: slugProp, initialQuery }: { slug?: string;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   // Flash legacy dai redirect (?msg / ?err).
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
 
   // Block modal state (mirrors cabins.js showCabinBlockPopup()).
   const [blockModal, setBlockModal] = useState<{

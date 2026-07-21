@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import InfoBox from "./info-box";
+import { flashNavigate, useTakenFlash } from "./flash";
 
 // Faithful port of the PHP coupons list page (app/pages/coupons.php), fed by
 // the existing DB-backed /api/manage/coupons. The PHP page renders an empty
@@ -94,6 +95,9 @@ export function CouponsContent({ slug: slugProp, initialQuery }: { slug?: string
   const [flash, setFlash] = useState<{ msg: string; type: string } | null>(() =>
     initialQuery?.msg ? { msg: initialQuery.msg, type: initialQuery.type || "success" } : null,
   );
+  useTakenFlash((f) => {
+    if (f.msg) setFlash({ msg: f.msg, type: f.type || "success" });
+  });
 
   // Fetch puro (setState nei callback della Promise; loading gia' true di default).
   const fetchData = useCallback((all?: boolean) => {
@@ -157,7 +161,7 @@ export function CouponsContent({ slug: slugProp, initialQuery }: { slug?: string
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j?.error) {
         if (j?.redirectEdit) {
-          window.location.href = href(`&action=edit&id=${c.id}`) + `&msg=${encodeURIComponent(String(j.error))}&type=${encodeURIComponent(String(j.errorType || "warning"))}`;
+          flashNavigate(href(`&action=edit&id=${c.id}`), { msg: String(j.error), type: String(j.errorType || "warning") });
           return;
         }
         setFlash({ msg: String(j?.error || "Errore coupon."), type: String(j?.errorType || "danger") });

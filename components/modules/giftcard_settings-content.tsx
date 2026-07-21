@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import InfoBox from "./info-box";
+import { flashNavigate, useTakenFlash } from "./flash";
 
 // Port fedele della pagina impostazioni GiftCard
 // (app/pages/giftcard_settings.php): scadenza predefinita (durata + unità) e
@@ -47,7 +48,8 @@ export function GiftcardSettingsContent({ slug: slugProp, initialQuery }: { slug
   const [terms, setTerms] = useState("");
   const [perms, setPerms] = useState({ canGiftcardManage: false, canCreate: false });
   // Flash legacy (View::alert): ?msg= success dal redirect + errore in pagina.
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
   const [error, setError] = useState("");
 
   const load = useCallback(() => {
@@ -91,7 +93,7 @@ export function GiftcardSettingsContent({ slug: slugProp, initialQuery }: { slug
         window.scrollTo(0, 0);
         return;
       }
-      window.location.href = `${pageBase}?msg=${encodeURIComponent(String(j?.message ?? ""))}`;
+      flashNavigate(pageBase, { msg: String(j?.message ?? "") });
     } catch {
       setError("Errore di rete.");
       window.scrollTo(0, 0);

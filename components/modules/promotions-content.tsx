@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTakenFlash } from "./flash";
 
 // Faithful port of the PHP promotions LIST (app/pages/promotions.php action=list
 // + assets/js/pages/promotions.js): tabella legacy (Nome/Sconto/Validità/Target/
@@ -66,7 +67,8 @@ export function PromotionsContent({ slug: slugProp, initialQuery }: { slug?: str
   const [hasAny, setHasAny] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
 
   // Modal Riepilogo aperto (id promo) — auto-open via ?open_summary.
   const [summaryId, setSummaryId] = useState(0);

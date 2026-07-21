@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import InfoBox from "./info-box";
+import { useTakenFlash } from "./flash";
 
 // Faithful port of the PHP "Scadenziario e Costi" page (app/pages/costs.php,
 // scadenziario tab), fed by the existing DB-backed /api/manage/costs.
@@ -181,6 +182,10 @@ export function CostsContent({ slug: slugProp, initialQuery }: { slug?: string; 
   // Flash legacy (?msg / ?err dopo i redirect): success sopra, danger sotto.
   const [flash, setFlash] = useState("");
   const [error, setError] = useState("");
+  useTakenFlash((f) => {
+    if (f.msg) setFlash(f.msg);
+    if (f.err) setError(f.err);
+  });
 
   // Legge il flash dai query param dopo un redirect (es. dal form costo: ?msg=Costo%20creato)
   // e ripulisce l'URL, come il legacy che mostra $_GET['msg']/['err'].

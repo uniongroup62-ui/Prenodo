@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { flashNavigate, useTakenFlash } from "./flash";
 
 // Faithful port of the PHP client-package EDIT form (packages.php tab=clients
 // action=client_edit): Cliente*/Sede/Da catalogo (opzionale)/Servizio
@@ -135,7 +136,8 @@ export function ClientPackageFormContent({ slug: slugProp, initialQuery }: { slu
   const [locations, setLocations] = useState<Array<{ id: number; name: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
 
   const [form, setForm] = useState({
     client_id: "",
@@ -159,12 +161,12 @@ export function ClientPackageFormContent({ slug: slugProp, initialQuery }: { slu
       const action = params.get("action") ?? "";
       if (action === "client_new") {
         // Legacy: la creazione avviene solo da Pagamenti.
-        window.location.href = `/${encodeURIComponent(slug)}/packages?tab=clients&err=${encodeURIComponent("La vendita/assegnazione dei pacchetti avviene solo da Pagamenti.")}`;
+        flashNavigate(`/${encodeURIComponent(slug)}/packages?tab=clients`, { err: "La vendita/assegnazione dei pacchetti avviene solo da Pagamenti." });
         return;
       }
       const id = Number.parseInt(params.get("id") ?? "", 10);
       if (Number.isFinite(id) && id > 0) setCpId(id);
-      else window.location.href = `/${encodeURIComponent(slug)}/packages?tab=clients&msg=${encodeURIComponent("Pacchetto non trovato")}`;
+      else flashNavigate(`/${encodeURIComponent(slug)}/packages?tab=clients`, { msg: "Pacchetto non trovato" });
     });
   }, [slug]);
 
@@ -180,7 +182,7 @@ export function ClientPackageFormContent({ slug: slugProp, initialQuery }: { slu
       .then(([ej, fj, sj, lj]) => {
         if (!active) return;
         if (!ej?.ok || !ej.edit) {
-          window.location.href = `/${encodeURIComponent(slug)}/packages?tab=clients&msg=${encodeURIComponent("Pacchetto non trovato")}`;
+          flashNavigate(`/${encodeURIComponent(slug)}/packages?tab=clients`, { msg: "Pacchetto non trovato" });
           return;
         }
         const e = ej.edit as EditData;
@@ -250,10 +252,10 @@ export function ClientPackageFormContent({ slug: slugProp, initialQuery }: { slu
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j?.error) {
         // Esiti legacy: errori come flash ?err sull'edit (o sulla lista).
-        window.location.href = `${listUrl(`&action=client_edit&id=${cpId}`)}&err=${encodeURIComponent(String(j?.error ?? "Errore salvataggio"))}`;
+        flashNavigate(listUrl(`&action=client_edit&id=${cpId}`), { err: String(j?.error ?? "Errore salvataggio") });
         return;
       }
-      window.location.href = `${listUrl(`&action=client_view&id=${cpId}`)}&msg=${encodeURIComponent("Pacchetto aggiornato")}`;
+      flashNavigate(listUrl(`&action=client_view&id=${cpId}`), { msg: "Pacchetto aggiornato" });
     } catch {
       setBusy(false);
     }

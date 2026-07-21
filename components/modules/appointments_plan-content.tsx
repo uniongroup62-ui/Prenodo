@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flashNavigate, takeFlash } from "./flash";
 
 // Pixel-faithful port of the PHP "Pianifica appuntamenti" page
 // (app/pages/appointments_plan.php, ?page=appointments_plan).
@@ -223,10 +224,12 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
         setCanSeeCalendar(j.canSeeCalendar !== false);
       })
       .catch(() => undefined);
-    // ?msg dal redirect legacy (in microtask: nessun setState sincrono nell'effect).
+    // Flash: sessionStorage (moderno) + ?msg come fallback per vecchi link
+    // (in microtask: nessun setState sincrono nell'effect).
     Promise.resolve().then(() => {
       if (!alive || typeof window === "undefined") return;
-      const urlMsg = String(new URLSearchParams(window.location.search).get("msg") ?? "").trim();
+      const taken = takeFlash();
+      const urlMsg = String(taken.msg ?? new URLSearchParams(window.location.search).get("msg") ?? "").trim();
       if (urlMsg) setPlanMsg(urlMsg);
     });
     return () => {
@@ -575,7 +578,7 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
       // Senza appointments.manage il legacy resta sul planner col solo ?msg
       // (appointments_plan.php 2025).
       if (!canManageAppointments) {
-        window.location.href = `/${encodeURIComponent(slug)}/appointments_plan?msg=${encodeURIComponent(successMessage)}`;
+        flashNavigate(`/${encodeURIComponent(slug)}/appointments_plan`, { msg: successMessage });
         return;
       }
       const details = (Array.isArray(j.details) ? j.details : []) as Array<{ date?: string; ok?: boolean; appointmentId?: number }>;
@@ -588,8 +591,7 @@ export function AppointmentsPlanContent({ slug: slugProp }: { slug?: string } = 
         params.set("to", shiftIsoDay(okDates[okDates.length - 1], 1));
       }
       if (createdIds.length) params.set("created", createdIds.join(","));
-      params.set("msg", successMessage);
-      window.location.href = `/${encodeURIComponent(slug)}/appointments?${params.toString()}`;
+      flashNavigate(`/${encodeURIComponent(slug)}/appointments?${params.toString()}`, { msg: successMessage });
       return;
     } catch {
       setPlanError("Errore di rete durante la creazione.");

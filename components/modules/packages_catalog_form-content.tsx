@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { flashNavigate } from "./flash";
 
 // Faithful port of the PHP package CATALOG editor (packages.php
 // action=catalog_new|catalog_edit): Nome + Contenuto pacchetto (#pkgItemsBox
@@ -277,7 +278,7 @@ export function PackagesCatalogFormContent({ slug: slugProp }: { slug?: string }
         return;
       }
       // Redirect legacy: catalogo con flash "Pacchetto creato"/"Pacchetto aggiornato".
-      window.location.href = href(`packages?tab=catalog&msg=${encodeURIComponent(action === "edit" ? "Pacchetto aggiornato" : "Pacchetto creato")}`);
+      flashNavigate(href("packages?tab=catalog"), { msg: action === "edit" ? "Pacchetto aggiornato" : "Pacchetto creato" });
     } catch {
       setError("Errore salvataggio pacchetto.");
       setSaving(false);

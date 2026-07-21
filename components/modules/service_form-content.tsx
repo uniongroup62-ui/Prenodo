@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { flashNavigate } from "./flash";
 
 // Faithful port of the PHP service NEW / EDIT form (app/pages/services.php,
 // action=new|edit). Field groups and Bootstrap markup mirror the legacy editor:
@@ -313,7 +314,7 @@ export function ServiceFormContent({ slug: slugProp }: { slug?: string } = {}) {
         return;
       }
       // Redirect flash legacy (services.php 4498/4579).
-      window.location.assign(`/${encodeURIComponent(slug)}/services?msg=${encodeURIComponent(String(j.msg ?? "Servizio aggiornato"))}`);
+      flashNavigate(`/${encodeURIComponent(slug)}/services`, { msg: String(j.msg ?? "Servizio aggiornato") });
     } catch {
       setError("Errore nel salvataggio del servizio.");
       setSaving(false);

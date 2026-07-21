@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { flashNavigate, useTakenFlash } from "./flash";
 
 // Port fedele del FORM preventivo (app/pages/quotes.php action=new|edit +
 // assets/js/pages/quotes.js mode=form): colonna "Dati preventivo" (data,
@@ -273,7 +274,8 @@ export function QuoteFormContent({ slug: slugProp, initialQuery }: { slug?: stri
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
 
   const [config, setConfig] = useState<NonNullable<FormPayload["config"]> | null>(null);
 
@@ -336,9 +338,9 @@ export function QuoteFormContent({ slug: slugProp, initialQuery }: { slug?: stri
       .then((j: FormPayload) => {
         if (j.redirect) {
           const target = j.redirect.to === "view" && j.redirect.id
-            ? `/${encodeURIComponent(slug)}/quotes?action=view&id=${j.redirect.id}&err=${encodeURIComponent(j.redirect.err)}`
-            : `/${encodeURIComponent(slug)}/quotes?err=${encodeURIComponent(j.redirect.err)}`;
-          window.location.href = target;
+            ? `/${encodeURIComponent(slug)}/quotes?action=view&id=${j.redirect.id}`
+            : `/${encodeURIComponent(slug)}/quotes`;
+          flashNavigate(target, { err: j.redirect.err });
           return;
         }
         const f = j.form;
@@ -684,7 +686,7 @@ export function QuoteFormContent({ slug: slugProp, initialQuery }: { slug?: stri
         window.scrollTo(0, 0);
         return;
       }
-      window.location.href = `${listUrl()}?action=view&id=${j.id}&msg=${encodeURIComponent("Preventivo salvato")}`;
+      flashNavigate(`${listUrl()}?action=view&id=${j.id}`, { msg: "Preventivo salvato" });
     } catch {
       setError("Errore salvataggio.");
       setSaving(false);

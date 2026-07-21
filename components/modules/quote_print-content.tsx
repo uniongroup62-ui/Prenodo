@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { flashNavigate } from "./flash";
 
 // Port fedele della STAMPA preventivo (app/pages/quotes.php action=print,
 // embed-friendly): toolbar no-print Torna/Stampa, intestazione attività
@@ -70,14 +71,14 @@ export function QuotePrintContent({ slug: slugProp, initialQuery }: { slug?: str
     const raw = initialQuery?.id ?? new URLSearchParams(window.location.search).get("id") ?? "";
     const id = Number.parseInt(String(raw), 10) || 0;
     if (id <= 0) {
-      window.location.href = `/${encodeURIComponent(slug)}/quotes?err=${encodeURIComponent("Preventivo non trovato")}`;
+      flashNavigate(`/${encodeURIComponent(slug)}/quotes`, { err: "Preventivo non trovato" });
       return;
     }
     fetch(`/api/manage/quotes?slug=${encodeURIComponent(slug)}&action=print&id=${id}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
       .then((j) => {
         if (j?.redirect?.to === "list" || !j?.print) {
-          window.location.href = `/${encodeURIComponent(slug)}/quotes?err=${encodeURIComponent(String(j?.redirect?.err ?? "Preventivo non trovato"))}`;
+          flashNavigate(`/${encodeURIComponent(slug)}/quotes`, { err: String(j?.redirect?.err ?? "Preventivo non trovato") });
           return;
         }
         setData(j.print as PrintData);

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTakenFlash } from "./flash";
 
 // Faithful port of the PHP services list page (app/pages/services.php, tab=services),
 // fed by the existing DB-backed /api/manage/services route.
@@ -77,7 +78,8 @@ export function ServicesContent({ slug: slugProp, initialQuery }: { slug?: strin
   });
   const page = Math.max(1, Number.parseInt(initialQuery?.p ?? "1", 10) || 1);
   // Flash legacy dal redirect (?msg / ?err) + errori delle azioni in pagina.
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [deletePopup, setDeletePopup] = useState<DeletePopup | null>(null);

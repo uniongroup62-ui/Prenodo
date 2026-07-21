@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import InfoBox from "./info-box";
+import { useTakenFlash } from "./flash";
 
 // Pixel-faithful port of the PHP automation page (app/pages/automation.php,
 // ?page=automation). Original Bootstrap markup preserved verbatim. The form is
@@ -68,6 +69,10 @@ export function AutomationContent({
   const [flash, setFlash] = useState<Flash | null>(() =>
     initialQuery?.msg ? { text: String(initialQuery.msg), type: "success" } : null,
   );
+  useTakenFlash((f) => {
+    if (f.msg) setFlash({ text: f.msg, type: "success" });
+    else if (f.err) setFlash({ text: f.err, type: "danger" });
+  });
 
   const showFlash = useCallback((next: Flash | null) => {
     setFlash(next);

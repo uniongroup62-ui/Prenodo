@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import InfoBox from "./info-box";
+import { flashNavigate, useTakenFlash } from "./flash";
 
 // Port fedele di Preventivi / Impostazioni (app/pages/quote_settings.php +
 // assets/js/pages/quote_settings.js): dati anagrafici e intestazione
@@ -57,7 +58,8 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodRow[]>([{ name: "", details: "" }]);
 
   // Flash legacy (View::alert): ?msg= success dal redirect + errore in pagina.
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -131,7 +133,7 @@ export function QuoteSettingsContent({ slug: slugProp, initialQuery }: { slug?: 
         window.scrollTo(0, 0);
         return;
       }
-      window.location.href = settingsUrl(`?msg=${encodeURIComponent(String(j?.message ?? ""))}`);
+      flashNavigate(settingsUrl(""), { msg: String(j?.message ?? "") });
     } catch {
       setError("Errore di rete.");
       window.scrollTo(0, 0);

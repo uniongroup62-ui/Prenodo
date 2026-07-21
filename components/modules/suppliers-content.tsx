@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTakenFlash } from "./flash";
 
 // Faithful port of the PHP suppliers list page (app/pages/suppliers.php), fed by
 // the existing DB-backed /api/manage/products endpoint which returns
@@ -69,6 +70,10 @@ export function SuppliersContent({ slug: slugProp, initialQuery }: { slug?: stri
   // Flash legacy (?msg/?err): dal redirect del form o dalle azioni.
   const [flash, setFlash] = useState(String(initialQuery?.msg ?? ""));
   const [error, setError] = useState(String(initialQuery?.err ?? ""));
+  useTakenFlash((f) => {
+    if (f.msg) setFlash(f.msg);
+    if (f.err) setError(f.err);
+  });
 
   // Fetch puro (setState nei callback della Promise; loading gia' true di default).
   const fetchData = useCallback(() => {

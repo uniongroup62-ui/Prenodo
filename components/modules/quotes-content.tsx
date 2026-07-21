@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import InfoBox from "./info-box";
+import { flashNavigate, useTakenFlash } from "./flash";
 import { ClientSearchCombobox } from "@/components/client-search-combobox";
 
 // Port fedele della LISTA preventivi (app/pages/quotes.php action=list):
@@ -123,7 +124,8 @@ export function QuotesContent({ slug: slugProp, initialQuery }: { slug?: string;
   const [allLocations, setAllLocations] = useState(applied.allLocations);
 
   // Flash legacy (View::alert): ?msg= success + ?err= danger dal redirect.
-  const [flash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  const [flash, setFlash] = useState<{ msg?: string; err?: string }>(() => ({ msg: initialQuery?.msg, err: initialQuery?.err }));
+  useTakenFlash(setFlash);
 
   useEffect(() => {
     const params = new URLSearchParams({ slug, action: "list" });
@@ -181,13 +183,11 @@ export function QuotesContent({ slug: slugProp, initialQuery }: { slug?: string;
       });
       const j = await res.json().catch(() => ({}));
       if (j?.redirect === "view" && j?.id) {
-        window.location.href = `/${encodeURIComponent(slug)}/quotes?action=view&id=${j.id}${j?.err ? `&err=${encodeURIComponent(String(j.err))}` : ""}`;
+        flashNavigate(`/${encodeURIComponent(slug)}/quotes?action=view&id=${j.id}`, j?.err ? { err: String(j.err) } : {});
         return;
       }
-      const params = new URLSearchParams();
-      if (j?.msg) params.set("msg", String(j.msg));
-      else if (j?.err) params.set("err", String(j.err));
-      window.location.href = listUrl(params);
+      const flash = j?.msg ? { msg: String(j.msg) } : j?.err ? { err: String(j.err) } : {};
+      flashNavigate(listUrl(new URLSearchParams()), flash);
     } finally {
       setBusyId(0);
     }

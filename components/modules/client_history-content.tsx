@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { flashNavigate } from "./flash";
 
 // Faithful port of the PHP client STORICO page (app/pages/clients.php
 // action=history): card "Appuntamenti fissati" con il riepilogo nel card-header
@@ -122,7 +123,7 @@ export function ClientHistoryContent({ slug: slugProp }: { slug?: string } = {})
         } else {
           // Legacy: client_load_accessible fa redirect alla lista con l'errore.
           const msg = String(j?.error || "Cliente non trovato o non disponibile per le tue sedi.");
-          window.location.href = `/${encodeURIComponent(slug)}/clients?err=${encodeURIComponent(msg)}`;
+          flashNavigate(`/${encodeURIComponent(slug)}/clients`, { err: msg });
         }
       })
       .catch(() => {
