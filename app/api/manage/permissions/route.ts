@@ -1,3 +1,4 @@
+import { businessNowDateTime } from "@/lib/business-datetime";
 import {
   can,
   canAny,
@@ -382,9 +383,8 @@ function parsePerms(value: unknown): string[] {
 }
 
 function auditSqlNow(): string {
-  const date = new Date();
-  const pad = (value: number) => value.toString().padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  // Wall-time ROMA (audit giro 3: era l'orologio del server, UTC su Amplify).
+  return businessNowDateTime();
 }
 
 function normalizedAuditPerms(perms: string[]): string[] {

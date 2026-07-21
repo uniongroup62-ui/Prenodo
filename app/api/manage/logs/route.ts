@@ -7,7 +7,7 @@
 import { jsonError } from "@/lib/api-utils";
 import { listActivityLogs, ACTIVITY_LOG_PAGE_SIZE } from "@/lib/activity-log";
 import { currentManageSession } from "@/lib/manage-auth";
-import { sessionAllowedLocationIds } from "@/lib/manage-locations";
+import { getManageLocationContext, sessionAllowedLocationIds } from "@/lib/manage-locations";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
 import { can } from "@/lib/role-permissions";
 import { tenantSelect, tenantTable, tableExists, type RowDataPacket } from "@/lib/tenant-db";
@@ -95,6 +95,14 @@ export async function GET(request: Request) {
     }
 
     if (!views.activity) return Response.json({ ok: false, error: "Accesso negato.", views }, { status: 403 });
+    // FAIL-CLOSED (audit giro 3): non-admin con lista sedi VUOTA (sessione
+    // degradata) — la sentinella []=admin avrebbe aperto il log tenant-wide.
+    if (String(session.user.role ?? "").toLowerCase() !== "admin" && (session.user.locationIds ?? []).length === 0) {
+      const locationContext = await getManageLocationContext(tenantSlug);
+      if (locationContext.allLocations.length > 0) {
+        return Response.json({ ok: true, sourceMode: "database", views, rows: [], modules: [], actions: [], users: [], totalCount: 0, pageSize: 25, currentPage: 1 });
+      }
+    }
     const list = await listActivityLogs(tenantSlug, {
       module: url.searchParams.get("module") ?? "",
       action: url.searchParams.get("action") ?? "",

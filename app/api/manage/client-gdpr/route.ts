@@ -1,3 +1,4 @@
+import { businessNowDateTime } from "@/lib/business-datetime";
 import { randomBytes } from "node:crypto";
 import { jsonError } from "@/lib/api-utils";
 import {
@@ -56,9 +57,8 @@ export const runtime = "nodejs";
 const clean = (v: unknown) => String(v ?? "").trim();
 
 function nowSql(): string {
-  const now = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  // Wall-time ROMA (audit giro 3: era l'orologio del server, UTC su Amplify).
+  return businessNowDateTime();
 }
 
 function fmtDateTime(value: unknown): string {

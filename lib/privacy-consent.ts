@@ -1,4 +1,5 @@
 import "server-only";
+import { businessTodayIso } from "@/lib/business-datetime";
 
 // PRIVACY / GDPR — port of app/lib/PrivacyConsent.php (le parti usate dal
 // flusso firma pubblica): etichette consensi, template con variabili
@@ -251,9 +252,10 @@ function businessSiteDataBlock(biz: RowDataPacket): string {
 }
 
 function todayDisplay(): string {
-  const t = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(t.getDate())}/${pad(t.getMonth() + 1)}/${t.getFullYear()}`;
+  // Data di ROMA (audit giro 3): finiva nei DOCUMENTI privacy/consensi con il
+  // giorno del server (UTC).
+  const iso = businessTodayIso();
+  return `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
 }
 
 // Render template: sostituzione case-insensitive di ogni variabile (str_ireplace).

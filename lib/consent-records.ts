@@ -1,4 +1,5 @@
 import "server-only";
+import { businessTodayIso } from "@/lib/business-datetime";
 
 // MODULI CONSENSO (lato record cliente) — port of app/lib/ConsentModules.php:
 // record client_consent_records (stati draft/pending/signed come il GDPR),
@@ -244,9 +245,10 @@ export function consentModuleBuildFilename(consentModule: ConsentModuleInfo, cli
 }
 
 function todayDisplay(): string {
-  const t = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(t.getDate())}/${pad(t.getMonth() + 1)}/${t.getFullYear()}`;
+  // Data di ROMA (audit giro 3): finiva nei DOCUMENTI privacy/consensi con il
+  // giorno del server (UTC).
+  const iso = businessTodayIso();
+  return `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
 }
 
 export function consentModuleSnapshotCreate(

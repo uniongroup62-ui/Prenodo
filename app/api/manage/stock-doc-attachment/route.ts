@@ -1,3 +1,4 @@
+import { sniffPdfOrJpeg } from "@/lib/upload-sniff";
 import { randomBytes } from "node:crypto";
 import { jsonError } from "@/lib/api-utils";
 import { currentManageSession } from "@/lib/manage-auth";
@@ -127,7 +128,10 @@ export async function POST(request: Request) {
     // Key come il legacy: stock_docs/<docId>/<random>.<ext>.
     const key = `t${tenantId}/stock_docs/${docId}/${randomBytes(10).toString("hex")}.${ext}`;
     const body = new Uint8Array(await file.arrayBuffer());
-    await putPrivateObject(key, body, String(file.type).toLowerCase());
+    // MIME AUTORITATIVO dai magic bytes (audit giro 3).
+    const sniffed = sniffPdfOrJpeg(body);
+    if (!sniffed) return jsonError("Formato non supportato (solo PDF o JPG)", 400);
+    await putPrivateObject(key, body, sniffed);
 
     const attachmentName = String(file.name ?? `documento.${ext}`).trim().slice(0, 190) || `documento.${ext}`;
     await tenantUpdate({

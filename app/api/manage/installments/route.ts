@@ -40,6 +40,15 @@ export async function GET(request: Request) {
       return Response.json({ ok: true, sourceMode: "database", plans: [], clients: [], alertDays: await automationAlertDays(tenantSlug, "installment_alert_days") });
     }
   }
+  // FAIL-CLOSED anche in Tutte-le-sedi per il NON-admin con lista sedi VUOTA
+  // (audit giro 3: sessione degradata — la sentinella []=admin apriva la
+  // lista tenant-wide senza scope).
+  if (allLocations && String(session.user.role ?? "").toLowerCase() !== "admin" && restrictedLocationIds(session.user).length === 0) {
+    const locationContext = await getManageLocationContext(tenantSlug);
+    if (locationContext.allLocations.length > 0) {
+      return Response.json({ ok: true, sourceMode: "database", plans: [], clients: [], alertDays: await automationAlertDays(tenantSlug, "installment_alert_days") });
+    }
+  }
   const filters = {
     status: url.searchParams.get("status") || undefined,
     clientId: parseInteger(url.searchParams.get("client_id"), 0) || undefined,
@@ -109,6 +118,16 @@ export async function POST(request: Request) {
     }
   }
   const scopeLocationIds = allLocations ? restrictedLocationIds(session.user) : undefined;
+  // FAIL-CLOSED anche in modalità Tutte-le-sedi (audit giro 3, come costs):
+  // la sentinella []=admin confondeva l'admin con un NON-admin dalla lista
+  // sedi vuota (sessione degradata al login) — che con all_locations poteva
+  // listare e incassare rate di QUALUNQUE sede senza scope.
+  if (allLocations && scopeLocationIds !== undefined && scopeLocationIds.length === 0 && String(session.user.role ?? "").toLowerCase() !== "admin") {
+    const locationContext = await getManageLocationContext(tenantSlug);
+    if (locationContext.allLocations.length > 0) {
+      return jsonError("Sede non autorizzata per questa operazione.");
+    }
+  }
 
   try {
     if (action === "create") {

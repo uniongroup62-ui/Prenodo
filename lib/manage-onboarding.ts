@@ -208,7 +208,11 @@ async function saveActivityCategories(slug: string, body: Record<string, string>
   const location = await tenantSelect<RowDataPacket>({ slug, table: "locations", columns: "id", orderBy: "is_active DESC, id ASC", limit: 1 }).catch(() => []);
   const locationId = Number(location[0]?.id ?? 0) || null;
   for (const name of values) {
-    await insertKnown("marketplace_activity_categories", { name, slug: slugify(name), is_active: 1 }, true).catch(() => 0);
+    // Audit giro 3: la tabella è GLOBALE ed esposta dal marketplace pubblico —
+    // le categorie NUOVE inserite dall'onboarding di un tenant nascono
+    // DISATTIVATE (is_active=0, visibili solo dopo approvazione admin);
+    // l'abbinamento tenant/sede sotto resta e funziona comunque.
+    await insertKnown("marketplace_activity_categories", { name, slug: slugify(name), is_active: 0 }, true).catch(() => 0);
     const categoryRows = await dbQuery<RowDataPacket[]>("SELECT id FROM `marketplace_activity_categories` WHERE LOWER(name)=LOWER(?) ORDER BY id ASC LIMIT 1", [name]).catch(() => []);
     const categoryId = Number(categoryRows[0]?.id ?? 0);
     if (categoryId > 0 && locationId) {

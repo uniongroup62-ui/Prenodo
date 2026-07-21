@@ -1,3 +1,5 @@
+import { sniffImageMime } from "@/lib/upload-sniff";
+import { businessNowDateTime } from "@/lib/business-datetime";
 import { randomBytes } from "node:crypto";
 import { jsonError } from "@/lib/api-utils";
 import { currentManageSession } from "@/lib/manage-auth";
@@ -182,13 +184,19 @@ export async function POST(request: Request) {
       // nel filename (t{tenant}/products/{pid}-{random}.{ext}).
       const key = tenantStorageKey(tenantId, "products", `${productId}-${randomBytes(10).toString("hex")}.${ext}`);
       const body = new Uint8Array(await file.arrayBuffer());
-      const publicUrl = await putPublicObject(key, body, String(file.type).toLowerCase());
+      // MIME AUTORITATIVO dai magic bytes (audit giro 3): bucket PUBBLICO.
+      const sniffed = sniffImageMime(body);
+      if (!sniffed) {
+        errors.push("Formato immagine non supportato (usa JPG, PNG, WEBP o GIF).");
+        continue;
+      }
+      const publicUrl = await putPublicObject(key, body, sniffed);
       maxSort += 10;
       await tenantInsert(imagesTable, {
         product_id: productId,
         image_path: publicUrl,
         sort_order: maxSort,
-        created_at: new Date(),
+        created_at: businessNowDateTime(),
       });
       existing++;
       uploaded++;

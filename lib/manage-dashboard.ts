@@ -1,4 +1,5 @@
 import "server-only";
+import { businessTodayIso } from "@/lib/business-datetime";
 
 // DASHBOARD (V1 campagna di verifica) — port fedele dei calcoli di
 // app/pages/dashboard.php (737 righe) + api_dashboard_performance.php (281):
@@ -90,7 +91,10 @@ export async function getManageDashboard(
 ): Promise<ManageDashboardPayload> {
   const locationId = Math.max(0, opts.locationId || 0);
   const failClosed = opts.needsLocationSelection === true;
-  const today = isoLocal(new Date());
+  // OGGI di ROMA (audit giro 3): coi componenti locali del server (UTC su
+  // Amplify) i KPI "oggi", i confini mese e la settimana slittavano di un
+  // giorno nella finestra serale. mondayOf/addDaysIso restano aritmetica pura.
+  const today = businessTodayIso();
 
   // Settimana corrente lun->dom + settimana precedente (per i delta) — servono
   // anche in fail-closed per costruire il range e la serie a zero.

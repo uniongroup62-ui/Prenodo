@@ -281,6 +281,13 @@ export async function POST(request: Request) {
     // Fallback compat (movimento wallet generico): gate STRETTO come il
     // Portafoglio — l'ombrello writePerms da solo aprirebbe i movimenti
     // punti/credito anche a chi ha solo membership/recharges (2026-07-17).
+    // DEFAULT-DENY (audit giro 3): il fallback vale SOLO per le action wallet
+    // esplicite — prima un'action sconosciuta (typo) con client_id/amount nel
+    // body eseguiva una scrittura contabile non richiesta.
+    const fallbackAction = String(body.action ?? "").trim();
+    if (fallbackAction !== "" && fallbackAction !== "movement" && fallbackAction !== "wallet_movement") {
+      return jsonError("Azione fidelity non supportata.", 400);
+    }
     if (!can(session.user.perms, "fidelity.wallet") && !can(session.user.perms, "fidelity.manage")) return jsonError("Permesso portafoglio fidelity mancante.", 403);
     const input = {
       clientId: parseInteger(body.client_id, 0),

@@ -1,3 +1,4 @@
+import { sniffImageMime } from "@/lib/upload-sniff";
 import { jsonError } from "@/lib/api-utils";
 import { currentManageSession } from "@/lib/manage-auth";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -84,7 +85,10 @@ export async function POST(request: Request) {
     const tenantId = Number(table.tenantId ?? 0);
     const key = tenantStorageKey(tenantId, "categories", `${categoryId}-${Date.now()}.${ext}`);
     const body = new Uint8Array(await file.arrayBuffer());
-    const publicUrl = await putPublicObject(key, body, String(file.type).toLowerCase());
+    // MIME AUTORITATIVO dai magic bytes (audit giro 3): bucket PUBBLICO.
+    const sniffed = sniffImageMime(body);
+    if (!sniffed) return jsonError("Formato immagine non supportato (usa JPG, PNG, WEBP o GIF).", 400);
+    const publicUrl = await putPublicObject(key, body, sniffed);
 
     await tenantUpdate({ slug: tenantSlug, table: "service_categories", id: categoryId, values: { image_url: publicUrl } });
 

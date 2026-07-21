@@ -155,7 +155,9 @@ export function ClientSheetsContent({ slug: slugProp }: { slug?: string } = {}) 
     setRemovals({});
     setHeader({
       title: record?.title ?? template?.title ?? "",
-      session_date: record?.sessionDate ?? new Date().toISOString().slice(0, 10),
+      // Data di ROMA (audit giro 3: toISOString e' UTC, vicino a mezzanotte
+      // slittava di un giorno).
+      session_date: record?.sessionDate ?? new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Rome" }),
       next_session_date: record?.nextSessionDate ?? "",
       operator_name: record?.operatorName ?? "",
       notes: record?.notes ?? "",

@@ -600,9 +600,7 @@ async function buildStaffByUserId(
   const byUserId = new Map<number, CommissionStaffSetting>();
   if (emailToStaff.size === 0) return byUserId;
   // users.email dei soli utenti del tenant (tenantSelect scoping) — 'users' risolve a public.users.
-  const users = await tenantSelect<RowDataPacket>({ slug, table: "users", columns: "id, email" }).catch(
-    () => [] as RowDataPacket[],
-  );
+  const users = await tenantSelect<RowDataPacket>({ slug, table: "users", columns: "id, email" }); // niente catch->[] (audit giro 3): risoluzione operatori vuota + reconcile = snapshot cancellati
   for (const u of users) {
     const uid = Number(u.id ?? 0) || 0;
     if (uid <= 0) continue;
@@ -679,7 +677,7 @@ async function buildPosEntriesFromSales(
       WHERE ${clauses.join(" AND ")}
       ORDER BY s.sale_date DESC, s.id DESC`,
     queryParams,
-  ).catch(() => [] as RowDataPacket[]);
+  ); // niente catch->[]: audit giro 3, un errore qui + reconcile = snapshot cancellati in massa
 
   if (!sales.length) return [];
 
@@ -876,7 +874,7 @@ async function buildAppointmentEntries(
       WHERE ${clauses.join(" AND ")}
       ORDER BY a.starts_at DESC, a.id DESC`,
     queryParams,
-  ).catch(() => [] as RowDataPacket[]);
+  ); // niente catch->[] (audit giro 3): vedi nota sul ramo vendite
 
   if (!appts.length) return [];
 

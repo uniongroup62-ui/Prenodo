@@ -5,7 +5,7 @@ import type { RowDataPacket } from "@/lib/tenant-db";
 import { parseInteger } from "@/lib/api-utils";
 import { dbExecute, dbQuery, quoteIdentifier, columnExists, tenantDelete, tenantInsert, tenantSelect, tenantTable, tenantUpdate, withTenantTransaction, type TenantTxQuery } from "@/lib/tenant-db";
 import { sendStaffInviteEmailCode } from "@/lib/manage-accessibility";
-import { businessNowDateTime } from "@/lib/business-datetime";
+import { businessNowDateTime, businessTodayIso } from "@/lib/business-datetime";
 import { deletePublicObject, storageKeyFromPublicUrl } from "@/lib/storage";
 
 export type ManageResourceContext = {
@@ -2611,7 +2611,9 @@ function weekRange(date: string): { start: string; end: string } {
 }
 
 function todayIsoLocal(): string {
-  return dateIsoLocal(new Date());
+  // OGGI di ROMA (audit giro 3: coi componenti del server la settimana
+  // mostrata slittava nella finestra notturna).
+  return businessTodayIso();
 }
 
 function addDays(date: string, days: number): string {
