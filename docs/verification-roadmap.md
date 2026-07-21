@@ -18012,3 +18012,18 @@ alive-guard blanket sui fetch di mount (benigni React 18); coupon
 re-validate display; N+1 area cliente/listDbGifts/listCabins blockers;
 SRI CDN; ghost calendario su liste filtrate; automation-reminders
 clamp frame.
+
+### 2026-07-21 - VERIFICA FINALE post-fix giro 3: 125/125 + crawler 73/73
+Odissea ambiente: 2 crash di VS Code durante le batterie -> (a) layer
+permessi con uv_spawn rotto (risolto SOLO con riavvio del PC; il
+restart di VS Code non basta perche' il crash-recovery eredita
+l'ambiente avvelenato); (b) cache .next corrotta = TUTTE le route 404
+dall'application code (fix: rm -rf .next); (c) la suite pagamenti
+uccisa a meta' ha lasciato il cliente ZZ 1950 + 3 vendite -> 17 suite
+rosse TUTTE sullo stesso invariante cleanup "5 clienti reali" (nessuna
+regressione). Bonifica per id verificato (guardia ^ZZ) con cascata, poi
+rerun mirato delle 18 interessate: 18/18 verdi. Totale effettivo dopo i
+fix del giro 3: 125/125 suite verdi + crawler console 73/73 pulito +
+tsc pulito. LEZIONE: dopo un crash controllare SUBITO (1) baseline
+clienti tenant 25, (2) integrita' .next, (3) sanita' spawn del layer
+permessi (git --version vs node -e).
