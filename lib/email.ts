@@ -55,6 +55,13 @@ export type EmailTemplateOpts = {
   business_name?: string;
   business_email?: string;
   business_logo_url?: string;
+  // Forza il ramo TESTO SEMPLICE anche se il contenuto somiglia a HTML.
+  // Serve ai builder plain-text (reminder/fidelity/lifecycle-rejected) che dal
+  // 21/07 NON pre-escapano più le variabili (divergenza DELIBERATA dal legacy,
+  // che double-escapava e mandava "L&#039;Estetica" al cliente): senza questo
+  // flag un nome tenant contenente "<qualcosa>" farebbe scattare looksHtml e
+  // il body passerebbe SENZA escaping (iniezione HTML nell'email).
+  force_plain_body?: boolean;
 };
 
 // --- Primitive condivise per i CORPI email (coerenza cross-modulo) ----------
@@ -89,7 +96,7 @@ export function buildModernEmailTemplate(
   const bizEmail = String(opts.business_email ?? "");
   const logoUrl = String(opts.business_logo_url ?? "").trim();
 
-  const looksHtml = /<\s*\w+[^>]*>/.test(content);
+  const looksHtml = opts.force_plain_body === true ? false : /<\s*\w+[^>]*>/.test(content);
 
   let textAlt = looksHtml ? htmlToText(content).trim() : content.trim();
   if (textAlt === "") textAlt = htmlToText(nl2br(h(content))).trim();

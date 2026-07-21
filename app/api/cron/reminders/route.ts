@@ -367,7 +367,7 @@ function buildReminderEmail(
   // attività "L'Estetica" arrivava al cliente come "L&#039;Estetica" (audit 21/07).
   const subject = "Promemoria appuntamento";
   const body = compactEmailBody(`Ciao,\n\n${details}\n\nSaluti,\n${bizName}`);
-  const tpl = buildModernEmailTemplate(subject, body, buildEmailTemplateOpts(biz));
+  const tpl = buildModernEmailTemplate(subject, body, { ...buildEmailTemplateOpts(biz), force_plain_body: true });
   return { subject, html: tpl.html, text: tpl.text };
 }
 
@@ -412,7 +412,7 @@ function buildFidelityEmail(
       `Per mantenerla attiva, effettua un acquisto o completa un appuntamento entro il ${expires}.\n` +
       `Il rinnovo verrà applicato automaticamente.\n\nSaluti,\n${bizName}`,
   );
-  const tpl = buildModernEmailTemplate(subject, body, buildEmailTemplateOpts(biz));
+  const tpl = buildModernEmailTemplate(subject, body, { ...buildEmailTemplateOpts(biz), force_plain_body: true });
   return { subject, html: tpl.html, text: tpl.text };
 }
 
@@ -1153,8 +1153,11 @@ function claimCutoff(): string {
 // Errori provider TRANSIENTI (throttling/rete): la riga torna 'pending' e viene
 // ritentata al giro dopo — prima diventava 'failed' per sempre, in
 // contraddizione col commento in testa al file.
+// NB (revisione avversaria 21/07): NIENTE pattern `5\d\d` — i codici SMTP
+// 550/554 ("address not verified") sono PERMANENTI e finirebbero in retry
+// infinito; il throttling reale di SES è "Maximum sending rate exceeded".
 function isTransientSendError(message: string): boolean {
-  return /throttl|rate.?limit|too many|timeout|timed out|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket|network|temporar|unavailable|5\d\d/i.test(message);
+  return /throttl|sending rate|rate.?limit|too many|slow ?down|timeout|timed out|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket|network|temporar|service unavailable|try again/i.test(message);
 }
 
 // PHP fidelity_card_normalize_date_ymd(): coerce a stored date to Y-m-d, or null.

@@ -197,6 +197,9 @@ function buildLifecycleEmail(
 
   const renderedBody = compactEmailBody(body);
   const tpl = buildModernEmailTemplate(subject, renderedBody, {
+    // Il ramo rejected è TESTO SEMPLICE non pre-escapato: forza il percorso
+    // plain del template (un nome tenant con "<x>" non deve flippare looksHtml).
+    force_plain_body: kind === "rejected",
     business_name: bizName,
     business_email: String(biz?.email ?? ""),
     // TODO: business_logo_url — PHP derives it from business_logo_absolute_url();

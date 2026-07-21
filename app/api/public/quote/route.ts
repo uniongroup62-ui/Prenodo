@@ -198,7 +198,7 @@ export async function GET(request: Request) {
   } catch (error) {
     // Solo messaggi di dominio al pubblico; il tecnico (pg/rete) va nei log.
     const message = error instanceof Error ? error.message : "";
-    const isTechnical = !message || /relation|column|syntax|SQLSTATE|ECONN|ETIMEDOUT|ENOTFOUND|timeout|SSL|pool|connect/i.test(message);
+    const isTechnical = !message || /relation|column|syntax|SQLSTATE|ECONN|ETIMEDOUT|ENOTFOUND|timeout|SSL|pool|connect|constraint|duplicate key|deadlock|violates|null value|permission denied|out of memory/i.test(message);
     if (isTechnical) console.error("[public/quote GET]", message || error);
     return Response.json({ ok: false, error: isTechnical ? "Preventivo non disponibile." : message }, { status: 400 });
   }

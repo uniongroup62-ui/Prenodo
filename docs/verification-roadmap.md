@@ -17940,3 +17940,23 @@ VERIFICHE: tsc pulito; suite quickbooking 5, calendario 25,
 appuntamenti 7, booking 9+3, saas-admin 19+9, log-attivita 16,
 profilo 14, automazioni 8, fidelity-pass2 10; crawler 73/73; unit
 redirect 5/5; JSON-LD live valido.
+
+### 2026-07-21 - GIRO 3: la revisione AVVERSARIA trova una regressione nei fix
+La CHECK constraint di reminders/card_reminders (enum legacy) ammetteva
+solo pending/sent/failed: il claim 'sending' del blocco B violava la
+constraint (23514) e l'isolamento per-tenant avrebbe INGHIOTTITO
+l'errore - cron promemoria morto in silenzio per il tenant. FIX:
+migrazione 0002_reminders_sending_status.sql (rilassa le due CHECK,
+applicata e verificata sul DB con probe). LEZIONE: un claim che "riusa
+lo status senza DDL" DEVE verificare le CHECK/enum esistenti; e le
+suite non esercitano i cron con righe dovute - il probe di constraint
+va fatto sul DB. Altri fix avversari: isTransientSendError senza
+`5\d\d` (550/554 sono PERMANENTI; aggiunto "sending rate" per il
+throttling SES reale); force_plain_body nel template email (i builder
+plain non pre-escapano piu - divergenza DELIBERATA dal legacy che
+double-escapava - e senza flag un nome tenant con <x> flippava
+looksHtml iniettando HTML non escapato); blocklist GET pubblici estesa
+(constraint/duplicate key/deadlock/violates...). DA CHECKLIST DEPLOY:
+CRON_SECRET ora fail-closed in prod (impostarla PRIMA del deploy);
+verificare in prod il formato X-Forwarded-For (rightmost corretto solo
+con un singolo hop fidato che appende: loggarlo una volta).
