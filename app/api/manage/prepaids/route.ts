@@ -14,10 +14,12 @@ export async function GET(request: Request) {
   if (!can(session.user.perms, "pos.prepaids")) return jsonError("Permesso prepagati mancante.", 403);
 
   try {
+    // Filtro sede server-side (audit giro 3: il select della pagina era cosmetico).
+    const locationId = parseInteger(new URL(request.url).searchParams.get("location_id"), 0);
     return Response.json({
       ok: true,
       sourceMode: "database",
-      prepaids: await listDbPrepaids(tenantSlug),
+      prepaids: await listDbPrepaids(tenantSlug, { locationId }),
     });
   } catch (error) {
     return jsonError(error instanceof Error ? error.message : "Errore prepagati.");

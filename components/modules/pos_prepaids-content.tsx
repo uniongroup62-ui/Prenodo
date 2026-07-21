@@ -99,25 +99,41 @@ export function PosPrepaidsContent({ slug: slugProp }: { slug?: string } = {}) {
     view: ViewKey;
   }>({ from: "", to: "", locationId: "0", q: "", clients: [], view: "active" });
 
+  // Refetch quando cambia la SEDE applicata (audit giro 3: il filtro era
+  // puramente cosmetico — ora il server filtra davvero, regola legacy) con
+  // guardia alive completa (la risposta di una sede vecchia non vince).
   useEffect(() => {
-    // setLoading in microtask (pattern consolidato).
     let alive = true;
     Promise.resolve().then(() => {
       if (alive) setLoading(true);
     });
-    fetch(`/api/manage/prepaids?slug=${encodeURIComponent(slug)}`, {
+    const locParam = applied.locationId !== "0" ? `&location_id=${encodeURIComponent(applied.locationId)}` : "";
+    fetch(`/api/manage/prepaids?slug=${encodeURIComponent(slug)}${locParam}`, {
       headers: { "x-tenant-slug": slug },
     })
       .then((r) => r.json())
-      .then((j) => setPrepaids(Array.isArray(j.prepaids) ? j.prepaids : []))
-      .catch(() => setPrepaids([]))
-      .finally(() => setLoading(false));
+      .then((j) => {
+        if (alive) setPrepaids(Array.isArray(j.prepaids) ? j.prepaids : []);
+      })
+      .catch(() => {
+        if (alive) setPrepaids([]);
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [slug, applied.locationId]);
 
+  useEffect(() => {
+    let alive = true;
     fetch(`/api/manage/locations?slug=${encodeURIComponent(slug)}`, {
       headers: { "x-tenant-slug": slug },
     })
       .then((r) => r.json())
       .then((j) => {
+        if (!alive) return;
         const list: LocationOption[] = (j.locations ?? []).map((loc: { id: number; name: string }) => ({
           id: Number(loc.id),
           name: String(loc.name ?? ""),

@@ -137,7 +137,14 @@ export function AccessibilityContent({
     if (next && typeof window !== "undefined") window.scrollTo({ top: 0 });
   }, []);
 
+  // Guardia doppio-submit condivisa dalle 4 azioni della pagina (audit giro 3).
+  const [actionBusy, setActionBusy] = useState(false);
+
   async function postAction(payload: Record<string, unknown>, opts?: { navigateOnSuccess?: boolean }): Promise<void> {
+    // Guardia doppio-submit (audit giro 3): un doppio click su "Conferma email"
+    // consumava 2 dei 5 tentativi; su "Invia codice" partivano due email.
+    if (actionBusy) return;
+    setActionBusy(true);
     setFeedback(null);
     try {
       const res = await fetch(`/api/manage/accessibility?slug=${encodeURIComponent(slug)}`, {
@@ -162,6 +169,8 @@ export function AccessibilityContent({
       load();
     } catch {
       showFlash({ type: "danger", text: "Errore di rete." });
+    } finally {
+      setActionBusy(false);
     }
   }
 
@@ -219,7 +228,7 @@ export function AccessibilityContent({
                     }}
                   >
                     <input type="hidden" name="action" value="request_email_verify" />
-                    <button className="btn btn-outline-primary" type="submit">
+                    <button className="btn btn-outline-primary" type="submit" disabled={actionBusy}>
                       <i className="bi bi-envelope-check me-1" />
                       Invia codice verifica
                     </button>
@@ -266,7 +275,7 @@ export function AccessibilityContent({
                     />
                   </div>
                   <div className="col-md-3">
-                    <button className="btn btn-outline-primary w-100" type="submit">
+                    <button className="btn btn-outline-primary w-100" type="submit" disabled={actionBusy}>
                       <i className="bi bi-envelope-check me-1" />
                       Invia codice
                     </button>
@@ -311,7 +320,7 @@ export function AccessibilityContent({
                         />
                       </div>
                       <div className="col-md-6">
-                        <button className="btn btn-primary w-100" type="submit">
+                        <button className="btn btn-primary w-100" type="submit" disabled={actionBusy}>
                           <i className="bi bi-check2-circle me-1" />
                           Conferma email
                         </button>
@@ -410,7 +419,7 @@ export function AccessibilityContent({
                 </div>
 
                 <div className="mt-4 d-flex gap-2">
-                  <button className="btn btn-primary" type="submit">
+                  <button className="btn btn-primary" type="submit" disabled={actionBusy}>
                     <i className="bi bi-key me-1" />
                     Aggiorna password
                   </button>

@@ -156,7 +156,10 @@ export function StaffAvailabilityContent({ slug: slugProp }: { slug?: string } =
 
   // Timeline window: business hours of the day, rounded to whole hours.
   // Falls back to 09:00-19:00 (the same default the legacy view shows).
-  const window = useMemo(() => {
+  // Rinominata (audit giro 3): 'const window' SHADOWAVA il globale — nei
+  // punti che facevano 'window.bootstrap' arrivava QUESTO oggetto e
+  // l'offcanvas Modifica non si apriva mai (e le modali non si chiudevano).
+  const dayWindow = useMemo(() => {
     const opens = dayHours && !dayHours.isClosed ? hhmmToMinutes(dayHours.opens) : null;
     const closes = dayHours && !dayHours.isClosed ? hhmmToMinutes(dayHours.closes) : null;
     let startMin = opens ?? 9 * 60;
@@ -173,10 +176,10 @@ export function StaffAvailabilityContent({ slug: slugProp }: { slug?: string } =
     return { startMin, endMin };
   }, [dayHours]);
 
-  const totalMin = Math.max(1, window.endMin - window.startMin);
+  const totalMin = Math.max(1, dayWindow.endMin - dayWindow.startMin);
 
   function leftPct(min: number): number {
-    return ((min - window.startMin) / totalMin) * 100;
+    return ((min - dayWindow.startMin) / totalMin) * 100;
   }
   function widthPct(fromMin: number, toMin: number): number {
     return ((toMin - fromMin) / totalMin) * 100;
@@ -185,13 +188,13 @@ export function StaffAvailabilityContent({ slug: slugProp }: { slug?: string } =
   // Hour scale ticks/labels (one per hour, inclusive of both ends).
   const ticks = useMemo(() => {
     const out: { left: number; label: string }[] = [];
-    for (let m = window.startMin; m <= window.endMin; m += 60) {
+    for (let m = dayWindow.startMin; m <= dayWindow.endMin; m += 60) {
       const hh = Math.floor(m / 60);
       out.push({ left: leftPct(m), label: `${String(hh).padStart(2, "0")}:00` });
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [window.startMin, window.endMin, totalMin]);
+  }, [dayWindow.startMin, dayWindow.endMin, totalMin]);
 
   // Business hours bar text (e.g. "09:00 - 19:00").
   const bizBar = useMemo(() => {
@@ -205,7 +208,7 @@ export function StaffAvailabilityContent({ slug: slugProp }: { slug?: string } =
       label: `${dayHours.opens} - ${dayHours.closes}`,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dayHours, window.startMin, window.endMin, totalMin]);
+  }, [dayHours, dayWindow.startMin, dayWindow.endMin, totalMin]);
 
   // Availability events for this exact day, grouped by staff id.
   const eventsByStaff = useMemo(() => {
@@ -336,6 +339,7 @@ export function StaffAvailabilityContent({ slug: slugProp }: { slug?: string } =
   // conflitti con appuntamenti esistenti (check_appt_conflicts), poi il save.
   async function submitEvent(e: React.FormEvent) {
     e.preventDefault();
+    if (busy) return; // guardia doppio-submit (audit giro 3: eventi duplicati)
     const fields: Record<string, string> = {
       action: "availability_save",
       location_id: String(activeLocationId || locationId || 0),
@@ -373,6 +377,7 @@ export function StaffAvailabilityContent({ slug: slugProp }: { slug?: string } =
   // Duplica settimana (do=copy_week) con i messaggi legacy dal server.
   async function submitCopyWeek(e: React.FormEvent) {
     e.preventDefault();
+    if (busy) return; // guardia doppio-submit (audit giro 3: settimana duplicata due volte)
     const j = await postResources({
       action: "availability_copy_week",
       location_id: String(activeLocationId || locationId || 0),
@@ -750,7 +755,7 @@ export function StaffAvailabilityContent({ slug: slugProp }: { slug?: string } =
                 <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal">
                   Annulla
                 </button>
-                <button type="submit" className="btn btn-primary">
+                <button type="submit" className="btn btn-primary" disabled={busy}>
                   <i className="bi bi-files me-1" />
                   Duplica
                 </button>
@@ -956,7 +961,7 @@ export function StaffAvailabilityContent({ slug: slugProp }: { slug?: string } =
             </div>
 
             <div className="d-flex gap-2">
-              <button className="btn btn-primary" type="submit">
+              <button className="btn btn-primary" type="submit" disabled={busy}>
                 <i className="bi bi-check2-circle me-1" />
                 Salva
               </button>

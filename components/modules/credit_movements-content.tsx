@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ClientSearchCombobox } from "@/components/client-search-combobox";
 
 // Faithful port of the PHP credit movements page (app/pages/credit_movements.php,
@@ -74,14 +74,23 @@ export function CreditMovementsContent({ slug: slugProp }: { slug?: string } = {
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
 
+  // Sequenza anti-stale (audit giro 3): cambi rapidi di cliente/pagina
+  // lanciavano fetch concorrenti e vinceva la risposta più lenta; inoltre
+  // loading non veniva mai riattivato nei refetch (bottoni pager mai
+  // disabilitati durante il caricamento).
+  const loadSeqRef = useRef(0);
   const load = useCallback(() => {
+    const seq = ++loadSeqRef.current;
+    setLoading(true);
     return fetch(`/api/manage/fidelity?slug=${encodeURIComponent(slug)}&action=credit${selectedClientId ? `&client_id=${selectedClientId}` : ""}&page=${page}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
       .then((j) => {
-        if (j?.credit) setData(j.credit as CreditData);
+        if (seq === loadSeqRef.current && j?.credit) setData(j.credit as CreditData);
       })
       .catch(() => undefined)
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (seq === loadSeqRef.current) setLoading(false);
+      });
   }, [slug, selectedClientId, page]);
 
   useEffect(() => {

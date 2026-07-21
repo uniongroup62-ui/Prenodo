@@ -11974,13 +11974,93 @@ export async function applyAppointmentGiftcardRedeem({
 //
 // Tenant-safe: every read is a tenant-scoped tenantSelect; cross-table linkage is
 // resolved in memory (no cross-tenant raw joins). Missing tables degrade to 0/skip.
-export async function listDbPrepaids(slug: string): Promise<ClientPrepaid[]> {
+export async function listDbPrepaids(slug: string, options: { locationId?: number } = {}): Promise<ClientPrepaid[]> {
   const [prepaids, packages, giftboxes] = await Promise.all([
     listPrepaidSourceRows(slug),
     listPackageSourceRows(slug),
     listGiftboxSourceRows(slug),
   ]);
-  const rows = [...prepaids, ...packages, ...giftboxes];
+  let rows = [...prepaids, ...packages, ...giftboxes];
+
+  // Filtro SEDE (audit giro 3: il select della pagina era puramente cosmetico —
+  // il legacy filtra davvero, _pos_pp_row_match). Regola fedele: per i
+  // PACCHETTI vale la sede del pacchetto, poi quella della vendita d'origine,
+  // poi l'abbinamento del pacchetto a catalogo (senza vincoli = visibile);
+  // per prepagati/giftbox vale la sede della vendita d'origine (senza vendita
+  // o senza sede = escluso, come _pos_pp_sale_location_id).
+  const locationFilterId = Math.max(0, Number(options.locationId ?? 0));
+  if (locationFilterId > 0 && rows.length > 0) {
+    const allSaleIds = [...new Set(rows.map((r) => Number(r.sourceSaleId ?? 0)).filter((n) => n > 0))];
+    const saleLocById = new Map<number, number>();
+    if (allSaleIds.length) {
+      const saleRows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "sales",
+        columns: "id, location_id",
+        where: "id = ANY(?)",
+        params: [allSaleIds],
+      }).catch(() => [] as RowDataPacket[]);
+      for (const r of saleRows) saleLocById.set(Number(r.id ?? 0), Number(r.location_id ?? 0) || 0);
+    }
+    const packageRowIds = rows.filter((r) => r.kind === "package").map((r) => Number(r.id ?? 0)).filter((n) => n > 0);
+    const cpById = new Map<number, { locationId: number; saleId: number; packageId: number }>();
+    if (packageRowIds.length) {
+      const cpRows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "client_packages",
+        columns: "id, location_id, sale_id, package_id",
+        where: "id = ANY(?)",
+        params: [packageRowIds],
+      }).catch(() => [] as RowDataPacket[]);
+      for (const r of cpRows) {
+        cpById.set(Number(r.id ?? 0), {
+          locationId: Number(r.location_id ?? 0) || 0,
+          saleId: Number(r.sale_id ?? 0) || 0,
+          packageId: Number(r.package_id ?? 0) || 0,
+        });
+      }
+      const extraSaleIds = [...new Set([...cpById.values()].map((c) => c.saleId).filter((n) => n > 0 && !saleLocById.has(n)))];
+      if (extraSaleIds.length) {
+        const extraRows = await tenantSelect<RowDataPacket>({ slug, table: "sales", columns: "id, location_id", where: "id = ANY(?)", params: [extraSaleIds] }).catch(() => [] as RowDataPacket[]);
+        for (const r of extraRows) saleLocById.set(Number(r.id ?? 0), Number(r.location_id ?? 0) || 0);
+      }
+    }
+    // Abbinamento catalogo (app_package_location_allowed): senza righe
+    // package_locations il pacchetto vale ovunque; con righe, serve la sede.
+    const catalogIds = [...new Set([...cpById.values()].map((c) => c.packageId).filter((n) => n > 0))];
+    const catalogScoped = new Set<number>();
+    const catalogAllowed = new Set<number>();
+    if (catalogIds.length) {
+      const plRows = await tenantSelect<RowDataPacket>({
+        slug,
+        table: "package_locations",
+        columns: "package_id, location_id",
+        where: "package_id = ANY(?)",
+        params: [catalogIds],
+      }).catch(() => [] as RowDataPacket[]);
+      for (const r of plRows) {
+        const pid = Number(r.package_id ?? 0);
+        catalogScoped.add(pid);
+        if (Number(r.location_id ?? 0) === locationFilterId) catalogAllowed.add(pid);
+      }
+    }
+    rows = rows.filter((row) => {
+      if (row.kind === "package") {
+        const cp = cpById.get(Number(row.id ?? 0));
+        if (!cp) return true; // fedele al legacy: dati mancanti = visibile
+        if (cp.locationId > 0) return cp.locationId === locationFilterId;
+        const saleId = cp.saleId > 0 ? cp.saleId : Number(row.sourceSaleId ?? 0);
+        const saleLoc = saleId > 0 ? saleLocById.get(saleId) ?? 0 : 0;
+        if (saleLoc > 0) return saleLoc === locationFilterId;
+        if (cp.packageId <= 0) return true;
+        if (!catalogScoped.has(cp.packageId)) return true;
+        return catalogAllowed.has(cp.packageId);
+      }
+      const saleId = Number(row.sourceSaleId ?? 0);
+      if (saleId <= 0) return false;
+      return (saleLocById.get(saleId) ?? 0) === locationFilterId;
+    });
+  }
   // Arricchimenti riga legacy (pos_prepaids.php): vendita d'origine annullata
   // (1583, CASE su sales.status) e servizio non più attivo a listino (1592,
   // join services.is_active) per TUTTE le fonti; il prossimo appuntamento

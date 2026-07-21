@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // Faithful port of the PHP POS preorders page (app/pages/pos_preorders.php):
 // KPI tiles, a left filter rail (period / location / search / clients / products /
@@ -92,7 +92,12 @@ export function PosPreordersContent({ slug: slugProp }: { slug?: string } = {}) 
   const [page, setPage] = useState(1);
   const perPage = 50;
 
+  // Sequenza anti-stale (audit giro 3): due cambi sede ravvicinati lanciavano
+  // fetch concorrenti e vinceva la risposta più lenta (stock/stati della sede
+  // sbagliata a schermo).
+  const loadSeqRef = useRef(0);
   const load = useCallback(() => {
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     // Forward the selected location so the product stock is location-aware
     // (mirrors pos_preorders.php app_product_stock_row). "0" = Tutte = base stock.
@@ -100,9 +105,15 @@ export function PosPreordersContent({ slug: slugProp }: { slug?: string } = {}) 
       headers: { "x-tenant-slug": slug },
     })
       .then((r) => r.json())
-      .then((j) => setPreorders(Array.isArray(j.preorders) ? j.preorders : []))
-      .catch(() => setPreorders([]))
-      .finally(() => setLoading(false));
+      .then((j) => {
+        if (seq === loadSeqRef.current) setPreorders(Array.isArray(j.preorders) ? j.preorders : []);
+      })
+      .catch(() => {
+        if (seq === loadSeqRef.current) setPreorders([]);
+      })
+      .finally(() => {
+        if (seq === loadSeqRef.current) setLoading(false);
+      });
   }, [slug, locationId]);
 
   useEffect(() => {
@@ -111,18 +122,31 @@ export function PosPreordersContent({ slug: slugProp }: { slug?: string } = {}) 
     Promise.resolve().then(() => {
       if (alive) load();
     });
+    return () => {
+      alive = false;
+    };
+  }, [load]);
+
+  // Contesto sedi/clienti: SOLO al mount (audit giro 3: prima ripartivano a
+  // ogni cambio sede insieme al load).
+  useEffect(() => {
+    let alive = true;
     fetch(`/api/manage/locations?slug=${encodeURIComponent(slug)}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
-      .then((j) => setLocations(Array.isArray(j.locations) ? j.locations : []))
+      .then((j) => {
+        if (alive) setLocations(Array.isArray(j.locations) ? j.locations : []);
+      })
       .catch(() => {});
     fetch(`/api/manage/clients?slug=${encodeURIComponent(slug)}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => r.json())
-      .then((j) => setClients(Array.isArray(j.clients) ? j.clients : []))
+      .then((j) => {
+        if (alive) setClients(Array.isArray(j.clients) ? j.clients : []);
+      })
       .catch(() => {});
     return () => {
       alive = false;
     };
-  }, [load, slug]);
+  }, [slug]);
 
   // Apply the filter rail to the loaded preorders. Mirrors _pos_pre_row_match:
   // the period filter tests the SALE date, and the 8 views have the semantics of

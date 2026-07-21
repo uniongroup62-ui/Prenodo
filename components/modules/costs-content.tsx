@@ -296,26 +296,38 @@ export function CostsContent({ slug: slugProp, initialQuery }: { slug?: string; 
     }
   }
 
+  // Guardia per-riga (audit giro 3): toggle_paid è un TOGGLE server-side —
+  // un doppio click lo flippava DUE volte mostrando comunque "Stato aggiornato".
+  const [rowBusyId, setRowBusyId] = useState(0);
+
   // Segna pagato / non pagato (legacy action=toggle&kind=paid, senza conferma):
   // flash "Stato aggiornato" e lista ricaricata con i filtri correnti.
   async function togglePaid(id: number) {
+    if (rowBusyId) return;
+    setRowBusyId(id);
     setFlash("");
     setError("");
-    const j = await postAction({ action: "toggle_paid", id: String(id) });
-    if (!j.ok) {
-      setError(String(j.error ?? "Errore: stato non aggiornato"));
-      return;
+    try {
+      const j = await postAction({ action: "toggle_paid", id: String(id) });
+      if (!j.ok) {
+        setError(String(j.error ?? "Errore: stato non aggiornato"));
+        return;
+      }
+      setFlash("Stato aggiornato");
+      load(appliedRef.current);
+    } finally {
+      setRowBusyId(0);
     }
-    setFlash("Stato aggiornato");
-    load(appliedRef.current);
   }
 
   // Elimina voce (legacy action=delete&kind=cost): conferma + flash verbatim.
   async function deleteCost(id: number) {
+    if (rowBusyId) return;
     if (typeof window !== "undefined" && !window.confirm("Eliminare definitivamente questa voce? Questa operazione non puo essere annullata.")) return;
+    setRowBusyId(id);
     setFlash("");
     setError("");
-    const j = await postAction({ action: "delete", id: String(id) });
+    const j = await postAction({ action: "delete", id: String(id) }).finally(() => setRowBusyId(0));
     if (!j.ok) {
       setError(String(j.error ?? "Errore: impossibile eliminare costo"));
       return;
@@ -701,6 +713,7 @@ export function CostsContent({ slug: slugProp, initialQuery }: { slug?: string; 
                                 type="button"
                                 className="btn btn-sm btn-outline-success"
                                 title="Segna pagato / non pagato"
+                                disabled={rowBusyId !== 0}
                                 onClick={() => togglePaid(r.id)}
                               >
                                 <i className="bi bi-check2-circle" />
@@ -709,6 +722,7 @@ export function CostsContent({ slug: slugProp, initialQuery }: { slug?: string; 
                                 type="button"
                                 className="btn btn-sm btn-outline-danger"
                                 title="Elimina"
+                                disabled={rowBusyId !== 0}
                                 onClick={() => deleteCost(r.id)}
                               >
                                 <i className="bi bi-trash" />
