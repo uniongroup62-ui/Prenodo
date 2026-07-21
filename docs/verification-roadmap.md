@@ -17796,3 +17796,21 @@ toccati. Probe probe-flash-receivers.mjs 4/4 (crea cliente reale ->
 banner "Cliente creato" su ?action=view + URL pulito + F5 muto;
 stash simulato su giftcard e stock_moves con storage svuotato);
 cleanup cliente ZZ per id tracciato (1727). tsc pulito.
+
+### 2026-07-21 - AUDIT: "non visualizzo piu' gli avvisi" (2a segnalazione)
+Audit completo del sistema flash SUL SERVER LOCALE, tutto verde:
+probe-flash-e2e 5/5 (flussi reali: giftbox_settings, fornitore
+creato, F5, fallback ?msg=, booking); probe-flash-receivers 4/4
+(crea cliente reale -> banner su client_detail); probe-flash-sweep
+37/37 (stash simulato su OGNI route con ricevitore: banner visibile
++ storage consumato); zero emissioni ?msg= residue (solo commenti,
+commissioni mostra il flash in-page senza redirect); nessun modulo
+annidato (niente doppio consumo); i 5 moduli senza classi alert-*
+standard (booking, consent_modules, coupons, hours, roles) usano
+template literal `alert alert-${type}` - il grep stretto era un
+falso allarme. TRAPPOLA PROBE: appointments_plan esige il permesso
+appointments.plan (non .manage) - senza, la card "Accesso negato"
+nasconde il banner ma takeFlash consuma comunque: falso FAIL.
+CONCLUSIONE: il codice su localhost:3000 e' verificato funzionante;
+se l'utente non vede gli avvisi la causa probabile e' bundle vecchio
+nel browser (hard refresh) o deploy produzione non aggiornato.
