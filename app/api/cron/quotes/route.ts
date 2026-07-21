@@ -1,3 +1,4 @@
+import { businessTodayIso } from "@/lib/business-datetime";
 import { activeTenantSlugs, assertCronAuth, trackCronResponse } from "@/lib/cron";
 import { dbExecute, tenantIdForSlug } from "@/lib/tenant-db";
 
@@ -19,15 +20,25 @@ async function handler(request: Request) {
     let total = 0;
 
     for (const slug of slugs) {
-      const tenantId = await tenantIdForSlug(slug);
-      if (!tenantId) continue;
-      const res = await dbExecute(
-        `UPDATE quotes SET status='expired'
-         WHERE tenant_id = ? AND status='sent' AND valid_until IS NOT NULL AND valid_until < CURRENT_DATE`,
-        [tenantId],
-      );
-      results.push({ tenant: slug, expired: res.affectedRows });
-      total += res.affectedRows;
+      // Isolamento per-tenant (audit 21/07): un tenant rotto non salta i successivi.
+      try {
+        const tenantId = await tenantIdForSlug(slug);
+        if (!tenantId) continue;
+        // Confine in ORA ROMA (audit 21/07): CURRENT_DATE del DB è UTC — tra le
+        // 00:00 e le 02:00 di Roma la scadenza slittava; il lato manage usa già
+        // businessTodayIso (quoteEffectiveStatusDb).
+        const res = await dbExecute(
+          `UPDATE quotes SET status='expired'
+           WHERE tenant_id = ? AND status='sent' AND valid_until IS NOT NULL AND valid_until < ?`,
+          [tenantId, businessTodayIso()],
+        );
+        results.push({ tenant: slug, expired: res.affectedRows });
+        total += res.affectedRows;
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.error(`[cron quotes] tenant ${slug} FALLITO:`, msg);
+        results.push({ tenant: slug, expired: 0, error: msg } as { tenant: string; expired: number });
+      }
     }
 
     return Response.json({ ok: true, job: "quotes", total, results });

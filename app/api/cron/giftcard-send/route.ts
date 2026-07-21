@@ -29,8 +29,12 @@ export const runtime = "nodejs";
 // email actually going out. Every statement is scoped by tenant_id.
 const SELECT_LIMIT = 500;
 // Sending is enabled whenever the email provider (SES) is configured. Until
-// then the job reports due items but does NOT mark them sent.
-const SEND_ENABLED = emailConfigured();
+// then the job reports due items but does NOT mark them sent. Valutato
+// PER-REQUEST (audit 21/07): a module-load le env cambiate a caldo non
+// venivano viste (giftbox lo fa già per-request).
+function sendEnabledNow(): boolean {
+  return emailConfigured();
+}
 
 type DueGiftcard = RowDataPacket & {
   id: number;
@@ -52,6 +56,8 @@ async function handler(request: Request) {
     let total = 0;
 
     for (const slug of slugs) {
+      // Isolamento per-tenant (audit 21/07): un tenant rotto non salta i successivi.
+      try {
       const tenantId = await tenantIdForSlug(slug);
       if (!tenantId) continue;
 
@@ -85,7 +91,7 @@ async function handler(request: Request) {
         [tenantId, businessTodayIso(), businessTodayIso()],
       );
 
-      if (!SEND_ENABLED) {
+      if (!sendEnabledNow()) {
         // Provider not configured: surface the due count without consuming items.
         results.push({ tenant: slug, sent: 0, errors: 0, due: due.length });
         continue;
@@ -141,9 +147,14 @@ async function handler(request: Request) {
 
       results.push({ tenant: slug, sent, errors });
       total += sent;
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.error(`[cron giftcard-send] tenant ${slug} FALLITO:`, msg);
+        results.push({ tenant: slug, sent: 0, errors: 1 });
+      }
     }
 
-    return Response.json({ ok: true, job: "giftcard-send", sendEnabled: SEND_ENABLED, total, results });
+    return Response.json({ ok: true, job: "giftcard-send", sendEnabled: sendEnabledNow(), total, results });
   } catch (error) {
     return Response.json(
       { ok: false, error: error instanceof Error ? error.message : "Errore cron giftcard-send." },

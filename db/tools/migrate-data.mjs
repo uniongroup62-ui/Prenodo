@@ -23,7 +23,19 @@ const my = await mysql.createConnection({
   host: phpVal("host") || "localhost", user: phpVal("user"),
   password: phpVal("pass") || "", database: DB, dateStrings: true,
 });
-const cs = process.env.SUPA_URL || process.env.PRENODO_DATABASE_URL;
+// GUARDIA (audit 21/07): questo tool fa TRUNCATE ... CASCADE di TUTTE le
+// tabelle di destinazione. Niente fallback silenzioso al DB live: SUPA_URL
+// esplicita E conferma esplicita, altrimenti abort.
+const cs = process.env.SUPA_URL;
+if (!cs) {
+  console.error("SUPA_URL non impostata. Questo tool AZZERA il database di destinazione:");
+  console.error("va puntato ESPLICITAMENTE (niente fallback a PRENODO_DATABASE_URL).");
+  process.exit(1);
+}
+if (process.env.CONFIRM_WIPE !== "1") {
+  console.error("Rifiutato: imposta CONFIRM_WIPE=1 per confermare il TRUNCATE totale del DB di destinazione.");
+  process.exit(1);
+}
 const pgc = new pg.Client({ connectionString: cs, ssl: { rejectUnauthorized: false }, statement_timeout: 300000 });
 await pgc.connect();
 

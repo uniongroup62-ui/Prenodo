@@ -1,6 +1,7 @@
 import "server-only";
 
 import crypto from "node:crypto";
+import { businessNowDateTime } from "@/lib/business-datetime";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { dbExecute, dbQuery, tableExists } from "@/lib/tenant-db";
 
@@ -121,9 +122,9 @@ function summarize(result: unknown): string {
 }
 
 function localSqlNow(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  // Wall-time ROMA (audit 21/07): il registro cron va letto nel pannello con
+  // la stessa convenzione oraria del resto dell'app, non con l'ora del server.
+  return businessNowDateTime();
 }
 
 // The Next equivalent of the PHP cron_active_tenants(): every active tenant.

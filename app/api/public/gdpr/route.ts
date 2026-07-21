@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { businessNowDateTime } from "@/lib/business-datetime";
 import {
   privacyClientDisplayName,
   privacyPdfSafeFilename,
@@ -152,11 +153,12 @@ export async function POST(request: Request) {
     const filename = privacyPdfSafeFilename(snapshot.filename || "");
     snapshot.filename = filename;
 
-    const now = new Date();
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const signedAtSql = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
-    const signedLabel = `${pad(now.getDate())}/${pad(now.getMonth() + 1)}/${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
-    const signedDate = `${pad(now.getDate())}/${pad(now.getMonth() + 1)}/${now.getFullYear()}`;
+    // Ora di ROMA (audit 21/07): la firma è stampata in un DOCUMENTO LEGALE —
+    // con l'orologio del server (UTC su Amplify) era 1-2h indietro.
+    const signedAtSql = businessNowDateTime();
+    const sm = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/.exec(signedAtSql);
+    const signedLabel = sm ? `${sm[3]}/${sm[2]}/${sm[1]} ${sm[4]}:${sm[5]}` : signedAtSql;
+    const signedDate = sm ? `${sm[3]}/${sm[2]}/${sm[1]}` : signedAtSql.slice(0, 10);
 
     const pdfBytes = await renderPrivacyPdf(snapshot, {
       dateDisplay: signedDate,
@@ -176,7 +178,7 @@ export async function POST(request: Request) {
       title: "Privacy firmata",
       file_path: key,
       mime: "application/pdf",
-      created_at: now,
+      created_at: signedAtSql,
     });
 
     await tenantUpdate({

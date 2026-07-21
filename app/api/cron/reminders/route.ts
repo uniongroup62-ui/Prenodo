@@ -362,12 +362,11 @@ function buildReminderEmail(
     bizPhone,
   });
 
-  // render_template feeds h()-escaped vars into the plain-text body template;
-  // automation_compact_email_body then trims it. The body is plain text (no HTML
-  // tags), so buildModernEmailTemplate paragraph-wraps it just like the PHP
-  // email_build_modern_template does.
+  // Il body è TESTO SEMPLICE (nessun tag): buildModernEmailTemplate lo escapa
+  // già lei (nl2br(h(p))). Pre-escapare qui produceva DOUBLE-ESCAPE: un nome
+  // attività "L'Estetica" arrivava al cliente come "L&#039;Estetica" (audit 21/07).
   const subject = "Promemoria appuntamento";
-  const body = compactEmailBody(`Ciao,\n\n${h(details)}\n\nSaluti,\n${h(bizName)}`);
+  const body = compactEmailBody(`Ciao,\n\n${details}\n\nSaluti,\n${bizName}`);
   const tpl = buildModernEmailTemplate(subject, body, buildEmailTemplateOpts(biz));
   return { subject, html: tpl.html, text: tpl.text };
 }
@@ -403,13 +402,15 @@ function buildFidelityEmail(
   biz: BusinessSettings | undefined,
 ): { subject: string; html: string; text: string } {
   const bizName = String(biz?.name ?? "") || DEFAULT_BIZ_NAME;
-  const cardCode = h(cleanText(String(row.card_code ?? "")));
-  const expires = h(fmtDateDM(row.card_expires_at));
+  // Testo semplice: l'escaping lo fa buildModernEmailTemplate — niente h() qui
+  // (double-escape: "L'Estetica" diventava "L&#039;Estetica", audit 21/07).
+  const cardCode = cleanText(String(row.card_code ?? ""));
+  const expires = fmtDateDM(row.card_expires_at);
   const subject = "La tua tessera Fidelity sta per scadere";
   const body = compactEmailBody(
     `Ciao,\n\nla tua tessera Fidelity ${cardCode} scade il ${expires}.\n` +
       `Per mantenerla attiva, effettua un acquisto o completa un appuntamento entro il ${expires}.\n` +
-      `Il rinnovo verrà applicato automaticamente.\n\nSaluti,\n${h(bizName)}`,
+      `Il rinnovo verrà applicato automaticamente.\n\nSaluti,\n${bizName}`,
   );
   const tpl = buildModernEmailTemplate(subject, body, buildEmailTemplateOpts(biz));
   return { subject, html: tpl.html, text: tpl.text };
@@ -565,7 +566,8 @@ function appointmentReminderSelect(channel: "email" | "sms"): string {
               SELECT MIN(b2.id) FROM businesses b2 WHERE b2.tenant_id = r.tenant_id)
            WHERE r.tenant_id = ?
              AND r.channel='${channel}'
-             AND r.status='pending'
+             AND (r.status='pending'
+                  OR (r.status='sending' AND r.updated_at < ?))
              AND r.scheduled_at <= ?
            ORDER BY r.scheduled_at ASC
            LIMIT ${SELECT_LIMIT}`;
@@ -595,10 +597,7 @@ async function handler(request: Request) {
     const smsReady = smsConfigured();
 
     for (const slug of slugs) {
-      const tenantId = await tenantIdForSlug(slug);
-      if (!tenantId) continue;
-
-      const result: TenantResult = {
+      const result: TenantResult & { error?: string } = {
         tenant: slug,
         fidCardsExpired: 0,
         appointmentReminderEnabled: false,
@@ -615,6 +614,13 @@ async function handler(request: Request) {
         failed: 0,
         skipped: 0,
       };
+
+      // ISOLAMENTO PER-TENANT (audit 21/07): un tenant con dati rotti non deve
+      // saltare tutti i successivi (ordine alfabetico) a ogni run — l'errore
+      // finisce nel payload del tenant e nel log, il loop prosegue.
+      try {
+      const tenantId = await tenantIdForSlug(slug);
+      if (!tenantId) continue;
 
       // ----- business settings (legacy setting_get from the businesses row,
       // here scoped per tenant). Supplies name/email/phone for the templates. -----
@@ -664,7 +670,7 @@ async function handler(request: Request) {
       if (reminderEnabled) {
         const due = await dbQuery<DueAppointmentReminder[]>(
           appointmentReminderSelect("email"),
-          [tenantId, businessNowDateTime()],
+          [tenantId, claimCutoff(), businessNowDateTime()],
         );
 
         for (const r of due) {
@@ -701,6 +707,16 @@ async function handler(request: Request) {
             continue;
           }
 
+          // CLAIM atomico anti double-send: un run concorrente non prende la
+          // stessa riga (prima due run sovrapposti inviavano DUE email).
+          const claim = await dbExecute(
+            `UPDATE reminders SET status='sending', updated_at=?
+              WHERE tenant_id = ? AND id = ?
+                AND (status='pending' OR (status='sending' AND updated_at < ?))`,
+            [businessNowDateTime(), tenantId, reminderId, claimCutoff()],
+          );
+          if (claim.affectedRows <= 0) continue;
+
           // Port of automation_send_email('reminder', appointmentId): build the
           // subject/body, send via SES. Mark 'sent' ONLY on a successful send.
           const msg = buildReminderEmail(r, bizSettings);
@@ -723,13 +739,14 @@ async function handler(request: Request) {
             );
             result.sent += 1;
           } else {
-            // Failed send: write the failure status, DO NOT mark sent. The PHP
-            // mailer returns a bool, so we record a generic error like the PHP
-            // 'Invio email fallito', enriched with the provider error.
+            // Errore TRANSIENTE (throttling/rete) -> la riga TORNA pending e
+            // viene ritentata al giro dopo; permanente -> failed definitivo.
+            const errText = `Invio email fallito: ${sendRes.error ?? "errore provider"}`;
+            const nextStatus = isTransientSendError(String(sendRes.error ?? "")) ? "pending" : "failed";
             await dbExecute(
-              `UPDATE reminders SET status='failed', last_error=?, sent_at=NULL
+              `UPDATE reminders SET status=?, last_error=?, sent_at=NULL
                 WHERE tenant_id = ? AND id = ?`,
-              [`Invio email fallito: ${sendRes.error ?? "errore provider"}`, tenantId, reminderId],
+              [nextStatus, errText, tenantId, reminderId],
             );
             result.failed += 1;
           }
@@ -746,7 +763,7 @@ async function handler(request: Request) {
       if (smsEnabled) {
         const smsDue = await dbQuery<DueAppointmentReminder[]>(
           appointmentReminderSelect("sms"),
-          [tenantId, businessNowDateTime()],
+          [tenantId, claimCutoff(), businessNowDateTime()],
         );
 
         for (const r of smsDue) {
@@ -779,6 +796,16 @@ async function handler(request: Request) {
             result.skipped += 1;
             continue;
           }
+
+          // CLAIM atomico anti double-send PRIMA del debit: due run sovrapposti
+          // inviavano DUE SMS addebitando DUE volte il wallet.
+          const smsClaim = await dbExecute(
+            `UPDATE reminders SET status='sending', updated_at=?
+              WHERE tenant_id = ? AND id = ?
+                AND (status='pending' OR (status='sending' AND updated_at < ?))`,
+            [businessNowDateTime(), tenantId, reminderId, claimCutoff()],
+          );
+          if (smsClaim.affectedRows <= 0) continue;
 
           // Port of automation_send_sms_reminder(): build the message, debit the
           // SMS credit wallet (1 credit/segment), send via OpenAPI, and refund on
@@ -835,15 +862,18 @@ async function handler(request: Request) {
             );
             result.sent += 1;
           } else {
-            // PHP: provider rejected -> refund the debited credits, mark failed.
+            // PHP: provider rejected -> refund the debited credits. Errore
+            // transiente -> torna pending (retry al giro dopo), permanente -> failed.
             await smsCreditRefund(tenantId, segments, "reminder", reminderId);
+            const smsNextStatus = isTransientSendError(String(smsRes.error ?? "")) ? "pending" : "failed";
             await dbExecute(
               `UPDATE reminders
-                  SET status='failed', sent_at=NULL, last_error=?,
+                  SET status=?, sent_at=NULL, last_error=?,
                       provider='openapi_sms', provider_message_id=?, provider_state=?,
                       sms_segments=?, sms_credits_used=0, last_checked_at=?
                 WHERE tenant_id = ? AND id = ?`,
               [
+                smsNextStatus,
                 String(smsRes.error ?? "").trim() || "Invio SMS fallito",
                 providerId !== "" ? providerId : null,
                 providerState !== "" ? providerState : null,
@@ -934,11 +964,12 @@ async function handler(request: Request) {
            JOIN clients c ON c.id = cr.client_id AND c.tenant_id = cr.tenant_id
           WHERE cr.tenant_id = ?
             AND cr.reminder_kind='expiry_window'
-            AND cr.status='pending'
+            AND (cr.status='pending'
+                 OR (cr.status='sending' AND cr.updated_at < ?))
             AND cr.scheduled_at <= ?
           ORDER BY cr.scheduled_at ASC, cr.id ASC
           LIMIT ${SELECT_LIMIT}`,
-        [tenantId, businessNowDateTime()],
+        [tenantId, claimCutoff(), businessNowDateTime()],
       );
 
       for (const row of dueCards) {
@@ -980,6 +1011,15 @@ async function handler(request: Request) {
           continue;
         }
 
+        // CLAIM atomico anti double-send (come i reminder appuntamento).
+        const cardClaim = await dbExecute(
+          `UPDATE card_reminders SET status='sending', updated_at=?
+            WHERE tenant_id = ? AND id = ?
+              AND (status='pending' OR (status='sending' AND updated_at < ?))`,
+          [businessNowDateTime(), tenantId, id, claimCutoff()],
+        );
+        if (cardClaim.affectedRows <= 0) continue;
+
         // Port of automation_send_fidelity_expiry_email(): build + send. Mark
         // 'sent' ONLY on a successful send.
         const msg = buildFidelityEmail(row, bizSettings);
@@ -1001,10 +1041,12 @@ async function handler(request: Request) {
           );
           result.sent += 1;
         } else {
+          // Transiente -> torna pending (retry al giro dopo); permanente -> failed.
+          const cardNextStatus = isTransientSendError(String(sendRes.error ?? "")) ? "pending" : "failed";
           await dbExecute(
-            `UPDATE card_reminders SET status='failed', sent_at=NULL, last_error=?
+            `UPDATE card_reminders SET status=?, sent_at=NULL, last_error=?
               WHERE tenant_id = ? AND id = ?`,
-            [`Invio email fallito: ${sendRes.error ?? "errore provider"}`, tenantId, id],
+            [cardNextStatus, `Invio email fallito: ${sendRes.error ?? "errore provider"}`, tenantId, id],
           );
           result.failed += 1;
         }
@@ -1051,6 +1093,11 @@ async function handler(request: Request) {
       } catch {
         // Cleanup must never block the cron.
       }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.error(`[cron reminders] tenant ${slug} FALLITO:`, msg);
+        result.error = msg;
+      }
 
       total += result.sent;
       totalFailed += result.failed;
@@ -1083,10 +1130,31 @@ export const POST = GET;
 // pg parsers return raw strings), so string comparison against expires_at is
 // the same lexicographic order PHP relied on.
 function todayYmd(): string {
-  const d = new Date();
-  return `${d.getFullYear().toString().padStart(4, "0")}-${(d.getMonth() + 1)
-    .toString()
-    .padStart(2, "0")}-${d.getDate().toString().padStart(2, "0")}`;
+  // Wall-time ROMA (audit 21/07): coi componenti locali del server (UTC su
+  // Amplify) tra le 00:00 e le 02:00 di Roma il "giorno" era quello precedente
+  // e la finestra rinnovo tessere slittava di un giorno.
+  return businessNowDateTime().slice(0, 10);
+}
+
+// CLAIM anti double-send (audit 21/07, stesso schema di giftbox/giftcard ma
+// senza DDL: riuso status+updated_at). Un run marca la riga 'sending' con
+// UPDATE atomico PRIMA di inviare; un run sovrapposto la salta. Le righe
+// 'sending' più vecchie di 15 minuti (crash a metà) tornano eleggibili.
+const CLAIM_MINUTES = 15;
+
+function claimCutoff(): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})/.exec(businessNowDateTime());
+  if (!m) return businessNowDateTime();
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]) - CLAIM_MINUTES, Number(m[6])));
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+}
+
+// Errori provider TRANSIENTI (throttling/rete): la riga torna 'pending' e viene
+// ritentata al giro dopo — prima diventava 'failed' per sempre, in
+// contraddizione col commento in testa al file.
+function isTransientSendError(message: string): boolean {
+  return /throttl|rate.?limit|too many|timeout|timed out|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket|network|temporar|unavailable|5\d\d/i.test(message);
 }
 
 // PHP fidelity_card_normalize_date_ymd(): coerce a stored date to Y-m-d, or null.

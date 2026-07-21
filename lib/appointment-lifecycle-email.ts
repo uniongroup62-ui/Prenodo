@@ -187,9 +187,12 @@ function buildLifecycleEmail(
   } else {
     subject = "Appuntamento rifiutato";
     // rejected has no appointment summary (matches automation_default_rejected_body).
+    // NIENTE h() qui: senza il summary HTML il body è testo semplice e
+    // buildModernEmailTemplate lo escapa già — con h() era double-escape
+    // (apostrofi come &#039; nell'email al cliente, audit 21/07).
     body =
       `${greeting}\n\npurtroppo non possiamo confermare l'appuntamento richiesto.\n` +
-      `${h(support)}\n\nSaluti,\n${h(bizName)}`;
+      `${support}\n\nSaluti,\n${bizName}`;
   }
 
   const renderedBody = compactEmailBody(body);

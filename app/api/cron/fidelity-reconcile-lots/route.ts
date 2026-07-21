@@ -35,9 +35,11 @@ function num(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function nowString(d = new Date()): string {
-  const p = (x: number) => String(x).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+// Wall-time ROMA (audit 21/07): stessa convenzione businessNowDateTime del
+// resto dell'app (i componenti locali del server su Amplify sono UTC).
+import { businessNowDateTime } from "@/lib/business-datetime";
+function nowString(): string {
+  return businessNowDateTime();
 }
 
 type FidelitySettings = { enabled: boolean; expireEnabled: boolean; expireDays: number };
@@ -315,19 +317,26 @@ async function handler(request: Request) {
     let totFixed = 0;
 
     for (const slug of slugs) {
-      const tenantId = await tenantIdForSlug(slug);
-      if (!tenantId) continue;
+      // Isolamento per-tenant (audit 21/07): un tenant rotto non salta i successivi.
+      try {
+        const tenantId = await tenantIdForSlug(slug);
+        if (!tenantId) continue;
 
-      const settings = await fidelitySettings(tenantId);
-      if (!settings.enabled) {
-        results.push({ tenant: slug, checked: 0, fixed: 0, skipped: true });
-        continue;
+        const settings = await fidelitySettings(tenantId);
+        if (!settings.enabled) {
+          results.push({ tenant: slug, checked: 0, fixed: 0, skipped: true });
+          continue;
+        }
+
+        const { checked, fixed } = await reconcileTenant(tenantId, settings, now, maxClients);
+        results.push({ tenant: slug, checked, fixed });
+        totChecked += checked;
+        totFixed += fixed;
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.error(`[cron fidelity-reconcile-lots] tenant ${slug} FALLITO:`, msg);
+        results.push({ tenant: slug, checked: 0, fixed: 0 });
       }
-
-      const { checked, fixed } = await reconcileTenant(tenantId, settings, now, maxClients);
-      results.push({ tenant: slug, checked, fixed });
-      totChecked += checked;
-      totFixed += fixed;
     }
 
     return Response.json({

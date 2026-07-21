@@ -1,3 +1,4 @@
+import { businessNowDateTime } from "@/lib/business-datetime";
 import { activeTenantSlugs, assertCronAuth, trackCronResponse } from "@/lib/cron";
 import { giftExpireDueInstancesBatch } from "@/lib/gifts-engine";
 import { dbExecute, dbQuery, tenantIdForSlug } from "@/lib/tenant-db";
@@ -44,17 +45,17 @@ function num(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-// Local Y-m-d H:i:s timestamp (mirrors PHP date()).
-function nowString(d = new Date()): string {
-  const p = (x: number) => String(x).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+// Wall-time ROMA (audit 21/07): coi componenti locali del server (UTC su
+// Amplify) tra le 00:00 e le 02:00 di Roma i lotti scadevano col giorno
+// sbagliato — stessa convenzione businessNowDateTime del resto dell'app.
+function nowString(): string {
+  return businessNowDateTime();
 }
 
 // Start of the current calendar day (Fidelity::dayStart) — scadenza is
 // evaluated per calendar day: a lot is valid until 23:59:59 of expires_at.
-function dayStartString(d = new Date()): string {
-  const p = (x: number) => String(x).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} 00:00:00`;
+function dayStartString(): string {
+  return `${businessNowDateTime().slice(0, 10)} 00:00:00`;
 }
 
 // Fidelity::settings() — only the keys the expiry path needs.
@@ -157,8 +158,12 @@ async function expireClientLots(
 
   const now = nowString();
   const dayStart = dayStartString();
-  const dayStartTs = new Date(dayStart.replace(" ", "T")).getTime();
-  const justBeforeNow = nowString(new Date(Math.max(0, dayStartTs - 1000)));
+  // dayStart - 1 secondo = 23:59:59 del giorno prima, aritmetica PURA sui
+  // componenti wall-time (Date.UTC come calcolatrice, nessuna timezone).
+  const m = /^(\d{4})-(\d{2})-(\d{2}) /.exec(dayStart);
+  const prev = new Date(Date.UTC(Number(m?.[1] ?? 0), Number(m?.[2] ?? 1) - 1, Number(m?.[3] ?? 1)) - 1000);
+  const p = (x: number) => String(x).padStart(2, "0");
+  const justBeforeNow = `${prev.getUTCFullYear()}-${p(prev.getUTCMonth() + 1)}-${p(prev.getUTCDate())} 23:59:59`;
 
   let expired = 0;
 
@@ -483,29 +488,36 @@ async function handler(request: Request) {
     const hasGiftCol = await columnExistsLive("appointments", "fidelity_gift_points_used");
 
     for (const slug of slugs) {
-      const tenantId = await tenantIdForSlug(slug);
-      if (!tenantId) continue;
-
-      let cardsExpired = 0;
+      // Isolamento per-tenant (audit 21/07): un tenant rotto non salta i successivi.
       try {
-        cardsExpired = await syncExpiredCardStatuses(tenantId);
-      } catch {
-        cardsExpired = 0;
+        const tenantId = await tenantIdForSlug(slug);
+        if (!tenantId) continue;
+
+        let cardsExpired = 0;
+        try {
+          cardsExpired = await syncExpiredCardStatuses(tenantId);
+        } catch {
+          cardsExpired = 0;
+        }
+
+        const settings = await fidelitySettings(tenantId);
+        const expired = await expireDueLotsBatch(tenantId, settings, hasGiftCol, 500);
+
+        // Scadenza istanze omaggio (legacy cron: try { Gifts::expireDueInstancesBatch }).
+        let giftsExpired = 0;
+        try {
+          giftsExpired = (await giftExpireDueInstancesBatch(slug, 500)).expired;
+        } catch {
+          giftsExpired = 0;
+        }
+
+        results.push({ tenant: slug, expired, cardsExpired, giftsExpired });
+        total += expired;
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.error(`[cron fidelity-expire] tenant ${slug} FALLITO:`, msg);
+        results.push({ tenant: slug, expired: 0, cardsExpired: 0, giftsExpired: 0 });
       }
-
-      const settings = await fidelitySettings(tenantId);
-      const expired = await expireDueLotsBatch(tenantId, settings, hasGiftCol, 500);
-
-      // Scadenza istanze omaggio (legacy cron: try { Gifts::expireDueInstancesBatch }).
-      let giftsExpired = 0;
-      try {
-        giftsExpired = (await giftExpireDueInstancesBatch(slug, 500)).expired;
-      } catch {
-        giftsExpired = 0;
-      }
-
-      results.push({ tenant: slug, expired, cardsExpired, giftsExpired });
-      total += expired;
     }
 
     return Response.json({

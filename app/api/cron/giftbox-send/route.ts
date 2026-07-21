@@ -315,6 +315,9 @@ async function handler(request: Request) {
     let total = 0;
 
     for (const slug of slugs) {
+      // Isolamento per-tenant (audit 21/07): il try per-riga sotto non copre le
+      // query tenant-level — un tenant rotto saltava tutti i successivi.
+      try {
       const tenantId = await tenantIdForSlug(slug);
       if (!tenantId) continue;
 
@@ -544,6 +547,11 @@ async function handler(request: Request) {
 
       results.push({ tenant: slug, sent, expired, errors });
       total += sent;
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        console.error(`[cron giftbox-send] tenant ${slug} FALLITO:`, msg);
+        results.push({ tenant: slug, sent: 0, expired: 0, errors: 1 });
+      }
     }
 
     return Response.json({ ok: true, job: "giftbox-send", sendEnabled, total, results });
