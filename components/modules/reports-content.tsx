@@ -125,29 +125,34 @@ function downloadCsv(filename: string, rows: (string | number)[][]): void {
   URL.revokeObjectURL(url);
 }
 
-// Port di formatDeltaInfo (reports.php 1505-1536): classi legacy
-// is-good/is-bad/is-flat, formatter €/int legacy, goodWhenUp invertibile
-// (per Costi/Commissioni un aumento è "bad").
-function deltaInfo(current: number, previous: number, opts: { money?: boolean; requiresBoth?: boolean; goodWhenUp?: boolean } = {}): { text: string; cls: string } {
+// Confronto periodo-su-periodo (ridisegno 2026-07-21 su best-practice dashboard:
+// freccia direzionale + % + il VALORE del periodo di confronto con etichetta
+// "vs", così è chiaro rispetto a cosa). `dir` guida la freccia (su/giù/pari),
+// `cls` il colore (goodWhenUp invertito per Costi/Commissioni), `prevText` è il
+// valore del periodo di confronto già formattato (€/intero).
+type DeltaInfo = { text: string; cls: string; dir: "up" | "down" | "flat"; prevText: string };
+function deltaInfo(current: number, previous: number, opts: { money?: boolean; requiresBoth?: boolean; goodWhenUp?: boolean } = {}): DeltaInfo {
   const eps = 0.0001;
   const goodWhenUp = opts.goodWhenUp !== false;
   const diff = current - previous;
+  const fmt = (v: number) => (opts.money ? `€ ${numberFormatIt(v, 2)}` : numberFormatIt(Math.round(v), 0));
+  const prevText = fmt(Math.max(0, previous));
   let cls = "is-flat";
   if (Math.abs(diff) >= eps) cls = (diff > 0) === goodWhenUp ? "is-good" : "is-bad";
+  const dir: DeltaInfo["dir"] = diff > eps ? "up" : diff < -eps ? "down" : "flat";
 
+  // requiresBoth (es. scontrino medio): senza entrambi i valori il % è privo di
+  // senso → trattino, ma si mostra comunque il "vs" per contesto.
   if (opts.requiresBoth && (current <= eps || previous <= eps)) {
-    return { text: Math.abs(diff) < eps ? "Nessuna variazione" : "Non confrontabile", cls: "is-flat" };
+    return { text: "n/d", cls: "is-flat", dir: "flat", prevText };
   }
+  // Periodo di confronto a zero: "Nuovo" (o pari se anche il corrente è 0).
   if (Math.abs(previous) < eps) {
-    return current > eps
-      ? { text: "Nuovo rispetto al confronto", cls }
-      : { text: "Nessuna variazione", cls: "is-flat" };
+    return current > eps ? { text: "Nuovo", cls, dir: "up", prevText } : { text: "0%", cls: "is-flat", dir: "flat", prevText };
   }
-  const sign = diff > 0 ? "+" : diff < 0 ? "-" : "";
-  const value = opts.money ? `€ ${numberFormatIt(Math.abs(diff), 2)}` : numberFormatIt(Math.round(Math.abs(diff)), 0);
   const pct = (diff / Math.abs(previous)) * 100;
-  const pctSign = pct > 0 ? "+" : pct < 0 ? "-" : "";
-  return { text: `${sign}${value} (${pctSign}${numberFormatIt(Math.abs(pct), 1)}%)`, cls };
+  const pctSign = pct > eps ? "+" : pct < -eps ? "−" : "";
+  return { text: `${pctSign}${numberFormatIt(Math.abs(pct), 1)}%`, cls, dir, prevText };
 }
 
 // Port di $buildTrendSeries (reports.php 1365-1410): ZERO-FILL dell'intero
@@ -776,11 +781,12 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
     ? deltaInfo(a.commissions.total, a.comparison.commissionsTotal, { money: true, goodWhenUp: false })
     : null;
 
-  const renderDelta = (delta: { text: string; cls: string } | null, extraClass = "") =>
+  const renderDelta = (delta: DeltaInfo | null, extraClass = "") =>
     delta ? (
       <div className={`report-delta ${delta.cls}${extraClass}`}>
-        <i className="bi bi-arrow-left-right" />
-        {delta.text}
+        <i className={`bi ${delta.dir === "up" ? "bi-arrow-up-short" : delta.dir === "down" ? "bi-arrow-down-short" : "bi-dash"}`} aria-hidden="true" />
+        <span className="report-delta__pct">{delta.text}</span>
+        <span className="report-delta__prev">vs {delta.prevText}</span>
       </div>
     ) : null;
 
@@ -814,7 +820,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
     <div className="container-fluid">
       {/* ?v= bumpato quando la CSS cambia: senza, il browser tiene la
           versione in cache e il layout dei filtri si sfalda. */}
-      <link rel="stylesheet" href="/assets/css/pages/reports.css?v=20260721nonav" />
+      <link rel="stylesheet" href="/assets/css/pages/reports.css?v=20260721compare" />
 
       <div className="bs-page-header">
         <div className="bs-page-heading">
@@ -1045,6 +1051,19 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
         </div>
       ) : (
       <>
+      {/* Con il confronto attivo: banda che chiarisce ESPLICITAMENTE che le
+          variazioni sotto ai numeri (freccia + % + "vs …") sono rispetto al
+          periodo di confronto — prima non era chiaro a cosa si riferissero. */}
+      {compare && a?.comparison ? (
+        <div className="report-compare-banner" role="note">
+          <i className="bi bi-arrow-left-right" aria-hidden="true" />
+          <span>
+            Le variazioni sotto ai numeri sono rispetto al periodo di confronto{" "}
+            <strong>{itDate(a.comparison.from)} – {itDate(a.comparison.to)}</strong>.
+          </span>
+        </div>
+      ) : null}
+
       <div className="report-kpi-grid mb-3">
         {/* Drill-down (2026-07-20): i KPI operativi sono LINK verso il modulo
             di origine col periodo trasferito dove la pagina lo supporta. */}

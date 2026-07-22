@@ -31,16 +31,39 @@
     align-items: center;
     display: inline-flex;
     flex-wrap: wrap;
-    gap: 4px;
+    gap: 3px 6px;
     font-size: .78rem;
     font-weight: 600;
     line-height: 1.2;
     margin-top: 8px;
     max-width: 100%;
   }
+  .report-delta > i { font-size: 1rem; margin-right: -2px; }
   .report-delta.is-good { color: #15803d; }
   .report-delta.is-bad { color: #b42318; }
   .report-delta.is-flat { color: #667085; }
+  /* Il "vs <valore prec.>" resta neutro (grigio) a prescindere dal colore
+     della variazione: è contesto, non un giudizio. */
+  .report-delta__prev { color: #667085; font-weight: 500; }
+  /* Banda che lega le variazioni al periodo di confronto. */
+  .report-compare-banner {
+    align-items: center;
+    background: #eef2f9;
+    border: 1px solid #dbe4f1;
+    border-radius: 8px;
+    color: #334155;
+    display: flex;
+    gap: 8px;
+    font-size: .82rem;
+    margin-bottom: 12px;
+    padding: 8px 12px;
+  }
+  .report-compare-banner i { color: #365a96; }
+  .report-compare-banner strong { color: #1d2939; }
+  .report-compare-note {
+    color: #667085;
+    font-size: .8rem;
+  }
   .report-compare-note {
     color: #667085;
     font-size: .8rem;
