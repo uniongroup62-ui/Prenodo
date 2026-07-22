@@ -790,6 +790,30 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
       </div>
     ) : null;
 
+  // Variazione COMPATTA (freccia + %) per le celle del pannello confronto: lì il
+  // valore del periodo di confronto è già una colonna, quindi niente "vs".
+  const renderDeltaCell = (delta: DeltaInfo | null) =>
+    delta ? (
+      <span className={`report-delta ${delta.cls}`}>
+        <i className={`bi ${delta.dir === "up" ? "bi-arrow-up-short" : delta.dir === "down" ? "bi-arrow-down-short" : "bi-dash"}`} aria-hidden="true" />
+        {delta.text}
+      </span>
+    ) : null;
+
+  // Righe del pannello "Confronto periodi" (vista affiancata in cima quando il
+  // confronto è attivo): metrica, valore periodo, valore confronto, variazione.
+  const compareRows = a?.comparison
+    ? [
+        { label: "Incasso", cur: fmtMoney(a.summary.totalRevenue), prev: fmtMoney(a.comparison.totalRevenue), delta: incassoDelta },
+        { label: "Vendite", cur: fmtInt(a.summary.saleCount), prev: fmtInt(a.comparison.saleCount), delta: venditeDelta },
+        { label: "Scontrino medio", cur: fmtMoney(a.summary.averageTicket), prev: fmtMoney(a.comparison.averageTicket), delta: ticketDelta },
+        { label: "Prenotazioni", cur: fmtInt(a.summary.appointmentCount), prev: fmtInt(a.comparison.appointmentCount), delta: prenotazioniDelta },
+        { label: "Clienti serviti", cur: fmtInt(a.summary.servedClients), prev: fmtInt(a.comparison.servedClients), delta: clientiDelta },
+        ...(a.costs && a.comparison.costsTotal !== null ? [{ label: "Costi", cur: fmtMoney(a.costs.total), prev: fmtMoney(a.comparison.costsTotal), delta: costiDelta }] : []),
+        ...(a.commissions && a.comparison.commissionsTotal !== null ? [{ label: "Commissioni", cur: fmtMoney(a.commissions.total), prev: fmtMoney(a.comparison.commissionsTotal), delta: commissioniDelta }] : []),
+      ]
+    : [];
+
   const locationLabelText = data?.locationLabel ?? "Tutte le sedi";
   // Percentuali prenotazioni (den = TUTTI gli appuntamenti del periodo).
   const apptPct = (n: number | undefined): string => {
@@ -820,7 +844,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
     <div className="container-fluid">
       {/* ?v= bumpato quando la CSS cambia: senza, il browser tiene la
           versione in cache e il layout dei filtri si sfalda. */}
-      <link rel="stylesheet" href="/assets/css/pages/reports.css?v=20260721compare" />
+      <link rel="stylesheet" href="/assets/css/pages/reports.css?v=20260721comparepanel" />
 
       <div className="bs-page-header">
         <div className="bs-page-heading">
@@ -1051,17 +1075,44 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
         </div>
       ) : (
       <>
-      {/* Con il confronto attivo: banda che chiarisce ESPLICITAMENTE che le
-          variazioni sotto ai numeri (freccia + % + "vs …") sono rispetto al
-          periodo di confronto — prima non era chiaro a cosa si riferissero. */}
+      {/* Pannello "Confronto periodi" (2026-07-21, scelta utente): vista
+          AFFIANCATA in cima quando il confronto è attivo — periodo analizzato
+          e periodo di confronto uno accanto all'altro con la variazione. Prima
+          il confronto era sparso (piccole variazioni sulle card + tratteggi nei
+          grafici in basso): cambiare il periodo di confronto non dava una vista
+          d'insieme senza scorrere. Le card sotto restano sul periodo. */}
       {compare && a?.comparison ? (
-        <div className="report-compare-banner" role="note">
-          <i className="bi bi-arrow-left-right" aria-hidden="true" />
-          <span>
-            Le variazioni sotto ai numeri sono rispetto al periodo di confronto{" "}
-            <strong>{itDate(a.comparison.from)} – {itDate(a.comparison.to)}</strong>.
-          </span>
-        </div>
+        <section className="report-panel report-compare-panel mb-3">
+          <div className="report-section-title border-bottom">
+            <div className="fw-semibold" role="heading" aria-level={2}>Confronto periodi</div>
+          </div>
+          <div className="report-compare-table-wrap">
+            <table className="report-compare-table">
+              <thead>
+                <tr>
+                  <th scope="col">Metrica</th>
+                  <th scope="col">
+                    Periodo<span className="report-compare-th-range">{itDate(a.from)} – {itDate(a.to)}</span>
+                  </th>
+                  <th scope="col">
+                    Confronto<span className="report-compare-th-range">{itDate(a.comparison.from)} – {itDate(a.comparison.to)}</span>
+                  </th>
+                  <th scope="col">Variazione</th>
+                </tr>
+              </thead>
+              <tbody>
+                {compareRows.map((row) => (
+                  <tr key={row.label}>
+                    <th scope="row">{row.label}</th>
+                    <td className="report-compare-cur">{row.cur}</td>
+                    <td className="report-compare-prev">{row.prev}</td>
+                    <td>{renderDeltaCell(row.delta)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
       ) : null}
 
       <div className="report-kpi-grid mb-3">
@@ -1075,27 +1126,19 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
           </div>
           {(a?.summary.collectionMovements ?? 0) > 0 ? (
             <div className="sub">Movimenti incasso {fmtInt(a?.summary.collectionMovements)}</div>
-          ) : null}
-          {renderDelta(incassoDelta)}
-        </a>
+          ) : null}        </a>
         <a className="report-kpi report-kpi-link" href={`/${encodeURIComponent(slug)}/pos_history?from=${rng.from}&to=${rng.to}`} title="Apri Movimenti nel periodo">
           <div className="label">Vendite</div>
           <div className="value">{fmtInt(a?.summary.saleCount)}</div>
-          <div className="sub">Periodo selezionato</div>
-          {renderDelta(venditeDelta)}
-        </a>
+          <div className="sub">Periodo selezionato</div>        </a>
         <div className="report-kpi">
           <div className="label">Scontrino medio</div>
           <div className="value">{fmtMoney(a?.summary.averageTicket)}</div>
-          <div className="sub">Periodo selezionato</div>
-          {renderDelta(ticketDelta)}
-        </div>
+          <div className="sub">Periodo selezionato</div>        </div>
         <div className="report-kpi">
           <div className="label">Clienti serviti</div>
           <div className="value">{fmtInt(a?.summary.servedClients)}</div>
-          <div className="sub">Clienti associati alle vendite</div>
-          {renderDelta(clientiDelta)}
-        </div>
+          <div className="sub">Clienti associati alle vendite</div>        </div>
       </div>
 
       <div className="report-kpi-grid mb-3">
@@ -1110,9 +1153,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
             <div className="sub">
               Eseguite {apptPct(a?.appointments.done)} · Annullate {apptPct(a?.appointments.canceled)} · No show {apptPct(a?.appointments.noShow)}
             </div>
-          ) : null}
-          {renderDelta(prenotazioniDelta)}
-        </a>
+          ) : null}        </a>
         <div className="report-kpi">
           <div className="label">Clienti nel periodo</div>
           <div className="value">{fmtInt(a?.newVsReturning.windowClients)}</div>
@@ -1138,17 +1179,13 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
             <a className="report-kpi report-kpi-link" href={`/${encodeURIComponent(slug)}/costs?from=${rng.from}&to=${rng.to}`} title="Apri Scadenziario e Costi nel periodo">
               <div className="label">Costi</div>
               <div className="value">{fmtMoney(a.costs.total)}</div>
-              <div className="sub">Residuo {fmtMoney(a.costs.open)}</div>
-              {renderDelta(costiDelta)}
-            </a>
+              <div className="sub">Residuo {fmtMoney(a.costs.open)}</div>            </a>
           ) : null}
           {a?.commissions ? (
             <a className="report-kpi report-kpi-link" href={`/${encodeURIComponent(slug)}/commissions?from=${rng.from}&to=${rng.to}`} title="Apri Commissioni nel periodo">
               <div className="label">Commissioni</div>
               <div className="value">{fmtMoney(a.commissions.total)}</div>
-              <div className="sub">Da pagare {fmtMoney(a.commissions.open)}</div>
-              {renderDelta(commissioniDelta)}
-            </a>
+              <div className="sub">Da pagare {fmtMoney(a.commissions.open)}</div>            </a>
           ) : null}
         </div>
       ) : null}

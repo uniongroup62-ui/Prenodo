@@ -45,25 +45,47 @@
   /* Il "vs <valore prec.>" resta neutro (grigio) a prescindere dal colore
      della variazione: è contesto, non un giudizio. */
   .report-delta__prev { color: #667085; font-weight: 500; }
-  /* Banda che lega le variazioni al periodo di confronto. */
-  .report-compare-banner {
-    align-items: center;
-    background: #eef2f9;
-    border: 1px solid #dbe4f1;
-    border-radius: 8px;
-    color: #334155;
-    display: flex;
-    gap: 8px;
-    font-size: .82rem;
-    margin-bottom: 12px;
-    padding: 8px 12px;
+  /* Pannello "Confronto periodi": vista affiancata in cima (periodo vs
+     confronto vs variazione) quando il confronto è attivo. */
+  .report-compare-panel { padding-bottom: 4px; }
+  .report-compare-table-wrap { overflow-x: auto; }
+  .report-compare-table {
+    border-collapse: collapse;
+    width: 100%;
   }
-  .report-compare-banner i { color: #365a96; }
-  .report-compare-banner strong { color: #1d2939; }
-  .report-compare-note {
+  .report-compare-table th,
+  .report-compare-table td {
+    padding: 9px 14px;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .report-compare-table thead th {
+    border-bottom: 1px solid #e4e9f1;
     color: #667085;
-    font-size: .8rem;
+    font-size: .74rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    vertical-align: bottom;
   }
+  .report-compare-table th:first-child,
+  .report-compare-table td:first-child { text-align: left; }
+  .report-compare-th-range {
+    color: #94a3b8;
+    display: block;
+    font-size: .72rem;
+    font-weight: 500;
+    letter-spacing: 0;
+    margin-top: 2px;
+    text-transform: none;
+  }
+  .report-compare-table tbody th {
+    color: #344054;
+    font-weight: 600;
+  }
+  .report-compare-table tbody tr + tr th,
+  .report-compare-table tbody tr + tr td { border-top: 1px solid #f1f4f9; }
+  .report-compare-cur { color: #111827; font-weight: 700; }
+  .report-compare-prev { color: #475569; }
   .report-compare-note {
     color: #667085;
     font-size: .8rem;
