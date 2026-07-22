@@ -271,6 +271,14 @@ const COMPARE_MODE_LABELS: Record<string, string> = {
   custom: "Periodo personalizzato",
 };
 
+// Lookup SICURO su questi dizionari: l'accesso a bracket con una chiave grezza
+// dell'URL (?range=toString) risalirebbe il prototipo e restituirebbe una
+// funzione truthy (Object.prototype.toString/valueOf/…), superando i guard e
+// facendo poi crashare `.toLowerCase()`. hasOwnProperty limita alle chiavi vere.
+function ownLabel(map: Record<string, string>, key: string): string | undefined {
+  return Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined;
+}
+
 type ReportsQuery = {
   range?: string;
   from?: string;
@@ -304,7 +312,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
   // compare=...); default legacy: range invalido + from/to PRESENTI (anche
   // invalidi, isset() nel PHP) → 'custom', altrimenti mese corrente.
   const q = initialQuery ?? {};
-  const initialRange = RANGE_LABELS[String(q.range ?? "")]
+  const initialRange = ownLabel(RANGE_LABELS, String(q.range ?? ""))
     ? String(q.range)
     : (q.from !== undefined || q.to !== undefined ? "custom" : "month_current");
   const [range, setRange] = useState(initialRange);
@@ -312,7 +320,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
   const [to, setTo] = useState(isYmd(q.to) ? String(q.to) : todayIso);
   const [granularity, setGranularity] = useState(["auto", "daily", "weekly", "monthly"].includes(String(q.granularity ?? "")) ? String(q.granularity) : "auto");
   const [compare, setCompare] = useState(["1", "true", "on", "yes"].includes(String(q.compare ?? "").toLowerCase()));
-  const [compareMode, setCompareMode] = useState(COMPARE_MODE_LABELS[String(q.compare_mode ?? "")] ? String(q.compare_mode) : "auto");
+  const [compareMode, setCompareMode] = useState(ownLabel(COMPARE_MODE_LABELS, String(q.compare_mode ?? "")) ? String(q.compare_mode) : "auto");
   const [compareMonth, setCompareMonth] = useState(() =>
     /^\d{4}-\d{2}$/.test(String(q.compare_month ?? "")) ? String(q.compare_month) : shiftMonthsYmd(todayIso, -1).slice(0, 7));
   const [compareFrom, setCompareFrom] = useState(isYmd(q.compare_from) ? String(q.compare_from) : monthStartIso);
@@ -322,6 +330,9 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
   const [allLoc, setAllLoc] = useState(["1", "true", "on", "yes"].includes(String(q.all_locations ?? "").toLowerCase()));
 
   const [data, setData] = useState<ReportsResponse | null>(null);
+  // Primo caricamento: distingue "sto caricando" da "periodo davvero vuoto"
+  // (prima i KPI mostravano 0 sin dal primo paint, indistinguibili dal vuoto).
+  const [loading, setLoading] = useState(true);
   // Auth::requirePerm legacy: 403 → pagina 'Accesso negato' (card nel chrome).
   const [accessDenied, setAccessDenied] = useState(false);
   const [clientSearch, setClientSearch] = useState("");
@@ -344,7 +355,14 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
         return { from: localYmd(start), to: localYmd(new Date(now.getFullYear(), now.getMonth(), 0)) };
       }
       case "year_current": return { from: localYmd(new Date(now.getFullYear(), 0, 1)), to: back(0) };
-      case "custom": return from <= to ? { from, to } : { from: to, to: from };
+      case "custom": {
+        // Date custom validate al punto d'uso: un campo svuotato/invalido (il
+        // <input type=date> restituisce "") NON deve arrivare all'API né alle
+        // didascalie come stringa vuota. Fallback: 1° del mese / oggi.
+        const f = isYmd(from) ? from : localYmd(new Date(now.getFullYear(), now.getMonth(), 1));
+        const t = isYmd(to) ? to : back(0);
+        return f <= t ? { from: f, to: t } : { from: t, to: f };
+      }
       case "month_current":
       default: return { from: localYmd(new Date(now.getFullYear(), now.getMonth(), 1)), to: back(0) };
     }
@@ -375,7 +393,12 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
         }
         return previousPeriod();
       }
-      case "custom": return compareFrom <= compareTo ? { from: compareFrom, to: compareTo } : { from: compareTo, to: compareFrom };
+      case "custom": {
+        // Date confronto custom validate come sopra: se invalide, ripiega sul
+        // periodo precedente di pari durata invece di inviare stringhe vuote.
+        if (!isYmd(compareFrom) || !isYmd(compareTo)) return previousPeriod();
+        return compareFrom <= compareTo ? { from: compareFrom, to: compareTo } : { from: compareTo, to: compareFrom };
+      }
       case "auto":
         if (range === "month_current" || range === "month_previous") return { from: shiftMonthsYmd(win.from, -1), to: shiftMonthsYmd(win.to, -1) };
         if (range === "year_current") return { from: shiftYearsYmd(win.from, -1), to: shiftYearsYmd(win.to, -1) };
@@ -401,16 +424,22 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
       params.set("compare_from", cw.from);
       params.set("compare_to", cw.to);
     }
+    setLoading(true);
     return fetch(`/api/manage/reports?${params.toString()}`, { headers: { "x-tenant-slug": slug } })
       .then((r) => {
-        if (seq === loadSeqRef.current && r.status === 403) setAccessDenied(true);
+        if (seq !== loadSeqRef.current) return null;
+        // accessDenied non più write-once: un 200 successivo sblocca la pagina.
+        setAccessDenied(r.status === 403);
         return r.json();
       })
-      .then((j: ReportsResponse) => {
-        if (seq === loadSeqRef.current) setData(j);
+      .then((j: ReportsResponse | null) => {
+        if (seq === loadSeqRef.current && j) setData(j);
       })
       .catch(() => {
         if (seq === loadSeqRef.current) setData(null);
+      })
+      .finally(() => {
+        if (seq === loadSeqRef.current) setLoading(false);
       });
   }, [slug, resolveRange, resolveCompareWindow, compare, allLoc]);
 
@@ -441,6 +470,13 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
     }
     window.history.replaceState(null, "", `/${encodeURIComponent(slug)}/reports?${qs.toString()}`);
   }, [slug, range, from, to, granularity, allLoc, compare, compareMode, compareMonth, compareFrom, compareTo]);
+
+  // "Tutte le sedi" non può restare attivo (e nascosto) se l'utente ha ≤1 sede:
+  // la checkbox sparisce sotto la soglia, quindi resettiamo il flag per non
+  // continuare a inviare all_locations=1 senza modo di disattivarlo dalla UI.
+  useEffect(() => {
+    if (allLoc && data && (data.locationsCount ?? 0) <= 1) setAllLoc(false);
+  }, [allLoc, data]);
 
   const k = data?.kpis ?? {};
   const a = data?.analytics;
@@ -518,12 +554,16 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
         if (chartsRef.current[id]) chartsRef.current[id].destroy();
         chartsRef.current[id] = new w.Chart(el, config);
       };
-      const moneyFmt = new Intl.NumberFormat("it-IT", { style: "currency", currency: "EUR" });
+      // Valuta col simbolo PRIMA ("€ 1.234,56"), identica a fmtMoney del DOM:
+      // prima i grafici usavano "1.234,56 €" (simbolo dopo) creando due
+      // convenzioni diverse nello stesso schermo.
+      const decFmt = new Intl.NumberFormat("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const moneyFmt = { format: (v: number) => `€ ${decFmt.format(Number(v) || 0)}` };
       const numberFmt = new Intl.NumberFormat("it-IT");
       const moneyShort = (value: unknown) => {
         const v = Number(value || 0);
-        if (Math.abs(v) >= 1000) return `${(v / 1000).toLocaleString("it-IT", { maximumFractionDigits: 1 })}k €`;
-        return `${v.toLocaleString("it-IT", { maximumFractionDigits: 0 })} €`;
+        if (Math.abs(v) >= 1000) return `€ ${(v / 1000).toLocaleString("it-IT", { maximumFractionDigits: 1 })}k`;
+        return `€ ${v.toLocaleString("it-IT", { maximumFractionDigits: 0 })}`;
       };
       const integerShort = (value: unknown) => {
         const v = Number(value || 0);
@@ -753,12 +793,10 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
   // Fidelity nel periodo: la sezione compare solo se c'è almeno un numero.
   const fp = a?.fidelityPeriod;
   const fidelityHasData = !!fp && (fp.pointsIssued > 0 || fp.pointsUsed > 0 || fp.rechargesCount > 0 || fp.giftcardsIssued > 0 || fp.giftcardUsedAmount > 0 || fp.creditUsedAmount > 0);
-  // Sottotitolo legacy: "{Range} / d/m/Y - d/m/Y / {Sede} / Grafici per giorno
-  // [ / Confronto {modo}: {d/m/Y - d/m/Y}]" (reports.php 1638-1645).
-  const subtitle = a
-    ? `${RANGE_LABELS[range] ?? "Periodo"} / ${itDate(a.from)} - ${itDate(a.to)} / ${locationLabelText} / Grafici ${trendBadge.toLowerCase()}`
-      + (compare && compareWindow ? ` / Confronto ${(COMPARE_MODE_LABELS[compareMode] ?? "").toLowerCase()}: ${itDate(compareWindow.from)} - ${itDate(compareWindow.to)}` : "")
-    : "Statistiche vendite del periodo";
+  // Sottotitolo STATICO (2026-07-21): descrive la pagina, non ripete i filtri.
+  // Prima ridiceva periodo/sede/raggruppamento/confronto già mostrati dalle
+  // didascalie dei filtri ("Stai vedendo", "Confrontato con"): puro doppione.
+  const subtitle = "Andamento di incassi, vendite, clienti e prenotazioni.";
 
   // Port della pagina 403 di Auth::requirePerm (Auth.php 494-505).
   if (accessDenied) {
@@ -776,7 +814,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
     <div className="container-fluid">
       {/* ?v= bumpato quando la CSS cambia: senza, il browser tiene la
           versione in cache e il layout dei filtri si sfalda. */}
-      <link rel="stylesheet" href="/assets/css/pages/reports.css?v=20260721filtri" />
+      <link rel="stylesheet" href="/assets/css/pages/reports.css?v=20260721audit" />
 
       <div className="bs-page-header">
         <div className="bs-page-heading">
@@ -799,8 +837,11 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
                 </li>
               </ul>
               <p>
-                Il confronto usa la finestra precedente di pari durata. Il filtro sede mostra solo le sedi a cui hai
-                accesso; con <strong>Tutte le sedi</strong>{" "}attivo compare anche il confronto tra sedi.
+                Con <strong>Automatico</strong> il confronto è il periodo immediatamente precedente (per mese e anno
+                sposta di un mese/anno, quindi a fine mese la durata può differire di qualche giorno); scegli{" "}
+                <strong>Periodo precedente di pari durata</strong> per un intervallo esattamente lungo uguale. Il filtro
+                sede mostra solo le sedi a cui hai accesso; con <strong>Tutte le sedi</strong>{" "}attivo compare anche il
+                confronto tra sedi.
               </p>
               <h6>Navigare dai numeri</h6>
               <ul>
@@ -985,6 +1026,25 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
         </div>
       </div>
 
+      {/* Primo caricamento: placeholder al posto di KPI/grafici a zero, così
+          "sto caricando" non si confonde con "periodo senza dati". Le richieste
+          successive tengono il contenuto precedente (nessun flicker). */}
+      {!data ? (
+        <div className="report-loading" role="status" aria-live="polite">
+          {loading ? (
+            <>
+              <span className="spinner-border spinner-border-sm" aria-hidden="true" />
+              Caricamento del report…
+            </>
+          ) : (
+            <>
+              <i className="bi bi-exclamation-triangle" aria-hidden="true" />
+              Impossibile caricare il report. Controlla la connessione o riprova.
+            </>
+          )}
+        </div>
+      ) : (
+      <>
       {/* Nav ancorata alle sezioni (2026-07-20): la pagina è lunga, le pillole
           saltano alla sezione; sticky sotto la topbar, esclusa dalla stampa. */}
       <nav className="report-anchor-nav d-print-none" aria-label="Sezioni report">
@@ -1064,19 +1124,10 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
           <div className="value">{fmtInt(arch?.total ?? k.clients)}</div>
           <div className="sub">Profilo clienti {locationLabelText.toLowerCase()}</div>
         </div>
-        <div className="report-kpi">
-          <div className="label">Genere prevalente</div>
-          <div className="value">{arch?.prevalence ?? "Non indicato"}</div>
-          <div className="sub">
-            Donne {fmtInt(arch?.female)} / Uomini {fmtInt(arch?.male)} / Non indicato {fmtInt(arch?.unknownGender ?? k.clients)}
-          </div>
-          <div className="sub">{arch?.prevalenceSub ?? "Nessun genere indicato"}</div>
-        </div>
-        <div className="report-kpi">
-          <div className="label">Et&agrave; media</div>
-          <div className="value">{arch && arch.avgAge !== null ? `${numberFormatIt(arch.avgAge, 1)} anni` : "N/D"}</div>
-          <div className="sub">Con data {fmtInt(arch?.birthKnown)} / Senza data {fmtInt(arch?.birthUnknown ?? k.clients)}</div>
-        </div>
+        {/* KPI "Genere prevalente" ed "Età media" rimossi (2026-07-21): erano il
+            doppione dei grafici "Clienti per genere" e "Clienti per età" della
+            sezione Composizione, e lasciavano una 5ª card orfana nella griglia
+            a 4 colonne. Il dettaglio demografico vive ora solo nei grafici. */}
       </div>
 
       {(a?.costs || a?.commissions) ? (
@@ -1104,7 +1155,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
         <div className="col-xl-6">
           <div className="report-panel">
             <div className="report-section-title border-bottom">
-              <div className="fw-semibold">Andamento incasso</div>
+              <div className="fw-semibold" role="heading" aria-level={2}>Andamento incasso</div>
               <div className="report-section-actions">
                 <span className="badge text-bg-light">{trendBadge}</span>
                 {(a?.daily.length ?? 0) > 0 ? (
@@ -1126,21 +1177,21 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
               </div>
             </div>
             <div className="report-chart-wrap">
-              {hasChart.trend ? <canvas id="reportTrendChart" aria-label="Andamento incasso" /> : chartEmpty}
+              {hasChart.trend ? <canvas role="img" id="reportTrendChart" aria-label="Andamento incasso" /> : chartEmpty}
             </div>
             {hasChart.trend ? (
-              <div className="report-chart-hint text-muted small px-3 pb-2">Clicca un punto per aprire i Movimenti del giorno.</div>
+              <div className="report-chart-hint text-muted small px-3 pb-2 d-print-none">Clicca un punto per aprire i Movimenti del giorno.</div>
             ) : null}
           </div>
         </div>
         <div className="col-xl-6">
           <div className="report-panel">
             <div className="report-section-title border-bottom">
-              <div className="fw-semibold">Andamento prenotazioni</div>
+              <div className="fw-semibold" role="heading" aria-level={2}>Andamento prenotazioni</div>
               <span className="badge text-bg-light">{trendBadge}</span>
             </div>
             <div className="report-chart-wrap">
-              {hasChart.appt ? <canvas id="reportAppointmentsTrendChart" aria-label="Andamento prenotazioni" /> : chartEmpty}
+              {hasChart.appt ? <canvas role="img" id="reportAppointmentsTrendChart" aria-label="Andamento prenotazioni" /> : chartEmpty}
             </div>
           </div>
         </div>
@@ -1150,18 +1201,18 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
         <div className="col-xl-3 col-md-6">
           <div className="report-panel">
             <div className="report-section-title border-bottom">
-              <div className="fw-semibold">Tipologie di vendita</div>
+              <div className="fw-semibold" role="heading" aria-level={2}>Tipologie di vendita</div>
               <span className="badge text-bg-light">Tipologia</span>
             </div>
             <div className="report-chart-wrap">
-              {hasChart.salesTypes ? <canvas id="reportSalesTypesChart" aria-label="Tipologie di vendita" /> : chartEmpty}
+              {hasChart.salesTypes ? <canvas role="img" id="reportSalesTypesChart" aria-label="Tipologie di vendita" /> : chartEmpty}
             </div>
           </div>
         </div>
         <div className="col-xl-3 col-md-6">
           <div className="report-panel">
             <div className="report-section-title border-bottom">
-              <div className="fw-semibold">Metodi di pagamento</div>
+              <div className="fw-semibold" role="heading" aria-level={2}>Metodi di pagamento</div>
               <div className="report-section-actions">
                 <span className="badge text-bg-light">Importi</span>
                 {(a?.paymentMethods.length ?? 0) > 0 ? (
@@ -1183,29 +1234,29 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
               </div>
             </div>
             <div className="report-chart-wrap">
-              {hasChart.paymentMethods ? <canvas id="reportPaymentMethodsChart" aria-label="Metodi di pagamento" /> : chartEmpty}
+              {hasChart.paymentMethods ? <canvas role="img" id="reportPaymentMethodsChart" aria-label="Metodi di pagamento" /> : chartEmpty}
             </div>
           </div>
         </div>
         <div className="col-xl-3 col-md-6">
           <div className="report-panel">
             <div className="report-section-title border-bottom">
-              <div className="fw-semibold">Clienti per genere</div>
+              <div className="fw-semibold" role="heading" aria-level={2}>Clienti per genere</div>
               <span className="badge text-bg-light">Archivio</span>
             </div>
             <div className="report-chart-wrap">
-              {hasChart.gender ? <canvas id="reportGenderChart" aria-label="Clienti per genere" /> : chartEmpty}
+              {hasChart.gender ? <canvas role="img" id="reportGenderChart" aria-label="Clienti per genere" /> : chartEmpty}
             </div>
           </div>
         </div>
         <div className="col-xl-3 col-md-6">
           <div className="report-panel">
             <div className="report-section-title border-bottom">
-              <div className="fw-semibold">Clienti per et&agrave;</div>
+              <div className="fw-semibold" role="heading" aria-level={2}>Clienti per et&agrave;</div>
               <span className="badge text-bg-light">Fasce</span>
             </div>
             <div className="report-chart-wrap">
-              {hasChart.age ? <canvas id="reportAgeChart" aria-label="Clienti per eta" /> : chartEmpty}
+              {hasChart.age ? <canvas role="img" id="reportAgeChart" aria-label="Clienti per età" /> : chartEmpty}
             </div>
           </div>
         </div>
@@ -1215,7 +1266,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
         <div className="col-xl-4">
           <div className="report-panel">
             <div className="report-section-title border-bottom">
-              <div className="fw-semibold">Top clienti</div>
+              <div className="fw-semibold" role="heading" aria-level={2}>Top clienti</div>
               <div className="report-section-actions">
                 <span className="badge text-bg-light">Top 10</span>
                 {(a?.topClients.length ?? 0) > 0 ? (
@@ -1242,14 +1293,14 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
               </div>
             </div>
             <div className="report-chart-wrap is-compact is-top10">
-              {hasChart.clients ? <canvas id="reportClientsChart" aria-label="Top clienti" /> : chartEmpty}
+              {hasChart.clients ? <canvas role="img" id="reportClientsChart" aria-label="Top clienti" /> : chartEmpty}
             </div>
           </div>
         </div>
         <div className="col-xl-4">
           <div className="report-panel">
             <div className="report-section-title border-bottom">
-              <div className="fw-semibold">Top servizi e prodotti</div>
+              <div className="fw-semibold" role="heading" aria-level={2}>Top servizi e prodotti</div>
               <div className="report-section-actions">
                 <span className="badge text-bg-light">Top 10</span>
                 {(a?.topItems.length ?? 0) > 0 ? (
@@ -1276,14 +1327,14 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
               </div>
             </div>
             <div className="report-chart-wrap is-compact is-top10">
-              {hasChart.items ? <canvas id="reportItemsChart" aria-label="Top servizi e prodotti" /> : chartEmpty}
+              {hasChart.items ? <canvas role="img" id="reportItemsChart" aria-label="Top servizi e prodotti" /> : chartEmpty}
             </div>
           </div>
         </div>
         <div className="col-xl-4">
           <div className="report-panel">
             <div className="report-section-title border-bottom">
-              <div className="fw-semibold">Operatori</div>
+              <div className="fw-semibold" role="heading" aria-level={2}>Operatori</div>
               <div className="report-section-actions">
                 <span className="badge text-bg-light">Top 10</span>
                 {(a?.operators.length ?? 0) > 0 ? (
@@ -1310,7 +1361,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
               </div>
             </div>
             <div className="report-chart-wrap is-compact is-top10">
-              {hasChart.operators ? <canvas id="reportOperatorsChart" aria-label="Operatori" /> : chartEmpty}
+              {hasChart.operators ? <canvas role="img" id="reportOperatorsChart" aria-label="Operatori" /> : chartEmpty}
             </div>
           </div>
         </div>
@@ -1320,12 +1371,12 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
         <div className="col-12">
           <div className="report-panel">
             <div className="report-section-title border-bottom">
-              <div className="fw-semibold">Incasso e costi</div>
+              <div className="fw-semibold" role="heading" aria-level={2}>Incasso e costi</div>
               <span className="badge text-bg-light">Periodo</span>
             </div>
             <div className="report-finance-layout">
               <div className="report-chart-wrap is-compact">
-                {hasChart.finance ? <canvas id="reportFinanceChart" aria-label="Incasso e costi" /> : chartEmpty}
+                {hasChart.finance ? <canvas role="img" id="reportFinanceChart" aria-label="Incasso e costi" /> : chartEmpty}
               </div>
               <div className="report-finance-summary">
                 <div className="report-finance-line">
@@ -1373,7 +1424,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
           <div className="col-12">
             <div className="report-panel">
               <div className="report-section-title border-bottom">
-                <div className="fw-semibold">Sedi a confronto</div>
+                <div className="fw-semibold" role="heading" aria-level={2}>Sedi a confronto</div>
                 <div className="report-section-actions">
                   <span className="badge text-bg-light">Venduto netto</span>
                   <button
@@ -1430,7 +1481,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
           <div className="col-12">
             <div className="report-panel">
               <div className="report-section-title border-bottom">
-                <div className="fw-semibold">Fidelity nel periodo</div>
+                <div className="fw-semibold" role="heading" aria-level={2}>Fidelity nel periodo</div>
                 <span className="badge text-bg-light">Punti · Ricariche · GiftCard</span>
               </div>
               <div className="report-kpi-grid p-3 pt-2">
@@ -1459,6 +1510,8 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
           </div>
         </div>
       ) : null}
+      </>
+      )}
 
       <div
         className="modal fade report-more-modal"
@@ -1475,7 +1528,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
                   Top clienti
                 </h5>
                 <div className="small text-muted" data-report-modal-count>
-                  {fmtInt(filteredClients.length)} risultati
+                  {fmtInt(filteredClients.length)} {filteredClients.length === 1 ? "risultato" : "risultati"}
                 </div>
               </div>
               <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Chiudi" />
@@ -1551,7 +1604,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
                   Top servizi e prodotti
                 </h5>
                 <div className="small text-muted" data-report-modal-count>
-                  {fmtInt(filteredItems.length)} risultati
+                  {fmtInt(filteredItems.length)} {filteredItems.length === 1 ? "risultato" : "risultati"}
                 </div>
               </div>
               <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Chiudi" />
@@ -1625,7 +1678,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
                   Operatori
                 </h5>
                 <div className="small text-muted" data-report-modal-count>
-                  {fmtInt(filteredOperators.length)} risultati
+                  {fmtInt(filteredOperators.length)} {filteredOperators.length === 1 ? "risultato" : "risultati"}
                 </div>
               </div>
               <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Chiudi" />

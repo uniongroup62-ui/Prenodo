@@ -18069,3 +18069,39 @@ working tree esterno + pattern *-cookies.txt nel .gitignore esterno
 (ATTENZIONE: repo esterno e annidato puntano allo STESSO remote GitHub
 - il repo esterno NON va mai pushato). Suite nuova
 tests/test-gdpr-compliance.mjs (21 check).
+
+### 2026-07-21 - AUDIT Report: fix UX/robustezza + debiti server annotati
+Verifica a 3 revisori (filtri, numeri API, UX) + live Playwright. FATTO
+(client + 1 server): (A) robustezza filtri — lookup label maps blindato
+con hasOwnProperty (prima ?range=toString / ?compare_mode=valueOf
+crashavano il render per funzione ereditata dal prototipo); date custom
+validate al punto d'uso (no stringhe vuote all'API); accessDenied non
+più write-once (200 successivo sblocca); allLoc auto-reset se sedi<=1;
+testo InfoBox "pari durata" reso accurato (l'Automatico a fine mese non
+è pari-durata). (B) semplicità — stato di caricamento distinto dal vuoto
+(placeholder loading vs errore); sottotitolo statico (non ripete più i
+filtri); KPI orfano risolto rimuovendo "Genere prevalente"/"Età media"
+(doppioni dei grafici); formato valuta uniforme (grafici col simbolo
+PRIMA "€ X" come il DOM). (C) accessibilità — titoli sezione role=heading
+aria-level=2 (11), canvas role=img, "eta"->"età", "{n} risultato/i",
+chart-hint d-print-none. (D) SERVER FATTO — ripartizione appuntamenti
+per sede: bridge con location_id NULL ora attribuiti alla sede-bridge
+autorizzata (COALESCE + GROUP BY 1), non più a "Senza sede". Verifica:
+tsc pulito, suite report 12/12 + 19/19, DOM 15/15 (crash-proof su 4 URL
+artefatti, loading, orfano risolto, headings, role=img, frecce KPI).
+DEBITI SERVER ANNOTATI (blocco successivo, richiedono schema/writer):
+- BUG paymentMethods: la classificazione "Metodi di pagamento" dipende
+  SOLO dalla regex "Tipo pagamento: X" nelle note (la colonna
+  payment_method non esiste in sales); vendite via createDbSale, saldate
+  interamente con giftcard/credito, o migrate finiscono in "Non
+  indicato" e sharePct distorto (Incasso resta corretto). Fix vero =
+  colonna payment_method + popolamento su TUTTI i path di creazione
+  vendita + migrazione. manage-reports.ts:152-167,250-278.
+- BUG off-by-2h su fidelity/commissioni/età: transactions.created_at,
+  giftcards.issued_at, recharges.created_at, commissions
+  movement_datetime/created_at, clientsArchive CURRENT_DATE sono scritti
+  in UTC (new Date()/DEFAULT CURRENT_TIMESTAMP, sessione pg UTC) ma
+  filtrati con confini Roma -> eventi 00:00-02:00 misattribuiti ai bordi
+  finestra (Incasso/Venduto restano corretti perché sale_date/paid_at
+  sono Roma). Fix = allineare i writer a businessNowDateTime() OPPURE
+  convertire in query (AT TIME ZONE). Serve suite TZ dedicata.

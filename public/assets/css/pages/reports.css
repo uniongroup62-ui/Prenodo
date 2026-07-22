@@ -289,16 +289,49 @@
 
 /* --- Rivoluzione Report (2026-07-20) ------------------------------------ */
 
-/* KPI cliccabili: stessa card, ma anchor con affordance al passaggio. */
+/* KPI cliccabili: distinguibili A RIPOSO (freccia ↗ in alto a destra), non
+   solo in hover — prima erano identici alle card statiche. */
 a.report-kpi-link{
   display:block;
   color:inherit;
   text-decoration:none;
+  position:relative;
+}
+a.report-kpi-link::after{
+  content:"\2197"; /* ↗ */
+  position:absolute;
+  top:10px;
+  right:12px;
+  font-size:13px;
+  line-height:1;
+  color:#94a3b8;
+  opacity:.75;
+  transition:opacity .15s ease,color .15s ease,transform .15s ease;
 }
 a.report-kpi-link:hover,
 a.report-kpi-link:focus-visible{
   border-color:#b6c8e4;
   box-shadow:0 4px 14px rgba(37,99,235,.10);
+}
+a.report-kpi-link:hover::after,
+a.report-kpi-link:focus-visible::after{
+  color:#365a96;
+  opacity:1;
+  transform:translate(1px,-1px);
+}
+
+/* Placeholder di primo caricamento (distingue "caricamento" da "vuoto"). */
+.report-loading{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:10px;
+  min-height:220px;
+  border:1px solid #dfe5ef;
+  border-radius:8px;
+  background:#fff;
+  color:#667085;
+  font-size:.9rem;
 }
 
 /* Nav ancorata alle sezioni. */

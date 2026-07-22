@@ -691,11 +691,24 @@ export async function getManageReports(
       e.soldRevenue = money(r.rev);
       e.saleCount = Number(r.cnt ?? 0);
     }
+    // Attribuzione per sede fedele al conteggio principale (fix 2026-07-21): un
+    // appuntamento con a.location_id NULL ma collegato via bridge a una sede
+    // finiva in "Senza sede" pur essendo contato nella sede X. Qui la chiave è
+    // COALESCE(sede diretta, sede-bridge AUTORIZZATA); GROUP BY 1 usa la stessa
+    // espressione senza duplicare i parametri della sottoquery.
+    let apptBreakLid = "a.location_id";
+    const breakParams: unknown[] = [];
+    if (hasApptBridge && locIds.length > 0) {
+      const bridgeB = await tenantTable(slug, "appointment_locations");
+      const inB = locIds.length === 1 ? "= ?" : `IN (${locIds.map(() => "?").join(",")})`;
+      apptBreakLid = `COALESCE(a.location_id, (SELECT al.location_id FROM ${quoteIdentifier(bridgeB.name)} al WHERE al.appointment_id = a.id AND al.tenant_id = a.tenant_id AND al.location_id ${inB} ORDER BY al.location_id LIMIT 1))`;
+      breakParams.push(...locIds);
+    }
     const apptByLoc = await dbQuery<RowDataPacket[]>(
-      `SELECT a.location_id lid, COUNT(*) cnt FROM ${quoteIdentifier(appt.name)} a
+      `SELECT ${apptBreakLid} lid, COUNT(*) cnt FROM ${quoteIdentifier(appt.name)} a
         WHERE a.tenant_id = ? AND a.starts_at >= ? AND a.starts_at < ? AND ${activeCond}${apptLocClause}
-        GROUP BY a.location_id`,
-      [appt.tenantId ?? 0, from, toExclusive, ...apptLocParams],
+        GROUP BY 1`,
+      [...breakParams, appt.tenantId ?? 0, from, toExclusive, ...apptLocParams],
     ).catch(() => [] as RowDataPacket[]);
     for (const r of apptByLoc) entry(keyOf(r.lid)).appointmentCount = Number(r.cnt ?? 0);
     locationsBreakdown = [...byId.values()].sort((x, y) => y.soldRevenue - x.soldRevenue);
