@@ -86,6 +86,13 @@ try {
   check("B3 il 14 Roma NON contiene l'evento (0 punti)", Number(fp14.pointsIssued) === 0, JSON.stringify(fp14.pointsIssued));
   const fp16 = (await report("&from=2027-08-16&to=2027-08-16")).j?.analytics?.fidelityPeriod ?? {};
   check("B3 il 16 Roma contiene solo il secondo evento (=7)", Number(fp16.pointsIssued) === 7, JSON.stringify(fp16.pointsIssued));
+
+  // ===== C: metriche cliente rese confrontabili nel pannello =====
+  const cmpA = (await report("&from=2027-05-01&to=2027-05-31&compare=1&compare_mode=previous_period")).j?.analytics;
+  check("C1 confronto espone windowClients + clientsArchiveTotal", typeof cmpA?.comparison?.windowClients === "number" && typeof cmpA?.comparison?.clientsArchiveTotal === "number", JSON.stringify([cmpA?.comparison?.windowClients, cmpA?.comparison?.clientsArchiveTotal]));
+  check("C2 top-level clientsArchivePeriodEnd presente (numero)", typeof cmpA?.clientsArchivePeriodEnd === "number", JSON.stringify(cmpA?.clientsArchivePeriodEnd));
+  // archivio a fine periodo >= archivio a fine confronto (registro cresce nel tempo)
+  check("C3 archivio a fine periodo >= a fine confronto", Number(cmpA?.clientsArchivePeriodEnd) >= Number(cmpA?.comparison?.clientsArchiveTotal), JSON.stringify([cmpA?.clientsArchivePeriodEnd, cmpA?.comparison?.clientsArchiveTotal]));
 } catch (e) {
   check("EXCEPTION", false, e.stack || e.message);
 } finally {

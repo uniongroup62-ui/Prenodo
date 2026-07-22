@@ -99,11 +99,20 @@ export type ManageReports = {
     // legacy ($previousCostSummary/$previousCommissionSummary, goodWhenUp=false).
     costsTotal: number | null;
     commissionsTotal: number | null;
+    // Clienti attivi nel periodo di confronto e dimensione archivio a fine di
+    // quel periodo (per le righe "Clienti nel periodo"/"Clienti in archivio"
+    // del pannello confronto).
+    windowClients: number;
+    newClients: number;
+    clientsArchiveTotal: number;
     // Serie del periodo di confronto per i dataset tratteggiati "Periodo
     // precedente" dei grafici trend (reports.php 1456-1462).
     daily: { day: string; revenue: number; saleCount: number }[];
     appointmentTrend: { day: string; count: number }[];
   } | null;
+  // Dimensione dell'archivio clienti alla FINE del periodo analizzato (profili
+  // registrati entro `to`), usata per confrontare la crescita del registro.
+  clientsArchivePeriodEnd: number;
   daily: { day: string; revenue: number; saleCount: number }[];
   topClients: { clientId: number; name: string; revenue: number; saleCount: number }[];
   topServices: ReportRow[];
@@ -584,6 +593,46 @@ export async function getManageReports(
     ],
   };
 
+  // Nuovi/di ritorno per FINESTRA (2026-07-21: estratto in funzione per poterlo
+  // calcolare anche sul periodo di confronto → riga "Clienti nel periodo" nel
+  // pannello confronto). "nuovo" = prima vendita ASSOLUTA del cliente nella
+  // finestra; il resto sono di ritorno.
+  const newVsReturningFor = async (winFrom: string, winToExclusive: string) => {
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT COUNT(*) total,
+              SUM(CASE WHEN x.fe >= ? AND x.fe < ? THEN 1 ELSE 0 END) newc
+         FROM (
+           SELECT w.cid, (SELECT MIN(s2.sale_date) FROM ${quoteIdentifier(sales.name)} s2
+                           WHERE s2.tenant_id = ? AND s2.client_id = w.cid
+                             AND LOWER(TRIM(COALESCE(s2.status,''))) NOT IN (${cph})) fe
+             FROM (SELECT DISTINCT s.client_id cid FROM ${quoteIdentifier(sales.name)} s
+                    WHERE ${scopeSql} AND s.sale_date >= ? AND s.sale_date < ? AND COALESCE(s.client_id,0) > 0) w
+         ) x`,
+      [winFrom, winToExclusive, tid, ...CANCELLED_SALE_STATES, ...scopeParams, winFrom, winToExclusive],
+    ).catch(() => [] as RowDataPacket[]);
+    const r = rows[0] ?? {};
+    return {
+      windowClients: Number(r.total ?? 0),
+      newClients: Number(r.newc ?? 0),
+      returningClients: Math.max(0, Number(r.total ?? 0) - Number(r.newc ?? 0)),
+    };
+  };
+  // "Clienti in archivio" alla FINE di un periodo = profili registrati entro
+  // dateEnd (COALESCE registration_date/created_at), stesso scope sede
+  // dell'archivio. Così l'archivio (di per sé una fotografia) diventa
+  // comparabile period-su-period: mostra la crescita del registro tra i due
+  // periodi invece di un valore identico.
+  const archiveCountAsOf = async (dateEnd: string): Promise<number> => {
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT COUNT(*) n FROM ${quoteIdentifier(clientsTable.name)} c
+        WHERE c.tenant_id = ?${clientLocClause} AND COALESCE(c.registration_date, c.created_at::date) <= ?::date`,
+      [clientsTable.tenantId ?? 0, ...clientLocParams, dateEnd],
+    ).catch(() => [] as RowDataPacket[]);
+    return Number(rows[0]?.n ?? 0);
+  };
+  const newVsReturning = await newVsReturningFor(from, toExclusive);
+  const clientsArchivePeriodEnd = await archiveCountAsOf(to);
+
   // --- Costi (reports.php 1211-1266): due_date BETWEEN inclusivo ----------
   const costSummaryFor = async (rangeFrom: string, rangeTo: string): Promise<{ total: number; paid: number; open: number }> => {
     const costsTable = await tenantTable(slug, "costs");
@@ -642,13 +691,15 @@ export async function getManageReports(
       prevFrom = addDaysYmd(from, -lenDays);
     }
     const prevToExclusive = addDaysYmd(prevTo, 1);
-    const [prevCollections, prevSummary, prevApptCount, prevCosts, prevCommissions, prevApptTrend] = await Promise.all([
+    const [prevCollections, prevSummary, prevApptCount, prevCosts, prevCommissions, prevApptTrend, prevNvr, prevArchive] = await Promise.all([
       collect(prevFrom, prevToExclusive),
       salesSummary(prevFrom, prevToExclusive),
       apptCount(prevFrom, prevToExclusive),
       costsAvailable ? costSummaryFor(prevFrom, prevTo) : Promise.resolve(null),
       commissionsAvailable ? commissionSummaryFor(prevFrom, prevToExclusive) : Promise.resolve(null),
       apptTrendFor(prevFrom, prevToExclusive),
+      newVsReturningFor(prevFrom, prevToExclusive),
+      archiveCountAsOf(prevTo),
     ]);
     const deltaPct = prevSummary.sold > 0
       ? Math.round(((summaryRow.sold - prevSummary.sold) / prevSummary.sold) * 1000) / 10
@@ -665,6 +716,9 @@ export async function getManageReports(
       deltaPct,
       costsTotal: prevCosts ? prevCosts.total : null,
       commissionsTotal: prevCommissions ? prevCommissions.total : null,
+      windowClients: prevNvr.windowClients,
+      newClients: prevNvr.newClients,
+      clientsArchiveTotal: prevArchive,
       daily: Array.from(prevCollections.byDay.keys()).sort().map((day) => ({ day, revenue: prevCollections.byDay.get(day)!.revenue, saleCount: prevCollections.byDay.get(day)!.movements })),
       appointmentTrend: prevApptTrend,
     };
@@ -684,28 +738,7 @@ export async function getManageReports(
 
   const dailyDays = Array.from(collections.byDay.keys()).sort();
 
-  // --- Nuovi vs di ritorno (2026-07-20): tra i clienti serviti nel periodo
-  // (vendite attive, scope sede), "nuovo" = la prima vendita ASSOLUTA del
-  // cliente (tenant-wide, non annullata, senza filtro sede) cade nella
-  // finestra; il resto sono clienti di ritorno.
-  const nvrRows = await dbQuery<RowDataPacket[]>(
-    `SELECT COUNT(*) total,
-            SUM(CASE WHEN x.fe >= ? AND x.fe < ? THEN 1 ELSE 0 END) newc
-       FROM (
-         SELECT w.cid, (SELECT MIN(s2.sale_date) FROM ${quoteIdentifier(sales.name)} s2
-                         WHERE s2.tenant_id = ? AND s2.client_id = w.cid
-                           AND LOWER(TRIM(COALESCE(s2.status,''))) NOT IN (${cph})) fe
-           FROM (SELECT DISTINCT s.client_id cid FROM ${quoteIdentifier(sales.name)} s
-                  WHERE ${baseWhere} AND COALESCE(s.client_id,0) > 0) w
-       ) x`,
-    [from, toExclusive, tid, ...CANCELLED_SALE_STATES, ...baseParams],
-  ).catch(() => [] as RowDataPacket[]);
-  const nvr = nvrRows[0] ?? {};
-  const newVsReturning = {
-    windowClients: Number(nvr.total ?? 0),
-    newClients: Number(nvr.newc ?? 0),
-    returningClients: Math.max(0, Number(nvr.total ?? 0) - Number(nvr.newc ?? 0)),
-  };
+  // (newVsReturning ora calcolato prima, via newVsReturningFor — vedi sopra.)
 
   // --- Breakdown per sede (solo con più sedi selezionate) -----------------
   let locationsBreakdown: ManageReports["locationsBreakdown"] = [];
@@ -837,6 +870,7 @@ export async function getManageReports(
     topItems: itemRows.map((r) => ({ name: String(r.name ?? ""), type: typeLabel(String(r.type ?? "altro"), String(r.name ?? "")), revenue: money(r.rev), qty: Number(r.qty ?? 0), saleCount: Number(r.cnt ?? 0) })),
     operators,
     newVsReturning,
+    clientsArchivePeriodEnd,
     locationsBreakdown,
     fidelityPeriod,
   };

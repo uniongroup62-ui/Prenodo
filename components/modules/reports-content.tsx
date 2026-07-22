@@ -33,7 +33,8 @@ type Analytics = {
   costs: { total: number; paid: number; open: number } | null;
   commissions: { count: number; total: number; paid: number; open: number } | null;
   composition: { label: string; revenue: number }[];
-  comparison: { from: string; to: string; totalRevenue: number; soldRevenue: number; saleCount: number; servedClients: number; averageTicket: number; appointmentCount: number; deltaPct: number; costsTotal: number | null; commissionsTotal: number | null; daily: { day: string; revenue: number; saleCount: number }[]; appointmentTrend: { day: string; count: number }[] } | null;
+  comparison: { from: string; to: string; totalRevenue: number; soldRevenue: number; saleCount: number; servedClients: number; averageTicket: number; appointmentCount: number; deltaPct: number; costsTotal: number | null; commissionsTotal: number | null; windowClients: number; newClients: number; clientsArchiveTotal: number; daily: { day: string; revenue: number; saleCount: number }[]; appointmentTrend: { day: string; count: number }[] } | null;
+  clientsArchivePeriodEnd: number;
   daily: { day: string; revenue: number; saleCount: number }[];
   topClients: { clientId: number; name: string; revenue: number; saleCount: number }[];
   topServices: ReportRow[];
@@ -780,6 +781,10 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
   const commissioniDelta = a?.comparison && a.comparison.commissionsTotal !== null && a.commissions
     ? deltaInfo(a.commissions.total, a.comparison.commissionsTotal, { money: true, goodWhenUp: false })
     : null;
+  // Clienti attivi nel periodo e dimensione archivio a fine periodo, ora
+  // confrontabili (l'API calcola le stesse metriche sul periodo di confronto).
+  const clientiPeriodoDelta = a?.comparison ? deltaInfo(a.newVsReturning.windowClients, a.comparison.windowClients) : null;
+  const archivioDelta = a?.comparison ? deltaInfo(a.clientsArchivePeriodEnd, a.comparison.clientsArchiveTotal) : null;
 
   const renderDelta = (delta: DeltaInfo | null, extraClass = "") =>
     delta ? (
@@ -809,6 +814,8 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
         { label: "Scontrino medio", cur: fmtMoney(a.summary.averageTicket), prev: fmtMoney(a.comparison.averageTicket), delta: ticketDelta },
         { label: "Prenotazioni", cur: fmtInt(a.summary.appointmentCount), prev: fmtInt(a.comparison.appointmentCount), delta: prenotazioniDelta },
         { label: "Clienti serviti", cur: fmtInt(a.summary.servedClients), prev: fmtInt(a.comparison.servedClients), delta: clientiDelta },
+        { label: "Clienti nel periodo", cur: fmtInt(a.newVsReturning.windowClients), prev: fmtInt(a.comparison.windowClients), delta: clientiPeriodoDelta },
+        { label: "Clienti in archivio", cur: fmtInt(a.clientsArchivePeriodEnd), prev: fmtInt(a.comparison.clientsArchiveTotal), delta: archivioDelta },
         ...(a.costs && a.comparison.costsTotal !== null ? [{ label: "Costi", cur: fmtMoney(a.costs.total), prev: fmtMoney(a.comparison.costsTotal), delta: costiDelta }] : []),
         ...(a.commissions && a.comparison.commissionsTotal !== null ? [{ label: "Commissioni", cur: fmtMoney(a.commissions.total), prev: fmtMoney(a.comparison.commissionsTotal), delta: commissioniDelta }] : []),
       ]
@@ -1194,28 +1201,6 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
         </div>
       ) : null}
       </>
-      ) : null}
-
-      {/* Col confronto attivo il pannello copre già Incasso/Vendite/Scontrino/
-          Clienti serviti/Prenotazioni/Costi/Commissioni; restano SOLO le due
-          metriche che nel pannello non ci sono perché non comparabili
-          period-su-period: "Clienti nel periodo" e "Clienti in archivio". */}
-      {compare && a?.comparison ? (
-        <div className="report-kpi-grid mb-3">
-          <div className="report-kpi">
-            <div className="label">Clienti nel periodo</div>
-            <div className="value">{fmtInt(a?.newVsReturning.windowClients)}</div>
-            <div className="sub">
-              Nuovi {fmtInt(a?.newVsReturning.newClients)} / Di ritorno {fmtInt(a?.newVsReturning.returningClients)}
-            </div>
-            <div className="sub">Nuovo = prima vendita in assoluto nel periodo</div>
-          </div>
-          <div className="report-kpi">
-            <div className="label">Clienti in archivio</div>
-            <div className="value">{fmtInt(arch?.total ?? k.clients)}</div>
-            <div className="sub">Profilo clienti {locationLabelText.toLowerCase()}</div>
-          </div>
-        </div>
       ) : null}
 
       <div className="row g-3 mb-3" id="rep-andamento">
