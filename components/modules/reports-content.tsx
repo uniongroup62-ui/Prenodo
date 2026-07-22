@@ -1115,6 +1115,10 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
         </section>
       ) : null}
 
+      {/* Con il confronto attivo le card KPI ripetono i numeri del pannello
+          "Confronto periodi" qui sopra: si mostrano SOLO senza confronto. */}
+      {!(compare && a?.comparison) ? (
+      <>
       <div className="report-kpi-grid mb-3">
         {/* Drill-down (2026-07-20): i KPI operativi sono LINK verso il modulo
             di origine col periodo trasferito dove la pagina lo supporta. */}
@@ -1188,6 +1192,8 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
               <div className="sub">Da pagare {fmtMoney(a.commissions.open)}</div>            </a>
           ) : null}
         </div>
+      ) : null}
+      </>
       ) : null}
 
       <div className="row g-3 mb-3" id="rep-andamento">
