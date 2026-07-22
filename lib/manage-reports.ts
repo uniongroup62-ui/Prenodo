@@ -1,7 +1,7 @@
 import "server-only";
 
 import type { RowDataPacket } from "@/lib/tenant-db";
-import { dbQuery, quoteIdentifier, tableExists, tenantTable } from "@/lib/tenant-db";
+import { columnExists, dbQuery, quoteIdentifier, tableExists, tenantTable } from "@/lib/tenant-db";
 import { businessTodayIso } from "@/lib/business-datetime";
 
 // Port DB-backed di app/pages/reports.php (Report / Analisi). Punti chiave di
@@ -149,15 +149,33 @@ function dayOf(raw: unknown): string {
   return String(raw ?? "").slice(0, 10);
 }
 
-// Metodo di pagamento legacy (reports.php paymentMethodFromSale ~524): colonna
-// payment_method se esiste, altrimenti regex "Tipo pagamento: X" nelle note.
-function paymentLabelFromNotes(notes: unknown, paymentMethod: unknown): string {
-  let raw = String(paymentMethod ?? "").trim();
-  if (!raw) {
-    const m = /Tipo pagamento\s*:\s*([^\r\n]+)/i.exec(String(notes ?? ""));
-    raw = m ? m[1].trim() : "";
+// Metodo di pagamento. Fonte PRIMARIA (2026-07-21): la colonna strutturata
+// sales.payment_methods = '{"base":"cash|card|check|transfer"}' che il POS
+// scrive per ogni vendita (migrazione 0005). FALLBACK per le vendite legacy
+// senza colonna: la regex "Tipo pagamento: X" nelle note (etichette italiane).
+// Le vendite storiche che non hanno né colonna né nota restano "Non indicato"
+// (il metodo non è mai stato registrato: informazione non ricostruibile).
+const BASE_METHOD_LABELS: Record<string, string> = {
+  cash: "Contanti",
+  card: "Carte",
+  check: "Assegno",
+  transfer: "Bonifico",
+};
+function paymentLabelFromNotes(notes: unknown, paymentMethodsJson: unknown): string {
+  // 1) base strutturata dal JSON {base: ...}
+  const rawJson = paymentMethodsJson;
+  if (rawJson) {
+    try {
+      const parsed = typeof rawJson === "string" ? JSON.parse(rawJson) : rawJson;
+      const base = String((parsed as { base?: unknown })?.base ?? "").trim().toLowerCase();
+      if (base && BASE_METHOD_LABELS[base]) return BASE_METHOD_LABELS[base];
+    } catch {
+      // JSON non parsabile: si passa al fallback nota
+    }
   }
-  const low = raw.toLowerCase();
+  // 2) fallback nota italiana (vendite legacy/migrate)
+  const m = /Tipo pagamento\s*:\s*([^\r\n]+)/i.exec(String(notes ?? ""));
+  const low = (m ? m[1].trim() : "").toLowerCase();
   if (!low) return "Non indicato";
   if (low.includes("contant")) return "Contanti";
   if (low.includes("cart") || low.includes("pos")) return "Carte";
@@ -165,6 +183,16 @@ function paymentLabelFromNotes(notes: unknown, paymentMethod: unknown): string {
   if (low.includes("bonific")) return "Bonifico";
   return "Non indicato";
 }
+
+// Confine finestra in ora di ROMA per le colonne scritte in UTC (audit
+// 2026-07-21). transactions.created_at, recharges.created_at, giftcards.issued_at
+// sono scritte con `new Date()` = UTC wall-clock; confrontarle direttamente coi
+// confini in ora di Roma faceva slittare gli eventi 00:00–02:00 al giorno prima
+// (mentre sale_date/paid_at, in ora di Roma, erano già corretti). Interpretiamo
+// la colonna come UTC e la convertiamo in wall-clock Roma prima del confronto.
+// NB: se un giorno quei writer passassero a businessNowDateTime() (Roma) questa
+// conversione andrebbe RIMOSSA (altrimenti doppio shift).
+const romeWall = (col: string) => `(${col} AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Rome')`;
 
 type CollectionTotals = {
   totalRevenue: number;
@@ -221,6 +249,11 @@ export async function getManageReports(
 
   const hasPlans = await tableExists("sale_installment_plans");
   const hasInstallments = await tableExists("sale_installments");
+  // Colonna strutturata del metodo di pagamento (migrazione 0005): feature-detect
+  // così un DB senza la colonna NON manda in errore le query (il .catch le
+  // svuoterebbe azzerando l'Incasso) — si ripiega sulla regex nota.
+  const hasPayMethods = await columnExists(sales.name, "payment_methods");
+  const payMethodsCol = hasPayMethods ? ", s.payment_methods" : "";
 
   // --- Eventi di incasso (fetchCollectionEvents) -------------------------
   const collect = async (winFrom: string, winToExclusive: string): Promise<CollectionTotals> => {
@@ -247,35 +280,35 @@ export async function getManageReports(
       ? ` AND NOT EXISTS (SELECT 1 FROM ${quoteIdentifier((await tenantTable(slug, "sale_installment_plans")).name)} p WHERE p.sale_id = s.id AND p.tenant_id = s.tenant_id)`
       : "";
     const instant = await dbQuery<RowDataPacket[]>(
-      `SELECT s.sale_date::date d, ${NET_SALE_REV} amt, s.notes FROM ${quoteIdentifier(sales.name)} s WHERE ${winWhere} AND ${NET_SALE_REV} > 0${noPlan}`,
+      `SELECT s.sale_date::date d, ${NET_SALE_REV} amt, s.notes${payMethodsCol} FROM ${quoteIdentifier(sales.name)} s WHERE ${winWhere} AND ${NET_SALE_REV} > 0${noPlan}`,
       winParams,
     ).catch(() => [] as RowDataPacket[]);
-    for (const row of instant) push(dayOf(row.d), row.amt, paymentLabelFromNotes(row.notes, row.payment_method));
+    for (const row of instant) push(dayOf(row.d), row.amt, paymentLabelFromNotes(row.notes, row.payment_methods));
 
     if (hasPlans) {
       // 2) Acconti dei piani rate (per sale_date della vendita).
       const plansTable = await tenantTable(slug, "sale_installment_plans");
       const downs = await dbQuery<RowDataPacket[]>(
-        `SELECT s.sale_date::date d, p.down_payment_amount amt, s.notes
+        `SELECT s.sale_date::date d, p.down_payment_amount amt, s.notes${payMethodsCol}
            FROM ${quoteIdentifier(plansTable.name)} p
            JOIN ${quoteIdentifier(sales.name)} s ON s.id = p.sale_id AND s.tenant_id = p.tenant_id
           WHERE ${winWhere} AND COALESCE(p.down_payment_amount,0) > 0`,
         winParams,
       ).catch(() => [] as RowDataPacket[]);
-      for (const row of downs) push(dayOf(row.d), row.amt, paymentLabelFromNotes(row.notes, row.payment_method));
+      for (const row of downs) push(dayOf(row.d), row.amt, paymentLabelFromNotes(row.notes, row.payment_methods));
     }
 
     if (hasInstallments) {
       // 3) Rate PAGATE nel periodo (per paid_at, cash-basis).
       const instTable = await tenantTable(slug, "sale_installments");
       const paid = await dbQuery<RowDataPacket[]>(
-        `SELECT i.paid_at::date d, COALESCE(NULLIF(i.paid_amount,0), i.amount, 0) amt, s.notes
+        `SELECT i.paid_at::date d, COALESCE(NULLIF(i.paid_amount,0), i.amount, 0) amt, s.notes${payMethodsCol}
            FROM ${quoteIdentifier(instTable.name)} i
            JOIN ${quoteIdentifier(sales.name)} s ON s.id = i.sale_id AND s.tenant_id = i.tenant_id
           WHERE ${scopeSql} AND i.paid_at >= ? AND i.paid_at < ? AND LOWER(TRIM(COALESCE(i.status,''))) = 'paid'`,
         [...scopeParams, winFrom, winToExclusive],
       ).catch(() => [] as RowDataPacket[]);
-      for (const row of paid) push(dayOf(row.d), row.amt, paymentLabelFromNotes(row.notes, row.payment_method));
+      for (const row of paid) push(dayOf(row.d), row.amt, paymentLabelFromNotes(row.notes, row.payment_methods));
     }
     return totals;
   };
@@ -496,8 +529,11 @@ export async function getManageReports(
     clientLocClause = ` AND (${directCond} OR EXISTS (SELECT 1 FROM ${quoteIdentifier(sales.name)} sx WHERE sx.client_id = c.id AND sx.tenant_id = c.tenant_id AND sx.location_id ${inSql} AND ${salesNotCancelled}) OR EXISTS (SELECT 1 FROM ${quoteIdentifier(appt.name)} ax WHERE ax.client_id = c.id AND ax.tenant_id = c.tenant_id AND ax.location_id ${inSql} AND ${apptActive}))`;
     clientLocParams.push(...locIds, ...locIds, ...locIds);
   }
-  const birthValid = "c.birth_date IS NOT NULL AND c.birth_date >= '1900-01-01' AND c.birth_date <= CURRENT_DATE";
-  const ageExpr = "DATE_PART('year', AGE(CURRENT_DATE, c.birth_date))";
+  // "Oggi" in ora di ROMA (todayIso = businessTodayIso), non CURRENT_DATE che è
+  // la data UTC della sessione pg: al confine di mezzanotte differivano di un
+  // giorno. todayIso è una data 'YYYY-MM-DD' formattata: interpolazione sicura.
+  const birthValid = `c.birth_date IS NOT NULL AND c.birth_date >= '1900-01-01' AND c.birth_date <= '${todayIso}'::date`;
+  const ageExpr = `DATE_PART('year', AGE('${todayIso}'::date, c.birth_date))`;
   const archRows = await dbQuery<RowDataPacket[]>(
     `SELECT COUNT(*) total,
             SUM(CASE WHEN UPPER(TRIM(COALESCE(c.gender,''))) = 'M' THEN 1 ELSE 0 END) male,
@@ -722,7 +758,7 @@ export async function getManageReports(
         `SELECT COALESCE(SUM(CASE WHEN LOWER(t.kind) = 'earn' THEN t.delta_points ELSE 0 END),0) issued,
                 COALESCE(SUM(CASE WHEN LOWER(t.kind) = 'redeem' THEN -t.delta_points ELSE 0 END),0) used
            FROM ${quoteIdentifier(txTable.name)} t
-          WHERE t.tenant_id = ? AND t.created_at >= ? AND t.created_at < ?${txLoc.sql}`,
+          WHERE t.tenant_id = ? AND ${romeWall("t.created_at")} >= ? AND ${romeWall("t.created_at")} < ?${txLoc.sql}`,
         [txTable.tenantId ?? 0, from, toExclusive, ...txLoc.params],
       ).catch(() => [] as RowDataPacket[])
     : [];
@@ -732,7 +768,7 @@ export async function getManageReports(
     ? await dbQuery<RowDataPacket[]>(
         `SELECT COUNT(*) cnt, COALESCE(SUM(r.base_amount),0) amt
            FROM ${quoteIdentifier(rechTable.name)} r
-          WHERE r.tenant_id = ? AND COALESCE(r.is_void,0) = 0 AND r.created_at >= ? AND r.created_at < ?${rechLoc.sql}`,
+          WHERE r.tenant_id = ? AND COALESCE(r.is_void,0) = 0 AND ${romeWall("r.created_at")} >= ? AND ${romeWall("r.created_at")} < ?${rechLoc.sql}`,
         [rechTable.tenantId ?? 0, from, toExclusive, ...rechLoc.params],
       ).catch(() => [] as RowDataPacket[])
     : [];
@@ -742,7 +778,7 @@ export async function getManageReports(
     ? await dbQuery<RowDataPacket[]>(
         `SELECT COUNT(*) cnt, COALESCE(SUM(g.initial_amount),0) amt
            FROM ${quoteIdentifier(gcTable.name)} g
-          WHERE g.tenant_id = ? AND g.issued_at >= ? AND g.issued_at < ?
+          WHERE g.tenant_id = ? AND ${romeWall("g.issued_at")} >= ? AND ${romeWall("g.issued_at")} < ?
             AND LOWER(TRIM(COALESCE(g.status,''))) NOT IN ('cancelled','canceled')${gcLoc.sql}`,
         [gcTable.tenantId ?? 0, from, toExclusive, ...gcLoc.params],
       ).catch(() => [] as RowDataPacket[])

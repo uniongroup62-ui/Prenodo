@@ -18105,3 +18105,27 @@ DEBITI SERVER ANNOTATI (blocco successivo, richiedono schema/writer):
   finestra (Incasso/Venduto restano corretti perché sale_date/paid_at
   sono Roma). Fix = allineare i writer a businessNowDateTime() OPPURE
   convertire in query (AT TIME ZONE). Serve suite TZ dedicata.
+
+### 2026-07-21 - Report: chiusi i 2 debiti server (metodi pagamento + off-by-2h)
+BUG 2 (metodi pagamento): scoperto che checkoutDbSale/convertDbQuoteToSale
+è CODICE MORTO (nessuna route lo chiama; la conversione preventivo→vendita
+passa dal POS che scrive la nota "Tipo pagamento"). Quindi TUTTE le vendite
+reali erano già classificate; il "Non indicato" riguarda solo dati legacy
+migrati senza nota (irrecuperabile). Fix proporzionato: attivata la colonna
+sales.payment_methods (migrazione 0005) che il POS GIÀ prova a scrivere
+'{"base":"cash|card|check|transfer"}' (insert schema-guarded, prima scartata);
+il report ora legge la base STRUTTURATA (BASE_METHOD_LABELS) con la regex
+nota come fallback per il legacy. Feature-detect columnExists (payMethodsCol)
+per non azzerare l'Incasso su DB senza colonna (le 3 collect hanno .catch→[]).
+BUG 3 (off-by-2h): transactions.created_at / recharges.created_at /
+giftcards.issued_at scritti con new Date() = UTC; il report li filtrava con
+confini Roma → eventi 00:00-02:00 slittavano al giorno prima. Fix QUERY-SIDE
+(romeWall = "col AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Rome'") sui 3
+aggregati fidelity + età (CURRENT_DATE → '${todayIso}'::date Roma). COMMISSIONI
+INTATTE: verificato che movement_datetime = sale_date/starts_at = ROMA (il
+commento "in UTC" del codice è fuorviante) → convertirle avrebbe ROTTO il caso
+comune. NB nel commento romeWall: se un giorno quei writer passassero a
+businessNowDateTime() la conversione va RIMOSSA (doppio shift). Suite nuova
+test-report-audit2 (9/9: {base} struttura vs nota vs Non indicato; evento
+fidelity 23:30 UTC del 14 → 15 Roma, non nel 14/16). Batteria mirata 11/11
+(report+pagamenti+fidelity+recharges+giftcard+commissioni), tsc pulito.
