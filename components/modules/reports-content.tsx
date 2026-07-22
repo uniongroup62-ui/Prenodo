@@ -418,6 +418,30 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
     load();
   }, [load]);
 
+  // URL sempre allineato ai filtri (deep-link condivisibili) SENZA dipendere da
+  // un pulsante: i filtri si applicano subito, quindi la barra indirizzi segue
+  // lo stato live. Era legato al submit di "Aggiorna" — origine della confusione
+  // "ho cambiato il filtro ma sembra non applicarsi".
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const qs = new URLSearchParams({ range, granularity });
+    if (range === "custom") {
+      qs.set("from", from);
+      qs.set("to", to);
+    }
+    if (allLoc) qs.set("all_locations", "1");
+    if (compare) {
+      qs.set("compare", "1");
+      qs.set("compare_mode", compareMode);
+      if (compareMode === "month") qs.set("compare_month", compareMonth);
+      if (compareMode === "custom") {
+        qs.set("compare_from", compareFrom);
+        qs.set("compare_to", compareTo);
+      }
+    }
+    window.history.replaceState(null, "", `/${encodeURIComponent(slug)}/reports?${qs.toString()}`);
+  }, [slug, range, from, to, granularity, allLoc, compare, compareMode, compareMonth, compareFrom, compareTo]);
+
   const k = data?.kpis ?? {};
   const a = data?.analytics;
   const showCustom = range === "custom";
@@ -722,7 +746,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
     <div className="container-fluid">
       {/* ?v= bumpato quando la CSS cambia: senza, il browser tiene la
           versione in cache e il layout dei filtri si sfalda. */}
-      <link rel="stylesheet" href="/assets/css/pages/reports.css?v=20260720b" />
+      <link rel="stylesheet" href="/assets/css/pages/reports.css?v=20260721filtri" />
 
       <div className="bs-page-header">
         <div className="bs-page-heading">
@@ -769,46 +793,21 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
         <div className="alert alert-warning">Seleziona una sede valida per visualizzare i dati.</div>
       ) : null}
 
-      <div className="report-filter-card p-3 mb-3">
-        <form
-          method="get"
-          onSubmit={(e) => {
-            e.preventDefault();
-            // Aggiorna l'URL come il form GET legacy (deep-link condivisibili).
-            if (typeof window !== "undefined") {
-              const qs = new URLSearchParams({ range, granularity });
-              if (range === "custom") {
-                qs.set("from", from);
-                qs.set("to", to);
-              }
-              if (allLoc) qs.set("all_locations", "1");
-              if (compare) {
-                qs.set("compare", "1");
-                qs.set("compare_mode", compareMode);
-                if (compareMode === "month") qs.set("compare_month", compareMonth);
-                if (compareMode === "custom") {
-                  qs.set("compare_from", compareFrom);
-                  qs.set("compare_to", compareTo);
-                }
-              }
-              window.history.replaceState(null, "", `/${encodeURIComponent(slug)}/reports?${qs.toString()}`);
-            }
-            load();
-          }}
-        >
-          <input type="hidden" name="page" value="reports" />
-          {/* Filtri su UNA riga (riordino 2026-07-20, pattern delle liste):
-              campi compatti a sinistra, interruttori + azioni in coda riga
-              allineati alla linea degli input. Layout con utility Bootstrap,
-              indipendente dalla cache della CSS di pagina. */}
-          <div className="d-flex flex-wrap align-items-end gap-3">
-            <div className="report-filter-field" style={{ width: 230 }}>
-              <label className="form-label small text-muted" htmlFor="reportRange">
-                Periodo dati
+      {/* Filtri ristrutturati (2026-07-21): tre blocchi etichettati — Periodo,
+          Confronto (a scomparsa), Opzioni — invece di un'unica riga affollata.
+          I filtri si applicano SUBITO (l'effetto load + l'URL sync seguono lo
+          stato): niente più pulsante "Aggiorna" che dava l'idea di dover
+          confermare. Il range risolto è mostrato come didascalia sotto ogni
+          selettore, così "che periodo sto vedendo" è sempre esplicito. */}
+      <div className="report-filter-card report-filters p-3 mb-3">
+        <div className="report-filters__block">
+          <div className="report-filters__row">
+            <div className="report-filter-field report-filter-field--period">
+              <label className="report-filter-field__label" htmlFor="reportRange">
+                Periodo da analizzare
               </label>
               <select
                 className="form-select"
-                name="range"
                 id="reportRange"
                 value={range}
                 onChange={(e) => setRange(e.target.value)}
@@ -822,180 +821,132 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
                 <option value="month_current">Mese corrente</option>
                 <option value="month_previous">Mese precedente</option>
                 <option value="year_current">Anno corrente</option>
-                <option value="custom">Personalizzato</option>
+                <option value="custom">Intervallo personalizzato…</option>
               </select>
             </div>
-            <div className={`report-filter-field${showCustom ? "" : " d-none"}`} style={{ width: 170 }} data-report-custom-group>
-              <label className="form-label small text-muted">Dal</label>
-              <input
-                className="form-control"
-                type="date"
-                name="from"
-                value={from}
-                onChange={(e) => setFrom(e.target.value)}
-                data-report-custom-date
-              />
+            {showCustom ? (
+              <>
+                <div className="report-filter-field report-filter-field--date">
+                  <label className="report-filter-field__label" htmlFor="reportFrom">Dal giorno</label>
+                  <input className="form-control" type="date" id="reportFrom" value={from} onChange={(e) => setFrom(e.target.value)} />
+                </div>
+                <div className="report-filter-field report-filter-field--date">
+                  <label className="report-filter-field__label" htmlFor="reportTo">Al giorno</label>
+                  <input className="form-control" type="date" id="reportTo" value={to} onChange={(e) => setTo(e.target.value)} />
+                </div>
+              </>
+            ) : null}
+            <p className="report-filter-caption" role="status">
+              <i className="bi bi-calendar-range" aria-hidden="true" />{" "}
+              Stai vedendo <strong>{itDate(rng.from)} – {itDate(rng.to)}</strong>
+            </p>
+          </div>
+        </div>
+
+        <div className="report-filters__block">
+          <label className="report-filter-toggle" htmlFor="reportCompare">
+            <input
+              className="form-check-input"
+              type="checkbox"
+              id="reportCompare"
+              checked={compare}
+              onChange={(e) => setCompare(e.target.checked)}
+            />
+            <span>
+              Confronta con un altro periodo
+              <span className="report-filter-toggle__hint">Aggiunge le variazioni % sotto ai numeri</span>
+            </span>
+          </label>
+          {compare ? (
+            <div className="report-compare-body">
+              <div className="report-filters__row">
+                <div className="report-filter-field report-filter-field--period">
+                  <label className="report-filter-field__label" htmlFor="reportCompareMode">Confronta con</label>
+                  <select
+                    className="form-select"
+                    id="reportCompareMode"
+                    value={compareMode}
+                    onChange={(e) => setCompareMode(e.target.value)}
+                  >
+                    <option value="auto">Automatico (periodo precedente)</option>
+                    <option value="previous_period">Periodo precedente di pari durata</option>
+                    <option value="previous_year">Stesso periodo dell&apos;anno scorso</option>
+                    <option value="month">Un mese specifico</option>
+                    <option value="custom">Intervallo personalizzato</option>
+                  </select>
+                </div>
+                {compareMode === "month" ? (
+                  <div className="report-filter-field report-filter-field--date">
+                    <label className="report-filter-field__label" htmlFor="reportCompareMonth">Mese</label>
+                    <input className="form-control" type="month" id="reportCompareMonth" value={compareMonth} onChange={(e) => setCompareMonth(e.target.value)} />
+                  </div>
+                ) : null}
+                {compareMode === "custom" ? (
+                  <>
+                    <div className="report-filter-field report-filter-field--date">
+                      <label className="report-filter-field__label" htmlFor="reportCompareFrom">Dal giorno</label>
+                      <input className="form-control" type="date" id="reportCompareFrom" value={compareFrom} onChange={(e) => setCompareFrom(e.target.value)} />
+                    </div>
+                    <div className="report-filter-field report-filter-field--date">
+                      <label className="report-filter-field__label" htmlFor="reportCompareTo">Al giorno</label>
+                      <input className="form-control" type="date" id="reportCompareTo" value={compareTo} onChange={(e) => setCompareTo(e.target.value)} />
+                    </div>
+                  </>
+                ) : null}
+                <p className="report-filter-caption" role="status">
+                  <i className="bi bi-arrow-left-right" aria-hidden="true" />{" "}
+                  Confrontato con <strong>{compareWindow ? `${itDate(compareWindow.from)} – ${itDate(compareWindow.to)}` : "—"}</strong>
+                </p>
+              </div>
             </div>
-            <div className={`report-filter-field${showCustom ? "" : " d-none"}`} style={{ width: 170 }} data-report-custom-group>
-              <label className="form-label small text-muted">Al</label>
-              <input
-                className="form-control"
-                type="date"
-                name="to"
-                value={to}
-                onChange={(e) => setTo(e.target.value)}
-                data-report-custom-date
-              />
-            </div>
-            <div className="report-filter-field" style={{ width: 200 }}>
-              <label className="form-label small text-muted" htmlFor="reportGranularity">
-                Raggruppamento grafici
+          ) : null}
+        </div>
+
+        <div className="report-filters__block report-filters__foot">
+          <div className="report-filters__row report-filters__row--options">
+            <div className="report-filter-field report-filter-field--period">
+              <label className="report-filter-field__label" htmlFor="reportGranularity">
+                Dettaglio dei grafici
               </label>
               <select
                 className="form-select"
-                name="granularity"
                 id="reportGranularity"
                 value={granularity}
                 onChange={(e) => setGranularity(e.target.value)}
+                title="Cambia solo il raggruppamento dei grafici, non i totali dei riquadri"
               >
                 <option value="auto">Automatico</option>
-                <option value="daily">Per giorno</option>
-                <option value="weekly">Per settimana</option>
-                <option value="monthly">Per mese</option>
+                <option value="daily">Un punto per giorno</option>
+                <option value="weekly">Un punto per settimana</option>
+                <option value="monthly">Un punto per mese</option>
               </select>
             </div>
-            <div className="d-flex flex-wrap align-items-center gap-3 ms-auto pb-1">
-              <div className="form-check mb-0">
+            {(data?.locationsCount ?? 0) > 1 ? (
+              <label className="report-filter-toggle report-filter-toggle--inline" htmlFor="reportAllLocations">
                 <input
                   className="form-check-input"
                   type="checkbox"
-                  name="compare"
-                  value="1"
-                  id="reportCompare"
-                  checked={compare}
-                  onChange={(e) => setCompare(e.target.checked)}
+                  id="reportAllLocations"
+                  checked={allLoc}
+                  onChange={(e) => setAllLoc(e.target.checked)}
                 />
-                <label className="form-check-label small fw-semibold" htmlFor="reportCompare">
-                  Confronta
-                </label>
-              </div>
-              {(data?.locationsCount ?? 0) > 1 ? (
-                <div className="form-check mb-0">
-                  <input
-                    className="form-check-input"
-                    type="checkbox"
-                    name="all_locations"
-                    value="1"
-                    id="reportAllLocations"
-                    checked={allLoc}
-                    onChange={(e) => setAllLoc(e.target.checked)}
-                  />
-                  <label className="form-check-label small fw-semibold" htmlFor="reportAllLocations">
-                    Tutte le sedi
-                  </label>
-                </div>
-              ) : null}
-              <div className="d-flex gap-2">
-                <button
-                  className="btn btn-outline-secondary"
-                  type="button"
-                  id="reportPrintBtn"
-                  onClick={() => window.print()}
-                >
-                  <i className="bi bi-printer me-1" />
-                  Stampa
-                </button>
-                <button className="btn btn-primary" type="submit">
-                  <i className="bi bi-arrow-clockwise me-1" />
-                  Aggiorna
-                </button>
-              </div>
-            </div>
+                <span>
+                  Includi tutte le sedi
+                  <span className="report-filter-toggle__hint">Somma i dati e aggiunge il confronto tra sedi</span>
+                </span>
+              </label>
+            ) : null}
           </div>
-
-          <div
-            className="report-filter-summary d-flex flex-wrap align-items-center gap-2 column-gap-4 mt-2"
-            data-report-period-summary
-            data-from={rng.from}
-            data-to={rng.to}
-          >
-            <span>
-              Periodo selezionato: <strong data-report-period-label>{itDate(rng.from)} - {itDate(rng.to)}</strong>
+          <div className="report-filters__actions">
+            <span className="report-filter-live">
+              <i className="bi bi-lightning-charge-fill" aria-hidden="true" /> I filtri si applicano da soli
             </span>
-            <span>{granularity === "auto" ? "Raggruppamento automatico" : trendBadge}</span>
+            <button className="btn btn-outline-secondary" type="button" id="reportPrintBtn" onClick={() => window.print()}>
+              <i className="bi bi-printer me-1" />
+              Stampa
+            </button>
           </div>
-
-          <div className={`report-filter-section${compare ? "" : " d-none"}`} data-report-compare-panel>
-            <div className="report-filter-grid is-compare">
-              <div className="report-filter-field">
-                <label className="form-label small text-muted" htmlFor="reportCompareMode">
-                  Confronta con
-                </label>
-                <select
-                  className="form-select"
-                  name="compare_mode"
-                  id="reportCompareMode"
-                  value={compareMode}
-                  onChange={(e) => setCompareMode(e.target.value)}
-                >
-                  <option value="auto">Automatico</option>
-                  <option value="previous_period">Stesso periodo precedente</option>
-                  <option value="previous_year">Stesso periodo anno precedente</option>
-                  <option value="month">Scegli mese</option>
-                  <option value="custom">Periodo personalizzato</option>
-                </select>
-              </div>
-              <div
-                className={`report-filter-field${compareMode === "month" ? "" : " d-none"}`}
-                data-report-compare-month
-              >
-                <label className="form-label small text-muted">Mese confronto</label>
-                <input
-                  className="form-control"
-                  type="month"
-                  name="compare_month"
-                  value={compareMonth}
-                  onChange={(e) => setCompareMonth(e.target.value)}
-                  data-report-compare-month-input
-                />
-              </div>
-              <div
-                className={`report-filter-field${compareMode === "custom" ? "" : " d-none"}`}
-                data-report-compare-custom
-              >
-                <label className="form-label small text-muted">Confronto dal</label>
-                <input
-                  className="form-control"
-                  type="date"
-                  name="compare_from"
-                  value={compareFrom}
-                  onChange={(e) => setCompareFrom(e.target.value)}
-                  data-report-compare-custom-date
-                />
-              </div>
-              <div
-                className={`report-filter-field${compareMode === "custom" ? "" : " d-none"}`}
-                data-report-compare-custom
-              >
-                <label className="form-label small text-muted">Confronto al</label>
-                <input
-                  className="form-control"
-                  type="date"
-                  name="compare_to"
-                  value={compareTo}
-                  onChange={(e) => setCompareTo(e.target.value)}
-                  data-report-compare-custom-date
-                />
-              </div>
-              <div className="report-filter-summary align-self-end pb-2">
-                Confronto effettivo:{" "}
-                <strong data-report-compare-effective>
-                  {compareWindow ? `${itDate(compareWindow.from)} - ${itDate(compareWindow.to)}` : "—"}
-                </strong>
-              </div>
-            </div>
-          </div>
-        </form>
+        </div>
       </div>
 
       {/* Nav ancorata alle sezioni (2026-07-20): la pagina è lunga, le pillole

@@ -50,59 +50,103 @@
     gap: 12px;
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
-  .report-filter-section {
+  /* Filtri a blocchi (2026-07-21): Periodo / Confronto / Opzioni impilati e
+     separati; il range risolto compare come didascalia accanto al selettore,
+     così è sempre chiaro "cosa sto guardando". Sostituisce la riga unica
+     affollata + il pulsante Aggiorna (i filtri si applicano da soli). */
+  .report-filters {
+    display: flex;
+    flex-direction: column;
+  }
+  .report-filters__block + .report-filters__block {
     border-top: 1px solid #edf1f7;
     margin-top: 12px;
     padding-top: 12px;
   }
-  .report-filter-grid {
-    align-items: end;
-    display: grid;
-    gap: 10px;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  }
-  .report-filter-grid.is-compare {
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  }
-  .report-filter-actions {
-    display: grid;
-    gap: 8px;
-  }
-  .report-filter-switch {
-    align-items: center;
-    background: transparent;
-    border: 0;
-    border-radius: 0;
+  .report-filters__row {
+    align-items: flex-end;
     display: flex;
-    min-height: 34px;
-    padding: 6px 0 0 28px;
+    flex-wrap: wrap;
+    gap: 10px 14px;
   }
-  .report-filter-switch .form-check-input {
-    margin-left: -28px;
-    margin-top: 0;
+  .report-filters__foot {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 18px;
+    justify-content: space-between;
+  }
+  .report-filters__row--options {
+    align-items: center;
+    flex: 1 1 auto;
+    row-gap: 8px;
+  }
+  .report-filters__actions {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 14px;
   }
   .report-filter-field {
     min-width: 0;
   }
-  .report-filter-field .form-label {
-    margin-bottom: 6px;
-  }
-  .report-filter-summary-bar {
-    align-items: center;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px 18px;
-    min-height: 24px;
-  }
-  .report-filter-help,
-  .report-filter-summary {
+  .report-filter-field--period { width: 260px; max-width: 100%; }
+  .report-filter-field--date { width: 168px; max-width: 100%; }
+  .report-filter-field__label {
     color: #667085;
-    font-size: .8rem;
-  }
-  .report-filter-summary strong {
-    color: #111827;
+    display: block;
+    font-size: .78rem;
     font-weight: 600;
+    margin-bottom: 5px;
   }
+  .report-filter-caption {
+    align-self: center;
+    color: #667085;
+    font-size: .82rem;
+    margin: 0 0 7px;
+  }
+  .report-filter-caption i { color: #365a96; }
+  .report-filter-caption strong { color: #111827; font-weight: 600; }
+  .report-filter-toggle {
+    align-items: flex-start;
+    cursor: pointer;
+    display: inline-flex;
+    gap: 9px;
+    margin: 0;
+  }
+  .report-filter-toggle .form-check-input {
+    flex: 0 0 auto;
+    margin: 2px 0 0;
+  }
+  .report-filter-toggle > span {
+    color: #1d2939;
+    display: flex;
+    flex-direction: column;
+    font-size: .92rem;
+    font-weight: 600;
+    line-height: 1.25;
+  }
+  .report-filter-toggle__hint {
+    color: #667085;
+    font-size: .78rem;
+    font-weight: 400;
+    margin-top: 2px;
+  }
+  .report-filter-toggle--inline { align-self: center; }
+  .report-compare-body {
+    border-left: 3px solid #cfe0f5;
+    margin-top: 10px;
+    padding-left: 14px;
+  }
+  .report-filter-live {
+    align-items: center;
+    color: #667085;
+    display: inline-flex;
+    font-size: .8rem;
+    font-weight: 500;
+    gap: 6px;
+  }
+  .report-filter-live i { color: #eab308; }
   .report-panel .table th {
     color: #667085;
     font-size: .74rem;
@@ -233,18 +277,14 @@
   @media (max-width: 1199.98px) {
     .report-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .report-finance-layout { grid-template-columns: 1fr; }
-    .report-filter-grid,
-    .report-filter-grid.is-compare {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
   }
   @media (max-width: 575.98px) {
     .report-kpi-grid { grid-template-columns: 1fr; }
     .report-kpi .value { font-size: 1.12rem; }
-    .report-filter-grid,
-    .report-filter-grid.is-compare {
-      grid-template-columns: 1fr;
-    }
+    .report-filter-field--period,
+    .report-filter-field--date { width: 100%; }
+    .report-filters__foot { align-items: stretch; }
+    .report-filters__actions { justify-content: space-between; }
   }
 
 /* --- Rivoluzione Report (2026-07-20) ------------------------------------ */
@@ -323,5 +363,5 @@ a.report-kpi-link:focus-visible{
   }
 }
 
-/* Riordino filtri (2026-07-20): riga unica coi layout via utility Bootstrap
-   nel markup (nessuna dipendenza dalla cache di questa CSS). */
+/* Filtri report: layout nelle classi .report-filters* più in alto in questo
+   file (ristrutturazione 2026-07-21, tre blocchi etichettati). */
