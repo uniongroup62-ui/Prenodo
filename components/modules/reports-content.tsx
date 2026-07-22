@@ -1196,6 +1196,28 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
       </>
       ) : null}
 
+      {/* Col confronto attivo il pannello copre già Incasso/Vendite/Scontrino/
+          Clienti serviti/Prenotazioni/Costi/Commissioni; restano SOLO le due
+          metriche che nel pannello non ci sono perché non comparabili
+          period-su-period: "Clienti nel periodo" e "Clienti in archivio". */}
+      {compare && a?.comparison ? (
+        <div className="report-kpi-grid mb-3">
+          <div className="report-kpi">
+            <div className="label">Clienti nel periodo</div>
+            <div className="value">{fmtInt(a?.newVsReturning.windowClients)}</div>
+            <div className="sub">
+              Nuovi {fmtInt(a?.newVsReturning.newClients)} / Di ritorno {fmtInt(a?.newVsReturning.returningClients)}
+            </div>
+            <div className="sub">Nuovo = prima vendita in assoluto nel periodo</div>
+          </div>
+          <div className="report-kpi">
+            <div className="label">Clienti in archivio</div>
+            <div className="value">{fmtInt(arch?.total ?? k.clients)}</div>
+            <div className="sub">Profilo clienti {locationLabelText.toLowerCase()}</div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="row g-3 mb-3" id="rep-andamento">
         <div className="col-xl-6">
           <div className="report-panel">
