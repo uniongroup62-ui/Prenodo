@@ -105,13 +105,13 @@ try {
   await ctx.addCookies([{ name: cn, value: cv, domain: "localhost", path: "/" }]);
   const page = await ctx.newPage();
   await page.goto(`${BASE}/${SLUG}/reports?range=custom&from=2027-04-01&to=2027-04-30&all_locations=1`, { waitUntil: "domcontentloaded" });
-  await page.locator(".report-anchor-nav").waitFor({ timeout: 60000 });
+  await page.locator(".report-kpi-grid").first().waitFor({ timeout: 60000 });
   await page.locator("#rep-sedi").waitFor({ timeout: 30000 });
   await page.waitForTimeout(1500);
 
-  // D1: nav ancorata con tutte le pillole (incluse Sedi e Fidelity)
-  const pills = await page.locator(".report-anchor-pill").allInnerTexts();
-  check("D1 nav sezioni: Andamento/Composizione/Top 10/Finanza/Sedi/Fidelity", ["Andamento", "Composizione", "Top 10", "Finanza", "Sedi", "Fidelity"].every((p) => pills.includes(p)), JSON.stringify(pills));
+  // D1: le sezioni chiave sono presenti (la nav a pillole è stata rimossa su
+  // richiesta utente 2026-07-21; restano gli id sezione per drill-down/stampa).
+  check("D1 sezioni presenti: Sedi e Fidelity", (await page.locator("#rep-sedi").count()) === 1 && (await page.locator("#rep-fidelity").count()) === 1);
 
   // D2: KPI Incasso è un link a Movimenti col periodo
   const kpiHref = await page.locator("a.report-kpi-link").first().getAttribute("href");

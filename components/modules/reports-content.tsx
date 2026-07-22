@@ -814,7 +814,7 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
     <div className="container-fluid">
       {/* ?v= bumpato quando la CSS cambia: senza, il browser tiene la
           versione in cache e il layout dei filtri si sfalda. */}
-      <link rel="stylesheet" href="/assets/css/pages/reports.css?v=20260721audit" />
+      <link rel="stylesheet" href="/assets/css/pages/reports.css?v=20260721nonav" />
 
       <div className="bs-page-header">
         <div className="bs-page-heading">
@@ -1045,23 +1045,6 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
         </div>
       ) : (
       <>
-      {/* Nav ancorata alle sezioni (2026-07-20): la pagina è lunga, le pillole
-          saltano alla sezione; sticky sotto la topbar, esclusa dalla stampa. */}
-      <nav className="report-anchor-nav d-print-none" aria-label="Sezioni report">
-        {([
-          ["#rep-andamento", "Andamento"],
-          ["#rep-mix", "Composizione"],
-          ["#rep-top", "Top 10"],
-          ["#rep-finanza", "Finanza"],
-          ...((a?.locationsBreakdown.length ?? 0) > 0 ? [["#rep-sedi", "Sedi"]] : []),
-          ...(fidelityHasData ? [["#rep-fidelity", "Fidelity"]] : []),
-        ] as [string, string][]).map(([href, label]) => (
-          <a key={href} className="report-anchor-pill" href={href}>
-            {label}
-          </a>
-        ))}
-      </nav>
-
       <div className="report-kpi-grid mb-3">
         {/* Drill-down (2026-07-20): i KPI operativi sono LINK verso il modulo
             di origine col periodo trasferito dove la pagina lo supporta. */}
