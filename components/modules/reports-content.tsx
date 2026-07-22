@@ -689,6 +689,36 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
   const arch = a?.clientsArchive;
   const rng = resolveRange();
   const compareWindow = compare ? resolveCompareWindow(rng) : null;
+
+  // Raggruppamenti grafici SENSATI per il periodo scelto (2026-07-21): un
+  // livello compare solo se produce ≥2 punti. Con "Oggi" (1 giorno)
+  // settimana/mese darebbero un unico punto con etichetta fuorviante
+  // ("22/07 - 22/07", "07/2026") — offrirli non ha senso. Regole allineate ai
+  // bucket di buildTrendSeries: giorno ≥2 giorni; settimana ≥2 bucket da 7
+  // (≥8 giorni); mese ≥2 mesi di calendario nel range.
+  const rngDays = Math.max(1, Math.round((Date.parse(`${rng.to}T00:00:00`) - Date.parse(`${rng.from}T00:00:00`)) / 86400000) + 1);
+  const rngMonths = (() => {
+    const [fy, fm] = rng.from.split("-").map(Number);
+    const [ty, tm] = rng.to.split("-").map(Number);
+    return (ty * 12 + tm) - (fy * 12 + fm) + 1;
+  })();
+  const granularityChoices = [
+    { value: "auto", label: "Automatico" },
+    ...(rngDays >= 2 ? [{ value: "daily", label: "Un punto per giorno" }] : []),
+    ...(Math.ceil(rngDays / 7) >= 2 ? [{ value: "weekly", label: "Un punto per settimana" }] : []),
+    ...(rngMonths >= 2 ? [{ value: "monthly", label: "Un punto per mese" }] : []),
+  ];
+  const canGroup = granularityChoices.length > 1;
+  // Se accorci il periodo e il raggruppamento scelto non è più producibile
+  // (es. "Ultimi 30 giorni / Per settimana" → "Oggi"), torna ad Automatico:
+  // altrimenti resterebbe uno stato "weekly" che disegna il punto singolo.
+  useEffect(() => {
+    if (granularity !== "auto" && !granularityChoices.some((c) => c.value === granularity)) {
+      setGranularity("auto");
+    }
+    // granularityChoices deriva solo da rng (range/from/to).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [granularity, rng.from, rng.to]);
   const filteredClients = (a?.topClients ?? []).filter((c) => c.name.toLowerCase().includes(clientSearch.toLowerCase()));
   const filteredItems = (a?.topItems ?? []).filter((i) => `${i.name} ${i.type ?? ""}`.toLowerCase().includes(itemSearch.toLowerCase()));
   const filteredOperators = (a?.operators ?? []).filter((o) => o.name.toLowerCase().includes(operatorSearch.toLowerCase()));
@@ -904,23 +934,29 @@ export function ReportsContent({ slug: slugProp, initialQuery }: { slug?: string
 
         <div className="report-filters__block report-filters__foot">
           <div className="report-filters__row report-filters__row--options">
-            <div className="report-filter-field report-filter-field--period">
-              <label className="report-filter-field__label" htmlFor="reportGranularity">
-                Dettaglio dei grafici
-              </label>
-              <select
-                className="form-select"
-                id="reportGranularity"
-                value={granularity}
-                onChange={(e) => setGranularity(e.target.value)}
-                title="Cambia solo il raggruppamento dei grafici, non i totali dei riquadri"
-              >
-                <option value="auto">Automatico</option>
-                <option value="daily">Un punto per giorno</option>
-                <option value="weekly">Un punto per settimana</option>
-                <option value="monthly">Un punto per mese</option>
-              </select>
-            </div>
+            {canGroup ? (
+              <div className="report-filter-field report-filter-field--period">
+                <label className="report-filter-field__label" htmlFor="reportGranularity">
+                  Dettaglio dei grafici
+                </label>
+                <select
+                  className="form-select"
+                  id="reportGranularity"
+                  value={granularity}
+                  onChange={(e) => setGranularity(e.target.value)}
+                  title="Cambia solo il raggruppamento dei grafici, non i totali dei riquadri"
+                >
+                  {granularityChoices.map((c) => (
+                    <option key={c.value} value={c.value}>{c.label}</option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <p className="report-filter-caption mb-0">
+                <i className="bi bi-bar-chart-line" aria-hidden="true" />{" "}
+                Periodo troppo breve per raggruppare i grafici
+              </p>
+            )}
             {(data?.locationsCount ?? 0) > 1 ? (
               <label className="report-filter-toggle report-filter-toggle--inline" htmlFor="reportAllLocations">
                 <input
