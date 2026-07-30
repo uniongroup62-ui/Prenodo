@@ -60,6 +60,22 @@ const nextConfig: NextConfig = {
         { source: "/settori/:path*", destination: `${vetrina}/settori/:path*` },
         // Asset della vetrina: /_vetrina/_next/... -> <vetrina>/_next/...
         { source: "/_vetrina/:path*", destination: `${vetrina}/:path*` },
+        // File statici della vetrina (la sua cartella public/): NON sono coperti
+        // dall'asset prefix, che vale solo per /_next/*. Vengono serviti dalla
+        // RADICE del dominio, quindi senza queste regole l'app li leggerebbe
+        // come slug di un tenant e li reindirizzerebbe (immagini rotte).
+        // Se si aggiungono file in public/ della vetrina, vanno elencati qui
+        // E nelle regole del CDN (vedi docs/domini-routing.md).
+        { source: "/images/:path*", destination: `${vetrina}/images/:path*` },
+        { source: "/icon.svg", destination: `${vetrina}/icon.svg` },
+        { source: "/icon-dark-32x32.png", destination: `${vetrina}/icon-dark-32x32.png` },
+        { source: "/icon-light-32x32.png", destination: `${vetrina}/icon-light-32x32.png` },
+        { source: "/apple-icon.png", destination: `${vetrina}/apple-icon.png` },
+        { source: "/placeholder.svg", destination: `${vetrina}/placeholder.svg` },
+        { source: "/placeholder.jpg", destination: `${vetrina}/placeholder.jpg` },
+        { source: "/placeholder-logo.svg", destination: `${vetrina}/placeholder-logo.svg` },
+        { source: "/placeholder-logo.png", destination: `${vetrina}/placeholder-logo.png` },
+        { source: "/placeholder-user.jpg", destination: `${vetrina}/placeholder-user.jpg` },
       ],
       afterFiles: [],
       fallback: [],

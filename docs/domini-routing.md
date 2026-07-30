@@ -38,14 +38,24 @@ L'ordine conta. La vetrina ha un elenco **finito** di percorsi; l'app ha il catc
 `/{slug}` dei tenant, quindi non è enumerabile: si elencano i path della vetrina e
 **tutto il resto va all'app**.
 
-1. `/_vetrina/*` → **vetrina** (asset), rimuovendo il prefisso `/_vetrina`
+1. `/_vetrina/*` → **vetrina** (chunk JS/CSS), rimuovendo il prefisso `/_vetrina`
 2. `/` (esatto) → **vetrina**
 3. `/chi-siamo`, `/chi-siamo/*` → **vetrina**
 4. `/features`, `/features/*` → **vetrina**
 5. `/pricing` → **vetrina**
 6. `/settori`, `/settori/*` → **vetrina**
-7. `/*` (qualsiasi altro) → **app** (marketplace, `/{slug}/…`, `/account`, `/legal`,
+7. **file statici della vetrina** (la sua cartella `public/`) → **vetrina**:
+   `/images/*`, `/icon.svg`, `/icon-dark-32x32.png`, `/icon-light-32x32.png`,
+   `/apple-icon.png`, `/placeholder.svg`, `/placeholder.jpg`,
+   `/placeholder-logo.svg`, `/placeholder-logo.png`, `/placeholder-user.jpg`
+8. `/*` (qualsiasi altro) → **app** (marketplace, `/{slug}/…`, `/account`, `/legal`,
    `/manage`, `/admin`, `/api`, `/_next`)
+
+> **Attenzione al punto 7.** `NEXT_PUBLIC_ASSET_PREFIX` copre **solo** `/_next/*`: i
+> file della cartella `public/` della vetrina restano serviti dalla radice del dominio.
+> Senza queste regole l'app li interpreta come slug di un tenant e li reindirizza al
+> login — la vetrina si vede senza immagini. Ogni file aggiunto in `public/` va
+> elencato qui **e** nei rewrite di sviluppo in `next.config.ts`.
 
 Se in futuro la vetrina aggiunge sezioni di primo livello (es. `/blog`, `/supporto`),
 va aggiunta una regola: **senza di essa quel path finirebbe all'app** e verrebbe
