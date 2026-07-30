@@ -68,7 +68,7 @@ try {
   await mob.close();
 
   // B6: treatment picker home — apri, scegli categoria, label+hidden aggiornati
-  await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${BASE}/attivita`, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(2500);
   await page.locator(".search-box [data-marketplace-treatment-trigger]").click();
   await page.locator('.search-box [data-marketplace-treatment-option][data-treatment-label="Unghie"]').click();

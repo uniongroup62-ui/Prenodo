@@ -64,7 +64,7 @@ try {
   check("C2 card sede: Prenota con location_id + Scheda /sedi/<slug>", /location_id=\d+/.test(locBook || "") && /\/attivita\/centroesteticoelite\/sedi\/.+-\d+$/.test(locScheda || ""), JSON.stringify([locBook, locScheda]));
 
   // CS1: suggerimenti città della hero — digita 'Alt' -> 'Altino' -> submit
-  await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${BASE}/attivita`, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(2500);
   await page.locator("#marketplace-home-city").fill("Alt");
   await page.waitForTimeout(600);
@@ -78,7 +78,7 @@ try {
   check("CS3 submit -> /attivita/ricerca?city=Altino…", /city=Altino/.test(page.url()), page.url().slice(0, 70));
 
   // P1: tab SERVIZI del picker home (fix giro 2: prima era VUOTA)
-  await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${BASE}/attivita`, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(2500);
   await page.locator(".search-box [data-marketplace-treatment-trigger]").click();
   await page.locator('.search-box [data-marketplace-treatment-tab="services"]').click();
@@ -96,7 +96,7 @@ try {
   check("P3 submit servizio -> risultati filtrati per service", /service=/.test(page.url()) && svcCards >= 1, `url=${decodeURIComponent(page.url()).slice(0, 80)} cards=${svcCards}`);
 
   // T1: tab ATTIVITÀ del picker — opzione elite seleziona q
-  await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${BASE}/attivita`, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(2500);
   await page.locator(".search-box [data-marketplace-treatment-trigger]").click();
   await page.locator('.search-box [data-marketplace-treatment-tab="salons"]').click();
