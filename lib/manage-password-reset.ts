@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs";
 import type { RowDataPacket } from "@/lib/tenant-db";
 import { dbExecute, dbQuery, tenantSelect, tenantTable, columnExists, tableExists, tenantIdForSlug } from "@/lib/tenant-db";
 import { normalizeTenantSlug } from "@/lib/tenant-runtime";
+import { appUrl } from "@/lib/base-urls";
 import { revokeManageSessions } from "@/lib/manage-auth";
 import { buildModernEmailTemplate, emailButton, emailConfigured, maskEmail, sendEmail } from "@/lib/email";
 
@@ -474,6 +475,8 @@ function manageResetUrl(origin: string | undefined, slug: string, token: string)
   // l'email della vittima farebbe arrivare nella mail un link col token valido
   // verso il PROPRIO dominio (token theft). Env esplicita prima di tutto;
   // l'origin del server resta solo come fallback dev.
-  const base = (process.env.PRENODO_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || origin || "http://localhost:3000").replace(/\/$/, "");
-  return `${base}/manage/reset-password?slug=${encodeURIComponent(slug)}&token=${encodeURIComponent(token)}`;
+  //
+  // Superficie: GESTIONALE → base dell'APP (app.<dominio> quando separato,
+  // altrimenti la base pubblica; vedi lib/base-urls.ts).
+  return appUrl(`/manage/reset-password?slug=${encodeURIComponent(slug)}&token=${encodeURIComponent(token)}`, origin);
 }

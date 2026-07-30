@@ -77,10 +77,15 @@ try {
   check("B6 picker: selezione 'Unghie' -> label + hidden category", (label || "").trim() === "Unghie" && hiddenCat === "Unghie", `label=${label} cat=${hiddenCat}`);
 
   // B7: validazione città — testo non in lista -> setCustomValidity blocca il submit
+  // NB (2026-07-23, separazione domini): la home del marketplace è /attivita — la
+  // root del dominio serve il sito vetrina e reindirizza qui. Quindi "submit
+  // bloccato" non si verifica più confrontando con "/", ma controllando che la
+  // pagina NON sia passata ai risultati di ricerca.
+  const urlBeforeSubmit = page.url();
   await page.locator("#marketplace-home-city").fill(`CittaInventata${RUN}`);
   await page.locator(".search-box > button[type=submit]").click();
   await page.waitForTimeout(600);
-  const stillHome = page.url() === `${BASE}/` || page.url().startsWith(`${BASE}/?`);
+  const stillHome = page.url().split("?")[0] === urlBeforeSubmit.split("?")[0] && !page.url().includes("/ricerca");
   const validity = await page.locator("#marketplace-home-city").evaluate((el) => el.validationMessage);
   check("B7 città non in lista -> submit bloccato con 'Seleziona una città dalla lista.'", stillHome && /Seleziona una citt/.test(validity || ""), `url=${page.url().slice(0, 40)} msg=${validity}`);
 

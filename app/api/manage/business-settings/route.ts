@@ -1,5 +1,6 @@
 import { jsonError, parseInteger, parseRequestBody } from "@/lib/api-utils";
 import { logActivity } from "@/lib/activity-log";
+import { publicBaseUrl } from "@/lib/base-urls";
 import {
   deleteBusinessBrandingImage,
   deleteBusinessLocation,
@@ -285,7 +286,16 @@ function normalizeBrandingKind(value: string): "logo" | "cover" | null {
   return null;
 }
 
+// Base usata per i link PUBBLICI generati dal salvataggio delle impostazioni:
+// `booking_url` delle sedi e `publicUrl` del profilo, che finiscono NEL DATABASE
+// e vengono poi serviti ai clienti finali dal marketplace.
+//
+// Prima derivava dall'origin della richiesta, cioè dall'indirizzo da cui il
+// gestore ha premuto "salva": un difetto già oggi (host alternativi, anteprime
+// di deploy) e un errore certo dopo la separazione dei domini, perché il
+// gestionale vivrà su app.<dominio> e pubblicherebbe link a quell'host.
+// Ora vince sempre la base pubblica configurata; l'origin resta fallback dev.
 function publicOrigin(request: Request): string {
   const url = new URL(request.url);
-  return `${url.protocol}//${url.host}`;
+  return publicBaseUrl(`${url.protocol}//${url.host}`);
 }

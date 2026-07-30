@@ -134,7 +134,12 @@ export function BookingSettingsContent({ slug: slugProp, initialQuery }: { slug?
   useEffect(() => {
     setOrigin(window.location.origin);
   }, []);
-  const publicHref = bookingUrl || `${origin}/${encodeURIComponent(slug)}/booking?public=1`;
+  // Link PUBBLICO che il gestore copia per i suoi clienti: si preferisce sempre
+  // il booking_url salvato lato server (già sul dominio pubblico), poi la base
+  // pubblica configurata; l'origin del browser è l'ultimo fallback perché nel
+  // gestionale sarà app.<dominio> una volta separati i domini.
+  const publicBase = (process.env.NEXT_PUBLIC_APP_URL || origin || "").replace(/\/+$/, "");
+  const publicHref = bookingUrl || `${publicBase}/${encodeURIComponent(slug)}/booking?public=1`;
 
   function cancelHref(): string {
     return `/${encodeURIComponent(slug)}/booking`;

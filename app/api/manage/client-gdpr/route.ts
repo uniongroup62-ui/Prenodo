@@ -19,6 +19,7 @@ import {
   privacySendSignatureEmail,
 } from "@/lib/consent-records";
 import { logActivity } from "@/lib/activity-log";
+import { publicUrl } from "@/lib/base-urls";
 import { buildClientGdprExport } from "@/lib/client-gdpr-export";
 import { currentManageSession } from "@/lib/manage-auth";
 import { manageTenantSlugFromRequest } from "@/lib/manage-request";
@@ -301,8 +302,12 @@ export async function POST(request: Request) {
 
   const mode = clean(form.get("_mode"));
   const clientId = Number.parseInt(String(form.get("client_id") ?? "0"), 10) || 0;
-  const origin = new URL(request.url).origin;
-  const publicBase = `${origin}/${encodeURIComponent(tenantSlug)}`;
+  // Questi link finiscono nelle email AL CLIENTE (richiesta di firma privacy /
+  // moduli consenso e invio del PDF firmato): sono superfici PUBBLICHE, quindi
+  // vanno sul dominio pubblico. Prima usavano l'origin della richiesta, che è
+  // quello del gestionale: dopo la separazione dei domini avrebbero puntato ad
+  // app.<dominio>. L'origin resta solo come fallback di sviluppo.
+  const publicBase = publicUrl(`/${encodeURIComponent(tenantSlug)}`, new URL(request.url).origin);
 
   try {
     const client = await loadClient(tenantSlug, clientId);

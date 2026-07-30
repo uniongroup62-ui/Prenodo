@@ -11,6 +11,7 @@ import {
   type SaasAdminRole,
   type SaasAdminUser,
 } from "@/lib/saas-admin-auth";
+import { appUrl } from "@/lib/base-urls";
 import { onboardingSteps } from "@/lib/manage-onboarding";
 import type { ManageSession } from "@/lib/manage-auth";
 import { dbExecute, dbQuery, quoteIdentifier, tableExists } from "@/lib/tenant-db";
@@ -812,7 +813,11 @@ export async function createSupportAccessToken(slug: string, reasonInput: string
     id: result.insertId,
     token,
     expires_at: expiresAt,
-    link: `${origin.replace(/\/$/, "")}/${encodeURIComponent(String(tenant.slug))}?support_token=${encodeURIComponent(token)}`,
+    // Il link di supporto porta nel GESTIONALE del tenant, quindi va sulla base
+    // dell'APP: `origin` qui è quello del pannello admin (admin.<dominio>), che
+    // dopo la separazione dei domini sarebbe l'host sbagliato. Resta come
+    // fallback di sviluppo. Vedi lib/base-urls.ts.
+    link: appUrl(`/${encodeURIComponent(String(tenant.slug))}?support_token=${encodeURIComponent(token)}`, origin),
   };
 }
 

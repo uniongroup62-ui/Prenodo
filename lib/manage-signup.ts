@@ -6,6 +6,7 @@ import type { RowDataPacket } from "@/lib/tenant-db";
 import { allAssignablePermissions, permissionDefinitions } from "@/lib/role-permissions";
 import { dbExecute, dbQuery, quoteIdentifier, tableExists } from "@/lib/tenant-db";
 import { tenantPrefix } from "@/lib/tenant-runtime";
+import { appUrl } from "@/lib/base-urls";
 import { buildModernEmailTemplate, emailButton, emailCodeBox, emailConfigured, maskEmail, sendEmail } from "@/lib/email";
 
 const SIGNUPS_TABLE = "saas_professional_signups";
@@ -955,9 +956,12 @@ function escapeHtml(value: string): string {
 // equivalent of the legacy manageUrl('/manage/verify', ...)). Needs an absolute base
 // (PRENODO_PUBLIC_BASE_URL); when unset we omit the button and rely on the code text.
 function signupVerifyLink(email: string): string {
-  const base = String(process.env.PRENODO_PUBLIC_BASE_URL ?? "").replace(/\/+$/, "");
-  if (!base) return "";
-  return `${base}/manage/verify?email=${encodeURIComponent(email)}`;
+  // Superficie: GESTIONALE (verifica email del professionista) → base dell'APP.
+  // Senza env esplicite appUrl ricade sulla base pubblica e infine su localhost:
+  // qui NON vogliamo un link a localhost nelle email, quindi il bottone viene
+  // omesso (come prima) se non è configurata alcuna base assoluta.
+  if (!process.env.PRENODO_APP_BASE_URL && !process.env.PRENODO_PUBLIC_BASE_URL) return "";
+  return appUrl(`/manage/verify?email=${encodeURIComponent(email)}`);
 }
 
 // Port of SaasProfessionalSignup::sendVerificationCodeEmail(): greeting, the
