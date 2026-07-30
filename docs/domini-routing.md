@@ -77,6 +77,29 @@ riscritto in `C:/Program Files/Git/_vetrina` dalla conversione automatica dei pa
 - `next.config.mjs` della vetrina supporta `NEXT_PUBLIC_ASSET_PREFIX`.
 - Il progetto vetrina si chiama ora `prenodo-vetrina` (era `my-project`).
 
+## Provare l'assetto finale in locale
+
+In sviluppo i due progetti sono server separati (app `:3000`, vetrina `:3001`) e la
+root dell'app reindirizza al marketplace: **la vetrina non compare su `:3000`**, perché
+in produzione a unirli è il CDN. Per replicare in locale l'assetto definitivo, l'app
+supporta `VETRINA_DEV_ORIGIN` (rewrite verso la vetrina, `beforeFiles`).
+
+Due terminali:
+
+```
+# 1) vetrina (repo PrenodoFrontend)
+NEXT_PUBLIC_ASSET_PREFIX=/_vetrina npm run dev -- -p 3001
+
+# 2) app (repo Prenodo)
+VETRINA_DEV_ORIGIN=http://localhost:3001 npm run dev
+```
+
+Poi su `http://localhost:3000/` c'è la vetrina, su `/attivita` il marketplace, e le
+altre superfici dell'app funzionano normalmente — esattamente come sarà in produzione.
+L'asset prefix è obbligatorio anche in locale: senza, la vetrina caricherebbe il
+JavaScript dell'app. Senza `VETRINA_DEV_ORIGIN` non cambia nulla e la root torna a
+reindirizzare a `/attivita`.
+
 ## Fase 2 — basi URL da sdoppiare (prerequisito della Fase 3)
 
 Oggi **una sola** variabile (`PRENODO_PUBLIC_BASE_URL`) genera i link di quattro

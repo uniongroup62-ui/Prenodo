@@ -151,6 +151,9 @@ export const config = {
     // instradare sull'host giusto. Esclusi API, file statici, ottimizzazione
     // immagini e i file di metadati: un redirect su quelli bloccherebbe CSS,
     // JS e immagini (vedi doc "Negative matching" del Proxy).
-    "/((?!api|_next/static|_next/image|favicon.ico|robots.txt|assets|uploads).*)",
+    // `_vetrina` è il prefisso degli asset del sito vetrina (NEXT_PUBLIC_ASSET_PREFIX):
+    // vanno serviti così come sono, altrimenti domainSurface li leggerebbe come
+    // pagine di un tenant e li spedirebbe sull'host del gestionale.
+    "/((?!api|_next/static|_next/image|_vetrina|favicon.ico|robots.txt|assets|uploads).*)",
   ],
 };
