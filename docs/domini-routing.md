@@ -98,14 +98,46 @@ configurazione, e questo è già un difetto oggi:
 | `lib/saas-tenant-manager.ts` | il link di accesso di supporto usa l'origin del pannello admin |
 | `components/modules/booking-content.tsx` | il link "booking pubblico" che il gestore copia per i clienti usa `window.location.origin` |
 
-## Fase 3 — `app.prenodo.it` per il gestionale
+## Fase 3 — `app.prenodo.it` per il gestionale (implementata)
 
-Stesso deploy che risponde su entrambi gli host, con redirect selettivi nel middleware:
+Stesso deploy che risponde su entrambi gli host, con redirect selettivi in `proxy.ts`:
 
-- su `prenodo.it`: le pagine **gestionali** reindirizzano a `app.prenodo.it`;
-- su `app.prenodo.it`: le pagine **pubbliche** reindirizzano a `prenodo.it`;
-- `X-Robots-Tag: noindex` su tutto `app.prenodo.it`.
+- su `prenodo.it`: le pagine **gestionali** → `307` a `app.prenodo.it` (nessuna SEO in
+  gioco, redirect reversibile senza cache permanenti nei browser);
+- su `app.prenodo.it`: le pagine **pubbliche** → `308` a `prenodo.it` (consolida la URL
+  canonica ed evita contenuti duplicati fra i due domini);
+- `X-Robots-Tag: noindex, nofollow` su tutte le pagine di `app.prenodo.it`.
 
 **Regola ferma:** le sei superfici a token e il booking pubblico restano **sempre** sul
 dominio principale, perché i link già inviati per email (voucher, richieste di firma)
-devono continuare a funzionare.
+devono continuare a funzionare. La distinzione è nella funzione `domainSurface()`.
+
+### Attivazione
+
+Il blocco è **inerte finché non si impostano entrambe** le variabili sul deploy:
+
+```
+PRENODO_APP_HOST=app.prenodo.it
+PRENODO_PUBLIC_HOST=prenodo.it
+```
+
+Senza di esse (sviluppo, o dominio unico) il proxy non tocca nulla. Guardie previste:
+host uguali fra loro → disattivato (eviterebbe un ciclo di redirect); host della
+richiesta diverso da entrambi (IP diretto, anteprima di deploy) → nessun redirect; mai
+redirect su `/api/*` (romperebbe le POST) né su file statici.
+
+### Manutenzione
+
+`BOOKING_PUBLIC_PARAMS` in `proxy.ts` replica la lista `isPublicRequest` di
+`app/[tenantSlug]/booking/page.tsx`: **se cambia là, va aggiornata qui**, altrimenti una
+pagina pubblica del booking verrebbe spedita sull'host del gestionale.
+
+### Variabili complessive al deploy
+
+| Variabile | Dove | Scopo |
+|---|---|---|
+| `PRENODO_PUBLIC_BASE_URL` | app | base dei link pubblici (marketplace, voucher, booking, area clienti) |
+| `PRENODO_APP_BASE_URL` | app | base dei link del gestionale (reset staff, verifica signup, supporto) |
+| `PRENODO_PUBLIC_HOST` / `PRENODO_APP_HOST` | app | attivano il routing per host della Fase 3 |
+| `NEXT_PUBLIC_ASSET_PREFIX` | vetrina | evita il conflitto `/_next/*` fra le due build |
+| `ADMIN_HOST` | app | host dedicato del pannello SaaS (già esistente) |
