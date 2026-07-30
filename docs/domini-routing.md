@@ -44,6 +44,8 @@ L'ordine conta. La vetrina ha un elenco **finito** di percorsi; l'app ha il catc
 4. `/features`, `/features/*` → **vetrina**
 5. `/pricing` → **vetrina**
 6. `/settori`, `/settori/*` → **vetrina**
+6b. `/blog`, `/blog/*` → **vetrina**
+6c. `/supporto` → **vetrina**
 7. **file statici della vetrina** (la sua cartella `public/`) → **vetrina**:
    `/images/*`, `/icon.svg`, `/icon-dark-32x32.png`, `/icon-light-32x32.png`,
    `/apple-icon.png`, `/placeholder.svg`, `/placeholder.jpg`,

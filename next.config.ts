@@ -58,6 +58,9 @@ const nextConfig: NextConfig = {
         { source: "/pricing", destination: `${vetrina}/pricing` },
         { source: "/settori", destination: `${vetrina}/settori` },
         { source: "/settori/:path*", destination: `${vetrina}/settori/:path*` },
+        { source: "/blog", destination: `${vetrina}/blog` },
+        { source: "/blog/:path*", destination: `${vetrina}/blog/:path*` },
+        { source: "/supporto", destination: `${vetrina}/supporto` },
         // Asset della vetrina: /_vetrina/_next/... -> <vetrina>/_next/...
         { source: "/_vetrina/:path*", destination: `${vetrina}/:path*` },
         // File statici della vetrina (la sua cartella public/): NON sono coperti
